@@ -51,6 +51,31 @@ impl SensorRegistryEntry {
     }
 }
 
+// ─── Sensor Log payload ──────────────────────────────────────────────────────
+
+/// Per-frame intrinsics + distortion. Pulled out of the registry-side identity
+/// because intrinsics can refine at runtime (autofocus, calibration updates).
+///
+/// Lives in `auki-registry` so that *consumers* of a Sensor Log (renderers,
+/// analysis tools) don't have to depend on a ROS adapter just to deserialize
+/// the payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DynamicIntrinsics {
+    pub fx: f64,
+    pub fy: f64,
+    pub cx: f64,
+    pub cy: f64,
+    pub distortion_coefficients: Vec<f64>,
+}
+
+/// The Sensor Log payload (CBOR-encoded under auki-logs framing). The frame
+/// timestamp lives in the framing's `timestamp_ns`, not here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SensorLogEntry {
+    pub dynamic_intrinsics: DynamicIntrinsics,
+    pub frame: Vec<u8>,
+}
+
 // ─── Clock Registry ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

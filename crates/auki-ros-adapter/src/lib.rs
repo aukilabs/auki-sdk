@@ -21,7 +21,6 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 
 pub use auki_registry;
 
@@ -58,25 +57,13 @@ pub struct ImageMsg {
 }
 
 // ─── Output types written to the Sensor Log ─────────────────────────────────
+//
+// `SensorLogEntry` and `DynamicIntrinsics` previously lived here; they moved
+// into `auki-registry` so that consumers of a sensor log (renderers, analysis
+// tools) don't have to pull in a ROS adapter just to deserialize the payload.
+// Re-exported here so existing call sites keep compiling.
 
-/// Per-frame intrinsics + distortion. Pulled out of the registry-side identity
-/// because intrinsics can refine at runtime (autofocus, calibration updates).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DynamicIntrinsics {
-    pub fx: f64,
-    pub fy: f64,
-    pub cx: f64,
-    pub cy: f64,
-    pub distortion_coefficients: Vec<f64>,
-}
-
-/// The Sensor Log payload (CBOR-encoded under auki-logs framing). The frame
-/// timestamp lives in the framing's `timestamp_ns`, not here.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SensorLogEntry {
-    pub dynamic_intrinsics: DynamicIntrinsics,
-    pub frame: Vec<u8>,
-}
+pub use auki_registry::{DynamicIntrinsics, SensorLogEntry};
 
 // ─── Translation functions ──────────────────────────────────────────────────
 

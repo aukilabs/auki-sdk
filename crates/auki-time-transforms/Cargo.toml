@@ -1,0 +1,18 @@
+[package]
+name = "auki-time-transforms"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "TimeTransform Log specialization + 1 Hz local-clock-read sampler."
+
+[dependencies]
+auki-logs = { path = "../auki-logs" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+ciborium = "0.2"

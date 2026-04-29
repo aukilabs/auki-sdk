@@ -1,0 +1,24 @@
+[package]
+name = "auki-ros-adapter"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "ROS2 subscription via r2r — camera_info + frame stream + sensor_msgs translation. The only crate that depends on r2r."
+
+[features]
+default = []
+# Enables the r2r-backed CameraSubscriber. Requires ROS2 client libs at link time;
+# leave disabled on macOS / cross-builds without ROS2.
+ros2 = ["dep:r2r", "dep:tokio", "dep:futures"]
+
+[dependencies]
+auki-registry = { path = "../auki-registry" }
+serde = { version = "1", features = ["derive"] }
+r2r = { version = "0.9", optional = true }
+tokio = { version = "1", features = ["rt", "macros", "time"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[dev-dependencies]
+ciborium = "0.2"

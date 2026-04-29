@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/auki-hash",
+    "crates/auki-jcs",
+    "crates/auki-logs",
+    "crates/auki-registry",
+    "crates/auki-ros-adapter",
+    "crates/auki-time-transforms",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/aukilabs/auki-sdk"
+authors = ["Auki Labs Limited"]
+version = "0.0.1"

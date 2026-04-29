@@ -1,0 +1,12 @@
+[package]
+name = "auki-jcs"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RFC 8785 JSON Canonicalization Scheme — canonical UTF-8 bytes for content-addressed hashing."
+
+[dependencies]
+serde_json = "1"
+serde_jcs = "0.2"

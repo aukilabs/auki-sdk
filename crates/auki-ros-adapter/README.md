@@ -58,7 +58,7 @@ Some registry-required fields aren't carried in `sensor_msgs/CameraInfo`:
 - `frame_rate_hz`
 - `intrinsics_model` (e.g. `pinhole`)
 
-These are supplied by the integrator from out-of-band knowledge of the platform. Known platforms ship as constants — for example, `K1_HEAD_RGB` captures the Booster K1 head camera's known-static configuration and is the platform's one-line config call.
+These are supplied by the integrator from out-of-band knowledge of the platform. The SDK does not ship platform-specific constants — each integrator (boosterapp, future platforms) defines and owns its own values. The SDK's job is the contract; the integrator's job is the configuration.
 
 ## `CameraSubscriber` trait
 

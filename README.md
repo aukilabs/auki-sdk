@@ -154,7 +154,7 @@ The SDK is **0.x and changing**. Schema and API are pre-stable; breaking changes
 The first downstream consumers are:
 
 - **`booster-app`** — the on-robot application running the SDK on a Booster K1 humanoid
-- **`park`** — an open-source visualization tool for Reid sessions, eventually a real-time domain viewer
+- **`park`** — an open-source visualization tool for Auki sessions, eventually a real-time domain viewer
 
 ---
 

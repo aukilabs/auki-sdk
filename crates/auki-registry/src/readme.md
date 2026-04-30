@@ -9,9 +9,11 @@ A single source file: [`lib.rs`](lib.rs).
 ## Storage layout
 
 ```
-<root>/registry/sensors/<id-with-slashes-replaced-by-__>/<hash>.json
-<root>/registry/clocks/<id-with-slashes-replaced-by-__>/<hash>.json
+<app_root>/registries/sensors/<id-with-slashes-replaced-by-__>/<hash>.json
+<app_root>/registries/clocks/<id-with-slashes-replaced-by-__>/<hash>.json
 ```
+
+Paths come from [`auki-session`](../../auki-session) (`sensor_entry_path` / `clock_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
 
 The hash *is* the version. There are no version counters. Re-writing identical content is a no-op (`WriteOutcome::AlreadyExists`); writing different content under the same `id` produces a sibling file (`WriteOutcome::Created` with a different hash).
 
@@ -126,10 +128,10 @@ Both byte buffers are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes th
 ## Public functions
 
 ```rust
-pub fn write_sensor(root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome>;
-pub fn write_clock(root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
-pub fn read_sensor(root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
-pub fn read_clock(root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
+pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome>;
+pub fn write_clock(app_root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
+pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
+pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
 ```
 
 Both entry types also expose `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.

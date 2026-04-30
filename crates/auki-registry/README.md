@@ -4,9 +4,9 @@ The typed data shapes the Auki SDK persists — registry entries (immutable iden
 
 ## Two kinds of typed data
 
-| Kind            | What it is                             | Where it lives                              |
-| --------------- | -------------------------------------- | ------------------------------------------- |
-| Registry entry  | Immutable identity, one per hash       | `<root>/registry/<kind>/<id>/<hash>.json`   |
+| Kind            | What it is                             | Where it lives                                          |
+| --------------- | -------------------------------------- | ------------------------------------------------------- |
+| Registry entry  | Immutable identity, one per hash       | `<app_root>/registries/<kind>/<id>/<hash>.json`         |
 | Log payload     | Per-frame mutable data                 | Inside an [`auki-logs`](../auki-logs) segment, CBOR-encoded |
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split lets the registry stay stable (no version churn from per-frame intrinsics drift) while honoring that some fields really do change over time.
@@ -18,10 +18,14 @@ Registry entries describe **what a thing is**; log payloads describe **what was 
 ### Storage layout
 
 ```
-<root>/registry/sensors/<sensor_id>/<hash>.json
-<root>/registry/clocks/<clock_id>/<hash>.json
-<root>/registry/frames/<frame_id>/<hash>.json    ← coming
+<app_root>/registries/sensors/<sensor_id>/<hash>.json
+<app_root>/registries/clocks/<clock_id>/<hash>.json
+<app_root>/registries/frames/<frame_id>/<hash>.json    ← coming
 ```
+
+Registries live at the **app root**, shared across every session of that app. Hash-keyed writes are idempotent, so a sensor entry that doesn't change between app starts produces the same `<hash>.json` regardless of session — re-writing it would be wasted work.
+
+The full session shape (registries + per-session log directories) is documented in [`auki-session`](../auki-session).
 
 `/` in IDs is replaced by `__` so namespaced IDs like `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory segment.
 
@@ -125,7 +129,7 @@ JCS-canonical UTF-8 JSON, written via auki-logs. Required keys (extends auki-log
 | `sensor_id`            | string  | The Sensor Registry ID this log captures                         |
 | `sensor_hash`          | string  | XXH3-128 hex of the sensor's registry entry                      |
 
-A reader resolves `(sensor_id, sensor_hash)` against `<root>/registry/sensors/<id>/<hash>.json` to recover dimensions, pixel format, and so on.
+A reader resolves `(sensor_id, sensor_hash)` against `<app_root>/registries/sensors/<id>/<hash>.json` to recover dimensions, pixel format, and so on.
 
 ### Payload (CBOR)
 
@@ -156,7 +160,7 @@ The K1's intrinsics are essentially constant in practice, but the schema doesn't
 
 ## Point Cloud Log payload — schema v1
 
-The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>` (different sensor_id, same `<root>/logs/sensors/<id>/...` path scheme as the Sensor Log). The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
+The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. It lives under the same per-recording sensor-log path as the camera Sensor Log (`<session>/sensorlogs/<recording_uuid>/<sensor_id>/`); a different `sensor_id` whose registry entry has `SensorBody::PointCloud` is what tells a reader to expect `PointCloudLogEntry` payloads. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
 
 ### Manifest
 

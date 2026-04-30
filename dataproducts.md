@@ -171,7 +171,7 @@ Everything required to decide "do I want this, and how do I consume it" without 
         "unit": "milliseconds", "monotonic": true,
         "epoch": null, "scope": "device-local"
       },
-      "log_handle": "logs/time_transforms/utc__to__monotonic",
+      "log_handle": "timetransform_logs/K1-AABBCCDDEEFF__utc__K1-AABBCCDDEEFF__monotonic",
       "earliest_timestamp_ns": 1745000000000000000,
       "latest_timestamp_ns":   1745000030000000000,
       "status": "live"

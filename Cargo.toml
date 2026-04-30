@@ -6,6 +6,7 @@ members = [
     "crates/auki-logs",
     "crates/auki-registry",
     "crates/auki-ros-adapter",
+    "crates/auki-session",
     "crates/auki-time-transforms",
 ]
 

@@ -7,7 +7,7 @@ This crate provides:
 - The 1 Hz `local_clock_read` sampler that produces those entries.
 - The default discontinuity-detection threshold and its rationale.
 
-The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>`.
+The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. There is one TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-session`](../auki-session) for path helpers and the full session shape.
 
 ## Manifest
 
@@ -22,7 +22,7 @@ JCS-canonical UTF-8 JSON, written via the auki-logs primitive. Required keys:
 | `to_clock_id`          | string  | The Clock Registry ID that `offset_ns` carries you to                |
 | `to_clock_hash`        | string  | XXH3-128 hex of the to-clock's registry entry                        |
 
-A node maintains one TimeTransform Log per ordered clock pair.
+A node maintains one TimeTransform Log per ordered clock pair per session.
 
 ## Entry payload (CBOR)
 

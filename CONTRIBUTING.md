@@ -41,3 +41,18 @@ Because the changelogs are updated so frequently, it is best practice to do a gi
 Open questions go in the `parking_lot.md` in the relevant folder. Cross-cutting questions go in the root `parking_lot.md`. Parent folders maintain a structured summary of their subfolders' parking lots.
 
 To answer a parking lot item, write your answer inline beneath it. An agent will then replace it with a "Propagate" task to update the docs when you're ready.
+
+---
+
+## Tagging
+
+Tags mark **consumer-coordination points**, not PR merges. A new tag is appropriate when:
+
+- A downstream consumer (boosterapp, Park, etc.) is ready to bump and needs a pinnable reference.
+- A coherent set of changes is sealed and ready for distribution.
+
+**Don't cut a tag for every merged PR.** `develop` is the integration branch — let it accumulate multiple PRs between tags so consumers do one bump per coordination round-trip rather than chasing each merge. The cost of an extra commit on develop is zero; the cost of a bumped tag is real (every consumer eventually pulls it).
+
+When in doubt, hold off. A consumer asking "can we tag now?" is the strongest signal a tag is warranted.
+
+Tag style: **annotated**, message format `vX.Y.Z — <one-line description>` to match the existing history (`v0.0.2`..`v0.0.5`).

@@ -3,15 +3,20 @@
 //!
 //! An entry is built from typed fields, canonicalized via [`auki_jcs`], hashed
 //! via [`auki_hash`], and persisted at
-//! `<root>/registry/{sensors,clocks}/<id>/<hash>.json`. Slashes in IDs are
+//! `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json`. Path layout lives
+//! in [`auki_session`]; this crate composes its helpers. Slashes in IDs are
 //! replaced with `__` in path segments. Re-writing identical content is a
 //! no-op; writing different content under the same id produces a sibling file.
 //!
 //! The hash *is* the version. There are no version counters.
+//!
+//! Registries live at the **app root**, not the session root — they're shared
+//! across all sessions of the same app. Hash-keyed writes are idempotent, so
+//! the same sensor entry produces the same `<hash>.json` regardless of session.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -238,24 +243,33 @@ impl From<io::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub fn write_sensor(root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
+/// Write a sensor registry entry under `<app_root>/registries/sensors/...`.
+/// Idempotent on hash: writing identical content is a no-op.
+pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    write_entry(root, "sensors", &entry.sensor_id, &hash, &bytes)
+    let path = auki_session::sensor_entry_path(app_root, &entry.sensor_id, &hash);
+    write_entry_at(&path, hash, &bytes)
 }
 
-pub fn write_clock(root: &Path, entry: &ClockRegistryEntry) -> Result<WriteOutcome> {
+/// Write a clock registry entry under `<app_root>/registries/clocks/...`.
+pub fn write_clock(app_root: &Path, entry: &ClockRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    write_entry(root, "clocks", &entry.clock_id, &hash, &bytes)
+    let path = auki_session::clock_entry_path(app_root, &entry.clock_id, &hash);
+    write_entry_at(&path, hash, &bytes)
 }
 
+/// Read a sensor registry entry by `(sensor_id, hash)`. Returns `Ok(None)` when
+/// the file doesn't exist; `Err(IdMismatch)` if the on-disk entry's
+/// `sensor_id` differs from the requested id.
 pub fn read_sensor(
-    root: &Path,
+    app_root: &Path,
     sensor_id: &str,
     hash: &str,
 ) -> Result<Option<SensorRegistryEntry>> {
-    let Some(bytes) = read_entry_bytes(root, "sensors", sensor_id, hash)? else {
+    let path = auki_session::sensor_entry_path(app_root, sensor_id, hash);
+    let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
     let entry: SensorRegistryEntry =
@@ -269,12 +283,14 @@ pub fn read_sensor(
     Ok(Some(entry))
 }
 
+/// Read a clock registry entry by `(clock_id, hash)`.
 pub fn read_clock(
-    root: &Path,
+    app_root: &Path,
     clock_id: &str,
     hash: &str,
 ) -> Result<Option<ClockRegistryEntry>> {
-    let Some(bytes) = read_entry_bytes(root, "clocks", clock_id, hash)? else {
+    let path = auki_session::clock_entry_path(app_root, clock_id, hash);
+    let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
     let entry: ClockRegistryEntry =
@@ -297,44 +313,18 @@ fn canonicalize<T: Serialize>(value: &T) -> Vec<u8> {
     auki_jcs::canonicalize(&v)
 }
 
-/// Replace `/` with `__` so a namespaced id like `K1-AABBCCDDEEFF/head_left_cam`
-/// becomes a single filesystem-safe directory segment.
-fn id_to_path_segment(id: &str) -> String {
-    id.replace('/', "__")
-}
-
-fn entry_path(root: &Path, kind: &str, id: &str, hash: &str) -> PathBuf {
-    root.join("registry")
-        .join(kind)
-        .join(id_to_path_segment(id))
-        .join(format!("{hash}.json"))
-}
-
-fn write_entry(
-    root: &Path,
-    kind: &str,
-    id: &str,
-    hash: &str,
-    bytes: &[u8],
-) -> Result<WriteOutcome> {
-    let path = entry_path(root, kind, id, hash);
+fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcome> {
     if path.exists() {
-        return Ok(WriteOutcome::AlreadyExists(hash.to_string()));
+        return Ok(WriteOutcome::AlreadyExists(hash));
     }
     let dir = path.parent().expect("entry path has a parent");
     fs::create_dir_all(dir)?;
-    atomic_write(&path, bytes)?;
-    Ok(WriteOutcome::Created(hash.to_string()))
+    atomic_write(path, bytes)?;
+    Ok(WriteOutcome::Created(hash))
 }
 
-fn read_entry_bytes(
-    root: &Path,
-    kind: &str,
-    id: &str,
-    hash: &str,
-) -> Result<Option<Vec<u8>>> {
-    let path = entry_path(root, kind, id, hash);
-    match fs::read(&path) {
+fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
         Ok(b) => Ok(Some(b)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::Io(e)),
@@ -501,7 +491,7 @@ mod tests {
 
         let entry_dir = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         let json_count = fs::read_dir(&entry_dir)
@@ -535,7 +525,7 @@ mod tests {
 
         let entry_dir = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         let json_count = fs::read_dir(&entry_dir)
@@ -562,7 +552,7 @@ mod tests {
 
         let expected_dir = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         assert!(expected_dir.is_dir(), "expected {expected_dir:?} to exist");
@@ -571,7 +561,7 @@ mod tests {
         // dir must NOT exist (would mean we forgot the substitution).
         let bad = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF")
             .join("head_left_cam");
@@ -604,13 +594,13 @@ mod tests {
         // file — content addressing is meant to make the mismatch detectable.
         let real = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF__head_left_cam")
             .join(format!("{hash}.json"));
         let bogus_dir = dir
             .path()
-            .join("registry")
+            .join("registries")
             .join("sensors")
             .join("K1-AABBCCDDEEFF__other_cam");
         fs::create_dir_all(&bogus_dir).unwrap();

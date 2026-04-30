@@ -10,7 +10,7 @@ Each crate that owns a wire format pins its own version: `auki-logs` segment for
 
 ## src/sprint.md per-crate scaffolding missing
 
-The convention specifies `src/sprint.md` per crate (current work + next steps). None of the six crates have one. They'd need seeding before the convention is fully realized.
+The convention specifies `src/sprint.md` per crate (current work + next steps). None of the seven crates have one. They'd need seeding before the convention is fully realized.
 
 ## changelog.md per-crate scaffolding missing
 
@@ -25,4 +25,5 @@ Same gap as above for `changelog.md`. None exist. Needs seeding, with establishe
 - [`auki-logs/`](auki-logs/parking_lot.md) — per-entry checksums; reader streaming for unbounded captures
 - [`auki-registry/`](auki-registry/parking_lot.md) — Frame Registry shape; UTC clock epoch format; sensor_id naming convention formalization; atomic-write tmp cleanup
 - [`auki-ros-adapter/`](auki-ros-adapter/parking_lot.md) — `r2r` typesupport blocker
+- [`auki-session/`](auki-session/parking_lot.md) — TimeTransform log path encoding ambiguity
 - [`auki-time-transforms/`](auki-time-transforms/parking_lot.md) — future `TimeTransformSource` variants

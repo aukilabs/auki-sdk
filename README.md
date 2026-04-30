@@ -63,6 +63,7 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
 | [`auki-time-transforms`](crates/auki-time-transforms) | ✓ Clock sampler primitives for the TimeTransform Log |
+| [`auki-session`](crates/auki-session) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
 
 **Not yet implemented:**
@@ -83,41 +84,53 @@ Logs and registries write to a documented binary + JSON format. Each format spec
 - [`auki-logs`](crates/auki-logs/README.md) — segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
 - [`auki-registry`](crates/auki-registry/README.md) — registry entry storage layout, plus the Sensor Log payload schema and the ROS2 → SDK field mapping
 - [`auki-time-transforms`](crates/auki-time-transforms/README.md) — TimeTransform Log payload schema and sampling protocol
+- [`auki-session`](crates/auki-session/README.md) — the path layout and helpers below
 
-Files within a session:
+Files within an app:
 
 ```
-<session>/
-├── registry/
-│   ├── sensors/<sensor_id>/<hash>.json
+<app_root>/
+├── registries/
+│   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 │   ├── clocks/<clock_id>/<hash>.json
-│   └── frames/<frame_id>/<hash>.json        ← coming
-└── logs/
-    ├── sensors/<sensor_id>/
+│   └── frames/<frame_id>/<hash>.json     ← coming
+└── <session>/
+    ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json
-    │   └── segments/<padded-ns>.seg
-    └── time_transforms/<from_id>/<to_id>/
-        ├── manifest.json
-        └── segments/<padded-ns>.seg
+    │   └── segments/<padded-ns>.seg      ← one TT log per session
+    └── sensorlogs/
+        └── <recording_uuid>/<sensor_id>/
+            ├── manifest.json              ← one sensor log per recording
+            └── segments/<padded-ns>.seg
 ```
+
+`<app_root>` is chosen by the integrator (boosterapp uses `/home/booster/auki/boosterapp/`); the SDK doesn't enforce structure above the registries. Registries live at the app root because hash-keyed writes are idempotent — a sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session, so per-session copies would be wasted work. A single session can hold multiple recordings (auto-started rolling buffer + on-demand intent captures, etc.) under `sensorlogs/<recording_uuid>/`; they're uniform on disk and distinguished only by `retention_ns` in their manifests.
+
+This is **breaking from v0.0.4** — the singular `registry/` and the flat `logs/sensors/<id>/` layout are gone.
 
 ---
 
 ## Quickstart
 
-Add a SDK crate as a Git dependency in your `Cargo.toml`:
+Add the SDK crates as Git dependencies in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-auki-logs = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.1" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.1" }
+auki-logs     = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
 ```
 
-Open a sensor log:
+Open a sensor log for one recording:
 
 ```rust
 use std::path::Path;
 use auki_logs::Log;
+use auki_session::{session_root, sensorlog_path};
+
+let app_root  = Path::new("/home/booster/auki/boosterapp");
+let session   = session_root(app_root, "session-uuid");
+let log_root  = sensorlog_path(&session, "recording-uuid", "K1-AABBCCDDEEFF/head_left_cam");
 
 let manifest = serde_json::json!({
     "segment_duration_ns": 1_000_000_000_i64,
@@ -128,7 +141,7 @@ let manifest = serde_json::json!({
     "clock_hash":          "def...",
 });
 
-let mut log: Log<MyPayload> = Log::open(Path::new("session/logs/sensors/cam"), manifest)?;
+let mut log: Log<MyPayload> = Log::open(&log_root, manifest)?;
 log.append(timestamp_ns, &payload)?;
 ```
 

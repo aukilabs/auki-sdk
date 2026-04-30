@@ -49,6 +49,7 @@ version = "0.0.0"
 dependencies = [
  "auki-hash",
  "auki-jcs",
+ "auki-session",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -66,6 +67,10 @@ dependencies = [
  "serde",
  "tokio",
 ]
+
+[[package]]
+name = "auki-session"
+version = "0.0.0"
 
 [[package]]
 name = "auki-time-transforms"

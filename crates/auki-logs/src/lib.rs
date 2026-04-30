@@ -211,7 +211,9 @@ where
         cur.writer.write_all(&payload_len.to_le_bytes())?;
         cur.writer.write_all(&payload_bytes)?;
 
-        self.evict_older_than(timestamp_ns.saturating_sub(self.retention_ns))?;
+        if self.retention_ns > 0 {
+            self.evict_older_than(timestamp_ns.saturating_sub(self.retention_ns))?;
+        }
         Ok(())
     }
 
@@ -282,8 +284,8 @@ fn required_durations(manifest: &serde_json::Value) -> Result<(i64, i64)> {
     if segment_duration_ns <= 0 {
         return Err(Error::Manifest("segment_duration_ns must be > 0".into()));
     }
-    if retention_ns <= 0 {
-        return Err(Error::Manifest("retention_ns must be > 0".into()));
+    if retention_ns < 0 {
+        return Err(Error::Manifest("retention_ns must be ≥ 0".into()));
     }
     Ok((segment_duration_ns, retention_ns))
 }
@@ -534,6 +536,30 @@ mod tests {
         // i.e. S ≤ threshold - 1s = 5s+100, i.e. S ≤ 5s. So 0,1,2,3,4,5 evict.
         // 6,7,8,9 remain (9 is current).
         assert_eq!(starts, &[6 * seg, 7 * seg, 8 * seg, 9 * seg]);
+    }
+
+    #[test]
+    fn retention_zero_disables_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        {
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 0)).unwrap();
+            for i in 0..10 {
+                log.append(
+                    i * seg + 100,
+                    &Sample {
+                        n: i as u32,
+                        label: format!("e{i}"),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let reader: LogReader<Sample> = Log::<Sample>::read(dir.path()).unwrap();
+        let starts: Vec<i64> = reader.segment_starts().to_vec();
+        assert_eq!(starts, (0..10).map(|i| i * seg).collect::<Vec<_>>());
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 10);
     }
 
     #[test]

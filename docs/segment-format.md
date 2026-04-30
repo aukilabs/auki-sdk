@@ -22,7 +22,7 @@ JCS-canonical UTF-8 JSON. The format requires two keys; everything else is the c
 | Key                    | Type     | Required | Notes                                                  |
 | ---------------------- | -------- | -------- | ------------------------------------------------------ |
 | `segment_duration_ns`  | integer  | yes      | Must be > 0. Time covered by one segment.              |
-| `retention_ns`         | integer  | yes      | Must be > 0. Window of data kept on disk.              |
+| `retention_ns`         | integer  | yes      | Must be ≥ 0. Window of data kept on disk; 0 = unbounded (no eviction). |
 
 A Sensor Log manifest will additionally carry `clock_id`, `sensor_id`, `sensor_hash`, etc. A TimeTransform Log manifest will carry `from_clock_id`, `to_clock_id`, and the corresponding hashes. `auki-logs` does not interpret these — they're caller-defined and persist verbatim.
 
@@ -63,6 +63,8 @@ All multi-byte integers in the segment header and entry framing are little-endia
 ## Eviction
 
 Driven by data timestamps, not wall clock. On every `append(timestamp_ns, …)` call, segments whose end (`start_ns + segment_duration_ns`) is `≤ timestamp_ns - retention_ns` become eligible for deletion. The currently-open segment is never evicted, even if its window has aged out.
+
+When `retention_ns == 0`, eviction is disabled entirely: every segment is kept for the lifetime of the log. Use this for unbounded captures.
 
 ## Versioning
 

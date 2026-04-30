@@ -28,6 +28,7 @@ pub struct SensorRegistryEntry {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SensorBody {
     RgbCamera(RgbCamera),
+    PointCloud(PointCloud),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +40,52 @@ pub struct RgbCamera {
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
+}
+
+/// Static layout of a point-cloud sensor's per-point bytes. The actual point
+/// data lives in the per-frame log payload (`PointCloudLogEntry`); this
+/// describes how to interpret those bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointCloud {
+    pub fields: Vec<PointField>,
+    pub point_step: u32,
+    pub is_bigendian: bool,
+    pub frame_rate_hz: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointField {
+    pub name: String,
+    pub offset: u32,
+    pub datatype: PointFieldDataType,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointFieldDataType {
+    Int8,
+    Uint8,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float32,
+    Float64,
+}
+
+impl PointFieldDataType {
+    /// Width of one element of this datatype in bytes.
+    pub const fn byte_width(self) -> u32 {
+        match self {
+            PointFieldDataType::Int8 | PointFieldDataType::Uint8 => 1,
+            PointFieldDataType::Int16 | PointFieldDataType::Uint16 => 2,
+            PointFieldDataType::Int32
+            | PointFieldDataType::Uint32
+            | PointFieldDataType::Float32 => 4,
+            PointFieldDataType::Float64 => 8,
+        }
+    }
 }
 
 impl SensorRegistryEntry {
@@ -73,7 +120,28 @@ pub struct DynamicIntrinsics {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensorLogEntry {
     pub dynamic_intrinsics: DynamicIntrinsics,
+    /// Encoded as a CBOR byte string (major type 2) rather than an array of
+    /// u8 — same on-disk semantics, ~half the byte cost for typical frames.
+    #[serde(with = "serde_bytes")]
     pub frame: Vec<u8>,
+}
+
+/// The Point Cloud Log payload (CBOR-encoded under auki-logs framing). The
+/// frame timestamp lives in the framing's `timestamp_ns`, not here. The byte
+/// layout of `data` is described by the corresponding `SensorBody::PointCloud`
+/// registry entry referenced by the log's manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointCloudLogEntry {
+    /// Organized: cols. Unorganized: total point count.
+    pub width: u32,
+    /// Organized: rows. Unorganized: 1.
+    pub height: u32,
+    /// True if `data` contains no invalid (NaN/Inf) points.
+    pub is_dense: bool,
+    /// `data.len()` MUST equal `point_step × width × height` where `point_step`
+    /// comes from the registry entry. Encoded as a CBOR byte string.
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
 }
 
 // ─── Clock Registry ──────────────────────────────────────────────────────────
@@ -452,11 +520,15 @@ mod tests {
         write_sensor(dir.path(), &entry).unwrap();
 
         // Mutate a static field — produces a new content hash and a sibling file.
-        // Plain `let` destructuring (not `if let`): if a future SensorBody variant
-        // is added, this becomes a compile error pointing the author here.
-        let SensorBody::RgbCamera(ref mut cam) = entry.body;
-        cam.width = 1920;
-        cam.height = 1080;
+        // Match (not `if let`): exhaustiveness means a future SensorBody variant
+        // becomes a compile error pointing the author here.
+        match &mut entry.body {
+            SensorBody::RgbCamera(cam) => {
+                cam.width = 1920;
+                cam.height = 1080;
+            }
+            SensorBody::PointCloud(_) => panic!("test was set up for RgbCamera"),
+        }
         let second_hash = entry.hash();
         assert_ne!(first_hash, second_hash);
         write_sensor(dir.path(), &entry).unwrap();
@@ -556,5 +628,79 @@ mod tests {
         let h = "deadbeef".to_string();
         assert_eq!(WriteOutcome::Created(h.clone()).hash(), "deadbeef");
         assert_eq!(WriteOutcome::AlreadyExists(h).hash(), "deadbeef");
+    }
+
+    // ─── Point cloud tests ──────────────────────────────────────────────────
+
+    fn m1_point_cloud_entry() -> SensorRegistryEntry {
+        SensorRegistryEntry {
+            sensor_id: "K1-AABBCCDDEEFF/head_depth_points".into(),
+            body: SensorBody::PointCloud(PointCloud {
+                fields: vec![
+                    PointField {
+                        name: "x".into(),
+                        offset: 0,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    PointField {
+                        name: "y".into(),
+                        offset: 4,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    PointField {
+                        name: "z".into(),
+                        offset: 8,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                ],
+                point_step: 12,
+                is_bigendian: false,
+                frame_rate_hz: 10,
+            }),
+        }
+    }
+
+    #[test]
+    fn point_cloud_entry_serializes_to_canonical_bytes() {
+        let bytes = m1_point_cloud_entry().canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+        );
+    }
+
+    #[test]
+    fn point_cloud_entry_hash_is_locked() {
+        // Pin the XXH3-128 of the M1 example point cloud entry.
+        // Updates to this must be coordinated with any cross-language reader.
+        assert_eq!(
+            m1_point_cloud_entry().hash(),
+            "35b318eb6b0a70cb2202083dcd1f14a2"
+        );
+    }
+
+    #[test]
+    fn write_then_read_point_cloud_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_point_cloud_entry();
+        let outcome = write_sensor(dir.path(), &entry).unwrap();
+        let hash = outcome.hash().to_string();
+        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        assert_eq!(read, Some(entry));
+    }
+
+    #[test]
+    fn point_field_datatype_byte_widths() {
+        assert_eq!(PointFieldDataType::Int8.byte_width(), 1);
+        assert_eq!(PointFieldDataType::Uint8.byte_width(), 1);
+        assert_eq!(PointFieldDataType::Int16.byte_width(), 2);
+        assert_eq!(PointFieldDataType::Uint16.byte_width(), 2);
+        assert_eq!(PointFieldDataType::Int32.byte_width(), 4);
+        assert_eq!(PointFieldDataType::Uint32.byte_width(), 4);
+        assert_eq!(PointFieldDataType::Float32.byte_width(), 4);
+        assert_eq!(PointFieldDataType::Float64.byte_width(), 8);
     }
 }

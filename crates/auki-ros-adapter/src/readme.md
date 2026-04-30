@@ -94,6 +94,34 @@ pub enum SubscriptionEvent {
 
 `MockCameraSubscriber` (in test scope, but also used by `auki-k1-binary`'s tests) scripts a bootstrap response + an event queue.
 
+## Point cloud translation
+
+Parallel to the camera path:
+
+```rust
+pub struct PointCloud2Msg { stamp, height, width, fields, is_bigendian, point_step, row_step, data, is_dense }
+pub struct PointFieldMsg  { name, offset, datatype: u8, count }   // u8: ROS2 numeric (1..=8)
+
+pub fn build_point_cloud_registry_entry(
+    sensor_id: impl Into<String>,
+    msg: &PointCloud2Msg,
+    frame_rate_hz: u32,
+) -> auki_registry::SensorRegistryEntry;
+
+pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry);
+
+pub trait PointCloudSubscriber: Send {
+    fn bootstrap(&mut self, timeout: Duration) -> Result<PointCloud2Msg, BootstrapError>;
+    fn poll(&mut self) -> Vec<PointCloud2Msg>;
+}
+pub struct MockPointCloudSubscriber { /* test-only helper, same shape as the camera mock */ }
+```
+
+Internal helpers (private):
+- `ros_datatype_to_sdk(u8)` — maps ROS2's `1..=8` discriminant to `PointFieldDataType`.
+- `normalize_layout(&[PointFieldMsg]) -> Normalized` — produces the SDK-side fields, packed `point_step`, and a per-source-field repacking plan. Both builders call this; the registry builder discards the plan.
+- `apply_normalization(plans, src_data, src_step, num_points, dst_step) -> Vec<u8>` — repacks per-frame bytes per the plan. RGB/RGBA in particular: source `[B, G, R, pad]` becomes `[R, G, B]`; source `[B, G, R, A]` becomes `[R, G, B, A]`.
+
 ## `r2r_subscriber` module (feature-gated)
 
 Compiled only with `feature = "ros2"`. Currently a scaffold:
@@ -112,7 +140,7 @@ impl R2rCameraSubscriber {
 
 The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The actual `r2r::Node` + subscription wiring lands at task 9 against the real DDS bus, where it can be validated for free during the bring-up walkthrough. Topics: `/boostercamera/head/rgb/camera_info` and `/boostercamera/head/rgb`.
 
-## Tests (12 total)
+## Tests (22 total)
 
 | Test | Asserts |
 |------|---------|

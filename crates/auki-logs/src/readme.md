@@ -1,6 +1,6 @@
 # `auki-logs/src/`
 
-Generic segmented ring-buffer log primitive. The on-disk format spec lives at [`docs/segment-format.md`](../../../docs/segment-format.md).
+Generic segmented ring-buffer log primitive. On-disk format spec: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 

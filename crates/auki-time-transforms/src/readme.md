@@ -1,6 +1,6 @@
 # `auki-time-transforms/src/`
 
-TimeTransform Log entry shape + 1 Hz `local_clock_read` sampler. Schema spec: [`docs/timetransform-log.md`](../../../docs/timetransform-log.md).
+TimeTransform Log entry shape + 1 Hz `local_clock_read` sampler. Schema spec: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 

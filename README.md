@@ -78,11 +78,11 @@ This repo is in early development. The crates here implement a foundational subs
 
 ## On-disk format
 
-Logs and registries write to a documented binary + JSON format. The format spec is the source of truth for any reader, in any language:
+Logs and registries write to a documented binary + JSON format. Each format spec lives with the crate that owns it — they're the source of truth for any reader, in any language:
 
-- [`docs/segment-format.md`](docs/segment-format.md) — the segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
-- [`docs/sensor-log.md`](docs/sensor-log.md) — Sensor Log payload schema and ROS2 mapping
-- [`docs/timetransform-log.md`](docs/timetransform-log.md) — TimeTransform Log payload schema
+- [`auki-logs`](crates/auki-logs/README.md) — segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
+- [`auki-registry`](crates/auki-registry/README.md) — registry entry storage layout, plus the Sensor Log payload schema and the ROS2 → SDK field mapping
+- [`auki-time-transforms`](crates/auki-time-transforms/README.md) — TimeTransform Log payload schema and sampling protocol
 
 Files within a session:
 
@@ -132,7 +132,7 @@ let mut log: Log<MyPayload> = Log::open(Path::new("session/logs/sensors/cam"), m
 log.append(timestamp_ns, &payload)?;
 ```
 
-See each crate's `README.md` for fuller usage; see the `docs/` specs for what gets written to disk.
+See each crate's `README.md` for the contract spec, and `crates/<name>/src/README.md` for the Rust-side implementation status.
 
 ---
 

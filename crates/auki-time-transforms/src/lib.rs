@@ -1,6 +1,6 @@
 //! TimeTransform Log + 1 Hz `local_clock_read` sampler.
 //!
-//! Schema spec: [`docs/timetransform-log.md`](../../../docs/timetransform-log.md).
+//! Schema spec: [`../README.md`](../README.md).
 //!
 //! - [`TimeTransformEntry`] is the per-sample payload written to an [`auki_logs::Log`].
 //! - [`tick`] is the unit-testable primitive: read three clocks, build one entry.

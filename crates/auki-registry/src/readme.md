@@ -78,6 +78,51 @@ pub enum Scope {
 
 `epoch` is intentionally `Option<String>` *without* `skip_serializing_if`. Monotonic clocks must serialize as `"epoch":null` because the absence of an epoch is meaningful information.
 
+### `SensorBody::PointCloud`
+
+```rust
+pub struct PointCloud {
+    pub fields: Vec<PointField>,
+    pub point_step: u32,
+    pub is_bigendian: bool,
+    pub frame_rate_hz: u32,
+}
+
+pub struct PointField {
+    pub name: String,
+    pub offset: u32,
+    pub datatype: PointFieldDataType,
+    pub count: u32,
+}
+
+#[serde(rename_all = "snake_case")]
+pub enum PointFieldDataType {
+    Int8, Uint8, Int16, Uint16, Int32, Uint32, Float32, Float64,
+}
+```
+
+`PointFieldDataType::byte_width()` returns the per-element width in bytes (1, 2, 4, or 8). Used by translation code (e.g. `auki-ros-adapter`) to compute output `point_step` after RGB normalization.
+
+## Log payload types
+
+```rust
+pub struct SensorLogEntry {
+    pub dynamic_intrinsics: DynamicIntrinsics,
+    #[serde(with = "serde_bytes")]
+    pub frame: Vec<u8>,
+}
+
+pub struct PointCloudLogEntry {
+    pub width: u32,        // organized: cols; unorganized: total point count
+    pub height: u32,       // organized: rows; unorganized: 1
+    pub is_dense: bool,
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+```
+
+Both byte buffers are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads.
+
 ## Public functions
 
 ```rust
@@ -116,7 +161,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (15 total)
+## Tests (18 total)
 
 | Test | Asserts |
 |------|---------|

@@ -75,6 +75,33 @@ trait CameraSubscriber {
 
 Implementations: `MockCameraSubscriber` (tests), `R2rCameraSubscriber` (production, feature-gated).
 
+## Point clouds — `PointCloud2` translation
+
+Parallel to the camera path, with the same source-agnostic shape (the integrator supplies `frame_rate_hz` directly):
+
+```
+build_point_cloud_registry_entry(sensor_id, msg, frame_rate_hz) -> SensorRegistryEntry
+build_point_cloud_log_entry(msg)                                -> (timestamp_ns, PointCloudLogEntry)
+```
+
+Inputs are mirrors of ROS2's `sensor_msgs/PointCloud2` and `sensor_msgs/PointField`. The ROS2 `datatype` byte (1..=8) is mapped to the SDK's typed enum (`int8`..`float64`); unknown values panic loudly so wire-format drift surfaces instead of silently corrupting data.
+
+### RGB/RGBA normalization
+
+ROS2 historically packs RGB into a `float32` whose 4 bytes are `0x00RRGGBB` (or `0xAARRGGBB` for `rgba`). The translation layer **normalizes** this so cross-language readers see plain `uint8` channels:
+
+| Source (ROS2)                            | Output                                              |
+| ---------------------------------------- | --------------------------------------------------- |
+| `name="rgb"`, `float32`, `count=1`       | three sequential `uint8` fields `r`, `g`, `b`       |
+| `name="rgba"`, `float32`, `count=1`      | four sequential `uint8` fields `r`, `g`, `b`, `a`   |
+| Anything else (intensity, ring, t, ...)  | pass-through; datatype/count preserved              |
+
+Per-point bytes are repacked accordingly: source `[B, G, R, pad]` → output `[R, G, B]`; source `[B, G, R, A]` → output `[R, G, B, A]`. The registry entry's `fields`/`point_step` describe the **normalized** layout, not the raw ROS layout.
+
+### `PointCloudSubscriber` trait
+
+Simpler than `CameraSubscriber` — there's no separate "info" topic, the static layout is embedded in every `PointCloud2` message. `bootstrap` blocks for the first message; `poll` drains subsequent ones. `MockPointCloudSubscriber` is provided for tests.
+
 ## ROS2 topic conventions (Booster K1)
 
 - `/boostercamera/head/rgb/camera_info` — `sensor_msgs/CameraInfo`

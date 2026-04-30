@@ -52,7 +52,7 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 ```
 SensorRegistryEntry {
   sensor_id: string,
-  type:      string,        // tagged-enum discriminant: "rgb_camera"; future: "depth", "imu", "lidar"
+  type:      string,        // tagged-enum discriminant: "rgb_camera" | "point_cloud"; future: "depth", "imu", "lidar"
   ...body fields per type...
 }
 ```
@@ -68,6 +68,24 @@ RgbCamera {
   color_space:       string,    // e.g. "BT.709", "sRGB"
   intrinsics_model:  string,    // e.g. "pinhole"
   distortion_model:  string,    // e.g. "plumb_bob", "none"
+}
+```
+
+When `type = "point_cloud"`:
+
+```
+PointCloud {
+  fields:        [PointField],   // byte layout of one point
+  point_step:    u32,            // bytes per point
+  is_bigendian:  bool,           // byte order of multi-byte fields in `data`
+  frame_rate_hz: u32,
+}
+
+PointField {
+  name:     string,              // "x", "y", "z", "r", "g", "b", "a", "intensity", "ring", "t", ...
+  offset:   u32,                 // byte offset within one point
+  datatype: string,              // "int8" | "uint8" | "int16" | "uint16" | "int32" | "uint32" | "float32" | "float64"
+  count:    u32,                 // number of `datatype` elements; usually 1
 }
 ```
 
@@ -136,6 +154,38 @@ The K1's intrinsics are essentially constant in practice, but the schema doesn't
 
 ---
 
+## Point Cloud Log payload — schema v1
+
+The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>` (different sensor_id, same `<root>/logs/sensors/<id>/...` path scheme as the Sensor Log). The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
+
+### Manifest
+
+JCS-canonical UTF-8 JSON. Same shape as the Sensor Log manifest — the `(sensor_id, sensor_hash)` pair resolves to a `SensorBody::PointCloud` registry entry, which is how a reader knows the segment payloads are `PointCloudLogEntry` rather than `SensorLogEntry`.
+
+### Payload (CBOR)
+
+```
+PointCloudLogEntry {
+  width:    u32,        // organized: cols; unorganized: total point count
+  height:   u32,        // organized: rows; unorganized: 1
+  is_dense: bool,       // true if no invalid (NaN/Inf) points in `data`
+  data:     bytes,      // length MUST equal point_step × width × height (point_step from registry)
+}
+```
+
+`data` is encoded as a CBOR byte string (major type 2), not an array of `u8` — same on-disk semantics, ~half the byte cost on typical point clouds. `SensorLogEntry.frame` uses the same encoding for the same reason.
+
+### RGB(A) normalization
+
+ROS2's `sensor_msgs/PointCloud2` historically packs RGB into a `float32` whose 4 bytes are interpreted as `0x00RRGGBB` (or `0xAARRGGBB` for `rgba`). The translation layer in [`auki-ros-adapter`](../auki-ros-adapter) **normalizes** this:
+
+- A field with `name = "rgb"`, `datatype = float32`, `count = 1` → three sequential `uint8` fields named `r`, `g`, `b` (point_step shrinks by 1).
+- A field with `name = "rgba"`, ... → four sequential `uint8` fields `r`, `g`, `b`, `a` (point_step unchanged, alpha preserved).
+
+The bytes are repacked accordingly. A `SensorBody::PointCloud` registry entry stores the **normalized** schema; readers never see the float-packed layout. Other ROS field quirks pass through unchanged.
+
+---
+
 ## Versioning
 
-Schema version is **1** for all four types (`SensorRegistryEntry`, `ClockRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`). Bump on incompatible field changes. The auki-logs segment format version is independent.
+Schema version is **1** for all six types (`SensorRegistryEntry`, `ClockRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`). Bump on incompatible field changes. The auki-logs segment format version is independent.

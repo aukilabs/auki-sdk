@@ -99,16 +99,6 @@ pub struct StaticCameraMetadata<'a> {
     pub intrinsics_model: &'a str,
 }
 
-impl StaticCameraMetadata<'static> {
-    /// The K1 head RGB camera's known-static configuration.
-    pub const K1_HEAD_RGB: Self = Self {
-        pixel_format: "YUV_NV12",
-        color_space: "BT.709",
-        frame_rate_hz: 20,
-        intrinsics_model: "pinhole",
-    };
-}
-
 /// Build a `SensorRegistryEntry` from a bootstrap `CameraInfo` + integrator-
 /// supplied static metadata. Currently only emits `RgbCamera` bodies.
 pub fn build_rgb_camera_registry_entry(
@@ -557,7 +547,12 @@ mod tests {
         let entry = build_rgb_camera_registry_entry(
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
-            &StaticCameraMetadata::K1_HEAD_RGB,
+            &StaticCameraMetadata {
+                pixel_format: "YUV_NV12",
+                color_space: "BT.709",
+                frame_rate_hz: 20,
+                intrinsics_model: "pinhole",
+            },
         );
         assert_eq!(entry.hash(), "e8cb3879fcfa7f716047aa0892b0c0c0");
     }
@@ -646,7 +641,12 @@ mod tests {
         let registry_entry = build_rgb_camera_registry_entry(
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
-            &StaticCameraMetadata::K1_HEAD_RGB,
+            &StaticCameraMetadata {
+                pixel_format: "YUV_NV12",
+                color_space: "BT.709",
+                frame_rate_hz: 20,
+                intrinsics_model: "pinhole",
+            },
         );
         assert_eq!(registry_entry.hash(), "e8cb3879fcfa7f716047aa0892b0c0c0");
 

@@ -23,6 +23,6 @@ Same gap as above for `changelog.md`. None exist. Needs seeding, with establishe
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path
 - [`auki-jcs/`](auki-jcs/parking_lot.md) — `serde_jcs` upstream vendoring strategy
 - [`auki-logs/`](auki-logs/parking_lot.md) — per-entry checksums; reader streaming for unbounded captures
-- [`auki-registry/`](auki-registry/parking_lot.md) — Frame Registry shape; UTC clock epoch format; atomic-write tmp cleanup
+- [`auki-registry/`](auki-registry/parking_lot.md) — Frame Registry shape; UTC clock epoch format; sensor_id naming convention formalization; atomic-write tmp cleanup
 - [`auki-ros-adapter/`](auki-ros-adapter/parking_lot.md) — `r2r` typesupport blocker
 - [`auki-time-transforms/`](auki-time-transforms/parking_lot.md) — future `TimeTransformSource` variants

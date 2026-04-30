@@ -72,18 +72,9 @@ pub struct StaticCameraMetadata<'a> {
     pub frame_rate_hz: u32,
     pub intrinsics_model: &'a str,
 }
-
-impl StaticCameraMetadata<'static> {
-    pub const K1_HEAD_RGB: Self = Self {
-        pixel_format: "YUV_NV12",
-        color_space: "BT.709",
-        frame_rate_hz: 20,
-        intrinsics_model: "pinhole",
-    };
-}
 ```
 
-`K1_HEAD_RGB` captures the Booster K1 head camera's known-static configuration as a const. Calling `build_rgb_camera_registry_entry(..., &StaticCameraMetadata::K1_HEAD_RGB)` is the platform's one-line configuration call.
+The SDK ships the struct only — no per-platform constants. Integrators define their own; e.g. boosterapp owns `K1_HEAD_RGB` in its `auki-k1-binary` crate.
 
 ## `CameraSubscriber` trait
 

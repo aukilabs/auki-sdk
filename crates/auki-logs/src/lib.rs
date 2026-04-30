@@ -1,6 +1,6 @@
 //! Generic segmented ring-buffer log primitive.
 //!
-//! On-disk format spec: [`docs/segment-format.md`](../../../docs/segment-format.md).
+//! On-disk format spec: [`../README.md`](../README.md).
 //!
 //! A `Log<T>` writes entries `(timestamp_ns, T)` to time-bounded segment files
 //! under `<root>/segments/`. Segments roll over when an appended entry's

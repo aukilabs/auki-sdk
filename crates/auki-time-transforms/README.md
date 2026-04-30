@@ -1,8 +1,13 @@
-# TimeTransform Log — schema v1
+# auki-time-transforms
 
-A TimeTransform Log is an [auki-logs](../src/crates/auki-logs/) `Log<TimeTransformEntry>` capturing the relationship between two clocks over time. Implementation lives in [`auki-time-transforms`](../src/crates/auki-time-transforms/).
+A TimeTransform Log captures the relationship between two clocks over time, sampled at 1 Hz. It's the primitive that `convert_time` will eventually consume to translate timestamps across clocks.
 
-For the conceptual model, see the design doc [TimeTransform Log](../About%20the%20real%20world%20web/Spatio-temporal%20Reasoning/Logging/TimeTransform%20Log%2034f5c8e96592819faf67fdf6557ea39a.md). This file pins the wire schema.
+This crate provides:
+- The `TimeTransformEntry` payload schema, pinned below as **wire format v1**.
+- The 1 Hz `local_clock_read` sampler that produces those entries.
+- The default discontinuity-detection threshold and its rationale.
+
+The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>`.
 
 ## Manifest
 
@@ -11,7 +16,7 @@ JCS-canonical UTF-8 JSON, written via the auki-logs primitive. Required keys:
 | Key                    | Type    | Notes                                                                |
 | ---------------------- | ------- | -------------------------------------------------------------------- |
 | `segment_duration_ns`  | integer | > 0; from auki-logs                                                  |
-| `retention_ns`         | integer | > 0; from auki-logs                                                  |
+| `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                                  |
 | `from_clock_id`        | string  | The Clock Registry ID that the framing's `timestamp_ns` is in        |
 | `from_clock_hash`      | string  | XXH3-128 hex of the from-clock's registry entry                      |
 | `to_clock_id`          | string  | The Clock Registry ID that `offset_ns` carries you to                |

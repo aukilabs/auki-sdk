@@ -2,7 +2,7 @@
 
 ROS2 → Auki translation: `sensor_msgs/CameraInfo` + `sensor_msgs/Image` into `SensorRegistryEntry` + `DynamicIntrinsics` + `SensorLogEntry`.
 
-Sensor-Log payload schema spec: [`docs/sensor-log.md`](../../../docs/sensor-log.md).
+Sensor-Log payload schema spec lives with the SDK-side types in [`auki-registry`](../../auki-registry/README.md). Translation contract: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 

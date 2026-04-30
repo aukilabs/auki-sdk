@@ -1,8 +1,8 @@
-# Reid log format — v1
+# auki-logs
 
-The on-disk format used by [`auki-logs`](../src/crates/auki-logs/) for both Sensor Logs and TimeTransform Logs.
+Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-registry`](../auki-registry) for `SensorLogEntry`, [`auki-time-transforms`](../auki-time-transforms) for `TimeTransformEntry`).
 
-This document is the **format spec**. Implementations in any language must read and write segment files that conform to it.
+The rest of this README is the **on-disk format spec, version 1** — implementations in any language must read and write segment files that conform to it.
 
 ## Filesystem layout
 

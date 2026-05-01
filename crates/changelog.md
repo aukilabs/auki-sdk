@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 1, 19:28 HKT, 2026
+
+`auki-session`: `sensorlog_path` drops its `sensor_id` parameter — recording = one sensor stream; sensor identity lives in the manifest, not the path. Breaking; tagged for consumer coordination as v0.0.7. See `auki-session/changelog.md` for detail.
+
 ### broodsugar's claude · May 1, 15:22 HKT, 2026
 
 Per-crate changelogs bootstrapped — all seven crates now have their own `changelog.md`. Resolved the matching parking-lot item.

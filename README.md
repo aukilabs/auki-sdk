@@ -99,14 +99,19 @@ Files within an app:
     │   ├── manifest.json
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     └── sensorlogs/
-        └── <recording_uuid>/<sensor_id>/
-            ├── manifest.json              ← one sensor log per recording
-            └── segments/<padded-ns>.seg
+        ├── <recording_uuid_1>/            ← one sensor stream per recording
+        │   ├── manifest.json
+        │   └── segments/<padded-ns>.seg
+        ├── <recording_uuid_2>/
+        │   └── ...
+        └── <recording_uuid_3>/
 ```
 
-`<app_root>` is chosen by the integrator (boosterapp uses `/home/booster/auki/boosterapp/`); the SDK doesn't enforce structure above the registries. Registries live at the app root because hash-keyed writes are idempotent — a sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session, so per-session copies would be wasted work. A single session can hold multiple recordings (auto-started rolling buffer + on-demand intent captures, etc.) under `sensorlogs/<recording_uuid>/`; they're uniform on disk and distinguished only by `retention_ns` in their manifests.
+`<app_root>` is chosen by the integrator (boosterapp uses `/home/booster/auki/boosterapp/`); the SDK doesn't enforce structure above the registries. Registries live at the app root because hash-keyed writes are idempotent — a sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session, so per-session copies would be wasted work.
 
-This is **breaking from v0.0.4** — the singular `registry/` and the flat `logs/sensors/<id>/` layout are gone.
+**A recording is one sensor stream.** Each `<recording_uuid>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel recordings sharing a session, not a multi-sensor recording. The auto-started ring buffer is just a recording with `retention_ns: 30s`; intent captures are recordings with `retention_ns: 0`. The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path.
+
+This shape is **breaking from v0.0.6** (the inner `<sensor_id>/` layer is gone).
 
 ---
 
@@ -138,7 +143,7 @@ use auki_session::{session_root, sensorlog_path};
 
 let app_root  = Path::new("/home/booster/auki/boosterapp");
 let session   = session_root(app_root, "session-uuid");
-let log_root  = sensorlog_path(&session, "recording-uuid", "K1-AABBCCDDEEFF/head_left_cam");
+let log_root  = sensorlog_path(&session, "recording-uuid");
 
 let manifest = serde_json::json!({
     "segment_duration_ns": 1_000_000_000_i64,

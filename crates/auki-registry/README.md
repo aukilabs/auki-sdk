@@ -160,7 +160,7 @@ The K1's intrinsics are essentially constant in practice, but the schema doesn't
 
 ## Point Cloud Log payload — schema v1
 
-The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. It lives under the same per-recording sensor-log path as the camera Sensor Log (`<session>/sensorlogs/<recording_uuid>/<sensor_id>/`); a different `sensor_id` whose registry entry has `SensorBody::PointCloud` is what tells a reader to expect `PointCloudLogEntry` payloads. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
+The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. Each point-cloud recording is its own directory at `<session>/sensorlogs/<recording_uuid>/` — same path scheme as a camera sensor log, just with a different sensor whose registry entry has `SensorBody::PointCloud` (the manifest's `sensor_hash` is what tells a reader to expect `PointCloudLogEntry` payloads). Capturing camera + point cloud simultaneously means two parallel recordings sharing a session, not one multi-sensor recording. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
 
 ### Manifest
 

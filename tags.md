@@ -82,14 +82,11 @@ The schema supports any of these; which authority model an ecosystem chooses is 
 
 (Wrapped here for readability; on disk it's a single line.)
 
-## Open / explicitly deferred
+## Open questions
 
-- **`signature` is null for v0.** Identity layer (`auki-identity`, planned) fills this in. Other fields are signature-aware — once we sign, the bytes signed are the canonical-JCS of the claim minus the signature field.
-- **Tag removal vs revocation.** `tags.jsonl` is append-only; there's no removal. Revocation is a *new* claim of `claim_type: "revoke"` referencing the prior claim's hash. Receivers honoring revocation is application-layer policy.
-- **`tag_id` shape per claim type.** Today it's opaque bytes/hex. Once identity lands, `domain_id = hash(domain_owner_pubkey)`, `anchor_id = hash(anchor_record)`, etc. The shape is uniform from the schema's perspective, but the *derivation* differs per claim type.
-- **Cross-data tags.** A claim references one `data_id`. If we later need claims about *sets* of data products (e.g. "this whole session is steve-domain"), we'll need a session-id-scoped variant.
-- **Tag inheritance / propagation.** If Park merges data from booster (tagged with booster-domain) and galbot (tagged with galbot-domain), what tags does the merged result carry? Tags don't capture structural derivation; combining all source tags loses the merge relationship, retaining only the result's own tag erases provenance. Out of scope for v0; needs a separate `derivation_chain` primitive eventually.
-- **Self-hash of the claim.** Useful for caching by claim identity but adds chicken-and-egg with `issued_at_ns`. Skip for v0.
+Tracked in the root [`parking_lot.md`](parking_lot.md) under the "TagClaim — …" sections. Cross-cutting design decisions (revocation semantics, `tag_id` derivation, set-scoped claims, propagation across derived data, self-hash) all live there per the project's parking-lot convention.
+
+Implementation note (not an open question): `signature` is null for v0 by design — the identity layer (`auki-identity`, planned) fills it in once it lands. Other fields are signature-aware so that addition is non-breaking.
 
 ## Out of scope (for v0)
 

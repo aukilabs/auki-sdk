@@ -12,10 +12,6 @@ Each crate that owns a wire format pins its own version: `auki-logs` segment for
 
 The convention specifies `src/sprint.md` per crate (current work + next steps). None of the seven crates have one. They'd need seeding before the convention is fully realized.
 
-## changelog.md per-crate scaffolding missing
-
-Same gap as above for `changelog.md`. None exist. Needs seeding, with established history backfilled or just starting from "now."
-
 ---
 
 ## Per-crate parking lots

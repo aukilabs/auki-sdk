@@ -28,6 +28,44 @@ Listed under "Not yet implemented" in [README.md](README.md). Path forward optio
 
 ---
 
+## TagClaim — tag removal vs revocation semantics
+
+`tags.jsonl` is append-only; there's no removal. Revocation is a *new* claim of `claim_type: "revoke"` referencing the prior claim's hash. Whether and how receivers honor revocation is application-layer policy. Pin the resolution rules before any peer-to-peer trust depends on them.
+
+## TagClaim — `tag_id` derivation per claim type
+
+Today the schema treats `tag_id` as opaque bytes/hex. Once identity lands, derivations differ: `domain_id = hash(domain_owner_pubkey)`, `anchor_id = hash(anchor_record)`, `contributor_id = hash(contributor_pubkey)`, etc. Document the derivation per claim type alongside the identity layer.
+
+## TagClaim — cross-data / set-scoped claims
+
+A claim today references one `data_id`. If we need claims about *sets* of data products (e.g. "this whole session is steve-domain") we'll need a session-id-scoped or set-scoped variant. Decide before tag-claim consumers proliferate.
+
+## TagClaim — tag inheritance / propagation across derived data
+
+If Park merges data from booster (booster-domain) and galbot (galbot-domain), what tags does the merged result carry? Tags don't capture structural derivation; combining all source tags loses the merge relationship, retaining only the result's own tag erases provenance. Eventually needs a separate `derivation_chain` primitive.
+
+## TagClaim — self-hash of the claim
+
+Would let peers cache by claim identity, but adds a chicken-and-egg with `issued_at_ns`. Trade-off worth pinning before tag stores get distributed.
+
+## Discovery descriptor — Pose Log shape
+
+[`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` only resolves to something fetchable once Pose Log exists. Pose Log is listed as not-yet-implemented in the root README; its concrete schema is unblocked by this descriptor.
+
+## Discovery descriptor — `log_handle` semantics
+
+What's the actual handle? `(sensor_id, sensor_hash)` pair? URL relative to a node base? Peer-ID-prefixed path? Depends on wire-protocol decisions that haven't been made yet.
+
+## Discovery descriptor — aborted-status detection
+
+The on-disk format doesn't currently mark clean-close vs. crash. Heuristic: "no recent updates AND no sealed marker." Pin before any consumer relies on the `status: "aborted"` field meaning anything specific.
+
+## Discovery descriptor — self-hash
+
+Would let peers cache by descriptor identity but adds a chicken-and-egg with `generated_at_ns`. Skip for v1; revisit when descriptor distribution becomes hot.
+
+---
+
 ## Subfolder summary
 
-- [`crates/`](crates/parking_lot.md) — schema versioning coordination; convention scaffolding gaps (sprint.md, changelog.md)
+- [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing

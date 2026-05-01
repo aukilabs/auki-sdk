@@ -191,13 +191,9 @@ Everything required to decide "do I want this, and how do I consume it" without 
 
 ---
 
-## Pending / open questions
+## Open questions
 
-- **Frame Registry schema.** `frame_entry` and `frame_transforms[].to_frame_entry` need a concrete shape. Blocks finalization of this descriptor.
-- **Pose Log shape.** `frame_transforms[].log_handle` only resolves to something fetchable once Pose Log exists.
-- **`log_handle` semantics.** What's the actual handle? `(sensor_id, sensor_hash)` pair? URL relative to a node base? Peer-ID-prefixed path? Depends on wire-protocol decisions.
-- **Aborted-status detection.** The on-disk format doesn't currently mark clean-close vs. crash. Heuristic: "no recent updates AND no sealed marker." Worth pinning before we rely on it.
-- **Self-hash of the descriptor.** Would let peers cache by descriptor identity, but adds a chicken-and-egg with `generated_at_ns`. Skip for v1.
+Tracked in the root [`parking_lot.md`](parking_lot.md) under the "Discovery descriptor — …" sections (Pose Log shape, `log_handle` semantics, aborted-status detection, self-hash) and per-crate parking lots ([Frame Registry shape](crates/auki-registry/parking_lot.md) lives in `auki-registry`).
 
 ---
 

@@ -110,6 +110,14 @@ This is **breaking from v0.0.4** — the singular `registry/` and the flat `logs
 
 ---
 
+## Operator control API
+
+Daemons that produce SDK sessions (BoosterApp, Sentinel, future) expose a uniform HTTP control surface so any UI — primarily [Park](https://github.com/aukilabs/park) — can drive any of them through one contract: list recordings, start/stop intent captures, peek at the latest frame, change buffer retention, request clean shutdown. Plus an mDNS service-discovery convention so consumers find daemons on the LAN automatically.
+
+Specified in [`docs/control-api.md`](docs/control-api.md). Six endpoints, JSON over HTTP, trusted-LAN assumption (no auth in v1).
+
+---
+
 ## Quickstart
 
 Add the SDK crates as Git dependencies in your `Cargo.toml`:

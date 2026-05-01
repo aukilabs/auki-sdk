@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 1, 19:28 HKT, 2026
+
+Session-shape revision: a recording is now one sensor stream. Dropped the `<sensor_id>` sublayer from `<session>/sensorlogs/<recording_uuid>/`; recording directories are now complete `auki-logs` log dirs (manifest + segments) for exactly one sensor. Multi-sensor capture = multiple parallel recordings sharing a session. Buffer vs. intent distinguished only by `retention_ns`. `auki-session::sensorlog_path` signature dropped its `sensor_id` parameter. Updated diagrams across root README, `auki-session/README.md` + inner readme, and the path-example bullets in `auki-logs/README.md` and `auki-registry/README.md`. Breaking from v0.0.6; v0.0.7 will be the consumer-coordination tag.
+
 ### broodsugar's claude · May 1, 15:56 HKT, 2026
 
 Added [`docs/control-api.md`](docs/control-api.md) — the v1 cross-app HTTP control API spec. Six endpoints (`/api/state`, `/api/preview/latest.jpg`, `/api/recordings`, `/api/recordings/<id>`, `/api/buffer`, `/api/quit`) plus the `_auki._tcp.local.` mDNS discovery convention. Lets BoosterApp, Sentinel, and future daemons share one operator-control surface so [Park](https://github.com/aukilabs/park) can drive any of them through a single contract — implementing the "Park is the unified operator UI" architectural decision (Reid quest, May 1). Cross-linked from the root README under a new "Operator control API" section. Parked the open registries-app-rooted-vs-domain-scoped question in [`parking_lot.md`](parking_lot.md) as a separate evolution of the session shape.

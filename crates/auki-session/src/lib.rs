@@ -14,9 +14,12 @@
 //!     │   ├── manifest.json
 //!     │   └── segments/<padded-ns>.seg      ← one TT log per session
 //!     └── sensorlogs/
-//!         └── <recording_uuid>/<sensor_id>/
-//!             ├── manifest.json              ← one sensor log per recording
-//!             └── segments/<padded-ns>.seg
+//!         ├── <recording_uuid_1>/            ← one sensor stream per recording
+//!         │   ├── manifest.json
+//!         │   └── segments/<padded-ns>.seg
+//!         ├── <recording_uuid_2>/
+//!         │   └── ...
+//!         └── <recording_uuid_3>/
 //! ```
 //!
 //! - `<app_root>` is chosen by the integrator (e.g. `/home/booster/auki/boosterapp/`).
@@ -26,15 +29,19 @@
 //!   session would be wasted work.
 //! - One TimeTransform Log per session (clock offsets are time-localized;
 //!   the session is the natural retention boundary).
-//! - Sensor logs are per-recording. The `<recording_uuid>` layer lets one
-//!   session hold multiple recordings (e.g. an auto-started rolling buffer
-//!   alongside on-demand intent captures); they're uniform on disk and
-//!   distinguished only by the `retention_ns` in their manifests.
+//! - **A recording is one sensor stream.** Each recording directory is a
+//!   complete `auki-logs` log (manifest + segments) for exactly one sensor.
+//!   Multi-sensor capture means multiple parallel recordings sharing a
+//!   session, not a multi-sensor recording. The auto-started ring buffer is
+//!   simply a recording with `retention_ns: 30s`; intent captures are
+//!   recordings with `retention_ns: 0`. Nothing on disk distinguishes them
+//!   beyond the manifest's retention value. The manifest's `sensor_id`
+//!   identifies which sensor's frames are inside.
 //!
 //! `/` in IDs is replaced with `__` so namespaced ids like
 //! `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory
-//! segment. The same convention applies to `from_id`/`to_id` in TimeTransform
-//! Log paths.
+//! segment in registry paths. The same convention applies to `from_id`/`to_id`
+//! in TimeTransform Log paths.
 
 use std::path::{Path, PathBuf};
 
@@ -81,18 +88,12 @@ pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -
     ))
 }
 
-/// `<app_root>/<session>/sensorlogs/<recording_uuid>/<sensor_id>` — one sensor
-/// log per recording. The auki-logs `manifest.json` and `segments/` directory
-/// live directly under this path.
-pub fn sensorlog_path(
-    session_root: &Path,
-    recording_uuid: &str,
-    sensor_id: &str,
-) -> PathBuf {
-    session_root
-        .join(SENSORLOGS_DIR)
-        .join(recording_uuid)
-        .join(id_to_segment(sensor_id))
+/// `<app_root>/<session>/sensorlogs/<recording_uuid>` — one recording = one
+/// sensor stream. The auki-logs `manifest.json` and `segments/` directory
+/// live directly under this path. The sensor identity is recorded in the
+/// log's manifest (`sensor_id` + `sensor_hash`), not encoded in the path.
+pub fn sensorlog_path(session_root: &Path, recording_uuid: &str) -> PathBuf {
+    session_root.join(SENSORLOGS_DIR).join(recording_uuid)
 }
 
 /// Replace `/` with `__` so namespaced ids become a single filesystem-safe
@@ -164,15 +165,23 @@ mod tests {
     }
 
     #[test]
-    fn sensorlog_path_includes_recording_layer() {
+    fn sensorlog_path_is_session_join_sensorlogs_join_recording() {
         let session = session_root(&app(), "abc-123");
         assert_eq!(
-            sensorlog_path(&session, "rec-456", "K1-AABB/head_left_cam"),
-            PathBuf::from(
-                "/home/booster/auki/boosterapp/abc-123/sensorlogs/\
-                 rec-456/K1-AABB__head_left_cam"
-            )
+            sensorlog_path(&session, "rec-456"),
+            PathBuf::from("/home/booster/auki/boosterapp/abc-123/sensorlogs/rec-456")
         );
+    }
+
+    #[test]
+    fn sensorlog_path_does_not_substitute_recording_uuid() {
+        // recording_uuid is opaque to the SDK — it doesn't apply the slash
+        // substitution we use for namespaced ids. Callers are responsible
+        // for passing a filesystem-safe identifier.
+        let session = session_root(&app(), "abc-123");
+        let path = sensorlog_path(&session, "rec-456");
+        assert!(path.ends_with("rec-456"));
+        assert!(!path.to_string_lossy().contains("__"));
     }
 
     #[test]

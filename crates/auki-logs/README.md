@@ -18,7 +18,7 @@ The rest of this README is the **on-disk format spec, version 1** — implementa
 `<log_root>` itself is chosen by the caller. In practice the SDK's session shape places it at:
 
 - `<session>/timetransform_logs/<from_id>__<to_id>/` — one TT log per session
-- `<session>/sensorlogs/<recording_uuid>/<sensor_id>/` — one sensor log per recording
+- `<session>/sensorlogs/<recording_uuid>/` — one sensor stream per recording (one log per sensor)
 
 See [`auki-session`](../auki-session) for path helpers and the full session shape.
 

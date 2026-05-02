@@ -10,13 +10,14 @@ Each crate that owns a wire format pins its own version: `auki-logs` segment for
 
 ## src/sprint.md per-crate scaffolding missing
 
-The convention specifies `src/sprint.md` per crate (current work + next steps). None of the seven crates have one. They'd need seeding before the convention is fully realized.
+The convention specifies `src/sprint.md` per crate (current work + next steps). None of the eight crates have one. They'd need seeding before the convention is fully realized.
 
 ---
 
 ## Per-crate parking lots
 
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path
+- [`auki-identity/`](auki-identity/parking_lot.md) — BIP32-vs-labeled-hash derivation; encrypted-at-rest format; BIP39 mnemonics; signing-scheme v2 shape
 - [`auki-jcs/`](auki-jcs/parking_lot.md) — `serde_jcs` upstream vendoring strategy
 - [`auki-logs/`](auki-logs/parking_lot.md) — per-entry checksums; reader streaming for unbounded captures
 - [`auki-registry/`](auki-registry/parking_lot.md) — Frame Registry shape; UTC clock epoch format; sensor_id naming convention formalization; atomic-write tmp cleanup

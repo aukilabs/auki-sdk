@@ -46,11 +46,11 @@ The Reid decision stipulates `relay-server` is off by default for BoosterApp / S
 
 Open in code: how does the off-by-default flag get plumbed? Three paths:
 
-1. **Boolean argument to a swarm builder** in `auki-network` (M1) — `Swarm::builder(peer).with_relay_server(true).build()`.
+1. **Boolean argument to a swarm builder** in `auki-network` — `SwarmConfig { enable_relay_server: bool, ... }`. M1a's `SwarmConfig` would gain the field in M1b alongside the `relay::Behaviour` wrapped in `Toggle`.
 2. **Per-capability advertisement gate** — `Capability::SFU` / `Capability::TURN` etc. only get included in the `ReachabilityRecord` if the corresponding behaviour is enabled.
 3. **Both.** Boolean controls the libp2p behaviour; capability list reflects what's actually offered.
 
-Lean toward (3); decide concretely when M1 starts.
+Lean toward (3); decide concretely when M1b starts. The M1a `SwarmConfig` is intentionally minimal (only `listen_addresses` + `agent_version`) to leave the relay-server field shape unspecified for now.
 
 ---
 
@@ -63,3 +63,32 @@ Today it's `{peer_id, addresses, capabilities, last_seen_ns}`. Likely additions 
 - **Auth.** Signed by the peer's wallet to prove ownership of the peer key — needs `auki-identity::CreationCert` shape extended for signing arbitrary structs.
 
 Append-fields-with-`#[serde(default)]` is the easy path; a versioned wire format is the honest one. Decide before any consumer relies on the shape being stable.
+
+---
+
+## `SwarmConfig` minimalism — when do we add knobs?
+
+M1a's `SwarmConfig` has only `listen_addresses` and `agent_version`. Many libp2p knobs are baked-in: idle connection timeout (60s), identify protocol id (`/auki/identify/1.0.0`), ping defaults. This is deliberate — fewer knobs means fewer ways to mis-configure.
+
+Knobs that consumers will likely want eventually:
+
+- **Idle timeout.** Long-lived idle connections vs aggressive eviction. Daemons probably want longer; gateways shorter.
+- **Ping interval / timeout.** Keepalive cadence vs liveness sensitivity.
+- **Allowed transports.** Force-TCP-only or force-QUIC-only for testing or networks that block UDP.
+- **Connection limits.** `libp2p::connection_limits::Behaviour` parameters.
+
+Default: don't expose any of these until a real consumer asks. Adding fields with `Default` impls is non-breaking; removing them is. Stay minimal.
+
+---
+
+## `BuildError::Transport(String)` — structured vs prose
+
+`BuildError::Transport` currently wraps a `String` (formatted from libp2p's transport-setup errors). This loses type information — callers can't programmatically distinguish "tcp listen failed" from "noise key generation failed." It also doesn't surface the underlying `std::io::Error` cleanly.
+
+Three options:
+
+1. **Keep `String`.** Simple; transport setup failures are rare and operator-facing anyway.
+2. **Box the underlying error.** `Transport(Box<dyn std::error::Error + Send + Sync>)`. Preserves the chain via `Error::source()`.
+3. **Enum the failure modes.** `Tcp`, `Quic`, `Noise`, `Yamux`, `Behaviour` variants. Most type information; most maintenance burden as libp2p evolves.
+
+Lean toward (2) once a consumer wants programmatic dispatch. (1) is fine for M1a.

@@ -2,34 +2,27 @@
 
 Current work and next steps to close the gap between [`src/readme.md`](readme.md) (what's implemented) and [the outer README](../README.md) (the spec).
 
-## Now (M0 — landed)
+## Now (M0 + M1a — landed)
 
-- `PeerIdentity` deriving from a wallet via `derive_child("peer/v1")`.
-- `ReachabilityRecord` with peer id, multiaddrs, capabilities, last-seen.
-- `Capability` newtype with the four canonical `networking:*` constants.
-- 11 tests covering the public contract.
+- **M0** — `PeerIdentity`, `ReachabilityRecord`, `Capability`. WASM-friendly. 11 tests.
+- **M1a** — libp2p `Swarm` builder behind the `swarm` feature. Transport: TCP + QUIC, Noise, Yamux. Behaviour: `identify` + `ping`. Two peers can dial each other and exchange identify info on either transport. 4 swarm tests + 1 doctest.
 
-## Next (M1 — libp2p Swarm)
+## Next (M1b — Circuit Relay v2 + mDNS coexistence)
 
-The data types ship in M0 so Console + the Relay can start consuming them while the swarm-side defaults get worked out. M1 lands the actual transport:
+- Add `libp2p::relay` to the `Behaviour`: `relay::client::Behaviour` always, `relay::Behaviour` (the server side) wrapped in `Toggle` so it's off by default for consumer daemons. Opt-in via a `SwarmConfig.enable_relay_server: bool` field (or equivalent — see the parking lot for the design question).
+- `_p2p._udp.local.` mDNS coexistence with the existing `_auki._tcp.local.` advertisement. Resolve the parking-lot question first; default likely dual-channel for the demo.
+- Dial-by-peer-id helper that handles circuit-relay multiaddrs (`/p2p/<relay>/p2p-circuit/p2p/<target>`).
+- Tests: relay-server-on swarm forwards a circuit-relay-mediated dial between two relay-clients; relay-server-off swarm refuses to act as a hop.
 
-- `Behaviour` aggregating `libp2p::core::transport` (TCP + QUIC + Noise + Yamux) and `libp2p::relay` (Circuit Relay v2 client + server).
-- `Swarm` builder helper: takes a `PeerIdentity`, returns a configured swarm. `--relay-server` opt-in (off by default for consumer daemons; on for the dedicated `aukilabs/relay` infrastructure node).
-- Listen-address selection from a `ReachabilityRecord`-shaped config.
-- Dial-by-peer-id helper: given a `PeerId` and a list of multiaddrs (possibly circuit-relay multiaddrs), dial through.
-- `_p2p._udp.local.` mDNS coexistence with the existing `_auki._tcp.local.` advertisement (parking-lot question; resolution drives the M1 default).
-
-Tests: connect two swarms over loopback; verify circuit-relay client→server→client round-trip with the relay-server opt-in; verify the off-by-default consumer daemon refuses to act as a relay-server.
-
-## After M1
+## After M1b
 
 - **Layer 2 — capability advertisement / discovery.** Per Reid: capability identifiers are the namespaced strings already in `Capability`; what's missing is the libp2p protocol that advertises a peer's capability list and lets others query it. Likely a `request-response` behaviour with a stable protocol id.
 - **Layer 3 — cluster admission.** Manager-issued signed tokens (built on `auki-identity`'s `CreationCert`); cluster-registry as authoritative directory. Required for Domain participation.
 
 ## Open items
 
-See [`parking_lot.md`](../parking_lot.md). The three biggest before M1 starts:
+See [`parking_lot.md`](../parking_lot.md). The three biggest before M1b starts:
 
-- Wallet → peer-key derivation path label format. `"peer/v1"` is shipped; whether to evolve to BIP32-style hardened paths later is in the parking lot.
 - mDNS coexistence between libp2p's `_p2p._udp.local.` and the SDK's existing `_auki._tcp.local.`.
+- Off-by-default relay-server plumbing — boolean in `SwarmConfig`, per-capability gate, or both.
 - Park-from-home access pattern: own Discovery Service query type, ride on capability recruitment, or stay manual-peer-id-paste for v1.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 2, 17:30 HKT, 2026
+
+`auki-network`: M1a landed — libp2p `Swarm` builder behind a default-off `swarm` feature. TCP + QUIC transports under Noise + Yamux; `identify` + `ping` behaviour. `build_swarm(&PeerIdentity, SwarmConfig)` returns a configured swarm already listening on the requested addresses; identify protocol id `/auki/identify/1.0.0`. 4 swarm tests + 1 doctest cover dial-and-mutual-identify over both TCP and QUIC; the no-feature M0 path stays WASM-compilable for Console. M1b (Circuit Relay v2 + mDNS coexistence) is the next chunk. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 2, 16:10 HKT, 2026
 
 `auki-network`: new crate — Layer 1 of the Reid milestone-2 networking stack, data types only. `PeerIdentity` (libp2p ed25519 keypair derived from a wallet via `derive_child("peer/v1")`), `ReachabilityRecord` (peer id + multiaddrs + capabilities + last-seen, JSON-serializable), `Capability` (namespaced-string newtype with the four canonical `networking:*` constants). M1 (libp2p Swarm with TCP/QUIC + Noise + Yamux + Circuit Relay v2) lands on top of these. WASM-friendly. See `auki-network/changelog.md` for detail.

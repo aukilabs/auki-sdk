@@ -44,7 +44,7 @@ Daemons that don't run mDNS still implement this endpoint; the values are operat
 
 ### `GET /api/state`
 
-Snapshot of the daemon's current session and all live recordings.
+Snapshot of the daemon's current session and all recordings, active and stopped.
 
 **Request.** No body.
 
@@ -58,6 +58,8 @@ Snapshot of the daemon's current session and all live recordings.
       "recording_id": "rec-0",
       "retention_ns": 30000000000,
       "started_at_ns": 1745000000000000000,
+      "stopped_at_ns": null,
+      "duration_ns": 30000000000,
       "frame_count": 612,
       "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
       "sensor_hash": "abc123...",
@@ -68,7 +70,9 @@ Snapshot of the daemon's current session and all live recordings.
       "recording_id": "rec-1",
       "retention_ns": 0,
       "started_at_ns": 1745000045000000000,
-      "frame_count": 138,
+      "stopped_at_ns": 1745000165000000000,
+      "duration_ns": 120000000000,
+      "frame_count": 3640,
       "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
       "sensor_hash": "abc123...",
       "clock_id": "K1-AABBCCDDEEFF/utc",
@@ -78,20 +82,25 @@ Snapshot of the daemon's current session and all live recordings.
 }
 ```
 
-| Field                          | Type     | Notes                                                              |
-| ------------------------------ | -------- | ------------------------------------------------------------------ |
-| `session_uuid`                 | string   | The session this daemon is currently writing to.                   |
-| `recordings`                   | array    | All currently-open recordings, ordered by `started_at_ns` ascending. |
-| `recordings[].recording_id`    | string   | Daemon-assigned identifier; opaque to consumers.                   |
-| `recordings[].retention_ns`    | integer  | Retention window for this recording. `0` = unbounded.              |
-| `recordings[].started_at_ns`   | integer  | Wall-clock UTC ns when the recording was opened.                   |
-| `recordings[].frame_count`     | integer  | Frames written to this recording so far.                           |
-| `recordings[].sensor_id`       | string   | The sensor this recording streams from. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
-| `recordings[].sensor_hash`     | string   | The content-addressed hash pinning the exact sensor entry the recording was opened against. The hash IS the version — don't substitute.                                            |
-| `recordings[].clock_id`        | string   | The clock used for the recording's per-frame timestamps. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). |
-| `recordings[].clock_hash`      | string   | The content-addressed hash pinning the exact clock entry. Same hash-is-version rule.                                                  |
+| Field                          | Type             | Notes                                                              |
+| ------------------------------ | ---------------- | ------------------------------------------------------------------ |
+| `session_uuid`                 | string           | The session this daemon is currently writing to.                   |
+| `recordings`                   | array            | All recordings of this session — active *and* stopped — ordered by `started_at_ns` ascending. |
+| `recordings[].recording_id`    | string           | Daemon-assigned identifier; opaque to consumers.                   |
+| `recordings[].retention_ns`    | integer          | Retention window for this recording. `0` = unbounded.              |
+| `recordings[].started_at_ns`   | integer          | Wall-clock UTC ns when the recording was opened.                   |
+| `recordings[].stopped_at_ns`   | integer \| null  | Same clock as `started_at_ns`, set the moment `DELETE /api/recordings/<id>` was processed. `null` while the recording is active. Recording state is determined by this field: `null` = active, non-null = stopped. |
+| `recordings[].duration_ns`     | integer          | Footage currently held in this recording. Computed by the daemon: `min(now - started_at_ns, retention_ns)` for an active ring buffer, `now - started_at_ns` for an active unbounded recording, `stopped_at_ns - started_at_ns` once stopped. |
+| `recordings[].frame_count`     | integer          | Frames written to this recording so far.                           |
+| `recordings[].sensor_id`       | string           | The sensor this recording streams from. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
+| `recordings[].sensor_hash`     | string           | The content-addressed hash pinning the exact sensor entry the recording was opened against. The hash IS the version — don't substitute.                                            |
+| `recordings[].clock_id`        | string           | The clock used for the recording's per-frame timestamps. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). |
+| `recordings[].clock_hash`      | string           | The content-addressed hash pinning the exact clock entry. Same hash-is-version rule.                                                  |
 
-**Important shape decision.** The auto-started ring buffer is `recordings[0]` with `retention_ns: 30000000000` (30 s default). It is **not** a separate `buffer` field. Daemons distinguish the buffer from intent recordings only by its `retention_ns` value. There can be exactly one auto-started buffer (started at session boot), or zero (some operator stopped it); intent recordings can be any number.
+**Important shape decisions.**
+
+- The auto-started ring buffer is `recordings[0]` with `retention_ns: 30000000000` (30 s default). It is **not** a separate `buffer` field. Daemons distinguish the buffer from intent recordings only by its `retention_ns` value. There can be exactly one auto-started buffer (started at session boot), or zero (some operator stopped it); intent recordings can be any number.
+- Stopped recordings stay in the `recordings` array for the lifetime of the session — they transition from `stopped_at_ns: null` to a non-null value, but they don't disappear. The list is "all recordings of this session," not "currently active recordings." Consumers wanting only active recordings filter on `stopped_at_ns == null`. Daemon restart resets the session (new `session_uuid`) and drops the in-memory list — stopped recordings remain on disk under `<session>/sensorlogs/<recording-id>/` regardless.
 
 ### `GET /api/registries/sensors/<sensor_id>/<sensor_hash>`
 
@@ -144,16 +153,16 @@ Open a new intent recording. Always unbounded (`retention_ns: 0`); buffer-style 
 
 ### `DELETE /api/recordings/<id>`
 
-Stop a specific recording. Closes the log on disk; the recording disappears from subsequent `GET /api/state` responses.
+Stop a specific recording. Closes the log on disk; the recording transitions to a stopped state in `GET /api/state` (its `stopped_at_ns` becomes non-null and its `duration_ns` freezes at the final value), but **stays in the `recordings` array** for the lifetime of the session.
 
 **Request.** No body.
 
 **Response.**
 
 - `200 OK`, `application/json`: `{ "stopped": "rec-1" }`
-- `404 Not Found`, `application/json`: `{ "error": "no such recording" }`
+- `404 Not Found`, `application/json`: `{ "error": "no such recording" }` — `id` is unknown, or refers to a recording that is already stopped (DELETE is idempotent only in the sense that re-stopping a stopped recording is a no-op error; the on-disk state doesn't change).
 
-Stopping the auto-started buffer (`recordings[0]`) is permitted — the buffer simply ends like any other recording.
+Stopping the auto-started buffer (`recordings[0]`) is permitted — the buffer enters the stopped state like any other recording.
 
 ### `PATCH /api/buffer`
 
@@ -265,6 +274,8 @@ A daemon is conformant when:
 - [ ] Every endpoint above responds with the exact JSON shapes documented.
 - [ ] `recordings[0]` is the auto-started buffer with `retention_ns: 30000000000` by default.
 - [ ] Each recording in `/api/state` carries `sensor_id` + `sensor_hash` + `clock_id` + `clock_hash` matching the on-disk manifest.
+- [ ] Each recording in `/api/state` carries `stopped_at_ns` (`null` while active) and `duration_ns` (computed per the table above) on the same clock as `started_at_ns`.
+- [ ] `DELETE /api/recordings/<id>` transitions the recording to stopped state but **keeps it in the `recordings` array** with non-null `stopped_at_ns`.
 - [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
 - [ ] `/api/info`'s `name` / `app` match the mDNS TXT records when both are configured.
 - [ ] Errors use `{"error": "..."}` JSON outside the documented per-endpoint response shapes.

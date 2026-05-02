@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 2, 16:10 HKT, 2026
+
+New `auki-network` crate — Layer 1 of the Reid milestone-2 networking stack, data types only. `PeerIdentity` derives a libp2p ed25519 keypair from a wallet via `derive_child("peer/v1")`; `ReachabilityRecord` is the JSON-serializable wire shape for peer discovery (peer id + multiaddrs + capabilities + last-seen); `Capability` is a namespaced-string newtype with the four canonical `networking:*` constants from the Reid architecture (`MESSAGE_FORWARDING`, `BULK_DATA_CHANNEL`, `TURN`, `SFU`). 11 tests covering the public derivation contract, JSON round-trips, and capability namespace handling. WASM-friendly — Console can derive a peer id from an in-browser wallet without M1's transport stack. M1 (libp2p `Swarm` with TCP/QUIC + Noise + Yamux + Circuit Relay v2) lands on top of these primitives. Built on `auki-identity`, `libp2p-identity` 0.2, and `multiaddr` 0.18 (with a small local serde adapter). No tag yet — wait until M1 lands or the Relay app earns it.
+
 ### broodsugar's claude · May 2, 14:30 HKT, 2026
 
 New `auki-identity` crate — wallet primitive (ed25519 keypair, sign/verify, deterministic child derivation, signed creation certs). Foundation for the upcoming `auki-network` (Layer 1 of the Reid milestone-2 networking work) and the Console session's wallet UI. WASM-friendly so Console can compile it in-browser. 16 tests; built on `ed25519-dalek` 2.x and `auki-hash`. No tag yet — wait until `auki-network` or Console actually consumes it.

@@ -5,7 +5,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Networking substrate for the Auki SDK — peer identity (derived from a wallet), reachability records, and named capabilities. libp2p Swarm scaffolding planned for M1."
+description = "Networking substrate for the Auki SDK — peer identity (derived from a wallet), reachability records, named capabilities, and (with the `swarm` feature) a libp2p Swarm builder for TCP/QUIC transport."
+
+[features]
+# Default-off so M0 stays WASM-friendly (Console derives peer-id without
+# pulling in libp2p's transport stack). Daemons opt in.
+default = []
+swarm = ["dep:libp2p", "dep:thiserror"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -13,5 +19,12 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
 
+# `swarm` feature
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "macros", "ed25519"], optional = true }
+thiserror = { version = "2", optional = true }
+
 [dev-dependencies]
 serde_json = "1"
+# For the swarm tests (require `--features swarm`).
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+futures = "0.3"

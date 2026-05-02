@@ -1,20 +1,24 @@
 //! Networking substrate for the Auki SDK.
 //!
-//! M0 (this crate today): the data types — [`PeerIdentity`] derived from a
-//! [`Wallet`] via `derive_child("peer/v1")`, [`ReachabilityRecord`]
-//! describing how to dial a peer, and [`Capability`] tagging what a peer
-//! offers.
+//! M0: the data types — [`PeerIdentity`] derived from a [`Wallet`] via
+//! `derive_child("peer/v1")`, [`ReachabilityRecord`] describing how to
+//! dial a peer, and [`Capability`] tagging what a peer offers.
 //!
-//! M1 (next): a libp2p `Swarm` with TCP/QUIC + Noise + Yamux + Circuit
-//! Relay v2 built on top of these types. The split lets Console + the
-//! Relay app start consuming peer identities immediately while the
-//! transport-side defaults (off-by-default relay-server, mDNS coexistence
-//! with `_auki._tcp.local.`) get worked out separately.
+//! M1a (behind the `swarm` feature): a libp2p `Swarm` with TCP/QUIC +
+//! Noise + Yamux and a minimal `identify` + `ping` behaviour. Two peers
+//! can dial each other and authenticate over either transport.
+//!
+//! M1b (next): Circuit Relay v2 (client + server, off by default for
+//! consumer daemons) and `_p2p._udp.local.` mDNS coexistence with the
+//! existing `_auki._tcp.local.` advertisement.
 
 use auki_identity::Wallet;
 use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "swarm")]
+pub mod swarm;
 
 /// Label used when deriving a wallet's peer key. Stable; do not change.
 ///

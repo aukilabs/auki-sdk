@@ -105,6 +105,19 @@ pub enum PointFieldDataType {
 
 `PointFieldDataType::byte_width()` returns the per-element width in bytes (1, 2, 4, or 8). Used by translation code (e.g. `auki-ros-adapter`) to compute output `point_step` after RGB normalization.
 
+### `SensorBody::Microphone`
+
+```rust
+pub struct Microphone {
+    pub sample_rate_hz: u32,        // e.g. 48000
+    pub channels: u32,              // 1 mono, 2 stereo, N for arrays
+    pub sample_format: String,      // "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_f32le" | "pcm_f64le"
+    pub channel_layout: String,     // "mono" | "stereo" | "5.1" | "7.1" | "ambisonic_b" | "n_channel"
+}
+```
+
+Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
+
 ## Log payload types
 
 ```rust
@@ -121,9 +134,14 @@ pub struct PointCloudLogEntry {
     #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,
 }
+
+pub struct AudioLogEntry {
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,     // interleaved samples per the registry's sample_format and channels
+}
 ```
 
-Both byte buffers are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads.
+All three byte buffers are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads.
 
 ## Public functions
 
@@ -163,7 +181,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (18 total)
+## Tests (21 total)
 
 | Test | Asserts |
 |------|---------|

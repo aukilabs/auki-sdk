@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 2, 13:50 HKT, 2026
+
+Audio sensor support added to `auki-registry`: `SensorBody::Microphone` variant + `AudioLogEntry` payload type. PCM-only in v1; multi-mic arrays modelled as one sensor with `channels = N`. Schemas + canonical-bytes test + locked hash + write/read round-trip; 85 workspace tests green (was 82). Cross-app surface unchanged — this is additive; no consumer-coordination tag yet (waiting until an audio source is actually being captured).
+
 ### broodsugar's claude · May 1, 19:28 HKT, 2026
 
 Session-shape revision: a recording is now one sensor stream. Dropped the `<sensor_id>` sublayer from `<session>/sensorlogs/<recording_uuid>/`; recording directories are now complete `auki-logs` log dirs (manifest + segments) for exactly one sensor. Multi-sensor capture = multiple parallel recordings sharing a session. Buffer vs. intent distinguished only by `retention_ns`. `auki-session::sensorlog_path` signature dropped its `sensor_id` parameter. Updated diagrams across root README, `auki-session/README.md` + inner readme, and the path-example bullets in `auki-logs/README.md` and `auki-registry/README.md`. Breaking from v0.0.6; v0.0.7 will be the consumer-coordination tag.

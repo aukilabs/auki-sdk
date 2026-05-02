@@ -34,6 +34,7 @@ pub struct SensorRegistryEntry {
 pub enum SensorBody {
     RgbCamera(RgbCamera),
     PointCloud(PointCloud),
+    Microphone(Microphone),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +94,35 @@ impl PointFieldDataType {
     }
 }
 
+/// Static identity of a microphone (or microphone array) — the bits that
+/// describe how to interpret the bytes downstream consumers will see in
+/// [`AudioLogEntry`].
+///
+/// **Multi-microphone arrays are modelled as one sensor with `channels = N`,
+/// not as N independent sensors.** This is right for physically-synchronized
+/// arrays where the channels share a clock and a beam-forming origin. Use
+/// separate `SensorRegistryEntry` records only when mics are physically
+/// independent capture devices on different chips.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Microphone {
+    /// Samples per channel per second (e.g. 48000).
+    pub sample_rate_hz: u32,
+    /// Number of channels per sample (1 mono, 2 stereo, N for arrays).
+    pub channels: u32,
+    /// Encoding of one sample. v1 supports raw PCM only:
+    ///   `pcm_s16le` | `pcm_s24le` | `pcm_s32le` | `pcm_f32le` | `pcm_f64le`.
+    /// Compressed formats (FLAC, Opus) get added as additional values when
+    /// they earn it; readers should treat unknown values as opaque.
+    pub sample_format: String,
+    /// Channel layout label. Cross-language readers use this to know which
+    /// channel index means what:
+    ///   `mono` | `stereo` | `5.1` | `7.1` | `ambisonic_b` | `n_channel`.
+    /// `n_channel` means "N independent channels, no specific layout" —
+    /// appropriate for generic mic arrays where the consumer does its own
+    /// beam-forming.
+    pub channel_layout: String,
+}
+
 impl SensorRegistryEntry {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         canonicalize(self)
@@ -145,6 +175,28 @@ pub struct PointCloudLogEntry {
     pub is_dense: bool,
     /// `data.len()` MUST equal `point_step × width × height` where `point_step`
     /// comes from the registry entry. Encoded as a CBOR byte string.
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+
+/// The Audio Log payload (CBOR-encoded under auki-logs framing). Each entry
+/// is one chunk of audio samples; the framing's `timestamp_ns` is the
+/// chunk's start time. The byte layout of `data` is described by the
+/// corresponding `SensorBody::Microphone` registry entry referenced by the
+/// log's manifest.
+///
+/// Samples are **interleaved**: for `channels = N`, the byte stream is
+/// `[s0_c0, s0_c1, ..., s0_cN-1, s1_c0, s1_c1, ..., s1_cN-1, ...]`. Each
+/// sample's encoding is the registry entry's `sample_format`.
+///
+/// Chunk size (samples per entry) is the integrator's choice; the SDK does
+/// not impose a value. Typical: 10–100 ms of samples per chunk at 48 kHz.
+/// Sample count per chunk is `data.len() / (sample_byte_width × channels)`
+/// where `sample_byte_width` is determined by `sample_format`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioLogEntry {
+    /// Interleaved samples per the registry's `sample_format` and `channels`.
+    /// Encoded as a CBOR byte string.
     #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,
 }
@@ -517,7 +569,9 @@ mod tests {
                 cam.width = 1920;
                 cam.height = 1080;
             }
-            SensorBody::PointCloud(_) => panic!("test was set up for RgbCamera"),
+            SensorBody::PointCloud(_) | SensorBody::Microphone(_) => {
+                panic!("test was set up for RgbCamera")
+            }
         }
         let second_hash = entry.hash();
         assert_ne!(first_hash, second_hash);
@@ -692,5 +746,48 @@ mod tests {
         assert_eq!(PointFieldDataType::Uint32.byte_width(), 4);
         assert_eq!(PointFieldDataType::Float32.byte_width(), 4);
         assert_eq!(PointFieldDataType::Float64.byte_width(), 8);
+    }
+
+    // ─── Microphone tests ──────────────────────────────────────────────────
+
+    fn m1_microphone_entry() -> SensorRegistryEntry {
+        SensorRegistryEntry {
+            sensor_id: "K1-AABBCCDDEEFF/head_array_4mic".into(),
+            body: SensorBody::Microphone(Microphone {
+                sample_rate_hz: 48_000,
+                channels: 4,
+                sample_format: "pcm_s16le".into(),
+                channel_layout: "n_channel".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn microphone_entry_serializes_to_canonical_bytes() {
+        let bytes = m1_microphone_entry().canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"microphone"}"#
+        );
+    }
+
+    #[test]
+    fn microphone_entry_hash_is_locked() {
+        // Pin the XXH3-128 of the M1 example microphone entry.
+        // Updates to this must be coordinated with any cross-language reader.
+        assert_eq!(
+            m1_microphone_entry().hash(),
+            "6e0a195364866f18834d2db8e2a0699f"
+        );
+    }
+
+    #[test]
+    fn write_then_read_microphone_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_microphone_entry();
+        let outcome = write_sensor(dir.path(), &entry).unwrap();
+        let hash = outcome.hash().to_string();
+        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        assert_eq!(read, Some(entry));
     }
 }

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 2, 13:50 HKT, 2026
+
+`auki-registry`: added audio sensor support — `SensorBody::Microphone` variant + `AudioLogEntry` payload (PCM only in v1; multi-mic array = one sensor with `channels = N`). See `auki-registry/changelog.md` for detail.
+
 ### broodsugar's claude · May 1, 19:28 HKT, 2026
 
 `auki-session`: `sensorlog_path` drops its `sensor_id` parameter — recording = one sensor stream; sensor identity lives in the manifest, not the path. Breaking; tagged for consumer coordination as v0.0.7. See `auki-session/changelog.md` for detail.

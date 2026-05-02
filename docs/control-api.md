@@ -8,7 +8,7 @@ This is **not** part of the data protocol. Data products flow through the SDK's 
 
 A daemon is **Auki Control API v1 conformant** when it:
 
-1. Implements all six endpoints below with the exact request/response shapes specified.
+1. Implements every endpoint below with the exact request/response shapes specified.
 2. Returns a JSON `{"error": "<message>"}` body for any non-success status code outside the response shapes specified per endpoint.
 3. (Optional but recommended) Advertises itself via mDNS per the convention below.
 
@@ -19,6 +19,28 @@ Consumers (Park, etc.) MAY auto-discover daemons via mDNS and MUST also support 
 ## Endpoints
 
 All endpoints live under `/api/`. Daemons bind `0.0.0.0:<port>` — no authentication, trusted-LAN assumption (see [Security model](#security-model) below).
+
+### `GET /api/info`
+
+Daemon identity. Operator-facing label and the implementing application's name, suitable for use as a UI label when a consumer reaches the daemon by URL rather than mDNS.
+
+**Request.** No body.
+
+**Response.** `200 OK`, `application/json`:
+
+```json
+{
+  "name": "k1-walker",
+  "app": "boosterapp"
+}
+```
+
+| Field  | Type   | Notes                                                         |
+| ------ | ------ | ------------------------------------------------------------- |
+| `name` | string | Operator-friendly identifier. MUST match the `name` TXT record when the daemon also advertises via mDNS. |
+| `app`  | string | Application identifier. MUST match the `app` TXT record when the daemon also advertises via mDNS. |
+
+Daemons that don't run mDNS still implement this endpoint; the values are operator-configurable strings (`--device-name`, defaults to hostname / binary name when unset).
 
 ### `GET /api/state`
 
@@ -36,13 +58,21 @@ Snapshot of the daemon's current session and all live recordings.
       "recording_id": "rec-0",
       "retention_ns": 30000000000,
       "started_at_ns": 1745000000000000000,
-      "frame_count": 612
+      "frame_count": 612,
+      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
+      "sensor_hash": "abc123...",
+      "clock_id": "K1-AABBCCDDEEFF/utc",
+      "clock_hash": "def456..."
     },
     {
       "recording_id": "rec-1",
       "retention_ns": 0,
       "started_at_ns": 1745000045000000000,
-      "frame_count": 138
+      "frame_count": 138,
+      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
+      "sensor_hash": "abc123...",
+      "clock_id": "K1-AABBCCDDEEFF/utc",
+      "clock_hash": "def456..."
     }
   ]
 }
@@ -56,8 +86,38 @@ Snapshot of the daemon's current session and all live recordings.
 | `recordings[].retention_ns`    | integer  | Retention window for this recording. `0` = unbounded.              |
 | `recordings[].started_at_ns`   | integer  | Wall-clock UTC ns when the recording was opened.                   |
 | `recordings[].frame_count`     | integer  | Frames written to this recording so far.                           |
+| `recordings[].sensor_id`       | string   | The sensor this recording streams from. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
+| `recordings[].sensor_hash`     | string   | The content-addressed hash pinning the exact sensor entry the recording was opened against. The hash IS the version — don't substitute.                                            |
+| `recordings[].clock_id`        | string   | The clock used for the recording's per-frame timestamps. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). |
+| `recordings[].clock_hash`      | string   | The content-addressed hash pinning the exact clock entry. Same hash-is-version rule.                                                  |
 
 **Important shape decision.** The auto-started ring buffer is `recordings[0]` with `retention_ns: 30000000000` (30 s default). It is **not** a separate `buffer` field. Daemons distinguish the buffer from intent recordings only by its `retention_ns` value. There can be exactly one auto-started buffer (started at session boot), or zero (some operator stopped it); intent recordings can be any number.
+
+### `GET /api/registries/sensors/<sensor_id>/<sensor_hash>`
+
+Return a Sensor Registry entry by its content-addressed hash. The response body is the on-disk JSON at `<app_root>/registries/sensors/<sensor_id>/<sensor_hash>.json` served verbatim — the SDK's [`auki-registry`](../crates/auki-registry/README.md) crate owns the schema; this endpoint is a thin file-server.
+
+Hash-keyed entries are immutable: once a `(sensor_id, sensor_hash)` pair is written, it never changes. Consumers cache aggressively.
+
+**Request.** No body.
+
+**Response.**
+
+- `200 OK`, `application/json`, with `Cache-Control: public, max-age=31536000, immutable` — the registry entry. Body shape is whatever [`auki-registry`](../crates/auki-registry/README.md) defines for sensors (e.g. `data_type`, `width`, `height`, `frame_rate_hz`, `pixel_format`, intrinsics).
+- `404 Not Found`, `application/json`: `{ "error": "no such sensor entry" }` — `sensor_id` exists but the requested `sensor_hash` is not on disk, or `sensor_id` itself is unknown.
+
+### `GET /api/registries/clocks/<clock_id>/<clock_hash>`
+
+Return a Clock Registry entry by its content-addressed hash. Same shape, semantics, and caching guarantees as the sensors endpoint above; body is the on-disk JSON at `<app_root>/registries/clocks/<clock_id>/<clock_hash>.json` served verbatim per the [`auki-registry`](../crates/auki-registry/README.md) clock-entry schema (e.g. `kind`, `epoch`, `scope`).
+
+**Request.** No body.
+
+**Response.**
+
+- `200 OK`, `application/json`, with `Cache-Control: public, max-age=31536000, immutable` — the registry entry.
+- `404 Not Found`, `application/json`: `{ "error": "no such clock entry" }` — `clock_id` exists but the requested `clock_hash` is not on disk, or `clock_id` itself is unknown.
+
+A future Frame Registry endpoint will follow the same shape (`/api/registries/frames/<frame_id>/<frame_hash>`); not yet specified — the on-disk Frame Registry is still pending in the SDK.
 
 ### `GET /api/preview/latest.jpg`
 
@@ -202,8 +262,11 @@ Decision deferred until a real v2 use case appears. Until then, `/api/` ≡ v1 �
 
 A daemon is conformant when:
 
-- [ ] All six endpoints respond with the exact JSON shapes documented.
+- [ ] Every endpoint above responds with the exact JSON shapes documented.
 - [ ] `recordings[0]` is the auto-started buffer with `retention_ns: 30000000000` by default.
+- [ ] Each recording in `/api/state` carries `sensor_id` + `sensor_hash` + `clock_id` + `clock_hash` matching the on-disk manifest.
+- [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
+- [ ] `/api/info`'s `name` / `app` match the mDNS TXT records when both are configured.
 - [ ] Errors use `{"error": "..."}` JSON outside the documented per-endpoint response shapes.
 - [ ] HTTP server binds `0.0.0.0:<port>`.
 - [ ] mDNS advertisement publishes `_auki._tcp.local.` with `name` and `app` TXT records (recommended).

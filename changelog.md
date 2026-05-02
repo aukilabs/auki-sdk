@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 2, 14:30 HKT, 2026
+
+New `auki-identity` crate — wallet primitive (ed25519 keypair, sign/verify, deterministic child derivation, signed creation certs). Foundation for the upcoming `auki-network` (Layer 1 of the Reid milestone-2 networking work) and the Console session's wallet UI. WASM-friendly so Console can compile it in-browser. 16 tests; built on `ed25519-dalek` 2.x and `auki-hash`. No tag yet — wait until `auki-network` or Console actually consumes it.
+
 ### broodsugar's claude · May 2, 13:50 HKT, 2026
 
 Audio sensor support added to `auki-registry`: `SensorBody::Microphone` variant + `AudioLogEntry` payload type. PCM-only in v1; multi-mic arrays modelled as one sensor with `channels = N`. Schemas + canonical-bytes test + locked hash + write/read round-trip; 85 workspace tests green (was 82). Cross-app surface unchanged — this is additive; no consumer-coordination tag yet (waiting until an audio source is actually being captured).

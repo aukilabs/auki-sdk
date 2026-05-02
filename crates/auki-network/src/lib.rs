@@ -4,13 +4,13 @@
 //! `derive_child("peer/v1")`, [`ReachabilityRecord`] describing how to
 //! dial a peer, and [`Capability`] tagging what a peer offers.
 //!
-//! M1a (behind the `swarm` feature): a libp2p `Swarm` with TCP/QUIC +
-//! Noise + Yamux and a minimal `identify` + `ping` behaviour. Two peers
-//! can dial each other and authenticate over either transport.
-//!
-//! M1b (next): Circuit Relay v2 (client + server, off by default for
-//! consumer daemons) and `_p2p._udp.local.` mDNS coexistence with the
-//! existing `_auki._tcp.local.` advertisement.
+//! M1 (behind the `swarm` feature): a libp2p `Swarm` with TCP + QUIC +
+//! Noise + Yamux. Behaviour: `identify` + `ping` always; `mdns` (on by
+//! default for daemons) for `_p2p._udp.local.` LAN discovery;
+//! `relay::client` always so any peer can be a relay-client; `relay`
+//! (the server side) optional, off by default for consumer daemons.
+//! Plus a [`swarm::dial_peer`] helper for Park-from-home circuit-relay
+//! dialing.
 
 use auki_identity::Wallet;
 use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};

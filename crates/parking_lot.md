@@ -20,7 +20,7 @@ The convention specifies `src/sprint.md` per crate (current work + next steps). 
 - [`auki-identity/`](auki-identity/parking_lot.md) — BIP32-vs-labeled-hash derivation; encrypted-at-rest format; BIP39 mnemonics; signing-scheme v2 shape
 - [`auki-jcs/`](auki-jcs/parking_lot.md) — `serde_jcs` upstream vendoring strategy
 - [`auki-logs/`](auki-logs/parking_lot.md) — per-entry checksums; reader streaming for unbounded captures
-- [`auki-network/`](auki-network/parking_lot.md) — mDNS coexistence (`_p2p._udp.local.` vs `_auki._tcp.local.`); peer-derivation label evolution; Park-from-home access pattern; relay-server off-by-default plumbing; `ReachabilityRecord` extensibility; `SwarmConfig` knob minimalism; `BuildError::Transport` structure
+- [`auki-network/`](auki-network/parking_lot.md) — peer-derivation label evolution; `ReachabilityRecord` extensibility; `SwarmConfig` knob minimalism; `BuildError::Transport` structure; loopback `add_external_address` workaround note; DCUtR/hole-punching as future work. (3 Reid M2 questions resolved + propagated 2026-05-02 in M1b code.)
 - [`auki-registry/`](auki-registry/parking_lot.md) — Frame Registry shape; UTC clock epoch format; sensor_id naming convention formalization; atomic-write tmp cleanup
 - [`auki-ros-adapter/`](auki-ros-adapter/parking_lot.md) — `r2r` typesupport blocker
 - [`auki-session/`](auki-session/parking_lot.md) — TimeTransform log path encoding ambiguity

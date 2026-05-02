@@ -20,7 +20,7 @@ multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
 
 # `swarm` feature
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "macros", "ed25519"], optional = true }
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "macros", "ed25519"], optional = true }
 thiserror = { version = "2", optional = true }
 
 [dev-dependencies]

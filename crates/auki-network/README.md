@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC transport and a minimal `identify` + `ping` behaviour (M1a — behind the `swarm` feature). Circuit Relay v2 and mDNS coexistence land in M1b.
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, and a dial-by-peer-id helper (M1 — behind the `swarm` feature).
 
 ## What a peer is
 
@@ -62,9 +62,9 @@ A namespaced string identifying what a peer offers. Format is `"<namespace>:<nam
 
 Other namespaces (`discovery:*`, `compute:*`, etc.) are open. The Relay app implements the four `networking:*` capabilities; daemons advertise the ones they offer; consumers filter by namespace or specific value.
 
-## The swarm builder (M1a)
+## The swarm builder (M1)
 
-Behind the `swarm` feature. `auki_network::swarm::build_swarm(&identity, config)` returns a `libp2p::Swarm<Behaviour>` already listening on the configured addresses. Transport: TCP + QUIC, both authenticated with Noise (using the peer's ed25519 keypair) and multiplexed with Yamux. Behaviour: `identify` + `ping`.
+Behind the `swarm` feature. `auki_network::swarm::build_swarm(&identity, config)` returns a `libp2p::Swarm<Behaviour>` already listening on the configured addresses.
 
 ```rust
 use auki_identity::Wallet;
@@ -78,18 +78,34 @@ let swarm = build_swarm(&identity, SwarmConfig {
         "/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap(),
     ],
     agent_version: "boosterapp/0.1".into(),
+    enable_mdns: true,           // _p2p._udp.local. for LAN discovery
+    enable_relay_server: false,  // off for daemons; true for the Relay app
 })?;
 ```
 
-The swarm's `local_peer_id` matches `identity.peer_id()` exactly — caller can rely on this for advertising. Idle connections close after 60 s (ping resets the timer). Identify protocol id is `/auki/identify/1.0.0`; the `agent_version` string is the per-deployment knob.
+**Transport stack:** TCP + QUIC, both authenticated with Noise (using the peer's ed25519 keypair) and multiplexed with Yamux. Circuit Relay v2 client transport is wired in always, so any peer can dial through a relay; the relay-*server* behaviour is gated on `enable_relay_server`.
+
+**Behaviour composition:**
+
+| Field | Always-on | Notes |
+|-------|-----------|-------|
+| `identify` | yes | Protocol id `/auki/identify/1.0.0`; `agent_version` is the per-deployment knob |
+| `ping` | yes | Resets the 60 s idle-connection timer |
+| `mdns` (Toggle) | gated on `enable_mdns` | `_p2p._udp.local.` advertisement; on by default for daemons. Daemons keep their existing `_auki._tcp.local.` advertisement separately (control-API discovery, unchanged) — **dual-channel** per Reid parking-lot 1a |
+| `relay_client` | yes | Lets any peer dial through a relay; consumes circuit-relay multiaddrs |
+| `relay` (Toggle) | gated on `enable_relay_server` | The relay-*server* role; off by default for consumer daemons; on for the dedicated `aukilabs/relay` infrastructure node — **both-gates** per Reid parking-lot 2c |
+
+The swarm's `local_peer_id` matches `identity.peer_id()` exactly — caller can rely on this for advertising. Idle connections close after 60 s.
+
+**Park-from-home dialing:** `swarm::dial_peer(&mut swarm, peer_id, vec![addr1, addr2, ...])`. Addresses may be direct (`/ip4/.../tcp/...`) or circuit-relay-mediated (`/p2p/<relay>/p2p-circuit/p2p/<target>`). Per Reid parking-lot 3c, the operator pastes the daemon's peer-id and (if needed) a relay multiaddr into Park's UI; no Discovery Service dependency for the M2 demo.
 
 The `swarm` feature pulls in `libp2p` 0.56 + tokio runtime; non-WASM. Console depends on this crate without the feature (default-off) to derive peer ids from wallets in-browser.
 
 ## What this crate is *not*
 
-- **Not Circuit Relay yet.** M1b adds `libp2p::relay` (client + server, off by default for consumer daemons; opt-in for stable infrastructure nodes) on top of the M1a swarm.
-- **Not mDNS yet.** `_p2p._udp.local.` coexistence with the existing `_auki._tcp.local.` advertisement lands in M1b once the parking-lot question resolves.
-- **Not a directory.** Discovery — both LAN mDNS and remote Discovery Service — produces and consumes `ReachabilityRecord`s but lives elsewhere. The crate publishes the wire shape, not the lookup mechanism.
+- **Not a Discovery Service.** `ReachabilityRecord` is the wire shape; the lookup mechanism (mDNS for LAN, Discovery Service for cross-network) lives elsewhere. Park-from-home in v1 is operator-paste, not query.
+- **Not DCUtR / hole-punching.** Connections through circuit-relay stay relayed for now; upgrading to direct via DCUtR is a future addition (small; not load-bearing for the M2 demo).
+- **Not Layer 2 capability discovery.** A peer's `Capability` list is in its `ReachabilityRecord`; the libp2p protocol that advertises and queries capability lists at runtime is Layer 2 (post-M1).
 - **Not a key store.** Same separation as `auki-identity`: this crate hands you a peer key derived from a wallet; persistence (encrypted-at-rest, OS keychain) is downstream.
 - **Not a capability registry.** The crate fixes the format and surfaces the four canonical networking constants. Authoritative semantics for each capability live with the implementation that provides it (the Relay app for the four `networking:*` ones).
 

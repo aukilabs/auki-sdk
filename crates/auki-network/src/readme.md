@@ -5,7 +5,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 ## What's here
 
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
-- [`swarm.rs`](swarm.rs) — M1a libp2p `Swarm` builder, gated behind the `swarm` feature.
+- [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 
 ## Public types
 
@@ -24,13 +24,19 @@ pub struct Capability(pub String);
 
 pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 
-// M1a (behind `swarm` feature)
+// M1 (behind `swarm` feature)
 pub mod swarm {
-    pub struct Behaviour { /* derived from #[derive(NetworkBehaviour)] */ }
-    pub struct SwarmConfig { listen_addresses: Vec<Multiaddr>, agent_version: String }
+    pub struct Behaviour { /* identify + ping + Toggle<mdns> + relay_client + Toggle<relay> */ }
+    pub struct SwarmConfig {
+        listen_addresses: Vec<Multiaddr>,
+        agent_version: String,
+        enable_mdns: bool,           // default true
+        enable_relay_server: bool,   // default false
+    }
     pub enum BuildError { Transport(String), Listen { addr, source } }
     pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/1.0.0";
     pub fn build_swarm(identity: &PeerIdentity, config: SwarmConfig) -> Result<libp2p::Swarm<Behaviour>, BuildError>;
+    pub fn dial_peer(swarm: &mut Swarm<Behaviour>, peer: PeerId, addresses: Vec<Multiaddr>) -> Result<(), DialError>;
 }
 ```
 
@@ -71,26 +77,37 @@ peer_id     = keypair.public().to_peer_id()      // protobuf + multihash
 
 A backup of the wallet seed is sufficient to regenerate the peer identity. The derivation label `"peer/v1"` is fixed; rotating to `"peer/v2"` would be a coordinated SDK + consumer change.
 
-## How `build_swarm` works (M1a)
+## How `build_swarm` works (M1)
 
 ```text
 SwarmBuilder::with_existing_identity(identity.keypair().clone())
     .with_tokio()
     .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)
     .with_quic()
-    .with_behaviour(|key| Behaviour {
-        identify: identify::Behaviour::new(
-            identify::Config::new("/auki/identify/1.0.0", key.public())
-                .with_agent_version(config.agent_version)
-        ),
-        ping:     ping::Behaviour::default(),
+    .with_relay_client(noise::Config::new, yamux::Config::default)
+    .with_behaviour(|key, relay_client| Behaviour {
+        identify:     identify::Behaviour::new(/* protocol /auki/identify/1.0.0, agent_version */),
+        ping:         ping::Behaviour::default(),
+        mdns:         Toggle::from(enable_mdns.then(|| mdns::tokio::Behaviour::new(...))),
+        relay_client,
+        relay:        Toggle::from(enable_relay_server.then(|| relay::Behaviour::new(local_pid, ...))),
     })
     .with_swarm_config(|c| c.with_idle_connection_timeout(60s))
     .build()
     + listen_on(each address in config.listen_addresses)
 ```
 
+mDNS is constructed outside the closure because its constructor is fallible — the closure can only return `Behaviour` directly (or `Result<Behaviour, Box<dyn Error>>`), so mDNS errors are surfaced as `BuildError::Transport` before the swarm is built.
+
 `build_swarm` does the listening — caller doesn't need to call `swarm.listen_on` afterwards.
+
+## `dial_peer` helper
+
+```rust
+swarm::dial_peer(&mut swarm, peer_id, vec![addr1, addr2, ...])
+```
+
+The addresses may be direct or circuit-relay-mediated. The swarm picks among them; the relay-client behaviour handles routing transparently. Park-from-home (Reid parking-lot 3c) is operator-paste of `(peer-id, [optional relay multiaddr])` into Park's UI; Park calls this helper.
 
 ## Serde shape
 
@@ -98,7 +115,7 @@ SwarmBuilder::with_existing_identity(identity.keypair().clone())
 
 ## Tests
 
-15 unit tests + 1 doctest. Run with `cargo test -p auki-network --features swarm` for the full set; `cargo test -p auki-network` runs only the M0 tests (11).
+19 unit tests + 1 doctest. Run with `cargo test -p auki-network --features swarm` for the full set; `cargo test -p auki-network` runs only the M0 tests (11).
 
 | Test | Asserts |
 |------|---------|
@@ -117,6 +134,10 @@ SwarmBuilder::with_existing_identity(identity.keypair().clone())
 | `swarm::two_peers_identify_each_other_over_tcp` | TCP dial → Noise handshake → identify exchange both ways |
 | `swarm::two_peers_identify_each_other_over_quic` | Same as above, over QUIC |
 | `swarm::build_listens_on_all_provided_addresses` | Both listen addresses produce `NewListenAddr` events |
+| `swarm::build_with_mdns_enabled_succeeds` | Construction-only sanity (real mDNS discovery requires a multicast-capable interface; verified by daemon-level integration) |
+| `swarm::build_with_relay_server_enabled_succeeds` | Construction-only sanity |
+| `swarm::relay_server_accepts_reservation` | Full reservation flow: client dials relay → identify exchange → listen on `/p2p/<relay>/p2p-circuit` → `RelayClient::ReservationReqAccepted` |
+| `swarm::dial_peer_helper_dials_direct_address` | The `dial_peer` helper establishes a connection by `(PeerId, addresses)` and identify exchange completes |
 | doctest in `swarm.rs` | Builder example compiles |
 
 ## Dependencies
@@ -125,13 +146,13 @@ SwarmBuilder::with_existing_identity(identity.keypair().clone())
 - `libp2p-identity` (0.2, `ed25519` + `peerid` + `serde` features, `default-features = false`) — keypair, public key, PeerId encoding.
 - `multiaddr` (0.18) — typed multiaddr; serde adapter local to this crate.
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
-- *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `macros`, `ed25519`) — the swarm itself.
+- *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `macros`, `ed25519`) — the swarm itself.
 - *(swarm feature)* `thiserror` (2) — `BuildError`.
 - *(dev)* `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
 
 ## Consumers in this workspace
 
-- *(planned, downstream)* `aukilabs/relay` — implements the four `networking:*` capabilities on top of the M1a swarm; M1b adds Circuit Relay v2 to enable cross-LAN.
-- *(planned, downstream)* BoosterApp / Sentinel — consume the swarm builder; register `ReachabilityRecord`s with a configured Relay (M1b).
-- *(planned, downstream)* Park — dial daemons by peer-id via the Relay (M1b).
+- *(planned, downstream)* `aukilabs/relay` — sets `enable_relay_server: true`; advertises the four `networking:*` capabilities it implements.
+- *(planned, downstream)* BoosterApp / Sentinel — set `enable_relay_server: false`; consume the swarm, register `ReachabilityRecord`s with a configured Relay.
+- *(planned, downstream)* Park — uses `dial_peer(peer_id, [relay_multiaddr/p2p-circuit])` for Park-from-home.
 - *(planned, downstream)* Console — depends on `auki-network` *without* the `swarm` feature; uses M0 only to display a wallet's `peer_id` in-browser.

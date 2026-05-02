@@ -1,0 +1,17 @@
+[package]
+name = "auki-network"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Networking substrate for the Auki SDK — peer identity (derived from a wallet), reachability records, and named capabilities. libp2p Swarm scaffolding planned for M1."
+
+[dependencies]
+auki-identity = { path = "../auki-identity" }
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
+multiaddr = "0.18"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

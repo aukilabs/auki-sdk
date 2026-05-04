@@ -8,7 +8,7 @@ The on-device SDK for the Auki **real world web** — a collaborative spatial co
 
 ## What this SDK is for
 
-Each physical space — a warehouse, a hospital ward, a retail floor — is a **Domain**: a named coordinate system owned and operated by whoever built it. Domains are to the real world what websites are to the internet. They're privately owned, independently operated, and linked together by a shared protocol. Operationally, a Domain is a scene graph: typed nodes (frames, sensors, clocks) connected by transform edges, served by a designated Map.
+Each physical space — a warehouse, a hospital ward, a retail floor — gets a **Domain**: a unique tag applied to data, asserting that the data is *about* that space. Domains are to the real world what websites are to the internet — privately owned, independently operated, linked by a shared protocol. A Domain has one or more **scenegraphs** — structured representations of typed nodes (frames, sensors, clocks) connected by transform edges. The Domain Owner designates one as the canonical **Map**, served by default when a peer asks for "the map" without naming a scenegraph. See [Glossary.md](Glossary.md) for the full term list, including the distinction between Domain ID, Scenegraph ID, and Session ID.
 
 The Auki protocol exists so any node — a phone, a robot, a cloud server, a browser tab — can answer four questions about any other node:
 

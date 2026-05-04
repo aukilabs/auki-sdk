@@ -9,11 +9,14 @@ The rest of this README is the **on-disk format spec, version 1** — implementa
 ```
 <log_root>/
   manifest.json             RFC 8785 (JCS) canonical bytes
+  tags.jsonl                append-only TagClaim sidecar; optional, see ../../tags.md
   segments/
     <padded-ns>.seg         one file per segment
 ```
 
 `<padded-ns>` is the segment-start timestamp in nanoseconds, formatted as a 20-digit zero-padded decimal. Lexicographic order on filenames equals chronological order on segments.
+
+`tags.jsonl` is a reserved filename for the [`TagClaim`](../../tags.md) sidecar. The auki-logs writer does not produce or consume it (TagClaim handling lives outside this crate); the file is documented here so any tooling that enumerates a log directory accounts for it. Absent until something writes one.
 
 `<log_root>` itself is chosen by the caller. In practice the SDK's session shape places it at:
 

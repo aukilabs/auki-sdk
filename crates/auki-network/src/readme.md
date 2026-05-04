@@ -7,6 +7,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
 - [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
+- [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
 ## Public types
 
@@ -60,6 +61,17 @@ pub mod swarm {
     pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/1.0.0";
     pub fn build_swarm(identity: &PeerIdentity, config: SwarmConfig) -> Result<libp2p::Swarm<Behaviour>, BuildError>;
     pub fn dial_peer(swarm: &mut Swarm<Behaviour>, peer: PeerId, addresses: Vec<Multiaddr>) -> Result<(), DialError>;
+}
+
+// ansuz #5 (behind `app_instance` feature)
+pub mod app_instance {
+    pub enum DeriveError {
+        NoNetworkInterfaces,
+        NoSuitableMac,
+        Io(std::io::Error),
+    }
+    pub fn derive() -> Result<String, DeriveError>;
+    pub fn derive_from(macs: &[[u8; 6]]) -> Result<String, DeriveError>;
 }
 ```
 
@@ -124,6 +136,20 @@ mDNS is constructed outside the closure because its constructor is fallible — 
 
 `build_swarm` does the listening — caller doesn't need to call `swarm.listen_on` afterwards.
 
+## How `app_instance::derive` works (ansuz #5)
+
+```text
+macs = mac_address::MacAddressIterator::new()  // platform-specific syscalls
+candidates = macs
+    .filter(|m| m != [0; 6])                   // skip loopback
+    .filter(|m| m[0] & 0x02 == 0)              // skip locally-administered
+candidates.sort()                                // lexicographic by raw bytes
+first = candidates.first()
+output = format!("{:02x}{:02x}…")                // 12 lowercase hex chars
+```
+
+Errors: `NoNetworkInterfaces` if the iterator yields nothing; `NoSuitableMac` if everything is filtered out (typical in containers); `Io(std::io::Error)` if the underlying syscall fails. `derive_from(&[[u8; 6]])` is the same logic exposed as the testing seam.
+
 ## `dial_peer` helper
 
 ```rust
@@ -138,7 +164,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-35 unit tests + 3 integration tests + 1 doctest with the `swarm` feature; 27 unit tests + 3 integration tests without it. Run `cargo test -p auki-network --features swarm` for the full set; `cargo test -p auki-network` for the M0 + cluster-doc set.
+44 unit tests + 3 integration tests + 1 doctest with `--all-features`; 36 unit + 3 integration + 1 doctest with `--features swarm`; 27 unit + 3 integration with no features (the M0 + cluster-doc set). The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest) run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -181,6 +207,15 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `cluster_doc[integration]::loads_from_cli_override_path` | `--cluster-doc <path>` flow: `resolve_path` with override → `load` |
 | `cluster_doc[integration]::surfaces_invalid_peer_id_with_value_in_error` | Operator typo path: `LoadError::InvalidPeerId` carries the offending value |
 | doctest in `swarm.rs` | Builder example compiles |
+| `app_instance::derive_from_locked_mac_renders_lowercase_no_separators` | Locked: `[0x00,0x16,0x3e,0xab,0xcd,0xef]` → `"00163eabcdef"` (cross-language conformance) |
+| `app_instance::derive_from_returns_no_network_interfaces_on_empty_input` | Empty input → `NoNetworkInterfaces` |
+| `app_instance::derive_from_returns_no_suitable_mac_when_only_loopback` | All-zero MAC → `NoSuitableMac` |
+| `app_instance::derive_from_returns_no_suitable_mac_when_only_locally_administered` | Every MAC has U/L bit set → `NoSuitableMac` |
+| `app_instance::derive_from_skips_loopback_and_picks_remaining_ieee_mac` | Loopback + IEEE → returns the IEEE one |
+| `app_instance::derive_from_skips_locally_administered_mac` | Random + IEEE → returns the IEEE one |
+| `app_instance::derive_from_picks_lexicographically_first_when_multiple_ieee_macs` | Multiple IEEE MACs → smallest by raw bytes (deterministic) |
+| `app_instance::derive_from_output_is_exactly_twelve_lowercase_hex_chars` | Schema check: any success returns 12 lowercase hex chars |
+| `app_instance::ul_bit_logic_isolates_first_octet_bit_one` | U/L-bit math: `0x02` set → locally administered; `0x01` (multicast) unrelated |
 
 ## Dependencies
 
@@ -190,7 +225,8 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `macros`, `ed25519`) — the swarm itself.
 - *(swarm feature)* `thiserror` (2) — `BuildError`.
-- *(dev)* `serde_json` for `cluster_doc` round-trip tests; `tempfile` for fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
+- *(app_instance feature)* `mac_address` (1) — cross-platform interface enumeration via `getifaddrs` / `GetAdaptersAddresses`. Non-WASM by nature.
+- *(dev)* `tempfile` for `cluster_doc` fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
 
 ## Consumers in this workspace
 

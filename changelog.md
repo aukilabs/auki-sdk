@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 16:30 HKT, 2026
+
+`auki-network::app_instance::derive()` landed in [`crates/auki-network/src/app_instance.rs`](crates/auki-network/src/app_instance.rs) — implementation of ansuz #5, the per-machine identifier the new `/api/info` `app_instance` field will carry. Recipe locked per ansuz D4: first non-loopback IEEE-administered MAC (skipping all-zero and locally-administered MACs where the U/L bit `0x02` is set), sorted lexicographically for deterministic selection, rendered as 12 lowercase hex chars without separators (`aabbccddeeff`). Behind a new default-off `app_instance` feature so the M0 WASM path stays clean — pulls in the `mac_address` (1.x) crate. `DeriveError::{NoNetworkInterfaces, NoSuitableMac, Io}` covers the failure modes; `derive_from(&[[u8; 6]])` is the pure testing seam. 9 new tests including the locked cross-language vector `[0x00,0x16,0x3e,0xab,0xcd,0xef]` → `"00163eabcdef"`. Stability caveats accepted by ansuz: fragile in containers, VMs, and multi-NIC environments. A stable-id alternative — wallet-derived and persisted on first boot — is parked for after ansuz.
+
 ### broodsugar's claude · May 4, 14:30 HKT, 2026
 
 `auki-network`: `cluster.json` discovery-doc spec + loader (ansuz milestone deliverable #1, [Notion plan](https://www.notion.so/3565c8e96592809fb674f769d826c1de)). New `cluster_doc` module — `ClusterDoc` / `ClusterPeer` types, `LoadError` enum, `load` + `default_path` + `resolve_path` (precedence: `--cluster-doc` CLI > `$AUKI_CLUSTER_DOC` > `<app_root>/registries/cluster_registries/cluster.json`). `peer_id` required per ansuz D1 (strict); `expected_app_id` advisory only. Doc is unsigned and the path is flat (one `cluster.json`, not hash-keyed) — both deliberate ansuz scope choices. 16 unit tests + 3 integration tests covering schema round-trip, all five `LoadError` variants, and full path-resolution precedence including the empty-env-as-unset edge.

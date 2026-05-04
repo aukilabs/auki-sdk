@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 16:30 HKT, 2026
+
+`auki-network`: `app_instance::derive()` landed (ansuz #5) — per-machine identifier behind a default-off `app_instance` feature. Recipe: first non-loopback IEEE-administered MAC (skipping U/L-bit-set / locally-administered MACs), sorted lexicographically, rendered as 12 lowercase hex chars (`aabbccddeeff`). New `mac_address` (1.x) optional dep — non-WASM. `derive_from(&[[u8; 6]])` exposed as testing seam. 9 new tests. Generates the value PR #25's `/api/info` redesign carries; PRs are independent. New parking-lot items: container/Docker handling, multi-NIC tiebreaker, eventual stable-id options. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 4, 14:30 HKT, 2026
 
 `auki-network`: `cluster.json` discovery-doc spec + loader (ansuz milestone deliverable #1). New always-on `cluster_doc` module — `ClusterDoc` / `ClusterPeer` types, `LoadError` enum (Io / Parse / UnsupportedVersion / InvalidPeerId / InvalidMultiaddr — typed-field errors carry the offending value), `load(&Path) -> Result<ClusterDoc, LoadError>` with two-phase parse (peeks at `version` first), `default_path` / `resolve_path` helpers honouring `cli_override > $AUKI_CLUSTER_DOC > default`. Path layout `<app_root>/registries/cluster_registries/cluster.json` — flat (not hash-keyed). `peer_id` required per ansuz D1; `expected_app_id` advisory only. 16 new unit tests + 3 integration tests; 35 unit + 3 integration + 1 doctest with `--features swarm`, 27 unit + 3 integration without. New `tempfile` dev-dep. Parking-lot items added: Cluster Registry primitive evolution, `cluster.json` signing, operator UX for peer-id discovery. See `auki-network/changelog.md` for detail.

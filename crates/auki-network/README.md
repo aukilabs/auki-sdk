@@ -197,6 +197,51 @@ pub fn resolve_path(app_root: &Path, cli_override: Option<&Path>) -> PathBuf;
 
 Both `peer_id` and each multiaddr are typed in the parsed struct — invalid strings surface as `InvalidPeerId(String)` / `InvalidMultiaddr(String)` carrying the offending text, so an operator can fix the doc from the error message alone. Unknown future versions surface as `UnsupportedVersion(u32)` from a two-phase parse that peeks at `version` before attempting the typed deserialize.
 
+## `app_instance`
+
+Behind the `app_instance` feature. `auki_network::app_instance::derive() -> Result<String, DeriveError>` returns a per-machine identifier — the value the `app_instance` field of `/api/info` carries to distinguish two daemons of the same `app` running on different hardware.
+
+**Recipe (locked per ansuz D4):** the first non-loopback IEEE-administered MAC address, lowercased hex without separators (`aabbccddeeff`).
+
+```rust
+use auki_network::app_instance;
+
+let id = app_instance::derive()?; // e.g. "00163eabcdef"
+```
+
+The recipe in detail:
+
+1. Enumerate the host's network interfaces (via the `mac_address` crate, which wraps `getifaddrs` / `GetAdaptersAddresses`).
+2. Skip interfaces with no MAC.
+3. Skip the loopback MAC (`00:00:00:00:00:00`).
+4. Skip locally-administered MACs — the U/L bit (`0x02` on the first octet) is `1`. These are randomized / generated MACs (macOS Private Wi-Fi, Docker bridges, VMs, hypervisors) and not stable across reboots.
+5. Sort the remaining MACs lexicographically by raw bytes; pick the first. Same hardware → same selection regardless of OS-level interface enumeration order.
+6. Render as 12 lowercase hex chars, no separators.
+
+**Stability caveats — fragile by design.** ansuz accepts these tradeoffs; a stable-id alternative is parked for later.
+
+- **Containers / Docker** typically only see locally-administered MACs → `DeriveError::NoSuitableMac`.
+- **VMs** with hypervisor-minted (locally-administered) MACs change identity across host migrations.
+- **Multi-NIC machines** can change selection if a NIC is added or removed (the lexicographically smallest MAC may shift).
+- **MAC randomization** (macOS Private Wi-Fi, `MACAddressPolicy=random`) is skipped; a wired NIC on the same machine still resolves.
+
+The `app_instance` feature is non-WASM by design — it depends on `mac_address`, which uses platform syscalls. Lives behind its own feature so the M0 path (Console, in-browser) stays WASM-friendly.
+
+```rust
+pub mod app_instance {
+    pub fn derive() -> Result<String, DeriveError>;
+    pub fn derive_from(macs: &[[u8; 6]]) -> Result<String, DeriveError>;
+
+    pub enum DeriveError {
+        NoNetworkInterfaces,
+        NoSuitableMac,
+        Io(std::io::Error),
+    }
+}
+```
+
+`derive_from` is the testing seam — production calls `derive()` (which gathers MACs from the host); tests call `derive_from(&[…])` with fixtures.
+
 ## What this crate is *not*
 
 - **Not a Discovery Service.** `ReachabilityRecord` is the wire shape; the lookup mechanism (mDNS for LAN, Discovery Service for cross-network) lives elsewhere. Park-from-home in v1 is operator-paste, not query.

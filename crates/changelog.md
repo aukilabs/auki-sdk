@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 16:39 HKT, 2026
+
+`auki-identity`: `load_or_mint_seed(path) -> Result<[u8; 32], SeedError>` added — the small fs helper backing ansuz's "stable peer key across restarts" guarantee (deliverable #6). Mints fresh 32 bytes from `OsRng` on first call, creates parents, writes atomically, sets `0o600` on Unix; on subsequent calls reads and rejects anything that isn't exactly 32 bytes. Path convention is caller's; documented in prose only. Module gated `#[cfg(not(target_arch = "wasm32"))]` so the rest of the crate stays WASM-clean. `tempfile` dev-dep added. +9 tests (16 → 25). See per-crate changelog for detail.
+
 ### broodsugar's claude · May 4, 16:30 HKT, 2026
 
 `auki-network`: `app_instance::derive()` landed (ansuz #5) — per-machine identifier behind a default-off `app_instance` feature. Recipe: first non-loopback IEEE-administered MAC (skipping U/L-bit-set / locally-administered MACs), sorted lexicographically, rendered as 12 lowercase hex chars (`aabbccddeeff`). New `mac_address` (1.x) optional dep — non-WASM. `derive_from(&[[u8; 6]])` exposed as testing seam. 9 new tests. Generates the value PR #25's `/api/info` redesign carries; PRs are independent. New parking-lot items: container/Docker handling, multi-NIC tiebreaker, eventual stable-id options. See `auki-network/changelog.md` for detail.

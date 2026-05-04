@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:38 HKT, 2026
+
+`auki-registry` + `auki-time-transforms`: Sensor Log family and TimeTransform Log manifest builders now produce the `app_id` and `session_id` fields specced this morning. New `build_sensor_log_manifest` in auki-registry (one function for Sensor / Point Cloud / Audio Log — they share the manifest shape; auki-logs added as dev-dep for the round-trip integration test); auki-registry now at 23 unit tests (was 21). `build_manifest` in auki-time-transforms gains two required parameters — **breaking API change**; existing test assertion expanded to cover the new fields, no count change (still 10). All workspace tests green. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 4, 10:22 HKT, 2026
 
 `auki-session` + `auki-registry` + `auki-time-transforms`: session lifecycle formally specced (one daemon run = one session, integrator-minted UUIDv4 at boot); Sensor Log family and TimeTransform Log manifests both gain a required `session_id: string` field carrying that UUID. Companion to the `app_id` change earlier today; together they make every manifest self-identifying about which app run produced it. Spec-only; implementation/tests pending. See per-crate changelogs for detail.

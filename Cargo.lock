@@ -216,6 +216,7 @@ version = "0.0.0"
 dependencies = [
  "auki-hash",
  "auki-jcs",
+ "auki-logs",
  "auki-session",
  "serde",
  "serde_bytes",

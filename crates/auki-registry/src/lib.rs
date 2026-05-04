@@ -17,6 +17,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -354,6 +355,46 @@ pub fn read_clock(
         });
     }
     Ok(Some(entry))
+}
+
+// ─── Sensor Log family manifest ──────────────────────────────────────────────
+
+/// Build a Sensor Log family manifest with the run-identifying `app_id` /
+/// `session_id`, the sensor and clock bindings, and auki-logs's required
+/// `segment_duration_ns` / `retention_ns`.
+///
+/// Same shape for Sensor Log, Point Cloud Log, and Audio Log — the
+/// `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose
+/// `body` variant tells a reader which payload type the segments hold.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
+/// (same value as the parent session directory name).
+pub fn build_sensor_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    sensor_id: &str,
+    sensor_hash: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
+        "sensor_id": sensor_id,
+        "sensor_hash": sensor_hash,
+        "clock_id": clock_id,
+        "clock_hash": clock_hash,
+        "segment_duration_ns": duration_as_i64_ns(segment_duration),
+        "retention_ns": duration_as_i64_ns(retention),
+    })
+}
+
+fn duration_as_i64_ns(d: Duration) -> i64 {
+    d.as_nanos().min(i64::MAX as u128) as i64
 }
 
 // ─── Internals ───────────────────────────────────────────────────────────────
@@ -789,5 +830,55 @@ mod tests {
         let hash = outcome.hash().to_string();
         let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
+    }
+
+    // ─── Sensor Log manifest builder ────────────────────────────────────────
+
+    #[test]
+    fn build_sensor_log_manifest_contains_all_required_fields() {
+        let m = build_sensor_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["sensor_id"], "K1-AABBCCDDEEFF/head_left_cam");
+        assert_eq!(m["sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
+        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
+        assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    #[test]
+    fn sensor_log_manifest_opens_a_log_round_trip() {
+        // End-to-end: the builder produces a manifest auki-logs accepts, and
+        // the manifest survives a write/read cycle via the auki-logs reader.
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = build_sensor_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        // The body type doesn't matter for the manifest round-trip; pick one.
+        let _log = auki_logs::Log::<SensorLogEntry>::open(dir.path(), manifest.clone()).unwrap();
+        let reader = auki_logs::Log::<SensorLogEntry>::read(dir.path()).unwrap();
+        // The on-disk manifest matches what we wrote.
+        assert_eq!(reader.manifest()["app_id"], "boosterapp");
+        assert_eq!(
+            reader.manifest()["session_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 }

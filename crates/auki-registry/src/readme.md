@@ -150,9 +150,22 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
 pub fn write_clock(app_root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
 pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
 pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
+
+pub fn build_sensor_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    sensor_id: &str,
+    sensor_hash: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value;
 ```
 
 Both entry types also expose `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
+
+`build_sensor_log_manifest` produces a `serde_json::Value` containing all eight required Sensor Log family manifest fields (the run-identifying `app_id` / `session_id`, the sensor and clock bindings, and `auki-logs`'s required `segment_duration_ns` / `retention_ns`). Same shape for Sensor Log, Point Cloud Log, and Audio Log — the `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose `body` variant tells a reader which payload type the segments hold.
 
 ## `WriteOutcome`
 
@@ -181,7 +194,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (21 total)
+## Tests (23 total)
 
 | Test | Asserts |
 |------|---------|
@@ -199,6 +212,8 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `read_missing_returns_none` | Absent files are `Ok(None)`, not an error |
 | `read_with_id_mismatch_errors` | Misplaced files surface as `IdMismatch` |
 | `write_outcome_hash_accessor` | `.hash()` works on both variants |
+| `build_sensor_log_manifest_contains_all_required_fields` | Builder produces all 8 manifest fields with correct types |
+| `sensor_log_manifest_opens_a_log_round_trip` | Manifest round-trips through `auki_logs::Log::open` + `read` (integration; uses dev-dep on `auki-logs`) |
 
 The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, three tests fail at once.
 

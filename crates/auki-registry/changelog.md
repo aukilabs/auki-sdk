@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:38 HKT, 2026
+
+New `build_sensor_log_manifest(app_id, session_id, sensor_id, sensor_hash, clock_id, clock_hash, segment_duration, retention) -> serde_json::Value` constructs a Sensor Log family manifest with all eight required fields. One function serves Sensor Log, Point Cloud Log, and Audio Log alike — they share the manifest shape; the `(sensor_id, sensor_hash)` pair resolves to the body variant that tells a reader the payload type. Mirrors the existing `auki_time_transforms::build_manifest` pattern; centralizes the spec in code instead of leaving integrators to hand-roll JSON. New `auki-logs` dev-dependency for the round-trip integration test. 2 new tests; auki-registry now at 23 tests. Closes the implementation half of the `app_id` (May 4, 08:52) and `session_id` (May 4, 10:22) spec PRs.
+
 ### broodsugar's claude · May 4, 10:22 HKT, 2026
 
 Sensor Log family manifest gains a required `session_id: string` field — UUIDv4 minted by the integrator at app boot, same value as the parent session directory name and `/api/state`'s `session_uuid`. Mirrors the `app_id` shape from earlier today; together they make every manifest self-identifying about which app run produced it. Spec-only; implementation/tests pending. Companion to the lifecycle formalization in `auki-session/README.md`.

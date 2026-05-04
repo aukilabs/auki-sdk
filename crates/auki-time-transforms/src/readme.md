@@ -73,6 +73,8 @@ If `|offset - prev_offset| ≥ threshold_ns`, the entry's `discontinuous` flag i
 
 ```rust
 pub fn build_manifest(
+    app_id: &str,
+    session_id: &str,
     from_clock_id: &str,
     from_clock_hash: &str,
     to_clock_id: &str,
@@ -82,7 +84,7 @@ pub fn build_manifest(
 ) -> serde_json::Value;
 ```
 
-Produces a `serde_json::Value` containing the four clock-binding fields plus `auki-logs`'s required `segment_duration_ns` / `retention_ns`.
+Produces a `serde_json::Value` containing the four clock-binding fields, the run-identifying `app_id` / `session_id` (UUIDv4 minted at app boot), plus `auki-logs`'s required `segment_duration_ns` / `retention_ns`.
 
 ## Background `Sampler`
 
@@ -117,7 +119,7 @@ Append failures are logged via `eprintln!` and the loop continues — a per-tick
 | `negative_step_also_flags` | Backwards UTC correction → `true` (uses `unsigned_abs`) |
 | `source_serializes_snake_case` | `LocalClockRead` → `"local_clock_read"` |
 | `entry_round_trips_through_cbor` | Full `TimeTransformEntry` survives a CBOR encode/decode cycle |
-| `build_manifest_contains_required_fields` | All 6 manifest fields present and typed correctly |
+| `build_manifest_contains_required_fields` | All 8 manifest fields present and typed correctly (incl. `app_id`, `session_id`) |
 | `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries present, sources correct, first-entry `discontinuous` invariant holds |
 
 ## Consumers in this workspace

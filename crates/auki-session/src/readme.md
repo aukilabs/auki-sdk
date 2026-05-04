@@ -15,10 +15,11 @@ pub fn clock_entry_path(app_root: &Path, clock_id: &str, hash: &str) -> PathBuf;
 pub fn session_root(app_root: &Path, session: &str) -> PathBuf;
 pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -> PathBuf;
 pub fn sensorlog_path(session_root: &Path, recording_uuid: &str) -> PathBuf;
+pub fn poselog_path(session_root: &Path, recording_uuid: &str) -> PathBuf;
 pub fn id_to_segment(id: &str) -> String;
 ```
 
-## Tests (8 total)
+## Tests (10 total)
 
 | Test | Asserts |
 |------|---------|
@@ -29,6 +30,8 @@ pub fn id_to_segment(id: &str) -> String;
 | `timetransform_log_path_uses_double_underscore_separator` | Joined as `<from>__<to>`, both substituted |
 | `sensorlog_path_is_session_join_sensorlogs_join_recording` | `<session>/sensorlogs/<recording_uuid>` |
 | `sensorlog_path_does_not_substitute_recording_uuid` | recording_uuid passes through opaque (no `/` → `__` substitution) |
+| `poselog_path_is_session_join_poselogs_join_recording` | `<session>/poselogs/<recording_uuid>` |
+| `poselog_path_does_not_substitute_recording_uuid` | Same opaque-uuid convention as sensorlog |
 | `id_to_segment_is_idempotent_for_ids_without_slashes` | No-op for ids without `/` |
 
 ## Consumers in this workspace

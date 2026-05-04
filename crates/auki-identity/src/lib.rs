@@ -16,11 +16,22 @@
 //!
 //! Both have legitimate uses; they're not interchangeable.
 //!
+//! ## Persistent identity
+//!
+//! [`load_or_mint_seed`] is a small filesystem helper for daemons that need
+//! a stable [`Wallet`] (and therefore a stable libp2p peer id) across
+//! process restarts. It loads 32 bytes from a path if it exists, otherwise
+//! mints fresh random bytes and persists them atomically with mode `0o600`.
+//! Native-only (gated on `not(target_arch = "wasm32")`) — the rest of the
+//! crate stays WASM-friendly for in-browser use.
+//!
 //! ## WASM
 //!
-//! No `std::fs`, no platform syscalls. `getrandom` is the only randomness
-//! source — works in browser via `js-sys` feature when downstream consumers
-//! enable it. Suitable for in-browser wallet management (Console).
+//! Core wallet primitives use no `std::fs` and no platform syscalls.
+//! `getrandom` is the only randomness source — works in browser via `js-sys`
+//! feature when downstream consumers enable it. Suitable for in-browser
+//! wallet management (Console). The [`load_or_mint_seed`] helper is the one
+//! exception and is excluded from WASM builds.
 //!
 //! ## What this crate is *not*
 //!
@@ -32,6 +43,11 @@
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+
+#[cfg(not(target_arch = "wasm32"))]
+mod seed;
+#[cfg(not(target_arch = "wasm32"))]
+pub use seed::{SeedError, load_or_mint_seed};
 
 // ─── Public types ────────────────────────────────────────────────────────────
 

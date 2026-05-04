@@ -57,9 +57,45 @@ pub fn wallet.issue_creation_cert(child: &Wallet, label: &str, created_at_ns: i6
 
 // Verification
 pub fn cert.verify() -> Result<(), VerifyError>
+
+// Persistent seed (native-only; not available on wasm32)
+pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>
 ```
 
 Public types are serde-serializable. Bytes fields use `serde_bytes` so JSON and CBOR encodings stay compact.
+
+## load_or_mint_seed
+
+Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind ansuz's "stable peer key across restarts" guarantee: clusters that pin peer ids in `cluster.json` rely on each daemon's wallet being deterministic across reboots, which means the seed must be persisted somewhere.
+
+```rust
+pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>;
+
+pub enum SeedError {
+    Io(std::io::Error),
+    InvalidLength(usize), // file existed but is not 32 bytes
+}
+```
+
+Behaviour:
+
+- **`path` exists:** read it. Return the 32 bytes if the file is exactly 32 bytes long; otherwise return `InvalidLength` carrying the actual length found. Never silently truncate, pad, or overwrite an existing file with the wrong shape.
+- **`path` does not exist:** create the parent directories with `std::fs::create_dir_all`, generate 32 cryptographically-random bytes from `OsRng`, write atomically (write to `<path>.tmp`, fsync, rename onto `path`) so a crash mid-write cannot leave a partial file behind, and on Unix set the file mode to `0o600` (owner read/write only) before returning. Successful writes leave no `.tmp` sidecar in place.
+- The function does not validate the seed cryptographically. Any 32 bytes are accepted on read; minted bytes come straight from the OS RNG. Validation is the wallet's job.
+
+### Path convention
+
+The function takes any `&Path`; the convention — *not baked into the signature* — is each app picks `~/.auki/<app>/identity.seed` so multiple Auki daemons can coexist on one host. Tests, ephemeral daemons, and alternative layouts shouldn't be locked into a hardcoded location, so the choice is the caller's.
+
+### What it deliberately doesn't do
+
+- **No encryption-at-rest.** The defence on disk is the file mode. Threat models that need more wrap their own keystore around this primitive — see the parking-lot item on encrypted-at-rest format.
+- **No OS-keychain integration.** Same reasoning. A future `auki-keystore` (or per-platform crate) would own that.
+- **No mnemonic backup.** BIP39 is parked separately; the helper hands the caller raw bytes.
+
+### WASM
+
+`load_or_mint_seed` is gated `#[cfg(not(target_arch = "wasm32"))]` — it touches the filesystem, which doesn't exist in browser builds. The rest of the crate (the wallet primitive itself) remains WASM-clean.
 
 ## What this crate is *not*
 
@@ -69,7 +105,9 @@ Public types are serde-serializable. Bytes fields use `serde_bytes` so JSON and 
 
 ## WASM compatibility
 
-The crate is designed to compile to WASM for in-browser use (Console). No `std::fs`, no platform syscalls, no panics on `no_std`. Randomness comes from `getrandom`, which works in the browser via downstream `js-sys` feature when consumers enable it. `ed25519-dalek` 2.x is WASM-friendly.
+The crate is designed to compile to WASM for in-browser use (Console). The wallet primitive — keypair generation, signing, verification, child derivation, creation certs — uses no `std::fs` and no platform syscalls. Randomness comes from `getrandom`, which works in the browser via downstream `js-sys` feature when consumers enable it. `ed25519-dalek` 2.x is WASM-friendly.
+
+The single exception is [`load_or_mint_seed`](#load_or_mint_seed), which touches the filesystem and is therefore gated `#[cfg(not(target_arch = "wasm32"))]`. WASM builds compile cleanly without it; browser consumers manage seed material via Console's in-browser keystore instead.
 
 ## Cross-language conformance
 

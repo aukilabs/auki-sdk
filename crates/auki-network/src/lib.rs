@@ -2,7 +2,10 @@
 //!
 //! M0: the data types — [`PeerIdentity`] derived from a [`Wallet`] via
 //! `derive_child("peer/v1")`, [`ReachabilityRecord`] describing how to
-//! dial a peer, and [`Capability`] tagging what a peer offers.
+//! dial a peer, [`Capability`] tagging what a peer offers, and
+//! [`ParticipantInfo`] (the wire shape every Auki participant exchanges to
+//! introduce itself; one schema, two transports — `GET /api/info` and the
+//! `/auki/cluster/1.0.0` libp2p protocol).
 //!
 //! M1 (behind the `swarm` feature): a libp2p `Swarm` with TCP + QUIC +
 //! Noise + Yamux. Behaviour: `identify` + `ping` always; `mdns` (on by
@@ -22,6 +25,8 @@ use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
 pub mod cluster_doc;
+pub mod participant;
+pub use participant::ParticipantInfo;
 
 #[cfg(feature = "swarm")]
 pub mod swarm;

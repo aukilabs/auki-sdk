@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 16:00 HKT, 2026
+
+`auki-network`: `ParticipantInfo` landed (ansuz networking-demo deliverable #2b) — the wire shape every Auki participant exchanges to introduce itself. New `auki_network::participant` module with `app`, `name`, `session_id`, `session_clock_id` + `_hash`, `session_now_ns`, `cluster_joined_at_ns: Option<u64>` (serializes as explicit `null` when `None`), `peer_id: PeerId` (multibase-base58 string in JSON), `app_instance`. **One schema, two transports**: matches the `/api/info` HTTP shape from PR #25 and the forthcoming `/auki/cluster/1.0.0` libp2p participant protocol (deliverable #3) byte-for-byte. M0 path — no `swarm` feature required; Park / Console can use it without libp2p's transport stack. 8 new tests including a locked golden-bytes pin. No new dependencies. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 4, 14:30 HKT, 2026
 
 `auki-network`: `cluster.json` discovery-doc spec + loader (ansuz milestone deliverable #1). New always-on `cluster_doc` module — `ClusterDoc` / `ClusterPeer` types, `LoadError` enum (Io / Parse / UnsupportedVersion / InvalidPeerId / InvalidMultiaddr — typed-field errors carry the offending value), `load(&Path) -> Result<ClusterDoc, LoadError>` with two-phase parse (peeks at `version` first), `default_path` / `resolve_path` helpers honouring `cli_override > $AUKI_CLUSTER_DOC > default`. Path layout `<app_root>/registries/cluster_registries/cluster.json` — flat (not hash-keyed). `peer_id` required per ansuz D1; `expected_app_id` advisory only. 16 new unit tests + 3 integration tests; 35 unit + 3 integration + 1 doctest with `--features swarm`, 27 unit + 3 integration without. New `tempfile` dev-dep. Parking-lot items added: Cluster Registry primitive evolution, `cluster.json` signing, operator UX for peer-id discovery. See `auki-network/changelog.md` for detail.

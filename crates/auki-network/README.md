@@ -101,6 +101,102 @@ The swarm's `local_peer_id` matches `identity.peer_id()` exactly — caller can 
 
 The `swarm` feature pulls in `libp2p` 0.56 + tokio runtime; non-WASM. Console depends on this crate without the feature (default-off) to derive peer ids from wallets in-browser.
 
+## `cluster.json` — the discovery doc
+
+For the ansuz networking-demo milestone, peer discovery on a small cluster is a **static, hand-edited directory file** rather than a discovery service. A daemon reads `cluster.json` at startup to learn the peer-ids and dialable multiaddrs of every other daemon in the cluster. There is no liveness gossip and no auto-update — operator edits the file when the cluster topology changes.
+
+### Why it's a directory, not a bootstrap list
+
+Every entry has a known `peer_id`. libp2p Noise rejects connection-time mismatches, so the doc gives **identity continuity across daemon restarts**: a Boosterapp that reboots derives the same peer-id from its persisted wallet seed (per [`PeerIdentity`](#peeridentity)) and is therefore recognizable as the same Boosterapp by every other node that has it pinned.
+
+This is intentionally narrower than a "bootstrap address list" (where addresses are hints and identities are learned). Pinned peer-ids are what makes long-running clusters survive operator restarts, IP churn, and certificate rotations.
+
+### Schema
+
+```json
+{
+  "version": 1,
+  "cluster_name": "demo-2026-05",
+  "peers": [
+    {
+      "peer_id": "12D3KooW...",
+      "addresses": [
+        "/ip4/192.168.1.10/tcp/4001",
+        "/ip4/192.168.1.10/udp/4001/quic-v1"
+      ],
+      "expected_app_id": "boosterapp",
+      "note": "robot 1 — K1 NUC"
+    }
+  ]
+}
+```
+
+| Field | Required? | Meaning |
+|-------|-----------|---------|
+| `version` | yes | Schema version. v1 is the only currently supported value. |
+| `cluster_name` | yes | Human-readable cluster identifier; surfaced in operator logs. |
+| `peers` | yes | Ordered list of pinned peers. Empty list is valid. |
+| `peers[].peer_id` | yes | libp2p `PeerId` (canonical base58 form). Used as the connection-time identity check. |
+| `peers[].addresses` | yes (may be empty) | Dialable multiaddrs. Direct (`/ip4/.../tcp/...`) or circuit-relay-mediated (`/p2p/<relay>/p2p-circuit/p2p/<peer>`) both accepted. Empty list is allowed (operator may have temporarily removed all addresses while keeping the peer pinned). |
+| `peers[].expected_app_id` | optional | Advisory `app_id` (e.g. `"boosterapp"`). **Not authoritative** — the wire-borne value (from `/api/info`) wins; the doc value is for fail-fast logging on mismatch. |
+| `peers[].note` | optional | Free-form human note; the SDK preserves it but never reads it. |
+
+### Path layout
+
+```text
+<app_root>/registries/cluster_registries/cluster.json
+```
+
+Sibling to the existing hash-keyed registries (`registries/sensors/`, `registries/clocks/`, `registries/frames/`). Unlike those, `cluster_registries/` is **flat** — one `cluster.json`, no per-cluster subdir, no hash-keyed entry files. Lifting the cluster doc into a Cluster Registry primitive is a future evolution if it earns one; ansuz keeps it a single file.
+
+### Resolution
+
+Daemons resolve the doc path by precedence: **CLI override → environment variable → default**. The CLI override is wired up by each integrator (typically a `--cluster-doc <path>` flag); the SDK exposes:
+
+```rust
+use auki_network::cluster_doc;
+
+let path = cluster_doc::resolve_path(app_root, cli_override);  // honors AUKI_CLUSTER_DOC
+let doc  = cluster_doc::load(&path)?;
+```
+
+The env var name is `AUKI_CLUSTER_DOC`; an empty value is treated as unset.
+
+### Loader API
+
+```rust
+pub struct ClusterDoc {
+    pub version: u32,
+    pub cluster_name: String,
+    pub peers: Vec<ClusterPeer>,
+}
+
+pub struct ClusterPeer {
+    pub peer_id: libp2p_identity::PeerId,
+    pub addresses: Vec<multiaddr::Multiaddr>,
+    pub expected_app_id: Option<String>,
+    pub note: Option<String>,
+}
+
+pub enum LoadError {
+    Io(std::io::Error),
+    Parse(serde_json::Error),
+    UnsupportedVersion(u32),
+    InvalidPeerId(String),
+    InvalidMultiaddr(String),
+}
+
+pub const SUPPORTED_VERSION: u32 = 1;
+pub const ENV_OVERRIDE: &str = "AUKI_CLUSTER_DOC";
+pub const DEFAULT_RELATIVE_PATH: &str = "registries/cluster_registries/cluster.json";
+
+pub fn load(path: &Path) -> Result<ClusterDoc, LoadError>;
+pub fn default_path(app_root: &Path) -> PathBuf;
+pub fn resolve_path(app_root: &Path, cli_override: Option<&Path>) -> PathBuf;
+```
+
+Both `peer_id` and each multiaddr are typed in the parsed struct — invalid strings surface as `InvalidPeerId(String)` / `InvalidMultiaddr(String)` carrying the offending text, so an operator can fix the doc from the error message alone. Unknown future versions surface as `UnsupportedVersion(u32)` from a two-phase parse that peeks at `version` before attempting the typed deserialize.
+
 ## What this crate is *not*
 
 - **Not a Discovery Service.** `ReachabilityRecord` is the wire shape; the lookup mechanism (mDNS for LAN, Discovery Service for cross-network) lives elsewhere. Park-from-home in v1 is operator-paste, not query.
@@ -108,6 +204,7 @@ The `swarm` feature pulls in `libp2p` 0.56 + tokio runtime; non-WASM. Console de
 - **Not Layer 2 capability discovery.** A peer's `Capability` list is in its `ReachabilityRecord`; the libp2p protocol that advertises and queries capability lists at runtime is Layer 2 (post-M1).
 - **Not a key store.** Same separation as `auki-identity`: this crate hands you a peer key derived from a wallet; persistence (encrypted-at-rest, OS keychain) is downstream.
 - **Not a capability registry.** The crate fixes the format and surfaces the four canonical networking constants. Authoritative semantics for each capability live with the implementation that provides it (the Relay app for the four `networking:*` ones).
+- **Not a Cluster Registry primitive.** `cluster.json` is a flat single-file directory, not hash-keyed like `Sensor` / `Clock` / `Frame` registries. Lifting it into a registry is a future evolution if it earns one; ansuz deliberately keeps it a config file. The doc is also unsigned for ansuz; cryptographic attestation of the cluster membership list is a future concern.
 
 ## WASM compatibility
 

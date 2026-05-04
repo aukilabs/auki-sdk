@@ -67,3 +67,35 @@ On real networks, external addresses get learned via identify (the client tells 
 Not in M1. libp2p `dcutr::Behaviour` upgrades a relayed connection to a direct one via simultaneous-open hole-punching. Small additive change to the `Behaviour` composition; not load-bearing for the M2 demo (Park dialing K1 through a relay works either way).
 
 Ship it when (a) the M2 demo is end-to-end and (b) Park-from-home traffic volume warrants reducing relay load.
+
+---
+
+## Cluster Registry primitive — does `cluster.json` graduate?
+
+ansuz #1 ships `cluster.json` as a **flat** single-file directory under `<app_root>/registries/cluster_registries/cluster.json`, deliberately **not** hash-keyed like the existing `Sensor` / `Clock` / `Frame` registries. The flat shape is right for ansuz: a small handful of pinned peers, edited by hand, no per-cluster history needed.
+
+Open: when (if ever) does this graduate to a real Cluster Registry primitive — hash-keyed entries at `<app_root>/registries/cluster_registries/<cluster_id>/<hash>.json`, content-addressed so consumers can pin a specific cluster snapshot? Plausible triggers:
+
+- **Multi-cluster daemons.** A single daemon participating in more than one cluster (e.g. operator's home cluster + a partner cluster) can't represent that with one `cluster.json`.
+- **Cluster-membership history.** Replay needs to know "which peers were in the cluster at time `t`" — flat overwrite loses this.
+- **Cryptographic attestation.** Once `cluster.json` is signed, an immutable hash-keyed file is the natural shape (attestation binds to bytes).
+
+Defer until one of those earns it. The flat path is a forward-compatible subset — a hash-keyed Cluster Registry can coexist with `cluster.json` for as long as we want.
+
+---
+
+## `cluster.json` signing — when?
+
+The doc is unsigned for ansuz. Trust is "operator wrote this file"; tampering on disk is out of scope. Once a Wallet-backed signing primitive is available (the partial answer in [`auki-identity/parking_lot.md`](../auki-identity/parking_lot.md)'s "Encrypted-at-rest format" thread), `cluster.json` becomes a natural candidate: sign the doc with the cluster operator's wallet, distribute the public key alongside, every reader verifies. Likely shape: a sibling `cluster.json.sig` rather than embedded signature — keeps the JSON itself diff-friendly.
+
+---
+
+## Operator UX for peer-id discovery
+
+The brief notes integrators wire `--cluster-doc <path>` through their CLI. Open question for daemon authors: how does an operator obtain the peer-ids to put in the doc in the first place?
+
+- BoosterApp / Sentinel can print their own peer-id to stdout at startup (and to `/api/info` over HTTP). Operator copies it.
+- Park can render a peer-id when an operator hits "show network identity."
+- A dedicated `auki peer-id` CLI subcommand on a SDK-driven binary would close the loop without needing the daemon running.
+
+Not a `cluster.json` concern per se — just adjacent. Document the recommended pattern in the `cluster.json` spec section once one daemon has the operator-facing UX nailed down.

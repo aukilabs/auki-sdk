@@ -2,13 +2,14 @@
 
 Current work and next steps to close the gap between [`src/readme.md`](readme.md) (what's implemented) and [the outer README](../README.md) (the spec).
 
-## Now (M0 + M1 — landed)
+## Now (M0 + M1 + ansuz #1 — landed)
 
 - **M0** — `PeerIdentity`, `ReachabilityRecord`, `Capability`. WASM-friendly. 11 tests.
 - **M1a** — libp2p `Swarm` builder behind the `swarm` feature. Transport: TCP + QUIC, Noise, Yamux. Behaviour: `identify` + `ping`. 4 tests + 1 doctest.
 - **M1b** — Circuit Relay v2 client (always) + relay-server (gated on `SwarmConfig.enable_relay_server`, `Toggle`-wrapped, off by default for consumer daemons). mDNS (`Toggle`-wrapped on `SwarmConfig.enable_mdns`, on by default for daemons — dual-channel coexistence with the existing `_auki._tcp.local.` advertisement). `dial_peer` helper for Park-from-home circuit-relay dialing. 4 new tests; 19 unit tests + 1 doctest total.
+- **ansuz #1** — `cluster.json` discovery-doc spec + loader. `cluster_doc` module (always-on; native-only via `std::fs`); `ClusterDoc` / `ClusterPeer` types; `load`, `default_path`, `resolve_path`; `LoadError` with five variants. 16 new unit + 3 integration tests; 35 unit + 3 integration + 1 doctest with `--features swarm`.
 
-The three Reid milestone-2 parking-lot questions are resolved and encoded in code: dual-channel mDNS (1a), both-gates relay-server (2c), manual peer-id paste for Park-from-home (3c).
+The three Reid milestone-2 parking-lot questions are resolved and encoded in code: dual-channel mDNS (1a), both-gates relay-server (2c), manual peer-id paste for Park-from-home (3c). The six ansuz decisions (D1–D6) are resolved on Notion; this crate has implemented D1 (strict — `peer_id` required in `cluster.json`).
 
 ## Next (Layer 2 — capability advertisement / discovery)
 

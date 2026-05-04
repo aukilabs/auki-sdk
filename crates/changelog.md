@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 14:30 HKT, 2026
+
+`auki-network`: `cluster.json` discovery-doc spec + loader (ansuz milestone deliverable #1). New always-on `cluster_doc` module — `ClusterDoc` / `ClusterPeer` types, `LoadError` enum (Io / Parse / UnsupportedVersion / InvalidPeerId / InvalidMultiaddr — typed-field errors carry the offending value), `load(&Path) -> Result<ClusterDoc, LoadError>` with two-phase parse (peeks at `version` first), `default_path` / `resolve_path` helpers honouring `cli_override > $AUKI_CLUSTER_DOC > default`. Path layout `<app_root>/registries/cluster_registries/cluster.json` — flat (not hash-keyed). `peer_id` required per ansuz D1; `expected_app_id` advisory only. 16 new unit tests + 3 integration tests; 35 unit + 3 integration + 1 doctest with `--features swarm`, 27 unit + 3 integration without. New `tempfile` dev-dep. Parking-lot items added: Cluster Registry primitive evolution, `cluster.json` signing, operator UX for peer-id discovery. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 4, 11:11 HKT, 2026
 
 `auki-registry` + `auki-session`: Pose Log capture support added — first concrete step toward `convert_pose`. New `PoseSource` enum (v1 ships `Ros2Tf { publishers }`; SLAM/odometry are the named extension points), `PoseLogEntry { transforms: Vec<TransformSample> }` payload, `build_pose_log_manifest(...)` builder in auki-registry; `poselog_path(session, recording_uuid)` helper in auki-session. Pose Log directories sit at `<session>/poselogs/<recording_uuid>/` — peer to Sensor Log, same parallel-recording semantics (multiple recordings per session, ring buffer + intent captures). **No Pose Source Registry** — source identity rides inline in the manifest under `"source"` because the payload is fully self-describing; provenance only, not a decoder. `f64` for translation/rotation matches ROS `geometry_msgs`. Locked canonical bytes + locked hash for the M1 example ROS 2 TF source. New `ciborium` dev-dep in auki-registry. auki-registry +6 tests (23 → 29); auki-session +2 tests (8 → 10). See per-crate changelogs for detail.

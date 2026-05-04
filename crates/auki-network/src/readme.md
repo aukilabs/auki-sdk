@@ -5,6 +5,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 ## What's here
 
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
+- [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 
 ## Public types
@@ -23,6 +24,28 @@ pub struct ReachabilityRecord {
 pub struct Capability(pub String);
 
 pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
+
+// `cluster_doc` module (always available, native-only)
+pub mod cluster_doc {
+    pub struct ClusterDoc {
+        pub version: u32,
+        pub cluster_name: String,
+        pub peers: Vec<ClusterPeer>,
+    }
+    pub struct ClusterPeer {
+        pub peer_id: libp2p_identity::PeerId,
+        pub addresses: Vec<multiaddr::Multiaddr>,
+        pub expected_app_id: Option<String>,
+        pub note: Option<String>,
+    }
+    pub enum LoadError { Io(std::io::Error), Parse(serde_json::Error), UnsupportedVersion(u32), InvalidPeerId(String), InvalidMultiaddr(String) }
+    pub const SUPPORTED_VERSION: u32 = 1;
+    pub const ENV_OVERRIDE: &str = "AUKI_CLUSTER_DOC";
+    pub const DEFAULT_RELATIVE_PATH: &str = "registries/cluster_registries/cluster.json";
+    pub fn load(path: &Path) -> Result<ClusterDoc, LoadError>;
+    pub fn default_path(app_root: &Path) -> PathBuf;
+    pub fn resolve_path(app_root: &Path, cli_override: Option<&Path>) -> PathBuf;
+}
 
 // M1 (behind `swarm` feature)
 pub mod swarm {
@@ -115,7 +138,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-19 unit tests + 1 doctest. Run with `cargo test -p auki-network --features swarm` for the full set; `cargo test -p auki-network` runs only the M0 tests (11).
+35 unit tests + 3 integration tests + 1 doctest with the `swarm` feature; 27 unit tests + 3 integration tests without it. Run `cargo test -p auki-network --features swarm` for the full set; `cargo test -p auki-network` for the M0 + cluster-doc set.
 
 | Test | Asserts |
 |------|---------|
@@ -138,6 +161,25 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `swarm::build_with_relay_server_enabled_succeeds` | Construction-only sanity |
 | `swarm::relay_server_accepts_reservation` | Full reservation flow: client dials relay → identify exchange → listen on `/p2p/<relay>/p2p-circuit` → `RelayClient::ReservationReqAccepted` |
 | `swarm::dial_peer_helper_dials_direct_address` | The `dial_peer` helper establishes a connection by `(PeerId, addresses)` and identify exchange completes |
+| `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
+| `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
+| `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |
+| `cluster_doc::io_error_for_missing_file` | Nonexistent path → `LoadError::Io` |
+| `cluster_doc::parse_error_for_invalid_json` | Malformed JSON → `LoadError::Parse` |
+| `cluster_doc::unsupported_version_rejected` | `version: 99` → `LoadError::UnsupportedVersion(99)` |
+| `cluster_doc::version_one_accepted` | `version: 1` is the supported value |
+| `cluster_doc::invalid_peer_id_rejected` | Garbage in `peer_id` → `LoadError::InvalidPeerId` |
+| `cluster_doc::invalid_multiaddr_rejected` | Garbage in `addresses[]` → `LoadError::InvalidMultiaddr` |
+| `cluster_doc::default_path_is_under_registries_cluster_registries` | Default path = `<app_root>/registries/cluster_registries/cluster.json` |
+| `cluster_doc::resolve_path_falls_back_to_default` | No CLI, no env → default |
+| `cluster_doc::resolve_path_honours_cli_override` | CLI override wins over default |
+| `cluster_doc::resolve_path_honours_env_override` | `$AUKI_CLUSTER_DOC` wins over default |
+| `cluster_doc::resolve_path_cli_beats_env` | CLI override wins over `$AUKI_CLUSTER_DOC` |
+| `cluster_doc::resolve_path_treats_empty_env_as_unset` | `AUKI_CLUSTER_DOC=""` falls through to default |
+| `cluster_doc::pretty_serialized_form_is_stable_under_round_trip` | None-valued optionals are skipped on serialize and round-trip clean |
+| `cluster_doc[integration]::loads_from_default_path_layout` | Daemon-startup flow: `resolve_path` then `load` against on-disk doc under `<app_root>/registries/cluster_registries/cluster.json` |
+| `cluster_doc[integration]::loads_from_cli_override_path` | `--cluster-doc <path>` flow: `resolve_path` with override → `load` |
+| `cluster_doc[integration]::surfaces_invalid_peer_id_with_value_in_error` | Operator typo path: `LoadError::InvalidPeerId` carries the offending value |
 | doctest in `swarm.rs` | Builder example compiles |
 
 ## Dependencies
@@ -148,7 +190,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `macros`, `ed25519`) — the swarm itself.
 - *(swarm feature)* `thiserror` (2) — `BuildError`.
-- *(dev)* `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
+- *(dev)* `serde_json` for `cluster_doc` round-trip tests; `tempfile` for fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
 
 ## Consumers in this workspace
 

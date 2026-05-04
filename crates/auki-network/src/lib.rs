@@ -11,11 +11,17 @@
 //! (the server side) optional, off by default for consumer daemons.
 //! Plus a [`swarm::dial_peer`] helper for Park-from-home circuit-relay
 //! dialing.
+//!
+//! ansuz milestone deliverable #1 — see [`cluster_doc`] for the
+//! `cluster.json` discovery-doc spec and loader. Always available
+//! (no feature gate); native-only because the loader uses `std::fs`.
 
 use auki_identity::Wallet;
 use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
+
+pub mod cluster_doc;
 
 #[cfg(feature = "swarm")]
 pub mod swarm;

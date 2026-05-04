@@ -17,4 +17,5 @@ serde_json = "1"
 
 [dev-dependencies]
 auki-logs = { path = "../auki-logs" }
+ciborium = "0.2"
 tempfile = "3"

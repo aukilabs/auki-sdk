@@ -13,13 +13,18 @@
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── manifest.json
 //!     │   └── segments/<padded-ns>.seg      ← one TT log per session
-//!     └── sensorlogs/
-//!         ├── <recording_uuid_1>/            ← one sensor stream per recording
+//!     ├── sensorlogs/
+//!     │   ├── <recording_uuid_1>/            ← one sensor stream per recording
+//!     │   │   ├── manifest.json
+//!     │   │   └── segments/<padded-ns>.seg
+//!     │   ├── <recording_uuid_2>/
+//!     │   │   └── ...
+//!     │   └── <recording_uuid_3>/
+//!     └── poselogs/
+//!         ├── <recording_uuid_1>/            ← one pose source per recording
 //!         │   ├── manifest.json
 //!         │   └── segments/<padded-ns>.seg
-//!         ├── <recording_uuid_2>/
-//!         │   └── ...
-//!         └── <recording_uuid_3>/
+//!         └── <recording_uuid_2>/
 //! ```
 //!
 //! - `<app_root>` is chosen by the integrator (e.g. `/home/booster/auki/boosterapp/`).
@@ -29,14 +34,16 @@
 //!   session would be wasted work.
 //! - One TimeTransform Log per session (clock offsets are time-localized;
 //!   the session is the natural retention boundary).
-//! - **A recording is one sensor stream.** Each recording directory is a
-//!   complete `auki-logs` log (manifest + segments) for exactly one sensor.
-//!   Multi-sensor capture means multiple parallel recordings sharing a
-//!   session, not a multi-sensor recording. The auto-started ring buffer is
-//!   simply a recording with `retention_ns: 30s`; intent captures are
-//!   recordings with `retention_ns: 0`. Nothing on disk distinguishes them
-//!   beyond the manifest's retention value. The manifest's `sensor_id`
-//!   identifies which sensor's frames are inside.
+//! - **A recording is one stream.** Each recording directory is a complete
+//!   `auki-logs` log (manifest + segments) for exactly one sensor (under
+//!   `sensorlogs/`) or one pose source (under `poselogs/`). Multi-stream
+//!   capture means multiple parallel recordings sharing a session, not a
+//!   multi-stream recording. The auto-started ring buffer is simply a
+//!   recording with `retention_ns: 30s`; intent captures are recordings with
+//!   `retention_ns: 0`. Nothing on disk distinguishes them beyond the
+//!   manifest's retention value. For sensor logs, the manifest's `sensor_id`
+//!   identifies the sensor; for pose logs, the manifest's `source` field
+//!   identifies the producer (e.g. ROS TF, SLAM, odometry).
 //!
 //! `/` in IDs is replaced with `__` so namespaced ids like
 //! `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory
@@ -50,6 +57,7 @@ const SENSORS_DIR: &str = "sensors";
 const CLOCKS_DIR: &str = "clocks";
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
+const POSELOGS_DIR: &str = "poselogs";
 
 /// `<app_root>/registries`.
 pub fn registries_root(app_root: &Path) -> PathBuf {
@@ -94,6 +102,17 @@ pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -
 /// log's manifest (`sensor_id` + `sensor_hash`), not encoded in the path.
 pub fn sensorlog_path(session_root: &Path, recording_uuid: &str) -> PathBuf {
     session_root.join(SENSORLOGS_DIR).join(recording_uuid)
+}
+
+/// `<app_root>/<session>/poselogs/<recording_uuid>` — one recording = one
+/// pose source (e.g. ROS TF, SLAM, odometry). The auki-logs `manifest.json`
+/// and `segments/` directory live directly under this path. The source
+/// identity is recorded inline in the log's manifest under the `source`
+/// field, not encoded in the path. Multiple recordings of the same source
+/// per session are fine — a typical session has a 30s rolling buffer plus
+/// any number of intent captures, distinguished only by `retention_ns`.
+pub fn poselog_path(session_root: &Path, recording_uuid: &str) -> PathBuf {
+    session_root.join(POSELOGS_DIR).join(recording_uuid)
 }
 
 /// Replace `/` with `__` so namespaced ids become a single filesystem-safe
@@ -188,5 +207,23 @@ mod tests {
     fn id_to_segment_is_idempotent_for_ids_without_slashes() {
         assert_eq!(id_to_segment("plain"), "plain");
         assert_eq!(id_to_segment("K1-AABB__already_subbed"), "K1-AABB__already_subbed");
+    }
+
+    #[test]
+    fn poselog_path_is_session_join_poselogs_join_recording() {
+        let session = session_root(&app(), "abc-123");
+        assert_eq!(
+            poselog_path(&session, "rec-789"),
+            PathBuf::from("/home/booster/auki/boosterapp/abc-123/poselogs/rec-789")
+        );
+    }
+
+    #[test]
+    fn poselog_path_does_not_substitute_recording_uuid() {
+        // recording_uuid is opaque to the SDK — same convention as sensorlog_path.
+        let session = session_root(&app(), "abc-123");
+        let path = poselog_path(&session, "rec-789");
+        assert!(path.ends_with("rec-789"));
+        assert!(!path.to_string_lossy().contains("__"));
     }
 }

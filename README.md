@@ -59,7 +59,7 @@ This repo is in early development. The crates here implement a foundational subs
 | Crate | Status |
 |---|---|
 | [`auki-logs`](crates/auki-logs) | ✓ Generic segmented ring-buffer log primitive — manifest + segment files + retention eviction |
-| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock registry types and IO; Sensor Log + Point Cloud Log + Audio Log payload schemas. Frame Registry pending |
+| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock registry types and IO; Sensor Log + Point Cloud Log + Audio Log + Pose Log payload schemas (capture-only for Pose Log; `convert_pose` pending). Frame Registry pending |
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
 | [`auki-time-transforms`](crates/auki-time-transforms) | ✓ Clock sampler primitives for the TimeTransform Log |
@@ -70,7 +70,7 @@ This repo is in early development. The crates here implement a foundational subs
 
 **Not yet implemented:**
 
-- Pose Log and `convert_pose`
+- `convert_pose` (the Pose Log primitives — `PoseLogEntry`, `PoseSource`, `build_pose_log_manifest`, `poselog_path` — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
 - Detection Log
 - Frame Registry
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
@@ -96,17 +96,22 @@ Files within an app:
 │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 │   ├── clocks/<clock_id>/<hash>.json
 │   └── frames/<frame_id>/<hash>.json     ← coming
-└── <session>/
+└── <session_id>/
     ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json
     │   └── segments/<padded-ns>.seg      ← one TT log per session
-    └── sensorlogs/
-        ├── <recording_uuid_1>/            ← one sensor stream per recording
+    ├── sensorlogs/
+    │   ├── <recording_uuid_1>/            ← one sensor stream per recording
+    │   │   ├── manifest.json
+    │   │   └── segments/<padded-ns>.seg
+    │   ├── <recording_uuid_2>/
+    │   │   └── ...
+    │   └── <recording_uuid_3>/
+    └── poselogs/
+        ├── <recording_uuid_1>/            ← one pose source per recording
         │   ├── manifest.json
         │   └── segments/<padded-ns>.seg
-        ├── <recording_uuid_2>/
-        │   └── ...
-        └── <recording_uuid_3>/
+        └── <recording_uuid_2>/
 ```
 
 `<app_root>` is chosen by the integrator (boosterapp uses `/home/booster/auki/boosterapp/`); the SDK doesn't enforce structure above the registries. Registries live at the app root because hash-keyed writes are idempotent — a sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session, so per-session copies would be wasted work.

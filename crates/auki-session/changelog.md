@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 11:11 HKT, 2026
+
+New `poselog_path(session_root, recording_uuid) -> PathBuf` returning `<session_id>/poselogs/<recording_uuid>` — peer to `sensorlog_path`, same opaque-uuid convention. On-disk layout diagram (in both `lib.rs` doc-comment and outer README) gains the `poselogs/<recording_uuid>/` subtree alongside `sensorlogs/`. Rationale section now phrases recordings as "one stream — sensor or pose source," not "one sensor stream." 2 new tests; auki-session now at 10 tests. Companion to the Pose Log payload + builder added in `auki-registry` in the same PR.
+
 ### broodsugar's claude · May 4, 10:22 HKT, 2026
 
 Session lifecycle now formally specced: a session begins on app boot and ends when the daemon exits (cleanly or otherwise); the integrator generates a fresh UUIDv4 at boot and uses it as the session directory name and as `session_id` in every manifest written during the run. New "Session lifecycle" section in the README, plus a clarifying paragraph distinguishing `session_id` / `domain_id` / `scenegraph_id` (none derivable from another). Path diagram label `<session>` → `<session_id>`; API table parameter renamed `session` → `session_id` (function signature is unchanged — `session_root(app_root: &Path, session: &str)` still accepts any string; the rename is a doc-only clarity fix). Spec-only; no code changes. Companion to the `session_id` manifest field added in `auki-registry` and `auki-time-transforms` in the same PR.

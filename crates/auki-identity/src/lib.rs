@@ -395,6 +395,31 @@ mod tests {
         assert_eq!(c1.public_key(), c2.public_key());
     }
 
+    /// Locked cross-language conformance vector: `Wallet::from_seed([3u8; 32])
+    /// .derive_child("peer/v1").public_key()` MUST produce the 32-byte ed25519
+    /// pubkey below. The locked chain: seed → ed25519 keypair → labeled-hash
+    /// child seed → child ed25519 keypair → child pubkey bytes. Any reimpl in
+    /// another language is correct only if it reproduces these exact bytes from
+    /// the same seed + label. Pairs with `auki_network::tests::locked_seed_to_peer_id_vector`
+    /// — the parent wallet's PeerId there is derived from this same `[3u8; 32]`
+    /// seed via the libp2p PeerId encoding. Don't update this without a
+    /// coordinated version bump.
+    #[test]
+    fn locked_derive_child_peer_v1_pubkey_vector() {
+        let parent = Wallet::from_seed(&[3u8; 32]);
+        let derived = parent.derive_child("peer/v1");
+        let expected: [u8; 32] = [
+            0x10, 0x80, 0x63, 0x3b, 0xcb, 0x57, 0xba, 0xc0, 0x66, 0xcf, 0x84, 0x46, 0xe2, 0xb7,
+            0xae, 0x71, 0x15, 0x71, 0xcb, 0x04, 0xbe, 0x0b, 0x46, 0xbd, 0xaf, 0x03, 0x14, 0x63,
+            0x17, 0xbf, 0xe7, 0x07,
+        ];
+        assert_eq!(
+            derived.public_key().0,
+            expected,
+            "derive_child(\"peer/v1\") drifted — see crate docs for the locked recipe"
+        );
+    }
+
     #[test]
     fn derive_child_differs_across_labels() {
         let parent = Wallet::from_seed(&[4u8; 32]);

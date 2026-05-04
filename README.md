@@ -169,6 +169,20 @@ See each crate's `README.md` for the contract spec, and `crates/<name>/src/READM
 
 ---
 
+## Cross-language conformance vectors
+
+Critical wire-format and derivation chains are pinned by **locked test vectors** — exact-bytes/exact-strings the Rust crate produces from a fixed input. Any reimplementation in another language (Python, Go, browser JS) is correct only if it reproduces the same outputs from the same inputs. If a vector ever drifts, every consumer in the wild drifts with it; updates require a coordinated version bump.
+
+| Crate | Test | What it locks |
+|---|---|---|
+| [`auki-hash`](crates/auki-hash) | `tests::locked_*` (existing) | XXH3-128 byte vectors (used for content-addressed registry hashes) |
+| [`auki-identity`](crates/auki-identity) | `tests::locked_derive_child_peer_v1_pubkey_vector` | `Wallet::from_seed([3u8; 32]).derive_child("peer/v1").public_key()` → 32-byte ed25519 pubkey |
+| [`auki-network`](crates/auki-network) | `tests::locked_seed_to_peer_id_vector` | `PeerIdentity::from_wallet(Wallet::from_seed([3u8; 32])).peer_id()` → canonical `12D3KooW…` libp2p PeerId string |
+
+The two-stage chain in `auki-identity` + `auki-network` together pin the `Wallet → libp2p PeerId` derivation that `cluster.json` depends on. They use the same `[3u8; 32]` seed so the locked pubkey can be inspected as the intermediate value for the locked PeerId.
+
+---
+
 ## Design and discussion
 
 The SDK's design is being worked through across two spaces:

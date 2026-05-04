@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 17:30 HKT, 2026
+
+`auki-identity` + `auki-network`: locked cross-language conformance vectors for the `Wallet → libp2p PeerId` chain. `auki-identity::tests::locked_derive_child_peer_v1_pubkey_vector` pins `Wallet::from_seed([3u8; 32]).derive_child("peer/v1").public_key()` to a fixed 32-byte ed25519 pubkey; `auki-network::tests::locked_seed_to_peer_id_vector` pins the canonical libp2p PeerId string `PeerIdentity::from_wallet(...)` produces from the same seed. Pattern matches `auki-hash`'s existing locked vectors; root `README.md` gets a "Cross-language conformance vectors" section indexing all three. Cheap insurance ahead of v0.0.11. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 4, 16:39 HKT, 2026
 
 `auki-identity`: `load_or_mint_seed(path) -> Result<[u8; 32], SeedError>` added — the small fs helper backing ansuz's "stable peer key across restarts" guarantee (deliverable #6). Mints fresh 32 bytes from `OsRng` on first call, creates parents, writes atomically, sets `0o600` on Unix; on subsequent calls reads and rejects anything that isn't exactly 32 bytes. Path convention is caller's; documented in prose only. Module gated `#[cfg(not(target_arch = "wasm32"))]` so the rest of the crate stays WASM-clean. `tempfile` dev-dep added. +9 tests (16 → 25). See per-crate changelog for detail.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 08:52 HKT, 2026
+
+`auki-registry` + `auki-time-transforms`: Sensor Log family and TimeTransform Log manifests both gain a required `app_id: string` field — same identifier as the daemon's `/api/info` `app` value. Spec-only; implementation/tests pending. Breaking against existing on-disk logs (acceptable under v0.x). See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 2, 18:45 HKT, 2026
 
 `auki-network`: M1b landed — Circuit Relay v2 (client always; server gated on `SwarmConfig.enable_relay_server`, off by default for consumer daemons), libp2p mDNS (`_p2p._udp.local.`, gated on `SwarmConfig.enable_mdns`, on by default for daemons — dual-channel with the existing `_auki._tcp.local.`), and a `dial_peer` helper for Park-from-home circuit-relay dialing. Encodes all three resolved Reid milestone-2 parking-lot answers (1a/2c/3c). 4 new tests; 19 unit tests + 1 doctest total. Layer 2 (capability advertisement / discovery) is the next chunk. See `auki-network/changelog.md` for detail.

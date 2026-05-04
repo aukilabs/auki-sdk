@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:22 HKT, 2026
+
+`auki-session` + `auki-registry` + `auki-time-transforms`: session lifecycle formally specced (one daemon run = one session, integrator-minted UUIDv4 at boot); Sensor Log family and TimeTransform Log manifests both gain a required `session_id: string` field carrying that UUID. Companion to the `app_id` change earlier today; together they make every manifest self-identifying about which app run produced it. Spec-only; implementation/tests pending. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 `auki-logs` + `auki-session`: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory (sensorlogs and timetransform_logs alike), with pointers to root `tags.md`. Spec gap fix — the sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs. No code changes. See per-crate changelogs for detail.

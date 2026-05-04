@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:22 HKT, 2026
+
+TimeTransform Log manifest gains a required `session_id: string` field — UUIDv4 minted by the integrator at app boot, same value as the parent session directory name and `/api/state`'s `session_uuid`. Mirrors the same change in the Sensor Log family manifest. Spec-only; implementation/tests pending.
+
 ### broodsugar's claude · May 4, 08:52 HKT, 2026
 
 TimeTransform Log manifest gains a required `app_id: string` field, carrying the same identifier as the daemon's `/api/info` `app` value (e.g. `boosterapp`, `sentinel`). Mandatory addition; breaking against existing on-disk logs (acceptable under v0.x). Mirrors the same change in the Sensor Log family manifest. Implementation/tests still pending.

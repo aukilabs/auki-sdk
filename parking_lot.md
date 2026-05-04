@@ -18,9 +18,9 @@ Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation 
 
 `auki-hash` publishes locked conformance vectors so any reimplementation can be validated. Should `auki-jcs`, `auki-logs`, `auki-registry`, and `auki-time-transforms` also publish locked vectors? Concretely: a `tests/cross_language/` directory with golden bytes any port must reproduce. Boosterapp's Python sidecar is already a de facto second implementation — vectors would catch drift automatically.
 
-## Glossary.md
+## Glossary.md — additional terms to seed
 
-[CLAUDE.md](CLAUDE.md) references a root-level `Glossary.md` for "definitions of all key terms." It doesn't exist yet. Who drafts it, and what's the seed list of terms (Domain, Cluster, Map, Frame, Pose Log, etc.)?
+[Glossary.md](Glossary.md) seeded May 4, 2026 with Domain, Domain Owner, Domain ID, Cluster, Scenegraph, Scenegraph ID, Map, Session ID. Pending entries: Frame, Pose Log, Sensor Log, Detection Log, TimeTransform Log, Pose Source, Anchor, App ID. Open question — does each crate-owned term live in the Glossary or stay in the crate's README, with the Glossary linking out? Default for now: protocol-level concepts (Domain, Map, Cluster, identifier model) live in the Glossary; per-crate implementation details stay with the crate.
 
 ## Python bindings strategy
 

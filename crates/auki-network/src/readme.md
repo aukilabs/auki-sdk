@@ -6,6 +6,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
 - [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
+- [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/1.0.0` participant protocol (libp2p). M0 — available without the `swarm` feature.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
@@ -23,6 +24,18 @@ pub struct ReachabilityRecord {
 }
 
 pub struct Capability(pub String);
+
+pub struct ParticipantInfo {
+    pub app: String,
+    pub name: String,
+    pub session_id: String,
+    pub session_clock_id: String,
+    pub session_clock_hash: String,
+    pub session_now_ns: u64,
+    pub cluster_joined_at_ns: Option<u64>,
+    pub peer_id: libp2p_identity::PeerId,
+    pub app_instance: String,
+}
 
 pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 
@@ -160,7 +173,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Serde shape
 
-`ReachabilityRecord` and `Capability` round-trip through JSON. `PeerId` serializes as its canonical multibase-base58 string (via `libp2p-identity`'s `serde` feature). `Multiaddr` lacks serde in `multiaddr` 0.18, so the crate ships a small adapter that serializes each as its text form (`/ip4/.../tcp/...`).
+`ReachabilityRecord`, `Capability`, and `ParticipantInfo` round-trip through JSON. `PeerId` serializes as its canonical multibase-base58 string (via `libp2p-identity`'s `serde` feature). `Multiaddr` lacks serde in `multiaddr` 0.18, so the crate ships a small adapter that serializes each as its text form (`/ip4/.../tcp/...`). `ParticipantInfo` uses snake-case field names directly (no `#[serde(rename_all)]` needed) and serializes `cluster_joined_at_ns: None` as explicit `null`.
 
 ## Tests
 
@@ -179,6 +192,14 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `capability_constants_match_spec` | Wire-format strings unchanged |
 | `capability_namespace_extraction` | `namespace()` returns the prefix before `:`, or `None` |
 | `capability_round_trips_through_json` | JSON serialize → deserialize is identity |
+| `participant::round_trip_with_cluster_joined_some` | JSON serialize → deserialize is identity with `Some` |
+| `participant::round_trip_with_cluster_joined_none` | JSON serialize → deserialize is identity with `None`; field present with `null` value |
+| `participant::json_keys_are_snake_case` | All JSON keys match the spec exactly (snake_case) |
+| `participant::golden_bytes_match_fixture` | Locked wire format — fixture struct serializes to exactly the spec'd JSON |
+| `participant::rejects_missing_field` | Missing required field fails to deserialize |
+| `participant::rejects_wrong_type` | Wrong-type value (string for u64) fails to deserialize |
+| `participant::rejects_invalid_peer_id` | Non-PeerId string in `peer_id` fails to deserialize |
+| `participant::cluster_joined_field_is_explicit_null_not_omitted` | `None` serializes as explicit `null`, not field omission |
 | `swarm::local_peer_id_matches_identity` | Built swarm's `local_peer_id` equals `identity.peer_id()` |
 | `swarm::two_peers_identify_each_other_over_tcp` | TCP dial → Noise handshake → identify exchange both ways |
 | `swarm::two_peers_identify_each_other_over_quic` | Same as above, over QUIC |

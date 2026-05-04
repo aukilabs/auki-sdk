@@ -11,7 +11,7 @@ Per the broader Auki architecture, every node has *two* identities:
 
 The peer identity is *derived* from the principal wallet via `Wallet::derive_child("peer/v1")`, so a backup of the wallet seed lets you regenerate the peer key. The peer key has its own libp2p `PeerId` and is what shows up in multiaddrs as `/p2p/<peer-id>`. Compromise blast-radius is separated: rotating the peer key (a re-derivation under a future label like `peer/v2`) doesn't invalidate the wallet.
 
-## Three primitives
+## Four primitives
 
 ### `PeerIdentity`
 
@@ -48,6 +48,47 @@ ReachabilityRecord {
     last_seen_ns: now_ns(),
 };
 ```
+
+### `ParticipantInfo`
+
+The wire shape every Auki participant exchanges to introduce itself. **One schema, two transports**:
+
+- **HTTP** — `GET /api/info` on the cross-app Control API ([`docs/control-api.md`](../../docs/control-api.md)) returns this exact JSON.
+- **libp2p** — the `/auki/cluster/1.0.0` participant protocol, a request/response exchange where each side sends its own `ParticipantInfo` to the other (the protocol implementation lands in a follow-up; the type is what locks the wire format down).
+
+```rust
+pub struct ParticipantInfo {
+    pub app: String,                          // e.g. "boosterapp", "sentinel", "park"
+    pub name: String,                         // operator-friendly label, e.g. "k1-walker"
+    pub session_id: String,                   // UUIDv4 minted at session boot
+    pub session_clock_id: String,             // identifier for the session's monotonic clock
+    pub session_clock_hash: String,           // content-addressed hash pinning the clock-registry entry
+    pub session_now_ns: u64,                  // session clock's value at the moment this struct was filled
+    pub cluster_joined_at_ns: Option<u64>,    // session-clock value at first peer connection; None while alone
+    pub peer_id: libp2p::PeerId,              // libp2p PeerId derived from Wallet::derive_child("peer/v1")
+    pub app_instance: String,                 // first non-loopback IEEE-administered MAC, lowercased hex without separators
+}
+```
+
+Snake-case JSON; `cluster_joined_at_ns` serializes as `null` when `None`; `peer_id` serializes as the canonical multibase-base58 string (`12D3KooW…`).
+
+```json
+{
+  "app": "boosterapp",
+  "name": "k1-walker",
+  "session_id": "abc-123-...",
+  "session_clock_id": "K1-AABBCCDDEEFF/session-monotonic",
+  "session_clock_hash": "abc123...",
+  "session_now_ns": 12345678900,
+  "cluster_joined_at_ns": 1745000000,
+  "peer_id": "12D3KooWAbc...",
+  "app_instance": "aabbccddeeff"
+}
+```
+
+`session_id`, `app`, and `app_instance` carry the same meaning across the SDK: `session_id` matches the directory name and the `session_id` field on every manifest written during the run (see [`auki-session`](../auki-session/README.md)); `app` matches the manifest `app_id` field and the `app` value advertised over mDNS by the daemon's Control API; `app_instance` is a hardware-stable identifier reused across runs on the same device.
+
+The struct is part of the M0 path — available without the `swarm` feature so consumers (Park, Console) can construct and parse it without pulling in libp2p's transport stack.
 
 ### `Capability`
 

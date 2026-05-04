@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 16:30 HKT, 2026
+
+`auki-network`: `app_instance::derive()` landed (ansuz #5) — per-machine identifier behind a default-off `app_instance` feature. Recipe: first non-loopback IEEE-administered MAC (skipping U/L-bit-set / locally-administered MACs), sorted lexicographically, rendered as 12 lowercase hex chars (`aabbccddeeff`). New `mac_address` (1.x) optional dep — non-WASM. `derive_from(&[[u8; 6]])` exposed as testing seam. 9 new tests. Generates the value PR #25's `/api/info` redesign carries; PRs are independent. New parking-lot items: container/Docker handling, multi-NIC tiebreaker, eventual stable-id options. See `auki-network/changelog.md` for detail.
 ### broodsugar's claude · May 4, 16:00 HKT, 2026
 
 `auki-network`: `ParticipantInfo` landed (ansuz networking-demo deliverable #2b) — the wire shape every Auki participant exchanges to introduce itself. New `auki_network::participant` module with `app`, `name`, `session_id`, `session_clock_id` + `_hash`, `session_now_ns`, `cluster_joined_at_ns: Option<u64>` (serializes as explicit `null` when `None`), `peer_id: PeerId` (multibase-base58 string in JSON), `app_instance`. **One schema, two transports**: matches the `/api/info` HTTP shape from PR #25 and the forthcoming `/auki/cluster/1.0.0` libp2p participant protocol (deliverable #3) byte-for-byte. M0 path — no `swarm` feature required; Park / Console can use it without libp2p's transport stack. 8 new tests including a locked golden-bytes pin. No new dependencies. See `auki-network/changelog.md` for detail.

@@ -31,6 +31,9 @@ pub use participant::ParticipantInfo;
 #[cfg(feature = "swarm")]
 pub mod swarm;
 
+#[cfg(feature = "app_instance")]
+pub mod app_instance;
+
 /// Label used when deriving a wallet's peer key. Stable; do not change.
 ///
 /// `Wallet::derive_child(PEER_DERIVATION_LABEL)` yields the ed25519 keypair

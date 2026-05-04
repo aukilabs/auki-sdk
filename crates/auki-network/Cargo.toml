@@ -12,6 +12,10 @@ description = "Networking substrate for the Auki SDK — peer identity (derived 
 # pulling in libp2p's transport stack). Daemons opt in.
 default = []
 swarm = ["dep:libp2p", "dep:thiserror"]
+# Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
+# `mac_address` crate, which uses platform-specific syscalls
+# (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
+app_instance = ["dep:mac_address"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -23,6 +27,9 @@ serde_json = "1"
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "macros", "ed25519"], optional = true }
 thiserror = { version = "2", optional = true }
+
+# `app_instance` feature
+mac_address = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

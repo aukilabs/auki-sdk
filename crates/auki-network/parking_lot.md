@@ -99,3 +99,32 @@ The brief notes integrators wire `--cluster-doc <path>` through their CLI. Open 
 - A dedicated `auki peer-id` CLI subcommand on a SDK-driven binary would close the loop without needing the daemon running.
 
 Not a `cluster.json` concern per se — just adjacent. Document the recommended pattern in the `cluster.json` spec section once one daemon has the operator-facing UX nailed down.
+
+---
+
+## `app_instance` — container / Docker handling
+
+`app_instance::derive()` typically returns `NoSuitableMac` inside a Docker container — the bridge-network interface gets a locally-administered MAC (first octet `0x02`), and there's usually no IEEE-administered NIC visible from inside the container. ansuz accepts this; daemons running in containers will need a fallback strategy (envvar override? hostname-derived? wallet-derived persisted?) before the SDK is comfortable in containerized deployments.
+
+Pin a story before the first daemon is shipped in a container.
+
+## `app_instance` — multi-NIC tiebreaker semantics
+
+Today: lex-smallest MAC wins among non-loopback IEEE-administered candidates. Adding or removing a NIC can shift which MAC sorts first → the daemon's `app_instance` changes even though the machine didn't.
+
+Alternatives if this becomes painful:
+- **Pin to a specific NIC** by name on first boot, persist that name. Shifts the question to "what about NIC renaming."
+- **Hash all eligible MACs** rather than picking one. Stable under add/remove? No — adding a NIC still changes the input set.
+- **Combined wallet-derived + first-boot persistence** (see next item) — stop relying on hardware altogether.
+
+Not blocking ansuz; revisit if real deployments hit it.
+
+## `app_instance` — eventual stable-id options
+
+MAC-by-convention is fragile in containers, VMs, and multi-NIC environments (see above). Long-term candidates for a stable per-machine id:
+
+- **Wallet-derived, persisted on first boot.** `Wallet::derive_child("app_instance/v1")` → 16 hex chars; daemon writes it to `<state_dir>/app_instance` on first run, reads thereafter. Survives NIC changes and container restarts (state-dir-permitting). Loses identity if `<state_dir>` is wiped.
+- **OS machine-id** (`/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, MachineGuid in Windows registry). Cross-platform but each platform has its own gotchas (machine-id can be stale-cloned across VM templates, IOPlatformUUID is reset by some firmware updates).
+- **MAC + persisted nonce** — hash the MAC together with a per-install random value, persist the result. Decouples the public id from the underlying MAC; new MAC selection still produces the same id.
+
+Decide before any cross-machine coordination relies on `app_instance` being stable. ansuz only needs distinguishability, not stability.

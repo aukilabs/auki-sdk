@@ -217,6 +217,26 @@ mod tests {
         assert_ne!(p1.peer_id(), p2.peer_id());
     }
 
+    /// Locked cross-language conformance vector: `Wallet::from_seed([3u8; 32])`
+    /// → `PeerIdentity::from_wallet(...).peer_id()` MUST produce the canonical
+    /// libp2p PeerId string below. Any reimplementation in another language
+    /// (Python, Go, browser JS) is correct only if it produces this exact string
+    /// from the same seed bytes. The chain that's locked: ed25519 keypair from
+    /// seed → libp2p `PublicKey` (protobuf-encoded) → multihash → multibase-base58
+    /// `PeerId` text form. If anything in that chain drifts, every `cluster.json`
+    /// in the wild also drifts. Don't update this string without a coordinated
+    /// version bump.
+    #[test]
+    fn locked_seed_to_peer_id_vector() {
+        let w = Wallet::from_seed(&[3u8; 32]);
+        let peer = PeerIdentity::from_wallet(&w);
+        assert_eq!(
+            peer.peer_id().to_string(),
+            "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+            "PeerId derivation drifted — see crate docs for the locked recipe"
+        );
+    }
+
     #[test]
     fn from_wallet_matches_from_seed_of_derived_child() {
         // The contract: `from_wallet(w)` is `from_seed(w.derive_child("peer/v1").seed())`.

@@ -10,7 +10,7 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 │   ├── clocks/<clock_id>/<hash>.json
 │   └── frames/<frame_id>/<hash>.json     ← coming
-└── <session>/
+└── <session_id>/                          ← UUIDv4 minted at app boot
     ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json
     │   ├── tags.jsonl                    ← optional TagClaim sidecar; see ../tags.md
@@ -26,6 +26,20 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 ```
 
 `tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
+
+## Session lifecycle
+
+**A session begins on app boot and ends when the daemon exits** (cleanly or otherwise). The integrator generates a fresh **UUIDv4** at boot and uses it as the session directory name and as the `session_id` in every log manifest written during the run. A daemon restart begins a new session with a new UUID; nothing on disk ties two consecutive sessions together at the SDK layer.
+
+This shape matches what the [Control API](../../docs/control-api.md) already implies (`/api/state` returns one `session_uuid`; multi-session daemons are out of scope for v1) and what the broader protocol model expects (the [Domain doc](https://www.notion.so/3565c8e965928154803af89f3b16d097) defines `session_id` as "Per-daemon UUID minted at session start; carries no implicit domain affiliation until tagged"). The SDK doesn't generate the UUID — that's the integrator's job — but every manifest writer requires the value, so the integrator must mint one before opening any log.
+
+`session_id` is one of three identifiers that travel together at any call site:
+
+- **`session_id`** — UUIDv4, integrator-minted at boot, opaque. Many per domain, no formal cardinality relation.
+- **`domain_id`** — `hash(owner_wallet_pubkey)`, derived from a wallet, stable for the wallet's lifetime. Asserted *into* a session's data via [`TagClaim`](../../tags.md) records, never encoded in the path.
+- **`scenegraph_id`** — hash of a constructed scenegraph's manifest. Many per domain; the owner marks one canonical.
+
+None is derivable from the others.
 
 ## Rationale
 
@@ -45,9 +59,9 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 | `registries_root(app_root)`                                     | `<app_root>/registries`                                              |
 | `sensor_entry_path(app_root, sensor_id, hash)`                  | `<app_root>/registries/sensors/<sensor_id>/<hash>.json`              |
 | `clock_entry_path(app_root, clock_id, hash)`                    | `<app_root>/registries/clocks/<clock_id>/<hash>.json`                |
-| `session_root(app_root, session)`                               | `<app_root>/<session>`                                               |
-| `timetransform_log_path(session_root, from_id, to_id)`          | `<session>/timetransform_logs/<from>__<to>`                          |
-| `sensorlog_path(session_root, recording_uuid)`                  | `<session>/sensorlogs/<recording_uuid>`                              |
+| `session_root(app_root, session_id)`                            | `<app_root>/<session_id>`                                            |
+| `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
+| `sensorlog_path(session_root, recording_uuid)`                  | `<session_id>/sensorlogs/<recording_uuid>`                           |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
 
 ## Versioning

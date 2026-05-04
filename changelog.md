@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:22 HKT, 2026
+
+Session lifecycle formally specced and `session_id` added to manifests. New "Session lifecycle" section in [`crates/auki-session/README.md`](crates/auki-session/README.md): one daemon run = one session, integrator generates a fresh UUIDv4 at boot and uses it as both the session directory name and the `session_id` value in every manifest written during the run. Sensor Log family ([`crates/auki-registry/README.md`](crates/auki-registry/README.md)) and TimeTransform Log ([`crates/auki-time-transforms/README.md`](crates/auki-time-transforms/README.md)) manifests both gain a required `session_id: string` field carrying that UUID. Companion to the `app_id` change earlier today; together every manifest is now self-identifying about which app run produced it. Path diagram label `<session>` → `<session_id>`; API table parameter renamed `session` → `session_id` (function signatures unchanged). Spec-only — no Rust code or path-helper changes. Aligns with the [Domain doc's](https://www.notion.so/3565c8e965928154803af89f3b16d097) identifier model (`session_id` is "Per-daemon UUID minted at session start", first-class alongside `domain_id` / `scenegraph_id`, none derivable from another).
+
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 `auki-logs` + `auki-session` READMEs: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory, with pointers to root [`tags.md`](tags.md). Spec gap fix — the TagClaim sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs and the [SDK Tech Specs](https://www.notion.so/3565c8e965928043b3fcc246c1d1d8c8) Notion page; directory-enumerating tooling could silently miss it. No code changes. New parking-lot item `TagClaim — tags.md ownership` raises the question of where `tags.md` should ultimately live (root vs. fold into `auki-logs` vs. future `auki-tags` crate) before any SDK code starts producing or consuming TagClaims.

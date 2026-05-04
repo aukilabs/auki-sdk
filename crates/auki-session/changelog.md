@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 10:22 HKT, 2026
+
+Session lifecycle now formally specced: a session begins on app boot and ends when the daemon exits (cleanly or otherwise); the integrator generates a fresh UUIDv4 at boot and uses it as the session directory name and as `session_id` in every manifest written during the run. New "Session lifecycle" section in the README, plus a clarifying paragraph distinguishing `session_id` / `domain_id` / `scenegraph_id` (none derivable from another). Path diagram label `<session>` → `<session_id>`; API table parameter renamed `session` → `session_id` (function signature is unchanged — `session_root(app_root: &Path, session: &str)` still accepts any string; the rename is a doc-only clarity fix). Spec-only; no code changes. Companion to the `session_id` manifest field added in `auki-registry` and `auki-time-transforms` in the same PR.
+
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 On-disk layout diagram now lists `tags.jsonl` as an optional TagClaim sidecar inside both `timetransform_logs/<from>__<to>/` and `sensorlogs/<recording_uuid>/` directories, with a pointer to root `tags.md`. Spec gap fix only — no code or path-helper changes.

@@ -139,6 +139,7 @@ JCS-canonical UTF-8 JSON, written via auki-logs. Required keys (extends auki-log
 | `segment_duration_ns`  | integer | > 0; from auki-logs                                              |
 | `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                              |
 | `app_id`               | string  | Identifier of the application that wrote this log. Same string as the daemon's `/api/info` `app` field (e.g. `boosterapp`, `sentinel`). |
+| `session_id`           | string  | UUIDv4 minted by the integrator at app boot; stable for the daemon run's lifetime. Same value as `/api/state`'s `session_uuid` and the parent directory name. See [`auki-session`](../auki-session) for session lifecycle. |
 | `clock_id`             | string  | The Clock Registry ID that the framing's `timestamp_ns` is in    |
 | `clock_hash`           | string  | XXH3-128 hex of the clock's registry entry                       |
 | `sensor_id`            | string  | The Sensor Registry ID this log captures                         |

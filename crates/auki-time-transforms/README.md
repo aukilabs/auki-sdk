@@ -17,6 +17,7 @@ JCS-canonical UTF-8 JSON, written via the auki-logs primitive. Required keys:
 | ---------------------- | ------- | -------------------------------------------------------------------- |
 | `segment_duration_ns`  | integer | > 0; from auki-logs                                                  |
 | `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                                  |
+| `app_id`               | string  | Identifier of the application that wrote this log. Same string as the daemon's `/api/info` `app` field (e.g. `boosterapp`, `sentinel`). |
 | `from_clock_id`        | string  | The Clock Registry ID that the framing's `timestamp_ns` is in        |
 | `from_clock_hash`      | string  | XXH3-128 hex of the from-clock's registry entry                      |
 | `to_clock_id`          | string  | The Clock Registry ID that `offset_ns` carries you to                |

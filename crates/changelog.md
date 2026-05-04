@@ -9,6 +9,9 @@ Latest entry on top.
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 `auki-logs` + `auki-session`: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory (sensorlogs and timetransform_logs alike), with pointers to root `tags.md`. Spec gap fix — the sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs. No code changes. See per-crate changelogs for detail.
+### broodsugar's claude · May 4, 08:52 HKT, 2026
+
+`auki-registry` + `auki-time-transforms`: Sensor Log family and TimeTransform Log manifests both gain a required `app_id: string` field — same identifier as the daemon's `/api/info` `app` value. Spec-only; implementation/tests pending. Breaking against existing on-disk logs (acceptable under v0.x). See per-crate changelogs for detail.
 
 ### broodsugar's claude · May 2, 18:45 HKT, 2026
 

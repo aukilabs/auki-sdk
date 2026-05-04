@@ -68,9 +68,9 @@ The on-disk format doesn't currently mark clean-close vs. crash. Heuristic: "no 
 
 Would let peers cache by descriptor identity but adds a chicken-and-egg with `generated_at_ns`. Skip for v1; revisit when descriptor distribution becomes hot.
 
-## Session shape — registries app-rooted vs domain-scoped
+## Propagate: registries stay app-rooted (Park's domain-rooted counter-proposal rejected)
 
-v0.0.5 settled on `<app_root>/registries/...` shared across all sessions of an app. Park has a counter-proposal (in flight): registries should instead be `<root>/domains/<domain-id>/registries/`, with `app_id` carried in the manifest rather than encoded in the path. The argument: when Park aggregates recordings from multiple apps in the same domain, an app-rooted layout keeps each app's data siloed; a domain-rooted layout makes cross-app discovery natural and aligns the SDK with the broader "domain is a tag" direction in [`tags.md`](tags.md). Resolution needed before BoosterApp / Sentinel adopt the next session shape; doesn't block the [Control API](docs/control-api.md) work.
+Decision: `<app_root>/registries/...` is the canonical layout. Sweep [`tags.md`](tags.md), `dataproducts.md`, and any crate README for residual hints at a domain-rooted alternative and remove them.
 
 ---
 

@@ -9,6 +9,9 @@ Latest entry on top.
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 `auki-logs` + `auki-session` READMEs: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory, with pointers to root [`tags.md`](tags.md). Spec gap fix — the TagClaim sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs and the [SDK Tech Specs](https://www.notion.so/3565c8e965928043b3fcc246c1d1d8c8) Notion page; directory-enumerating tooling could silently miss it. No code changes. New parking-lot item `TagClaim — tags.md ownership` raises the question of where `tags.md` should ultimately live (root vs. fold into `auki-logs` vs. future `auki-tags` crate) before any SDK code starts producing or consuming TagClaims.
+### broodsugar's claude · May 4, 08:52 HKT, 2026
+
+Sensor Log family (Sensor / Point Cloud / Audio) and TimeTransform Log manifests both gain a required `app_id: string` field — same identifier as the daemon's `/api/info` `app` value (e.g. `boosterapp`, `sentinel`). Spec-only addition in `crates/auki-registry/README.md` and `crates/auki-time-transforms/README.md`; implementation/tests pending. Breaking against existing on-disk logs (acceptable under v0.x). Resolves the partial-answer side of the Park-domain-rooted-vs-app-rooted question (registries stay app-rooted; `app_id` carried in manifest for cross-app discovery).
 
 ### broodsugar's claude · May 2, 20:15 HKT, 2026
 

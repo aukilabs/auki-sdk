@@ -2,7 +2,7 @@
 
 The Auki SDK's operator-control surface. Daemons that produce SDK sessions (BoosterApp, Sentinel, future) implement this API so any UI — primarily Park — can drive any of them through a single contract.
 
-This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments) and the (forthcoming) peer-discovery layer. The Control API is a runtime, operator-facing concern: list recordings, start/stop them, peek at the latest captured frame, change buffer retention, request a clean shutdown.
+This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments). The Control API is a runtime, operator-facing concern: list recordings, start/stop them, peek at the latest captured frame, change buffer retention, request a clean shutdown, and report the daemon's session-scoped identity ([`/api/info`](#get-apiinfo)) — the same content the libp2p cluster protocol exchanges peer-to-peer.
 
 ## Conformance
 
@@ -22,7 +22,7 @@ All endpoints live under `/api/`. Daemons bind `0.0.0.0:<port>` — no authentic
 
 ### `GET /api/info`
 
-Daemon identity. Operator-facing label and the implementing application's name, suitable for use as a UI label when a consumer reaches the daemon by URL rather than mDNS.
+Session-scoped identity. Returns the daemon's identity for the current session — operator-facing labels, the application + machine identifiers, the libp2p peer identity, the session UUID and current monotonic-clock value, and the cluster-join timestamp. This is the canonical "who am I, when did my session start, what time is it on my clock" surface; the libp2p `/auki/cluster/1.0.0` protocol carries the same content peer-to-peer.
 
 **Request.** No body.
 
@@ -30,17 +30,33 @@ Daemon identity. Operator-facing label and the implementing application's name, 
 
 ```json
 {
+  "app": "boosterapp",
   "name": "k1-walker",
-  "app": "boosterapp"
+  "session_id": "abc-123-...",
+  "session_clock_id": "K1-AABBCCDDEEFF/session-monotonic",
+  "session_clock_hash": "abc123...",
+  "session_now_ns": 12345678900,
+  "cluster_joined_at_ns": 1745000000,
+  "peer_id": "12D3KooWAbc...",
+  "app_instance": "aabbccddeeff"
 }
 ```
 
-| Field  | Type   | Notes                                                         |
-| ------ | ------ | ------------------------------------------------------------- |
-| `name` | string | Operator-friendly identifier. MUST match the `name` TXT record when the daemon also advertises via mDNS. |
-| `app`  | string | Application identifier. MUST match the `app` TXT record when the daemon also advertises via mDNS. |
+| Field | Type | Notes |
+| --- | --- | --- |
+| `app` | string | Application identifier (`boosterapp`, `sentinel`, `park`). MUST match the `app` mDNS TXT record when the daemon also advertises via mDNS. |
+| `name` | string | Operator-friendly label (`k1-walker`, `webcam-front`). MUST match the `name` mDNS TXT record when the daemon also advertises via mDNS. |
+| `session_id` | string | UUIDv4 minted at session boot. A session begins on app boot and ends when the daemon exits — see [`auki-session`](../crates/auki-session/README.md). Same value as `/api/state.session_uuid`. |
+| `session_clock_id` | string | Identifier for the session's monotonic clock. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). The session clock is a fresh monotonic clock the daemon registers at session boot; on this clock, the session's start is `0` trivially. |
+| `session_clock_hash` | string | Content-addressed hash pinning the exact clock-registry entry. Same hash-is-version rule as the other registries. |
+| `session_now_ns` | integer | The session clock's current value at the moment this response was generated. Strictly increasing across responses. Consumers wanting wall-clock time subtract at poll time (e.g. `consumer_utc_now − session_now_ns ≈ session_started_at_consumer_utc`); the principled cross-clock path is `convert_time` via the [TimeTransform Log](../crates/auki-time-transforms/README.md). |
+| `cluster_joined_at_ns` | integer \| null | The session clock's value at the moment this peer first successfully connected to another peer in its libp2p cluster. Set once on first peer connection, never reset. `null` while the daemon is alone in the cluster. Consumers compute "time in cluster" as `session_now_ns − cluster_joined_at_ns`. |
+| `peer_id` | string | libp2p PeerId derived from `Wallet::derive_child("peer/v1")` — see [`auki-network`](../crates/auki-network/README.md). Stable across daemon restarts when the wallet seed is persisted. |
+| `app_instance` | string | Per-machine identifier — the first non-loopback IEEE-administered MAC, lowercased hex without separators (`aabbccddeeff`). Distinguishes two daemons of the same `app` running on different hardware. |
 
-Daemons that don't run mDNS still implement this endpoint; the values are operator-configurable strings (`--device-name`, defaults to hostname / binary name when unset).
+**No canonical clock.** The SDK does not assume UTC, monotonic, or any other specific clock as canonical for the API. Every timestamp is paired with an explicit clock identity (here, `session_clock_id` + `session_clock_hash`); cross-clock conversion is what the [TimeTransform Log](../crates/auki-time-transforms/README.md) and `convert_time` exist for. Apps that treat UTC as canonical do so by *convention* — they configure a TimeTransform between their session clock and a UTC clock and consumers walk it via `convert_time`.
+
+Daemons that don't run mDNS still implement this endpoint; the operator-facing values (`name`, `app`) are operator-configurable strings (`--device-name` flag, defaults to hostname / binary name when unset).
 
 ### `GET /api/state`
 
@@ -88,7 +104,7 @@ Snapshot of the daemon's current session and all recordings, active and stopped.
 | `recordings`                   | array            | All recordings of this session — active *and* stopped — ordered by `started_at_ns` ascending. |
 | `recordings[].recording_id`    | string           | Daemon-assigned identifier; opaque to consumers.                   |
 | `recordings[].retention_ns`    | integer          | Retention window for this recording. `0` = unbounded.              |
-| `recordings[].started_at_ns`   | integer          | Wall-clock UTC ns when the recording was opened.                   |
+| `recordings[].started_at_ns`   | integer          | ns on the clock identified by `clock_id`. Set when the recording was opened. The SDK does not assume UTC — see the [no-canonical-clock note](#get-apiinfo) on `/api/info`.    |
 | `recordings[].stopped_at_ns`   | integer \| null  | Same clock as `started_at_ns`, set the moment `DELETE /api/recordings/<id>` was processed. `null` while the recording is active. Recording state is determined by this field: `null` = active, non-null = stopped. |
 | `recordings[].duration_ns`     | integer          | Footage currently held in this recording. Computed by the daemon: `min(now - started_at_ns, retention_ns)` for an active ring buffer, `now - started_at_ns` for an active unbounded recording, `stopped_at_ns - started_at_ns` once stopped. |
 | `recordings[].frame_count`     | integer          | Frames written to this recording so far.                           |
@@ -279,7 +295,11 @@ A daemon is conformant when:
 - [ ] Each recording in `/api/state` carries `stopped_at_ns` (`null` while active) and `duration_ns` (computed per the table above) on the same clock as `started_at_ns`.
 - [ ] `DELETE /api/recordings/<id>` transitions the recording to stopped state but **keeps it in the `recordings` array** with non-null `stopped_at_ns`.
 - [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
+- [ ] `/api/info` returns the full session-scoped identity shape: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns` (`null` while the daemon is alone in the cluster), `peer_id`, `app_instance`.
 - [ ] `/api/info`'s `name` / `app` match the mDNS TXT records when both are configured.
+- [ ] Daemon registers a session clock at session boot — a fresh monotonic clock per session, on which the session's start is `0` trivially. The `clock_id` and `clock_hash` are the values returned in `/api/info`.
+- [ ] `cluster_joined_at_ns` is `null` until first peer connection, then set once on the session clock and never reset.
+- [ ] No timestamp in any API response is described as "UTC ns" or "monotonic ns" — every timestamp is "ns on the clock identified by `<x>_clock_id`."
 - [ ] Errors use `{"error": "..."}` JSON outside the documented per-endpoint response shapes.
 - [ ] HTTP server binds `0.0.0.0:<port>`.
 - [ ] mDNS advertisement publishes `_auki._tcp.local.` with `name` and `app` TXT records (recommended).

@@ -18,9 +18,13 @@ Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation 
 
 `auki-hash` publishes locked conformance vectors so any reimplementation can be validated. Should `auki-jcs`, `auki-logs`, `auki-registry`, and `auki-time-transforms` also publish locked vectors? Concretely: a `tests/cross_language/` directory with golden bytes any port must reproduce. Boosterapp's Python sidecar is already a de facto second implementation — vectors would catch drift automatically.
 
-## Glossary.md
+## `/api/state.session_uuid` vs `/api/info.session_id` naming
 
-[CLAUDE.md](CLAUDE.md) references a root-level `Glossary.md` for "definitions of all key terms." It doesn't exist yet. Who drafts it, and what's the seed list of terms (Domain, Cluster, Map, Frame, Pose Log, etc.)?
+Post-ansuz `/api/info` redesign returns `session_id`; `/api/state` still returns `session_uuid`. Same value, two field names. The SDK's broader convention is `session_id` (per [`auki-session`](crates/auki-session/README.md) and the manifest spec); `session_uuid` predates that landing. Renaming `/api/state.session_uuid` → `session_id` is a breaking change to consumers expecting the old name (Park, etc.). Aligning makes the API consistent; deferring keeps existing consumers unbroken until the next coordination-tag PR. Decide with the next consumer-coordination round.
+
+## Glossary.md — additional terms to seed
+
+[Glossary.md](Glossary.md) seeded May 4, 2026 with Domain, Domain Owner, Domain ID, Cluster, Scenegraph, Scenegraph ID, Map, Session ID. Pending entries: Frame, Pose Log, Sensor Log, Detection Log, TimeTransform Log, Pose Source, Anchor, App ID. Open question — does each crate-owned term live in the Glossary or stay in the crate's README, with the Glossary linking out? Default for now: protocol-level concepts (Domain, Map, Cluster, identifier model) live in the Glossary; per-crate implementation details stay with the crate.
 
 ## Python bindings strategy
 

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 09:24 HKT, 2026
+
+`auki-logs` + `auki-session`: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory (sensorlogs and timetransform_logs alike), with pointers to root `tags.md`. Spec gap fix — the sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs. No code changes. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 2, 18:45 HKT, 2026
 
 `auki-network`: M1b landed — Circuit Relay v2 (client always; server gated on `SwarmConfig.enable_relay_server`, off by default for consumer daemons), libp2p mDNS (`_p2p._udp.local.`, gated on `SwarmConfig.enable_mdns`, on by default for daemons — dual-channel with the existing `_auki._tcp.local.`), and a `dial_peer` helper for Park-from-home circuit-relay dialing. Encodes all three resolved Reid milestone-2 parking-lot answers (1a/2c/3c). 4 new tests; 19 unit tests + 1 doctest total. Layer 2 (capability advertisement / discovery) is the next chunk. See `auki-network/changelog.md` for detail.

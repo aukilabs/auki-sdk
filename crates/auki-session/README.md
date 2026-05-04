@@ -13,15 +13,19 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 └── <session>/
     ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json
+    │   ├── tags.jsonl                    ← optional TagClaim sidecar; see ../tags.md
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     └── sensorlogs/
         ├── <recording_uuid_1>/            ← one sensor stream per recording
         │   ├── manifest.json
+        │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
         ├── <recording_uuid_2>/
         │   └── ...
         └── <recording_uuid_3>/
 ```
+
+`tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
 
 ## Rationale
 

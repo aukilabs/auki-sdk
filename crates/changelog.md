@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 11:11 HKT, 2026
+
+`auki-registry` + `auki-session`: Pose Log capture support added — first concrete step toward `convert_pose`. New `PoseSource` enum (v1 ships `Ros2Tf { publishers }`; SLAM/odometry are the named extension points), `PoseLogEntry { transforms: Vec<TransformSample> }` payload, `build_pose_log_manifest(...)` builder in auki-registry; `poselog_path(session, recording_uuid)` helper in auki-session. Pose Log directories sit at `<session>/poselogs/<recording_uuid>/` — peer to Sensor Log, same parallel-recording semantics (multiple recordings per session, ring buffer + intent captures). **No Pose Source Registry** — source identity rides inline in the manifest under `"source"` because the payload is fully self-describing; provenance only, not a decoder. `f64` for translation/rotation matches ROS `geometry_msgs`. Locked canonical bytes + locked hash for the M1 example ROS 2 TF source. New `ciborium` dev-dep in auki-registry. auki-registry +6 tests (23 → 29); auki-session +2 tests (8 → 10). See per-crate changelogs for detail.
+
+### broodsugar's claude · May 4, 10:38 HKT, 2026
+
+`auki-registry` + `auki-time-transforms`: Sensor Log family and TimeTransform Log manifest builders now produce the `app_id` and `session_id` fields specced this morning. New `build_sensor_log_manifest` in auki-registry (one function for Sensor / Point Cloud / Audio Log — they share the manifest shape; auki-logs added as dev-dep for the round-trip integration test); auki-registry now at 23 unit tests (was 21). `build_manifest` in auki-time-transforms gains two required parameters — **breaking API change**; existing test assertion expanded to cover the new fields, no count change (still 10). All workspace tests green. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 4, 10:22 HKT, 2026
 
 `auki-session` + `auki-registry` + `auki-time-transforms`: session lifecycle formally specced (one daemon run = one session, integrator-minted UUIDv4 at boot); Sensor Log family and TimeTransform Log manifests both gain a required `session_id: string` field carrying that UUID. Companion to the `app_id` change earlier today; together they make every manifest self-identifying about which app run produced it. Spec-only; implementation/tests pending. See per-crate changelogs for detail.

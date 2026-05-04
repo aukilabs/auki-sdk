@@ -254,6 +254,68 @@ v1 specifies PCM only. When compression is added, `sample_format` gains values l
 
 ---
 
+## Pose Log payload — schema v1
+
+The Pose Log is an `auki_logs::Log<PoseLogEntry>`. The framing's `timestamp_ns` is the message arrival time on the daemon's clock; the payload here carries one batch of transforms (one ROS `TFMessage`, or the equivalent for other producers).
+
+Pose Log answers "where was this frame relative to that one over time" — eventually consumed by the future `convert_pose` operation. v1 covers capture and read; composition / path-finding / `convert_pose` lands separately.
+
+Pose Log directories live at `<session>/poselogs/<recording_uuid>/` — same parallel-recording shape as Sensor Logs (multiple recordings per session, ring buffer + intent captures, distinguished only by `retention_ns`). Multiple recordings of the same source are fine; the integrator decides when to start and stop.
+
+### Manifest
+
+JCS-canonical UTF-8 JSON. Required keys (extends auki-logs's base):
+
+| Key                    | Type    | Notes                                                            |
+| ---------------------- | ------- | ---------------------------------------------------------------- |
+| `segment_duration_ns`  | integer | > 0; from auki-logs                                              |
+| `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                              |
+| `app_id`               | string  | Application identifier (same as the daemon's `/api/info` `app`). |
+| `session_id`           | string  | UUIDv4 minted by the integrator at app boot.                     |
+| `clock_id`             | string  | The Clock Registry ID that the framing's `timestamp_ns` is in    |
+| `clock_hash`           | string  | XXH3-128 hex of the clock's registry entry                       |
+| `source`               | object  | The producer identity, inline (see below). Tagged-enum body.     |
+
+**`source` is inline, not a registry reference.** Pose Log has no Pose Source Registry — payload is fully self-describing (frame names sit in each `TransformSample`), so producer identity is provenance, not a decoder. Sensor Log earns a registry because its byte payload is uninterpretable without one; Pose Log doesn't have that pressure. If/when a producer variant brings substantial identity (SLAM with `map_id` + algorithm parameters), graduating `source` to a sibling registry is straightforward — extract the body into a content-addressed JSON file and replace the inline value with `(source_id, source_hash)`.
+
+### `PoseSource` — inline producer identity
+
+Tagged-enum body. v1 ships one variant; SLAM, odometry, and manual fixtures are the named extension points.
+
+```
+PoseSource = Ros2Tf {
+  publishers: [string],     // sorted ROS node names contributing to /tf
+                            // (e.g. ["amcl", "robot_state_publisher", "tf_broadcaster"])
+}
+```
+
+Frame pairs are deliberately *not* part of identity — they can change at runtime; consult the segments for what was actually observed. `/tf_static` merges with `/tf` on capture; the static-vs-dynamic distinction is not preserved (Park can detect statics by observing they don't change).
+
+### Payload (CBOR)
+
+```
+PoseLogEntry {
+  transforms: [TransformSample],   // empty allowed
+}
+
+TransformSample {
+  parent_frame:  string,
+  child_frame:   string,
+  translation:   [f64; 3],          // x, y, z (typically meters)
+  rotation_quat: [f64; 4],          // x, y, z, w (Hamilton convention; matches ROS)
+}
+```
+
+`f64` matches ROS `geometry_msgs` and preserves precision at large-map scales. Translation and rotation are CBOR arrays (not maps) for half the byte cost; the ordering is documented and stable.
+
+There is no per-`TransformSample` timestamp in the payload — the auki-logs framing's `timestamp_ns` is the message arrival time on the daemon's clock. ROS TF carries per-`TransformStamped` `stamp` fields too, but for the rendering use case the message arrival is what consumers need to step through. If downstream needs per-transform stamps, add them additively without breaking the existing shape.
+
+### Frame Registry
+
+Frame IDs (`parent_frame`, `child_frame`) are opaque strings in v1. The Frame Registry — describing each named frame's coordinate conventions (handedness, axes, units, rotation semantics) — is still aspirational; it lives at `<app_root>/registries/frames/<frame_id>/<hash>.json` when implemented. Without it, frame names are labels; with it, they carry semantic identity.
+
+---
+
 ## Versioning
 
-Schema version is **1** for all eight types (`SensorRegistryEntry`, `ClockRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`). Bump on incompatible field changes. The auki-logs segment format version is independent.
+Schema version is **1** for all types (`SensorRegistryEntry`, `ClockRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseSource`, `PoseLogEntry`, `TransformSample`). Bump on incompatible field changes. The auki-logs segment format version is independent.

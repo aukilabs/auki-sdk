@@ -118,6 +118,20 @@ pub struct Microphone {
 
 Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
 
+### `PoseSource` (inline in Pose Log manifest, not a registry entry)
+
+```rust
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PoseSource {
+    Ros2Tf {
+        publishers: Vec<String>,    // sorted ROS node names contributing to /tf
+    },
+    // future: Slam { ... }, Odometry { ... }, ...
+}
+```
+
+Lives inline in the Pose Log manifest under `"source"`. No `pose_sources/` registry — the Pose Log payload (`PoseLogEntry`) is fully self-describing, so source identity is provenance, not a decoder. Tagged-enum body is the extension point for SLAM, odometry, manual fixtures.
+
 ## Log payload types
 
 ```rust
@@ -139,9 +153,20 @@ pub struct AudioLogEntry {
     #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,     // interleaved samples per the registry's sample_format and channels
 }
+
+pub struct PoseLogEntry {
+    pub transforms: Vec<TransformSample>,   // empty allowed
+}
+
+pub struct TransformSample {
+    pub parent_frame: String,
+    pub child_frame:  String,
+    pub translation:  [f64; 3],   // x, y, z (typically meters)
+    pub rotation_quat: [f64; 4],  // x, y, z, w (Hamilton convention; matches ROS)
+}
 ```
 
-All three byte buffers are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads.
+All three byte buffers (`SensorLogEntry.frame`, `PointCloudLogEntry.data`, `AudioLogEntry.data`) are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads. `PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding.
 
 ## Public functions
 
@@ -150,9 +175,34 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
 pub fn write_clock(app_root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
 pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
 pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
+
+pub fn build_sensor_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    sensor_id: &str,
+    sensor_hash: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value;
+
+pub fn build_pose_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    source: &PoseSource,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value;
 ```
 
-Both entry types also expose `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
+Both entry types also expose `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing. `PoseSource` exposes the same pair (no on-disk file is written for it — source identity rides inline in the Pose Log manifest — but the hash is useful as a regression guard for the JCS shape).
+
+`build_sensor_log_manifest` produces a `serde_json::Value` containing all eight required Sensor Log family manifest fields (the run-identifying `app_id` / `session_id`, the sensor and clock bindings, and `auki-logs`'s required `segment_duration_ns` / `retention_ns`). Same shape for Sensor Log, Point Cloud Log, and Audio Log — the `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose `body` variant tells a reader which payload type the segments hold.
+
+`build_pose_log_manifest` produces a `serde_json::Value` for Pose Log — the run-identifying fields, clock binding, inline `source` (no separate registry; provenance only), and the auki-logs base. See the [outer README's "Pose Log payload" section](../README.md#pose-log-payload--schema-v1) for the rationale on why Pose Log doesn't get its own registry.
 
 ## `WriteOutcome`
 
@@ -181,7 +231,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (21 total)
+## Tests (29 total)
 
 | Test | Asserts |
 |------|---------|
@@ -199,6 +249,14 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `read_missing_returns_none` | Absent files are `Ok(None)`, not an error |
 | `read_with_id_mismatch_errors` | Misplaced files surface as `IdMismatch` |
 | `write_outcome_hash_accessor` | `.hash()` works on both variants |
+| `build_sensor_log_manifest_contains_all_required_fields` | Builder produces all 8 manifest fields with correct types |
+| `sensor_log_manifest_opens_a_log_round_trip` | Manifest round-trips through `auki_logs::Log::open` + `read` (integration; uses dev-dep on `auki-logs`) |
+| `ros2_tf_source_serializes_to_canonical_bytes` | Byte-exact JCS output for the M1 example ROS 2 TF source |
+| `ros2_tf_source_hash_is_locked` | `f3d296341347589c72297a0cc7c81cd8` |
+| `build_pose_log_manifest_contains_all_required_fields` | Builder produces all 7 manifest fields incl. nested `source.kind` |
+| `pose_log_entry_round_trips_through_cbor` | `PoseLogEntry` with two `TransformSample`s survives CBOR encode/decode |
+| `pose_log_entry_with_empty_transforms_round_trips` | Empty `transforms` vector is permitted and round-trips |
+| `pose_log_manifest_opens_a_log_round_trip` | Builder + `auki_logs::Log::open` + append + read back; manifest and entry both intact |
 
 The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, three tests fail at once.
 

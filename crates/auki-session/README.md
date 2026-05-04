@@ -15,14 +15,20 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
     │   ├── manifest.json
     │   ├── tags.jsonl                    ← optional TagClaim sidecar; see ../tags.md
     │   └── segments/<padded-ns>.seg      ← one TT log per session
-    └── sensorlogs/
-        ├── <recording_uuid_1>/            ← one sensor stream per recording
+    ├── sensorlogs/
+    │   ├── <recording_uuid_1>/            ← one sensor stream per recording
+    │   │   ├── manifest.json
+    │   │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
+    │   │   └── segments/<padded-ns>.seg
+    │   ├── <recording_uuid_2>/
+    │   │   └── ...
+    │   └── <recording_uuid_3>/
+    └── poselogs/
+        ├── <recording_uuid_1>/            ← one pose source per recording
         │   ├── manifest.json
         │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
-        ├── <recording_uuid_2>/
-        │   └── ...
-        └── <recording_uuid_3>/
+        └── <recording_uuid_2>/
 ```
 
 `tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
@@ -46,7 +52,7 @@ None is derivable from the others.
 - **`<app_root>` is chosen by the integrator.** The SDK doesn't prescribe `<robot-home>/auki/<app-name>/` or any specific structure above the registries — the app picks its name and where to write. (Boosterapp uses `/home/booster/auki/boosterapp/`.)
 - **Registries shared across sessions.** Hash-keyed writes are idempotent; re-writing the same `<hash>.json` per session would be wasted work. A sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session.
 - **One TimeTransform Log per session.** Clock offsets are time-localized; the session is the natural retention boundary.
-- **A recording is one sensor stream.** Each `<recording_uuid>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel recordings sharing a session, not a multi-sensor recording. The auto-started ring buffer is just a recording with `retention_ns: 30s`; intent captures are recordings with `retention_ns: 0`. Nothing on disk distinguishes "buffer" from "intent" beyond the manifest's retention value. The sensor identity is recorded in the log's manifest (`sensor_id` + `sensor_hash`), not encoded in the path.
+- **A recording is one stream.** Each `<recording_uuid>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor (under `sensorlogs/`) or one pose source (under `poselogs/`). Multi-stream capture means multiple parallel recordings sharing a session, not a multi-stream recording. The auto-started ring buffer is just a recording with `retention_ns: 30s`; intent captures are recordings with `retention_ns: 0`. Nothing on disk distinguishes "buffer" from "intent" beyond the manifest's retention value. For sensor logs, identity is the manifest's `sensor_id` + `sensor_hash`; for pose logs, identity is the manifest's inline `source` block. Neither is encoded in the path.
 
 ## ID encoding
 
@@ -62,6 +68,7 @@ None is derivable from the others.
 | `session_root(app_root, session_id)`                            | `<app_root>/<session_id>`                                            |
 | `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
 | `sensorlog_path(session_root, recording_uuid)`                  | `<session_id>/sensorlogs/<recording_uuid>`                           |
+| `poselog_path(session_root, recording_uuid)`                    | `<session_id>/poselogs/<recording_uuid>`                             |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
 
 ## Versioning

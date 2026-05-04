@@ -125,8 +125,16 @@ fn midpoint(a: i64, b: i64) -> i64 {
 }
 
 /// Build a TimeTransform Log manifest with the four required clock-binding
-/// fields plus auki-logs's required `segment_duration_ns` / `retention_ns`.
+/// fields, the run-identifying `app_id` / `session_id`, plus auki-logs's
+/// required `segment_duration_ns` / `retention_ns`.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
+/// (same value as the parent session directory name).
 pub fn build_manifest(
+    app_id: &str,
+    session_id: &str,
     from_clock_id: &str,
     from_clock_hash: &str,
     to_clock_id: &str,
@@ -135,6 +143,8 @@ pub fn build_manifest(
     retention: Duration,
 ) -> serde_json::Value {
     serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
         "from_clock_id": from_clock_id,
         "from_clock_hash": from_clock_hash,
         "to_clock_id": to_clock_id,
@@ -333,6 +343,8 @@ mod tests {
     #[test]
     fn build_manifest_contains_required_fields() {
         let m = build_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
             "K1-AABBCCDDEEFF/monotonic",
             "deadbeefcafefeed",
             "K1-AABBCCDDEEFF/utc",
@@ -340,6 +352,8 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(60),
         );
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(m["from_clock_id"], "K1-AABBCCDDEEFF/monotonic");
         assert_eq!(m["to_clock_hash"], "1234567890abcdef");
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
@@ -357,6 +371,8 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let manifest = build_manifest(
+            "test-app",
+            "550e8400-e29b-41d4-a716-446655440000",
             "test/from",
             "fhash",
             "test/to",

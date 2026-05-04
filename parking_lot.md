@@ -52,9 +52,9 @@ If Park merges data from booster (booster-domain) and galbot (galbot-domain), wh
 
 Would let peers cache by claim identity, but adds a chicken-and-egg with `issued_at_ns`. Trade-off worth pinning before tag stores get distributed.
 
-## Discovery descriptor — Pose Log shape
+## Propagate: Pose Log capture shape decided
 
-[`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` only resolves to something fetchable once Pose Log exists. Pose Log is listed as not-yet-implemented in the root README; its concrete schema is unblocked by this descriptor.
+`PoseLogEntry { transforms: Vec<TransformSample> }` with inline `PoseSource` in the manifest (no Pose Source Registry — payload is self-describing; provenance only). Update [`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` to point at the actual Pose Log layout (`<session>/poselogs/<recording_uuid>/`); confirm the discovery descriptor reads cleanly against the new shape. `convert_pose` itself is still pending — capture and read are in place; composition / path-finding is not.
 
 ## Discovery descriptor — `log_handle` semantics
 

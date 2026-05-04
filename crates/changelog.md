@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 4, 18:00 HKT, 2026
+
+`auki-identity-py`: new crate. PyO3 bindings for a tiny slice of the SDK — exactly three primitives (`load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`) so Boosterapp's Python sidecar can implement the [`/api/info` v0.0.11 shape](../docs/control-api.md) ahead of the full `auki-py` MVP. PyO3 0.22 with the `Bound<...>` API; `abi3-py38` so one wheel works across Python 3.8+; built via `maturin` (PEP 517 backend in `pyproject.toml`). `crate-type = ["cdylib", "rlib"]` and `extension-module` gated behind a default Cargo feature so `cargo test` can drive the bindings via `Python::with_gil` while `maturin develop` still builds a runtime-link-free extension. Error mapping is one-to-one with the upstream Rust crates: `OSError` for IO; `ValueError` for `InvalidLength`; `RuntimeError` (variant name in message) for `NoNetworkInterfaces` / `NoSuitableMac`. **Out of scope by design** — no async / Tokio / libp2p Swarm; no signing / verification / creation certs; no WASM (those land in the full `auki-py` track later). 5 Rust-side smoke tests + 13 Python-side end-to-end tests including the cross-language locked vector for `Wallet.from_seed(b'\x03' * 32).derive_child("peer/v1").peer_id()`. Workspace `Cargo.toml` updated to include the new member. See per-crate changelog for detail.
+
 ### broodsugar's claude · May 4, 16:39 HKT, 2026
 
 `auki-identity`: `load_or_mint_seed(path) -> Result<[u8; 32], SeedError>` added — the small fs helper backing ansuz's "stable peer key across restarts" guarantee (deliverable #6). Mints fresh 32 bytes from `OsRng` on first call, creates parents, writes atomically, sets `0o600` on Unix; on subsequent calls reads and rejects anything that isn't exactly 32 bytes. Path convention is caller's; documented in prose only. Module gated `#[cfg(not(target_arch = "wasm32"))]` so the rest of the crate stays WASM-clean. `tempfile` dev-dep added. +9 tests (16 → 25). See per-crate changelog for detail.

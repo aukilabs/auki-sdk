@@ -65,6 +65,7 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-time-transforms`](crates/auki-time-transforms) | ✓ Clock sampler primitives for the TimeTransform Log |
 | [`auki-session`](crates/auki-session) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout |
 | [`auki-identity`](crates/auki-identity) | ✓ Wallet primitive: ed25519 keypairs, deterministic child derivation, signed creation certs. WASM-friendly |
+| [`auki-identity-py`](crates/auki-identity-py) | ✓ PyO3 bindings for a tiny slice of the SDK — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`. Stepping-stone Python package for Boosterapp's `/api/info` v0.0.11 sidecar; the full `auki-py` MVP (Swarm + async) is a separate, larger track |
 | [`auki-network`](crates/auki-network) | ✓ M0 + M1: peer identity (derived from wallet via `derive_child("peer/v1")`), reachability records, named capabilities, plus a libp2p `Swarm` builder behind the `swarm` feature (TCP/QUIC + Noise + Yamux + Circuit Relay v2 + mDNS + identify + ping; dial-by-peer-id helper for circuit-relay multiaddrs). All Reid M2 networking parking-lot questions resolved |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
 
@@ -75,7 +76,7 @@ This repo is in early development. The crates here implement a foundational subs
 - Frame Registry
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
 - Domain registration / clustering / discovery (these live in higher layers; the SDK provides primitives, not the network protocol itself)
-- Python bindings (planned)
+- The full `auki-py` MVP — libp2p Swarm + async / Tokio integration. The minimal `auki-identity-py` slice (`load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`) ships today as a stepping stone for Boosterapp's `/api/info` v0.0.11 sidecar
 
 ---
 

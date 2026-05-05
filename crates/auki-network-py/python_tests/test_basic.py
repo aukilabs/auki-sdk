@@ -37,12 +37,29 @@ def test_module_exposes_only_documented_apis() -> None:
     deliberate decision and a changelog bump."""
     public = {name for name in dir(cluster) if not name.startswith("_")}
     expected = {
+        # Ansuz surface (v0.0.14).
         "ClusterDoc",
         "ClusterRuntime",
         "ParticipantInfo",
         "PeerSnapshot",
         "load_doc",
         "spawn",
+        # Grimsby Stream<T> surface (deliverable #4 / v0.0.17).
+        "StreamRequest",
+        "AcceptInfo",
+        "JpegFrame",
+        "DeclineReason",
+        "EndReason",
+        "ProducerFrame",
+        "ConsumerFrame",
+        "StreamDecision",
+        "StreamSubscription",
+        "FrameIterator",
+        "StreamEndOfStream",
+        "StreamConnectionLost",
+        "StreamProtocolError",
+        "StreamDeclined",
+        "StreamUnreachable",
     }
     assert expected.issubset(public), f"missing expected API: {expected - public}"
 

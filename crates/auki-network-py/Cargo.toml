@@ -64,4 +64,13 @@ pyo3 = { version = "0.22", features = ["abi3-py38"] }
 # manually starting an interpreter; needs the runtime linked, which is
 # why we don't enable it on the production extension build.
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+# `pyo3-async-runtimes` 0.22 matches our `pyo3 = "0.22"`. Used by the
+# Path 1 prototype in `stream_bridge.rs` to drive a Python async
+# iterator's `__anext__()` calls onto a Rust `futures::Stream` via the
+# tokio runtime — grimsby D3 Python-binding evaluation. Dev-dep until
+# the production wrapper for `stream_provider` lands.
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+# Used by `stream_bridge.rs` tests to assert the bridge yields `Stream`
+# items in order.
+futures = "0.3"
 tempfile = "3"

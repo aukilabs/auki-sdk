@@ -25,6 +25,13 @@
 //! See [`crates/auki-network-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
 
+// `stream_bridge` is `#[cfg(test)]`-gated — Path 1 prototype for the
+// grimsby `stream_provider` Python wrapper (deliverable #4). Lives in
+// the crate so the prototype can grow into the production wrapper
+// without restructuring; carries no production surface today.
+#[cfg(test)]
+mod stream_bridge;
+
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule};
@@ -38,6 +45,7 @@ use auki_network_rs::{
     cluster_runtime::{
         ClusterRuntime as RustClusterRuntime, ParticipantInfoProvider, SpawnError,
     },
+    stream_runtime::decline_all_streams,
     swarm::SwarmConfig,
 };
 use libp2p_identity::PeerId;
@@ -616,7 +624,19 @@ fn spawn(
     let rt = cluster_tokio_runtime();
     let cluster = py.allow_threads(|| {
         let _guard = rt.enter();
-        RustClusterRuntime::spawn(seed_arr, doc.inner.clone(), swarm_config, provider)
+        // Grimsby (deliverable #6) will replace `decline_all_streams()`
+        // with a Python-supplied `stream_provider`. Today the wrapper
+        // is consumer-only — every inbound `/auki/stream/1.0.0` request
+        // gets `DeclineReason::SensorNotFound`. This keeps the binding
+        // building against develop after PR #40 added a required
+        // `stream_provider` to `ClusterRuntime::spawn`.
+        RustClusterRuntime::spawn(
+            seed_arr,
+            doc.inner.clone(),
+            swarm_config,
+            provider,
+            decline_all_streams(),
+        )
     });
 
     let cluster = cluster.map_err(map_spawn_error)?;

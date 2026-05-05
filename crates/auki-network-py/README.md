@@ -29,14 +29,26 @@ def participant_provider() -> auki.cluster.ParticipantInfo:
 
 # 3. Spawn the cluster runtime. Lazily creates a process-wide tokio
 #    runtime on first call.
+#
+#    Note: `seed` is the *peer* seed, not the wallet seed. For the
+#    typical wallet-rooted pattern, derive the peer wallet first and
+#    hand its `.seed()` here — otherwise the swarm's PeerId won't
+#    match the wallet-derived peer identity in cluster.json.
+import auki_identity
+wallet = auki_identity.Wallet.from_seed(
+    auki_identity.load_or_mint_seed("/var/lib/boosterapp/identity.seed")
+)
+peer = wallet.derive_child("peer/v1")  # canonical "peer/v1" label
+
 runtime = auki.cluster.spawn(
-    seed=load_or_mint_seed("/var/lib/boosterapp/identity.seed"),
+    seed=peer.seed(),                  # 32-byte derived peer seed (NOT wallet seed)
     doc=doc,
     participant_provider=participant_provider,
-    listen_addresses=None,        # default: TCP+QUIC on 0.0.0.0, OS-chosen ports
-    agent_version=None,           # default: "auki-network-py/<crate-version>"
-    enable_mdns=True,             # default: True; matches SwarmConfig::default
+    listen_addresses=None,             # default: TCP+QUIC on 0.0.0.0, OS-chosen ports
+    agent_version=None,                # default: "auki-network-py/<crate-version>"
+    enable_mdns=True,                  # default: True; matches SwarmConfig::default
 )
+# runtime's libp2p PeerId == peer.peer_id(), by construction.
 
 # 4. Read the live peer state from any thread (HTTP handler, control loop, ...).
 for peer in runtime.peers():

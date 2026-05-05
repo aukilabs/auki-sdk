@@ -100,8 +100,13 @@ pub mod cluster_runtime {
     pub const RECONNECT_TICK: std::time::Duration = std::time::Duration::from_millis(500);
 
     pub type ParticipantInfoProvider = std::sync::Arc<
-        dyn Fn() -> ParticipantInfo + Send + Sync,
+        dyn Fn() -> Option<ParticipantInfo> + Send + Sync,
     >;
+    // Returning `None` tells the runtime to drop the inbound request's
+    // reply channel without sending a response — requester sees a
+    // request timeout. Use cases: session clock not yet bound (sidecar
+    // mid-startup), Python participant_provider raised an exception,
+    // any other transient inability to fill in valid info.
 
     pub enum SpawnError {
         BuildSwarm(swarm::BuildError),
@@ -301,7 +306,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-63 unit tests + 3 integration tests + 2 doctest with `--all-features`; 54 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), and the `cluster_runtime` tests (7) all run under `--features swarm`.
+64 unit tests + 3 integration tests + 2 doctest with `--all-features`; 55 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), and the `cluster_runtime` tests (8) all run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -339,6 +344,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `cluster_runtime::three_runtimes_form_full_mesh` | 3 runtimes, each ends with 2 peers in `peers()` within 15 s |
 | `cluster_runtime::peer_leaving_drops_off_other_peers` | 3 runtimes converge → kill one → surviving 2 drop the departed peer from `peers()` while keeping each other |
 | `cluster_runtime::unknown_peer_is_not_surfaced` | Outsider not in doc dials in and sends a request → runtime drops silently, `peers().len() == 0` (cluster doc is the trust boundary) |
+| `cluster_runtime::provider_returning_none_drops_the_reply` | Provider returns `None` → runtime drops the reply channel (requester sees timeout); runtime survives; asymmetric peer view confirms (rt-with-normal-provider sees rt-with-none, but rt-with-none replies normally so the other side sees nothing) |
 | `cluster_runtime::shutdown_is_idempotent_and_drops_state` | `shutdown(self)` returns promptly without deadlock |
 | `cluster_runtime::drop_without_explicit_shutdown_cleans_up` | `Drop` runs the same cleanup as `shutdown` |
 | `cluster_runtime::spawn_outside_tokio_runtime_returns_error` | Calling `from_swarm` from a `std::thread` (no tokio) → `SpawnError::NoTokioRuntime` |

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "auki-network-py"
+version = "0.0.0"
+description = "PyO3 bindings for auki-network's ClusterRuntime — lets a Python process participate in an ansuz cluster as a libp2p peer."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Auki Labs Limited" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/aukilabs/auki-sdk"
+
+[tool.maturin]
+# Build an abi3 wheel (stable-ABI; works on the matching Python minor and
+# every later minor version of the same major).
+features = ["pyo3/extension-module"]
+module-name = "auki_network"
+# Manifest path is implicit — maturin defaults to ./Cargo.toml.
+
+[tool.pytest.ini_options]
+testpaths = ["python_tests"]

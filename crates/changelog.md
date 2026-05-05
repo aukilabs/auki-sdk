@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 5, 19:00 HKT, 2026
+
+`auki-network`: new test pinning `ClusterRuntime::open_stream` behavior against an unreachable peer (cluster.json with a peer at port 1; libp2p RST-fast-fails). Returns `Err(OpenStreamError::LibP2p(_))` or `Err(OpenStreamError::Timeout(_))` within 30s `OPEN_STREAM_TIMEOUT`; doesn't hang or panic. Closes the second of v0.0.16's documented follow-ups. No behavior change. Test counts 74 unit + 3 integration + 2 doctest with `--features swarm`. Will land in v0.0.17. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 5, 18:30 HKT, 2026
 
 `auki-network`: `ClusterRuntime::shutdown` now flushes typed `EndOfStream { reason: ProducerShuttingDown }` to every in-flight inbound stream substream before tearing down the swarm — closes the [grimsby](https://www.notion.so/3575c8e965928079a955ed9573bbb398) D5b "best-effort explicit" gap that v0.0.16 left as a follow-up. New private `watch::Sender<bool>` field on `ClusterRuntime`; per-substream pump tasks race `source.next()` against the watch and write the typed end-reason on signal. `run_task`'s shutdown-receive arm sleeps `SHUTDOWN_GRACE = 100ms` before returning so the per-substream writes have time to flush over the still-alive connection. `Drop` path unchanged (skips the explicit signal; consumer falls back to `ConnectionLost`). No breaking API changes. New test `producer_shutdown_signals_consumer_with_typed_end_of_stream` (5th stream_runtime test). Test counts 73 unit + 3 integration + 2 doctest with `--features swarm`. Will land in v0.0.17. See `auki-network/changelog.md` for detail.

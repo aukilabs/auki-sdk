@@ -405,7 +405,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-82 unit tests + 3 integration tests + 2 doctest with `--all-features`; 73 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (13), and the `stream_runtime` tests (5) all run under `--features swarm`.
+83 unit tests + 3 integration tests + 2 doctest with `--all-features`; 74 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (13), and the `stream_runtime` tests (6) all run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -465,6 +465,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `stream_runtime::producer_error_signals_consumer_with_detail` | Source-Stream yields `Some(Err("encoder died"))`; consumer reads frame then sees `Err(EndOfStream { reason: ProducerError { detail: "encoder died" } })`; iterator exhausted after |
 | `stream_runtime::decline_all_streams_returns_sensor_not_found` | Convenience helper for consumer-only nodes (Park) declines every request with `SensorNotFound` |
 | `stream_runtime::producer_shutdown_signals_consumer_with_typed_end_of_stream` | Producer's source-Stream is `iter([first_frame]).chain(pending())`; consumer reads first frame, then `producer.shutdown()` is called; consumer's iterator yields `Err(EndOfStream { reason: ProducerShuttingDown })` (not `ConnectionLost`) within the `SHUTDOWN_GRACE` + RTT window, then `None`. Confirms grimsby D5b's "best-effort explicit" path |
+| `stream_runtime::open_stream_against_unreachable_peer_surfaces_typed_error` | `cluster.json` lists a peer at an unreachable address (port 1, refused immediately); consumer's `open_stream` returns `Err(OpenStreamError::LibP2p(_))` or `Err(OpenStreamError::Timeout(_))` rather than hanging or panicking. Bounded by an outer 35s safety-net timeout vs the SDK's 30s `OPEN_STREAM_TIMEOUT` |
 | `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
 | `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
 | `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |

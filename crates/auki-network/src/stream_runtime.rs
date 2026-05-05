@@ -984,6 +984,75 @@ mod tests {
         consumer.shutdown();
     }
 
+    /// Consumer's `cluster.json` lists a peer that doesn't actually
+    /// exist on the network. The consumer's `open_stream` call should
+    /// surface the failure as a typed `OpenStreamError` — not hang
+    /// forever, not panic, not return a half-constructed
+    /// `StreamSubscription`.
+    ///
+    /// Either `LibP2p(...)` (libp2p couldn't reach the peer — dial
+    /// failed, peer didn't speak the protocol, etc.) or `Timeout(...)`
+    /// (the open didn't complete inside `OPEN_STREAM_TIMEOUT`) is
+    /// acceptable; both are explicit "the request failed" signals the
+    /// consumer's app-level reconnect logic can act on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn open_stream_against_unreachable_peer_surfaces_typed_error() {
+        let id_consumer = PeerIdentity::from_seed(&[201u8; 32]);
+        let id_unreachable = PeerIdentity::from_seed(&[202u8; 32]);
+
+        let (swarm_c, addr_c) = build_listening_swarm(&id_consumer, "test-consumer/0").await;
+
+        // cluster.json lists a "peer" that's just an identity — no
+        // listening swarm at the address. Port 1 is reserved and
+        // typically refuses connections immediately on Linux/macOS,
+        // which gives libp2p a fast dial-failure signal.
+        let unreachable_addr: libp2p::Multiaddr =
+            "/ip4/127.0.0.1/tcp/1".parse().unwrap();
+        let doc = ClusterDoc {
+            version: 1,
+            cluster_name: "test-unreachable".into(),
+            peers: vec![
+                cluster_peer(id_consumer.peer_id(), addr_c),
+                cluster_peer(id_unreachable.peer_id(), unreachable_addr),
+            ],
+        };
+
+        let consumer = ClusterRuntime::from_swarm(
+            swarm_c,
+            doc,
+            fixture_participant_provider(id_consumer.peer_id(), "consumer"),
+            decline_all_streams(),
+        )
+        .unwrap();
+
+        // open_stream — bounded by OPEN_STREAM_TIMEOUT (30s) on the
+        // SDK side; we wrap an outer 35s tokio timeout as a safety net
+        // to fail the test rather than hang indefinitely if the
+        // bound's broken.
+        let result = tokio::time::timeout(
+            Duration::from_secs(35),
+            consumer.open_stream::<JpegFrame>(
+                id_unreachable.peer_id(),
+                StreamRequest {
+                    sensor_id: "any".into(),
+                },
+            ),
+        )
+        .await
+        .expect("open_stream did not return inside its own OPEN_STREAM_TIMEOUT bound");
+
+        match result {
+            Err(OpenStreamError::LibP2p(_)) => {}
+            Err(OpenStreamError::Timeout(_)) => {}
+            Err(other) => panic!(
+                "expected LibP2p(_) or Timeout(_), got typed error: {other:?}"
+            ),
+            Ok(_) => panic!("expected an error, got an Ok subscription"),
+        }
+
+        consumer.shutdown();
+    }
+
     #[test]
     fn decline_all_streams_returns_sensor_not_found() {
         let provider: StreamProvider<JpegFrame> = decline_all_streams();

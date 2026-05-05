@@ -10,6 +10,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
 - [`cluster_runtime.rs`](cluster_runtime.rs) — opaque runtime that owns a `Swarm<Behaviour>` + tokio task and orchestrates the cluster (ansuz #4), gated behind the `swarm` feature. Auto-dials peers in a `ClusterDoc`, exchanges `ParticipantInfo`, exposes the live peer state via `peers()`, reconnects with per-peer exponential backoff. The wrapper `auki-py` `cluster.spawn` is built on top of this.
+- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/1.0.0` typed-byte-stream wire primitives (grimsby #1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (the `T` for grimsby v1), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/1.0.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field; consumers acquire a `libp2p_stream::Control` from the swarm and use these helpers to frame typed messages on the resulting `libp2p::Stream`. The `Stream<T>` Rust API + `stream_provider` runtime are separate grimsby deliverables (#2, #3) building on these primitives.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
 ## Public types
@@ -66,7 +67,7 @@ pub mod cluster_doc {
 // M1 (behind `swarm` feature)
 pub mod swarm {
     pub struct Behaviour {
-        /* identify + ping + Toggle<mdns> + relay_client + Toggle<relay> + cluster */
+        /* identify + ping + Toggle<mdns> + relay_client + Toggle<relay> + cluster + stream */
     }
     pub struct SwarmConfig {
         listen_addresses: Vec<Multiaddr>,
@@ -91,6 +92,50 @@ pub mod cluster_protocol {
         libp2p::request_response::json::Behaviour<ClusterRequest, ClusterResponse>;
 
     pub fn behaviour() -> Behaviour;
+}
+
+// grimsby #1 (behind `swarm` feature)
+pub mod stream_protocol {
+    pub const STREAM_PROTOCOL: &str = "/auki/stream/1.0.0";
+    pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;          // 16 MiB
+
+    pub struct StreamRequest { pub sensor_id: String }
+    pub struct AcceptInfo {
+        pub sensor_hash: String,
+        pub clock_id:    String,
+        pub clock_hash:  String,
+    }
+    pub enum DeclineReason {
+        SensorNotFound,
+        SensorUnavailable,
+        ProducerShuttingDown,
+        Other { detail: String },
+    }
+    pub enum EndReason {
+        SourceEnded,
+        ProducerShuttingDown,
+        SessionEnded,
+        ProducerError { detail: String },
+    }
+    pub enum StreamMessage<T> {                                  // tagged "kind" on JSON
+        Request(StreamRequest),
+        Accept(AcceptInfo),
+        Decline { reason: DeclineReason },
+        Frame { timestamp_ns: i64, seq: u64, payload: T },
+        EndOfStream { reason: EndReason },
+    }
+    pub struct JpegFrame { pub bytes: Vec<u8> }                  // T for grimsby v1
+
+    pub enum StreamProtocolError { Io, Serialize, Deserialize, FrameTooLarge, EmptyFrame }
+
+    pub async fn write_message<T: Serialize, S: AsyncWrite + Unpin>(
+        stream: &mut S,
+        msg: &StreamMessage<T>,
+    ) -> Result<(), StreamProtocolError>;
+
+    pub async fn read_message<T: DeserializeOwned, S: AsyncRead + Unpin>(
+        stream: &mut S,
+    ) -> Result<StreamMessage<T>, StreamProtocolError>;
 }
 
 // ansuz #4 (behind `swarm` feature)
@@ -306,7 +351,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-64 unit tests + 3 integration tests + 2 doctest with `--all-features`; 55 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), and the `cluster_runtime` tests (8) all run under `--features swarm`.
+77 unit tests + 3 integration tests + 2 doctest with `--all-features`; 68 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), and the `stream_protocol` tests (13) all run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -348,6 +393,19 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `cluster_runtime::shutdown_is_idempotent_and_drops_state` | `shutdown(self)` returns promptly without deadlock |
 | `cluster_runtime::drop_without_explicit_shutdown_cleans_up` | `Drop` runs the same cleanup as `shutdown` |
 | `cluster_runtime::spawn_outside_tokio_runtime_returns_error` | Calling `from_swarm` from a `std::thread` (no tokio) → `SpawnError::NoTokioRuntime` |
+| `stream_protocol::protocol_id_is_locked` | Wire-format pin: `STREAM_PROTOCOL == "/auki/stream/1.0.0"` |
+| `stream_protocol::max_frame_bytes_is_locked` | Wire-format pin: `MAX_FRAME_BYTES == 16 MiB` |
+| `stream_protocol::request_message_round_trips_through_json` | `StreamMessage::Request` round-trips through serde-JSON, with the `kind: "request"` tag pinned |
+| `stream_protocol::accept_message_round_trips_through_json` | `StreamMessage::Accept` round-trips, `kind: "accept"` tag pinned |
+| `stream_protocol::decline_message_round_trips_through_json` | `StreamMessage::Decline { reason: SensorNotFound }` round-trips, both outer and inner `kind` tags pinned |
+| `stream_protocol::frame_message_round_trips_through_json` | `StreamMessage::Frame { ... }` round-trips, `kind: "frame"`, `seq` field pinned |
+| `stream_protocol::end_of_stream_message_round_trips_through_json` | `StreamMessage::EndOfStream { reason: ProducerError { detail } }` round-trips |
+| `stream_protocol::write_then_read_round_trips_a_request` | Single message survives `write_message → read_message` through an in-memory cursor; length prefix matches encoded body |
+| `stream_protocol::write_then_read_round_trips_a_full_session` | Realistic order (Request → Accept → Frame×3 → EndOfStream) survives in the same buffer in order |
+| `stream_protocol::read_rejects_oversized_frame_via_length_prefix` | Length prefix `MAX_FRAME_BYTES + 1` → `FrameTooLarge` before the payload is read (no allocation) |
+| `stream_protocol::read_rejects_empty_frame` | Length prefix `0` → `EmptyFrame` |
+| `stream_protocol::read_surfaces_eof_as_io_error` | Empty buffer → `Io(UnexpectedEof)` (consumer should treat as substream-closed) |
+| `stream_protocol::write_rejects_oversized_payload_before_io` | Payload that JSON-encodes to over `MAX_FRAME_BYTES` → `FrameTooLarge` before writing the length prefix |
 | `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
 | `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
 | `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |
@@ -385,6 +443,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - `multiaddr` (0.18) — typed multiaddr; serde adapter local to this crate.
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `request-response`, `json`, `macros`, `ed25519`) — the swarm itself plus the `cluster_protocol` JSON request-response codec.
+- *(swarm feature)* `libp2p-stream` (`=0.4.0-alpha`) — raw-substream multiplexer for grimsby's `/auki/stream/1.0.0` typed-byte-stream protocol. The libp2p umbrella crate doesn't expose `stream` as a feature in 0.56; pre-1.0; pinned exactly until the upstream surface stabilizes.
 - *(swarm feature)* `thiserror` (2) — `BuildError`, `SpawnError`.
 - *(swarm feature)* `tokio` (1, features: `macros`, `rt`, `sync`, `time`) — `cluster_runtime`'s task primitives (`select!`, `oneshot`, `interval`, `Handle::try_current`).
 - *(swarm feature)* `futures` (0.3, default-features off) — `StreamExt::next` for polling `swarm.next()` in the runtime task.

@@ -101,6 +101,15 @@ pub struct Behaviour {
     /// [`cluster_protocol::Behaviour::send_response`]. See
     /// [`crate::cluster_protocol`].
     pub cluster: cluster_protocol::Behaviour,
+    /// libp2p raw-substream multiplexer used by grimsby's
+    /// `/auki/stream/1.0.0` typed-byte-stream protocol. Always present —
+    /// the behaviour sits idle for swarms that don't open or accept any
+    /// streams; a knob would just be ceremony. Bind to a specific
+    /// protocol id (typically [`crate::stream_protocol::STREAM_PROTOCOL`])
+    /// on the receiving side via `libp2p_stream::Control::accept`, or open
+    /// outbound via `libp2p_stream::Control::open_stream`. See
+    /// [`crate::stream_protocol`].
+    pub stream: libp2p_stream::Behaviour,
 }
 
 /// Per-swarm configuration.
@@ -203,6 +212,7 @@ pub fn build_swarm(
                 relay::Behaviour::new(local_pid, relay::Config::default())
             })),
             cluster: cluster_protocol::behaviour(),
+            stream: libp2p_stream::Behaviour::new(),
         })
         .expect("behaviour construction is infallible")
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_TIMEOUT))

@@ -78,6 +78,22 @@ Decision: `<app_root>/registries/...` is the canonical layout. Sweep [`tags.md`]
 
 ---
 
+## Grimsby follow-ups (cross-cutting items surfaced during the [grimsby](https://www.notion.so/3575c8e965928079a955ed9573bbb398) decision walkthrough — none gating grimsby itself)
+
+### `/auki/capabilities/1.0.0` — Layer 2 capability advertisement
+
+Grimsby D2 resolved on `sensor_id`-only addressing for v1. The long-term shape is topic-based addressing (consumers asking for `rgb/head_left` instead of an internal `K1-AABBCCDDEEFF/head_left_cam`), which requires a new libp2p request-response protocol returning a `Vec<{topic, sensor_id, sensor_hash}>` so consumers can discover what a peer offers. Sibling to `/auki/cluster/1.0.0` (ansuz #3) and `/auki/stream/1.0.0` (grimsby #1); same `request_response::json::Behaviour` codec pattern. Belongs in `auki-network`. State of SDK doc flags this as "the biggest single gap on the networking side." Not gating grimsby; a parallel track once Layer 3 (admission) becomes a near-term need.
+
+### `Log<T>` watcher primitive
+
+Grimsby D3 considered (and deferred) a `stream_provider` shape that takes `Option<&Log<T>>` and lets the SDK tail the log onto the wire. Blocked on `auki-logs` not having a way to notify on `append` — the only way to tail a Log<T> today is to poll the segments directory. Designing a watcher (semantics for replay-from-tail vs. start-at-now, backpressure interaction with disk writes, multi-watcher support) is meaningful work. Once it lands, `Stream<T>` gets a one-line convenience adapter `handle.tail_log(&log)` so producers already writing to a Log<T> get streaming for free.
+
+### `auki-network-py` async-iterator ↔ Rust Stream bridge
+
+Grimsby D3 settled on `Fn(StreamRequest) -> StreamDecision<T>` where the app returns a `futures::Stream`. The Python binding for that signature (deliverable #4) needs to wrap a Python callable returning either `None` (decline) or an async iterator (accept), then bridge `__anext__()` calls onto tokio's runtime. The standard tool is [`pyo3-asyncio`](https://github.com/awestlake87/pyo3-asyncio); rolling our own is an option but adds a maintenance surface. Alternative wrapper shape: have the Python `stream_provider` return a callable `async def next() -> Optional[T]` instead of an async iterator — same wire semantics, simpler bridge. Pick when #4 starts.
+
+---
+
 ## Subfolder summary
 
 - [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing

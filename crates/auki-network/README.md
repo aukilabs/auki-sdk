@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, and an opaque `ClusterRuntime` that drives the swarm against a `cluster.json` (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and (for grimsby) the `/auki/stream/1.0.0` typed-byte-stream protocol primitives — wire types, framing, and `libp2p_stream::Behaviour` wired into the swarm (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
 
 ## What a peer is
 
@@ -244,6 +244,136 @@ runtime.shutdown(); // explicit clean exit; Drop is the safety net.
 **Opaque, not a `NetworkBehaviour`.** Decision recorded in the ansuz Notion doc (2026-05-05): the consumers we know about (Boosterapp via `auki-py` opaque, Sentinel direct on `cluster_protocol::Behaviour`) both want runtime shape. A future Rust consumer that wants `NetworkBehaviour` composition can build it on top of `cluster_protocol` directly.
 
 **Lifecycle.** `shutdown(self)` signals the driver task and aborts it; the swarm drops, connections close at the TCP layer. The `Drop` impl runs the same cleanup as a safety net. Both paths are sync — Python wrappers don't need an async shutdown.
+
+## The stream protocol (M1)
+
+Behind the `swarm` feature. The wire primitives for **grimsby** — typed-byte-stream subscriptions over libp2p, the substrate for live sensor frames pushed from a producer (Boosterapp) to a consumer (Park) without HTTP polling.
+
+This module ships **wire primitives only**: protocol id, message envelope, framing helpers, and the `libp2p_stream::Behaviour` field on the swarm. The `Stream<T>` consumer-and-producer Rust API and the `stream_provider` runtime are separate grimsby deliverables (#2 / #3) building on these primitives. See the [grimsby Notion doc](https://www.notion.so/3575c8e965928079a955ed9573bbb398) for the design walkthrough (D1–D5 resolved 2026-05-05).
+
+### Wire format
+
+Each `/auki/stream/1.0.0` substream is a sequence of length-prefixed `StreamMessage<T>` values, each:
+
+```text
++----+----+----+----+--------------------------+
+|  4-byte u32 BE length  |  JSON-serialized payload  |
++----+----+----+----+--------------------------+
+```
+
+Length cap: 16 MiB (constant `stream_protocol::MAX_FRAME_BYTES`). Payload is a `serde_json`-encoded `StreamMessage<T>`; `T` is generic and rides inside the same JSON envelope so the framing is the same for every Stream<T> instantiation. JPEG frames (grimsby v1, `T = JpegFrame`) typically run 10–100 KB.
+
+Healthy substream lifecycle:
+
+1. Initiator → Responder: `Request(StreamRequest { sensor_id })`
+2. Responder → Initiator: `Accept(AcceptInfo)` *or* `Decline { reason: DeclineReason }`
+3. Responder → Initiator: zero or more `Frame { timestamp_ns, seq, payload }`
+4. Responder → Initiator: `EndOfStream { reason: EndReason }` *or* substream closes
+
+Substream closing without an explicit `EndOfStream` is treated by the consumer as an implicit connection-loss equivalent. Substreams are full-duplex; future consumer→producer control messages (pause, request keyframe, params) ride the same substream as new `StreamMessage` variants without a wire change.
+
+### Wire types
+
+```rust
+pub const STREAM_PROTOCOL: &str = "/auki/stream/1.0.0";
+pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;            // 16 MiB
+
+pub struct StreamRequest { pub sensor_id: String }
+
+pub struct AcceptInfo {
+    pub sensor_hash: String,
+    pub clock_id:    String,
+    pub clock_hash:  String,
+}
+
+pub enum DeclineReason {
+    SensorNotFound,
+    SensorUnavailable,
+    ProducerShuttingDown,
+    Other { detail: String },
+}
+
+pub enum EndReason {
+    SourceEnded,
+    ProducerShuttingDown,
+    SessionEnded,
+    ProducerError { detail: String },
+}
+
+pub enum StreamMessage<T> {        // tagged "kind" on JSON
+    Request(StreamRequest),
+    Accept(AcceptInfo),
+    Decline { reason: DeclineReason },
+    Frame { timestamp_ns: i64, seq: u64, payload: T },
+    EndOfStream { reason: EndReason },
+}
+
+pub struct JpegFrame { pub bytes: Vec<u8> }                   // T for grimsby v1
+```
+
+### Framing helpers
+
+Both helpers are generic over the `futures` async-IO traits (matches what `libp2p_stream` hands you):
+
+```rust
+pub async fn write_message<T, S>(
+    stream: &mut S,
+    msg:    &StreamMessage<T>,
+) -> Result<(), StreamProtocolError>
+where T: Serialize, S: AsyncWrite + Unpin;
+
+pub async fn read_message<T, S>(
+    stream: &mut S,
+) -> Result<StreamMessage<T>, StreamProtocolError>
+where T: DeserializeOwned, S: AsyncRead + Unpin;
+```
+
+`write_message` does three I/O operations (4-byte length, payload, flush) so a partial write can't sit half-buffered. `read_message` reads the length prefix first and bounds-checks against `MAX_FRAME_BYTES` before allocating the body buffer. End-of-stream from the peer surfaces as `Err(StreamProtocolError::Io(e))` with `e.kind() == UnexpectedEof`. Errors leave the stream in an undefined state; callers should drop the substream rather than reuse it.
+
+### `libp2p_stream::Behaviour` integration
+
+The swarm's `Behaviour` struct gains an always-on `stream:` field of type `libp2p_stream::Behaviour`. Bind to the `/auki/stream/1.0.0` protocol on the receiving side via `Control::accept`, or open outbound via `Control::open_stream`:
+
+```rust
+use libp2p::StreamProtocol;
+use auki_network::stream_protocol::{
+    self, STREAM_PROTOCOL, StreamMessage, StreamRequest, JpegFrame,
+};
+
+// Responder side: accept inbound substreams on the stream protocol.
+let mut control  = swarm.behaviour().stream.new_control();
+let mut incoming = control
+    .accept(StreamProtocol::new(STREAM_PROTOCOL))
+    .expect("nobody else has bound this protocol");
+
+while let Some((peer, mut sub)) = incoming.next().await {
+    let req: StreamMessage<JpegFrame> =
+        stream_protocol::read_message(&mut sub).await?;
+    // ... `stream_provider` invocation, write Accept/Decline, push frames ...
+}
+
+// Initiator side: open an outbound substream and write a request.
+let mut sub = control
+    .open_stream(peer_id, StreamProtocol::new(STREAM_PROTOCOL))
+    .await?;
+stream_protocol::write_message(
+    &mut sub,
+    &StreamMessage::<JpegFrame>::Request(StreamRequest {
+        sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
+    }),
+).await?;
+```
+
+Trust boundary: same as the rest of `auki-network`. `cluster.json` gates Noise-level admission; peers not in the doc cannot dial. The stream protocol does not introduce a new admission decision.
+
+### What's deferred to grimsby #2 / #3
+
+The wire primitives above are minimal on purpose. The next two grimsby deliverables build on them:
+
+- **#2 — `Stream<T>` Rust API.** Typed consumer-side iterator (`open_stream(peer, sensor_id) -> impl futures::Stream<Item = Result<T, StreamError>>`) and producer-side `StreamDecision<T> = { Accept(Box<dyn Stream<Item = T>>), Decline(DeclineReason) }`. The framing codec stays the same.
+- **#3 — Stream runtime.** The `stream_provider` callable plumbing — a `ClusterRuntime` extension (or sibling driver) that owns the substream lifecycle, invokes `stream_provider` per inbound request, spawns the pump task that drains the source-Stream onto the substream, and tears down on substream close.
+
+Once #2 and #3 land, daemons won't touch `libp2p_stream::Control` or the framing helpers directly — they'll plug a `stream_provider` into the runtime and consume `Stream<T>` on the consumer side.
 
 ## `cluster.json` — the discovery doc
 

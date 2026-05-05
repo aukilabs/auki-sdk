@@ -11,7 +11,7 @@ description = "Networking substrate for the Auki SDK — peer identity (derived 
 # Default-off so M0 stays WASM-friendly (Console derives peer-id without
 # pulling in libp2p's transport stack). Daemons opt in.
 default = []
-swarm = ["dep:libp2p", "dep:thiserror"]
+swarm = ["dep:libp2p", "dep:thiserror", "dep:tokio", "dep:futures"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -27,6 +27,12 @@ serde_json = "1"
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
 thiserror = { version = "2", optional = true }
+# Runtime + select!/sleep/interval/oneshot for `cluster_runtime`. Pulled in
+# only with `swarm`; libp2p's `tokio` feature already brings tokio into
+# the dep graph, this just exposes the bits we use directly.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"], optional = true }
+# `StreamExt` for polling `swarm.next()` in the runtime task.
+futures = { version = "0.3", default-features = false, optional = true }
 
 # `app_instance` feature
 mac_address = { version = "1", optional = true }

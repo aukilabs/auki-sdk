@@ -76,6 +76,10 @@ Driven by data timestamps, not wall clock. On every `append(timestamp_ns, …)` 
 
 When `retention_ns == 0`, eviction is disabled entirely: every segment is kept for the lifetime of the log. Use this for unbounded captures.
 
+### Runtime mutability
+
+A running log's `retention_ns` can be changed via `Log::set_retention(new_value)` without closing the log. The implementation rewrites `manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart, then updates the in-memory state. Disk-first ordering means a failed write leaves the log unchanged. Eviction itself runs only as part of `append`, so a quiescent log retains its current segments until something appends after the change. The use case is operator-driven endpoints — `PATCH /api/buffer` in the [Control API spec](../../docs/control-api.md) — that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window. The application owns the policy decision; the SDK exposes the mechanism.
+
 ## Versioning
 
 Format version is **1**. Bump for any incompatible change to the header layout, framing, or payload encoding (e.g. CBOR → another scheme). Readers MUST reject unknown versions.

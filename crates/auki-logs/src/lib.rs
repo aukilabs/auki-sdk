@@ -142,6 +142,56 @@ impl<T> Log<T> {
         }
         Ok(())
     }
+
+    /// Update this log's retention window. Affects future appends —
+    /// the next call to [`append`][Self::append] evicts any segment
+    /// fully outside the new window. Persists to `manifest.json`
+    /// atomically so the change survives daemon restart.
+    ///
+    /// Use case: an operator-driven endpoint like `PATCH /api/buffer`
+    /// that lets a daemon's running ring-buffer extend (or shrink)
+    /// while it's recording, without forcing a close-and-reopen cycle
+    /// that would drop streaming data during the window.
+    ///
+    /// `retention_ns` must be `≥ 0`. Zero disables eviction (matching
+    /// the [`open`][Self::open] semantics).
+    ///
+    /// **Note:** setting retention does not retroactively trigger
+    /// eviction. Eviction runs as part of `append`. To force immediate
+    /// effect on a quiescent log, the caller can `flush()` and then
+    /// drive any subsequent `append`.
+    ///
+    /// **Failure semantics:** the on-disk manifest is rewritten
+    /// *before* the in-memory `retention_ns` field is updated. If the
+    /// disk write fails, the log is left unchanged (in-memory state
+    /// stays consistent with the on-disk source of truth).
+    pub fn set_retention(&mut self, retention_ns: i64) -> Result<()> {
+        if retention_ns < 0 {
+            return Err(Error::Manifest("retention_ns must be ≥ 0".into()));
+        }
+
+        let mut new_manifest = self.manifest.clone();
+        match new_manifest {
+            serde_json::Value::Object(ref mut map) => {
+                map.insert(
+                    "retention_ns".into(),
+                    serde_json::Value::Number(retention_ns.into()),
+                );
+            }
+            _ => {
+                return Err(Error::Manifest(
+                    "manifest is not a JSON object".into(),
+                ));
+            }
+        }
+
+        let bytes = auki_jcs::canonicalize(&new_manifest);
+        atomic_write(&self.root.join("manifest.json"), &bytes)?;
+
+        self.manifest = new_manifest;
+        self.retention_ns = retention_ns;
+        Ok(())
+    }
 }
 
 impl<T> Log<T>
@@ -684,5 +734,139 @@ mod tests {
         let bad = json!({"segment_duration_ns": 0, "retention_ns": 1_000});
         let result: Result<Log<Sample>> = Log::open(dir.path(), bad);
         assert!(matches!(result, Err(Error::Manifest(_))));
+    }
+
+    #[test]
+    fn set_retention_shrinks_window_for_subsequent_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        {
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+            // Fill 5 segments under generous (60 s) retention.
+            for i in 0..5 {
+                log.append(
+                    i * seg + 100,
+                    &Sample {
+                        n: i as u32,
+                        label: format!("e{i}"),
+                    },
+                )
+                .unwrap();
+            }
+            // Shrink retention to 1 s — affects future appends only.
+            log.set_retention(seg).unwrap();
+            // This append triggers eviction with the new retention.
+            log.append(
+                5 * seg + 100,
+                &Sample {
+                    n: 5,
+                    label: "new".into(),
+                },
+            )
+            .unwrap();
+        }
+        let reader: LogReader<Sample> = Log::<Sample>::read(dir.path()).unwrap();
+        let starts: Vec<i64> = reader.segment_starts().to_vec();
+        // After append at 5s+100 with retention=1s: threshold = 4s+100.
+        // Evict where start+1s ≤ threshold, i.e. start ≤ 3s+100, i.e.
+        // start ≤ 3s. So 0,1,2,3 evict; 4 and 5 (current) remain.
+        assert_eq!(starts, vec![4 * seg, 5 * seg]);
+    }
+
+    #[test]
+    fn set_retention_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        {
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+            log.set_retention(3 * seg).unwrap();
+            // The in-memory manifest reflects the new value.
+            assert_eq!(
+                log.manifest().get("retention_ns").and_then(|v| v.as_i64()),
+                Some(3 * seg)
+            );
+        }
+        // The on-disk manifest reflects the new value.
+        let written = fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        assert!(
+            written.contains(r#""retention_ns":3000000000"#),
+            "manifest did not persist set_retention: {written}"
+        );
+
+        // Re-open. On-disk manifest is the source of truth — the
+        // `manifest` argument we pass here is ignored per `open`'s
+        // contract, so we use the same one to keep the test focused.
+        {
+            let mut log: Log<Sample> =
+                Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+            // Append-driven eviction should use the persisted 3 s, not
+            // the original 60 s the manifest argument carries.
+            for i in 0..10 {
+                log.append(
+                    i * seg + 100,
+                    &Sample {
+                        n: i as u32,
+                        label: format!("e{i}"),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let reader: LogReader<Sample> = Log::<Sample>::read(dir.path()).unwrap();
+        let starts = reader.segment_starts();
+        // Same arithmetic as `evicts_segments_older_than_retention`
+        // with retention = 3 s.
+        assert_eq!(starts, &[6 * seg, 7 * seg, 8 * seg, 9 * seg]);
+    }
+
+    #[test]
+    fn set_retention_rejects_negative() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+        let result = log.set_retention(-1);
+        assert!(matches!(result, Err(Error::Manifest(_))));
+        // The in-memory state is unchanged on rejection.
+        assert_eq!(
+            log.manifest().get("retention_ns").and_then(|v| v.as_i64()),
+            Some(60 * seg)
+        );
+    }
+
+    #[test]
+    fn set_retention_zero_disables_future_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        {
+            // Start with a tight retention, fill some segments, then
+            // disable eviction by setting retention to 0.
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, seg)).unwrap();
+            // Two segments survive under retention=1s after the second
+            // append (start=0 evicts when threshold passes 1s).
+            log.append(
+                100,
+                &Sample {
+                    n: 0,
+                    label: "a".into(),
+                },
+            )
+            .unwrap();
+            log.set_retention(0).unwrap();
+            // Now flood — nothing should evict.
+            for i in 1..=5 {
+                log.append(
+                    i * seg + 100,
+                    &Sample {
+                        n: i as u32,
+                        label: format!("e{i}"),
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let reader: LogReader<Sample> = Log::<Sample>::read(dir.path()).unwrap();
+        let starts: Vec<i64> = reader.segment_starts().to_vec();
+        // All six segments retained.
+        assert_eq!(starts, (0..=5).map(|i| i * seg).collect::<Vec<_>>());
     }
 }

@@ -86,7 +86,19 @@ pub const RECONNECT_TICK: Duration = Duration::from_millis(500);
 /// `session_now_ns` is fresh on each reply rather than stale at
 /// runtime-spawn time. Must be `Send + Sync` because the runtime task
 /// holds it in an `Arc` shared with the swarm.
-pub type ParticipantInfoProvider = Arc<dyn Fn() -> ParticipantInfo + Send + Sync>;
+///
+/// Returning `None` tells the runtime to drop the inbound request's
+/// reply channel without sending a response — the requester sees a
+/// request timeout (correct: we couldn't fill in valid info, don't
+/// pretend we could). Use cases include: the consumer's session clock
+/// isn't bound yet (sidecar mid-startup), a Python `participant_provider`
+/// callable raised an exception that the PyO3 wrapper caught and
+/// logged, or any other transient inability to construct a valid
+/// `ParticipantInfo`. The runtime is unaffected — it stays alive,
+/// continues to process other events, and will accept future requests
+/// from the same peer.
+pub type ParticipantInfoProvider =
+    Arc<dyn Fn() -> Option<ParticipantInfo> + Send + Sync>;
 
 /// Errors from [`ClusterRuntime::spawn`] / [`ClusterRuntime::from_swarm`].
 #[derive(Debug, thiserror::Error)]
@@ -362,16 +374,25 @@ fn handle_event(
         )) => match message {
             request_response::Message::Request { channel, .. } => {
                 if known_peers.contains_key(&peer) {
-                    let info = (participant_provider)();
-                    let _ = swarm
-                        .behaviour_mut()
-                        .cluster
-                        .send_response(channel, info);
+                    if let Some(info) = (participant_provider)() {
+                        let _ = swarm
+                            .behaviour_mut()
+                            .cluster
+                            .send_response(channel, info);
+                    }
+                    // Provider returned None: drop the channel. The
+                    // requester sees a request timeout, which is the
+                    // correct signal — the consumer told us they
+                    // couldn't fill in valid info right now (session
+                    // clock not yet bound, Python exception in the
+                    // PyO3 wrapper, etc.). The runtime stays alive
+                    // and will retry on the next inbound request.
                 }
-                // Else: drop the channel. The peer-not-in-doc case sees
-                // their request time out, which is the correct signal
-                // — we don't share our identity with peers outside the
-                // cluster.
+                // Peer not in doc: drop the channel. Same shape as the
+                // None case from the requester's perspective; the
+                // distinction is that we don't share our identity with
+                // peers outside the cluster regardless of whether the
+                // provider would have answered.
             }
             request_response::Message::Response { response, .. } => {
                 if known_peers.contains_key(&peer) {
@@ -494,7 +515,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
-            ParticipantInfo {
+            Some(ParticipantInfo {
                 app: app.clone(),
                 name: name.clone(),
                 session_id: session_id.clone(),
@@ -504,7 +525,7 @@ mod tests {
                 cluster_joined_at_ns: None,
                 peer_id,
                 app_instance: "00163eabcdef".into(),
-            }
+            })
         })
     }
 
@@ -595,6 +616,79 @@ mod tests {
         assert!(rt_a.peers()[0].first_seen_ns > 0);
         assert!(rt_b.peers()[0].first_seen_ns > 0);
 
+        rt_a.shutdown();
+        rt_b.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn provider_returning_none_drops_the_reply() {
+        // rt_a's provider always returns None — simulates a sidecar
+        // mid-startup whose session clock isn't bound yet, or a Python
+        // participant_provider whose exception was caught and logged
+        // by the PyO3 wrapper. rt_b's provider is normal.
+        //
+        // Expected asymmetry:
+        // - rt_a sees rt_b in peers() (rt_b replies normally to rt_a's
+        //   request).
+        // - rt_b does NOT see rt_a in peers() (rt_a drops the channel
+        //   when its provider returns None; rt_b's request times out).
+        // - Both runtimes survive — None on the provider must not kill
+        //   the driver task.
+        let id_a = PeerIdentity::from_seed(&[81u8; 32]);
+        let id_b = PeerIdentity::from_seed(&[82u8; 32]);
+
+        let (swarm_a, addr_a) = build_listening_swarm(&id_a, "a/0").await;
+        let (swarm_b, addr_b) = build_listening_swarm(&id_b, "b/0").await;
+
+        let doc = ClusterDoc {
+            version: 1,
+            cluster_name: "test-none-provider".into(),
+            peers: vec![
+                cluster_peer(id_a.peer_id(), addr_a),
+                cluster_peer(id_b.peer_id(), addr_b),
+            ],
+        };
+
+        // None-returning provider for rt_a.
+        let none_provider: ParticipantInfoProvider = Arc::new(|| None);
+
+        let rt_a = ClusterRuntime::from_swarm(swarm_a, doc.clone(), none_provider).unwrap();
+        let rt_b = ClusterRuntime::from_swarm(
+            swarm_b,
+            doc.clone(),
+            fixture_provider(id_b.peer_id(), "sentinel", "b"),
+        )
+        .unwrap();
+
+        // rt_a should converge to seeing rt_b within the timeout (rt_b
+        // replies normally). Once rt_a sees rt_b, we know the system
+        // is settled — at that point we sample rt_b's view to confirm
+        // the asymmetry.
+        let a_sees_b = poll_until(
+            || rt_a.peers().len() == 1,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(a_sees_b, "rt_a never saw rt_b: {}", rt_a.peers().len());
+
+        // Give one extra second of slack for any inbound to rt_b that
+        // might be in flight despite the None drop.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        assert_eq!(
+            rt_b.peers().len(),
+            0,
+            "rt_b surfaced a peer despite the provider returning None: {:?}",
+            rt_b.peers()
+                .iter()
+                .map(|p| p.peer_id)
+                .collect::<Vec<_>>()
+        );
+
+        // Both runtimes must still be responsive — peers() returns
+        // without panicking, shutdown returns without hanging.
+        let _ = rt_a.peers();
+        let _ = rt_b.peers();
         rt_a.shutdown();
         rt_b.shutdown();
     }

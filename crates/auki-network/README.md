@@ -198,10 +198,11 @@ let doc = ClusterDoc {
 
 // The runtime invokes this on every inbound cluster request, so
 // session_now_ns is fresh on each reply rather than stale at spawn.
-let provider: ParticipantInfoProvider = Arc::new(|| ParticipantInfo {
+// Return `None` to drop the reply (e.g. session clock not bound yet).
+let provider: ParticipantInfoProvider = Arc::new(|| Some(ParticipantInfo {
     /* fill from live session state */
     # ..unimplemented!()
-});
+}));
 
 let runtime = ClusterRuntime::spawn(
     seed,                          // 32-byte ed25519 seed (typically from
@@ -234,7 +235,7 @@ runtime.shutdown(); // explicit clean exit; Drop is the safety net.
 | Public API | `spawn` / `from_swarm`, `peers() -> Vec<PeerSnapshot>`, `shutdown(self)`. |
 | Trust boundary | the cluster doc, full stop — inbound from peers not in the doc is dropped silently. |
 | Reconnect | per-peer exponential backoff, `INITIAL_BACKOFF = 1 s` doubling up to `MAX_BACKOFF = 60 s`, reset on a successful connect. |
-| `participant_provider` | `Arc<dyn Fn() -> ParticipantInfo + Send + Sync>` invoked **per inbound request** so `session_now_ns` is fresh. |
+| `participant_provider` | `Arc<dyn Fn() -> Option<ParticipantInfo> + Send + Sync>` invoked **per inbound request** so `session_now_ns` is fresh. Returning `None` drops the reply channel (requester sees timeout) — for sidecar mid-startup, Python exceptions, or any transient inability to fill in valid info. |
 | `cluster_joined_at_ns` | the consumer's responsibility — read `peers()` to know whether at least one peer has connected; set the field on outbound info accordingly. The runtime explicitly does not mutate the consumer's `ParticipantInfo`. |
 | `first_seen_ns` | peer's `session_now_ns` at first response from their current session; sticky across reconnects within the same peer-session, reset on peer `session_id` change. |
 

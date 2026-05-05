@@ -69,7 +69,22 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::{
+    sync::{oneshot, watch},
+    task::JoinHandle,
+};
+
+/// How long [`ClusterRuntime::shutdown`] gives in-flight inbound substream
+/// tasks to write their explicit `EndOfStream { reason: ProducerShuttingDown }`
+/// before the swarm tears down the connections (per grimsby D5b's "best-effort
+/// explicit"). 100 ms is comfortably more than the time required to write a
+/// single small JSON-framed message over a healthy LAN substream.
+///
+/// On unclean exit (`Drop` without `shutdown(self)`, panic, etc.) the grace
+/// period is skipped — consumer sees `ConnectionLost` instead of the typed
+/// reason. That's the documented fallback shape; explicit `shutdown(self)` is
+/// the API for clean producer exit.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
 
 /// Initial reconnect backoff. Doubled on each consecutive dial failure
 /// or unexpected disconnect, up to [`MAX_BACKOFF`]. Reset on a
@@ -154,6 +169,16 @@ pub struct ClusterRuntime {
     /// per-Control backpressure model. The runtime task holds a separate
     /// clone for the inbound `accept` registration.
     stream_control: Control,
+    /// Watch channel signalling per-substream inbound tasks to write a
+    /// final `EndOfStream { reason: ProducerShuttingDown }` and exit
+    /// (per grimsby D5b — "best-effort explicit"). Sent to by
+    /// [`Self::shutdown`] just before the swarm teardown signal; the
+    /// `run_task`'s shutdown-receive arm sleeps [`SHUTDOWN_GRACE`]
+    /// before returning so the per-substream tasks have time to flush
+    /// their EndOfStream onto the wire while the connection is still
+    /// alive. On `Drop` (unclean exit) this is skipped — consumer sees
+    /// `ConnectionLost` instead of the typed reason.
+    inbound_shutdown_tx: watch::Sender<bool>,
 }
 
 impl ClusterRuntime {
@@ -235,6 +260,11 @@ impl ClusterRuntime {
         let outbound_control = swarm.behaviour().stream.new_control();
         let inbound_control = outbound_control.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        // Per-substream task shutdown signal. Initial value `false`;
+        // `shutdown(self)` sends `true` to wake all per-substream pump
+        // tasks so they can flush a typed `EndOfStream` before the
+        // connection tears down.
+        let (inbound_shutdown_tx, inbound_shutdown_rx) = watch::channel(false);
         let task = handle.spawn(run_task(
             swarm,
             doc,
@@ -242,6 +272,7 @@ impl ClusterRuntime {
             participant_provider,
             stream_provider,
             inbound_control,
+            inbound_shutdown_rx,
             shutdown_rx,
         ));
         Ok(Self {
@@ -249,6 +280,7 @@ impl ClusterRuntime {
             shutdown_tx: Some(shutdown_tx),
             task: Some(task),
             stream_control: outbound_control,
+            inbound_shutdown_tx,
         })
     }
 
@@ -271,11 +303,24 @@ impl ClusterRuntime {
             .collect()
     }
 
-    /// Signal the driver task to shut down and abort it. The underlying
-    /// swarm is dropped, closing all connections. Idempotent in
-    /// practice — calling shutdown consumes `self` and the [`Drop`]
-    /// impl on the unconsumed path runs the same cleanup.
+    /// Signal the driver task to shut down and abort it. Sends an
+    /// explicit `EndOfStream { reason: ProducerShuttingDown }` to every
+    /// in-flight inbound stream substream first (best-effort per
+    /// grimsby D5b — the per-substream tasks have [`SHUTDOWN_GRACE`] to
+    /// flush before the swarm tears down the connections). The
+    /// underlying swarm is then dropped, closing remaining connections.
+    /// Consumes `self`; the [`Drop`] impl on the unconsumed path runs
+    /// the same cleanup but **skips** the explicit-EndOfStream path —
+    /// consumers of dropped-without-shutdown runtimes see
+    /// `ConnectionLost` instead of the typed reason.
     pub fn shutdown(mut self) {
+        // 1. Wake per-substream inbound tasks so they can flush typed
+        //    EndOfStream before the swarm dies.
+        let _ = self.inbound_shutdown_tx.send(true);
+        // 2. Existing teardown — run_task's shutdown-receive arm
+        //    sleeps SHUTDOWN_GRACE before returning, giving the
+        //    per-substream tasks a chance to write while the swarm is
+        //    still alive.
         self.cleanup();
     }
 
@@ -317,6 +362,7 @@ async fn run_task(
     participant_provider: ParticipantInfoProvider,
     stream_provider: StreamProvider<JpegFrame>,
     mut inbound_control: Control,
+    inbound_shutdown_rx: watch::Receiver<bool>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
     // Rebind to a `mut` local so `tokio::select!` and `&mut swarm`
@@ -382,6 +428,17 @@ async fn run_task(
             biased;
 
             _ = &mut shutdown_rx => {
+                // Brief grace period so per-substream inbound tasks
+                // (which are watching `inbound_shutdown_rx` and have
+                // already been signalled by `ClusterRuntime::shutdown`
+                // before this oneshot fires) can flush their typed
+                // `EndOfStream { reason: ProducerShuttingDown }` while
+                // the swarm + connections are still alive. After the
+                // grace, we return; the swarm drops; remaining writes
+                // (if any) fail and the consumer falls back to
+                // `ConnectionLost`. Per grimsby D5b — best-effort
+                // explicit, libp2p disconnect as the implicit fallback.
+                tokio::time::sleep(SHUTDOWN_GRACE).await;
                 return;
             }
 
@@ -416,12 +473,17 @@ async fn run_task(
                     drop(substream);
                     continue;
                 }
-                // Per-substream task; clones the Arc'd provider.
+                // Per-substream task; clones the Arc'd provider and
+                // the watch::Receiver so the task can race source.next()
+                // against the shutdown signal and flush a typed
+                // EndOfStream when shutdown fires.
                 let provider = stream_provider.clone();
+                let task_shutdown = inbound_shutdown_rx.clone();
                 tokio::spawn(handle_inbound_substream::<JpegFrame>(
                     peer,
                     substream,
                     provider,
+                    task_shutdown,
                 ));
             }
 

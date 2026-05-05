@@ -9,6 +9,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/1.0.0` participant protocol (libp2p). M0 — available without the `swarm` feature.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
+- [`cluster_runtime.rs`](cluster_runtime.rs) — opaque runtime that owns a `Swarm<Behaviour>` + tokio task and orchestrates the cluster (ansuz #4), gated behind the `swarm` feature. Auto-dials peers in a `ClusterDoc`, exchanges `ParticipantInfo`, exposes the live peer state via `peers()`, reconnects with per-peer exponential backoff. The wrapper `auki-py` `cluster.spawn` is built on top of this.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
 ## Public types
@@ -90,6 +91,49 @@ pub mod cluster_protocol {
         libp2p::request_response::json::Behaviour<ClusterRequest, ClusterResponse>;
 
     pub fn behaviour() -> Behaviour;
+}
+
+// ansuz #4 (behind `swarm` feature)
+pub mod cluster_runtime {
+    pub const INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+    pub const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+    pub const RECONNECT_TICK: std::time::Duration = std::time::Duration::from_millis(500);
+
+    pub type ParticipantInfoProvider = std::sync::Arc<
+        dyn Fn() -> ParticipantInfo + Send + Sync,
+    >;
+
+    pub enum SpawnError {
+        BuildSwarm(swarm::BuildError),
+        NoTokioRuntime,
+    }
+
+    pub struct PeerSnapshot {
+        pub peer_id: libp2p::PeerId,
+        pub info: ParticipantInfo,
+        pub first_seen_ns: u64,                      // sticky per peer-session
+    }
+
+    pub struct ClusterRuntime { /* state + task + shutdown handles */ }
+
+    impl ClusterRuntime {
+        pub fn spawn(
+            seed: [u8; 32],
+            doc: ClusterDoc,
+            swarm_config: SwarmConfig,
+            participant_provider: ParticipantInfoProvider,
+        ) -> Result<Self, SpawnError>;
+
+        pub fn from_swarm(
+            swarm: libp2p::Swarm<swarm::Behaviour>,
+            doc: ClusterDoc,
+            participant_provider: ParticipantInfoProvider,
+        ) -> Result<Self, SpawnError>;
+
+        pub fn peers(&self) -> Vec<PeerSnapshot>;
+
+        pub fn shutdown(self);
+    }
 }
 
 // ansuz #5 (behind `app_instance` feature)
@@ -182,6 +226,53 @@ The JSON is byte-for-byte identical to the `participant::golden_bytes_match_fixt
 
 Higher-level orchestration (auto-dialing peers from `cluster.json`, tracking `Joined`/`Left`, holding a peer state map) lives in the upcoming cluster-runtime module (ansuz #4); Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves.
 
+## How `cluster_runtime` works (ansuz #4)
+
+The runtime takes a `ClusterDoc`, a `SwarmConfig` (or a pre-built `Swarm<Behaviour>` via `from_swarm`), and a `participant_provider` callable. It spawns a tokio task that owns the swarm and drives the cluster:
+
+```text
+                          ┌─────────────────────┐
+                          │  ClusterDoc         │  pinned peers
+                          └─────────┬───────────┘
+                                    │
+   ┌──────── ConnectionEstablished ─┴──────────────┐
+   │                                                │
+   │  for known peer:                               │
+   │     send ClusterRequest                        │
+   │     reset backoff                              │
+   │                                                │
+   │  on inbound Request from known peer:           │
+   │     info = participant_provider()              │
+   │     send_response(channel, info)               │
+   │                                                │
+   │  on inbound Request from unknown peer:         │
+   │     drop channel (silent — doc is the          │
+   │     trust boundary)                            │
+   │                                                │
+   │  on Response from known peer:                  │
+   │     state.peers[pid].info = response           │
+   │     state.peers[pid].connected = true          │
+   │     if new session_id: reset first_seen_ns     │
+   │                                                │
+   │  on ConnectionClosed / OutgoingError:          │
+   │     state.peers[pid].connected = false         │
+   │     schedule retry @ now + backoff             │
+   │     backoff = min(backoff * 2, MAX_BACKOFF)    │
+   │                                                │
+   │  every RECONNECT_TICK (500ms):                 │
+   │     for each peer with next_dial_at <= now:    │
+   │        if !is_connected: dial_peer(addrs)      │
+   └────────────────────────────────────────────────┘
+```
+
+The runtime mutates only its own state map; it does not change the `ParticipantInfo` flowing through `participant_provider`. The consumer is responsible for setting `cluster_joined_at_ns` on its own outbound info — they read `peers()` to know whether at least one peer has connected, and set the field once on first non-empty `peers()`.
+
+`peers()` returns `PeerSnapshot { peer_id, info, first_seen_ns }` for every entry where `connected: true`. Disconnected entries are retained internally so `first_seen_ns` survives a same-session reconnect; `peers()` filters them out. A peer-session change (different `session_id` in their response) replaces the entry and resets `first_seen_ns`.
+
+`shutdown(self)` and the `Drop` impl both signal the task and abort it. Connections close at the TCP layer when the swarm drops. Idempotent in practice — `shutdown` consumes self and the unconsumed path runs the same `cleanup` from `Drop`.
+
+The runtime is opaque by design: consumers don't drive the swarm event loop themselves. The Python sidecar in Boosterapp can't drive an async libp2p loop from Python and just wants `peers()` from the HTTP request handler thread; `auki-py`'s `cluster.spawn` will wrap this. Sentinel and other Rust consumers that want fine control use `cluster_protocol::Behaviour` directly and skip this module.
+
 ## How `app_instance::derive` works (ansuz #5)
 
 ```text
@@ -210,7 +301,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-56 unit tests + 3 integration tests + 2 doctest with `--all-features`; 47 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest) and the `cluster_protocol` tests (3) run under `--features swarm`.
+63 unit tests + 3 integration tests + 2 doctest with `--all-features`; 54 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), and the `cluster_runtime` tests (7) all run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -244,6 +335,13 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `cluster_protocol::protocol_id_is_locked` | Wire-format pin: `CLUSTER_PROTOCOL == "/auki/cluster/1.0.0"` |
 | `cluster_protocol::request_serializes_as_json_null` | `ClusterRequest` (unit struct) serializes as JSON `null` and round-trips |
 | `cluster_protocol::two_peers_exchange_participant_info_over_tcp` | End-to-end: peer A sends `ClusterRequest`, peer B replies with its `ParticipantInfo`, A asserts received == fixture |
+| `cluster_runtime::two_runtimes_discover_each_other_via_cluster_doc` | 2-peer happy path: both spawn, converge in `peers()` within 10 s, cross-side ParticipantInfo correct, `first_seen_ns > 0` |
+| `cluster_runtime::three_runtimes_form_full_mesh` | 3 runtimes, each ends with 2 peers in `peers()` within 15 s |
+| `cluster_runtime::peer_leaving_drops_off_other_peers` | 3 runtimes converge → kill one → surviving 2 drop the departed peer from `peers()` while keeping each other |
+| `cluster_runtime::unknown_peer_is_not_surfaced` | Outsider not in doc dials in and sends a request → runtime drops silently, `peers().len() == 0` (cluster doc is the trust boundary) |
+| `cluster_runtime::shutdown_is_idempotent_and_drops_state` | `shutdown(self)` returns promptly without deadlock |
+| `cluster_runtime::drop_without_explicit_shutdown_cleans_up` | `Drop` runs the same cleanup as `shutdown` |
+| `cluster_runtime::spawn_outside_tokio_runtime_returns_error` | Calling `from_swarm` from a `std::thread` (no tokio) → `SpawnError::NoTokioRuntime` |
 | `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
 | `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
 | `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |
@@ -281,7 +379,9 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - `multiaddr` (0.18) — typed multiaddr; serde adapter local to this crate.
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `request-response`, `json`, `macros`, `ed25519`) — the swarm itself plus the `cluster_protocol` JSON request-response codec.
-- *(swarm feature)* `thiserror` (2) — `BuildError`.
+- *(swarm feature)* `thiserror` (2) — `BuildError`, `SpawnError`.
+- *(swarm feature)* `tokio` (1, features: `macros`, `rt`, `sync`, `time`) — `cluster_runtime`'s task primitives (`select!`, `oneshot`, `interval`, `Handle::try_current`).
+- *(swarm feature)* `futures` (0.3, default-features off) — `StreamExt::next` for polling `swarm.next()` in the runtime task.
 - *(app_instance feature)* `mac_address` (1) — cross-platform interface enumeration via `getifaddrs` / `GetAdaptersAddresses`. Non-WASM by nature.
 - *(dev)* `tempfile` for `cluster_doc` fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
 

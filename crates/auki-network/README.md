@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, and the `/auki/cluster/1.0.0` participant-exchange request-response protocol (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, and an opaque `ClusterRuntime` that drives the swarm against a `cluster.json` (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
 
 ## What a peer is
 
@@ -175,7 +175,74 @@ let request_id = swarm.behaviour_mut().cluster.send_request(&peer_id, ClusterReq
 
 **Always-on, no toggle.** The protocol sits idle for swarms that don't participate in a cluster (the dedicated `aukilabs/relay` infrastructure node) — there's no traffic until somebody sends a request. A toggle would just be ceremony.
 
-**Higher-level orchestration lives separately.** Auto-dialing every peer in `cluster.json`, tracking `Joined`/`Left` events, holding a peer-state map — all of that lands in the upcoming cluster-runtime module (ansuz #4). Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves and call `send_request` / `send_response` directly. The Python sidecar wraps the runtime opaquely via the planned `auki-py` `cluster.spawn`.
+**Higher-level orchestration lives separately.** Auto-dialing every peer in `cluster.json`, tracking the live peer-state map, reconnecting on disconnect — all of that lands in [`ClusterRuntime`](#the-cluster-runtime-m1) below. Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves and call `send_request` / `send_response` directly. The Python sidecar wraps the runtime opaquely via the planned `auki-py` `cluster.spawn`.
+
+## The cluster runtime (M1)
+
+`ClusterRuntime` (ansuz #4) is the orchestration layer above the cluster protocol. It owns its own libp2p swarm + tokio task; consumers interact through `peers()` / `shutdown()` and never touch the swarm event loop themselves.
+
+```rust
+use auki_network::{
+    cluster_doc::{ClusterDoc, ClusterPeer},
+    cluster_runtime::{ClusterRuntime, ParticipantInfoProvider},
+    swarm::SwarmConfig,
+    ParticipantInfo,
+};
+use std::sync::Arc;
+
+let doc = ClusterDoc {
+    version: 1,
+    cluster_name: "demo-2026-05".into(),
+    peers: vec![/* … */],
+};
+
+// The runtime invokes this on every inbound cluster request, so
+// session_now_ns is fresh on each reply rather than stale at spawn.
+let provider: ParticipantInfoProvider = Arc::new(|| ParticipantInfo {
+    /* fill from live session state */
+    # ..unimplemented!()
+});
+
+let runtime = ClusterRuntime::spawn(
+    seed,                          // 32-byte ed25519 seed (typically from
+                                   // auki-identity::load_or_mint_seed)
+    doc,
+    SwarmConfig {
+        listen_addresses: vec![
+            "/ip4/0.0.0.0/tcp/0".parse().unwrap(),
+            "/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap(),
+        ],
+        agent_version: "boosterapp/0.1".into(),
+        enable_mdns: true,
+        enable_relay_server: false,
+    },
+    provider,
+)?;
+
+// Read the live peer view from any thread, including non-tokio HTTP
+// handlers — the snapshot is taken under a brief mutex.
+for peer in runtime.peers() {
+    println!("{} {} ({})", peer.peer_id, peer.info.name, peer.info.app);
+}
+
+runtime.shutdown(); // explicit clean exit; Drop is the safety net.
+```
+
+| | |
+|---|---|
+| Owns | a `Swarm<Behaviour>` and a tokio driver task (internal). |
+| Public API | `spawn` / `from_swarm`, `peers() -> Vec<PeerSnapshot>`, `shutdown(self)`. |
+| Trust boundary | the cluster doc, full stop — inbound from peers not in the doc is dropped silently. |
+| Reconnect | per-peer exponential backoff, `INITIAL_BACKOFF = 1 s` doubling up to `MAX_BACKOFF = 60 s`, reset on a successful connect. |
+| `participant_provider` | `Arc<dyn Fn() -> ParticipantInfo + Send + Sync>` invoked **per inbound request** so `session_now_ns` is fresh. |
+| `cluster_joined_at_ns` | the consumer's responsibility — read `peers()` to know whether at least one peer has connected; set the field on outbound info accordingly. The runtime explicitly does not mutate the consumer's `ParticipantInfo`. |
+| `first_seen_ns` | peer's `session_now_ns` at first response from their current session; sticky across reconnects within the same peer-session, reset on peer `session_id` change. |
+
+**Two construction paths.** `ClusterRuntime::spawn(seed, doc, swarm_config, provider)` builds the swarm internally — this is the daemon path. `ClusterRuntime::from_swarm(swarm, doc, provider)` accepts a pre-built swarm — useful when the caller needs to learn bound addresses *before* composing the cluster doc (tests, or a daemon that publishes its addresses out-of-band).
+
+**Opaque, not a `NetworkBehaviour`.** Decision recorded in the ansuz Notion doc (2026-05-05): the consumers we know about (Boosterapp via `auki-py` opaque, Sentinel direct on `cluster_protocol::Behaviour`) both want runtime shape. A future Rust consumer that wants `NetworkBehaviour` composition can build it on top of `cluster_protocol` directly.
+
+**Lifecycle.** `shutdown(self)` signals the driver task and aborts it; the swarm drops, connections close at the TCP layer. The `Drop` impl runs the same cleanup as a safety net. Both paths are sync — Python wrappers don't need an async shutdown.
 
 ## `cluster.json` — the discovery doc
 

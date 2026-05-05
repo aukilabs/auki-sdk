@@ -13,6 +13,7 @@ auki_identity.load_or_mint_seed(path: str) -> bytes        # 32 bytes
 auki_identity.Wallet.from_seed(seed: bytes) -> Wallet
 Wallet.derive_child(label: str) -> Wallet
 Wallet.peer_id() -> str                                    # "12D3KooW…"
+Wallet.seed() -> bytes                                     # 32-byte derived seed
 auki_identity.app_instance.derive() -> str                 # "aabbccddeeff"
 ```
 
@@ -26,6 +27,7 @@ That's it. No `sign`, no `verify`, no creation certs, no Swarm. Those land in th
 | `Wallet.from_seed(seed)` | `auki_identity::Wallet::from_seed(&[u8; 32])` |
 | `Wallet.derive_child(label)` | `auki_identity::Wallet::derive_child(&str)` |
 | `Wallet.peer_id()` | `auki_network::PeerIdentity::from_seed(&wallet.seed()).peer_id().to_string()` |
+| `Wallet.seed()` | `auki_identity::Wallet::seed(&self) -> [u8; 32]` |
 | `app_instance.derive()` | `auki_network::app_instance::derive()` (requires `app_instance` feature) |
 
 `Wallet.peer_id()` does **not** implicitly `derive_child("peer/v1")` — the caller does. This matches the upstream Rust contract: `PeerIdentity::from_wallet(&w)` is sugar for `from_seed(w.derive_child("peer/v1").seed())`, and the Python equivalent is `w.derive_child("peer/v1").peer_id()`. Documented on the method docstring.
@@ -51,7 +53,7 @@ The crate is dual-mode by design.
 
 The two feature modes are mutually exclusive — `extension-module` skips linking Python; `auto-initialize` requires it linked. The default-empty + maturin-enables-it pattern keeps both code paths working without manual feature flags. Standard PyO3 setup; see the [PyO3 user guide](https://pyo3.rs/v0.22.0/).
 
-## Tests (5 Rust-side smoke + 13 Python-side)
+## Tests (8 Rust-side smoke + 18 Python-side)
 
 ### Rust-side (`lib.rs`)
 
@@ -61,6 +63,9 @@ The two feature modes are mutually exclusive — `extension-module` skips linkin
 | `wallet_from_seed_then_peer_id_is_deterministic` | Same seed → same `derive_child("peer/v1").peer_id()`; canonical `12D3KooW` prefix |
 | `wallet_from_seed_rejects_wrong_length` | Non-32-byte seed → `ValueError` |
 | `load_or_mint_seed_round_trip_via_pyo3_layer` | The `#[pyfunction]` entry point round-trips bytes correctly through tempdir |
+| `wallet_seed_round_trips_for_root_wallet` | `Wallet.from_seed(seed).seed() == seed` |
+| `wallet_seed_round_trips_for_derived_child` | `Wallet.from_seed(parent.derive_child(label).seed()).peer_id() == parent.derive_child(label).peer_id()` — the property `auki_network.cluster.spawn` relies on |
+| `wallet_seed_returns_32_bytes` | Length pin (the `cluster.spawn` FFI seam strictly requires 32 bytes) |
 | `locked_peer_id_vector` | Shape pin for `Wallet.from_seed(&[3u8; 32]).derive_child("peer/v1").peer_id()` — the cross-language locked vector |
 
 ### Python-side (`python_tests/test_basic.py`)
@@ -78,6 +83,10 @@ The two feature modes are mutually exclusive — `extension-module` skips linkin
 | `test_wallet_peer_id_differs_across_seeds` | Different seeds → different `peer_id`s |
 | `test_wallet_derive_child_differs_across_labels` | `peer/v1` and `app/boosterapp` produce different children |
 | `test_wallet_from_seed_rejects_wrong_length` | Non-32-byte seed → `ValueError` |
+| `test_wallet_seed_round_trips_for_root_wallet` | `Wallet.from_seed(seed).seed() == seed` |
+| `test_wallet_seed_round_trips_for_derived_child` | `Wallet.from_seed(parent.derive_child(label).seed()).peer_id() == parent.derive_child(label).peer_id()` — the property the BoosterApp ansuz path depends on |
+| `test_wallet_seed_returns_bytes_of_length_32` | Returns 32-byte `bytes` (the `cluster.spawn` FFI seam strictly requires 32 bytes) |
+| `test_wallet_seed_differs_across_derivations` | Different labels produce different child seeds (derivation is non-trivial) |
 | `test_app_instance_derive_returns_12_lowercase_hex_or_runtime_error` | Returns 12 lowercase hex chars on hardware, or accepts `RuntimeError` for container / private-Wi-Fi-only environments |
 | `test_locked_peer_id_vector` | Shape pin + optional exact match against the cross-language locked literal |
 | `test_module_exposes_only_documented_apis` | Pin the public surface — anything new requires a deliberate decision |

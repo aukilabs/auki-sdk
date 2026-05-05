@@ -443,6 +443,25 @@ impl std::fmt::Debug for ClusterRuntime {
 /// Boot a `ClusterRuntime` against `doc`. Lazily creates a process-wide
 /// tokio runtime on first call; subsequent calls share it.
 ///
+/// **`seed` must be the *peer* seed**, not the wallet seed. The runtime
+/// constructs the swarm's keypair via
+/// `PeerIdentity::from_seed(seed)` — i.e. direct ed25519 from the 32
+/// bytes — *not* via `from_wallet`. For consumers that root identity in
+/// a wallet (e.g. BoosterApp's sidecar), the right invocation is:
+///
+/// ```python
+/// wallet = auki_identity.Wallet.from_seed(load_or_mint_seed(...))
+/// peer = wallet.derive_child("peer/v1")
+/// runtime = auki_network.cluster.spawn(seed=peer.seed(), doc=doc, ...)
+/// # runtime's PeerId == peer.peer_id(), by construction.
+/// ```
+///
+/// Passing the wallet seed directly will produce a swarm whose PeerId
+/// is `from_seed(wallet_seed)` rather than the wallet-derived peer
+/// identity — the two differ, and operators putting the
+/// wallet-derived peer_id in `cluster.json` will get Noise mismatch
+/// rejections at connection time.
+///
 /// `participant_provider` is a Python callable invoked **per inbound
 /// `/auki/cluster/1.0.0` request** by the cluster runtime's worker
 /// task. The wrapper acquires the GIL, calls it, and:

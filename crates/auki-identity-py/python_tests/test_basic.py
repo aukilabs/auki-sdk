@@ -118,6 +118,44 @@ def test_wallet_from_seed_rejects_wrong_length() -> None:
         Wallet.from_seed(b"too short")
 
 
+def test_wallet_seed_round_trips_for_root_wallet() -> None:
+    """Wallet.from_seed(seed).seed() == seed — the trivial round-trip."""
+    seed = b"\x42" * 32
+    w = Wallet.from_seed(seed)
+    assert w.seed() == seed
+
+
+def test_wallet_seed_round_trips_for_derived_child() -> None:
+    """The BoosterApp ansuz path: derive once, hand the bytes to
+    cluster.spawn, expect the swarm's PeerId to equal the derived child's
+    peer_id. Concretely: a wallet reconstructed from the derived seed must
+    have the same peer_id as the original derived wallet."""
+    parent = Wallet.from_seed(b"\x07" * 32)
+    derived = parent.derive_child("peer/v1")
+    derived_seed = derived.seed()
+    derived_peer_id = derived.peer_id()
+
+    # auki_network::PeerIdentity::from_seed(derived_seed) ↔
+    # Wallet::from_seed(derived_seed).peer_id() must agree:
+    reconstructed = Wallet.from_seed(derived_seed)
+    assert reconstructed.peer_id() == derived_peer_id
+
+
+def test_wallet_seed_returns_bytes_of_length_32() -> None:
+    seed = Wallet.from_seed(b"\x01" * 32).seed()
+    assert isinstance(seed, bytes)
+    assert len(seed) == 32
+
+
+def test_wallet_seed_differs_across_derivations() -> None:
+    """Two child wallets with different labels must yield different seeds —
+    otherwise the derivation collapses and security goes out the window."""
+    parent = Wallet.from_seed(b"\x05" * 32)
+    a = parent.derive_child("peer/v1").seed()
+    b = parent.derive_child("app/boosterapp").seed()
+    assert a != b
+
+
 # ─── app_instance.derive ─────────────────────────────────────────────────────
 
 

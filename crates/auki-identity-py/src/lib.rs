@@ -142,6 +142,45 @@ impl Wallet {
         let peer = PeerIdentity::from_seed(&seed);
         peer.peer_id().to_string()
     }
+
+    /// The 32-byte seed backing this wallet — the value `Wallet::from_seed`
+    /// would round-trip through. Same wallet → same seed; identical to the
+    /// argument that constructed it (or, for a derived wallet, the
+    /// XXH3-128-derived child seed).
+    ///
+    /// **Why this exists.** `cluster.spawn` in `auki_network` takes a
+    /// 32-byte seed and constructs the swarm's keypair via
+    /// `PeerIdentity::from_seed(seed)` — *not* via `from_wallet`. To make
+    /// the swarm's PeerId match what `Wallet::derive_child("peer/v1").peer_id()`
+    /// reports (the canonical wallet-rooted peer identity), the caller has
+    /// to derive the peer wallet first and hand its `.seed()` to
+    /// `cluster.spawn`. Without this getter, Python consumers couldn't
+    /// extract the derived seed bytes; the Rust `auki_identity::Wallet::seed`
+    /// method existed upstream from day one but was never wired to the
+    /// binding.
+    ///
+    /// Typical usage in a Python sidecar that participates in an ansuz
+    /// cluster:
+    ///
+    /// ```python
+    /// wallet_seed = auki_identity.load_or_mint_seed(seed_path)
+    /// wallet = auki_identity.Wallet.from_seed(wallet_seed)
+    /// peer = wallet.derive_child("peer/v1")
+    /// peer_seed = peer.seed()
+    /// peer_id = peer.peer_id()
+    /// runtime = auki_network.cluster.spawn(seed=peer_seed, ...)
+    /// # runtime's libp2p PeerId == peer_id, by construction.
+    /// ```
+    ///
+    /// **Sensitivity.** This returns the secret key bytes. Treat the
+    /// result with the same caution as the seed file itself — don't log
+    /// it, don't transmit it, don't pickle it across a process boundary
+    /// you don't trust. The wallet object holds these bytes regardless;
+    /// this getter just makes them explicit.
+    #[pyo3(text_signature = "($self, /)")]
+    fn seed<'py>(&self, py: Python<'py>) -> Py<PyBytes> {
+        PyBytes::new_bound(py, &self.inner.seed()).unbind()
+    }
 }
 
 // ─── app_instance submodule ──────────────────────────────────────────────────
@@ -296,6 +335,61 @@ mod tests {
                 second.downcast::<PyBytes>().unwrap().as_bytes().to_vec();
             assert_eq!(first_bytes, second_bytes);
             assert_eq!(first_bytes.len(), 32);
+        });
+    }
+
+    #[test]
+    fn wallet_seed_round_trips_for_root_wallet() {
+        // For a wallet constructed via from_seed, .seed() must return the
+        // same bytes that constructed it.
+        Python::with_gil(|py| {
+            let original = [42u8; 32];
+            let seed_bytes = PyBytes::new_bound(py, &original);
+            let w = Wallet::from_seed(&seed_bytes).unwrap();
+            let extracted = w.seed(py);
+            let extracted_bytes = extracted
+                .bind(py)
+                .downcast::<PyBytes>()
+                .unwrap()
+                .as_bytes()
+                .to_vec();
+            assert_eq!(extracted_bytes, original.to_vec());
+        });
+    }
+
+    #[test]
+    fn wallet_seed_round_trips_for_derived_child() {
+        // A derived child's seed, when fed back into Wallet::from_seed,
+        // must produce a wallet with the same peer_id as the original
+        // derived child. This is the round-trip property the BoosterApp
+        // sidecar relies on: derive once, hand the seed to cluster.spawn,
+        // and trust that the swarm's PeerId matches the derived peer's
+        // peer_id.
+        Python::with_gil(|py| {
+            let seed = PyBytes::new_bound(py, &[7u8; 32]);
+            let parent = Wallet::from_seed(&seed).unwrap();
+            let derived = parent.derive_child("peer/v1");
+            let derived_peer_id = derived.peer_id();
+            let derived_seed = derived.seed(py);
+
+            // Reconstruct from the derived seed; peer_id must match.
+            let reconstructed = Wallet::from_seed(derived_seed.bind(py)).unwrap();
+            assert_eq!(reconstructed.peer_id(), derived_peer_id);
+        });
+    }
+
+    #[test]
+    fn wallet_seed_returns_32_bytes() {
+        // Property pin: the seed format is 32-byte ed25519 secret bytes.
+        // If anything in the upstream Wallet representation changes the
+        // length, this test catches it before it cascades into the
+        // cluster.spawn FFI seam (which strictly requires 32 bytes).
+        Python::with_gil(|py| {
+            let seed = PyBytes::new_bound(py, &[1u8; 32]);
+            let w = Wallet::from_seed(&seed).unwrap();
+            let extracted = w.seed(py);
+            let len = extracted.bind(py).downcast::<PyBytes>().unwrap().as_bytes().len();
+            assert_eq!(len, 32, "seed must be 32 bytes");
         });
     }
 

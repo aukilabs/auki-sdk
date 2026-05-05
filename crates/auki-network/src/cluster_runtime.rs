@@ -160,6 +160,20 @@ impl ClusterRuntime {
     /// Build a swarm from `seed` + `swarm_config`, then drive it
     /// against `doc`. Convenience over [`Self::from_swarm`] —
     /// equivalent to constructing the swarm manually and handing it in.
+    ///
+    /// **`seed` is the *peer* seed**, not the wallet seed. This function
+    /// constructs the swarm's keypair via
+    /// [`PeerIdentity::from_seed(&seed)`][PeerIdentity::from_seed] — i.e.
+    /// direct ed25519 from the 32 bytes — *not* via
+    /// [`PeerIdentity::from_wallet`][PeerIdentity::from_wallet]. Wallet-rooted
+    /// consumers must derive the peer wallet first
+    /// (`Wallet::derive_child(`[`PEER_DERIVATION_LABEL`][crate::PEER_DERIVATION_LABEL]`)`)
+    /// and pass `peer_wallet.seed()` here, otherwise the swarm's PeerId
+    /// won't match the wallet-derived peer identity that operators put
+    /// into `cluster.json`. (Noise rejects connection-time PeerId
+    /// mismatches; the symptom is silent dial failures.) Mirroring
+    /// rationale lives in
+    /// [`auki-identity-py`'s `Wallet::seed`](../../auki-identity-py/src/lib.rs).
     pub fn spawn(
         seed: [u8; 32],
         doc: ClusterDoc,
@@ -176,6 +190,10 @@ impl ClusterRuntime {
     /// caller needs to learn the swarm's bound addresses *before*
     /// constructing the cluster doc — e.g. tests, or a daemon that
     /// publishes its addresses out-of-band before peers can dial it.
+    ///
+    /// The `swarm` argument carries the keypair (and therefore the
+    /// PeerId) the runtime will use; same wallet-derivation caveat as
+    /// [`spawn`][Self::spawn] applies to whatever recipe constructed it.
     pub fn from_swarm(
         swarm: Swarm<Behaviour>,
         doc: ClusterDoc,

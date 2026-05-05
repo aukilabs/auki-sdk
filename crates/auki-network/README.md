@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and (for grimsby) the `/auki/stream/1.0.0` typed-byte-stream protocol primitives — wire types, framing, and `libp2p_stream::Behaviour` wired into the swarm (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and (for grimsby) the `/auki/stream/1.0.0` typed-byte-stream wire primitives + a typed `Stream<T>` Rust API on top — `stream_provider` callable for the producer side, `ClusterRuntime::open_stream<T>` for the consumer side (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
 
 ## What a peer is
 
@@ -366,14 +366,85 @@ stream_protocol::write_message(
 
 Trust boundary: same as the rest of `auki-network`. `cluster.json` gates Noise-level admission; peers not in the doc cannot dial. The stream protocol does not introduce a new admission decision.
 
-### What's deferred to grimsby #2 / #3
+### Typed `Stream<T>` Rust API (grimsby #2 + #3)
 
-The wire primitives above are minimal on purpose. The next two grimsby deliverables build on them:
+The wire primitives above are minimal on purpose. Layered on top: the `auki_network::stream_runtime` module's typed Rust API, which most consumers actually use instead of touching `libp2p_stream::Control` or the framing helpers directly.
 
-- **#2 — `Stream<T>` Rust API.** Typed consumer-side iterator (`open_stream(peer, sensor_id) -> impl futures::Stream<Item = Result<T, StreamError>>`) and producer-side `StreamDecision<T> = { Accept(Box<dyn Stream<Item = T>>), Decline(DeclineReason) }`. The framing codec stays the same.
-- **#3 — Stream runtime.** The `stream_provider` callable plumbing — a `ClusterRuntime` extension (or sibling driver) that owns the substream lifecycle, invokes `stream_provider` per inbound request, spawns the pump task that drains the source-Stream onto the substream, and tears down on substream close.
+**Producer side.** Plug a `stream_provider` into `ClusterRuntime::spawn`; the runtime invokes it per inbound substream and pumps the app-supplied source-Stream onto the wire.
 
-Once #2 and #3 land, daemons won't touch `libp2p_stream::Control` or the framing helpers directly — they'll plug a `stream_provider` into the runtime and consume `Stream<T>` on the consumer side.
+```rust
+use std::sync::Arc;
+use futures::stream;
+use auki_network::stream_protocol::{
+    AcceptInfo, DeclineReason, JpegFrame, StreamRequest,
+};
+use auki_network::stream_runtime::{
+    ProducerFrame, StreamDecision, StreamProvider,
+};
+
+let provider: StreamProvider<JpegFrame> = Arc::new(|req: StreamRequest| {
+    if req.sensor_id != "K1-AABBCCDDEEFF/head_left_cam" {
+        return StreamDecision::Decline {
+            reason: DeclineReason::SensorNotFound,
+        };
+    }
+    let frames = vec![
+        Ok(ProducerFrame {
+            timestamp_ns: 1_000,
+            payload: JpegFrame { bytes: latest_jpeg() },
+        }),
+        // ... more frames pulled from a tokio broadcast channel etc.
+    ];
+    StreamDecision::Accept {
+        info: AcceptInfo {
+            sensor_hash: "abc123…".into(),
+            clock_id: "K1-AABBCCDDEEFF/session-monotonic".into(),
+            clock_hash: "def456…".into(),
+        },
+        source: Box::pin(stream::iter(frames)),
+    }
+});
+```
+
+The source-Stream's item type is `Result<ProducerFrame<T>, String>`. Yielding `Some(Err(detail))` ends the stream with `EndReason::ProducerError { detail }`; returning `None` ends with `EndReason::SourceEnded`. SDK auto-stamps `seq` (0, 1, 2, …) per substream — producers don't track it.
+
+**Consumer-only nodes** (Park, future analytics) can use the convenience helper `decline_all_streams::<JpegFrame>()` instead of constructing a no-op provider.
+
+**Consumer side.** Open a typed subscription on a peer:
+
+```rust
+use auki_network::stream_protocol::JpegFrame;
+use auki_network::stream_runtime::{StreamSubscription, OpenStreamError};
+use futures::StreamExt;
+
+let mut sub: StreamSubscription<JpegFrame> = runtime
+    .open_stream::<JpegFrame>(peer_id, StreamRequest {
+        sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
+    })
+    .await?;
+
+println!("subscribed; sensor_hash = {}", sub.info.sensor_hash);
+
+while let Some(item) = sub.frames.next().await {
+    match item {
+        Ok(frame) => render_jpeg(frame.payload.bytes),
+        Err(end) => {
+            // Final terminator item; iterator returns None next.
+            eprintln!("stream ended: {end}");
+        }
+    }
+}
+```
+
+`StreamSubscription::frames` yields `Result<ConsumerFrame<T>, StreamError>`. The iterator yields zero or more `Ok(frame)` items, then a **single final** `Err(StreamError)` describing the end (`EndOfStream { reason }` for graceful end, `ConnectionLost` for substream-closed-without-marker, `Protocol(...)` for malformed bytes), then `None`. The consumer's app-level reconnect policy decides whether to re-request — the SDK never auto-retries (per grimsby D5c).
+
+Dropping the `StreamSubscription` cleanly closes the substream; the producer's source-Stream gets dropped on the next pump cycle, releasing whatever resources its `Drop` holds.
+
+**Locked to ****`T = JpegFrame`**** at runtime construction time** (per grimsby D4). `open_stream<T>` is generic on the consumer side; `stream_provider`'s `T` is fixed to `JpegFrame` for grimsby v1. Generalizing to multiple producer-side `T`s on one daemon is a type-erased follow-up — defer.
+
+**Backpressure** flows naturally: slow consumer → Yamux/QUIC substream backpressure → SDK pump blocks on its substream write → SDK stops pulling from the source-Stream → producer's source-Stream backpressures upstream. For live preview, the recommended source-Stream is a small bounded broadcast channel that sheds old frames before the SDK ever sees them.
+
+**Trust boundary**: same as `cluster_protocol`. Inbound substreams from peers not in `cluster.json` are dropped silently — the `stream_provider` is never invoked for outsiders. App-level decline policy only applies to peers we already trust at the cluster layer.
 
 ## `cluster.json` — the discovery doc
 

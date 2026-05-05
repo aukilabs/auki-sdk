@@ -10,7 +10,8 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
 - [`cluster_runtime.rs`](cluster_runtime.rs) — opaque runtime that owns a `Swarm<Behaviour>` + tokio task and orchestrates the cluster (ansuz #4), gated behind the `swarm` feature. Auto-dials peers in a `ClusterDoc`, exchanges `ParticipantInfo`, exposes the live peer state via `peers()`, reconnects with per-peer exponential backoff. The wrapper `auki-py` `cluster.spawn` is built on top of this.
-- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/1.0.0` typed-byte-stream wire primitives (grimsby #1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (the `T` for grimsby v1), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/1.0.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field; consumers acquire a `libp2p_stream::Control` from the swarm and use these helpers to frame typed messages on the resulting `libp2p::Stream`. The `Stream<T>` Rust API + `stream_provider` runtime are separate grimsby deliverables (#2, #3) building on these primitives.
+- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/1.0.0` typed-byte-stream wire primitives (grimsby #1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (the `T` for grimsby v1), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/1.0.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
+- [`stream_runtime.rs`](stream_runtime.rs) — typed `Stream<T>` Rust API on top of `stream_protocol`'s wire primitives (grimsby #2 + #3), gated behind the `swarm` feature. Producer-side: `ProducerFrame<T>`, `SourceStream<T>`, `StreamDecision<T>`, `StreamProvider<T>`, `decline_all_streams<T>()` convenience for consumer-only nodes. Consumer-side: `ConsumerFrame<T>`, `StreamSubscription<T>`, `StreamError`, `OpenStreamError`, `OPEN_STREAM_TIMEOUT = 30s`. Adds the `open_stream<T>(peer_id, request)` async method on `ClusterRuntime` for outbound subscriptions; the runtime task spawns per-substream `handle_inbound_substream` for each accepted inbound substream on `STREAM_PROTOCOL`. Cluster-doc trust boundary applies — outsiders' substreams are dropped silently. Locked to `T = JpegFrame` at runtime construction time (per grimsby D4); `open_stream<T>` is generic on the consumer side.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
 ## Public types
@@ -94,6 +95,57 @@ pub mod cluster_protocol {
     pub fn behaviour() -> Behaviour;
 }
 
+// grimsby #2 + #3 (behind `swarm` feature)
+pub mod stream_runtime {
+    pub const OPEN_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    pub struct ProducerFrame<T> { pub timestamp_ns: i64, pub payload: T }
+
+    pub type SourceStream<T> =
+        Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
+
+    pub enum StreamDecision<T> {
+        Accept { info: AcceptInfo, source: SourceStream<T> },
+        Decline { reason: DeclineReason },
+    }
+
+    pub type StreamProvider<T> =
+        Arc<dyn Fn(StreamRequest) -> StreamDecision<T> + Send + Sync>;
+
+    pub fn decline_all_streams<T: 'static>() -> StreamProvider<T>;
+
+    pub struct ConsumerFrame<T> { pub timestamp_ns: i64, pub seq: u64, pub payload: T }
+
+    pub struct StreamSubscription<T> {
+        pub info: AcceptInfo,
+        pub frames: Pin<Box<
+            dyn Stream<Item = Result<ConsumerFrame<T>, StreamError>> + Send,
+        >>,
+    }
+
+    pub enum StreamError {
+        EndOfStream { reason: EndReason },
+        ConnectionLost,
+        Protocol(StreamProtocolError),
+    }
+
+    pub enum OpenStreamError {
+        Declined { reason: DeclineReason },
+        LibP2p(libp2p_stream::OpenStreamError),
+        Protocol(StreamProtocolError),
+        Timeout(std::time::Duration),
+    }
+
+    impl ClusterRuntime {
+        pub async fn open_stream<T>(
+            &self,
+            peer_id: libp2p::PeerId,
+            request: StreamRequest,
+        ) -> Result<StreamSubscription<T>, OpenStreamError>
+        where T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+    }
+}
+
 // grimsby #1 (behind `swarm` feature)
 pub mod stream_protocol {
     pub const STREAM_PROTOCOL: &str = "/auki/stream/1.0.0";
@@ -172,12 +224,14 @@ pub mod cluster_runtime {
             doc: ClusterDoc,
             swarm_config: SwarmConfig,
             participant_provider: ParticipantInfoProvider,
+            stream_provider: stream_runtime::StreamProvider<stream_protocol::JpegFrame>,
         ) -> Result<Self, SpawnError>;
 
         pub fn from_swarm(
             swarm: libp2p::Swarm<swarm::Behaviour>,
             doc: ClusterDoc,
             participant_provider: ParticipantInfoProvider,
+            stream_provider: stream_runtime::StreamProvider<stream_protocol::JpegFrame>,
         ) -> Result<Self, SpawnError>;
 
         pub fn peers(&self) -> Vec<PeerSnapshot>;
@@ -351,7 +405,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-77 unit tests + 3 integration tests + 2 doctest with `--all-features`; 68 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), and the `stream_protocol` tests (13) all run under `--features swarm`.
+81 unit tests + 3 integration tests + 2 doctest with `--all-features`; 72 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (13), and the `stream_runtime` tests (4) all run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -406,6 +460,10 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `stream_protocol::read_rejects_empty_frame` | Length prefix `0` → `EmptyFrame` |
 | `stream_protocol::read_surfaces_eof_as_io_error` | Empty buffer → `Io(UnexpectedEof)` (consumer should treat as substream-closed) |
 | `stream_protocol::write_rejects_oversized_payload_before_io` | Payload that JSON-encodes to over `MAX_FRAME_BYTES` → `FrameTooLarge` before writing the length prefix |
+| `stream_runtime::producer_accepts_and_streams_jpeg_frames` | E2E happy path: two cluster runtimes converge, consumer opens stream, reads 3 typed frames + clean `EndOfStream { reason: SourceEnded }`; iterator exhausted after the terminator. Asserts `seq` stamping (0, 1, 2), `timestamp_ns`, `payload.bytes`, and `info.{sensor_hash, clock_id, clock_hash}` end-to-end |
+| `stream_runtime::producer_declines_unknown_sensor` | Provider returns `Decline { reason: SensorNotFound }` for unknown `sensor_id`; consumer's `open_stream` returns `Err(OpenStreamError::Declined { reason: SensorNotFound })` |
+| `stream_runtime::producer_error_signals_consumer_with_detail` | Source-Stream yields `Some(Err("encoder died"))`; consumer reads frame then sees `Err(EndOfStream { reason: ProducerError { detail: "encoder died" } })`; iterator exhausted after |
+| `stream_runtime::decline_all_streams_returns_sensor_not_found` | Convenience helper for consumer-only nodes (Park) declines every request with `SensorNotFound` |
 | `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
 | `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
 | `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |

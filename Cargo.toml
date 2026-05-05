@@ -7,6 +7,7 @@ members = [
     "crates/auki-jcs",
     "crates/auki-logs",
     "crates/auki-network",
+    "crates/auki-network-py",
     "crates/auki-registry",
     "crates/auki-ros-adapter",
     "crates/auki-session",

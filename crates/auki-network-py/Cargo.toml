@@ -1,0 +1,67 @@
+[package]
+name = "auki-network-py"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PyO3 bindings for `auki-network`'s `ClusterRuntime` — lets a Python process participate in an ansuz cluster as a libp2p peer. Wraps `cluster.load_doc`, `cluster.ParticipantInfo`, `cluster.spawn`, `runtime.peers`, `runtime.shutdown` over a process-wide tokio runtime owned in a `std::thread`."
+
+[lib]
+# `cdylib` makes the crate build as a Python native extension.
+# `rlib` keeps it usable from Rust (`cargo test` against the in-tree
+# crate, which links Python at test time via the `auto-initialize`
+# feature on dev-deps).
+name = "auki_network"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# `extension-module` tells PyO3 to skip linking the Python runtime —
+# symbols are resolved at import time by the host interpreter. This is
+# the standard pattern for native Python extensions; `maturin develop`
+# / `maturin build` enable it via `[tool.maturin]` in `pyproject.toml`.
+#
+# Default is *empty* on purpose: `cargo test` wants to *link* Python
+# (via the `auto-initialize` dev-feature) so `Python::with_gil` works
+# out of the box. Enabling `extension-module` would skip that link and
+# the test binary would fail to load. The two modes are mutually
+# exclusive; the default-empty + maturin-enables-it pattern keeps both
+# code paths working without manual feature flags.
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+# Renamed via `package =` so the upstream crate's name doesn't collide
+# with our own lib name `auki_network` (which is also the Python module
+# name the `#[pymodule]` macro generates the entry point for).
+auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm"] }
+# `PeerId` parsing/formatting on the Python ↔ Rust seam (the underlying
+# `ParticipantInfo.peer_id` is `libp2p_identity::PeerId`; Python sees a
+# string, the wrapper does the parse/format). Same feature set as
+# `auki-network` itself so the dep graph collapses to one version.
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
+# `Multiaddr` parsing for the Python `listen_addresses` kwarg on
+# `cluster.spawn`. Python passes strings; the wrapper parses them into
+# `Multiaddr` to populate `SwarmConfig.listen_addresses`.
+multiaddr = "0.18"
+# Process-wide tokio runtime owned in `OnceLock<Runtime>`; `enter()`
+# guard makes `cluster.spawn` callable from outside an explicit
+# `block_on`. Multi-thread because `auki-network`'s `ClusterRuntime`
+# requires `Handle::try_current()` to succeed and we want spawn() not
+# to block while the runtime task makes progress.
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# `tracing::warn!` for logged drops when the Python `participant_provider`
+# raises an exception (caught here, returned as `None` to the runtime).
+# Default subscriber → stderr → systemd → journald. `RUST_LOG` filters.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+# `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
+# without rebuilding per minor version.
+pyo3 = { version = "0.22", features = ["abi3-py38"] }
+
+[dev-dependencies]
+# `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
+# manually starting an interpreter; needs the runtime linked, which is
+# why we don't enable it on the production extension build.
+pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+tempfile = "3"

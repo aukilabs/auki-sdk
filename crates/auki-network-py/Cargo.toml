@@ -57,11 +57,11 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
 # without rebuilding per minor version.
-pyo3 = { version = "0.22", features = ["abi3-py38"] }
+pyo3 = { version = "0.24", features = ["abi3-py38"] }
 
 [dev-dependencies]
 # `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
 # manually starting an interpreter; needs the runtime linked, which is
 # why we don't enable it on the production extension build.
-pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+pyo3 = { version = "0.24", features = ["abi3-py38", "auto-initialize"] }
 tempfile = "3"

@@ -54,13 +54,16 @@ use crate::{
     ParticipantInfo, PeerIdentity,
     cluster_doc::ClusterDoc,
     cluster_protocol::ClusterRequest,
+    stream_protocol::{JpegFrame, STREAM_PROTOCOL},
+    stream_runtime::{StreamProvider, handle_inbound_substream},
     swarm::{self, Behaviour, BehaviourEvent, SwarmConfig, build_swarm},
 };
 use futures::StreamExt;
 use libp2p::{
-    Multiaddr, PeerId, Swarm, request_response,
+    Multiaddr, PeerId, StreamProtocol, Swarm, request_response,
     swarm::SwarmEvent,
 };
+use libp2p_stream::Control;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -134,13 +137,32 @@ pub struct PeerSnapshot {
 
 /// Drives a libp2p swarm against a [`ClusterDoc`], auto-dialing peers,
 /// exchanging [`ParticipantInfo`] over `/auki/cluster/1.0.0`, and
-/// maintaining the live peer state.
+/// maintaining the live peer state. As of grimsby Batch 1, also drives
+/// `/auki/stream/1.0.0` typed-byte-stream subscriptions through the
+/// same swarm — `stream_provider` runs the producer side; `open_stream`
+/// runs the consumer side.
 ///
 /// See the module-level docs for the design rationale.
 pub struct ClusterRuntime {
     state: Arc<Mutex<RuntimeState>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
+    /// Cloneable handle to the swarm's [`libp2p_stream::Behaviour`] used
+    /// by [`crate::stream_runtime`]'s `open_stream` (consumer side) to
+    /// open outbound substreams on `/auki/stream/1.0.0`. Each call clones
+    /// this for its own `&mut self` use, per `libp2p-stream`'s
+    /// per-Control backpressure model. The runtime task holds a separate
+    /// clone for the inbound `accept` registration.
+    stream_control: Control,
+}
+
+impl ClusterRuntime {
+    /// Cloneable [`Control`] handle for outbound stream opens. Internal
+    /// to the crate — `auki_network::stream_runtime::ClusterRuntime::open_stream`
+    /// uses it; external callers go through `open_stream` itself.
+    pub(crate) fn stream_control(&self) -> &Control {
+        &self.stream_control
+    }
 }
 
 struct RuntimeState {
@@ -179,10 +201,11 @@ impl ClusterRuntime {
         doc: ClusterDoc,
         swarm_config: SwarmConfig,
         participant_provider: ParticipantInfoProvider,
+        stream_provider: StreamProvider<JpegFrame>,
     ) -> Result<Self, SpawnError> {
         let identity = PeerIdentity::from_seed(&seed);
         let swarm = build_swarm(&identity, swarm_config)?;
-        Self::from_swarm(swarm, doc, participant_provider)
+        Self::from_swarm(swarm, doc, participant_provider, stream_provider)
     }
 
     /// Drive a pre-built swarm against `doc`. The swarm should already
@@ -198,24 +221,34 @@ impl ClusterRuntime {
         swarm: Swarm<Behaviour>,
         doc: ClusterDoc,
         participant_provider: ParticipantInfoProvider,
+        stream_provider: StreamProvider<JpegFrame>,
     ) -> Result<Self, SpawnError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| SpawnError::NoTokioRuntime)?;
         let state = Arc::new(Mutex::new(RuntimeState {
             peers: HashMap::new(),
         }));
+        // Acquire a Control before moving swarm into the driver task.
+        // The outbound clone is held on the runtime for `open_stream`;
+        // a separate clone goes into the driver task to register the
+        // inbound `accept` for STREAM_PROTOCOL.
+        let outbound_control = swarm.behaviour().stream.new_control();
+        let inbound_control = outbound_control.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = handle.spawn(run_task(
             swarm,
             doc,
             state.clone(),
             participant_provider,
+            stream_provider,
+            inbound_control,
             shutdown_rx,
         ));
         Ok(Self {
             state,
             shutdown_tx: Some(shutdown_tx),
             task: Some(task),
+            stream_control: outbound_control,
         })
     }
 
@@ -278,12 +311,20 @@ struct PeerSchedule {
 }
 
 async fn run_task(
-    mut swarm: Swarm<Behaviour>,
+    swarm: Swarm<Behaviour>,
     doc: ClusterDoc,
     state: Arc<Mutex<RuntimeState>>,
     participant_provider: ParticipantInfoProvider,
+    stream_provider: StreamProvider<JpegFrame>,
+    mut inbound_control: Control,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
+    // Rebind to a `mut` local so `tokio::select!` and `&mut swarm`
+    // re-borrows in the body work. (The function-parameter `mut` would
+    // be the same thing, but the compiler's `unused_mut` lint flags it
+    // because the macro-expanded `select!` doesn't make the requirement
+    // visible to the lint pass.)
+    let mut swarm = swarm;
     // Membership is fixed at spawn time; capture as a HashMap for
     // O(1) lookups during the event loop.
     let known_peers: HashMap<PeerId, Vec<Multiaddr>> = doc
@@ -312,6 +353,30 @@ async fn run_task(
 
     let mut tick = tokio::time::interval(RECONNECT_TICK);
 
+    // Register inbound `/auki/stream/1.0.0` substream acceptance. Each
+    // accepted substream is handed off to a per-substream task that
+    // invokes `stream_provider` and pumps the source-Stream onto the
+    // wire. AlreadyRegistered is unreachable in practice — the
+    // protocol id is unique to this runtime — but if it ever fires
+    // the runtime keeps running with stream-protocol effectively
+    // disabled (cluster orchestration unaffected).
+    let stream_proto = StreamProtocol::try_from_owned(STREAM_PROTOCOL.to_string())
+        .expect("STREAM_PROTOCOL is a valid libp2p stream protocol id");
+    let mut incoming_streams: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(stream_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => {
+            // No way to recover other than logging; libp2p_stream returns
+            // this only when accept(p) is called twice for the same `p`
+            // on the same Behaviour. We're the only caller for
+            // STREAM_PROTOCOL on this runtime, so this is unreachable.
+            // Continue without inbound stream support; we can still drive
+            // cluster_protocol and outbound `open_stream`s.
+            futures::stream::pending().boxed()
+        }
+    };
+
     loop {
         tokio::select! {
             biased;
@@ -332,6 +397,32 @@ async fn run_task(
                     &state,
                     &participant_provider,
                 );
+            }
+
+            inbound = incoming_streams.next() => {
+                // `IncomingStreams` only ends when the underlying
+                // `Behaviour` is dropped, which means the swarm is gone
+                // — return cleanly.
+                let Some((peer, substream)) = inbound else {
+                    return;
+                };
+                // Inbound stream-protocol substreams from peers not in
+                // the cluster doc are dropped without invoking the
+                // provider — same trust boundary as the cluster
+                // protocol's request handling above. Producer's
+                // `stream_provider` policy (decline reasons, app-level
+                // gates) only applies to peers we already trust.
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                // Per-substream task; clones the Arc'd provider.
+                let provider = stream_provider.clone();
+                tokio::spawn(handle_inbound_substream::<JpegFrame>(
+                    peer,
+                    substream,
+                    provider,
+                ));
             }
 
             _ = tick.tick() => {
@@ -493,6 +584,7 @@ fn store_response(
 mod tests {
     use super::*;
     use crate::cluster_doc::ClusterPeer;
+    use crate::stream_runtime::decline_all_streams;
 
     /// Build a swarm config that's safe for parallel tests: loopback,
     /// OS-chosen TCP port, mDNS off (no LAN noise / cross-test
@@ -598,15 +690,19 @@ mod tests {
         };
 
         let rt_a = ClusterRuntime::from_swarm(
+
             swarm_a,
             doc.clone(),
             fixture_provider(id_a.peer_id(), "boosterapp", "robot-a"),
+            decline_all_streams(),
         )
         .expect("spawn rt_a");
         let rt_b = ClusterRuntime::from_swarm(
+
             swarm_b,
             doc.clone(),
             fixture_provider(id_b.peer_id(), "sentinel", "sentinel-b"),
+            decline_all_streams(),
         )
         .expect("spawn rt_b");
 
@@ -670,11 +766,13 @@ mod tests {
         // None-returning provider for rt_a.
         let none_provider: ParticipantInfoProvider = Arc::new(|| None);
 
-        let rt_a = ClusterRuntime::from_swarm(swarm_a, doc.clone(), none_provider).unwrap();
+        let rt_a = ClusterRuntime::from_swarm(swarm_a, doc.clone(), none_provider, decline_all_streams()).unwrap();
         let rt_b = ClusterRuntime::from_swarm(
+
             swarm_b,
             doc.clone(),
             fixture_provider(id_b.peer_id(), "sentinel", "b"),
+            decline_all_streams(),
         )
         .unwrap();
 
@@ -732,21 +830,27 @@ mod tests {
         };
 
         let rt_a = ClusterRuntime::from_swarm(
+
             swarm_a,
             doc.clone(),
             fixture_provider(id_a.peer_id(), "boosterapp", "a"),
+            decline_all_streams(),
         )
         .unwrap();
         let rt_b = ClusterRuntime::from_swarm(
+
             swarm_b,
             doc.clone(),
             fixture_provider(id_b.peer_id(), "sentinel", "b"),
+            decline_all_streams(),
         )
         .unwrap();
         let rt_c = ClusterRuntime::from_swarm(
+
             swarm_c,
             doc.clone(),
             fixture_provider(id_c.peer_id(), "park", "c"),
+            decline_all_streams(),
         )
         .unwrap();
 
@@ -793,21 +897,27 @@ mod tests {
         };
 
         let rt_a = ClusterRuntime::from_swarm(
+
             swarm_a,
             doc.clone(),
             fixture_provider(id_a.peer_id(), "boosterapp", "a"),
+            decline_all_streams(),
         )
         .unwrap();
         let rt_b = ClusterRuntime::from_swarm(
+
             swarm_b,
             doc.clone(),
             fixture_provider(id_b.peer_id(), "sentinel", "b"),
+            decline_all_streams(),
         )
         .unwrap();
         let rt_c = ClusterRuntime::from_swarm(
+
             swarm_c,
             doc.clone(),
             fixture_provider(id_c.peer_id(), "park", "c"),
+            decline_all_streams(),
         )
         .unwrap();
 
@@ -915,9 +1025,11 @@ mod tests {
         // loop — at this point the outsider's TCP SYN may already have
         // been sent and is buffered for delivery as soon as we poll.
         let rt = ClusterRuntime::from_swarm(
+
             swarm_rt,
             doc,
             fixture_provider(pid_rt, "boosterapp", "rt"),
+            decline_all_streams(),
         )
         .unwrap();
 
@@ -950,9 +1062,11 @@ mod tests {
             peers: vec![],
         };
         let rt = ClusterRuntime::from_swarm(
+
             swarm,
             doc,
             fixture_provider(id.peer_id(), "test", "alone"),
+            decline_all_streams(),
         )
         .unwrap();
 
@@ -975,9 +1089,11 @@ mod tests {
             peers: vec![],
         };
         let _rt = ClusterRuntime::from_swarm(
+
             swarm,
             doc,
             fixture_provider(id.peer_id(), "test", "drop"),
+            decline_all_streams(),
         )
         .unwrap();
         // _rt drops here.
@@ -998,7 +1114,7 @@ mod tests {
         let provider = fixture_provider(id.peer_id(), "test", "no-rt");
 
         let result = std::thread::spawn(move || {
-            ClusterRuntime::from_swarm(swarm, doc, provider).map(|_| ())
+            ClusterRuntime::from_swarm(swarm, doc, provider, decline_all_streams()).map(|_| ())
         })
         .join()
         .expect("std thread");

@@ -40,6 +40,9 @@ pub mod cluster_runtime;
 #[cfg(feature = "swarm")]
 pub mod stream_protocol;
 
+#[cfg(feature = "swarm")]
+pub mod stream_runtime;
+
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
 

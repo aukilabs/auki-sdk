@@ -8,6 +8,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
 - [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/1.0.0` participant protocol (libp2p). M0 — available without the `swarm` feature.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
+- [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 
 ## Public types
@@ -63,7 +64,9 @@ pub mod cluster_doc {
 
 // M1 (behind `swarm` feature)
 pub mod swarm {
-    pub struct Behaviour { /* identify + ping + Toggle<mdns> + relay_client + Toggle<relay> */ }
+    pub struct Behaviour {
+        /* identify + ping + Toggle<mdns> + relay_client + Toggle<relay> + cluster */
+    }
     pub struct SwarmConfig {
         listen_addresses: Vec<Multiaddr>,
         agent_version: String,
@@ -74,6 +77,19 @@ pub mod swarm {
     pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/1.0.0";
     pub fn build_swarm(identity: &PeerIdentity, config: SwarmConfig) -> Result<libp2p::Swarm<Behaviour>, BuildError>;
     pub fn dial_peer(swarm: &mut Swarm<Behaviour>, peer: PeerId, addresses: Vec<Multiaddr>) -> Result<(), DialError>;
+}
+
+// ansuz #3 (behind `swarm` feature)
+pub mod cluster_protocol {
+    pub const CLUSTER_PROTOCOL: &str = "/auki/cluster/1.0.0";
+    pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    pub struct ClusterRequest;                       // unit struct → JSON `null`
+    pub type ClusterResponse = ParticipantInfo;
+    pub type Behaviour =
+        libp2p::request_response::json::Behaviour<ClusterRequest, ClusterResponse>;
+
+    pub fn behaviour() -> Behaviour;
 }
 
 // ansuz #5 (behind `app_instance` feature)
@@ -149,6 +165,23 @@ mDNS is constructed outside the closure because its constructor is fallible — 
 
 `build_swarm` does the listening — caller doesn't need to call `swarm.listen_on` afterwards.
 
+## How `cluster_protocol` works (ansuz #3)
+
+The behaviour is `libp2p::request_response::json::Behaviour` over the protocol id `/auki/cluster/1.0.0`. Request body is the unit struct `ClusterRequest` (serializes as JSON `null` — empty by design); response is `ParticipantInfo` (same JSON as `GET /api/info`). One round-trip per query; 30 s per-request timeout.
+
+The behaviour is wired into the swarm `Behaviour` struct as the always-on `cluster:` field — there is no `Toggle`. Swarms that don't participate in a cluster (the dedicated `aukilabs/relay` infrastructure node) just never see traffic on it; a knob would have been ceremony.
+
+The behaviour does **not** auto-respond. A peer that receives a request gets `request_response::Event::Message::Request{ channel, .. }` and is responsible for filling in its current `ParticipantInfo` and calling `behaviour.cluster.send_response(channel, info)`. This is the standard libp2p pattern, and it's what lets a Python sidecar's `participant_provider` callable invoke per-request so `session_now_ns` is fresh on every reply rather than stale at swarm-spawn time.
+
+```text
+A → B   ClusterRequest                     (JSON null)
+B → A   ParticipantInfo of B               (same shape as GET /api/info)
+```
+
+The JSON is byte-for-byte identical to the `participant::golden_bytes_match_fixture` fixture — the codec uses `serde_json` end-to-end. Length framing is the underlying libp2p stream's, not application-layer.
+
+Higher-level orchestration (auto-dialing peers from `cluster.json`, tracking `Joined`/`Left`, holding a peer state map) lives in the upcoming cluster-runtime module (ansuz #4); Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves.
+
 ## How `app_instance::derive` works (ansuz #5)
 
 ```text
@@ -177,7 +210,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-44 unit tests + 3 integration tests + 1 doctest with `--all-features`; 36 unit + 3 integration + 1 doctest with `--features swarm`; 27 unit + 3 integration with no features (the M0 + cluster-doc set). The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest) run under `--features swarm`.
+56 unit tests + 3 integration tests + 2 doctest with `--all-features`; 47 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest) and the `cluster_protocol` tests (3) run under `--features swarm`.
 
 | Test | Asserts |
 |------|---------|
@@ -208,6 +241,9 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `swarm::build_with_relay_server_enabled_succeeds` | Construction-only sanity |
 | `swarm::relay_server_accepts_reservation` | Full reservation flow: client dials relay → identify exchange → listen on `/p2p/<relay>/p2p-circuit` → `RelayClient::ReservationReqAccepted` |
 | `swarm::dial_peer_helper_dials_direct_address` | The `dial_peer` helper establishes a connection by `(PeerId, addresses)` and identify exchange completes |
+| `cluster_protocol::protocol_id_is_locked` | Wire-format pin: `CLUSTER_PROTOCOL == "/auki/cluster/1.0.0"` |
+| `cluster_protocol::request_serializes_as_json_null` | `ClusterRequest` (unit struct) serializes as JSON `null` and round-trips |
+| `cluster_protocol::two_peers_exchange_participant_info_over_tcp` | End-to-end: peer A sends `ClusterRequest`, peer B replies with its `ParticipantInfo`, A asserts received == fixture |
 | `cluster_doc::round_trips_through_serde` | Two-peer doc serialize → load is identity |
 | `cluster_doc::loads_canonical_example_from_spec` | The README's example schema parses end-to-end |
 | `cluster_doc::missing_optional_fields_default_to_none` | `expected_app_id` and `note` absent → `None`; empty addresses allowed |
@@ -244,7 +280,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - `libp2p-identity` (0.2, `ed25519` + `peerid` + `serde` features, `default-features = false`) — keypair, public key, PeerId encoding.
 - `multiaddr` (0.18) — typed multiaddr; serde adapter local to this crate.
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
-- *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `macros`, `ed25519`) — the swarm itself.
+- *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `request-response`, `json`, `macros`, `ed25519`) — the swarm itself plus the `cluster_protocol` JSON request-response codec.
 - *(swarm feature)* `thiserror` (2) — `BuildError`.
 - *(app_instance feature)* `mac_address` (1) — cross-platform interface enumeration via `getifaddrs` / `GetAdaptersAddresses`. Non-WASM by nature.
 - *(dev)* `tempfile` for `cluster_doc` fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.

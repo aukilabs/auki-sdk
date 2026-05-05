@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # `swarm` feature
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "macros", "ed25519"], optional = true }
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
 thiserror = { version = "2", optional = true }
 
 # `app_instance` feature

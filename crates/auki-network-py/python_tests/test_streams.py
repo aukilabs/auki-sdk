@@ -1,0 +1,349 @@
+"""Python-side tests for grimsby's `Stream<T>` surface (deliverable #4).
+
+Run via::
+
+    cd crates/auki-network-py
+    maturin develop --release
+    pytest python_tests/test_streams.py
+
+Two-tier coverage:
+
+1. **Surface tests** — type construction, getters, tagged-enum factories.
+   Fast; no SDK runtime.
+2. **Cross-language conformance** — two `cluster.spawn` instances in the
+   same process: a Python producer with `stream_provider` accepting and
+   yielding three `JpegFrame`s, a Python consumer calling `open_stream`
+   and iterating the frames. Mirrors the Rust
+   `producer_accepts_and_streams_jpeg_frames` test shape.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from auki_network import cluster
+
+
+# Reuse the seed → peer_id constants from `test_basic.py`. Computed via
+# `cargo test print_python_e2e_peer_ids -- --nocapture`.
+PEER_ID_SEED_10 = "12D3KooWG3t2M63pjiZP7UHsWruK1tQomm9kMsTm4FS3YMTfE6ao"
+PEER_ID_SEED_11 = "12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz"
+
+
+def _port_pair(offset: int) -> tuple[int, int]:
+    """Return a fresh `(port_a, port_b)` pair for each test that spawns
+    a two-runtime cluster. Sequential tests on the same loopback port pair
+    can collide on macOS `TIME_WAIT` states; staggering by test gets us
+    clear of that. Range 45070-45099 is reserved for streams tests; basic
+    tests use 45050-45069."""
+    return (45070 + offset * 2, 45071 + offset * 2)
+
+
+# ─── Surface tests ───────────────────────────────────────────────────────────
+
+
+def test_stream_request_round_trips() -> None:
+    r = cluster.StreamRequest(sensor_id="K1-AABB/head_left_cam")
+    assert r.sensor_id == "K1-AABB/head_left_cam"
+    assert "head_left_cam" in repr(r)
+
+
+def test_accept_info_round_trips_and_compares() -> None:
+    a = cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch")
+    b = cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch")
+    assert a == b
+    assert a.sensor_hash == "h"
+    assert a.clock_id == "c"
+    assert a.clock_hash == "ch"
+    c = cluster.AcceptInfo(sensor_hash="other", clock_id="c", clock_hash="ch")
+    assert a != c
+
+
+def test_jpeg_frame_carries_bytes() -> None:
+    payload = b"\xff\xd8\x01\x02\x03"
+    f = cluster.JpegFrame(payload)
+    assert f.bytes == payload
+    assert len(f) == len(payload)
+
+
+def test_decline_reason_factories() -> None:
+    nf = cluster.DeclineReason.sensor_not_found()
+    assert nf.kind == "sensor_not_found"
+    assert nf.detail is None
+
+    other = cluster.DeclineReason.other(detail="custom reason")
+    assert other.kind == "other"
+    assert other.detail == "custom reason"
+
+    # Equality follows the inner Rust enum.
+    assert nf == cluster.DeclineReason.sensor_not_found()
+    assert nf != cluster.DeclineReason.sensor_unavailable()
+
+
+def test_end_reason_factories() -> None:
+    assert cluster.EndReason.source_ended().kind == "source_ended"
+    perr = cluster.EndReason.producer_error(detail="encoder died")
+    assert perr.kind == "producer_error"
+    assert perr.detail == "encoder died"
+
+
+def test_producer_frame_round_trips() -> None:
+    pf = cluster.ProducerFrame(timestamp_ns=12345, payload=cluster.JpegFrame(b"abc"))
+    assert pf.timestamp_ns == 12345
+    assert pf.payload.bytes == b"abc"
+
+
+def test_stream_decision_factory_tags() -> None:
+    info = cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch")
+
+    async def _empty():
+        return
+        yield  # unreachable; makes this an async generator function
+
+    acc = cluster.StreamDecision.accept(info=info, source=_empty())
+    assert acc.kind == "accept"
+
+    dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
+    assert dec.kind == "decline"
+
+
+# ─── Cross-language conformance ─────────────────────────────────────────────
+
+
+def write_cluster_json(path: Path, peers: list[dict]) -> Path:
+    doc = {"version": 1, "cluster_name": "stream-conformance", "peers": peers}
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def _provider_for(peer_id: str, app: str, name: str):
+    """Mirror of test_basic._provider_for — builds a ParticipantInfo with
+    a fresh `session_now_ns` on each call."""
+
+    def provider() -> cluster.ParticipantInfo:
+        return cluster.ParticipantInfo(
+            app=app,
+            name=name,
+            session_id=f"session-{name}",
+            session_clock_id=f"{name}/clock",
+            session_clock_hash="deadbeef",
+            session_now_ns=time.monotonic_ns(),
+            cluster_joined_at_ns=None,
+            peer_id=peer_id,
+            app_instance="00163eabcdef",
+        )
+
+    return provider
+
+
+def _two_peer_doc(tmp_path: Path, port_a: int, port_b: int) -> cluster.ClusterDoc:
+    path = write_cluster_json(
+        tmp_path / "cluster.json",
+        peers=[
+            {
+                "peer_id": PEER_ID_SEED_10,
+                "addresses": [f"/ip4/127.0.0.1/tcp/{port_a}"],
+            },
+            {
+                "peer_id": PEER_ID_SEED_11,
+                "addresses": [f"/ip4/127.0.0.1/tcp/{port_b}"],
+            },
+        ],
+    )
+    return cluster.load_doc(str(path))
+
+
+def test_python_producer_python_consumer_round_trip_jpeg(tmp_path: Path) -> None:
+    """Cross-language conformance vector (per the grimsby task queue):
+    two `cluster.spawn` instances in one process — Python producer +
+    Python consumer — round-trip `JpegFrame`s end-to-end.
+
+    Mirrors `auki_network::stream_runtime::tests::producer_accepts_and_streams_jpeg_frames`.
+    """
+    port_a, port_b = _port_pair(0)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    # Producer side.
+    accepted_count = 0
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        nonlocal accepted_count
+        if req.sensor_id != "test/cam":
+            return cluster.StreamDecision.decline(
+                cluster.DeclineReason.sensor_not_found()
+            )
+        accepted_count += 1
+
+        async def gen():
+            yield cluster.ProducerFrame(
+                timestamp_ns=1_000, payload=cluster.JpegFrame(b"\xff\xd8\x01")
+            )
+            yield cluster.ProducerFrame(
+                timestamp_ns=2_000, payload=cluster.JpegFrame(b"\xff\xd8\x02")
+            )
+            yield cluster.ProducerFrame(
+                timestamp_ns=3_000, payload=cluster.JpegFrame(b"\xff\xd8\x03")
+            )
+
+        return cluster.StreamDecision.accept(
+            info=cluster.AcceptInfo(
+                sensor_hash="sensor-hash-3",
+                clock_id="test/session-monotonic",
+                clock_hash="clock-hash-3",
+            ),
+            source=gen(),
+        )
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+
+    # Consumer side. No stream_provider → consumer-only (decline_all_streams
+    # behind the scenes).
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        # Wait for cluster connect so open_stream routes through the
+        # existing connection rather than a fresh dial.
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers() and rt_producer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        sub = rt_consumer.open_stream(
+            peer_id=PEER_ID_SEED_10,
+            sensor_id="test/cam",
+        )
+        assert sub.info.sensor_hash == "sensor-hash-3"
+        assert sub.info.clock_id == "test/session-monotonic"
+        assert sub.info.clock_hash == "clock-hash-3"
+
+        frames = sub.frames()
+
+        # Drain three frames — order, seq, timestamp, payload all locked.
+        f0 = next(frames)
+        assert f0.seq == 0
+        assert f0.timestamp_ns == 1_000
+        assert f0.payload.bytes == b"\xff\xd8\x01"
+
+        f1 = next(frames)
+        assert f1.seq == 1
+        assert f1.timestamp_ns == 2_000
+
+        f2 = next(frames)
+        assert f2.seq == 2
+        assert f2.payload.bytes == b"\xff\xd8\x03"
+
+        # Producer's generator returned → SDK writes
+        # `EndOfStream { SourceEnded }` → Python sees `StreamEndOfStream`.
+        with pytest.raises(cluster.StreamEndOfStream) as excinfo:
+            next(frames)
+        reason = excinfo.value.args[0]
+        assert isinstance(reason, cluster.EndReason)
+        assert reason.kind == "source_ended"
+
+        # After the terminator, the iterator is exhausted.
+        with pytest.raises(StopIteration):
+            next(frames)
+
+        assert accepted_count == 1, "provider should have been invoked exactly once"
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()
+
+
+def test_open_stream_against_unknown_sensor_raises_declined(tmp_path: Path) -> None:
+    """Producer's `stream_provider` declines the request → consumer's
+    `open_stream` raises `StreamDeclined` carrying a typed
+    `DeclineReason`. No frames flow."""
+    port_a, port_b = _port_pair(1)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        return cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        with pytest.raises(cluster.StreamDeclined) as excinfo:
+            rt_consumer.open_stream(peer_id=PEER_ID_SEED_10, sensor_id="anything")
+        reason = excinfo.value.args[0]
+        assert isinstance(reason, cluster.DeclineReason)
+        assert reason.kind == "sensor_not_found"
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()
+
+
+def test_open_stream_after_shutdown_raises_runtime_error(tmp_path: Path) -> None:
+    """Trying to open a stream after `runtime.shutdown()` raises
+    `RuntimeError` rather than hanging or panicking."""
+    doc = cluster.load_doc(
+        str(write_cluster_json(tmp_path / "cluster.json", peers=[]))
+    )
+    rt = cluster.spawn(
+        seed=b"\x42" * 32,
+        doc=doc,
+        participant_provider=lambda: None,
+        listen_addresses=["/ip4/127.0.0.1/tcp/0"],
+        enable_mdns=False,
+    )
+    rt.shutdown()
+    with pytest.raises(RuntimeError, match="shut down"):
+        rt.open_stream(peer_id=PEER_ID_SEED_10, sensor_id="any")
+
+
+def test_open_stream_with_invalid_peer_id_raises_value_error(tmp_path: Path) -> None:
+    doc = cluster.load_doc(
+        str(write_cluster_json(tmp_path / "cluster.json", peers=[]))
+    )
+    rt = cluster.spawn(
+        seed=b"\x42" * 32,
+        doc=doc,
+        participant_provider=lambda: None,
+        listen_addresses=["/ip4/127.0.0.1/tcp/0"],
+        enable_mdns=False,
+    )
+    try:
+        with pytest.raises(ValueError, match="invalid peer_id"):
+            rt.open_stream(peer_id="not-a-peer-id", sensor_id="any")
+    finally:
+        rt.shutdown()

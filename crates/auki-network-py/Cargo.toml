@@ -58,19 +58,21 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
 # without rebuilding per minor version.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
+# Path 1 (locked) for the grimsby `stream_provider` Python binding —
+# bridges Python `async def` generators onto Rust `futures::Stream` so a
+# Python provider can return an async iterator and the SDK pumps it on
+# its tokio worker. `0.22` tracks our `pyo3 = "0.22"`. We share the
+# wrapper's process-wide tokio runtime via `init_with_runtime` instead
+# of letting pyo3-async-runtimes spin up its own.
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+# `futures::Stream` / `StreamExt` for the source-Stream bridge on the
+# producer side and consumer-side substream draining; `channel::oneshot`
+# for the sync `open_stream` blocking-bridge.
+futures = "0.3"
 
 [dev-dependencies]
 # `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
 # manually starting an interpreter; needs the runtime linked, which is
 # why we don't enable it on the production extension build.
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
-# `pyo3-async-runtimes` 0.22 matches our `pyo3 = "0.22"`. Used by the
-# Path 1 prototype in `stream_bridge.rs` to drive a Python async
-# iterator's `__anext__()` calls onto a Rust `futures::Stream` via the
-# tokio runtime — grimsby D3 Python-binding evaluation. Dev-dep until
-# the production wrapper for `stream_provider` lands.
-pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
-# Used by `stream_bridge.rs` tests to assert the bridge yields `Stream`
-# items in order.
-futures = "0.3"
 tempfile = "3"

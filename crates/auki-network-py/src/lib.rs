@@ -25,12 +25,12 @@
 //! See [`crates/auki-network-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
 
-// `stream_bridge` is `#[cfg(test)]`-gated — Path 1 prototype for the
-// grimsby `stream_provider` Python wrapper (deliverable #4). Lives in
-// the crate so the prototype can grow into the production wrapper
-// without restructuring; carries no production surface today.
-#[cfg(test)]
+// Path 1 (locked) for grimsby's `stream_provider` Python binding —
+// bridges Python `async def` generators onto Rust `futures::Stream`.
+// Public surface stays inside this crate; consumers call through
+// `cluster.spawn(..., stream_provider=...)` and `runtime.open_stream`.
 mod stream_bridge;
+mod stream_types;
 
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -45,6 +45,7 @@ use auki_network_rs::{
     cluster_runtime::{
         ClusterRuntime as RustClusterRuntime, ParticipantInfoProvider, SpawnError,
     },
+    stream_protocol::StreamRequest as RustStreamRequest,
     stream_runtime::decline_all_streams,
     swarm::SwarmConfig,
 };
@@ -54,6 +55,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::Runtime;
+
+use crate::stream_types::{
+    PyStreamSubscription, build_stream_provider, open_stream_error_to_pyerr,
+};
 
 // ─── ParticipantInfo ─────────────────────────────────────────────────────────
 
@@ -354,7 +359,11 @@ fn map_load_error(e: LoadError) -> PyErr {
 /// succeed inside `ClusterRuntime::spawn`; a single `auki-network-py`
 /// process typically holds at most one or two `ClusterRuntime`s, so the
 /// runtime is heavily under-utilized — that's fine.
-fn cluster_tokio_runtime() -> &'static Runtime {
+///
+/// `pub(crate)` so [`crate::stream_types`] (the source-Stream Drop guard
+/// and the consumer-side blocking iterator) can spawn / `block_on`
+/// against the same runtime instead of building a sibling.
+pub(crate) fn cluster_tokio_runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         // Best-effort tracing init so `tracing::warn!` from the
@@ -405,6 +414,75 @@ impl ClusterRuntime {
         let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
         let rt = inner.as_ref().ok_or_else(shutdown_error)?;
         Ok(rt.peers().into_iter().map(PeerSnapshot::from_rust).collect())
+    }
+
+    /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
+    /// for the named sensor (grimsby deliverable #4 — consumer side,
+    /// `T = JpegFrame` per D4).
+    ///
+    /// **Synchronous-blocking**: returns once the producer has Accepted
+    /// or Declined the request, or the SDK's 30s timeout fires. The
+    /// caller's thread is blocked while the wrapper's tokio runtime
+    /// drives the libp2p substream open + wire-handshake. Pattern A
+    /// (per the BoosterApp Claude flag): asyncio plumbing stays
+    /// internal to the SDK; the caller stays sync-shaped.
+    ///
+    /// Returns a [`StreamSubscription`]; iterate frames via
+    /// `subscription.frames()` (also sync-blocking — see
+    /// [`StreamSubscription`] for end-of-stream signalling).
+    ///
+    /// Raises:
+    /// - `ValueError` if `peer_id` does not parse as a libp2p PeerId.
+    /// - `auki_network.cluster.StreamDeclined(reason)` — producer accepted
+    ///   the substream open but declined the request.
+    ///   `args[0]` is a `DeclineReason`.
+    /// - `auki_network.cluster.StreamUnreachable(detail)` — libp2p
+    ///   couldn't open the substream (peer not reachable, peer doesn't
+    ///   speak `/auki/stream/1.0.0`, or the open timed out).
+    /// - `auki_network.cluster.StreamProtocolError(detail)` — peer
+    ///   wrote malformed bytes during the request/reply exchange.
+    /// - `RuntimeError` if the runtime has been shut down.
+    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
+    fn open_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: String,
+    ) -> PyResult<PyStreamSubscription> {
+        let peer = PeerId::from_str(peer_id).map_err(|e| {
+            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
+        })?;
+
+        // Hold a clone of the inner runtime across the await — the
+        // mutex guard cannot cross `.await` (not Send for Mutex), and
+        // the underlying RustClusterRuntime is Send + Sync, so a quick
+        // copy-out works. The runtime is dropped via `shutdown()`
+        // which `take()`s the inner; we only need it alive long enough
+        // to drive the open_stream call.
+        //
+        // We can't `Clone` RustClusterRuntime — it isn't Clone — so
+        // call `open_stream` on a borrow that lives for the duration of
+        // the block_on call. That means holding the guard the whole
+        // time. Easiest: do the work in a closure that borrows the
+        // guard, releasing it after block_on completes.
+        let request = RustStreamRequest { sensor_id };
+        let result = py.allow_threads(|| {
+            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
+            let rt = inner.as_ref().ok_or(())?;
+            let tokio_rt = cluster_tokio_runtime();
+            Ok(tokio_rt.block_on(async {
+                rt.open_stream::<auki_network_rs::stream_protocol::JpegFrame>(peer, request)
+                    .await
+            }))
+        });
+
+        let rust_sub = match result {
+            Err(()) => return Err(shutdown_error()),
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
+        };
+
+        Ok(PyStreamSubscription::from_rust(rust_sub))
     }
 
     /// Signal the driver task to shut down and abort it. Idempotent in
@@ -492,6 +570,13 @@ impl std::fmt::Debug for ClusterRuntime {
 /// cached state.
 ///
 /// Kwargs (all optional, sensible defaults):
+/// - `stream_provider: Callable[[StreamRequest], StreamDecision] | None` —
+///   inbound `/auki/stream/1.0.0` request handler (grimsby deliverable
+///   #4). Synchronous; on `Accept`, the source must be a Python async
+///   iterator yielding `ProducerFrame` values. Default `None` —
+///   consumer-only mode: every inbound request gets
+///   `DeclineReason.sensor_not_found`. The same shape Park uses on the
+///   Rust side (`decline_all_streams`).
 /// - `listen_addresses: list[str] | None` — multiaddr strings the
 ///   swarm will listen on. Default: TCP+QUIC on `0.0.0.0`, OS-chosen
 ///   ports (`/ip4/0.0.0.0/tcp/0`, `/ip4/0.0.0.0/udp/0/quic-v1`). An
@@ -509,22 +594,25 @@ impl std::fmt::Debug for ClusterRuntime {
 #[pyfunction]
 #[pyo3(
     name = "spawn",
-    text_signature = "(seed, doc, participant_provider, *, listen_addresses=None, agent_version=None, enable_mdns=True)",
+    text_signature = "(seed, doc, participant_provider, *, stream_provider=None, listen_addresses=None, agent_version=None, enable_mdns=True)",
     signature = (
         seed,
         doc,
         participant_provider,
         *,
+        stream_provider = None,
         listen_addresses = None,
         agent_version = None,
         enable_mdns = true,
     ),
 )]
+#[allow(clippy::too_many_arguments)]
 fn spawn(
     py: Python<'_>,
     seed: &Bound<'_, PyBytes>,
     doc: &ClusterDoc,
     participant_provider: PyObject,
+    stream_provider: Option<PyObject>,
     listen_addresses: Option<Vec<String>>,
     agent_version: Option<String>,
     enable_mdns: bool,
@@ -612,7 +700,18 @@ fn spawn(
         })
     });
 
-    // 4. Enter the tokio runtime context so `ClusterRuntime::spawn`'s
+    // 4. Build the `StreamProvider<JpegFrame>`. If the caller supplied
+    //    `stream_provider=...`, wrap it as a Python-driven provider
+    //    (the source-Stream is a Python async iterator drained on the
+    //    wrapper's asyncio loop). Otherwise default to
+    //    `decline_all_streams()` — the consumer-only shape Park's Rust
+    //    side took in [park#20].
+    let stream_prov = match stream_provider {
+        Some(callable) => build_stream_provider(callable),
+        None => decline_all_streams(),
+    };
+
+    // 5. Enter the tokio runtime context so `ClusterRuntime::spawn`'s
     //    internal `Handle::try_current()` succeeds. The driver task is
     //    spawned on a tokio worker thread, so the guard can drop
     //    immediately after spawn returns — the task continues running
@@ -624,18 +723,12 @@ fn spawn(
     let rt = cluster_tokio_runtime();
     let cluster = py.allow_threads(|| {
         let _guard = rt.enter();
-        // Grimsby (deliverable #6) will replace `decline_all_streams()`
-        // with a Python-supplied `stream_provider`. Today the wrapper
-        // is consumer-only — every inbound `/auki/stream/1.0.0` request
-        // gets `DeclineReason::SensorNotFound`. This keeps the binding
-        // building against develop after PR #40 added a required
-        // `stream_provider` to `ClusterRuntime::spawn`.
         RustClusterRuntime::spawn(
             seed_arr,
             doc.inner.clone(),
             swarm_config,
             provider,
-            decline_all_streams(),
+            stream_prov,
         )
     });
 
@@ -669,6 +762,9 @@ fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     cluster.add_class::<ClusterRuntime>()?;
     cluster.add_function(wrap_pyfunction!(load_doc, &cluster)?)?;
     cluster.add_function(wrap_pyfunction!(spawn, &cluster)?)?;
+
+    // Grimsby Stream<T> surface (deliverable #4).
+    stream_types::register(py, &cluster)?;
 
     // Register the submodule in `sys.modules` so
     // `from auki_network import cluster` works the same as
@@ -737,12 +833,29 @@ mod tests {
             populate_module(&module).unwrap();
 
             let cluster = module.getattr("cluster").unwrap();
+            // Ansuz surface (v0.0.14).
             assert!(cluster.getattr("ParticipantInfo").is_ok());
             assert!(cluster.getattr("PeerSnapshot").is_ok());
             assert!(cluster.getattr("ClusterDoc").is_ok());
             assert!(cluster.getattr("ClusterRuntime").is_ok());
             assert!(cluster.getattr("load_doc").is_ok());
             assert!(cluster.getattr("spawn").is_ok());
+            // Grimsby Stream<T> surface (deliverable #4 / v0.0.17).
+            assert!(cluster.getattr("StreamRequest").is_ok());
+            assert!(cluster.getattr("AcceptInfo").is_ok());
+            assert!(cluster.getattr("JpegFrame").is_ok());
+            assert!(cluster.getattr("DeclineReason").is_ok());
+            assert!(cluster.getattr("EndReason").is_ok());
+            assert!(cluster.getattr("ProducerFrame").is_ok());
+            assert!(cluster.getattr("ConsumerFrame").is_ok());
+            assert!(cluster.getattr("StreamDecision").is_ok());
+            assert!(cluster.getattr("StreamSubscription").is_ok());
+            assert!(cluster.getattr("FrameIterator").is_ok());
+            assert!(cluster.getattr("StreamEndOfStream").is_ok());
+            assert!(cluster.getattr("StreamConnectionLost").is_ok());
+            assert!(cluster.getattr("StreamProtocolError").is_ok());
+            assert!(cluster.getattr("StreamDeclined").is_ok());
+            assert!(cluster.getattr("StreamUnreachable").is_ok());
         });
     }
 
@@ -922,7 +1035,7 @@ mod tests {
             let doc = empty_cluster_doc();
             let bad_seed = PyBytes::new_bound(py, &[0u8; 16]);
             let provider = py.None();
-            let err = spawn(py, &bad_seed, &doc, provider, None, None, true)
+            let err = spawn(py, &bad_seed, &doc, provider, None, None, None, true)
                 .expect_err("16-byte seed must be rejected");
             assert!(err.is_instance_of::<PyValueError>(py));
             assert!(
@@ -943,6 +1056,7 @@ mod tests {
                 &seed,
                 &doc,
                 provider,
+                None,
                 Some(vec!["not a multiaddr".to_string()]),
                 None,
                 true,
@@ -971,7 +1085,7 @@ mod tests {
             let provider = py.None(); // never invoked (no peers)
             let listen = Some(vec!["/ip4/127.0.0.1/tcp/0".to_string()]);
 
-            let runtime = spawn(py, &seed, &doc, provider, listen, None, false)
+            let runtime = spawn(py, &seed, &doc, provider, None, listen, None, false)
                 .expect("spawn happy path");
 
             // Empty cluster — no peers visible.

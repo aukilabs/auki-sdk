@@ -52,7 +52,7 @@
 //! }).expect("build swarm");
 //! ```
 
-use crate::PeerIdentity;
+use crate::{PeerIdentity, cluster_protocol};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, identify, mdns, noise, ping, relay,
     swarm::{
@@ -93,6 +93,14 @@ pub struct Behaviour {
     /// consumer daemons (BoosterApp, Sentinel); on for the dedicated
     /// `aukilabs/relay` infrastructure node.
     pub relay: Toggle<relay::Behaviour>,
+    /// `/auki/cluster/1.0.0` participant exchange. Always present — the
+    /// protocol sits idle for swarms that don't participate in a cluster
+    /// (the dedicated `aukilabs/relay` infrastructure node), so a knob
+    /// would just be ceremony. The behaviour does not auto-respond:
+    /// receivers handle `Request` events themselves and call
+    /// [`cluster_protocol::Behaviour::send_response`]. See
+    /// [`crate::cluster_protocol`].
+    pub cluster: cluster_protocol::Behaviour,
 }
 
 /// Per-swarm configuration.
@@ -194,6 +202,7 @@ pub fn build_swarm(
             relay: Toggle::from(enable_relay_server.then(|| {
                 relay::Behaviour::new(local_pid, relay::Config::default())
             })),
+            cluster: cluster_protocol::behaviour(),
         })
         .expect("behaviour construction is infallible")
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_TIMEOUT))

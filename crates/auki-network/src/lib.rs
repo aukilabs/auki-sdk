@@ -31,6 +31,9 @@ pub use participant::ParticipantInfo;
 #[cfg(feature = "swarm")]
 pub mod swarm;
 
+#[cfg(feature = "swarm")]
+pub mod cluster_protocol;
+
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
 

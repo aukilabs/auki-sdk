@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, and a dial-by-peer-id helper (M1 — behind the `swarm` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, and the `/auki/cluster/1.0.0` participant-exchange request-response protocol (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
 
 ## What a peer is
 
@@ -54,7 +54,7 @@ ReachabilityRecord {
 The wire shape every Auki participant exchanges to introduce itself. **One schema, two transports**:
 
 - **HTTP** — `GET /api/info` on the cross-app Control API ([`docs/control-api.md`](../../docs/control-api.md)) returns this exact JSON.
-- **libp2p** — the `/auki/cluster/1.0.0` participant protocol, a request/response exchange where each side sends its own `ParticipantInfo` to the other (the protocol implementation lands in a follow-up; the type is what locks the wire format down).
+- **libp2p** — the `/auki/cluster/1.0.0` participant protocol (see [the cluster protocol](#the-cluster-protocol-m1) below), a request/response exchange where each side sends its own `ParticipantInfo` to the other.
 
 ```rust
 pub struct ParticipantInfo {
@@ -135,12 +135,47 @@ let swarm = build_swarm(&identity, SwarmConfig {
 | `mdns` (Toggle) | gated on `enable_mdns` | `_p2p._udp.local.` advertisement; on by default for daemons. Daemons keep their existing `_auki._tcp.local.` advertisement separately (control-API discovery, unchanged) — **dual-channel** per Reid parking-lot 1a |
 | `relay_client` | yes | Lets any peer dial through a relay; consumes circuit-relay multiaddrs |
 | `relay` (Toggle) | gated on `enable_relay_server` | The relay-*server* role; off by default for consumer daemons; on for the dedicated `aukilabs/relay` infrastructure node — **both-gates** per Reid parking-lot 2c |
+| `cluster` | yes | `/auki/cluster/1.0.0` participant-exchange request-response (ansuz #3); JSON codec, 30 s per-request timeout. See [the cluster protocol](#the-cluster-protocol-m1) for usage. Always-on; sits idle on swarms that don't participate in a cluster |
 
 The swarm's `local_peer_id` matches `identity.peer_id()` exactly — caller can rely on this for advertising. Idle connections close after 60 s.
 
 **Park-from-home dialing:** `swarm::dial_peer(&mut swarm, peer_id, vec![addr1, addr2, ...])`. Addresses may be direct (`/ip4/.../tcp/...`) or circuit-relay-mediated (`/p2p/<relay>/p2p-circuit/p2p/<target>`). Per Reid parking-lot 3c, the operator pastes the daemon's peer-id and (if needed) a relay multiaddr into Park's UI; no Discovery Service dependency for the M2 demo.
 
 The `swarm` feature pulls in `libp2p` 0.56 + tokio runtime; non-WASM. Console depends on this crate without the feature (default-off) to derive peer ids from wallets in-browser.
+
+## The cluster protocol (M1)
+
+`/auki/cluster/1.0.0` is the libp2p half of `ParticipantInfo`'s **one schema, two transports** promise. A peer that reaches a daemon over HTTP (Park, querying `GET /api/info`) and a peer that reaches it over libp2p parse identical JSON out of either wire. The libp2p side is a request/response exchange; the request body is empty (`null`); the response is the responder's current `ParticipantInfo`.
+
+```rust
+use auki_network::cluster_protocol::{self, CLUSTER_PROTOCOL, ClusterRequest};
+use libp2p::request_response;
+
+// Build the swarm — the cluster protocol behaviour is wired in
+// automatically as the always-on `cluster:` field on `swarm::Behaviour`.
+let mut swarm = build_swarm(&identity, swarm_config)?;
+
+// Ask another peer for its identity card.
+let request_id = swarm.behaviour_mut().cluster.send_request(&peer_id, ClusterRequest);
+
+// Receivers handle Request events themselves and call send_response —
+// see the swarm event loop in your daemon for the typical pattern.
+```
+
+| | |
+|---|---|
+| Protocol id | `/auki/cluster/1.0.0` (constant `cluster_protocol::CLUSTER_PROTOCOL`) |
+| Codec | `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>` (length-framed JSON over the libp2p stream) |
+| Request body | `ClusterRequest` (unit struct → JSON `null`) |
+| Response body | `ParticipantInfo` (same JSON as `GET /api/info`) |
+| Per-request timeout | 30 s (constant `cluster_protocol::REQUEST_TIMEOUT`) |
+| Wired into | `swarm::Behaviour.cluster` — always-on, no `Toggle` |
+
+**The behaviour does not auto-respond.** A peer that receives a request gets `request_response::Event::Message::Request{ channel, .. }` and is responsible for filling in its current `ParticipantInfo` and calling `behaviour.cluster.send_response(channel, info)`. This is the standard libp2p pattern and it's what lets a Python sidecar's `participant_provider` callable run per-request, so `session_now_ns` is fresh on each reply rather than stale at swarm-spawn time.
+
+**Always-on, no toggle.** The protocol sits idle for swarms that don't participate in a cluster (the dedicated `aukilabs/relay` infrastructure node) — there's no traffic until somebody sends a request. A toggle would just be ceremony.
+
+**Higher-level orchestration lives separately.** Auto-dialing every peer in `cluster.json`, tracking `Joined`/`Left` events, holding a peer-state map — all of that lands in the upcoming cluster-runtime module (ansuz #4). Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves and call `send_request` / `send_response` directly. The Python sidecar wraps the runtime opaquely via the planned `auki-py` `cluster.spawn`.
 
 ## `cluster.json` — the discovery doc
 

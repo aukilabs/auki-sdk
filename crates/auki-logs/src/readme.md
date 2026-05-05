@@ -57,6 +57,7 @@ impl<T: Serialize + DeserializeOwned> Log<T> {
 impl<T> Log<T> {
     pub fn manifest(&self) -> &serde_json::Value;
     pub fn flush(&mut self) -> Result<()>;
+    pub fn set_retention(&mut self, retention_ns: i64) -> Result<()>;
 }
 
 pub struct LogReader<T> { ... }
@@ -93,6 +94,8 @@ If `manifest.json` already exists at `root`, it is the source of truth and the `
 
 **Read.** Walks every `.seg` file in the segments dir in chronological order, reads each entry until EOF, returns them all. Truncated tails are silently tolerated.
 
+**`set_retention`.** Updates the in-memory `retention_ns` and rewrites `manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart. Affects future appends only — eviction runs as part of `append`, not as part of `set_retention` itself, so a quiescent log retains its current segments until something appends. Disk-write-first ordering: the manifest is persisted before the in-memory field is updated, so a failed write leaves the log unchanged. Use case: operator-driven endpoints like Sentinel's `PATCH /api/buffer` that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window.
+
 **Drop.** `Log<T>::drop` best-effort-closes the current segment so the SDK doesn't depend on explicit `flush()` calls for crash safety.
 
 ## Errors
@@ -110,7 +113,7 @@ pub enum Error {
 
 Chosen jointly with Nils after weighing throughput vs cross-language readability. CBOR (via `ciborium`) is binary-efficient like bincode but has a stable inter-language ecosystem — important because the SDK's design ambition includes future iOS/phone/browser composition where readers may not be Rust. Revisit if profiling shows overhead at scale.
 
-## Tests (8 total)
+## Tests (14 total)
 
 | Test | Asserts |
 |------|---------|
@@ -118,10 +121,15 @@ Chosen jointly with Nils after weighing throughput vs cross-language readability
 | `round_trip_single_segment` | Two appends in the same segment round-trip cleanly through read |
 | `rolls_over_at_segment_boundary` | Crossing `segment_duration_ns` triggers a new segment file |
 | `evicts_segments_older_than_retention` | After 10s of appends with 3s retention, only the last 4 segments remain |
+| `retention_zero_disables_eviction` | `retention_ns = 0` keeps every segment for the lifetime of the log |
 | `segment_file_header_is_well_formed` | Magic/version/reserved/start_ns bytes match the spec |
 | `reopen_preserves_existing_manifest_and_appends_new_segments` | On-disk manifest wins over the new arg; new segments append correctly |
 | `truncated_segment_tail_is_tolerated_on_read` | Garbage at end-of-segment doesn't break the read |
 | `manifest_missing_required_field_errors` / `manifest_zero_duration_errors` | Manifest validation |
+| `set_retention_shrinks_window_for_subsequent_appends` | Shrinking retention during a run takes effect on the next `append` |
+| `set_retention_persists_across_reopen` | Manifest rewrite survives drop + reopen; persisted value drives eviction |
+| `set_retention_rejects_negative` | Negative argument → `Error::Manifest`; in-memory state unchanged |
+| `set_retention_zero_disables_future_eviction` | Switching from a tight retention to `0` mid-run stops further eviction |
 
 ## Consumers in this workspace
 

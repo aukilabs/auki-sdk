@@ -6,6 +6,61 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 16:30 HKT, 2026
+
+`stream_runtime` lifted to multi-`T` dispatch + `stream_protocol` gains `PointCloudFrame` — [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1 (#1 + #2). One PR; cuts as v0.0.20.
+
+**Why this PR is breaking on the producer side and not the consumer side**
+
+grimsby v1 (v0.0.16) pinned `T = JpegFrame` at `ClusterRuntime::spawn` time — the producer's callback was `StreamProvider<JpegFrame>` returning `StreamDecision<JpegFrame>`. Dagaz D1 (RESOLVED 2026-05-06) lifts that pinning to per-call generic on the producer: a single daemon serves multiple `T`s by dispatching on `request.sensor_id`. The consumer side (`open_stream<T>`) was already generic in grimsby v1 — it stays unchanged because each consumer call statically knows the `T` it expects.
+
+**The new producer-side surface**
+
+```rust
+pub enum StreamDispatch {
+    AcceptJpeg       { info: AcceptInfo, source: SourceStream<JpegFrame>       },
+    AcceptPointCloud { info: AcceptInfo, source: SourceStream<PointCloudFrame> },
+    Decline          { reason: DeclineReason },
+}
+
+pub type StreamProvider = Arc<dyn Fn(StreamRequest) -> StreamDispatch + Send + Sync>;
+
+pub fn decline_all_streams() -> StreamProvider;  // no longer generic
+```
+
+**Closed enum, not trait-object.** Adding a new `T` is a deliberate, coordinated SDK + consumer release: bump auki-network, add the variant, every consumer that wants the new sensor type opts in. Trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries, and the type-erased version would lose the SDK-level type-checking the consumer surface relies on (per Dagaz D1's rationale: "(B) opaque-bytes rejected — would force the consumer to re-implement decoding the SDK could have type-checked"). New `T` is a 4-line variant addition; cheap.
+
+**Migration for grimsby v1 producers**: `StreamDecision::Accept { info, source }` → `StreamDispatch::AcceptJpeg { info, source }`; `StreamDecision::Decline { reason }` → `StreamDispatch::Decline { reason }`. Decline is variant-stable; Accept becomes typed-by-`T`. The `StreamProvider<JpegFrame>` annotation drops to `StreamProvider`.
+
+**Implementation: non-generic outer + per-`T` typed pump.** `handle_inbound_substream` is now non-generic — reads the request type-free (the `Request` variant of `StreamMessage<T>` carries no `T`-dependent payload, so any concrete `T` deserializes it; we use `JpegFrame` as the marker), invokes the provider, then matches the `StreamDispatch` variant and hands off to a generic `pump_typed::<T>` helper that monomorphizes per `T`. The Decline path writes `StreamMessage::<JpegFrame>::Decline { reason }` — the Decline variant payload is also `T`-free on the wire, so the marker `T` is safe.
+
+**`PointCloudFrame { bytes: Vec<u8> }`** — Dagaz Batch 1 #2, raw-CDR-of-`PointCloud2` per Dagaz D2 (RESOLVED 2026-05-06 — A). The producer forwards CDR bytes verbatim; the consumer (Park) parses CDR on its side. Per-frame layout fields (`row_step`, `height`, `width`, `is_dense`) ride inside the CDR payload itself; sensor-bootstrap fields (`fields[]`, `point_step`, `is_bigendian`, `frame_rate_hz`) live in the producer's `SensorBody::PointCloud` registry entry (boosterapp's `bootstrap_pointcloud`).
+
+**Wire-side of D3** (RESOLVED 2026-05-06): the `bytes` field uses `#[serde(with = "base64_bytes")]` — a small adapter inside `stream_protocol` that serializes `Vec<u8>` as a base64-encoded JSON string instead of `serde_json`'s default array-of-integers encoding. The default would tax the wire ~4× (each byte → ~3.5 ASCII chars + comma); base64 is ~33% overhead vs raw. Bandwidth: 22 MB/s raw `PointCloud2` → ~30 MB/s on the wire (was ~80 MB/s without the adapter). `JpegFrame` keeps the array-of-integers form unchanged — JPEGs are ~1000× smaller, the 4× tax there is tolerable, and changing it would break grimsby v1 wire compat. Producer-side knobs (voxel decimation, reduced cadence) remain for boosterapp at Batch 3 integration.
+
+**New deps** — `base64 = "0.22"` rides on the `swarm` feature (no transitive deps; the `discovery_client` feature already had it). Pure additive; M0 (no features, WASM-friendly) untouched.
+
+**Tests**: 99 unit + 3 integration + 2 doctest with `--all-features` (was 92 + 3 + 2; +7).
+
+`stream_protocol::tests` (+5):
+- `point_cloud_frame_serializes_bytes_as_base64_string` — pins `serde_json::to_string(PointCloudFrame { bytes: [0x00, 0x01, 0x02, 0x03, 0xff, 0xfe] })` → `{"bytes":"AAECA//+"}`. Adapter drift fails loudly.
+- `point_cloud_frame_round_trips_a_kilobyte_payload` — 1 KB pseudo-random payload round-trips losslessly through serde.
+- `point_cloud_frame_wire_size_dodges_the_array_of_integers_tax` — wire-size assertion: 1 KB payload → < 1.5 KB JSON (vs the ~3.4 KB the array-of-integers path would produce). If someone removes the adapter, this fails.
+- `locked_point_cloud_frame_wire_shape_vector` — **cross-language conformance vector**. Pins `StreamMessage::Frame { timestamp_ns: 1_700_000_000_000_000_000, seq: 42, payload: PointCloudFrame { bytes: [0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff] } }` → exact JSON `{"kind":"frame","timestamp_ns":1700000000000000000,"seq":42,"payload":{"bytes":"QkNERQAB/v8="}}`. A cross-language reimplementation (Park's browser-side decoder, future Sentinel-as-consumer) is correct only if it produces these exact bytes from the same input. Joins the `auki-hash` / `auki-identity` / `auki-network::tests::locked_seed_to_peer_id_vector` / `auki-identity::tests::locked_sign_canonical_json_vector` cross-language conformance set.
+- `point_cloud_frame_round_trips_through_framing_helpers` — full wire-level round trip through `write_message` + `read_message` (length prefix + JSON body).
+
+`stream_runtime::tests` (+2 e2e):
+- `producer_accepts_and_streams_pointcloud_frames` — full e2e two-runtime cluster convergence + `open_stream<PointCloudFrame>` + 3 frames + `EndOfStream { SourceEnded }` + iterator-exhausted-after-terminator. Mirrors `producer_accepts_and_streams_jpeg_frames` but with the new dispatch shape.
+- `one_producer_serves_jpeg_and_pointcloud_via_sensor_id_dispatch` — one `ClusterRuntime` with a `sensor_id`-keyed multi-`T` provider serves `"camera"` (JPEG) and `"pointcloud"` (PointCloud) over **separate libp2p substreams** multiplexed on the same yamux/QUIC connection. Confirms Dagaz D1's per-call-`T` dispatch end-to-end. Plus declines-on-unknown-sensor — the third substream against `"no-such-sensor"` returns `Err(OpenStreamError::Declined { reason: SensorNotFound })`. This is the core shape boosterapp will use in Batch 3.
+
+Existing JPEG tests all pass with no behavior change — `producer_accepts_and_streams_jpeg_frames`, `producer_declines_unknown_sensor`, `producer_error_signals_consumer_with_detail`, `producer_shutdown_signals_consumer_with_typed_end_of_stream`, `decline_all_streams_returns_sensor_not_found`, `open_stream_against_unreachable_peer_surfaces_typed_error` (now 6 stream_runtime tests; was 6) — confirming the wire bytes for JPEG are byte-identical pre/post-refactor.
+
+**Companion change in `auki-network-py`**: the wrapper's `build_stream_provider` and existing tests updated to construct `StreamDispatch::AcceptJpeg` instead of `StreamDecision::Accept`. **Python surface unchanged** — Python callers still see one `cluster.StreamDecision` PyClass with `.accept` and `.decline` factories that produce JPEG. PointCloudFrame on the Python surface lands in Dagaz Batch 2 (the `auki-network-py` extension for the new `T` shape) — when that lands, `DecisionInner` extends with a `PointCloud` variant and `cluster.PointCloudFrame` becomes a Python type. 33 auki-network-py Rust tests + 39 / 46 Python tests still pass.
+
+Will land in v0.0.20.
+
+---
+
 ### broodsugar's claude · May 6, 12:00 HKT, 2026
 
 `discovery_client` module landed — [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616) Batch 1 piece #2 (Lane B), the SDK-side REST client for `aukilabs/discovery`. Two parallel SDK Claude sessions split Vinland Batch 1 by file ownership: Lane A owns `auki-identity` (`Wallet::sign_canonical_json` + locked vector); Lane B (this crate) owns `auki-network::discovery_client` + the new `discovery_client` Cargo feature. Both pieces ship in v0.0.18.

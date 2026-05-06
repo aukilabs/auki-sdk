@@ -28,7 +28,7 @@ use auki_network_rs::stream_protocol::{
 };
 use auki_network_rs::stream_runtime::{
     ConsumerFrame as RustConsumerFrame, OpenStreamError as RustOpenStreamError,
-    ProducerFrame as RustProducerFrame, SourceStream, StreamDecision as RustStreamDecision,
+    ProducerFrame as RustProducerFrame, SourceStream, StreamDispatch as RustStreamDispatch,
     StreamError as RustStreamError, StreamProvider, StreamSubscription as RustStreamSubscription,
 };
 use futures::{Stream, StreamExt};
@@ -509,15 +509,32 @@ impl PyStreamDecision {
 
 // ─── PyStreamProvider ────────────────────────────────────────────────────────
 
-/// Build a Rust [`StreamProvider<JpegFrame>`] from a Python callable
-/// matching `Callable[[StreamRequest], StreamDecision]`. Used by
-/// `cluster.spawn` when the consumer passes `stream_provider=...`.
+/// Build a Rust [`StreamProvider`] from a Python callable matching
+/// `Callable[[StreamRequest], StreamDecision]`. Used by `cluster.spawn`
+/// when the consumer passes `stream_provider=...`.
+///
+/// **Python surface today is JPEG-only.** Dagaz Batch 1 lifted the Rust
+/// [`StreamProvider`] to a closed [`RustStreamDispatch`] enum over the
+/// SDK-supported `T`s (`AcceptJpeg`, `AcceptPointCloud`, `Decline`).
+/// The Python `StreamDecision` PyClass currently only constructs JPEG
+/// sources, so this adapter always returns either
+/// `RustStreamDispatch::AcceptJpeg` (on Accept) or
+/// `RustStreamDispatch::Decline`. PointCloud support on the Python
+/// surface lands in Dagaz Batch 2 (the `auki-network-py` extension for
+/// the new `T` shape) — when that lands, the `DecisionInner` enum
+/// extends with a `PointCloud` variant and this match grows another
+/// arm.
 ///
 /// Behaviour on Python exception / non-`StreamDecision` return:
 /// the wrapper logs the offence via `tracing::warn!` and synthesizes a
 /// `Decline { reason: Other { detail: <error string> } }` so the
 /// requester sees a typed failure rather than a hung substream.
-pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider<RustJpegFrame> {
+pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
+    // `RustJpegFrame` is no longer referenced through the generic
+    // `StreamProvider<T>` signature; keep it imported because the
+    // PyJpegFrame path still touches `RustJpegFrame` lower in this
+    // file.
+    let _ = std::marker::PhantomData::<RustJpegFrame>;
     Arc::new(move |request: RustStreamRequest| {
         let py_request = PyStreamRequest { inner: request };
 
@@ -549,18 +566,19 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider<RustJ
         });
 
         // Step 2 (no GIL needed for the type-shape match): map onto a
-        // Rust StreamDecision. On error, synthesize a Decline carrying
-        // the error string.
+        // Rust StreamDispatch variant. On error, synthesize a Decline
+        // carrying the error string. Python surface is JPEG-only today,
+        // so Accept maps to AcceptJpeg.
         match decision_or_err {
-            Err(detail) => RustStreamDecision::Decline {
+            Err(detail) => RustStreamDispatch::Decline {
                 reason: RustDeclineReason::Other { detail },
             },
-            Ok(DecisionInner::Decline { reason }) => RustStreamDecision::Decline {
+            Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
                 reason: reason.inner,
             },
             Ok(DecisionInner::Accept { info, source }) => {
                 let source_stream = python_iter_into_source_stream(source);
-                RustStreamDecision::Accept {
+                RustStreamDispatch::AcceptJpeg {
                     info: info.inner,
                     source: source_stream,
                 }
@@ -1073,7 +1091,7 @@ def _make(cluster):
                 sensor_id: "any".into(),
             };
             match rust_provider(request) {
-                RustStreamDecision::Decline {
+                RustStreamDispatch::Decline {
                     reason: RustDeclineReason::SensorNotFound,
                 } => {}
                 _ => panic!("expected Decline(SensorNotFound)"),
@@ -1106,7 +1124,7 @@ def _bad(req):
                 sensor_id: "any".into(),
             };
             match rust_provider(request) {
-                RustStreamDecision::Decline {
+                RustStreamDispatch::Decline {
                     reason: RustDeclineReason::Other { detail },
                 } => assert!(
                     detail.contains("provider broke"),

@@ -169,6 +169,7 @@ name = "auki-identity"
 version = "0.0.0"
 dependencies = [
  "auki-hash",
+ "auki-jcs",
  "ed25519-dalek",
  "rand_core 0.6.4",
  "serde",

@@ -124,6 +124,29 @@ impl Wallet {
         Signature(self.signing_key.sign(msg).to_bytes())
     }
 
+    /// JCS-canonicalize `value` (RFC 8785) and sign the canonical bytes with
+    /// this wallet's private key. Returns `(canonical_bytes, signature)` so
+    /// callers can ship the signature on the wire AND inspect or log the
+    /// bytes that got signed.
+    ///
+    /// JCS makes the signing reproducible across processes and languages:
+    /// same `serde_json::Value` → same bytes → same signature (modulo the
+    /// wallet). Verifiers reproduce the canonical bytes locally with
+    /// `auki_jcs::canonicalize` and verify the signature against them — the
+    /// two sides cannot drift because both use the same canonicaliser.
+    ///
+    /// Used by Vinland's signed registration to Discovery: the daemon builds
+    /// a registration JSON minus the `signature` field, calls this method,
+    /// adds the resulting signature to the JSON, and POSTs. Discovery
+    /// reproduces the canonical bytes from the JSON-minus-signature it
+    /// receives, looks up the public key embedded in the payload, and
+    /// verifies.
+    pub fn sign_canonical_json(&self, value: &serde_json::Value) -> (Vec<u8>, Signature) {
+        let canonical_bytes = auki_jcs::canonicalize(value);
+        let signature = self.sign(&canonical_bytes);
+        (canonical_bytes, signature)
+    }
+
     /// **Deterministic** child derivation. Child seed is `XXH3-128(seed || label)`
     /// expanded to 32 bytes by re-hashing — small, reproducible, no external
     /// HKDF dependency. The child has no creation cert; the relationship is
@@ -483,5 +506,106 @@ mod tests {
         let back: CreationCert = serde_json::from_str(&json).unwrap();
         assert_eq!(cert, back);
         assert!(back.verify().is_ok());
+    }
+
+    // ─── sign_canonical_json ─────────────────────────────────────────────
+
+    #[test]
+    fn sign_canonical_json_round_trips() {
+        let wallet = Wallet::new();
+        let value = serde_json::json!({
+            "cluster_name": "vinland",
+            "peer_id": "12D3KooW...",
+            "addresses": ["/ip4/127.0.0.1/tcp/4001"],
+        });
+        let (canonical_bytes, signature) = wallet.sign_canonical_json(&value);
+        assert!(verify(&wallet.public_key(), &canonical_bytes, &signature).is_ok());
+    }
+
+    #[test]
+    fn sign_canonical_json_is_deterministic_for_same_input() {
+        let wallet = Wallet::from_seed(&[7u8; 32]);
+        let value = serde_json::json!({"a": 1, "b": [2, 3]});
+        let (bytes1, sig1) = wallet.sign_canonical_json(&value);
+        let (bytes2, sig2) = wallet.sign_canonical_json(&value);
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn sign_canonical_json_normalises_key_order() {
+        // JCS sorts object keys; two values that differ only in key order
+        // must produce identical canonical bytes (and therefore identical
+        // signatures). This is what makes the verifier-side check work
+        // independent of how either side serialised the JSON originally.
+        let wallet = Wallet::from_seed(&[8u8; 32]);
+        let v1 = serde_json::json!({"a": 1, "b": 2, "c": 3});
+        let v2 = serde_json::json!({"c": 3, "a": 1, "b": 2});
+        let (bytes1, sig1) = wallet.sign_canonical_json(&v1);
+        let (bytes2, sig2) = wallet.sign_canonical_json(&v2);
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn sign_canonical_json_verifier_rejects_tampered_field() {
+        let wallet = Wallet::from_seed(&[9u8; 32]);
+        let original = serde_json::json!({"cluster_name": "vinland", "n": 1});
+        let tampered = serde_json::json!({"cluster_name": "vinland", "n": 2});
+        let (_orig_bytes, signature) = wallet.sign_canonical_json(&original);
+        let tampered_bytes = auki_jcs::canonicalize(&tampered);
+        assert_eq!(
+            verify(&wallet.public_key(), &tampered_bytes, &signature),
+            Err(VerifyError::SignatureMismatch)
+        );
+    }
+
+    /// Locked cross-language conformance vector for `Wallet::sign_canonical_json`.
+    ///
+    /// Pins the chain `seed → wallet → JCS canonical bytes of fixed JSON →
+    /// 64-byte ed25519 signature` to exact bytes. Any reimplementation in
+    /// another language is correct only if it reproduces these exact
+    /// canonical bytes AND signature from the same seed + JSON value. Drift
+    /// in JCS, in ed25519, or in the seed-to-signing-key path will surface
+    /// here. Pairs with the existing `auki-hash` / `auki-identity` /
+    /// `auki-network` locked vectors as the cross-language conformance set
+    /// downstream Vinland verifiers (Discovery, Python sidecar) will pin
+    /// against. Don't update without a coordinated version bump.
+    ///
+    /// Source value uses a Vinland-shaped registration body in deliberately
+    /// non-sorted insertion order so the assertion exercises JCS's
+    /// key-sorting behaviour, not just byte-for-byte JSON serialisation.
+    #[test]
+    fn locked_sign_canonical_json_vector() {
+        let wallet = Wallet::from_seed(&[3u8; 32]);
+        let value = serde_json::json!({
+            "cluster_name": "vinland",
+            "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+            "addresses": ["/ip4/127.0.0.1/tcp/4001"],
+            "timestamp_ns": 1_700_000_000_000_000_000_i64,
+        });
+        let (canonical_bytes, signature) = wallet.sign_canonical_json(&value);
+
+        // RFC 8785 (JCS) — keys in ASCII order, no whitespace, integers
+        // without trailing zeros.
+        let expected_canonical: &[u8] = br#"{"addresses":["/ip4/127.0.0.1/tcp/4001"],"cluster_name":"vinland","peer_id":"12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar","timestamp_ns":1700000000000000000}"#;
+        assert_eq!(
+            canonical_bytes,
+            expected_canonical,
+            "JCS canonical bytes drifted — see crate docs for the locked recipe"
+        );
+
+        let expected_signature: [u8; 64] = [
+            0x6f, 0xdd, 0x19, 0x1c, 0xdd, 0xf7, 0xa2, 0xa5, 0x19, 0x23, 0xb4, 0x67, 0xf1, 0x64,
+            0xde, 0x58, 0x7d, 0x12, 0x29, 0x85, 0x8c, 0x11, 0xa3, 0x3b, 0x3b, 0xeb, 0xdb, 0x54,
+            0xa3, 0xed, 0x82, 0xdb, 0x1c, 0x86, 0x05, 0x34, 0xdc, 0x6a, 0xff, 0x14, 0xac, 0x7b,
+            0x88, 0x04, 0xc2, 0x95, 0x10, 0x07, 0x5d, 0x6b, 0xd8, 0x5f, 0x6a, 0xaf, 0x30, 0xaa,
+            0x4d, 0x47, 0xd5, 0xd8, 0x0e, 0x39, 0x22, 0x07,
+        ];
+        assert_eq!(
+            signature.0,
+            expected_signature,
+            "ed25519 signature drifted — see crate docs for the locked recipe"
+        );
     }
 }

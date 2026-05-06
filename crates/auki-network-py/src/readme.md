@@ -5,7 +5,7 @@ PyO3 bindings for `auki-network`'s cluster layer — the libp2p-peer-from-Python
 ## What's here
 
 - [`lib.rs`](lib.rs) — the cluster + grimsby surface entry points (`#[pymodule]` macro generates the C entry point Python imports). PyO3 0.22 `Bound<...>` API.
-- [`stream_bridge.rs`](stream_bridge.rs) + [`stream_types.rs`](stream_types.rs) — grimsby's `Stream<T>` PyO3 wrappers (deliverable #4). Async-iter ↔ Rust `futures::Stream` bridge for the producer side; sync-blocking iterator on the consumer side.
+- [`stream_bridge.rs`](stream_bridge.rs) + [`stream_types.rs`](stream_types.rs) — grimsby's `Stream<T>` PyO3 wrappers (deliverable #4) lifted by Dagaz Batch 2 to multi-`T` dispatch (`JpegFrame` + `PointCloudFrame`). Async-iter ↔ Rust `futures::Stream` bridge for the producer side; sync-blocking iterator on the consumer side.
 - [`discovery.rs`](discovery.rs) — Vinland Batch 2 PyO3 wrapper for `auki_network::discovery_client`. Sync-shaped `DiscoveryClient(url)` with `register` / `fetch` / `deregister`; three typed Python exceptions (`DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`).
 
 ## Public Python surface
@@ -32,7 +32,21 @@ auki_network.cluster.spawn(
 ) -> ClusterRuntime
 
 ClusterRuntime.peers() -> list[PeerSnapshot]
+ClusterRuntime.open_stream(peer_id: str, sensor_id: str) -> StreamSubscription   # JPEG (grimsby v1)
+ClusterRuntime.open_pointcloud_stream(peer_id: str, sensor_id: str) -> StreamSubscription  # CDR PointCloud2 (Dagaz Batch 2)
 ClusterRuntime.shutdown() -> None          # consumes; second call raises RuntimeError
+
+# Stream<T> producer surface — Dagaz Batch 2 widens the JPEG-only grimsby v1 surface.
+# Each substream stays mono-T; the producer's StreamDecision factory picks which T.
+auki_network.cluster.JpegFrame(bytes: bytes)              # grimsby v1 payload
+auki_network.cluster.PointCloudFrame(bytes: bytes)        # Dagaz Batch 2 — raw CDR PointCloud2
+auki_network.cluster.ProducerFrame(*,
+    timestamp_ns: int,
+    payload: JpegFrame | PointCloudFrame,                 # type-checked at construction
+)
+auki_network.cluster.StreamDecision.accept(*, info, source)             # JPEG substream
+auki_network.cluster.StreamDecision.accept_pointcloud(*, info, source)  # PointCloud substream
+auki_network.cluster.StreamDecision.decline(reason)
 
 # Vinland Batch 2 (v0.0.19) — Discovery REST client.
 auki_network.discovery.DiscoveryClient(url: str)             # cheap; shareable across threads
@@ -122,7 +136,7 @@ The two feature modes are mutually exclusive; the default-empty + maturin-enable
 
 ## Tests
 
-`cargo test -p auki-network-py` runs **33 Rust-side smoke tests**; `pytest python_tests/` runs **39 Python-side tests** (or 46 with `DISCOVERY_BIN=/path/to/discovery` set, enabling the live Discovery integration tests).
+`cargo test -p auki-network-py` runs **40 Rust-side smoke tests**; `pytest python_tests/` runs **44 Python-side tests** (or 51 with `DISCOVERY_BIN=/path/to/discovery` set, enabling the live Discovery integration tests).
 
 ### Rust-side (`lib.rs`)
 

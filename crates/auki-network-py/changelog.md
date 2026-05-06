@@ -6,6 +6,28 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 18:00 HKT, 2026
+
+[Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 — `auki-network-py` extension for the new `T` shape (`PointCloudFrame`). **Closes Dagaz Batch 2; cuts as v0.0.21.** Pins v0.0.20 (Dagaz Batch 1).
+
+**Producer side.** New `cluster.PointCloudFrame(bytes)` PyClass — analog of `JpegFrame`, opaque-bytes-with-a-`bytes`-property; the SDK doesn't decode either. `cluster.ProducerFrame.payload` now accepts either a `JpegFrame` or a `PointCloudFrame` (was JPEG-only); the constructor type-checks and raises `ValueError` for anything else. `cluster.ConsumerFrame.payload` returns whichever variant the producer accepted with — each substream stays mono-`T` end-to-end. New `cluster.StreamDecision.accept_pointcloud(*, info, source)` factory mirrors `accept(*, info, source)` (which keeps its JPEG semantics for back-compat); `.kind` returns `"accept"` / `"accept_pointcloud"` / `"decline"` / `"consumed"`. The async source iterator yields `ProducerFrame(payload=PointCloudFrame(...))` values; mismatched payloads (yielding `JpegFrame` from an `accept_pointcloud(...)` source, or vice versa) end the substream with `EndReason::ProducerError` carrying a typed detail rather than coercing the wrong T onto the wire.
+
+**Consumer side.** New `runtime.open_pointcloud_stream(peer_id, sensor_id) -> StreamSubscription` — same blocking shape as `open_stream` (which stays JPEG-only). Returns frames whose `payload` is a `PointCloudFrame`. The internal `RustClusterRuntime::open_stream::<T>` dispatch picks `T = PointCloudFrame` for the new method.
+
+**Internal seam.** `stream_types::DecisionInner` enum extended (`Accept` → `AcceptJpeg` + new `AcceptPointCloud`; `Decline` unchanged); `build_stream_provider` grows a third match arm constructing `RustStreamDispatch::AcceptPointCloud`. `python_iter_into_source_stream` is now generic over `T` with a per-`T` `convert: fn(&PyProducerFrame) -> Result<RustProducerFrame<T>, String>` extractor — used twice (`to_rust_jpeg` / `to_rust_pointcloud`) so the duplication is one function-pointer per dispatch, no monomorphization-of-asyncio-bridge cost. `PyStreamSubscription` / `PyFrameIterator` hold a `FrameStreamKind` enum over the two typed `Pin<Box<dyn Stream<...>>>`s; `__next__` dispatches and produces a `PyConsumerFrame::from_rust_jpeg` / `from_rust_pointcloud` accordingly. **Internal-only refactor**: `from_rust` → `from_rust_jpeg` (caller is `lib.rs::open_stream`).
+
+**Pattern A unchanged.** Same producer-side shape grimsby v1 locked: SDK owns the asyncio loop on its tokio worker; Python sidecars stay sync-shaped. The async `def` generator's `finally` block fires on consumer disconnect via `aclose()` driven through `SourceStreamGuard`'s `Drop` — same scaffolding, two `T`s now.
+
+**No new deps.** Pure additive; the `auki-network-rs` path-dep already exposed `PointCloudFrame` after Dagaz Batch 1 (v0.0.20).
+
+**Tests**: `cargo test -p auki-network-py` 40 (was 33; +7) — `point_cloud_frame_round_trips_through_pybytes`, `producer_frame_extracts_to_rust_pointcloud`, `producer_frame_to_rust_errors_on_mismatched_payload`, `producer_frame_rejects_unknown_payload_type`, `consumer_frame_constructs_from_rust_pointcloud`, `build_stream_provider_accept_jpeg_maps_to_dispatch_acceptjpeg`, `build_stream_provider_accept_pointcloud_maps_to_dispatch_acceptpointcloud`, plus updates to existing `producer_frame_extracts_to_rust_jpeg` / `consumer_frame_constructs_from_rust_jpeg` / `stream_decision_factories_tag_correctly` to cover the new dispatch surface. `pytest python_tests/` 44 / 51 with `DISCOVERY_BIN` set (was 39 / 46; +5) — `test_pointcloud_frame_carries_bytes`, `test_producer_frame_accepts_pointcloud_payload`, `test_producer_frame_rejects_unknown_payload_type`, `test_python_producer_python_consumer_round_trip_pointcloud` (full Python-producer ↔ Python-consumer cross-language conformance vector mirroring the Rust-side e2e), `test_payload_mismatch_ends_stream_with_producer_error`. Existing JPEG round-trip tests pass byte-identically — the JPEG dispatch path is unchanged on the wire.
+
+**Migration.** Existing JPEG producers / consumers need no changes: `cluster.StreamDecision.accept(info, source)` still produces JPEG substreams, `runtime.open_stream(peer_id, sensor_id)` still opens JPEG substreams, `.kind == "accept"` is preserved. Only the type of `ProducerFrame.payload` widened from `JpegFrame` to `JpegFrame | PointCloudFrame`, and only the `ConsumerFrame.payload` getter — both are construction-side / read-side changes that don't affect existing callers.
+
+Will land in v0.0.21; closes Dagaz Batch 2.
+
+---
+
 ### broodsugar's claude · May 6, 16:30 HKT, 2026
 
 **Companion change to [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1** — `auki-network`'s producer-side `StreamProvider<T>` lifted to a non-generic `StreamProvider` returning a closed `StreamDispatch` enum (`AcceptJpeg`, `AcceptPointCloud`, `Decline`). Internal seam in `stream_types::build_stream_provider` updated: the function returns `StreamProvider` (no generic), and on Accept it constructs `RustStreamDispatch::AcceptJpeg` instead of the old `RustStreamDecision::Accept`. **Python surface unchanged** — the `cluster.StreamDecision` PyClass still has `.accept` + `.decline` factories that produce JPEG, the `cluster.spawn(stream_provider=...)` shape takes an unchanged `Callable[[StreamRequest], StreamDecision]`, and 39 / 46 Python tests pass with zero rewrites.

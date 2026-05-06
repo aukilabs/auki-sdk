@@ -48,6 +48,8 @@ def test_module_exposes_only_documented_apis() -> None:
         "StreamRequest",
         "AcceptInfo",
         "JpegFrame",
+        # Dagaz Batch 2 (v0.0.21) — pointcloud `T`.
+        "PointCloudFrame",
         "DeclineReason",
         "EndReason",
         "ProducerFrame",

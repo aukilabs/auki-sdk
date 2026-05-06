@@ -2,12 +2,12 @@
 
 Current work and next steps to close the gap between [`src/readme.md`](readme.md) (what's implemented) and [the outer README](../README.md) (the spec).
 
-## Now (cluster + grimsby + Vinland Batch 2 — landed)
+## Now (cluster + grimsby + Vinland Batch 2 + Dagaz Batch 2 — landed)
 
 The crate ships three Python sub-modules:
 
 - **`auki_network.cluster`** — ansuz cluster runtime + types (initial release).
-- **`auki_network.cluster.{StreamRequest, AcceptInfo, JpegFrame, ...}`** — grimsby `Stream<T>` surface (deliverable #4 / v0.0.17).
+- **`auki_network.cluster.{StreamRequest, AcceptInfo, JpegFrame, PointCloudFrame, ...}`** — grimsby `Stream<T>` surface (deliverable #4 / v0.0.17) lifted by [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 (v0.0.21) to multi-`T` dispatch. `cluster.StreamDecision.accept(info, source)` produces a JPEG substream; the new `accept_pointcloud(info, source)` produces a CDR-encoded `PointCloud2` substream. Consumer side: `runtime.open_stream(peer_id, sensor_id)` opens JPEG; `runtime.open_pointcloud_stream(peer_id, sensor_id)` opens PointCloud. Each substream stays mono-`T` end-to-end.
 - **`auki_network.discovery`** — Vinland Batch 2 REST client wrapping `auki_network::discovery_client` (will land in v0.0.19). Sync-shaped `DiscoveryClient(url)` with `register` / `fetch` / `deregister`; three typed Python exceptions (`DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`). Pattern A bridge — each method `block_on`s on the existing process-wide `cluster_tokio_runtime()`.
 
 The crate ships the full cluster-layer Python surface and nothing else:
@@ -21,7 +21,7 @@ The crate ships the full cluster-layer Python surface and nothing else:
 
 Built via `maturin` (PEP 517 backend declared in `pyproject.toml`). PyO3 0.22 with the `Bound<...>` API; `abi3-py38`; `crate-type = ["cdylib", "rlib"]`.
 
-Tests: 33 Rust-side smoke tests (`cargo test -p auki-network-py`); 39 Python-side tests (`pytest python_tests/`) or 46 with `DISCOVERY_BIN=/path/to/discovery` set, enabling the Vinland-Batch-2 live integration tests in `python_tests/test_discovery.py`.
+Tests: 40 Rust-side smoke tests (`cargo test -p auki-network-py`); 44 Python-side tests (`pytest python_tests/`) or 51 with `DISCOVERY_BIN=/path/to/discovery` set, enabling the Vinland-Batch-2 live integration tests in `python_tests/test_discovery.py`.
 
 ## Next
 

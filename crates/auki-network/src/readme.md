@@ -13,6 +13,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/1.0.0` typed-byte-stream wire primitives (grimsby #1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (the `T` for grimsby v1), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/1.0.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
 - [`stream_runtime.rs`](stream_runtime.rs) — typed `Stream<T>` Rust API on top of `stream_protocol`'s wire primitives (grimsby #2 + #3), gated behind the `swarm` feature. Producer-side: `ProducerFrame<T>`, `SourceStream<T>`, `StreamDecision<T>`, `StreamProvider<T>`, `decline_all_streams<T>()` convenience for consumer-only nodes. Consumer-side: `ConsumerFrame<T>`, `StreamSubscription<T>`, `StreamError`, `OpenStreamError`, `OPEN_STREAM_TIMEOUT = 30s`. Adds the `open_stream<T>(peer_id, request)` async method on `ClusterRuntime` for outbound subscriptions; the runtime task spawns per-substream `handle_inbound_substream` for each accepted inbound substream on `STREAM_PROTOCOL`. Cluster-doc trust boundary applies — outsiders' substreams are dropped silently. Locked to `T = JpegFrame` at runtime construction time (per grimsby D4); `open_stream<T>` is generic on the consumer side.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
+- [`discovery_client.rs`](discovery_client.rs) — REST client for [`aukilabs/discovery`](https://github.com/aukilabs/discovery) (Vinland Batch 1 piece #2), gated behind the `discovery_client` feature. Public types: `DiscoveryClient`, `DiscoveryError`. Public consts: `DEFAULT_TIMEOUT = 30s`. Methods: `new`, `with_http`, `base_url`; async `register`, `fetch`, `deregister`. Wire shape locked against Discovery's verifier — JCS-canonical signing payload includes `cluster_name` (cross-cluster replay guard); base64-32 ed25519 pubkey + base64-64 signature on the wire; ±60s replay window. Deregister signs `{cluster_name, peer_id, op: "delete", timestamp_ns}` (no `public_key` in the canonical bytes — `verify_peer_id` already binds it).
 
 ## Public types
 
@@ -250,6 +251,45 @@ pub mod app_instance {
     pub fn derive() -> Result<String, DeriveError>;
     pub fn derive_from(macs: &[[u8; 6]]) -> Result<String, DeriveError>;
 }
+
+// Vinland Batch 1 piece #2 (behind `discovery_client` feature)
+pub mod discovery_client {
+    pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    pub struct DiscoveryClient { /* base_url + reqwest::Client */ }
+
+    pub enum DiscoveryError {
+        Transport(reqwest::Error),
+        Status { status: u16, body: String },
+        Clock(String),
+    }
+
+    impl DiscoveryClient {
+        pub fn new(url: impl Into<String>) -> Self;
+        pub fn with_http(url: impl Into<String>, http: reqwest::Client) -> Self;
+        pub fn base_url(&self) -> &str;
+
+        pub async fn register(
+            &self,
+            wallet: &auki_identity::Wallet,
+            cluster_name: &str,
+            addresses: &[multiaddr::Multiaddr],
+            expected_app_id: Option<&str>,
+            note: Option<&str>,
+        ) -> Result<cluster_doc::ClusterDoc, DiscoveryError>;
+
+        pub async fn fetch(
+            &self,
+            cluster_name: &str,
+        ) -> Result<cluster_doc::ClusterDoc, DiscoveryError>;
+
+        pub async fn deregister(
+            &self,
+            wallet: &auki_identity::Wallet,
+            cluster_name: &str,
+        ) -> Result<(), DiscoveryError>;
+    }
+}
 ```
 
 ## Public functions
@@ -405,7 +445,9 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-83 unit tests + 3 integration tests + 2 doctest with `--all-features`; 74 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`. The `app_instance` tests (9) run under `--features app_instance`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (13), and the `stream_runtime` tests (6) all run under `--features swarm`.
+92 unit tests + 3 integration tests + 2 doctest with `--all-features`; 74 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`; 45 unit + 3 integration + 1 doctest with `--features discovery_client`. The `app_instance` tests (9) run under `--features app_instance`; the `discovery_client` tests (9) run under `--features discovery_client`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (13), and the `stream_runtime` tests (6) all run under `--features swarm`.
+
+The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]`) boots a real Discovery binary on a tempdir + ephemeral loopback port. Run with `DISCOVERY_BIN=/path/to/discovery cargo test -p auki-network --features discovery_client -- --ignored discovery`.
 
 | Test | Asserts |
 |------|---------|
@@ -495,6 +537,17 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 | `app_instance::derive_from_picks_lexicographically_first_when_multiple_ieee_macs` | Multiple IEEE MACs → smallest by raw bytes (deterministic) |
 | `app_instance::derive_from_output_is_exactly_twelve_lowercase_hex_chars` | Schema check: any success returns 12 lowercase hex chars |
 | `app_instance::ul_bit_logic_isolates_first_octet_bit_one` | U/L-bit math: `0x02` set → locally administered; `0x01` (multicast) unrelated |
+| `discovery_client::register_signature_verifies_under_wire_pubkey` | Signed bytes verify under the wire pubkey via `auki_identity::verify` (rule 4 of Discovery's verify order) |
+| `discovery_client::register_pubkey_reconstructs_peer_id` | `libp2p_identity::PublicKey::from_bytes(wire_pubkey).to_peer_id() == wire_peer_id` (rule 2 of Discovery's verify order) |
+| `discovery_client::tampered_addresses_break_signature` | Mutating `addresses` after signing breaks signature verify — `addresses` is in the canonical bytes |
+| `discovery_client::cross_cluster_replay_breaks_signature` | A signature computed for cluster A doesn't verify under cluster B's canonical bytes — `cluster_name` is in the canonical bytes |
+| `discovery_client::optional_fields_omitted_when_none` | Parses canonical JSON: no `expected_app_id` / `note` keys when callers passed `None`; required keys always present |
+| `discovery_client::deregister_signature_verifies` | Deregister canonical bytes match `{cluster_name, peer_id, op: "delete", timestamp_ns}` and signature self-verifies; pinned: `public_key` is on the wire body but NOT in the signed bytes |
+| `discovery_client::locked_register_canonical_and_signature_vector` | Cross-language conformance vector: parent seed `[3u8; 32]` + fixed cluster + fixed addresses + fixed `timestamp_ns: 1_700_000_000_000_000_000` → exact RFC 8785 canonical bytes + exact 64-byte ed25519 signature |
+| `discovery_client::with_http_uses_supplied_client_and_url` | `with_http` constructor uses the supplied `reqwest::Client`; URL trailing slash trimmed |
+| `discovery_client::new_trims_trailing_slash` | `DiscoveryClient::new("...")` and `DiscoveryClient::new(".../")` produce the same `base_url` |
+| `discovery_client[integration]::discovery_round_trip` (`#[ignore]`) | E2E against real Discovery binary on a tempdir + ephemeral port: Sentinel + Booster register, fetch returns both, Sentinel deregister, fetch shows only Booster, second sentinel deregister returns 404, unknown cluster fetch returns 404 |
+| `discovery_client[integration]::discovery_rejects_invalid_cluster_name` (`#[ignore]`) | Path-traversal `cluster_name` (`"../etc/passwd"`) is rejected by Discovery |
 
 ## Dependencies
 
@@ -508,7 +561,11 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 - *(swarm feature)* `tokio` (1, features: `macros`, `rt`, `sync`, `time`) — `cluster_runtime`'s task primitives (`select!`, `oneshot`, `interval`, `Handle::try_current`).
 - *(swarm feature)* `futures` (0.3, default-features off) — `StreamExt::next` for polling `swarm.next()` in the runtime task.
 - *(app_instance feature)* `mac_address` (1) — cross-platform interface enumeration via `getifaddrs` / `GetAdaptersAddresses`. Non-WASM by nature.
-- *(dev)* `tempfile` for `cluster_doc` fixture-on-disk round-trips; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
+- *(discovery_client feature)* `reqwest` (0.12, default-features off, features: `json`, `rustls-tls`) — async HTTP client. rustls-tls (not native-tls) keeps us off OpenSSL for cross-platform reproducibility; HTTPS isn't strictly required for ansuz LAN deploys but the cost is small and Discovery may grow beyond the LAN later.
+- *(discovery_client feature)* `base64` (0.22, default-features off, features: `std`) — encoding / decoding the 32-byte ed25519 pubkey + 64-byte signature on the wire.
+- *(discovery_client feature)* `auki-jcs` (path) — RFC 8785 canonical bytes for the signed payload. Same crate Discovery uses on its verify side, so canonical-byte equality is mechanical.
+- *(discovery_client feature)* `thiserror` (2) — `DiscoveryError`. Already optional for `swarm`; the same dep, two features both opting it in.
+- *(dev)* `tempfile` for `cluster_doc` fixture-on-disk round-trips and the `discovery_integration` test's tempdir; `tokio` (`macros`, `rt-multi-thread`, `time`) + `futures` for the swarm tests.
 
 ## Consumers in this workspace
 

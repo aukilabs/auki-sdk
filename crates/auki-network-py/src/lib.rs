@@ -32,6 +32,12 @@
 mod stream_bridge;
 mod stream_types;
 
+// Vinland Batch 2 — the `auki_network.discovery` Python submodule
+// wrapping `auki_network::discovery_client::DiscoveryClient`.
+// Sync-shaped per Pattern A; each method `block_on`s on the shared
+// `cluster_tokio_runtime()`.
+mod discovery;
+
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule};
@@ -775,6 +781,14 @@ fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .set_item("auki_network.cluster", &cluster)?;
     m.add_submodule(&cluster)?;
 
+    // Submodule: auki_network.discovery (Vinland Batch 2).
+    let discovery_mod = PyModule::new_bound(py, "discovery")?;
+    discovery::register_module(py, &discovery_mod)?;
+    py.import_bound("sys")?
+        .getattr("modules")?
+        .set_item("auki_network.discovery", &discovery_mod)?;
+    m.add_submodule(&discovery_mod)?;
+
     Ok(())
 }
 
@@ -856,6 +870,29 @@ mod tests {
             assert!(cluster.getattr("StreamProtocolError").is_ok());
             assert!(cluster.getattr("StreamDeclined").is_ok());
             assert!(cluster.getattr("StreamUnreachable").is_ok());
+        });
+    }
+
+    /// Pin the `auki_network.discovery` submodule surface (Vinland
+    /// Batch 2 / v0.0.19). Anything new requires a deliberate decision
+    /// and a changelog bump.
+    #[test]
+    fn module_exposes_discovery_submodule_with_documented_surface() {
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "auki_network").unwrap();
+            populate_module(&module).unwrap();
+
+            let discovery = module.getattr("discovery").unwrap();
+            assert!(discovery.getattr("DiscoveryClient").is_ok());
+            assert!(discovery.getattr("DiscoveryUnreachable").is_ok());
+            assert!(discovery.getattr("DiscoveryRejected").is_ok());
+            assert!(discovery.getattr("DiscoveryClockError").is_ok());
+
+            // `from auki_network import discovery` works because the
+            // wrapper registered the submodule in `sys.modules`.
+            let sys = py.import_bound("sys").unwrap();
+            let modules = sys.getattr("modules").unwrap();
+            assert!(modules.contains("auki_network.discovery").unwrap());
         });
     }
 

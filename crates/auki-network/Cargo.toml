@@ -16,6 +16,14 @@ swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:f
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
 app_instance = ["dep:mac_address"]
+# Vinland Batch 1 piece #2 — REST client for Discovery
+# (`aukilabs/discovery`). Pulls in `reqwest` (async HTTP), `base64`
+# (32-byte pubkey + 64-byte signature on the wire), `auki-jcs` (RFC
+# 8785 canonical bytes for the signed payload), and `thiserror`. Async
+# only — the caller drives a tokio runtime; the SDK does not own one.
+# Opt-in because it's a fairly heavy dep set that not every consumer
+# needs.
+discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -40,6 +48,15 @@ futures = { version = "0.3", default-features = false, optional = true }
 
 # `app_instance` feature
 mac_address = { version = "1", optional = true }
+
+# `discovery_client` feature
+# rustls-tls (not the default native-tls) keeps us off OpenSSL for
+# cross-platform reproducibility; HTTPS isn't strictly required for
+# ansuz LAN deploys but the cost is small and Discovery may grow
+# beyond the LAN later.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+auki-jcs = { path = "../auki-jcs", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -6,6 +6,80 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 12:00 HKT, 2026
+
+`discovery_client` module landed — [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616) Batch 1 piece #2 (Lane B), the SDK-side REST client for `aukilabs/discovery`. Two parallel SDK Claude sessions split Vinland Batch 1 by file ownership: Lane A owns `auki-identity` (`Wallet::sign_canonical_json` + locked vector); Lane B (this crate) owns `auki-network::discovery_client` + the new `discovery_client` Cargo feature. Both pieces ship in v0.0.18.
+
+**Public surface** (gated on the new `discovery_client` feature):
+
+```rust
+pub mod discovery_client {
+    pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    pub struct DiscoveryClient { /* base_url + reqwest::Client */ }
+
+    pub enum DiscoveryError {
+        Transport(reqwest::Error),
+        Status { status: u16, body: String },
+        Clock(String),
+    }
+
+    impl DiscoveryClient {
+        pub fn new(url: impl Into<String>) -> Self;
+        pub fn with_http(url: impl Into<String>, http: reqwest::Client) -> Self;
+        pub fn base_url(&self) -> &str;
+
+        pub async fn register(
+            &self,
+            wallet: &auki_identity::Wallet,
+            cluster_name: &str,
+            addresses: &[multiaddr::Multiaddr],
+            expected_app_id: Option<&str>,
+            note: Option<&str>,
+        ) -> Result<cluster_doc::ClusterDoc, DiscoveryError>;
+
+        pub async fn fetch(
+            &self,
+            cluster_name: &str,
+        ) -> Result<cluster_doc::ClusterDoc, DiscoveryError>;
+
+        pub async fn deregister(
+            &self,
+            wallet: &auki_identity::Wallet,
+            cluster_name: &str,
+        ) -> Result<(), DiscoveryError>;
+    }
+}
+```
+
+**Wire shape** (locked end-to-end against Discovery's `verify.rs` / `api.rs` 2026-05-06):
+
+- `POST /clusters/{name}/peers` body: `{ peer_id, public_key (base64-32), addresses, expected_app_id?, note?, timestamp_ns, signature (base64-64) }`. Signed bytes are JCS over the same fields **plus** `cluster_name` (so a captured registration can't be replayed against a different cluster name) and **minus** `signature`. Optional fields are omitted when `None`, both on the wire and in the canonical bytes.
+- `GET /clusters/{name}` returns `Json<ClusterDoc>`.
+- `DELETE /clusters/{name}/peers/{peer_id}` body: `{ peer_id, public_key, timestamp_ns, signature }`. Signed bytes are JCS over `{ cluster_name, peer_id, op: "delete", timestamp_ns }` — `public_key` rides on the wire body but is **NOT** in the signed bytes (Discovery's `verify_peer_id` already binds pubkey ↔ peer_id, so signing pubkey alongside is redundant). Pinned in `deregister_signature_verifies` because I got this wrong on the first pass and integration-tested my way back to the right shape.
+
+**Identity recipe**: `register`/`deregister` accept the daemon's *parent* `Wallet`; the client internally derives the peer-key wallet via `wallet.derive_child(PEER_DERIVATION_LABEL)` and signs with it. The `peer_id` and `public_key` on the wire are the child's, matching `PeerIdentity::from_wallet`. Same recipe Discovery's verify_peer_id reconstructs.
+
+**Vinland D1, D2, D3 alignment**: `register` is one-shot at startup (D1 — no liveness loop); `fetch` is pull-only on demand (D2 — no SDK-side poll); errors propagate to the caller (D3 — no SDK-side fallback to a local `cluster.json`). Re-register / poll loops deferred to Vinland v2 once Discovery adds TTL or push.
+
+**New `discovery_client` Cargo feature** pulls in `reqwest` (default-features = false; `json` + `rustls-tls`), `base64` (`std`), `auki-jcs` (path-dep), and `thiserror`. Async-only (caller drives a tokio runtime) — no blocking client by intent; daemons running on a tokio runtime call `.await`, ones that don't can wrap with `tokio::runtime::Handle::current().block_on(...)` or `tokio::task::spawn_blocking`. The feature is opt-in (not in `default`) because reqwest + rustls is a fairly heavy dep set that not every consumer needs; the `swarm` feature stays default-off too, mirroring the existing convention.
+
+**Built in parallel against `develop`** using `auki_jcs::canonicalize(&payload) + signing.sign(canonical)` directly so Lane B compiled clean while Lane A's [#44](https://github.com/aukilabs/auki-sdk/pull/44) was still in flight. Once #44 merged earlier today, Lane B picked up `Wallet::sign_canonical_json` in the promised two-line refactor — the production path is now `let (canonical, sig) = signing.sign_canonical_json(&payload)`. Wire bytes are byte-identical (same JCS canonicaliser + same ed25519 sign, just behind a tidier surface). All 9 unit tests + 2 integration tests pass before AND after the refactor with zero changes to Discovery's verifier; the locked cross-language conformance vector binds the same 64-byte signature to the same canonical bytes regardless of which side of the refactor produced them. The internal `register_payload_value` / `deregister_payload_value` helpers return `serde_json::Value` (the input shape `sign_canonical_json` expects); tests reproduce the canonical bytes via `auki_jcs::canonicalize(&register_payload_value(...))` for tampering / replay assertions.
+
+**Tests**: 9 new unit tests + 2 new integration tests (ignored by default; opt-in via `DISCOVERY_BIN=/path/to/discovery cargo test --features discovery_client -- --ignored`).
+
+Unit: `register_signature_verifies_under_wire_pubkey` (rule 4 of Discovery's verify order); `register_pubkey_reconstructs_peer_id` (rule 2); `tampered_addresses_break_signature` (`addresses` is in the signed bytes); `cross_cluster_replay_breaks_signature` (`cluster_name` is in the signed bytes — cluster A signature doesn't verify under cluster B's canonical bytes); `optional_fields_omitted_when_none` (parses canonical JSON, asserts no `expected_app_id`/`note` keys); `deregister_signature_verifies` (matches Discovery's `{cluster_name, peer_id, op, timestamp_ns}` shape and asserts `public_key` is on the wire body but **NOT** in the signed bytes); `locked_register_canonical_and_signature_vector` (cross-language vector — pins parent seed `[3u8; 32]` + fixed cluster + fixed addresses + fixed timestamp `1_700_000_000_000_000_000` to exact RFC 8785 canonical bytes + exact 64-byte ed25519 signature; pairs with `auki-identity::tests::locked_derive_child_peer_v1_pubkey_vector` and `auki-network::tests::locked_seed_to_peer_id_vector`); `with_http_uses_supplied_client_and_url` + `new_trims_trailing_slash` (URL hygiene).
+
+Integration (`tests/discovery_integration.rs`, `#[ignore]`): `discovery_round_trip` boots a real Discovery on a fresh tempdir + ephemeral loopback port, registers Sentinel + Booster into "vinland", fetches both, deregisters Sentinel, asserts Booster remains, asserts second sentinel deregister returns 404 (idempotent on Discovery's side), asserts unknown cluster fetch returns 404. `discovery_rejects_invalid_cluster_name` posts a path-traversal `cluster_name` (`"../etc/passwd"`) and asserts Discovery rejects it. The fixture spawns Discovery as a child process under `Drop`-guarded teardown so a panicking test doesn't leak a daemon.
+
+**Test counts**: no-features unchanged at 36 unit + 3 integration + 1 doctest (the new tests are gated on the new feature). `--features discovery_client` alone runs 45 unit + 3 integration + 1 doctest (baseline 36 + 9 new in `discovery_client::tests`). `--all-features` runs 92 unit + 3 integration + 2 doctest (was 83 + 3 + 2; +9 from discovery_client). `--features swarm` and `--features app_instance` paths unchanged at 74 + 3 + 2 / 45 + 3 + 0 respectively. The 2 integration tests in `tests/discovery_integration.rs` are `#[ignore]`-marked + gated on `DISCOVERY_BIN` so they don't run in the default integration suite count.
+
+**No breaking changes** — purely additive on a new feature flag.
+
+Closes Vinland Batch 1 alongside Lane A's [#44](https://github.com/aukilabs/auki-sdk/pull/44); cuts as v0.0.18.
+
+---
+
 ### broodsugar's claude · May 5, 19:00 HKT, 2026
 
 `stream_runtime`: new test `open_stream_against_unreachable_peer_surfaces_typed_error` (6th `stream_runtime` test) — closes the second of v0.0.16's documented follow-ups. Pins the existing behavior of `ClusterRuntime::open_stream` against a peer in `cluster.json` whose address refuses connections (port 1 — reserved, RST'd immediately by Linux/macOS): the call returns `Err(OpenStreamError::LibP2p(_))` or `Err(OpenStreamError::Timeout(_))` within the 30s `OPEN_STREAM_TIMEOUT` bound, doesn't hang, doesn't panic. Wraps an outer 35s `tokio::time::timeout` as a safety net to fail the test rather than hang if the SDK-side bound ever breaks. Both variants are explicit "request failed" signals the consumer's app-level reconnect logic can act on, so the test admits either; in practice libp2p RST-fast-fails inside ~80ms on the LAN-loopback case. No behavior change — just locks in what was already shipping. Test counts: 74 unit + 3 integration + 2 doctest with `--features swarm` (was 73 + 3 + 2); 83 unit with `--all-features` (was 82). Will land in v0.0.17 alongside the producer-shutdown follow-up below.

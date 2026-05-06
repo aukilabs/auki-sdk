@@ -46,6 +46,9 @@ pub mod stream_runtime;
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
 
+#[cfg(feature = "discovery_client")]
+pub mod discovery_client;
+
 /// Label used when deriving a wallet's peer key. Stable; do not change.
 ///
 /// `Wallet::derive_child(PEER_DERIVATION_LABEL)` yields the ed25519 keypair

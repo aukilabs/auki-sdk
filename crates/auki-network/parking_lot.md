@@ -2,6 +2,26 @@
 
 ---
 
+## `discovery_client` — `DiscoveryRuntime` (re-register / poll loop)
+
+Vinland v1 ships `DiscoveryClient::register/fetch/deregister` as one-shots. The Notion doc explicitly defers a `DiscoveryRuntime` (long-lived task that re-registers periodically and/or polls for updates) until Discovery itself grows TTL (D1) or push (D2). When that happens:
+
+- **Re-register loop.** Daemons should renew their entry every `ttl/3` or so to outlive Discovery's eviction. Suggests a small task: `DiscoveryRuntime::spawn(client, wallet, cluster_name, addresses, expected_app_id?, note?, period?)` that calls `register` on a tokio interval. Owns its own task handle; `shutdown(self)` deregisters and returns.
+- **Poll-for-updates loop.** Daemons that want to see new peers without an operator nudge call `fetch(cluster_name)` on a slower interval (every 30–60s). Same runtime can host both loops.
+- **Push channel.** If Discovery grows SSE / WebSocket, the poll loop swaps for a streaming consumer of the same shape.
+
+Defer until Discovery v2 lands. The current one-shot surface is forward-compatible — a `DiscoveryRuntime` builds *on* `DiscoveryClient`, doesn't replace it.
+
+---
+
+## `discovery_client` — TLS knobs / custom roots
+
+`DiscoveryClient::new` builds a default `reqwest::Client` with rustls + webpki-roots; HTTPS against public CAs Just Works. Self-signed Discovery (LAN-internal HTTPS the operator runs themselves) needs a custom client via `DiscoveryClient::with_http(url, custom)`. That's the escape hatch today — operators who need it know enough to construct a `reqwest::Client::builder()` with `add_root_certificate(...)`.
+
+Open: should `new` grow first-class kwargs for the common cases (`tls_config`, `proxy`, `connect_timeout`)? Lean toward no — `with_http` covers it, and a richer constructor is a forward-compat headache. Revisit if a real consumer (Sentinel, Park) hits the friction.
+
+---
+
 ## Wallet → peer-key derivation label evolution
 
 `PEER_DERIVATION_LABEL = "peer/v1"` is shipped. The `/v1` suffix is deliberate — when libp2p's PeerId encoding changes, or when we want to rotate the peer key without invalidating the wallet, we can ship `"peer/v2"` and have new code derive from the new label while old `ReachabilityRecord`s under the v1 PeerId still resolve.

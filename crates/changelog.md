@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 10:30 HKT, 2026
+
+`auki-identity`: `Wallet::sign_canonical_json(value: &serde_json::Value) -> (Vec<u8>, Signature)` added — JCS-canonicalize via `auki-jcs` (RFC 8785) + ed25519-sign the canonical bytes, return both so callers can ship the signature on the wire AND inspect / log the bytes that got signed. Generic primitive; the [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616) signed registration to Discovery is the first consumer. New auki-identity deps: `auki-jcs` (path-dep, pure Rust, WASM-clean) + `serde_json` (promoted from dev-dep). Plus a locked cross-language conformance vector pinning `Wallet::from_seed([3u8; 32]).sign_canonical_json(<vinland-shaped registration JSON in non-sorted insertion order>)` to exact RFC 8785 canonical bytes + 64-byte ed25519 signature; joins the existing `auki-hash` / `auki-identity` / `auki-network` cross-language conformance set. 5 new tests; auki-identity test count 25 → 31. Vinland Batch 1 piece #1 (Lane A); piece #2 is `auki-network::discovery_client` (Lane B, in flight). See `auki-identity/changelog.md` for detail.
+
 ### broodsugar's claude · May 5, 19:00 HKT, 2026
 
 `auki-network`: new test pinning `ClusterRuntime::open_stream` behavior against an unreachable peer (cluster.json with a peer at port 1; libp2p RST-fast-fails). Returns `Err(OpenStreamError::LibP2p(_))` or `Err(OpenStreamError::Timeout(_))` within 30s `OPEN_STREAM_TIMEOUT`; doesn't hang or panic. Closes the second of v0.0.16's documented follow-ups. No behavior change. Test counts 74 unit + 3 integration + 2 doctest with `--features swarm`. Will land in v0.0.17. See `auki-network/changelog.md` for detail.

@@ -47,6 +47,7 @@ impl Wallet {
     pub fn public_key(&self) -> PublicKey;
     pub fn id(&self) -> WalletId;
     pub fn sign(&self, msg: &[u8]) -> Signature;
+    pub fn sign_canonical_json(&self, value: &serde_json::Value) -> (Vec<u8>, Signature);
     pub fn derive_child(&self, label: &str) -> Wallet;
     pub fn issue_creation_cert(&self, child: &Wallet, label: &str, created_at_ns: i64) -> CreationCert;
 }
@@ -75,6 +76,20 @@ child = Wallet::from_seed(&child_seed)
 
 Two `auki-hash` outputs concatenated. No HKDF dep; reproducible bytes-for-bytes by any consumer using `auki-hash`. The `/expand` suffix is fixed; verifiers must reproduce the exact bytes.
 
+## How `sign_canonical_json` works
+
+JCS-canonicalize the input `serde_json::Value` via `auki-jcs::canonicalize` (RFC 8785 — keys sorted by ASCII order, no whitespace, deterministic number serialisation), sign the canonical bytes with this wallet's ed25519 key, return both:
+
+```text
+canonical_bytes = auki_jcs::canonicalize(value)   // RFC 8785
+signature       = ed25519_sign(this_wallet.seed, canonical_bytes)
+return (canonical_bytes, signature)
+```
+
+The verifier side reproduces the canonical bytes locally with the same `auki-jcs` canonicaliser and verifies the signature against them. Both sides using one canonicaliser means there's no risk of "the bytes I signed aren't the bytes you verified."
+
+Used by [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616)'s signed registration to Discovery: the daemon builds a registration JSON minus the `signature` field, calls this method, embeds the resulting signature in the JSON under `signature`, and POSTs to `/clusters/:cluster_name/peers`. Discovery strips `signature`, canonicalises the rest, and verifies under the public key embedded in the payload. Replay protection: `cluster_name` and `timestamp_ns` are inside the canonical bytes, so a registration captured for cluster A cannot be replayed against cluster B, and Discovery rejects timestamps outside ±60s.
+
 ## How `CreationCert` signing works
 
 The signed bytes are:
@@ -90,7 +105,7 @@ created_at_ns_le64 (8 bytes)
 
 Verifiers reproduce the same bytes locally and check the ed25519 signature against the parent pubkey. Cross-language: same recipe, same bytes, same ed25519 verification.
 
-## Tests (25 total — 16 wallet + 9 seed)
+## Tests (31 total — 22 wallet + 9 seed)
 
 ### Wallet (`lib.rs`)
 
@@ -105,6 +120,7 @@ Verifiers reproduce the same bytes locally and check the ed25519 signature again
 | `wallet_id_is_stable_for_same_pubkey` | `WalletId` is deterministic + 32 chars |
 | `wallet_id_differs_across_wallets` | Different wallets → different ids |
 | `derive_child_is_deterministic` | Same parent + same label → same child |
+| `locked_derive_child_peer_v1_pubkey_vector` | Cross-language vector pinning seed `[3u8;32]` + label `"peer/v1"` → fixed 32-byte pubkey |
 | `derive_child_differs_across_labels` | Different labels → different children |
 | `derive_child_differs_across_parents` | Different parents → different children |
 | `creation_cert_verifies` | Issued cert verifies cleanly |
@@ -112,6 +128,11 @@ Verifiers reproduce the same bytes locally and check the ed25519 signature again
 | `creation_cert_rejects_swapped_child` | Mutating `child_pubkey` fails verification |
 | `creation_cert_rejects_swapped_parent` | Mutating `parent_pubkey` fails verification |
 | `creation_cert_serializes_via_serde_json` | Round-trips through JSON; verifies after round-trip |
+| `sign_canonical_json_round_trips` | Verify accepts the signature against the returned canonical bytes |
+| `sign_canonical_json_is_deterministic_for_same_input` | Same input value + same wallet → identical canonical bytes + signature |
+| `sign_canonical_json_normalises_key_order` | Two values differing only in object-key order produce identical canonical bytes + signature (JCS sorting) |
+| `sign_canonical_json_verifier_rejects_tampered_field` | Mutating a field after signing makes verification against the new canonical bytes fail |
+| `locked_sign_canonical_json_vector` | Cross-language vector pinning `Wallet::from_seed([3u8;32]).sign_canonical_json(<vinland-shaped registration JSON>)` → exact RFC 8785 canonical bytes + 64-byte ed25519 signature |
 
 ### Seed persistence (`seed.rs`)
 
@@ -131,12 +152,15 @@ Verifiers reproduce the same bytes locally and check the ed25519 signature again
 
 - `ed25519-dalek` (2.x) — ed25519 implementation. WASM-friendly; pinned with the `rand_core` feature for `SigningKey::generate`.
 - `auki-hash` — `WalletId` derivation + `derive_child` seed expansion.
+- `auki-jcs` — RFC 8785 JSON canonicalization for `sign_canonical_json`. Pure Rust, WASM-clean.
 - `serde` + `serde_bytes` — serialization for the public types.
+- `serde_json` — `serde_json::Value` appears in the public signature of `sign_canonical_json`.
 - `rand_core` — the OS RNG (`OsRng`) that feeds `Wallet::new()` and `load_or_mint_seed`.
 - `tempfile` (dev-only) — test isolation for seed-persistence tests.
 
 ## Consumers in this workspace
 
-- *(planned)* `auki-network` — uses `derive_child("peer/v1")` to produce libp2p peer keys.
-- *(planned)* the `ansuz` networking-demo daemon — uses `load_or_mint_seed` so its `peer_id` stays stable across restarts (required for clusters that pin peer ids in `cluster.json`).
+- `auki-network` — uses `derive_child("peer/v1")` to produce libp2p peer keys; planned `discovery_client` uses `sign_canonical_json` for Vinland's signed registration to Discovery.
+- `auki-network-py` — re-exports the wallet primitive into Python via PyO3.
+- `ansuz` / `vinland` networking-demo daemons (Boosterapp, Sentinel, Park) — use `load_or_mint_seed` so each daemon's `peer_id` stays stable across restarts.
 - *(planned, downstream)* Console — uses the wallet primitive directly (compiled to WASM) for the in-browser keystore. `load_or_mint_seed` is the one piece of the API not available in the browser build.

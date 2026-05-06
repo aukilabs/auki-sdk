@@ -9,11 +9,12 @@ description = "Wallet primitive for the Auki SDK — ed25519 keypairs, signing, 
 
 [dependencies]
 auki-hash = { path = "../auki-hash" }
+auki-jcs = { path = "../auki-jcs" }
 ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "zeroize", "rand_core"] }
 rand_core = { version = "0.6", features = ["std", "getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
+serde_json = "1"
 
 [dev-dependencies]
-serde_json = "1"
 tempfile = "3"

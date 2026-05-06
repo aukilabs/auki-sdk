@@ -86,13 +86,15 @@ On real networks, external addresses get learned via identify (the client tells 
 
 The grimsby D4-resolved framing is **JSON-serialized `StreamMessage<T>`** with a 4-byte length prefix. For grimsby v1 (`T = JpegFrame { bytes: Vec<u8> }`), `serde_json` renders the `bytes` field as a JSON array of integers — each byte becomes ~4 ASCII bytes (`"123,"`), producing roughly a 4× bandwidth hit vs. raw. For 30 fps × 100 KB JPEGs that's ~12 MB/s on the wire vs. ~3 MB/s raw — fine for a 1–4 robot LAN demo, real concern for anything larger.
 
-Three forward paths, in order of effort:
+**Resolved 2026-05-06 for `PointCloudFrame` only** (Dagaz Batch 1, D3 wire-side). Path (1) — `#[serde(with = "base64_bytes")]` adapter — applied to `PointCloudFrame.bytes` because pointcloud at 22 MB/s × 4 was untenable on a Wi-Fi LAN. The adapter lives at module scope in `stream_protocol`; `JpegFrame.bytes` was deliberately **not** updated to keep grimsby v1 wire compat (existing consumers — boosterapp's Python sidecar, Park's browser-side decoder — would fail closed on the encoding swap). Locked cross-language conformance vector pinned in [`stream_protocol::tests::locked_point_cloud_frame_wire_shape_vector`](src/stream_protocol.rs).
 
-1. **Base64-encode the `bytes` field inside JSON.** ~33 % overhead vs. raw. Add a small `#[serde(with = "...")]` adapter inside `stream_protocol`. Tiny dep (`base64 = "0.22"` has no transitive deps). Wire-compat-breaking only at the decoder level — old consumers see a JSON string instead of a JSON array and fail closed.
-2. **Switch the codec to CBOR** (`ciborium` or `serde_cbor`). Native binary support; `Vec<u8>` rides as raw bytes. Wire-compat-breaking; no longer human-readable in tcpdump but still serde-driven.
+**Still open for `JpegFrame`** (and any future binary-heavy `T`). Three forward paths, in order of effort:
+
+1. **Base64-encode `JpegFrame.bytes` inside JSON.** Same adapter `PointCloudFrame` already uses. Wire-compat-breaking — every grimsby consumer renegotiates. Defer until a JPEG consumer reports stutter or a producer reports outbound saturation; not a v1 bottleneck.
+2. **Switch the codec to CBOR** (`ciborium` or `serde_cbor`). Native binary support; `Vec<u8>` rides as raw bytes. Wire-compat-breaking for everyone; no longer human-readable in tcpdump but still serde-driven.
 3. **Hybrid framing** — JSON envelope with a `payload_size: u32` field, plus a separate length-prefixed binary section after. Most efficient, most bespoke; preserves human readability of the envelope.
 
-Defer until grimsby v1 actually hits a bandwidth ceiling. The simplest fix is path (1); we'd take it the moment a consumer (Park) reports stutter or a producer (Boosterapp) reports outbound saturation. Path (2) is a coordinated bump for every Stream<T> consumer at once.
+Path (2) is a coordinated bump for every `Stream<T>` consumer at once. Path (3) is the most engineering work but doesn't sacrifice tcpdump readability of the envelope. Stay deferred until a real consumer asks.
 
 ## `stream_protocol` — `libp2p-stream` 0.4.0-alpha pin
 

@@ -11,7 +11,12 @@ description = "Networking substrate for the Auki SDK — peer identity (derived 
 # Default-off so M0 stays WASM-friendly (Console derives peer-id without
 # pulling in libp2p's transport stack). Daemons opt in.
 default = []
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures"]
+# `base64` is on the swarm path because Dagaz's `PointCloudFrame.bytes`
+# uses a `#[serde(with = "base64_bytes")]` adapter to dodge serde_json's
+# array-of-integers encoding (~4× wire overhead for `Vec<u8>` payloads).
+# Tiny dep with no transitive cost; rides on the swarm feature so M0
+# (WASM) stays untouched.
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:base64"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.

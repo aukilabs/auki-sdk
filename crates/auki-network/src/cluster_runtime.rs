@@ -54,7 +54,7 @@ use crate::{
     ParticipantInfo, PeerIdentity,
     cluster_doc::ClusterDoc,
     cluster_protocol::ClusterRequest,
-    stream_protocol::{JpegFrame, STREAM_PROTOCOL},
+    stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
     swarm::{self, Behaviour, BehaviourEvent, SwarmConfig, build_swarm},
 };
@@ -226,7 +226,7 @@ impl ClusterRuntime {
         doc: ClusterDoc,
         swarm_config: SwarmConfig,
         participant_provider: ParticipantInfoProvider,
-        stream_provider: StreamProvider<JpegFrame>,
+        stream_provider: StreamProvider,
     ) -> Result<Self, SpawnError> {
         let identity = PeerIdentity::from_seed(&seed);
         let swarm = build_swarm(&identity, swarm_config)?;
@@ -246,7 +246,7 @@ impl ClusterRuntime {
         swarm: Swarm<Behaviour>,
         doc: ClusterDoc,
         participant_provider: ParticipantInfoProvider,
-        stream_provider: StreamProvider<JpegFrame>,
+        stream_provider: StreamProvider,
     ) -> Result<Self, SpawnError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| SpawnError::NoTokioRuntime)?;
@@ -360,7 +360,7 @@ async fn run_task(
     doc: ClusterDoc,
     state: Arc<Mutex<RuntimeState>>,
     participant_provider: ParticipantInfoProvider,
-    stream_provider: StreamProvider<JpegFrame>,
+    stream_provider: StreamProvider,
     mut inbound_control: Control,
     inbound_shutdown_rx: watch::Receiver<bool>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -479,7 +479,7 @@ async fn run_task(
                 // EndOfStream when shutdown fires.
                 let provider = stream_provider.clone();
                 let task_shutdown = inbound_shutdown_rx.clone();
-                tokio::spawn(handle_inbound_substream::<JpegFrame>(
+                tokio::spawn(handle_inbound_substream(
                     peer,
                     substream,
                     provider,

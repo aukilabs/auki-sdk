@@ -1,21 +1,25 @@
 //! Typed `Stream<T>` Rust API on top of [`crate::stream_protocol`]'s wire
 //! primitives — [grimsby](https://www.notion.so/3575c8e965928079a955ed9573bbb398)
-//! deliverables #2 + #3.
+//! deliverables #2 + #3, lifted to multi-`T` dispatch by
+//! [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1.
 //!
-//! Producer side: [`StreamProvider<T>`] — a callable [`ClusterRuntime`]
-//! invokes per inbound substream. The callable returns
-//! [`StreamDecision::Accept`] (with the [`AcceptInfo`] metadata and a
-//! source [`futures::Stream`] of [`ProducerFrame<T>`] values) or
-//! [`StreamDecision::Decline`] (with a typed reason). On accept, the
-//! runtime spawns a per-substream task that drains the source-Stream,
-//! framing each item as a [`StreamMessage::Frame`] on the wire.
+//! Producer side: [`StreamProvider`] — a callable [`ClusterRuntime`]
+//! invokes per inbound substream. The callable returns a [`StreamDispatch`]
+//! variant that pairs the typed source-stream with the [`AcceptInfo`]
+//! metadata, or [`StreamDispatch::Decline`] with a typed reason. The
+//! dispatch enum is *closed* over the SDK-supported `T`s (`JpegFrame`,
+//! `PointCloudFrame` today; new variants added per coordinated
+//! SDK + consumer release). Each substream is mono-`T`; the producer's
+//! callback decides which `T` based on `request.sensor_id`.
 //!
 //! Consumer side: [`ClusterRuntime::open_stream`] returns a typed
 //! [`StreamSubscription<T>`] containing the [`AcceptInfo`] from the
 //! producer plus a [`futures::Stream`] of [`Result<ConsumerFrame<T>,
 //! StreamError>`] items. The iterator yields one [`Err`] as a final
 //! item describing how the stream ended (graceful end-of-stream,
-//! connection lost, protocol error) and then returns `None`.
+//! connection lost, protocol error) and then returns `None`. The
+//! consumer side stays generic over `T` — the consumer statically
+//! knows which `T` it expects per call.
 //!
 //! ## Layered on top of `ClusterRuntime`
 //!
@@ -26,20 +30,21 @@
 //! opens outbound subscriptions through the same swarm. No second
 //! Noise handshake, no second connection per peer pair.
 //!
-//! ## Generic in `T`, locked to `JpegFrame` at runtime construction time
+//! ## Per-call `T` on the producer side (Dagaz D1)
 //!
-//! Per grimsby D4 — `T = JpegFrame` for grimsby v1; the wire
-//! envelope and codec are generic over `T`. The `stream_provider`
-//! signature on `ClusterRuntime` is `StreamProvider<JpegFrame>`.
-//! `open_stream<T>` is generic on the consumer side because a consumer
-//! might subscribe to producers emitting different `T`s; `T` is fixed
-//! per call. Generalizing the runtime to multiplex multiple producer-side
-//! `T`s on one daemon would be a type-erased follow-up — defer.
+//! grimsby v1 pinned `T = JpegFrame` at `ClusterRuntime::spawn` time —
+//! the producer's callback was `StreamProvider<JpegFrame>`, returning
+//! `StreamDecision<JpegFrame>`. Dagaz lifts that pinning so a single
+//! daemon can serve multiple `T`s (camera + pointcloud, today). The
+//! producer dispatches on `request.sensor_id` and returns a
+//! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
+//! New `T` = new `StreamDispatch` variant + a coordinated SDK-consumer
+//! release; on the wire each substream stays purely typed end-to-end.
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::stream_protocol::{
-    AcceptInfo, DeclineReason, EndReason, JpegFrame, STREAM_PROTOCOL, StreamMessage,
-    StreamProtocolError, StreamRequest, read_message, write_message,
+    AcceptInfo, DeclineReason, EndReason, JpegFrame, PointCloudFrame, STREAM_PROTOCOL,
+    StreamMessage, StreamProtocolError, StreamRequest, read_message, write_message,
 };
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
@@ -67,7 +72,8 @@ pub struct ProducerFrame<T> {
     pub payload: T,
 }
 
-/// Source-stream type the app returns inside [`StreamDecision::Accept`].
+/// Source-stream type the app returns inside an `Accept*` variant of
+/// [`StreamDispatch`].
 ///
 /// Item is `Result<ProducerFrame<T>, String>` so the producer can end
 /// with an error reason — `Some(Err(detail))` is mapped to
@@ -78,12 +84,32 @@ pub struct ProducerFrame<T> {
 pub type SourceStream<T> =
     Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
 
-/// Provider's accept/decline decision for a single inbound request.
-pub enum StreamDecision<T> {
-    /// Accept the request. SDK writes [`StreamMessage::Accept(info)`] then
-    /// drains `source` onto the substream until the stream ends or the
-    /// substream closes.
-    Accept { info: AcceptInfo, source: SourceStream<T> },
+/// Producer's accept/decline decision for a single inbound request.
+/// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1)
+/// and `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2). Adding a new
+/// `T` is a coordinated SDK + consumer release — bump the runtime, add
+/// the variant, every consumer that wants the new sensor type opts in.
+///
+/// On `Accept*`, the SDK writes [`StreamMessage::Accept(info)`] for the
+/// matching `T` and drains the source-Stream onto the substream as
+/// [`StreamMessage::Frame`] values until the source ends or the
+/// substream closes. On [`StreamDispatch::Decline`], the SDK writes
+/// `Decline { reason }` and closes the substream.
+pub enum StreamDispatch {
+    /// Accept the request with a JPEG source-Stream — grimsby v1's
+    /// existing path, byte-for-byte unchanged on the wire from the
+    /// pre-Dagaz `StreamProvider<JpegFrame>` shape.
+    AcceptJpeg {
+        info: AcceptInfo,
+        source: SourceStream<JpegFrame>,
+    },
+    /// Accept the request with a PointCloud source-Stream — Dagaz's new
+    /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
+    /// `PointCloud2` ROS message; the consumer parses CDR on its side.
+    AcceptPointCloud {
+        info: AcceptInfo,
+        source: SourceStream<PointCloudFrame>,
+    },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
     Decline { reason: DeclineReason },
@@ -94,19 +120,19 @@ pub enum StreamDecision<T> {
 /// allocating buffers) lives *inside* the source-Stream the app
 /// constructs and returns.
 ///
+/// The producer dispatches on `request.sensor_id` to pick which
+/// [`StreamDispatch`] variant to return — each substream is mono-`T`
+/// end-to-end (per grimsby D1: substream lifetime IS the subscription).
+///
 /// `Send + Sync` because the runtime task holds the callable in an
 /// `Arc` shared across spawned per-substream tasks.
-pub type StreamProvider<T> =
-    Arc<dyn Fn(StreamRequest) -> StreamDecision<T> + Send + Sync>;
+pub type StreamProvider = Arc<dyn Fn(StreamRequest) -> StreamDispatch + Send + Sync>;
 
 /// Convenience constructor for consumer-only nodes (Park, analytics
 /// tools, future Sentinel-as-consumer) that don't expose any sensors.
 /// Declines every inbound request with [`DeclineReason::SensorNotFound`].
-pub fn decline_all_streams<T>() -> StreamProvider<T>
-where
-    T: 'static,
-{
-    Arc::new(|_req| StreamDecision::Decline {
+pub fn decline_all_streams() -> StreamProvider {
+    Arc::new(|_req| StreamDispatch::Decline {
         reason: DeclineReason::SensorNotFound,
     })
 }
@@ -306,117 +332,138 @@ impl ClusterRuntime {
 
 /// Producer-side per-substream task. Spawned by `cluster_runtime`'s
 /// driver task for each inbound substream that arrives on
-/// [`STREAM_PROTOCOL`].
+/// [`STREAM_PROTOCOL`]. Non-generic — reads the request type-free,
+/// invokes the provider, then dispatches to [`pump_typed`] with the
+/// concrete `T` matching the [`StreamDispatch`] variant.
 ///
-/// 1. Read [`StreamMessage::Request`].
-/// 2. Invoke `provider(request) -> StreamDecision<T>`.
-/// 3. If `Decline`: write [`StreamMessage::Decline { reason }`] and close.
-/// 4. If `Accept(info, source)`: write [`StreamMessage::Accept(info)`]
-///    then drain `source` onto the substream as
-///    [`StreamMessage::Frame`] values, stamping `seq` 0, 1, 2, …
-/// 5. Source returns `None` → write
-///    [`StreamMessage::EndOfStream { reason: SourceEnded }`] and close.
-/// 6. Source returns `Some(Err(detail))` → write
-///    [`StreamMessage::EndOfStream { reason: ProducerError { detail } }`]
-///    and close.
+/// 1. Read [`StreamMessage::Request`] (the Request variant carries no
+///    `T`-dependent data, so we read it as `StreamMessage<JpegFrame>`
+///    — any concrete `T` works for the Request shape).
+/// 2. Invoke `provider(request) -> StreamDispatch`.
+/// 3. Match the dispatch variant; for Accept variants, hand off to
+///    [`pump_typed::<T>`] with the matching `T`. Decline → write
+///    [`StreamMessage::Decline { reason }`] and close.
 ///
-/// Errors during write (consumer disconnected, libp2p tore down the
+/// Errors during read/write (peer disconnected, libp2p tore down the
 /// substream) terminate the task silently — the substream is dead
-/// already and the producer's source-Stream gets dropped along with the
-/// task.
-pub(crate) async fn handle_inbound_substream<T>(
+/// already.
+pub(crate) async fn handle_inbound_substream(
     _peer: PeerId,
     mut substream: libp2p::Stream,
-    provider: StreamProvider<T>,
-    mut shutdown_rx: watch::Receiver<bool>,
-) where
-    T: Serialize + DeserializeOwned + Send + 'static,
-{
-    // 1. Read the request.
-    let request: StreamRequest = match read_message::<T, _>(&mut substream).await {
+    provider: StreamProvider,
+    shutdown_rx: watch::Receiver<bool>,
+) {
+    // 1. Read the request. The Request variant doesn't carry any
+    //    `T`-dependent payload, so deserializing as
+    //    `StreamMessage<JpegFrame>` accepts the bytes regardless of
+    //    what `T` the producer ultimately picks. If a peer bizarrely
+    //    sent a Frame as its first message (wire-protocol violation),
+    //    the deserialize either fails or yields a different variant
+    //    and we drop the substream.
+    let request: StreamRequest = match read_message::<JpegFrame, _>(&mut substream).await {
         Ok(StreamMessage::Request(req)) => req,
         Ok(_other) => {
-            // Wire-protocol violation: peer wrote something other than
-            // Request as its first message. Drop the substream silently;
-            // the peer's open_stream call will surface its own protocol
-            // error from the read side.
+            // Peer wrote something other than Request first. Drop;
+            // their open_stream call surfaces the protocol error.
             return;
         }
         Err(_) => {
-            // Read failed — substream's already broken. Nothing to do.
+            // Read failed — substream's already broken.
             return;
         }
     };
 
-    // 2. Invoke the provider.
-    let decision = (provider)(request);
+    // 2. Invoke the provider — non-generic; closed enum tells us which
+    //    `T` to pump.
+    let dispatch = (provider)(request);
 
-    match decision {
-        StreamDecision::Decline { reason } => {
-            // 3. Write decline and close.
-            let msg: StreamMessage<T> = StreamMessage::Decline { reason };
+    match dispatch {
+        StreamDispatch::Decline { reason } => {
+            // Decline payload is `T`-free; write with any `T`.
+            let msg: StreamMessage<JpegFrame> = StreamMessage::Decline { reason };
             let _ = write_message(&mut substream, &msg).await;
         }
-        StreamDecision::Accept { info, mut source } => {
-            // 4. Write accept.
-            let accept_msg: StreamMessage<T> = StreamMessage::Accept(info);
-            if write_message(&mut substream, &accept_msg).await.is_err() {
-                return;
-            }
-            // 5–6. Drain source into Frame messages until end-of-source,
-            // shutdown signal, or send error. The shutdown branch writes
-            // an explicit `EndOfStream { reason: ProducerShuttingDown }`
-            // before exiting (per grimsby D5b — best-effort explicit).
-            let mut seq: u64 = 0;
-            let end_reason = loop {
-                tokio::select! {
-                    biased;
-
-                    // Shutdown signal raced ahead of the next frame —
-                    // flush a typed EndOfStream and exit. The
-                    // ClusterRuntime gives us a brief grace period
-                    // (SHUTDOWN_GRACE) before the swarm tears down, so
-                    // there's time for this write to complete on a
-                    // healthy LAN substream.
-                    res = shutdown_rx.changed() => {
-                        if res.is_ok() && *shutdown_rx.borrow() {
-                            break EndReason::ProducerShuttingDown;
-                        }
-                        // Sender dropped without setting true (runtime
-                        // exiting via Drop, not shutdown(self)) — fall
-                        // through to the implicit `ConnectionLost`
-                        // path on the next pump-iteration write
-                        // failure. Continue polling source.
-                        continue;
-                    }
-
-                    item = source.next() => match item {
-                        Some(Ok(frame)) => {
-                            let msg: StreamMessage<T> = StreamMessage::Frame {
-                                timestamp_ns: frame.timestamp_ns,
-                                seq,
-                                payload: frame.payload,
-                            };
-                            if write_message(&mut substream, &msg).await.is_err() {
-                                // Consumer disconnected mid-stream. Don't
-                                // try to write EndOfStream — the substream
-                                // is dead. Just exit; source drops with
-                                // the task.
-                                return;
-                            }
-                            seq = seq.wrapping_add(1);
-                        }
-                        Some(Err(detail)) => break EndReason::ProducerError { detail },
-                        None => break EndReason::SourceEnded,
-                    },
-                }
-            };
-            // Write the final EndOfStream. Best-effort — if the consumer
-            // already disconnected, the write fails silently.
-            let end_msg: StreamMessage<T> = StreamMessage::EndOfStream { reason: end_reason };
-            let _ = write_message(&mut substream, &end_msg).await;
+        StreamDispatch::AcceptJpeg { info, source } => {
+            pump_typed::<JpegFrame>(substream, info, source, shutdown_rx).await;
+        }
+        StreamDispatch::AcceptPointCloud { info, source } => {
+            pump_typed::<PointCloudFrame>(substream, info, source, shutdown_rx).await;
         }
     }
+}
+
+/// Per-`T` source-Stream pump. Writes [`StreamMessage::Accept(info)`]
+/// then drains `source` onto the substream as `StreamMessage::Frame`
+/// values with auto-stamped `seq`. Honors the shutdown signal with an
+/// explicit `EndOfStream { reason: ProducerShuttingDown }` (grimsby
+/// D5b — best-effort explicit). Source returns `None` →
+/// `EndOfStream { reason: SourceEnded }`. Source returns
+/// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
+///
+/// Generic over `T`: the SDK monomorphizes one copy per variant
+/// (`JpegFrame`, `PointCloudFrame`). Adding a new variant means adding
+/// a new monomorphization plus extending [`StreamDispatch`].
+async fn pump_typed<T>(
+    mut substream: libp2p::Stream,
+    info: AcceptInfo,
+    mut source: SourceStream<T>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) where
+    T: Serialize + DeserializeOwned + Send + 'static,
+{
+    // Write accept.
+    let accept_msg: StreamMessage<T> = StreamMessage::Accept(info);
+    if write_message(&mut substream, &accept_msg).await.is_err() {
+        return;
+    }
+    // Drain source into Frame messages until end-of-source, shutdown
+    // signal, or send error. Shutdown branch writes an explicit
+    // `EndOfStream { reason: ProducerShuttingDown }` before exiting
+    // (per grimsby D5b — best-effort explicit).
+    let mut seq: u64 = 0;
+    let end_reason = loop {
+        tokio::select! {
+            biased;
+
+            // Shutdown signal raced ahead of the next frame — flush a
+            // typed EndOfStream and exit. The ClusterRuntime gives us
+            // a brief grace period (SHUTDOWN_GRACE) before the swarm
+            // tears down, so there's time for this write to complete
+            // on a healthy LAN substream.
+            res = shutdown_rx.changed() => {
+                if res.is_ok() && *shutdown_rx.borrow() {
+                    break EndReason::ProducerShuttingDown;
+                }
+                // Sender dropped without setting true (runtime exiting
+                // via Drop, not shutdown(self)) — fall through to the
+                // implicit `ConnectionLost` path on the next pump-
+                // iteration write failure. Continue polling source.
+                continue;
+            }
+
+            item = source.next() => match item {
+                Some(Ok(frame)) => {
+                    let msg: StreamMessage<T> = StreamMessage::Frame {
+                        timestamp_ns: frame.timestamp_ns,
+                        seq,
+                        payload: frame.payload,
+                    };
+                    if write_message(&mut substream, &msg).await.is_err() {
+                        // Consumer disconnected mid-stream. Don't try
+                        // to write EndOfStream — the substream is dead.
+                        return;
+                    }
+                    seq = seq.wrapping_add(1);
+                }
+                Some(Err(detail)) => break EndReason::ProducerError { detail },
+                None => break EndReason::SourceEnded,
+            },
+        }
+    };
+    // Write the final EndOfStream. Best-effort — if the consumer
+    // already disconnected, the write fails silently.
+    let end_msg: StreamMessage<T> = StreamMessage::EndOfStream { reason: end_reason };
+    let _ = write_message(&mut substream, &end_msg).await;
 }
 
 /// Consumer-side per-substream reader task. Spawned by
@@ -572,7 +619,7 @@ mod tests {
         }
     }
 
-    fn jpeg_provider_yielding_three_frames() -> StreamProvider<JpegFrame> {
+    fn jpeg_provider_yielding_three_frames() -> StreamProvider {
         Arc::new(|_req| {
             let frames = vec![
                 Ok(ProducerFrame {
@@ -588,7 +635,7 @@ mod tests {
                     payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x03] },
                 }),
             ];
-            StreamDecision::Accept {
+            StreamDispatch::AcceptJpeg {
                 info: AcceptInfo {
                     sensor_hash: "sensor-hash-3".into(),
                     clock_id: "test/session-monotonic".into(),
@@ -599,14 +646,14 @@ mod tests {
         })
     }
 
-    fn jpeg_provider_declines_unknown() -> StreamProvider<JpegFrame> {
+    fn jpeg_provider_declines_unknown() -> StreamProvider {
         Arc::new(|req| {
             if req.sensor_id == "exists" {
                 let frames = vec![Ok(ProducerFrame {
                     timestamp_ns: 1,
                     payload: JpegFrame { bytes: vec![0xff] },
                 })];
-                StreamDecision::Accept {
+                StreamDispatch::AcceptJpeg {
                     info: AcceptInfo {
                         sensor_hash: "h".into(),
                         clock_id: "c".into(),
@@ -615,14 +662,14 @@ mod tests {
                     source: Box::pin(stream::iter(frames)),
                 }
             } else {
-                StreamDecision::Decline {
+                StreamDispatch::Decline {
                     reason: DeclineReason::SensorNotFound,
                 }
             }
         })
     }
 
-    fn jpeg_provider_yields_then_errors() -> StreamProvider<JpegFrame> {
+    fn jpeg_provider_yields_then_errors() -> StreamProvider {
         Arc::new(|_req| {
             let items = vec![
                 Ok(ProducerFrame {
@@ -631,7 +678,7 @@ mod tests {
                 }),
                 Err("encoder died".to_string()),
             ];
-            StreamDecision::Accept {
+            StreamDispatch::AcceptJpeg {
                 info: AcceptInfo {
                     sensor_hash: "h".into(),
                     clock_id: "c".into(),
@@ -639,6 +686,89 @@ mod tests {
                 },
                 source: Box::pin(stream::iter(items)),
             }
+        })
+    }
+
+    /// Dagaz fixture — yields three CDR-shaped (mock) PointCloudFrames.
+    /// Each `bytes` payload is a small distinguishable byte sequence so
+    /// the e2e test asserts the wire round trip end-to-end. Bandwidth
+    /// is irrelevant at three small frames; the production path
+    /// compresses by base64 inside JSON regardless.
+    fn pointcloud_provider_yielding_three_frames() -> StreamProvider {
+        Arc::new(|_req| {
+            let frames = vec![
+                Ok(ProducerFrame {
+                    timestamp_ns: 10_000,
+                    payload: PointCloudFrame {
+                        bytes: vec![0xCD, 0xAA, 0x01, 0x02, 0x03],
+                    },
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 20_000,
+                    payload: PointCloudFrame {
+                        bytes: vec![0xCD, 0xAA, 0x04, 0x05, 0x06],
+                    },
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 30_000,
+                    payload: PointCloudFrame {
+                        bytes: vec![0xCD, 0xAA, 0x07, 0x08, 0x09],
+                    },
+                }),
+            ];
+            StreamDispatch::AcceptPointCloud {
+                info: AcceptInfo {
+                    sensor_hash: "pc-sensor-hash-3".into(),
+                    clock_id: "pc/test/session-monotonic".into(),
+                    clock_hash: "pc-clock-hash-3".into(),
+                },
+                source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    /// A `sensor_id`-keyed provider that demonstrates the multi-`T`
+    /// dispatch on the producer side: requests for `"camera"` get
+    /// `AcceptJpeg`, `"pointcloud"` gets `AcceptPointCloud`. This is
+    /// the shape Booster will use once the daemon side wires its
+    /// PreviewFanout + PointCloudFanout (Dagaz Batch 3).
+    fn multi_t_provider() -> StreamProvider {
+        Arc::new(|req| match req.sensor_id.as_str() {
+            "camera" => {
+                let frames = vec![Ok(ProducerFrame {
+                    timestamp_ns: 1,
+                    payload: JpegFrame {
+                        bytes: vec![0xff, 0xd8, 0xab],
+                    },
+                })];
+                StreamDispatch::AcceptJpeg {
+                    info: AcceptInfo {
+                        sensor_hash: "cam-hash".into(),
+                        clock_id: "shared/clock".into(),
+                        clock_hash: "shared-clock-hash".into(),
+                    },
+                    source: Box::pin(stream::iter(frames)),
+                }
+            }
+            "pointcloud" => {
+                let frames = vec![Ok(ProducerFrame {
+                    timestamp_ns: 1,
+                    payload: PointCloudFrame {
+                        bytes: vec![0xCD, 0xCD, 0xCD],
+                    },
+                })];
+                StreamDispatch::AcceptPointCloud {
+                    info: AcceptInfo {
+                        sensor_hash: "pc-hash".into(),
+                        clock_id: "shared/clock".into(),
+                        clock_hash: "shared-clock-hash".into(),
+                    },
+                    source: Box::pin(stream::iter(frames)),
+                }
+            }
+            _ => StreamDispatch::Decline {
+                reason: DeclineReason::SensorNotFound,
+            },
         })
     }
 
@@ -902,13 +1032,13 @@ mod tests {
         // Source-Stream that yields one frame then never yields again.
         // Forces the producer to still be in the pump loop (rather than
         // having returned None and ended naturally) when shutdown fires.
-        let provider: StreamProvider<JpegFrame> = Arc::new(|_req| {
+        let provider: StreamProvider = Arc::new(|_req| {
             let first = stream::iter(vec![Ok(ProducerFrame {
                 timestamp_ns: 1_000,
                 payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x99] },
             })]);
             let then_pending = stream::pending::<Result<ProducerFrame<JpegFrame>, String>>();
-            StreamDecision::Accept {
+            StreamDispatch::AcceptJpeg {
                 info: AcceptInfo {
                     sensor_hash: "shutdown-test".into(),
                     clock_id: "test/clock".into(),
@@ -1055,15 +1185,201 @@ mod tests {
 
     #[test]
     fn decline_all_streams_returns_sensor_not_found() {
-        let provider: StreamProvider<JpegFrame> = decline_all_streams();
+        let provider: StreamProvider = decline_all_streams();
         let req = StreamRequest {
             sensor_id: "anything".into(),
         };
         match provider(req) {
-            StreamDecision::Decline {
+            StreamDispatch::Decline {
                 reason: DeclineReason::SensorNotFound,
             } => {}
             _ => panic!("decline_all_streams should always decline with SensorNotFound"),
         }
+    }
+
+    // ─── Dagaz Batch 1 e2e tests ─────────────────────────────────────────
+
+    /// E2e happy path for `T = PointCloudFrame`: two cluster runtimes
+    /// converge over libp2p, consumer opens a stream, producer's
+    /// `AcceptPointCloud` flows three CDR-shaped frames through the
+    /// base64-of-binary JSON envelope, consumer reads the typed frames
+    /// back, then sees the `EndOfStream { SourceEnded }` terminator.
+    /// Exercises the full multi-`T` dispatch chain end-to-end.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_pointcloud_frames() {
+        let id_p = PeerIdentity::from_seed(&[111u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[112u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-pc-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-pc-consumer/0").await;
+
+        let doc = ClusterDoc {
+            version: 1,
+            cluster_name: "test-pointcloud-happy-path".into(),
+            peers: vec![
+                cluster_peer(id_p.peer_id(), addr_p),
+                cluster_peer(id_c.peer_id(), addr_c),
+            ],
+        };
+
+        let producer = ClusterRuntime::from_swarm(
+            swarm_p,
+            doc.clone(),
+            fixture_participant_provider(id_p.peer_id(), "producer"),
+            pointcloud_provider_yielding_three_frames(),
+        )
+        .unwrap();
+        let consumer = ClusterRuntime::from_swarm(
+            swarm_c,
+            doc,
+            fixture_participant_provider(id_c.peer_id(), "consumer"),
+            decline_all_streams(),
+        )
+        .unwrap();
+
+        let connected = poll_until(
+            || consumer.peers().iter().any(|p| p.peer_id == id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected, "consumer did not see producer in cluster within 15s");
+
+        let sub: StreamSubscription<PointCloudFrame> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "test/pc".into(),
+                },
+            )
+            .await
+            .expect("open_stream<PointCloudFrame> should succeed");
+
+        assert_eq!(sub.info.sensor_hash, "pc-sensor-hash-3");
+        assert_eq!(sub.info.clock_id, "pc/test/session-monotonic");
+        assert_eq!(sub.info.clock_hash, "pc-clock-hash-3");
+
+        let mut frames = sub.frames;
+        let f0 = frames.next().await.unwrap().expect("frame 0 ok");
+        assert_eq!(f0.seq, 0);
+        assert_eq!(f0.timestamp_ns, 10_000);
+        assert_eq!(f0.payload.bytes, vec![0xCD, 0xAA, 0x01, 0x02, 0x03]);
+
+        let f1 = frames.next().await.unwrap().expect("frame 1 ok");
+        assert_eq!(f1.seq, 1);
+        assert_eq!(f1.timestamp_ns, 20_000);
+        assert_eq!(f1.payload.bytes, vec![0xCD, 0xAA, 0x04, 0x05, 0x06]);
+
+        let f2 = frames.next().await.unwrap().expect("frame 2 ok");
+        assert_eq!(f2.seq, 2);
+        assert_eq!(f2.timestamp_ns, 30_000);
+        assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
+
+        let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
+        match end {
+            StreamError::EndOfStream { reason: EndReason::SourceEnded } => {}
+            other => panic!("expected SourceEnded, got {other:?}"),
+        }
+        assert!(frames.next().await.is_none());
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// One producer with a `sensor_id`-keyed multi-`T` provider serves
+    /// **both** JPEG and pointcloud over the same `ClusterRuntime`.
+    /// Confirms Dagaz D1's per-call `T` dispatch: a daemon doesn't
+    /// have to choose one `T` at spawn time. This is the core shape
+    /// Booster uses in Batch 3.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn one_producer_serves_jpeg_and_pointcloud_via_sensor_id_dispatch() {
+        let id_p = PeerIdentity::from_seed(&[121u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[122u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-multi-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-multi-consumer/0").await;
+
+        let doc = ClusterDoc {
+            version: 1,
+            cluster_name: "test-multi-t-dispatch".into(),
+            peers: vec![
+                cluster_peer(id_p.peer_id(), addr_p),
+                cluster_peer(id_c.peer_id(), addr_c),
+            ],
+        };
+
+        let producer = ClusterRuntime::from_swarm(
+            swarm_p,
+            doc.clone(),
+            fixture_participant_provider(id_p.peer_id(), "producer"),
+            multi_t_provider(),
+        )
+        .unwrap();
+        let consumer = ClusterRuntime::from_swarm(
+            swarm_c,
+            doc,
+            fixture_participant_provider(id_c.peer_id(), "consumer"),
+            decline_all_streams(),
+        )
+        .unwrap();
+
+        let connected = poll_until(
+            || consumer.peers().iter().any(|p| p.peer_id == id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected, "consumer did not see producer within 15s");
+
+        // First substream: JPEG.
+        let sub_jpeg: StreamSubscription<JpegFrame> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "camera".into(),
+                },
+            )
+            .await
+            .expect("open_stream<JpegFrame> on sensor_id=camera");
+        assert_eq!(sub_jpeg.info.sensor_hash, "cam-hash");
+        let mut jpeg_frames = sub_jpeg.frames;
+        let jf = jpeg_frames.next().await.unwrap().expect("jpeg frame");
+        assert_eq!(jf.payload.bytes, vec![0xff, 0xd8, 0xab]);
+
+        // Second substream: PointCloud — separate libp2p substream
+        // multiplexed over the same yamux/QUIC connection. Mono-`T`
+        // per substream (grimsby D1).
+        let sub_pc: StreamSubscription<PointCloudFrame> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "pointcloud".into(),
+                },
+            )
+            .await
+            .expect("open_stream<PointCloudFrame> on sensor_id=pointcloud");
+        assert_eq!(sub_pc.info.sensor_hash, "pc-hash");
+        let mut pc_frames = sub_pc.frames;
+        let pcf = pc_frames.next().await.unwrap().expect("pc frame");
+        assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
+
+        // Third substream: unknown sensor → producer's provider
+        // returns Decline; consumer sees typed Declined error.
+        let unknown_result: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "no-such-sensor".into(),
+                },
+            )
+            .await;
+        match unknown_result {
+            Err(OpenStreamError::Declined {
+                reason: DeclineReason::SensorNotFound,
+            }) => {}
+            Err(other) => panic!("expected Declined(SensorNotFound), got {other:?}"),
+            Ok(_) => panic!("expected Declined; producer should have rejected unknown sensor"),
+        }
+
+        producer.shutdown();
+        consumer.shutdown();
     }
 }

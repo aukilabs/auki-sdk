@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 16:30 HKT, 2026
+
+**Companion change to [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1** — `auki-network`'s producer-side `StreamProvider<T>` lifted to a non-generic `StreamProvider` returning a closed `StreamDispatch` enum (`AcceptJpeg`, `AcceptPointCloud`, `Decline`). Internal seam in `stream_types::build_stream_provider` updated: the function returns `StreamProvider` (no generic), and on Accept it constructs `RustStreamDispatch::AcceptJpeg` instead of the old `RustStreamDecision::Accept`. **Python surface unchanged** — the `cluster.StreamDecision` PyClass still has `.accept` + `.decline` factories that produce JPEG, the `cluster.spawn(stream_provider=...)` shape takes an unchanged `Callable[[StreamRequest], StreamDecision]`, and 39 / 46 Python tests pass with zero rewrites.
+
+**No PointCloudFrame on the Python side yet.** Dagaz Batch 2 (the `auki-network-py` extension for the new `T` shape) is where `cluster.PointCloudFrame` lands as a PyClass and `DecisionInner` grows a `PointCloud` variant — when that PR opens, the matching Rust dispatch arm in `build_stream_provider` extends to `RustStreamDispatch::AcceptPointCloud`. For now: Python sidecar producers are JPEG-only, but the Rust seam is ready.
+
+Existing test suite updated to reference `RustStreamDispatch` instead of `RustStreamDecision`; semantics unchanged, byte-identical JPEG wire format. `cargo test -p auki-network-py` still 33 (was 33). Python pytest: 39 offline / 46 with `DISCOVERY_BIN` set (unchanged from v0.0.19). Will land in v0.0.20 alongside the `auki-network` change.
+
+---
+
 ### broodsugar's claude · May 6, 14:00 HKT, 2026
 
 `auki_network.discovery` Python submodule landed — [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616) Batch 2, the PyO3 wrapper around `auki_network::discovery_client` from [v0.0.18](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.18). Sync-shaped per Pattern A — the SDK owns the asyncio loop on its tokio worker; sidecar consumers stay sync-shaped, matching grimsby's `auki-network-py` precedent. Pins v0.0.18 by adding `"discovery_client"` to the `auki-network-rs` features list. Reassigned from Arshak to SDK Claude on 2026-05-06 ("i am taking arshaks work, lets go").

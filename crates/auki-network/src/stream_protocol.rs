@@ -251,6 +251,58 @@ pub struct JpegFrame {
     pub bytes: Vec<u8>,
 }
 
+/// Pointcloud payload for `T = PointCloudFrame` substreams ([Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) D2
+/// = raw CDR). The producer forwards a CDR-encoded `PointCloud2` ROS 2
+/// message verbatim; the consumer (Park, future Sentinel) parses CDR on
+/// its side. The SDK doesn't decode or interpret these bytes — the
+/// shape mirrors `JpegFrame { bytes }` for the same reason.
+///
+/// **Per-frame layout fields** (`row_step`, `height`, `width`, `is_dense`)
+/// ride inside the CDR payload itself; the consumer pulls them from the
+/// wire frame as it decodes. **Sensor bootstrap-time fields**
+/// (`fields[]`, `point_step`, `is_bigendian`, `frame_rate_hz`) live in
+/// the producer's `SensorBody::PointCloud` registry entry — see
+/// `bootstrap_pointcloud` in [boosterapp's auki_capture.py](https://github.com/aukilabs/boosterapp/blob/develop/scripts/auki_capture.py).
+///
+/// ## Wire-side encoding
+///
+/// `bytes` is base64-encoded inside the JSON envelope via the
+/// [`base64_bytes`] serde adapter. Without the adapter, `serde_json`
+/// renders `Vec<u8>` as a JSON array of integers — about 4× the raw
+/// byte size on the wire. Base64 is ~33% overhead vs raw, so a 736 KB
+/// `PointCloud2` frame at ~30 Hz lands at ~30 MB/s on the wire instead
+/// of ~80 MB/s. JpegFrame keeps the array-of-integers form — JPEGs are
+/// 1000× smaller, the 4× tax there is tolerable, and changing JpegFrame
+/// would break grimsby v1 wire compat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointCloudFrame {
+    /// Raw CDR-encoded `PointCloud2` message bytes. Base64-encoded
+    /// inside the JSON envelope by the serde adapter — see [`base64_bytes`].
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+/// Serde adapter: serialize `Vec<u8>` as a base64-string field inside
+/// JSON, parse it back on deserialize. Used by [`PointCloudFrame::bytes`]
+/// to dodge `serde_json`'s array-of-integers encoding for `Vec<u8>`
+/// (~4× wire overhead). Base64 round-trip is lossless and ~33% overhead
+/// vs raw bytes — the smallest of the three exits the auki-network
+/// parking lot pre-spec'd for the JSON-of-binary tax.
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&B64.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(d)?;
+        B64.decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 /// Failure modes for [`read_message`] / [`write_message`].
@@ -568,5 +620,145 @@ mod tests {
             result,
             Err(StreamProtocolError::FrameTooLarge { .. })
         ));
+    }
+
+    // ─── PointCloudFrame (Dagaz Batch 1) ─────────────────────────────────
+
+    /// `PointCloudFrame.bytes` serializes via the [`base64_bytes`]
+    /// adapter as a JSON string (not an array of integers like
+    /// `JpegFrame.bytes`). Pin the on-the-wire shape so a refactor of
+    /// the adapter doesn't silently change the format.
+    #[test]
+    fn point_cloud_frame_serializes_bytes_as_base64_string() {
+        let frame = PointCloudFrame {
+            bytes: vec![0x00, 0x01, 0x02, 0x03, 0xff, 0xfe],
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        // base64 of 0x00,0x01,0x02,0x03,0xff,0xfe is "AAECA//+".
+        assert_eq!(json, r#"{"bytes":"AAECA//+"}"#);
+
+        // And it round-trips losslessly.
+        let back: PointCloudFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    /// Lossless round-trip on a representative-size CDR-shaped payload
+    /// (1 KB of pseudo-random bytes). Confirms the base64 path doesn't
+    /// truncate / pad / mis-align on non-trivial inputs.
+    #[test]
+    fn point_cloud_frame_round_trips_a_kilobyte_payload() {
+        let bytes: Vec<u8> = (0..1024u32).map(|i| (i * 37 + 11) as u8).collect();
+        let frame = PointCloudFrame {
+            bytes: bytes.clone(),
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        let back: PointCloudFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.bytes, bytes);
+    }
+
+    /// Wire-compat pin against the JSON-of-binary tax. For a 1 KB
+    /// payload, base64 encoding produces ~1.37 KB of JSON, while
+    /// `serde_json`'s array-of-integers encoding for `Vec<u8>` would
+    /// produce ~3.4 KB (each byte averaging 3.5 ASCII chars + comma).
+    /// If this assertion ever flips, someone removed the
+    /// `#[serde(with = "base64_bytes")]` adapter and Dagaz's bandwidth
+    /// reasoning is silently broken.
+    #[test]
+    fn point_cloud_frame_wire_size_dodges_the_array_of_integers_tax() {
+        let bytes = vec![0xAB; 1024];
+        let frame = PointCloudFrame { bytes };
+        let json = serde_json::to_string(&frame).unwrap();
+        // Base64 path: ~1.37 KB.
+        assert!(
+            json.len() < 1500,
+            "base64 path should produce < 1.5 KB for 1 KB input; got {}",
+            json.len()
+        );
+        // Sanity: definitely smaller than the array-of-integers path
+        // (~3.4 KB for the same input — `[171,171,171,...]`).
+        assert!(json.len() < 3000, "must be smaller than array-of-ints");
+    }
+
+    /// Locked cross-language conformance vector for the
+    /// `PointCloudFrame` wire shape. A cross-language reimplementation
+    /// (Park's browser-side decoder, future Sentinel-as-consumer in
+    /// another runtime) is correct only if it produces these exact JSON
+    /// bytes from the same `(timestamp_ns, seq, bytes)` tuple, and
+    /// parses these exact bytes back to the same tuple.
+    ///
+    /// Pinned values:
+    /// - `timestamp_ns: 1_700_000_000_000_000_000`
+    /// - `seq: 42`
+    /// - `bytes`: the 8 bytes `[0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff]`
+    /// - base64(bytes) = "QkNERQAB/v8="
+    #[test]
+    fn locked_point_cloud_frame_wire_shape_vector() {
+        let payload = PointCloudFrame {
+            bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
+        };
+        let msg: StreamMessage<PointCloudFrame> = StreamMessage::Frame {
+            timestamp_ns: 1_700_000_000_000_000_000,
+            seq: 42,
+            payload: payload.clone(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let expected = r#"{"kind":"frame","timestamp_ns":1700000000000000000,"seq":42,"payload":{"bytes":"QkNERQAB/v8="}}"#;
+        assert_eq!(
+            json, expected,
+            "PointCloudFrame wire shape drifted — see crate docs for the locked recipe",
+        );
+
+        // And the reverse — these exact bytes parse back to the same
+        // typed message. A cross-language consumer that emits the same
+        // string from the same input is correct on both directions.
+        let back: StreamMessage<PointCloudFrame> = serde_json::from_str(expected).unwrap();
+        match back {
+            StreamMessage::Frame {
+                timestamp_ns,
+                seq,
+                payload: parsed,
+            } => {
+                assert_eq!(timestamp_ns, 1_700_000_000_000_000_000);
+                assert_eq!(seq, 42);
+                assert_eq!(parsed, payload);
+            }
+            _ => panic!("expected Frame variant"),
+        }
+    }
+
+    /// Through the framing helpers (length prefix + JSON body), a
+    /// `PointCloudFrame` round-trips. Different from the JSON-only
+    /// round-trip above because this exercises the wire-level
+    /// `write_message` / `read_message` path that the runtime actually
+    /// uses for transport.
+    #[test]
+    fn point_cloud_frame_round_trips_through_framing_helpers() {
+        let payload = PointCloudFrame {
+            bytes: (0..256u32).map(|i| (i * 31 + 7) as u8).collect(),
+        };
+        let original: StreamMessage<PointCloudFrame> = StreamMessage::Frame {
+            timestamp_ns: 12_345_678_900,
+            seq: 7,
+            payload: payload.clone(),
+        };
+
+        let mut buf: Vec<u8> = Vec::new();
+        futures::executor::block_on(async { write_message(&mut buf, &original).await }).unwrap();
+
+        let mut reader = Cursor::new(buf);
+        let parsed: StreamMessage<PointCloudFrame> =
+            futures::executor::block_on(async { read_message(&mut reader).await }).unwrap();
+        match parsed {
+            StreamMessage::Frame {
+                timestamp_ns,
+                seq,
+                payload: p,
+            } => {
+                assert_eq!(timestamp_ns, 12_345_678_900);
+                assert_eq!(seq, 7);
+                assert_eq!(p, payload);
+            }
+            _ => panic!("expected Frame variant"),
+        }
     }
 }

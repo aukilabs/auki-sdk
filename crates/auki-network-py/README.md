@@ -58,6 +58,57 @@ for peer in runtime.peers():
 runtime.shutdown()
 ```
 
+### `Stream<T>` (grimsby + Dagaz Batch 2)
+
+Same `runtime` participates in `/auki/stream/1.0.0` substreams over the same swarm — no second libp2p stack. The producer's `stream_provider` callable returns a typed `StreamDecision`, the consumer opens a typed subscription:
+
+```python
+# Producer side — one callable, two T's. Each substream stays mono-T.
+def stream_provider(req: auki.cluster.StreamRequest) -> auki.cluster.StreamDecision:
+    if req.sensor_id == "head_left_cam":
+        async def jpeg_source():
+            async for jpeg_bytes in jpeg_fanout.subscribe():
+                yield auki.cluster.ProducerFrame(
+                    timestamp_ns=session_clock_now_ns(),
+                    payload=auki.cluster.JpegFrame(jpeg_bytes),
+                )
+        return auki.cluster.StreamDecision.accept(
+            info=auki.cluster.AcceptInfo(sensor_hash="...", clock_id="...", clock_hash="..."),
+            source=jpeg_source(),
+        )
+    if req.sensor_id == "head/pointcloud":
+        async def pc_source():
+            async for cdr_bytes in pointcloud_fanout.subscribe():
+                yield auki.cluster.ProducerFrame(
+                    timestamp_ns=session_clock_now_ns(),
+                    payload=auki.cluster.PointCloudFrame(cdr_bytes),
+                )
+        return auki.cluster.StreamDecision.accept_pointcloud(
+            info=auki.cluster.AcceptInfo(sensor_hash="...", clock_id="...", clock_hash="..."),
+            source=pc_source(),
+        )
+    return auki.cluster.StreamDecision.decline(
+        auki.cluster.DeclineReason.sensor_not_found(),
+    )
+
+runtime = auki.cluster.spawn(
+    seed=peer.seed(), doc=doc,
+    participant_provider=participant_provider,
+    stream_provider=stream_provider,         # Dagaz Batch 2 — multi-T
+)
+
+# Consumer side — pick the open method that matches the substream T.
+sub = runtime.open_stream(peer_id=their_peer_id, sensor_id="head_left_cam")
+for frame in sub.frames():
+    handle_jpeg(frame.timestamp_ns, frame.seq, frame.payload.bytes)
+
+sub_pc = runtime.open_pointcloud_stream(peer_id=their_peer_id, sensor_id="head/pointcloud")
+for frame in sub_pc.frames():
+    handle_cdr_pointcloud2(frame.timestamp_ns, frame.seq, frame.payload.bytes)
+```
+
+Stream-end signals raise typed exceptions (`StreamEndOfStream(reason)`, `StreamConnectionLost`, `StreamProtocolError(detail)`); see [`src/readme.md`](src/readme.md) for the full surface.
+
 ## Provider performance contract
 
 The `participant_provider` callable runs **on the cluster runtime's only worker task**. It's invoked once per inbound `/auki/cluster/1.0.0` request — the wrapper acquires the GIL, calls it, converts the result, and hands the answer to the runtime. While the GIL is held, the runtime's task is blocked on the wrapper.
@@ -149,12 +200,12 @@ Two layers, both green:
 # Rust-side (links a real Python interpreter via pyo3's auto-initialize
 # dev-feature; doesn't need maturin):
 cargo test -p auki-network-py
-# → 12 passed (Phase 1 surface tests + Phase 2 spawn / shutdown tests)
+# → 40 passed (cluster + grimsby + Vinland Batch 2 discovery + Dagaz Batch 2 PointCloud)
 
 # Python-side end-to-end (needs maturin):
 maturin develop
 pytest python_tests/
-# → 18 passed (surface, type construction, error mapping, the two-runtime discovery)
+# → 44 passed, 7 skipped (51 with DISCOVERY_BIN=/path/to/discovery set)
 ```
 
 The Python suite includes a **two-runtime discovery test** — two `cluster.spawn` instances against a stub `cluster.json` listing both peers' fixed loopback addresses, polled until both see each other. Cross-language analog of `auki_network::cluster_runtime::tests::two_runtimes_discover_each_other_via_cluster_doc`.

@@ -423,8 +423,11 @@ impl ClusterRuntime {
     }
 
     /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
-    /// for the named sensor (grimsby deliverable #4 — consumer side,
-    /// `T = JpegFrame` per D4).
+    /// for the named sensor with `T = JpegFrame` (grimsby deliverable
+    /// #4). The producer must accept with [`PyStreamDecision.accept(...)`];
+    /// for `T = PointCloudFrame` (Dagaz Batch 2) call
+    /// [`open_pointcloud_stream`][ClusterRuntime::open_pointcloud_stream]
+    /// instead.
     ///
     /// **Synchronous-blocking**: returns once the producer has Accepted
     /// or Declined the request, or the SDK's 30s timeout fires. The
@@ -435,7 +438,8 @@ impl ClusterRuntime {
     ///
     /// Returns a [`StreamSubscription`]; iterate frames via
     /// `subscription.frames()` (also sync-blocking — see
-    /// [`StreamSubscription`] for end-of-stream signalling).
+    /// [`StreamSubscription`] for end-of-stream signalling). Each frame's
+    /// `payload` is a [`JpegFrame`].
     ///
     /// Raises:
     /// - `ValueError` if `peer_id` does not parse as a libp2p PeerId.
@@ -488,7 +492,51 @@ impl ClusterRuntime {
             Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
         };
 
-        Ok(PyStreamSubscription::from_rust(rust_sub))
+        Ok(PyStreamSubscription::from_rust_jpeg(rust_sub))
+    }
+
+    /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
+    /// for the named sensor with `T = PointCloudFrame` (Dagaz Batch 2).
+    /// The producer must accept with
+    /// [`PyStreamDecision.accept_pointcloud(...)`].
+    ///
+    /// Same blocking shape as [`open_stream`][ClusterRuntime::open_stream]:
+    /// returns once the producer has Accepted, Declined, or the 30s
+    /// timeout fires. Returns a [`StreamSubscription`] whose frames
+    /// carry [`PointCloudFrame`] payloads — raw CDR-encoded
+    /// `PointCloud2` ROS message bytes that the consumer parses on its
+    /// side. Same exception surface as `open_stream`.
+    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
+    fn open_pointcloud_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: String,
+    ) -> PyResult<PyStreamSubscription> {
+        let peer = PeerId::from_str(peer_id).map_err(|e| {
+            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
+        })?;
+
+        let request = RustStreamRequest { sensor_id };
+        let result = py.allow_threads(|| {
+            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
+            let rt = inner.as_ref().ok_or(())?;
+            let tokio_rt = cluster_tokio_runtime();
+            Ok(tokio_rt.block_on(async {
+                rt.open_stream::<auki_network_rs::stream_protocol::PointCloudFrame>(
+                    peer, request,
+                )
+                .await
+            }))
+        });
+
+        let rust_sub = match result {
+            Err(()) => return Err(shutdown_error()),
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
+        };
+
+        Ok(PyStreamSubscription::from_rust_pointcloud(rust_sub))
     }
 
     /// Signal the driver task to shut down and abort it. Idempotent in
@@ -854,10 +902,12 @@ mod tests {
             assert!(cluster.getattr("ClusterRuntime").is_ok());
             assert!(cluster.getattr("load_doc").is_ok());
             assert!(cluster.getattr("spawn").is_ok());
-            // Grimsby Stream<T> surface (deliverable #4 / v0.0.17).
+            // Grimsby Stream<T> surface (deliverable #4 / v0.0.17) +
+            // Dagaz Batch 2 PointCloudFrame (v0.0.21).
             assert!(cluster.getattr("StreamRequest").is_ok());
             assert!(cluster.getattr("AcceptInfo").is_ok());
             assert!(cluster.getattr("JpegFrame").is_ok());
+            assert!(cluster.getattr("PointCloudFrame").is_ok());
             assert!(cluster.getattr("DeclineReason").is_ok());
             assert!(cluster.getattr("EndReason").is_ok());
             assert!(cluster.getattr("ProducerFrame").is_ok());

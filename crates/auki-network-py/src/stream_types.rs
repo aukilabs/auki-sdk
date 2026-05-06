@@ -24,7 +24,8 @@
 
 use auki_network_rs::stream_protocol::{
     AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
-    EndReason as RustEndReason, JpegFrame as RustJpegFrame, StreamRequest as RustStreamRequest,
+    EndReason as RustEndReason, JpegFrame as RustJpegFrame,
+    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
 };
 use auki_network_rs::stream_runtime::{
     ConsumerFrame as RustConsumerFrame, OpenStreamError as RustOpenStreamError,
@@ -163,6 +164,53 @@ impl PyJpegFrame {
 
     fn __repr__(&self) -> String {
         format!("JpegFrame(<{} bytes>)", self.inner.bytes.len())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+// ─── PointCloudFrame ─────────────────────────────────────────────────────────
+
+/// Dagaz Batch 1 payload `T` — raw CDR-encoded `PointCloud2` ROS message
+/// bytes (per [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) D2).
+/// Consumer (Park, future Sentinel) parses CDR on its side; the SDK doesn't
+/// decode or interpret these bytes. Same shape as [`PyJpegFrame`] —
+/// opaque-bytes-with-a-`bytes`-property — but the wire envelope uses a
+/// base64 adapter so a 22 MB/s raw stream lands at ~30 MB/s on the wire
+/// instead of ~80 MB/s (grimsby's JSON-of-binary tax dodge, per Dagaz D2).
+#[pyclass(name = "PointCloudFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyPointCloudFrame {
+    pub(crate) inner: RustPointCloudFrame,
+}
+
+#[pymethods]
+impl PyPointCloudFrame {
+    #[new]
+    #[pyo3(signature = (bytes, /))]
+    fn new(bytes: Bound<'_, PyBytes>) -> Self {
+        Self {
+            inner: RustPointCloudFrame {
+                bytes: bytes.as_bytes().to_vec(),
+            },
+        }
+    }
+
+    /// Raw CDR-encoded `PointCloud2` bytes. Returns a fresh `bytes` copy
+    /// each call.
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.bytes)
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.bytes.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PointCloudFrame(<{} bytes>)", self.inner.bytes.len())
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -332,26 +380,76 @@ impl PyEndReason {
     }
 }
 
+// ─── Frame payload (Jpeg vs PointCloud) ──────────────────────────────────────
+
+/// Tagged union over the two payload `T`s the SDK currently supports.
+/// The producer's [`PyProducerFrame`] and the consumer's [`PyConsumerFrame`]
+/// both carry one of these; the wire-side substream is mono-`T` per the
+/// matching [`RustStreamDispatch`] variant.
+#[derive(Clone, Debug)]
+pub(crate) enum FramePayload {
+    Jpeg(PyJpegFrame),
+    PointCloud(PyPointCloudFrame),
+}
+
+impl FramePayload {
+    fn from_py(payload: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(jpeg) = payload.extract::<PyJpegFrame>() {
+            return Ok(Self::Jpeg(jpeg));
+        }
+        if let Ok(pc) = payload.extract::<PyPointCloudFrame>() {
+            return Ok(Self::PointCloud(pc));
+        }
+        Err(PyValueError::new_err(format!(
+            "frame payload must be a JpegFrame or PointCloudFrame; got {}",
+            payload
+                .repr()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|_| "<unrepr>".into()),
+        )))
+    }
+
+    fn into_py(self, py: Python<'_>) -> PyObject {
+        match self {
+            Self::Jpeg(f) => Py::new(py, f).expect("alloc JpegFrame").into_py(py),
+            Self::PointCloud(f) => Py::new(py, f).expect("alloc PointCloudFrame").into_py(py),
+        }
+    }
+
+    fn repr(&self) -> String {
+        match self {
+            Self::Jpeg(f) => f.__repr__(),
+            Self::PointCloud(f) => f.__repr__(),
+        }
+    }
+}
+
 // ─── ProducerFrame ───────────────────────────────────────────────────────────
 
 /// What the producer's source-iterator yields. `seq` is stamped by the
 /// SDK at send time; producers only set `timestamp_ns` + `payload`.
+///
+/// `payload` accepts either a [`PyJpegFrame`] or a [`PyPointCloudFrame`]
+/// (Dagaz Batch 2). The SDK type-checks the payload against the matching
+/// [`PyStreamDecision`] accept variant when draining the source iterator
+/// — yielding a `JpegFrame` from an `accept_pointcloud(...)` source ends
+/// the substream with `EndReason::ProducerError`.
 #[pyclass(name = "ProducerFrame", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyProducerFrame {
     pub(crate) timestamp_ns: i64,
-    pub(crate) payload: PyJpegFrame,
+    pub(crate) payload: FramePayload,
 }
 
 #[pymethods]
 impl PyProducerFrame {
     #[new]
     #[pyo3(signature = (*, timestamp_ns, payload))]
-    fn new(timestamp_ns: i64, payload: PyJpegFrame) -> Self {
-        Self {
+    fn new(timestamp_ns: i64, payload: Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
             timestamp_ns,
-            payload,
-        }
+            payload: FramePayload::from_py(&payload)?,
+        })
     }
 
     #[getter]
@@ -359,25 +457,56 @@ impl PyProducerFrame {
         self.timestamp_ns
     }
 
+    /// The wrapped frame payload — either a `JpegFrame` or a
+    /// `PointCloudFrame`. Returns a fresh Python object each call.
     #[getter]
-    fn payload(&self) -> PyJpegFrame {
-        self.payload.clone()
+    fn payload(&self, py: Python<'_>) -> PyObject {
+        self.payload.clone().into_py(py)
     }
 
     fn __repr__(&self) -> String {
         format!(
             "ProducerFrame(timestamp_ns={}, payload={})",
             self.timestamp_ns,
-            self.payload.__repr__(),
+            self.payload.repr(),
         )
     }
 }
 
 impl PyProducerFrame {
-    pub(crate) fn to_rust_jpeg(&self) -> RustProducerFrame<RustJpegFrame> {
-        RustProducerFrame {
-            timestamp_ns: self.timestamp_ns,
-            payload: self.payload.inner.clone(),
+    /// Convert to a `RustProducerFrame<RustJpegFrame>`. Errors with a
+    /// human-readable detail if the payload is `PointCloud`. Used by
+    /// the producer-side source-stream pump for an `AcceptJpeg`
+    /// dispatch.
+    pub(crate) fn to_rust_jpeg(&self) -> Result<RustProducerFrame<RustJpegFrame>, String> {
+        match &self.payload {
+            FramePayload::Jpeg(f) => Ok(RustProducerFrame {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            FramePayload::PointCloud(_) => Err(
+                "AcceptJpeg source yielded a ProducerFrame with PointCloudFrame payload; \
+                 the substream is mono-T — yield JpegFrame or use accept_pointcloud(..)"
+                    .into(),
+            ),
+        }
+    }
+
+    /// Convert to a `RustProducerFrame<RustPointCloudFrame>`. Errors
+    /// with a human-readable detail if the payload is `Jpeg`.
+    pub(crate) fn to_rust_pointcloud(
+        &self,
+    ) -> Result<RustProducerFrame<RustPointCloudFrame>, String> {
+        match &self.payload {
+            FramePayload::PointCloud(f) => Ok(RustProducerFrame {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            FramePayload::Jpeg(_) => Err(
+                "AcceptPointCloud source yielded a ProducerFrame with JpegFrame payload; \
+                 the substream is mono-T — yield PointCloudFrame or use accept(..)"
+                    .into(),
+            ),
         }
     }
 }
@@ -386,12 +515,17 @@ impl PyProducerFrame {
 
 /// What the consumer reads off `StreamSubscription.frames()`. Same as
 /// [`PyProducerFrame`] but with the SDK-stamped `seq` exposed.
+///
+/// `payload` is whichever `T` the producer accepted with — `JpegFrame`
+/// for an `accept(...)` substream or `PointCloudFrame` for an
+/// `accept_pointcloud(...)` substream. Each substream is mono-`T`, so a
+/// given `StreamSubscription` only ever surfaces one payload variant.
 #[pyclass(name = "ConsumerFrame", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyConsumerFrame {
     timestamp_ns: i64,
     seq: u64,
-    payload: PyJpegFrame,
+    payload: FramePayload,
 }
 
 #[pymethods]
@@ -406,9 +540,11 @@ impl PyConsumerFrame {
         self.seq
     }
 
+    /// The wrapped frame payload — either a `JpegFrame` or a
+    /// `PointCloudFrame`. Returns a fresh Python object each call.
     #[getter]
-    fn payload(&self) -> PyJpegFrame {
-        self.payload.clone()
+    fn payload(&self, py: Python<'_>) -> PyObject {
+        self.payload.clone().into_py(py)
     }
 
     fn __repr__(&self) -> String {
@@ -416,41 +552,61 @@ impl PyConsumerFrame {
             "ConsumerFrame(timestamp_ns={}, seq={}, payload={})",
             self.timestamp_ns,
             self.seq,
-            self.payload.__repr__(),
+            self.payload.repr(),
         )
     }
 }
 
 impl PyConsumerFrame {
-    fn from_rust(frame: RustConsumerFrame<RustJpegFrame>) -> Self {
+    fn from_rust_jpeg(frame: RustConsumerFrame<RustJpegFrame>) -> Self {
         Self {
             timestamp_ns: frame.timestamp_ns,
             seq: frame.seq,
-            payload: PyJpegFrame {
+            payload: FramePayload::Jpeg(PyJpegFrame {
                 inner: frame.payload,
-            },
+            }),
+        }
+    }
+
+    fn from_rust_pointcloud(frame: RustConsumerFrame<RustPointCloudFrame>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: FramePayload::PointCloud(PyPointCloudFrame {
+                inner: frame.payload,
+            }),
         }
     }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
 
-/// Provider's accept/decline decision. Construct via the static factories
-/// `accept(info, source)` / `decline(reason)` — there is no public
-/// constructor.
+/// Provider's accept/decline decision. Construct via the static
+/// factories `accept(info, source)` (JPEG substream) /
+/// `accept_pointcloud(info, source)` (PointCloud substream — Dagaz Batch
+/// 2) / `decline(reason)` — there is no public constructor.
 ///
-/// `source` (on `accept`) is **a Python async iterator yielding
-/// [`PyProducerFrame`] values**. Typically an `async def` generator;
-/// any object with `__aiter__` / `__anext__` works. The SDK drains it
-/// on the wrapper's asyncio loop; `finally` blocks fire when the SDK
-/// drops the iterator (consumer disconnect → `aclose` driven through).
+/// `source` is **a Python async iterator yielding [`PyProducerFrame`]
+/// values**. Typically an `async def` generator; any object with
+/// `__aiter__` / `__anext__` works. The SDK drains it on the wrapper's
+/// asyncio loop; `finally` blocks fire when the SDK drops the iterator
+/// (consumer disconnect → `aclose` driven through).
+///
+/// **Each substream is mono-`T`.** The `accept` factory commits to a
+/// `JpegFrame` substream — yielding a `PointCloudFrame` ends the stream
+/// with `EndReason::ProducerError`. Use `accept_pointcloud` for a
+/// `PointCloudFrame` substream.
 #[pyclass(name = "StreamDecision", frozen)]
 pub struct PyStreamDecision {
     pub(crate) inner: Mutex<Option<DecisionInner>>,
 }
 
 pub(crate) enum DecisionInner {
-    Accept {
+    AcceptJpeg {
+        info: PyAcceptInfo,
+        source: Py<PyAny>,
+    },
+    AcceptPointCloud {
         info: PyAcceptInfo,
         source: Py<PyAny>,
     },
@@ -461,11 +617,26 @@ pub(crate) enum DecisionInner {
 
 #[pymethods]
 impl PyStreamDecision {
+    /// Accept the request with a JPEG source. The async iterator must
+    /// yield `ProducerFrame(payload=JpegFrame(...))` values; yielding a
+    /// `PointCloudFrame` ends the stream with `EndReason::ProducerError`.
     #[staticmethod]
     #[pyo3(signature = (*, info, source))]
     fn accept(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::Accept { info, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptJpeg { info, source })),
+        }
+    }
+
+    /// Accept the request with a PointCloud source (Dagaz Batch 2). The
+    /// async iterator must yield `ProducerFrame(payload=PointCloudFrame(...))`
+    /// values carrying CDR-encoded `PointCloud2` ROS message bytes; the
+    /// consumer (Park, future Sentinel) parses CDR on its side.
+    #[staticmethod]
+    #[pyo3(signature = (*, info, source))]
+    fn accept_pointcloud(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptPointCloud { info, source })),
         }
     }
 
@@ -477,14 +648,16 @@ impl PyStreamDecision {
         }
     }
 
-    /// Discriminator: `"accept"` or `"decline"`. Read-only inspection;
+    /// Discriminator: `"accept"` (JPEG), `"accept_pointcloud"`,
+    /// `"decline"`, or `"consumed"` (post-`take`). Read-only inspection;
     /// the actual fields aren't exposed because the source iterator is
     /// consumed by the SDK exactly once.
     #[getter]
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
         match guard.as_ref() {
-            Some(DecisionInner::Accept { .. }) => "accept",
+            Some(DecisionInner::AcceptJpeg { .. }) => "accept",
+            Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -513,28 +686,17 @@ impl PyStreamDecision {
 /// `Callable[[StreamRequest], StreamDecision]`. Used by `cluster.spawn`
 /// when the consumer passes `stream_provider=...`.
 ///
-/// **Python surface today is JPEG-only.** Dagaz Batch 1 lifted the Rust
-/// [`StreamProvider`] to a closed [`RustStreamDispatch`] enum over the
-/// SDK-supported `T`s (`AcceptJpeg`, `AcceptPointCloud`, `Decline`).
-/// The Python `StreamDecision` PyClass currently only constructs JPEG
-/// sources, so this adapter always returns either
-/// `RustStreamDispatch::AcceptJpeg` (on Accept) or
-/// `RustStreamDispatch::Decline`. PointCloud support on the Python
-/// surface lands in Dagaz Batch 2 (the `auki-network-py` extension for
-/// the new `T` shape) — when that lands, the `DecisionInner` enum
-/// extends with a `PointCloud` variant and this match grows another
-/// arm.
+/// Maps the Python [`PyStreamDecision`]'s [`DecisionInner`] variants
+/// (`AcceptJpeg`, `AcceptPointCloud`, `Decline`) onto the matching
+/// Rust [`RustStreamDispatch`] variant. Each substream is mono-`T`;
+/// the `T` is decided here by which factory the Python provider used
+/// (`accept` → `AcceptJpeg`, `accept_pointcloud` → `AcceptPointCloud`).
 ///
 /// Behaviour on Python exception / non-`StreamDecision` return:
 /// the wrapper logs the offence via `tracing::warn!` and synthesizes a
 /// `Decline { reason: Other { detail: <error string> } }` so the
 /// requester sees a typed failure rather than a hung substream.
 pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
-    // `RustJpegFrame` is no longer referenced through the generic
-    // `StreamProvider<T>` signature; keep it imported because the
-    // PyJpegFrame path still touches `RustJpegFrame` lower in this
-    // file.
-    let _ = std::marker::PhantomData::<RustJpegFrame>;
     Arc::new(move |request: RustStreamRequest| {
         let py_request = PyStreamRequest { inner: request };
 
@@ -567,8 +729,7 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
 
         // Step 2 (no GIL needed for the type-shape match): map onto a
         // Rust StreamDispatch variant. On error, synthesize a Decline
-        // carrying the error string. Python surface is JPEG-only today,
-        // so Accept maps to AcceptJpeg.
+        // carrying the error string.
         match decision_or_err {
             Err(detail) => RustStreamDispatch::Decline {
                 reason: RustDeclineReason::Other { detail },
@@ -576,9 +737,22 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
             Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
                 reason: reason.inner,
             },
-            Ok(DecisionInner::Accept { info, source }) => {
-                let source_stream = python_iter_into_source_stream(source);
+            Ok(DecisionInner::AcceptJpeg { info, source }) => {
+                let source_stream =
+                    python_iter_into_source_stream::<RustJpegFrame>(source, |pf| {
+                        pf.to_rust_jpeg()
+                    });
                 RustStreamDispatch::AcceptJpeg {
+                    info: info.inner,
+                    source: source_stream,
+                }
+            }
+            Ok(DecisionInner::AcceptPointCloud { info, source }) => {
+                let source_stream =
+                    python_iter_into_source_stream::<RustPointCloudFrame>(source, |pf| {
+                        pf.to_rust_pointcloud()
+                    });
+                RustStreamDispatch::AcceptPointCloud {
                     info: info.inner,
                     source: source_stream,
                 }
@@ -588,13 +762,17 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
 }
 
 /// Convert a Python async iterator (yielding `PyProducerFrame`) into a
-/// Rust [`SourceStream<JpegFrame>`] the SDK can drain.
+/// Rust [`SourceStream<T>`] the SDK can drain. The `convert` callback
+/// extracts the per-substream typed payload from each yielded
+/// [`PyProducerFrame`] — `JpegFrame` for an `AcceptJpeg` dispatch,
+/// `PointCloudFrame` for `AcceptPointCloud`. Yielding a frame with the
+/// wrong payload variant produces `Some(Err("..."))`, which the SDK
+/// converts into [`auki_network::stream_protocol::EndReason::ProducerError`]
+/// on the wire and ends the stream.
 ///
 /// Type contract: each yielded Python value must extract as
-/// [`PyProducerFrame`]. Anything else maps to
-/// `Some(Err("..."))` which the SDK converts into
-/// [`auki_network::stream_protocol::EndReason::ProducerError`] on the
-/// wire and ends the stream.
+/// [`PyProducerFrame`]. Anything else maps to `Some(Err("..."))` with
+/// the same end-of-stream effect.
 ///
 /// Lifetime / cleanup: the bridge is held inside [`SourceStreamGuard`].
 /// On natural end (`StopAsyncIteration` or first error) we explicitly
@@ -603,33 +781,37 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
 /// `Drop` on [`SourceStreamGuard`] schedules a fire-and-forget `aclose`
 /// task on the wrapper's tokio runtime so the generator's `finally`
 /// block fires promptly rather than waiting for asyncio's gc hooks.
-fn python_iter_into_source_stream(aiter: Py<PyAny>) -> SourceStream<RustJpegFrame> {
+fn python_iter_into_source_stream<T>(
+    aiter: Py<PyAny>,
+    convert: fn(&PyProducerFrame) -> Result<RustProducerFrame<T>, String>,
+) -> SourceStream<T>
+where
+    T: Send + 'static,
+{
     let bridge = PyAsyncIterStream::new(aiter);
     let state = SourceStreamGuard {
         bridge: Some(bridge),
     };
 
-    let stream = futures::stream::unfold(state, |mut state| async move {
+    let stream = futures::stream::unfold(state, move |mut state| async move {
         let bridge = state.bridge.as_ref()?;
         match bridge.next().await {
             Ok(Some(value)) => {
                 // Type-check the yielded item under GIL; convert to
-                // ProducerFrame<JpegFrame>.
-                let result = Python::with_gil(
-                    |py| -> Result<RustProducerFrame<RustJpegFrame>, String> {
-                        let bound = value.bind(py);
-                        match bound.extract::<PyRef<PyProducerFrame>>() {
-                            Ok(pf) => Ok(pf.to_rust_jpeg()),
-                            Err(_) => Err(format!(
-                                "stream_provider source must yield ProducerFrame; got {}",
-                                bound
-                                    .repr()
-                                    .map(|r| r.to_string())
-                                    .unwrap_or_else(|_| "<unrepr>".into())
-                            )),
-                        }
-                    },
-                );
+                // ProducerFrame<T> using the substream-typed `convert`.
+                let result = Python::with_gil(|py| -> Result<RustProducerFrame<T>, String> {
+                    let bound = value.bind(py);
+                    match bound.extract::<PyRef<PyProducerFrame>>() {
+                        Ok(pf) => convert(&pf),
+                        Err(_) => Err(format!(
+                            "stream_provider source must yield ProducerFrame; got {}",
+                            bound
+                                .repr()
+                                .map(|r| r.to_string())
+                                .unwrap_or_else(|_| "<unrepr>".into())
+                        )),
+                    }
+                });
                 match result {
                     Ok(frame) => Some((Ok(frame), state)),
                     Err(detail) => {
@@ -694,20 +876,34 @@ impl Drop for SourceStreamGuard {
 
 // ─── StreamSubscription + FrameIterator ──────────────────────────────────────
 
-/// What `runtime.open_stream` returns on a successful Accept. Carries
-/// the producer's [`PyAcceptInfo`]; iterate over frames via
-/// `subscription.frames()`.
+type RustJpegFrameStream =
+    Pin<Box<dyn Stream<Item = Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>> + Send>>;
+type RustPointCloudFrameStream = Pin<
+    Box<
+        dyn Stream<Item = Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>> + Send,
+    >,
+>;
+
+/// Tagged union over the underlying typed frame-stream the SDK returns
+/// for an open subscription. Each substream is mono-`T`, so the
+/// variant is fixed at `open_stream` time and never changes for the
+/// lifetime of the subscription.
+enum FrameStreamKind {
+    Jpeg(RustJpegFrameStream),
+    PointCloud(RustPointCloudFrameStream),
+}
+
+/// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
+/// returns on a successful Accept. Carries the producer's
+/// [`PyAcceptInfo`]; iterate over frames via `subscription.frames()`.
 ///
 /// The frames iterator can be fetched **at most once**. A second call
 /// raises `RuntimeError` — the underlying Rust `Stream` is single-use.
 #[pyclass(name = "StreamSubscription")]
 pub struct PyStreamSubscription {
     info: PyAcceptInfo,
-    frames: Mutex<Option<RustFrameStream>>,
+    frames: Mutex<Option<FrameStreamKind>>,
 }
-
-type RustFrameStream =
-    Pin<Box<dyn Stream<Item = Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>> + Send>>;
 
 #[pymethods]
 impl PyStreamSubscription {
@@ -746,22 +942,45 @@ impl PyStreamSubscription {
 }
 
 impl PyStreamSubscription {
-    pub(crate) fn from_rust(rust_sub: RustStreamSubscription<RustJpegFrame>) -> Self {
+    pub(crate) fn from_rust_jpeg(rust_sub: RustStreamSubscription<RustJpegFrame>) -> Self {
         Self {
             info: PyAcceptInfo {
                 inner: rust_sub.info,
             },
-            frames: Mutex::new(Some(rust_sub.frames)),
+            frames: Mutex::new(Some(FrameStreamKind::Jpeg(rust_sub.frames))),
+        }
+    }
+
+    pub(crate) fn from_rust_pointcloud(
+        rust_sub: RustStreamSubscription<RustPointCloudFrame>,
+    ) -> Self {
+        Self {
+            info: PyAcceptInfo {
+                inner: rust_sub.info,
+            },
+            frames: Mutex::new(Some(FrameStreamKind::PointCloud(rust_sub.frames))),
         }
     }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s frames. Each
 /// `__next__()` blocks the caller's thread on the wrapper's tokio
-/// runtime until the next frame arrives.
+/// runtime until the next frame arrives. The substream's payload `T`
+/// is fixed at open time; `__next__` dispatches on the stored
+/// [`FrameStreamKind`] variant.
 #[pyclass(name = "FrameIterator")]
 pub struct PyFrameIterator {
-    frames: Mutex<Option<RustFrameStream>>,
+    frames: Mutex<Option<FrameStreamKind>>,
+}
+
+/// Internal: result of polling one item out of either typed stream.
+/// Used to keep the per-T monomorphization inside the `block_on`
+/// closure and convert to a [`PyConsumerFrame`] with the GIL held
+/// afterwards.
+enum FrameNext {
+    Jpeg(Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>),
+    PointCloud(Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>),
+    Done,
 }
 
 #[pymethods]
@@ -793,21 +1012,36 @@ impl PyFrameIterator {
 
         let item = py.allow_threads(|| {
             let rt = crate::cluster_tokio_runtime();
-            rt.block_on(async { stream.next().await })
+            rt.block_on(async {
+                match &mut stream {
+                    FrameStreamKind::Jpeg(s) => match s.next().await {
+                        Some(item) => FrameNext::Jpeg(item),
+                        None => FrameNext::Done,
+                    },
+                    FrameStreamKind::PointCloud(s) => match s.next().await {
+                        Some(item) => FrameNext::PointCloud(item),
+                        None => FrameNext::Done,
+                    },
+                }
+            })
         });
 
         match item {
-            Some(Ok(frame)) => {
-                // Put the stream back; iterator is still live.
+            FrameNext::Jpeg(Ok(frame)) => {
                 let mut guard = self.frames.lock().expect("FrameIterator mutex poisoned");
                 *guard = Some(stream);
-                Ok(PyConsumerFrame::from_rust(frame))
+                Ok(PyConsumerFrame::from_rust_jpeg(frame))
             }
-            Some(Err(stream_err)) => {
+            FrameNext::PointCloud(Ok(frame)) => {
+                let mut guard = self.frames.lock().expect("FrameIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyConsumerFrame::from_rust_pointcloud(frame))
+            }
+            FrameNext::Jpeg(Err(stream_err)) | FrameNext::PointCloud(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
-            None => Err(PyStopIteration::new_err(())),
+            FrameNext::Done => Err(PyStopIteration::new_err(())),
         }
     }
 }
@@ -894,6 +1128,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyStreamRequest>()?;
     cluster.add_class::<PyAcceptInfo>()?;
     cluster.add_class::<PyJpegFrame>()?;
+    cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyProducerFrame>()?;
@@ -1008,19 +1243,102 @@ mod tests {
         });
     }
 
+    /// Helper: wrap a [`PyJpegFrame`] as a `Bound<'_, PyAny>` for the
+    /// new typed-payload `PyProducerFrame::new` constructor (which
+    /// accepts either `JpegFrame` or `PointCloudFrame`).
+    fn jpeg_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
+        let frame = PyJpegFrame::new(PyBytes::new_bound(py, bytes));
+        Py::new(py, frame)
+            .expect("alloc PyJpegFrame")
+            .bind(py)
+            .clone()
+            .into_any()
+    }
+
+    /// Helper: wrap a [`PyPointCloudFrame`] as a `Bound<'_, PyAny>` for
+    /// the typed-payload `PyProducerFrame::new` constructor.
+    fn pointcloud_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
+        let frame = PyPointCloudFrame::new(PyBytes::new_bound(py, bytes));
+        Py::new(py, frame)
+            .expect("alloc PyPointCloudFrame")
+            .bind(py)
+            .clone()
+            .into_any()
+    }
+
+    #[test]
+    fn point_cloud_frame_round_trips_through_pybytes() {
+        Python::with_gil(|py| {
+            let payload = PyBytes::new_bound(py, &[0x10, 0x20, 0x30]);
+            let f = PyPointCloudFrame::new(payload);
+            assert_eq!(f.__len__(), 3);
+            assert_eq!(f.bytes(py).as_bytes(), &[0x10, 0x20, 0x30]);
+            assert_eq!(f.__repr__(), "PointCloudFrame(<3 bytes>)");
+        });
+    }
+
     #[test]
     fn producer_frame_extracts_to_rust_jpeg() {
         Python::with_gil(|py| {
-            let payload = PyJpegFrame::new(PyBytes::new_bound(py, &[1, 2, 3]));
-            let pf = PyProducerFrame::new(123_456_789, payload);
-            let rust = pf.to_rust_jpeg();
+            let payload_any = jpeg_frame_as_any(py, &[1, 2, 3]);
+            let pf = PyProducerFrame::new(123_456_789, payload_any).unwrap();
+            let rust = pf.to_rust_jpeg().expect("payload is Jpeg");
             assert_eq!(rust.timestamp_ns, 123_456_789);
             assert_eq!(rust.payload.bytes, vec![1, 2, 3]);
         });
     }
 
     #[test]
-    fn consumer_frame_constructs_from_rust() {
+    fn producer_frame_extracts_to_rust_pointcloud() {
+        Python::with_gil(|py| {
+            let payload_any = pointcloud_frame_as_any(py, &[0xaa, 0xbb]);
+            let pf = PyProducerFrame::new(42, payload_any).unwrap();
+            let rust = pf.to_rust_pointcloud().expect("payload is PointCloud");
+            assert_eq!(rust.timestamp_ns, 42);
+            assert_eq!(rust.payload.bytes, vec![0xaa, 0xbb]);
+        });
+    }
+
+    /// Mismatched payload variant on `to_rust_*` must surface a
+    /// human-readable error — the source-stream pump turns this into an
+    /// `EndReason::ProducerError` on the wire rather than ending the
+    /// substream silently.
+    #[test]
+    fn producer_frame_to_rust_errors_on_mismatched_payload() {
+        Python::with_gil(|py| {
+            let pf_jpeg = PyProducerFrame::new(0, jpeg_frame_as_any(py, &[1])).unwrap();
+            let err = pf_jpeg.to_rust_pointcloud().expect_err("jpeg ≠ pointcloud");
+            assert!(err.contains("AcceptPointCloud"), "{err}");
+            assert!(err.contains("PointCloudFrame"), "{err}");
+
+            let pf_pc =
+                PyProducerFrame::new(0, pointcloud_frame_as_any(py, &[2])).unwrap();
+            let err = pf_pc.to_rust_jpeg().expect_err("pointcloud ≠ jpeg");
+            assert!(err.contains("AcceptJpeg"), "{err}");
+            assert!(err.contains("JpegFrame"), "{err}");
+        });
+    }
+
+    /// A non-JpegFrame / non-PointCloudFrame object passed as `payload`
+    /// must surface a `ValueError` at construction time — the Python
+    /// surface is closed over the two SDK-supported `T`s.
+    #[test]
+    fn producer_frame_rejects_unknown_payload_type() {
+        Python::with_gil(|py| {
+            // py.None() is a stand-in for "anything that isn't a frame
+            // PyClass" — same shape as a Python user passing a dict, an
+            // int, a custom class, etc.
+            let bad = py.None();
+            let err =
+                PyProducerFrame::new(0, bad.bind(py).clone()).expect_err("None is not a frame");
+            assert!(err.is_instance_of::<PyValueError>(py));
+            assert!(err.to_string().contains("JpegFrame"), "{err}");
+            assert!(err.to_string().contains("PointCloudFrame"), "{err}");
+        });
+    }
+
+    #[test]
+    fn consumer_frame_constructs_from_rust_jpeg() {
         Python::with_gil(|_py| {
             let rust_frame = RustConsumerFrame {
                 timestamp_ns: 9_999,
@@ -1029,10 +1347,36 @@ mod tests {
                     bytes: vec![0xff, 0xd8, 0xee],
                 },
             };
-            let pf = PyConsumerFrame::from_rust(rust_frame);
+            let pf = PyConsumerFrame::from_rust_jpeg(rust_frame);
             assert_eq!(pf.timestamp_ns(), 9_999);
             assert_eq!(pf.seq(), 17);
-            assert_eq!(pf.payload().__len__(), 3);
+            // Inspect the payload variant directly via the
+            // `pub(crate)` field — exposing `__len__` would require
+            // routing through the GIL-bound getter.
+            match &pf.payload {
+                FramePayload::Jpeg(j) => assert_eq!(j.inner.bytes.len(), 3),
+                _ => panic!("expected Jpeg payload variant"),
+            }
+        });
+    }
+
+    #[test]
+    fn consumer_frame_constructs_from_rust_pointcloud() {
+        Python::with_gil(|_py| {
+            let rust_frame = RustConsumerFrame {
+                timestamp_ns: 1_000,
+                seq: 7,
+                payload: RustPointCloudFrame {
+                    bytes: vec![0x01, 0x02, 0x03, 0x04],
+                },
+            };
+            let pf = PyConsumerFrame::from_rust_pointcloud(rust_frame);
+            assert_eq!(pf.timestamp_ns(), 1_000);
+            assert_eq!(pf.seq(), 7);
+            match &pf.payload {
+                FramePayload::PointCloud(p) => assert_eq!(p.inner.bytes.len(), 4),
+                _ => panic!("expected PointCloud payload variant"),
+            }
         });
     }
 
@@ -1041,10 +1385,12 @@ mod tests {
         Python::with_gil(|py| {
             // Construct a Python object to stand in for the source iterator
             // (a None object is fine — we only inspect .kind, never drain).
-            let placeholder = py.None();
             let info = PyAcceptInfo::new("h".into(), "c".into(), "ch".into());
-            let acc = PyStreamDecision::accept(info, placeholder);
+            let acc = PyStreamDecision::accept(info.clone(), py.None());
             assert_eq!(acc.kind(), "accept");
+
+            let acc_pc = PyStreamDecision::accept_pointcloud(info, py.None());
+            assert_eq!(acc_pc.kind(), "accept_pointcloud");
 
             let dec = PyStreamDecision::decline(PyDeclineReason::sensor_not_found());
             assert_eq!(dec.kind(), "decline");
@@ -1052,6 +1398,8 @@ mod tests {
             // After taking, the decision reports `consumed`.
             let _taken = acc.take();
             assert_eq!(acc.kind(), "consumed");
+            let _taken = acc_pc.take();
+            assert_eq!(acc_pc.kind(), "consumed");
         });
     }
 
@@ -1131,6 +1479,95 @@ def _bad(req):
                     "decline detail should carry the Python error: {detail}",
                 ),
                 _ => panic!("expected Decline(Other) with the Python error in detail"),
+            }
+        });
+    }
+
+    /// `build_stream_provider` mapping the Python `accept(info, source)`
+    /// factory onto `RustStreamDispatch::AcceptJpeg`. We don't drain the
+    /// source-stream here (that requires the wrapper's tokio runtime
+    /// + asyncio loop scaffolding from the cross-language tests); we
+    /// only assert that the dispatch variant matches the Python call.
+    #[test]
+    fn build_stream_provider_accept_jpeg_maps_to_dispatch_acceptjpeg() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "test_provider_accept_jpeg").unwrap();
+            crate::populate_module(&module).unwrap();
+            let cluster = module.getattr("cluster").unwrap();
+
+            py.run_bound(
+                r#"
+def _make(cluster):
+    async def _src():
+        if False:
+            yield None  # makes this an async generator
+    def provider(req):
+        return cluster.StreamDecision.accept(
+            info=cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch"),
+            source=_src(),
+        )
+    return provider
+"#,
+                None,
+                None,
+            )
+            .unwrap();
+            let make = py.eval_bound("_make", None, None).unwrap();
+            let provider = make.call1((&cluster,)).unwrap();
+            let rust_provider = build_stream_provider(provider.unbind());
+
+            match rust_provider(RustStreamRequest {
+                sensor_id: "any".into(),
+            }) {
+                RustStreamDispatch::AcceptJpeg { info, source: _ } => {
+                    assert_eq!(info.sensor_hash, "h");
+                    assert_eq!(info.clock_id, "c");
+                }
+                _ => panic!("expected AcceptJpeg"),
+            }
+        });
+    }
+
+    /// `build_stream_provider` mapping `accept_pointcloud(info, source)`
+    /// onto `RustStreamDispatch::AcceptPointCloud` (Dagaz Batch 2 — the
+    /// new dispatch arm).
+    #[test]
+    fn build_stream_provider_accept_pointcloud_maps_to_dispatch_acceptpointcloud() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "test_provider_accept_pc").unwrap();
+            crate::populate_module(&module).unwrap();
+            let cluster = module.getattr("cluster").unwrap();
+
+            py.run_bound(
+                r#"
+def _make(cluster):
+    async def _src():
+        if False:
+            yield None
+    def provider(req):
+        return cluster.StreamDecision.accept_pointcloud(
+            info=cluster.AcceptInfo(sensor_hash="pc", clock_id="c", clock_hash="ch"),
+            source=_src(),
+        )
+    return provider
+"#,
+                None,
+                None,
+            )
+            .unwrap();
+            let make = py.eval_bound("_make", None, None).unwrap();
+            let provider = make.call1((&cluster,)).unwrap();
+            let rust_provider = build_stream_provider(provider.unbind());
+
+            match rust_provider(RustStreamRequest {
+                sensor_id: "any".into(),
+            }) {
+                RustStreamDispatch::AcceptPointCloud { info, source: _ } => {
+                    assert_eq!(info.sensor_hash, "pc");
+                }
+                _ => panic!("expected AcceptPointCloud"),
             }
         });
     }

@@ -6,6 +6,24 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 18:00 HKT, 2026
+
+[Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 — `auki-network-py` extension for the new `T` shape. **Closes Dagaz Batch 2; cuts as v0.0.21.** Pins v0.0.20 (Dagaz Batch 1 SDK Rust core).
+
+**Producer side** ([`crates/auki-network-py/src/stream_types.rs`](crates/auki-network-py/src/stream_types.rs)): new `cluster.PointCloudFrame(bytes)` PyClass — analog of `JpegFrame`, opaque-bytes-with-a-`bytes`-property; the SDK doesn't decode either. `cluster.ProducerFrame.payload` widens to accept either `JpegFrame` or `PointCloudFrame` (was JPEG-only); the constructor type-checks and raises `ValueError` for anything else. New `cluster.StreamDecision.accept_pointcloud(*, info, source)` factory mirrors `accept(*, info, source)` (which keeps its JPEG semantics for back-compat); `.kind` returns `"accept"` / `"accept_pointcloud"` / `"decline"` / `"consumed"`. Mismatched payloads (yielding `JpegFrame` from an `accept_pointcloud` source, or vice versa) end the substream with `EndReason::ProducerError` carrying a typed detail rather than coercing the wrong T onto the wire.
+
+**Consumer side** ([`crates/auki-network-py/src/lib.rs`](crates/auki-network-py/src/lib.rs)): new `runtime.open_pointcloud_stream(peer_id, sensor_id) -> StreamSubscription` — same blocking shape as `open_stream` (which stays JPEG-only). Returns frames whose `payload` is a `PointCloudFrame`. The internal `RustClusterRuntime::open_stream::<T>` dispatch picks `T = PointCloudFrame` for the new method.
+
+**Internal seam.** `DecisionInner` extended (`Accept` → `AcceptJpeg` + new `AcceptPointCloud`; `Decline` unchanged); `build_stream_provider` grows a third arm constructing `RustStreamDispatch::AcceptPointCloud`. `python_iter_into_source_stream` is now generic over `T` with a per-`T` `convert: fn(&PyProducerFrame) -> Result<RustProducerFrame<T>, String>` extractor — used twice (`to_rust_jpeg` / `to_rust_pointcloud`). `PyStreamSubscription` / `PyFrameIterator` hold a `FrameStreamKind` enum over the two typed `Pin<Box<dyn Stream<...>>>`s; `__next__` dispatches and produces a `PyConsumerFrame::from_rust_jpeg` / `from_rust_pointcloud` accordingly.
+
+**No new deps.** Pure additive; the `auki-network-rs` path-dep already exposes `PointCloudFrame` after Dagaz Batch 1 (v0.0.20).
+
+**Pattern A unchanged.** SDK owns the asyncio loop on its tokio worker; sidecar consumers stay sync-shaped. The async `def` generator's `finally` block fires on consumer disconnect via `aclose()` driven through `SourceStreamGuard`'s `Drop` — same scaffolding, two `T`s now.
+
+**Tests**: `cargo test -p auki-network-py` 40 (was 33; +7) including new `point_cloud_frame_round_trips_through_pybytes`, `producer_frame_extracts_to_rust_pointcloud`, `producer_frame_to_rust_errors_on_mismatched_payload`, `producer_frame_rejects_unknown_payload_type`, `consumer_frame_constructs_from_rust_pointcloud`, `build_stream_provider_accept_jpeg_maps_to_dispatch_acceptjpeg`, `build_stream_provider_accept_pointcloud_maps_to_dispatch_acceptpointcloud`. `pytest python_tests/` 44 / 51 with `DISCOVERY_BIN` set (was 39 / 46; +5) including the full Python-producer ↔ Python-consumer pointcloud conformance vector (mirroring the Rust-side `producer_accepts_and_streams_pointcloud_frames`) and a payload-mismatch test that pins the `EndReason::ProducerError` semantics. Existing JPEG round-trip tests pass byte-identically.
+
+**Migration.** Existing JPEG producers / consumers need no changes: `cluster.StreamDecision.accept(info, source)` still produces JPEG substreams, `runtime.open_stream(peer_id, sensor_id)` still opens JPEG substreams, `.kind == "accept"` is preserved. Only the type of `ProducerFrame.payload` widened from `JpegFrame` to `JpegFrame | PointCloudFrame`. See [`crates/auki-network-py/changelog.md`](crates/auki-network-py/changelog.md) for detail.
+
 ### broodsugar's claude · May 6, 16:30 HKT, 2026
 
 [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1 — producer-side `T` lift + `PointCloudFrame` payload type, both in `auki-network`. **Closes Dagaz Batch 1 SDK Rust core; cuts as v0.0.20.**

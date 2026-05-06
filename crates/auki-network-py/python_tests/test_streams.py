@@ -70,6 +70,17 @@ def test_jpeg_frame_carries_bytes() -> None:
     assert len(f) == len(payload)
 
 
+def test_pointcloud_frame_carries_bytes() -> None:
+    """Dagaz Batch 2 — `cluster.PointCloudFrame` is the analog of
+    `JpegFrame` for raw CDR-encoded `PointCloud2` ROS payloads. Same
+    shape, same accessors; the SDK doesn't decode either."""
+    payload = b"\x00\x01\x02\x03\xff"
+    f = cluster.PointCloudFrame(payload)
+    assert f.bytes == payload
+    assert len(f) == len(payload)
+    assert "PointCloudFrame" in repr(f)
+
+
 def test_decline_reason_factories() -> None:
     nf = cluster.DeclineReason.sensor_not_found()
     assert nf.kind == "sensor_not_found"
@@ -94,7 +105,28 @@ def test_end_reason_factories() -> None:
 def test_producer_frame_round_trips() -> None:
     pf = cluster.ProducerFrame(timestamp_ns=12345, payload=cluster.JpegFrame(b"abc"))
     assert pf.timestamp_ns == 12345
+    assert isinstance(pf.payload, cluster.JpegFrame)
     assert pf.payload.bytes == b"abc"
+
+
+def test_producer_frame_accepts_pointcloud_payload() -> None:
+    """Dagaz Batch 2 — `ProducerFrame.payload` accepts either
+    `JpegFrame` or `PointCloudFrame`. The substream-typed dispatch
+    happens later, when the source iterator is paired with a
+    `StreamDecision.accept_pointcloud(...)` Accept variant."""
+    pf = cluster.ProducerFrame(
+        timestamp_ns=42_000, payload=cluster.PointCloudFrame(b"\x01\x02")
+    )
+    assert pf.timestamp_ns == 42_000
+    assert isinstance(pf.payload, cluster.PointCloudFrame)
+    assert pf.payload.bytes == b"\x01\x02"
+
+
+def test_producer_frame_rejects_unknown_payload_type() -> None:
+    """Anything other than JpegFrame / PointCloudFrame is a
+    `ValueError` at construction time."""
+    with pytest.raises(ValueError, match="JpegFrame"):
+        cluster.ProducerFrame(timestamp_ns=0, payload="not-a-frame")
 
 
 def test_stream_decision_factory_tags() -> None:
@@ -106,6 +138,9 @@ def test_stream_decision_factory_tags() -> None:
 
     acc = cluster.StreamDecision.accept(info=info, source=_empty())
     assert acc.kind == "accept"
+
+    acc_pc = cluster.StreamDecision.accept_pointcloud(info=info, source=_empty())
+    assert acc_pc.kind == "accept_pointcloud"
 
     dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
     assert dec.kind == "decline"
@@ -313,9 +348,180 @@ def test_open_stream_against_unknown_sensor_raises_declined(tmp_path: Path) -> N
         rt_consumer.shutdown()
 
 
+def test_python_producer_python_consumer_round_trip_pointcloud(
+    tmp_path: Path,
+) -> None:
+    """Dagaz Batch 2 cross-language conformance vector — same shape as
+    the JPEG round-trip but with `PointCloudFrame` end-to-end. Producer
+    accepts via `accept_pointcloud(...)`; consumer opens via
+    `open_pointcloud_stream(...)`. Verifies the SDK routes both `T`s
+    through one shared swarm without crosstalk.
+
+    Mirrors `auki_network::stream_runtime::tests::producer_accepts_and_streams_pointcloud_frames`
+    on the Rust side.
+    """
+    port_a, port_b = _port_pair(2)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    # Producer side — sensor_id="lidar/points" → accept_pointcloud.
+    accepted_count = 0
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        nonlocal accepted_count
+        if req.sensor_id != "lidar/points":
+            return cluster.StreamDecision.decline(
+                cluster.DeclineReason.sensor_not_found()
+            )
+        accepted_count += 1
+
+        async def gen():
+            yield cluster.ProducerFrame(
+                timestamp_ns=10_000,
+                payload=cluster.PointCloudFrame(b"\x00\x01\x02"),
+            )
+            yield cluster.ProducerFrame(
+                timestamp_ns=20_000,
+                payload=cluster.PointCloudFrame(b"\x10\x11"),
+            )
+            yield cluster.ProducerFrame(
+                timestamp_ns=30_000,
+                payload=cluster.PointCloudFrame(b"\xa0\xa1\xa2\xa3"),
+            )
+
+        return cluster.StreamDecision.accept_pointcloud(
+            info=cluster.AcceptInfo(
+                sensor_hash="pc-sensor",
+                clock_id="lidar/clock",
+                clock_hash="pc-clock-hash",
+            ),
+            source=gen(),
+        )
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers() and rt_producer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        sub = rt_consumer.open_pointcloud_stream(
+            peer_id=PEER_ID_SEED_10,
+            sensor_id="lidar/points",
+        )
+        assert sub.info.sensor_hash == "pc-sensor"
+        assert sub.info.clock_id == "lidar/clock"
+
+        frames = sub.frames()
+
+        f0 = next(frames)
+        assert f0.seq == 0
+        assert f0.timestamp_ns == 10_000
+        assert isinstance(f0.payload, cluster.PointCloudFrame)
+        assert f0.payload.bytes == b"\x00\x01\x02"
+
+        f1 = next(frames)
+        assert f1.seq == 1
+        assert f1.timestamp_ns == 20_000
+        assert f1.payload.bytes == b"\x10\x11"
+
+        f2 = next(frames)
+        assert f2.seq == 2
+        assert f2.payload.bytes == b"\xa0\xa1\xa2\xa3"
+
+        with pytest.raises(cluster.StreamEndOfStream) as excinfo:
+            next(frames)
+        reason = excinfo.value.args[0]
+        assert reason.kind == "source_ended"
+
+        assert accepted_count == 1
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()
+
+
+def test_payload_mismatch_ends_stream_with_producer_error(tmp_path: Path) -> None:
+    """A producer that says `accept_pointcloud(...)` but yields a
+    `JpegFrame` ends the stream with `EndReason::ProducerError` —
+    each substream is mono-`T`, the SDK rejects the wrong payload
+    variant rather than coercing it."""
+    port_a, port_b = _port_pair(3)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        async def gen():
+            # Wrong T — substream is PointCloud, but we yield a JPEG frame.
+            yield cluster.ProducerFrame(
+                timestamp_ns=1, payload=cluster.JpegFrame(b"jpeg-bytes")
+            )
+
+        return cluster.StreamDecision.accept_pointcloud(
+            info=cluster.AcceptInfo(
+                sensor_hash="pc", clock_id="c", clock_hash="ch"
+            ),
+            source=gen(),
+        )
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        sub = rt_consumer.open_pointcloud_stream(
+            peer_id=PEER_ID_SEED_10, sensor_id="any"
+        )
+        frames = sub.frames()
+
+        with pytest.raises(cluster.StreamEndOfStream) as excinfo:
+            next(frames)
+        reason = excinfo.value.args[0]
+        assert reason.kind == "producer_error"
+        # Detail names which T it was expecting.
+        assert "PointCloudFrame" in (reason.detail or "")
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()
+
+
 def test_open_stream_after_shutdown_raises_runtime_error(tmp_path: Path) -> None:
     """Trying to open a stream after `runtime.shutdown()` raises
-    `RuntimeError` rather than hanging or panicking."""
+    `RuntimeError` rather than hanging or panicking. Same shape for the
+    pointcloud method."""
     doc = cluster.load_doc(
         str(write_cluster_json(tmp_path / "cluster.json", peers=[]))
     )
@@ -329,6 +535,8 @@ def test_open_stream_after_shutdown_raises_runtime_error(tmp_path: Path) -> None
     rt.shutdown()
     with pytest.raises(RuntimeError, match="shut down"):
         rt.open_stream(peer_id=PEER_ID_SEED_10, sensor_id="any")
+    with pytest.raises(RuntimeError, match="shut down"):
+        rt.open_pointcloud_stream(peer_id=PEER_ID_SEED_10, sensor_id="any")
 
 
 def test_open_stream_with_invalid_peer_id_raises_value_error(tmp_path: Path) -> None:

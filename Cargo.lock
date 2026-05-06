@@ -232,6 +232,7 @@ dependencies = [
 name = "auki-network-py"
 version = "0.0.0"
 dependencies = [
+ "auki-identity",
  "auki-network",
  "futures",
  "libp2p-identity",

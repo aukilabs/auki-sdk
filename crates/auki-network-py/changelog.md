@@ -6,6 +6,67 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 6, 14:00 HKT, 2026
+
+`auki_network.discovery` Python submodule landed — [Vinland](https://www.notion.so/3585c8e9659280699681caec256e0616) Batch 2, the PyO3 wrapper around `auki_network::discovery_client` from [v0.0.18](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.18). Sync-shaped per Pattern A — the SDK owns the asyncio loop on its tokio worker; sidecar consumers stay sync-shaped, matching grimsby's `auki-network-py` precedent. Pins v0.0.18 by adding `"discovery_client"` to the `auki-network-rs` features list. Reassigned from Arshak to SDK Claude on 2026-05-06 ("i am taking arshaks work, lets go").
+
+**Public surface** (new `auki_network.discovery` submodule):
+
+```python
+from auki_network.discovery import (
+    DiscoveryClient,
+    DiscoveryUnreachable,
+    DiscoveryRejected,
+    DiscoveryClockError,
+)
+
+client = DiscoveryClient("http://10.0.0.5:8080")
+
+# `seed` is the PARENT wallet seed (32 bytes). The wrapper internally
+# derives the peer-key wallet via `derive_child("peer/v1")` and signs
+# with that. Distinct from `cluster.spawn(seed=peer_seed)` which takes
+# the *peer* seed already derived. Mirrors the Rust shape.
+doc = client.register(
+    seed=wallet_seed,
+    cluster_name="vinland",
+    addresses=["/ip4/192.168.9.130/tcp/4001"],
+    expected_app_id="sentinel",  # optional
+    note=None,                    # optional
+)
+# doc is a cluster.ClusterDoc — same Python type cluster.load_doc returns.
+
+doc = client.fetch("vinland")
+client.deregister(seed=wallet_seed, cluster_name="vinland")
+```
+
+**Pattern A bridge**: each method `block_on`s on the existing process-wide `cluster_tokio_runtime()` (the one `cluster.spawn` already lazy-inits), so two SDK pieces share one tokio runtime in a Python process. `py.allow_threads()` releases the GIL during the I/O so other Python threads stay live. Cheap to construct (`reqwest::Client` pools connections internally); shareable across Python threads — one `DiscoveryClient` per Discovery URL.
+
+**Three typed Python exceptions** for the Rust `DiscoveryError` variants:
+
+- `DiscoveryUnreachable` — transport / DNS / connect / TLS / timeout. Discovery isn't reachable; the daemon retries or surfaces as a startup failure (Vinland D3 — the SDK does not fall back to a local `cluster.json`).
+- `DiscoveryRejected` — HTTP non-2xx. Carries `.status: int` and `.body: str` attributes so `try / except DiscoveryRejected as e: if e.status == 404: ...` works cleanly. Daemons treating clean shutdown as idempotent catch this on the second `deregister` call against an already-removed entry.
+- `DiscoveryClockError` — `SystemTime::now()` failed (pre-1970 or post-2262). Rare; means the host clock is broken — the SDK can't sign without a valid timestamp.
+
+**Identity decision: ****`seed: bytes`**** (32 bytes, parent), not a ****`Wallet`**** object.** PyO3 doesn't gracefully share pyclasses across crates without making them `pub`, and the existing `cluster.spawn(seed=...)` precedent is already the seed-bytes shape. Operators do `seed = auki_identity.load_or_mint_seed(seed_path)` once; for `cluster.spawn` they then derive the peer seed via `auki_identity.Wallet.from_seed(seed).derive_child("peer/v1").seed()`; for `discovery.register` they pass the parent seed directly and the wrapper does the same `derive_child` internally. Documented prominently in the module docstring with a side-by-side table — the asymmetry mirrors the underlying Rust APIs.
+
+**No new production deps on this crate** beyond extending the existing path-dep — `auki-network-rs`'s `discovery_client` feature pulls in `reqwest` / `base64` / `auki-jcs` / `thiserror` transitively. The wrapper itself adds a path-dep on `auki-identity` (the Rust crate, not `auki-identity-py`) for `Wallet::from_seed` reconstruction inside the FFI seam — sub-microsecond per call, no I/O.
+
+**Tests**: 7 new Rust-side smoke tests + 17 new Python-side tests (10 offline + 7 against a live Discovery binary, gated on `DISCOVERY_BIN` env var — same gate the Rust-side `tests/discovery_integration.rs` uses).
+
+Rust-side (`discovery::tests`, 6) + the surface-pin in `tests::module_exposes_discovery_submodule_with_documented_surface` (1) — auki-network-py Rust test count 26 → 33. The 6 module tests cover: constructor + URL trim, register seed-length validation, register multiaddr validation, deregister seed-length validation, fetch against unreachable URL → typed `DiscoveryUnreachable`, module-level surface pin (DiscoveryClient + 3 exception types).
+
+Python-side (`python_tests/test_discovery.py`):
+- **Offline (10)**: submodule surface pin, top-level `from auki_network import discovery`, constructor URL-trim, repr, register-rejects-short-seed, register-rejects-long-seed, register-rejects-invalid-multiaddr, deregister-rejects-short-seed, register-accepts-empty-addresses (the wrapper doesn't reject empty `addresses` — the operator might want to register without reachability info temporarily), fetch-against-unreachable-URL raises typed `DiscoveryUnreachable`.
+- **Live Discovery (7, gated on `DISCOVERY_BIN`)**: register returns full ClusterDoc (single-peer boot), three peers converge in `vinland` (Sentinel/Booster/Park sequential register + fetch shows all three), deregister removes the entry from a subsequent fetch, deregister-already-removed raises `DiscoveryRejected` with `.status == 404`, fetch unknown cluster raises `DiscoveryRejected` with `.status == 404`, path-traversal `cluster_name` (`"../etc/passwd"`) is rejected, returned ClusterDoc isinstance-checks against `cluster.ClusterDoc` (schema-parity smoke test — same Python type `cluster.load_doc` returns and `cluster.spawn` accepts).
+
+The fixture spawns Discovery as a subprocess on a fresh tempdir + ephemeral loopback port (binds `127.0.0.1:0`, reads the port, drops the listener; Discovery binds the same port a moment later), polls `GET /clusters` until 200 OK, yields the base URL, and tears the subprocess down on `finally` (terminate → wait timeout=2 → kill if still alive). Same shape as the Rust-side integration test.
+
+Test counts: Rust-side `cargo test -p auki-network-py` 33 (was 26; +7); Python-side `pytest python_tests/` 39 + 7 skipped without `DISCOVERY_BIN` / 46 with `DISCOVERY_BIN` set (was 22 / 22). No breaking changes.
+
+Will land in v0.0.19; closes Vinland Batch 2.
+
+---
+
 ### arshak's claude · May 5, 19:00 HKT, 2026
 
 [Grimsby](https://www.notion.so/3575c8e965928079a955ed9573bbb398) Lane B deliverable #4 — Path 1 prototype for the async-iter ↔ Rust `futures::Stream` bridge. New dev-gated module [`crates/auki-network-py/src/stream_bridge.rs`](crates/auki-network-py/src/stream_bridge.rs) ships `PyAsyncIterStream`: wraps a `Py<PyAny>` Python async iterator (anything with `__anext__`) and exposes an async `next() -> PyResult<Option<PyObject>>` that drives one `__anext__()` round trip per call via `pyo3_async_runtimes::tokio::into_future`. `StopAsyncIteration` → `Ok(None)`; any other Python exception → `Err(e)`. ~100 LoC. The bridge is the implementation half of D3's "provider returns a `futures::Stream`" framing on the Python side, evaluating BoosterApp Claude's preferred shape (an `async def` generator whose `finally` is the natural cleanup hook on consumer disconnect) against the fallback (a sync object exposing `async def next() -> Optional[T]`). Two tests pass on `--test-threads=1`: 3-yield generator round-trips through the bridge in order; a `RuntimeError` raised mid-iteration surfaces as `Err`, not silent termination. **Dev-gated** (`#![cfg(test)]`) until deliverable #6 — the production wrapper for `stream_provider` — lands; that PR will lift the gate and grow this into the producer-side wrapper. **Caveat doc'd in the test module:** parallel `cargo test` runs deadlock on `pyo3-async-runtimes`'s shared tokio runtime + per-call asyncio event loop on the current Python thread; serial passes in 0.23s. Not a production concern (real users don't spawn N concurrent SDK runtimes per process), purely a test ergonomics note. **Companion regression fix in the same branch:** [`crates/auki-network-py/src/lib.rs`](crates/auki-network-py/src/lib.rs)'s `cluster.spawn` wrapper didn't build against develop after PR #40 added the required `stream_provider` arg to `RustClusterRuntime::spawn`. Fixed by importing `decline_all_streams` from `auki_network_rs::stream_runtime` and threading `decline_all_streams()` through — same shape Park took in [park#20](https://github.com/aukilabs/park/pull/20). The wrapper is consumer-only today; deliverable #6 will replace `decline_all_streams()` with a Python-supplied provider. New dev-deps: `pyo3-async-runtimes = "0.22"` (matches our `pyo3 = "0.22"`), `futures = "0.3"`. No production-deps change. **Path 1 selected for the production wrapper** — the BoosterApp-preferred `finally`-on-Drop shape is implementable in ~100 LoC of PyO3 plumbing; Path 2 (sync object with `async def next()`) becomes the documented fallback if implementation surprises us. Will land alongside the production wrapper in v0.0.17.

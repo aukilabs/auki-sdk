@@ -34,7 +34,15 @@ extension-module = ["pyo3/extension-module"]
 # Renamed via `package =` so the upstream crate's name doesn't collide
 # with our own lib name `auki_network` (which is also the Python module
 # name the `#[pymodule]` macro generates the entry point for).
-auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm"] }
+auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
+# `auki-identity` for `Wallet::from_seed` — the Python wrapper takes a
+# 32-byte seed (the parent wallet's secret) on `register` / `deregister`
+# and reconstructs the Wallet internally to call into Rust's
+# `discovery_client::register(wallet, ...)`. Same parent-seed-bytes seam
+# `auki-identity-py`'s `Wallet.seed()` returns; consumers extract via
+# `auki_identity.Wallet.from_seed(seed).seed()` (or just hold onto the
+# 32 bytes from `auki_identity.load_or_mint_seed`).
+auki-identity = { path = "../auki-identity" }
 # `PeerId` parsing/formatting on the Python ↔ Rust seam (the underlying
 # `ParticipantInfo.peer_id` is `libp2p_identity::PeerId`; Python sees a
 # string, the wrapper does the parse/format). Same feature set as

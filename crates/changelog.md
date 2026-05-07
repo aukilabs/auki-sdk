@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:00 HKT, 2026
+
+`auki-registry`: per-section "Departing" callouts on the four log-payload sections in `README.md` cross-linking each migration step in `auki-datatypes/src/sprint.md`; corresponding `parking_lot.md` item documenting the doc-stays-until-code-moves rule.
+
 ### broodsugar's claude · May 7, 21:15 HKT, 2026
 
 `auki-registry`: README + `src/readme.md` opening framing updated to flag the scope-shrink-in-flight decided 2026-05-07. The "registry entries AND log payloads" framing was the AI-drift identified earlier; corrected to *"the SDK's identity catalog"* with a callout pointing readers at [`auki-datatypes/src/sprint.md`](auki-datatypes/src/sprint.md) for the type migration. Content describing today's code is unchanged — accurate for current state; the framing fix is what mattered. Doc-only.

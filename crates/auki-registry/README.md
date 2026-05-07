@@ -130,6 +130,8 @@ ClockRegistryEntry {
 
 ## Sensor Log payload — schema v1
 
+> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as `PinholeCameraLogEntry` (renamed; protobuf-encoded). See [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 1.*
+
 The Sensor Log is an `auki_logs::Log<SensorLogEntry>`. The framing's `timestamp_ns` is the frame timestamp; the payload here carries per-frame data.
 
 ### Manifest
@@ -178,6 +180,8 @@ The K1's intrinsics are essentially constant in practice, but the schema doesn't
 
 ## Point Cloud Log payload — schema v1
 
+> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as `PointCloudLogEntry` (protobuf-encoded; on-disk vs. wire-format shape pending — see [`auki-datatypes/parking_lot.md`](../auki-datatypes/parking_lot.md)). [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 3.*
+
 The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. Each point-cloud log is its own directory at `<session>/sensorlogs/<sensor_log_id>/` — same path scheme as a camera sensor log, just with a different sensor whose registry entry has `SensorBody::PointCloud` (the manifest's `sensor_hash` is what tells a reader to expect `PointCloudLogEntry` payloads). Capturing camera + point cloud simultaneously means two parallel sensor logs sharing a session, not one multi-sensor log. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
 
 ### Manifest
@@ -209,6 +213,8 @@ The bytes are repacked accordingly. A `SensorBody::PointCloud` registry entry st
 ---
 
 ## Audio Log payload — schema v1
+
+> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as `AudioLogEntry` (protobuf-encoded; explicit `sample_count` field pending — see [`auki-datatypes/parking_lot.md`](../auki-datatypes/parking_lot.md)). [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 4.*
 
 The Audio Log is a separate `auki_logs::Log<AudioLogEntry>`. Each recording is one microphone (or mic array) producing samples over time; the framing's `timestamp_ns` is the **chunk's start time**.
 
@@ -257,6 +263,8 @@ v1 specifies PCM only. When compression is added, `sample_format` gains values l
 ---
 
 ## Pose Log payload — schema v1
+
+> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as flat `SpatialTransform` segment entries (protobuf-encoded). The `PoseLogEntry` wrapper goes away; `from` / `to` move to manifest identity (per-`(from, to)` log instead of per-producer). See [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 5 and [root `parking_lot.md`](../../parking_lot.md) "Pose Log capture shape" Propagate task.*
 
 The Pose Log is an `auki_logs::Log<PoseLogEntry>`. The framing's `timestamp_ns` is the message arrival time on the daemon's clock; the payload here carries one batch of transforms (one ROS `TFMessage`, or the equivalent for other producers).
 

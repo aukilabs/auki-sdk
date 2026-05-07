@@ -9,7 +9,7 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 ├── registries/
 │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 │   ├── clocks/<clock_id>/<hash>.json
-│   └── frames/<frame_id>/<hash>.json     ← coming
+│   └── frames/<frame_id>/<hash>.json     ← Frame Registry (v0.0.22)
 └── <session_id>/                          ← UUIDv4 minted at app boot
     ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json

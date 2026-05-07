@@ -41,12 +41,18 @@ CameraLogProduct {
   clock_entry:     ClockRegistryEntry,
 
   // ── Spatial frame identity ──────────────────────────────────────
-  // The Frame Registry entry for the sensor's mounting position.
-  // Frame Registry is currently pending — `frame_entry`'s shape is
-  // TBD until that schema lands.
+  // The Frame Registry entry for the sensor's mounting position
+  // (the camera optical frame for an RGB camera). Shipped in v0.0.22.
+  // The hash references a specific FrameRegistryEntry under
+  // <app_root>/registries/frames/<frame_id>/<hash>.json so a peer can
+  // resolve handedness / axes / units before consuming any pose data
+  // tagged with this frame.
   frame_id:        string,
   frame_hash:      string,
-  frame_entry:     FrameRegistryEntry,   // TBD — pending Frame Registry
+  frame_entry:     FrameRegistryEntry,
+                   // Carries: handedness, axes (x/y/z directions),
+                   //          units. Tree structure (parent-child)
+                   //          lives in the Pose Log, not here.
 
   // ── Time-alignment options ──────────────────────────────────────
   // One entry per other clock this node tracks via a TimeTransform Log.
@@ -90,19 +96,21 @@ TimeTransformAvailability {
 }
 ```
 
-### `FrameTransformAvailability` *(TBD — pending Pose Log)*
+### `FrameTransformAvailability`
 
 ```
 FrameTransformAvailability {
   to_frame_id:           string,
   to_frame_hash:         string,
-  to_frame_entry:        FrameRegistryEntry,    // embedded
-  log_handle:            string,
+  to_frame_entry:        FrameRegistryEntry,    // embedded; v0.0.22 shipped
+  log_handle:            string,                // e.g. "poselogs/<recording_uuid>" — relative to <session_id>
   earliest_timestamp_ns: i64,
   latest_timestamp_ns:   i64,
   status:                "live" | "sealed" | "aborted",
 }
 ```
+
+The Pose Log capture path is in place as of v0.0.11 (`PoseLogEntry`, `PoseSource`, `build_pose_log_manifest`, `poselog_path`). The consumer-side `convert_pose` operation that composes pose paths across the TF tree is still pending — `FrameTransformAvailability` describes what's available; the composition is the consumer's job today.
 
 ---
 
@@ -110,7 +118,7 @@ FrameTransformAvailability {
 
 - **Bytes** — full sensor identity (width, height, format, color space, intrinsics/distortion model).
 - **Time** — full clock identity for the log's timestamps.
-- **Space** — full frame identity for the sensor's mounting position (once Frame Registry exists).
+- **Space** — full frame identity (handedness, axes, units) for the sensor's mounting position.
 - **Time bridges** — a menu of TimeTransform Logs to align with the peer's own clock.
 - **Space bridges** — a menu of pose chains to align with the peer's own coordinate frame.
 - **Coverage** — what time range is on disk, how big.
@@ -142,13 +150,14 @@ Everything required to decide "do I want this, and how do I consume it" without 
 {
   "schema_version": 1,
   "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-  "sensor_hash": "e8cb3879fcfa7f716047aa0892b0c0c0",
+  "sensor_hash": "d798fa879c80a5b00cabc1ce47ca4f7a",
   "sensor_entry": {
     "type": "rgb_camera",
     "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
     "width": 544, "height": 488, "frame_rate_hz": 20,
     "pixel_format": "YUV_NV12", "color_space": "BT.709",
-    "intrinsics_model": "pinhole", "distortion_model": "plumb_bob"
+    "intrinsics_model": "pinhole", "distortion_model": "plumb_bob",
+    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical"
   },
   "clock_id": "K1-AABBCCDDEEFF/utc",
   "clock_hash": "89f84f4c2e09bef81d385b2af1d17e6c",
@@ -158,9 +167,14 @@ Everything required to decide "do I want this, and how do I consume it" without 
     "unit": "milliseconds", "monotonic": false,
     "epoch": "1970-01-01T00:00:00Z", "scope": "global"
   },
-  "frame_id": "K1-AABBCCDDEEFF/head_left_cam_frame",
-  "frame_hash": "...",
-  "frame_entry": "<TBD — pending Frame Registry>",
+  "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
+  "frame_hash": "fd0dc3789e898b71b5e16ee122a81a44",
+  "frame_entry": {
+    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
+    "handedness": "right",
+    "axes": {"x": "right", "y": "down", "z": "forward"},
+    "units": "meters"
+  },
   "time_transforms": [
     {
       "to_clock_id": "K1-AABBCCDDEEFF/monotonic",
@@ -193,7 +207,7 @@ Everything required to decide "do I want this, and how do I consume it" without 
 
 ## Open questions
 
-Tracked in the root [`parking_lot.md`](parking_lot.md) under the "Discovery descriptor — …" sections (Pose Log shape, `log_handle` semantics, aborted-status detection, self-hash) and per-crate parking lots ([Frame Registry shape](crates/auki-registry/parking_lot.md) lives in `auki-registry`).
+Tracked in the root [`parking_lot.md`](parking_lot.md) under the "Discovery descriptor — …" sections (`log_handle` semantics, aborted-status detection, self-hash) and per-crate parking lots. The Frame Registry shape question is resolved (v0.0.22); the Pose Log shape question is partially resolved (capture-side shipped, `convert_pose` consumer side pending).
 
 ---
 

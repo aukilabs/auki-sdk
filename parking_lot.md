@@ -14,21 +14,21 @@ Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation 
 
 [CONTRIBUTING.md](CONTRIBUTING.md) describes the outer crate `README.md` as the **aspirational spec** ("what this component should be") while `src/README.md` is **what is actually implemented today**. In practice the outer crate READMEs we just wrote describe what's implemented today, since spec and reality match. As the SDK grows and ambitions outpace implementation, the two framings diverge — which one is the outer README?
 
-## Cross-language conformance vectors
+## Cross-language conformance vectors — coverage gaps
 
-`auki-hash` publishes locked conformance vectors so any reimplementation can be validated. Should `auki-jcs`, `auki-logs`, `auki-registry`, and `auki-time-transforms` also publish locked vectors? Concretely: a `tests/cross_language/` directory with golden bytes any port must reproduce. Boosterapp's Python sidecar is already a de facto second implementation — vectors would catch drift automatically.
+Locked vectors now exist in `auki-hash` (XXH3-128), `auki-identity` (`derive_child("peer/v1")` pubkey + `sign_canonical_json`), `auki-network` (seed → libp2p PeerId, Vinland Discovery `register` signing, PointCloudFrame on-wire), and `auki-registry` (M1 sensor + M1 point cloud + Frame Registry M1 vector). See the table in [`README.md`](README.md). Not yet locked: `auki-jcs` (canonicalization end-to-end, beyond what `auki-identity` exercises in passing), `auki-logs` (segment file binary layout — the most-load-bearing schema with no cross-language reference yet), `auki-time-transforms` (TimeTransform Log payload). Worth adding when a second-language consumer (Park's browser side, or a future Python `auki-logs-py`) starts touching that on-disk shape — drift is silent until then.
 
 ## `/api/state.session_uuid` vs `/api/info.session_id` naming
 
 Post-ansuz `/api/info` redesign returns `session_id`; `/api/state` still returns `session_uuid`. Same value, two field names. The SDK's broader convention is `session_id` (per [`auki-session`](crates/auki-session/README.md) and the manifest spec); `session_uuid` predates that landing. Renaming `/api/state.session_uuid` → `session_id` is a breaking change to consumers expecting the old name (Park, etc.). Aligning makes the API consistent; deferring keeps existing consumers unbroken until the next coordination-tag PR. Decide with the next consumer-coordination round.
 
-## Glossary.md — additional terms to seed
+## Glossary.md term coverage
 
-[Glossary.md](Glossary.md) seeded May 4, 2026 with Domain, Domain Owner, Domain ID, Cluster, Scenegraph, Scenegraph ID, Map, Session ID. Pending entries: Frame, Pose Log, Sensor Log, Detection Log, TimeTransform Log, Pose Source, Anchor, App ID. Open question — does each crate-owned term live in the Glossary or stay in the crate's README, with the Glossary linking out? Default for now: protocol-level concepts (Domain, Map, Cluster, identifier model) live in the Glossary; per-crate implementation details stay with the crate.
+[Glossary.md](Glossary.md) covers protocol-level concepts (Domain, Map, Cluster, identifier model), all four logs, both registries that ship today (Sensor + Clock are described per-crate; Frame Registry has its own Glossary entry as of v0.0.22), Pose Source, Anchor, App ID, App Instance, Discovery. Per-crate implementation details stay in each crate's README; the Glossary links out where the boundary is unclear. **Resolved 2026-05-07** — original parking-lot question was whether each crate-owned term lived in the Glossary or stayed with the crate; the answer is hybrid (protocol concepts in the Glossary, implementation details in the crate), as documented above.
 
 ## Python bindings strategy
 
-Listed under "Not yet implemented" in [README.md](README.md). Path forward options: (a) PyO3 wrapper exposing `auki-logs`, `auki-registry`, `auki-time-transforms`; (b) pure-Python re-implementation per the on-disk specs; (c) bless boosterapp's existing Python sidecar as the official binding. Each has different drift-risk, packaging, and effort tradeoffs.
+**Resolved 2026-05-06 — per-component (a).** [`auki-identity-py`](crates/auki-identity-py) ships the identity primitives; [`auki-network-py`](crates/auki-network-py) ships `ClusterRuntime` + `Stream<T>` + `discovery_client`. Per-component naming over an umbrella `auki-py`. Future bindings (`auki-logs-py`, `auki-session-py`, `auki-registry-py`, `auki-time-transforms-py`) follow the same pattern when downstream consumers need them.
 
 ---
 
@@ -58,7 +58,7 @@ Would let peers cache by claim identity, but adds a chicken-and-egg with `issued
 
 ## Propagate: Pose Log capture shape decided
 
-`PoseLogEntry { transforms: Vec<TransformSample> }` with inline `PoseSource` in the manifest (no Pose Source Registry — payload is self-describing; provenance only). Update [`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` to point at the actual Pose Log layout (`<session>/poselogs/<recording_uuid>/`); confirm the discovery descriptor reads cleanly against the new shape. `convert_pose` itself is still pending — capture and read are in place; composition / path-finding is not.
+`PoseLogEntry { transforms: Vec<TransformSample> }` with inline `PoseSource` in the manifest (no Pose Source Registry — payload is self-describing; provenance only). [`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability` is still marked "TBD — pending Pose Log"; refresh to reflect that the shape is now concrete (`log_handle` references `<session>/poselogs/<recording_uuid>/`, `to_frame_id` / `to_frame_hash` / `to_frame_entry` resolve via the Frame Registry which now exists). `convert_pose` itself is still pending — capture and read are in place; composition / path-finding is not.
 
 ## Discovery descriptor — `log_handle` semantics
 

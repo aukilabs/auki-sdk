@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 7, 22:30 HKT, 2026
+
+[Sawslin](https://www.notion.so/3585c8e9659280dd9093c703d88e1530) Phase 1 Lane 0 / **PR A** (clean half; targets v0.0.24 — v0.0.23 is spec/scaffold-only per Nils' recent rewrite). `auki-network`: new [`cluster_name`](crates/auki-network/src/cluster_name.rs) module — `resolve(flag) -> Result<String, ClusterNameError>` implements sawslin Decision #1's strict precedence (flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → fail-fast). `auki-registry`: `SensorBody::JointState { joint_names, frame_rate_hz }` variant + locked XXH3-128 vector (`b0cffe39e34d0f326112c21c071b2c1a`) + `JointState::validate` (rejects empty / duplicate joint names with new `Error::InvalidJointNames`); plus `FrameRegistryEntry::opencv_pnp` preset (locked decision #2; numerically same as `ros_optical` but semantically distinct — sentinel publishes ArUco poses tagged `opencv_pnp` from Phase 3+, park reads the registry to compute one conversion matrix to its render frame). `auki-ros-adapter`: `JointStateMsg` mirror + `build_joint_state_registry_entry` helper. `auki-network-py`: `auki_network.cluster.resolve_cluster_name(flag=None)` PyO3 wrapper. PoseStream wire format + `JointAngles` / `SpatialTransform` payloads + single `AcceptPoseStream` dispatch variant (per locked decision #7 — same variant carries both shapes via the typed source) land in **PR B**, defined as protobuf messages in [`auki-datatypes`](crates/auki-datatypes) directly so the migration sweep doesn't introduce a `TransformFrame → SpatialTransform` rename later.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 [`auki-datatypes`](crates/auki-datatypes) migration architecture decisions: manifest encoding stays JCS-JSON (not protobuf); new [`auki-manifests`](crates/auki-manifests) crate (to be created) owns `build_*_log_manifest` builders + manifest schemas, extracted as Step 0 prep PR before migration step 1. [`auki-logs`](crates/auki-logs) parking-lot open question added: encoder-aware vs encoder-agnostic `Log<T>` post-migration.

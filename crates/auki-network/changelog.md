@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 7, 22:30 HKT, 2026
+
+`cluster_name` resolver helper landed (sawslin Phase 1 Lane 0 / PR A; targets v0.0.24). New always-available module [`cluster_name`](src/cluster_name.rs) with one public function — `resolve(flag: Option<&str>) -> Result<String, ClusterNameError>` — implementing sawslin Decision #1's strict precedence: flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → `ClusterNameError::Unset`. Empty-string env values treated as unset. Pure stdlib, no feature gate, no `thiserror` (Display + std::error::Error implemented manually since the swarm-feature-gated thiserror dep doesn't reach this surface). Tests cover the four-corner cases (flag-wins, env-fallback, both-unset, empty-env-as-unset) plus the explicit-empty-flag pass-through.
+
+The SDK already accepts `cluster_name` as a parameter everywhere it matters (`ClusterDoc::cluster_name`, every `discovery_client` method); what was missing was a shared way for daemons to read the value out of CLI/env without each reimplementing the same precedence + fail-fast. Boosterapp's back-compat carve-out (`flag > env > default "vinland"` rather than strict — see sawslin Decision #1's follow-up) lives in boosterapp, not here; documented in the module-level rustdoc.
+
+**On "strip the hardcoded ****`vinland`**** constant in ****`auki-identity`**** + tests" (sawslin Lane 0 bullet):** I audited all `"vinland"` references in the SDK. Every one is inside a `#[cfg(test)]` block — they're test fixtures pinning historical signatures (the locked vector for `Wallet::sign_canonical_json` against a vinland-shaped registration JSON; discovery_client unit tests). There is **no production hardcoded constant** — `cluster_name` already flows through `ClusterDoc` / `discovery_client` as a parameter (per `auki-network/src/sprint.md`'s D5-honored decision). The test fixtures must stay verbatim, because changing the input changes the signature and breaks the cross-language conformance guarantee. So the SDK side of that bullet is a no-op; the daemon side is the boosterapp / park / sentinel CLI wiring.
+
+---
+
 ### broodsugar's claude · May 6, 16:30 HKT, 2026
 
 `stream_runtime` lifted to multi-`T` dispatch + `stream_protocol` gains `PointCloudFrame` — [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1 (#1 + #2). One PR; cuts as v0.0.20.

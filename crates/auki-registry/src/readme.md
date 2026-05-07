@@ -144,14 +144,17 @@ A named coordinate system. Tells a consumer how to interpret position and rotati
 
 `AxisConvention` is validated at write time: the three axes must be drawn from three distinct axis-pairs (forward/backward, left/right, up/down). Handedness consistency vs. axes is **not** cross-checked — both fields are declarations.
 
-Preset constructors fill in the four conventions that cover almost every real-world frame:
+Preset constructors fill in the five conventions that cover almost every real-world frame:
 
 ```rust
 FrameRegistryEntry::ros_body(frame_id)     // right, x=forward y=left z=up,    meters (REP-103)
 FrameRegistryEntry::ros_optical(frame_id)  // right, x=right y=down z=forward, meters (REP-103 optical)
 FrameRegistryEntry::opengl(frame_id)       // right, x=right y=up z=backward,  meters
 FrameRegistryEntry::unity(frame_id)        // left,  x=right y=up z=forward,   meters
+FrameRegistryEntry::opencv_pnp(frame_id)   // right, x=right y=down z=forward, meters (numerically same as ros_optical)
 ```
+
+`opencv_pnp` is numerically identical to `ros_optical` — preserved as a separate preset because the *semantic* contract differs ("output of OpenCV's PnP pipeline" vs "REP-103 optical frame"); operators reading a pose log want to see the producer's intent. Used by sentinel for ArUco-marker pose streams (sawslin Phase 3+; see [sawslin Decision #2](https://www.notion.so/3585c8e9659280dd9093c703d88e1530)).
 
 The on-disk JSON is fully spelled-out either way — presets are pure ergonomics, not shorthand on the wire.
 
@@ -167,6 +170,19 @@ pub struct Microphone {
 ```
 
 Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
+
+### `SensorBody::JointState`
+
+```rust
+pub struct JointState {
+    pub joint_names: Vec<String>,   // ordered list; per-frame angle vectors index by position
+    pub frame_rate_hz: u32,         // intended publication rate (sizing hint, not enforced)
+}
+```
+
+Static identity of an articulated-joint sensor. Mirrors `sensor_msgs/JointState` shape on the producer side, but stores names as a static list rather than re-publishing them with every frame: the K1 (and most articulated platforms) emit the same joint set every frame, so per-frame names are wire bloat. The frame payload (defined in [`auki-datatypes`](../../auki-datatypes); landed alongside the PoseStream wire format in PR B) references this list by index.
+
+`JointState::validate()` rejects empty `joint_names` and duplicate names with `Error::InvalidJointNames`. Cross-language consumers indexing by name (rather than position) require both invariants. The matching helper in [`auki-ros-adapter`](../../auki-ros-adapter) (`build_joint_state_registry_entry`) calls `validate()` for the integrator.
 
 ### `PoseSource` (inline in Pose Log manifest, not a registry entry)
 
@@ -286,7 +302,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (41 total)
+## Tests (49 total)
 
 | Test | Asserts |
 |------|---------|
@@ -319,12 +335,20 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `ros_optical_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_optical` matches |
 | `opengl_preset_matches_explicit_construction` | `FrameRegistryEntry::opengl` matches |
 | `unity_preset_matches_explicit_construction` | `FrameRegistryEntry::unity` matches |
-| `validate_accepts_all_four_presets` | All four presets pass orthogonality validation |
+| `opencv_pnp_preset_matches_explicit_construction` | `FrameRegistryEntry::opencv_pnp` matches |
+| `opencv_pnp_preset_axes_match_ros_optical_numerically` | Pin the numeric equivalence so park's render-frame conversion matrix doesn't drift |
+| `validate_accepts_all_five_presets` | All five presets pass orthogonality validation |
 | `validate_rejects_non_orthogonal_axes` | `x=Forward y=Backward` (same axis-pair) → `InvalidAxes` |
 | `write_frame_rejects_non_orthogonal_axes_without_touching_disk` | Validation runs before any I/O |
 | `write_then_read_frame_round_trip` | Frame entry round-trips through write+read |
 | `write_frame_is_idempotent_on_identical_content` | Same input → same hash, second write is no-op |
 | `read_frame_returns_none_for_missing_entry` | Absent file is `Ok(None)` |
+| `joint_state_entry_serializes_to_canonical_bytes` | Byte-exact JCS output for the M1 example joint-state entry |
+| `joint_state_entry_hash_is_locked` | `b0cffe39e34d0f326112c21c071b2c1a` |
+| `write_then_read_joint_state_round_trip` | Joint-state entry round-trips through write+read |
+| `joint_state_validate_rejects_empty` | Empty `joint_names` → `InvalidJointNames` |
+| `joint_state_validate_rejects_duplicates` | Repeated entry in `joint_names` → `InvalidJointNames` |
+| `joint_state_validate_accepts_unique_non_empty` | Validation happy path |
 
 The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, multiple tests fail at once.
 

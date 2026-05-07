@@ -21,6 +21,10 @@ auki_network.cluster.ClusterDoc            # opaque; load_doc returns one
 auki_network.cluster.ClusterRuntime        # opaque; spawn returns one
 
 auki_network.cluster.load_doc(path: str) -> ClusterDoc
+auki_network.cluster.resolve_cluster_name(flag: str | None = None) -> str
+    # Strict resolver — flag wins, AUKI_CLUSTER_NAME is fallback,
+    # neither set → ValueError("cluster_name unset: ...").
+    # Sawslin Decision #1; daemons call this once at startup.
 auki_network.cluster.spawn(
     seed: bytes,                           # 32-byte ed25519 seed
     doc: ClusterDoc,

@@ -122,6 +122,27 @@ Internal helpers (private):
 - `normalize_layout(&[PointFieldMsg]) -> Normalized` — produces the SDK-side fields, packed `point_step`, and a per-source-field repacking plan. Both builders call this; the registry builder discards the plan.
 - `apply_normalization(plans, src_data, src_step, num_points, dst_step) -> Vec<u8>` — repacks per-frame bytes per the plan. RGB/RGBA in particular: source `[B, G, R, pad]` becomes `[R, G, B]`; source `[B, G, R, A]` becomes `[R, G, B, A]`.
 
+## Joint state translation
+
+Parallel to the camera and point-cloud paths, but smaller — only the registry-side helper is needed for sawslin Phase 1 (the per-frame angle vector flows separately, defined in [`auki-datatypes`](../../auki-datatypes); landed alongside the PoseStream wire format in PR B):
+
+```rust
+pub struct JointStateMsg {
+    pub stamp: StampMsg,
+    pub name: Vec<String>,    // joint names in publisher order
+}
+
+pub fn build_joint_state_registry_entry(
+    sensor_id: impl Into<String>,
+    msg: &JointStateMsg,
+    frame_rate_hz: u32,
+) -> auki_registry::Result<auki_registry::SensorRegistryEntry>;
+```
+
+Mirrors `build_point_cloud_registry_entry`'s shape: the integrator supplies `frame_rate_hz` out-of-band (ROS does not publish it on the topic) and the joint name list comes verbatim from a bootstrap message. Validates `joint_names` is non-empty and free of duplicates — returns `Err(auki_registry::Error::InvalidJointNames)` otherwise. `position` / `velocity` / `effort` are intentionally absent at this layer because the registry entry's identity is the joint-name list; per-frame angle vectors live in the wire / on-disk payload.
+
+Re-exports `JointState` from `auki-registry` so call sites already importing `auki_ros_adapter` for camera / pointcloud helpers don't pick up an extra dep.
+
 ## `r2r_subscriber` module (feature-gated)
 
 Compiled only with `feature = "ros2"`. Currently a scaffold:
@@ -140,7 +161,7 @@ impl R2rCameraSubscriber {
 
 The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The actual `r2r::Node` + subscription wiring lands at task 9 against the real DDS bus, where it can be validated for free during the bring-up walkthrough. Topics: `/boostercamera/head/rgb/camera_info` and `/boostercamera/head/rgb`.
 
-## Tests (22 total)
+## Tests (25 total)
 
 | Test | Asserts |
 |------|---------|
@@ -157,6 +178,9 @@ The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The a
 | `mock_subscriber_bootstrap_timeout_when_unscripted` | Default mock returns `Timeout` |
 | `mock_subscriber_bootstrap_can_be_scripted_to_error` | Mock can simulate transport failures |
 | `end_to_end_translation_from_subscription_to_log_entry` | Full subscription → registry → log-entry path against the mock |
+| `build_joint_state_registry_entry_matches_locked_hash` | Matches `auki-registry`'s locked joint-state hash (`b0cffe39...`) |
+| `build_joint_state_registry_entry_rejects_duplicates` | Repeated joint name → `InvalidJointNames` |
+| `build_joint_state_registry_entry_rejects_empty` | Empty `name` → `InvalidJointNames` |
 
 ## Consumers in this workspace
 

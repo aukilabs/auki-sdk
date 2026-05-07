@@ -6,6 +6,7 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
 - [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
+- [`cluster_name.rs`](cluster_name.rs) — `cluster_name` resolution from CLI flag or `AUKI_CLUSTER_NAME` env var (sawslin Decision #1). Always available, pure stdlib. Public fn: `resolve(flag: Option<&str>) -> Result<String, ClusterNameError>` — flag wins, env is fallback, neither set → `ClusterNameError::Unset` (no default). Public const: `ENV_VAR = "AUKI_CLUSTER_NAME"`.
 - [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/1.0.0` participant protocol (libp2p). M0 — available without the `swarm` feature.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
@@ -323,6 +324,10 @@ impl Capability {
 
 impl From<&str>   for Capability;
 impl From<String> for Capability;
+
+// cluster_name resolution (sawslin Decision #1)
+pub fn cluster_name::resolve(flag: Option<&str>) -> Result<String, cluster_name::ClusterNameError>;
+pub const cluster_name::ENV_VAR: &str = "AUKI_CLUSTER_NAME";
 ```
 
 ## How `PeerIdentity::from_wallet` works

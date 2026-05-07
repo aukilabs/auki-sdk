@@ -91,7 +91,7 @@ pub struct PointFieldMsg {
 // tools) don't have to pull in a ROS adapter just to deserialize the payload.
 // Re-exported here so existing call sites keep compiling.
 
-pub use auki_registry::{DynamicIntrinsics, PointCloudLogEntry, SensorLogEntry};
+pub use auki_registry::{DynamicIntrinsics, JointState, PointCloudLogEntry, SensorLogEntry};
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -477,6 +477,45 @@ pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogE
         data,
     };
     (timestamp_ns, entry)
+}
+
+// ─── Joint state ────────────────────────────────────────────────────────────
+
+/// Mirror of `sensor_msgs/JointState`. Mirrors only the fields the SDK
+/// uses for sawslin Phase 1 (ordered joint name list + frame stamp);
+/// `position` / `velocity` / `effort` are intentionally absent at this
+/// layer because the registry entry's identity is the joint-name list.
+/// Per-frame angle vectors live separately (`auki-datatypes`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct JointStateMsg {
+    pub stamp: StampMsg,
+    /// Joint name list in publisher order. Identical across consecutive
+    /// frames in normal operation; the registry entry pins the contract.
+    pub name: Vec<String>,
+}
+
+/// Build a `SensorRegistryEntry` (with `SensorBody::JointState`) from a
+/// bootstrap `sensor_msgs/JointState` message + integrator-supplied frame
+/// rate. Mirrors [`build_point_cloud_registry_entry`]'s shape: the frame
+/// rate comes out-of-band (ROS does not publish it on the topic) and the
+/// joint name list is taken verbatim from the bootstrap message.
+///
+/// Validates `joint_names` is non-empty and free of duplicates. Returns
+/// `Err(auki_registry::Error::InvalidJointNames)` otherwise.
+pub fn build_joint_state_registry_entry(
+    sensor_id: impl Into<String>,
+    msg: &JointStateMsg,
+    frame_rate_hz: u32,
+) -> auki_registry::Result<auki_registry::SensorRegistryEntry> {
+    let body = auki_registry::JointState {
+        joint_names: msg.name.clone(),
+        frame_rate_hz,
+    };
+    body.validate()?;
+    Ok(auki_registry::SensorRegistryEntry {
+        sensor_id: sensor_id.into(),
+        body: auki_registry::SensorBody::JointState(body),
+    })
 }
 
 // ─── PointCloudSubscriber trait + mock ──────────────────────────────────────
@@ -1273,5 +1312,55 @@ mod tests {
         let mut sub = MockPointCloudSubscriber::new();
         let err = sub.bootstrap(Duration::from_millis(1)).unwrap_err();
         assert!(matches!(err, BootstrapError::Timeout));
+    }
+
+    // ─── Joint state ────────────────────────────────────────────────────────
+
+    #[test]
+    fn build_joint_state_registry_entry_matches_locked_hash() {
+        let msg = JointStateMsg {
+            stamp: StampMsg { sec: 0, nanosec: 0 },
+            name: vec![
+                "Head_pitch".into(),
+                "Left_arm_shoulder_pitch".into(),
+                "Right_arm_shoulder_pitch".into(),
+            ],
+        };
+        let entry = build_joint_state_registry_entry(
+            "K1-AABBCCDDEEFF/joint_states",
+            &msg,
+            60,
+        )
+        .expect("validation passes for unique non-empty joint names");
+        // Locked: same hash exercised by auki-registry's
+        // `joint_state_entry_hash_is_locked`. If the two diverge, one
+        // of the crates drifted from the schema.
+        assert_eq!(entry.hash(), "b0cffe39e34d0f326112c21c071b2c1a");
+    }
+
+    #[test]
+    fn build_joint_state_registry_entry_rejects_duplicates() {
+        let msg = JointStateMsg {
+            stamp: StampMsg { sec: 0, nanosec: 0 },
+            name: vec!["a".into(), "b".into(), "a".into()],
+        };
+        let result = build_joint_state_registry_entry("test/joints", &msg, 60);
+        assert!(matches!(
+            result,
+            Err(auki_registry::Error::InvalidJointNames(_))
+        ));
+    }
+
+    #[test]
+    fn build_joint_state_registry_entry_rejects_empty() {
+        let msg = JointStateMsg {
+            stamp: StampMsg { sec: 0, nanosec: 0 },
+            name: vec![],
+        };
+        let result = build_joint_state_registry_entry("test/joints", &msg, 60);
+        assert!(matches!(
+            result,
+            Err(auki_registry::Error::InvalidJointNames(_))
+        ));
     }
 }

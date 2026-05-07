@@ -36,6 +36,7 @@ pub enum SensorBody {
     RgbCamera(RgbCamera),
     PointCloud(PointCloud),
     Microphone(Microphone),
+    JointState(JointState),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +136,59 @@ pub struct Microphone {
     /// appropriate for generic mic arrays where the consumer does its own
     /// beam-forming.
     pub channel_layout: String,
+}
+
+/// Static identity of an articulated-joint sensor — the bits that describe
+/// how to interpret the per-frame angle vector that flows through Joint
+/// State streams and logs.
+///
+/// Mirrors `sensor_msgs/JointState` shape on the producer side, but
+/// **stores names as a static list** rather than re-publishing them with
+/// every frame: the K1 (and most articulated platforms) emit the same
+/// joint set every frame, so per-frame names are wire bloat. The frame
+/// payload references this list by index.
+///
+/// `frame_rate_hz` is the *intended* publication rate; actual cadence may
+/// drift at runtime under load. Consumers treat it as a sizing hint, not
+/// a contract.
+///
+/// Validation: `joint_names` must be non-empty and contain no duplicates;
+/// see [`Error::InvalidJointNames`]. Cross-language consumers indexing by
+/// name (rather than by position) need duplicate-rejection or they
+/// silently lose joints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JointState {
+    /// Ordered list of joint names. Per-frame angle vectors reference
+    /// this list by index, not by name. Order is part of the registry
+    /// entry's identity (changing it changes the hash).
+    pub joint_names: Vec<String>,
+    /// Intended publication rate of the joint-state topic. Sizing hint
+    /// for downstream buffers; not enforced.
+    pub frame_rate_hz: u32,
+}
+
+impl JointState {
+    /// Validate that `joint_names` is non-empty and contains no
+    /// duplicates. Cross-language consumers that want to index angles
+    /// by joint name (rather than by position) require both invariants;
+    /// this check makes the intent explicit at registry-entry build
+    /// time rather than letting an inconsistent entry hit the wire.
+    pub fn validate(&self) -> Result<()> {
+        if self.joint_names.is_empty() {
+            return Err(Error::InvalidJointNames(
+                "joint_names must not be empty".into(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(self.joint_names.len());
+        for name in &self.joint_names {
+            if !seen.insert(name.as_str()) {
+                return Err(Error::InvalidJointNames(format!(
+                    "duplicate joint name: {name:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl SensorRegistryEntry {
@@ -528,6 +582,31 @@ impl FrameRegistryEntry {
             units: LengthUnit::Meters,
         }
     }
+
+    /// OpenCV `solvePnP` output frame: right-handed, X right, Y down,
+    /// Z forward, meters. Numerically identical to [`ros_optical`] —
+    /// preserved as a separate preset because the *semantic* contract
+    /// is different ("this came out of OpenCV's PnP pipeline" vs
+    /// "this is a ROS REP-103 optical frame"), and operators looking
+    /// at a pose log want to see the producer's intent.
+    ///
+    /// Used by sentinel for ArUco-marker pose streams (sawslin Phase
+    /// 3+). Park reads the registry entry at startup, computes one
+    /// conversion matrix from `opencv_pnp` to its render frame, and
+    /// applies it at the consumer boundary — see locked decision #2
+    /// in the [sawslin Notion doc](https://www.notion.so/3585c8e9659280dd9093c703d88e1530).
+    pub fn opencv_pnp(frame_id: impl Into<String>) -> Self {
+        Self {
+            frame_id: frame_id.into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Down,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        }
+    }
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
@@ -561,6 +640,9 @@ pub enum Error {
     /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
     /// the same axis-pair (forward/backward, left/right, or up/down).
     InvalidAxes(String),
+    /// On build of a [`JointState`] entry, `joint_names` was empty or
+    /// contained duplicates. See [`JointState::validate`].
+    InvalidJointNames(String),
 }
 
 impl std::fmt::Display for Error {
@@ -572,6 +654,7 @@ impl std::fmt::Display for Error {
                 write!(f, "id mismatch: expected {expected:?}, found {found:?}")
             }
             Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
+            Error::InvalidJointNames(msg) => write!(f, "invalid joint_names: {msg}"),
         }
     }
 }
@@ -936,7 +1019,9 @@ mod tests {
                 cam.width = 1920;
                 cam.height = 1080;
             }
-            SensorBody::PointCloud(_) | SensorBody::Microphone(_) => {
+            SensorBody::PointCloud(_)
+            | SensorBody::Microphone(_)
+            | SensorBody::JointState(_) => {
                 panic!("test was set up for RgbCamera")
             }
         }
@@ -1162,6 +1247,85 @@ mod tests {
         let hash = outcome.hash().to_string();
         let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
+    }
+
+    // ─── Joint state tests ──────────────────────────────────────────────────
+
+    fn m1_joint_state_entry() -> SensorRegistryEntry {
+        SensorRegistryEntry {
+            sensor_id: "K1-AABBCCDDEEFF/joint_states".into(),
+            // Subset of the K1's published joint set, kept short for the
+            // locked vector. Real deployments publish ~20 joints; the
+            // shape and canonicalization are what's locked here.
+            body: SensorBody::JointState(JointState {
+                joint_names: vec![
+                    "Head_pitch".into(),
+                    "Left_arm_shoulder_pitch".into(),
+                    "Right_arm_shoulder_pitch".into(),
+                ],
+                frame_rate_hz: 60,
+            }),
+        }
+    }
+
+    #[test]
+    fn joint_state_entry_serializes_to_canonical_bytes() {
+        let bytes = m1_joint_state_entry().canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"frame_rate_hz":60,"joint_names":["Head_pitch","Left_arm_shoulder_pitch","Right_arm_shoulder_pitch"],"sensor_id":"K1-AABBCCDDEEFF/joint_states","type":"joint_state"}"#
+        );
+    }
+
+    #[test]
+    fn joint_state_entry_hash_is_locked() {
+        // Pin the XXH3-128 of the M1 example joint state entry.
+        // Updates to this must be coordinated with any cross-language
+        // reader. If this trips, either (a) the canonical bytes
+        // assertion above also tripped — see that for the cause —
+        // or (b) `auki-jcs` / `auki-hash` drifted; investigate before
+        // updating.
+        assert_eq!(
+            m1_joint_state_entry().hash(),
+            "b0cffe39e34d0f326112c21c071b2c1a"
+        );
+    }
+
+    #[test]
+    fn write_then_read_joint_state_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_joint_state_entry();
+        let outcome = write_sensor(dir.path(), &entry).unwrap();
+        let hash = outcome.hash().to_string();
+        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        assert_eq!(read, Some(entry));
+    }
+
+    #[test]
+    fn joint_state_validate_rejects_empty() {
+        let body = JointState {
+            joint_names: vec![],
+            frame_rate_hz: 60,
+        };
+        assert!(matches!(body.validate(), Err(Error::InvalidJointNames(_))));
+    }
+
+    #[test]
+    fn joint_state_validate_rejects_duplicates() {
+        let body = JointState {
+            joint_names: vec!["a".into(), "b".into(), "a".into()],
+            frame_rate_hz: 60,
+        };
+        assert!(matches!(body.validate(), Err(Error::InvalidJointNames(_))));
+    }
+
+    #[test]
+    fn joint_state_validate_accepts_unique_non_empty() {
+        let body = JointState {
+            joint_names: vec!["a".into(), "b".into(), "c".into()],
+            frame_rate_hz: 60,
+        };
+        assert!(body.validate().is_ok());
     }
 
     // ─── Sensor Log manifest builder ────────────────────────────────────────
@@ -1423,11 +1587,41 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_all_four_presets() {
+    fn opencv_pnp_preset_matches_explicit_construction() {
+        let preset = FrameRegistryEntry::opencv_pnp("frame/x");
+        let explicit = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Down,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        };
+        assert_eq!(preset, explicit);
+    }
+
+    #[test]
+    fn opencv_pnp_preset_axes_match_ros_optical_numerically() {
+        // Sentinel publishes ArUco poses tagged `opencv_pnp`; park's
+        // conversion matrix to its render frame depends on these
+        // axes matching ROS optical (x right, y down, z forward).
+        // If this drifts, park's marker rendering rotates wrong.
+        let pnp = FrameRegistryEntry::opencv_pnp("a");
+        let optical = FrameRegistryEntry::ros_optical("a");
+        assert_eq!(pnp.handedness, optical.handedness);
+        assert_eq!(pnp.axes, optical.axes);
+        assert_eq!(pnp.units, optical.units);
+    }
+
+    #[test]
+    fn validate_accepts_all_five_presets() {
         FrameRegistryEntry::ros_body("a").validate().unwrap();
         FrameRegistryEntry::ros_optical("b").validate().unwrap();
         FrameRegistryEntry::opengl("c").validate().unwrap();
         FrameRegistryEntry::unity("d").validate().unwrap();
+        FrameRegistryEntry::opencv_pnp("e").validate().unwrap();
     }
 
     #[test]

@@ -25,6 +25,7 @@ use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
 pub mod cluster_doc;
+pub mod cluster_name;
 pub mod participant;
 pub use participant::ParticipantInfo;
 

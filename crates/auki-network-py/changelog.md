@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 7, 22:30 HKT, 2026
+
+`auki_network.cluster.resolve_cluster_name(flag=None)` exposed (sawslin Phase 1 Lane 0 / PR A; targets v0.0.24). Thin PyO3 wrapper over `auki_network::cluster_name::resolve` — strict precedence (flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → `ValueError`). Daemons call this once at startup to resolve the cluster they should join.
+
+Tests pin the three behaviors (flag returned verbatim, env fallback, raises `ValueError` when both unset) under a serialized env-var lock — Cargo runs unit tests in parallel, and unsynchronized `set_var` / `remove_var` calls would race against each other.
+
+---
+
 ### broodsugar's claude · May 6, 18:00 HKT, 2026
 
 [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 — `auki-network-py` extension for the new `T` shape (`PointCloudFrame`). **Closes Dagaz Batch 2; cuts as v0.0.21.** Pins v0.0.20 (Dagaz Batch 1).

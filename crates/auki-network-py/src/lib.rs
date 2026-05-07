@@ -48,6 +48,7 @@ use pyo3::types::{PyBytes, PyModule};
 use auki_network_rs::{
     ParticipantInfo as RustParticipantInfo,
     cluster_doc::{self, ClusterDoc as RustClusterDoc, LoadError},
+    cluster_name::{self as rust_cluster_name, ClusterNameError},
     cluster_runtime::{
         ClusterRuntime as RustClusterRuntime, ParticipantInfoProvider, SpawnError,
     },
@@ -336,6 +337,25 @@ impl ClusterDoc {
 fn load_doc(path: PathBuf) -> PyResult<ClusterDoc> {
     let inner = cluster_doc::load(&path).map_err(map_load_error)?;
     Ok(ClusterDoc { inner })
+}
+
+/// Resolve `cluster_name` from a CLI flag (passed in as `flag`) or the
+/// `AUKI_CLUSTER_NAME` env var, in that order. Strict semantics per
+/// sawslin Decision #1: if neither is set, raises `ValueError`.
+///
+/// Pass `flag=None` (the default) when the CLI parser saw no
+/// `--cluster-name`. Empty-string env values are treated as unset.
+///
+/// Daemons with a back-compat reason to default to a specific cluster
+/// (notably boosterapp's "vinland" carve-out) implement their own
+/// resolver instead of calling this — strict is the default for
+/// everything else.
+#[pyfunction]
+#[pyo3(name = "resolve_cluster_name", signature = (flag = None))]
+fn resolve_cluster_name(flag: Option<&str>) -> PyResult<String> {
+    rust_cluster_name::resolve(flag).map_err(|e| match e {
+        ClusterNameError::Unset => PyValueError::new_err(e.to_string()),
+    })
 }
 
 fn map_load_error(e: LoadError) -> PyErr {
@@ -815,6 +835,7 @@ fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     cluster.add_class::<ClusterDoc>()?;
     cluster.add_class::<ClusterRuntime>()?;
     cluster.add_function(wrap_pyfunction!(load_doc, &cluster)?)?;
+    cluster.add_function(wrap_pyfunction!(resolve_cluster_name, &cluster)?)?;
     cluster.add_function(wrap_pyfunction!(spawn, &cluster)?)?;
 
     // Grimsby Stream<T> surface (deliverable #4).
@@ -901,6 +922,7 @@ mod tests {
             assert!(cluster.getattr("ClusterDoc").is_ok());
             assert!(cluster.getattr("ClusterRuntime").is_ok());
             assert!(cluster.getattr("load_doc").is_ok());
+            assert!(cluster.getattr("resolve_cluster_name").is_ok());
             assert!(cluster.getattr("spawn").is_ok());
             // Grimsby Stream<T> surface (deliverable #4 / v0.0.17) +
             // Dagaz Batch 2 PointCloudFrame (v0.0.21).
@@ -1060,6 +1082,66 @@ mod tests {
                 err.to_string().contains("unsupported version 99"),
                 "error message should name the bad version: {err}",
             );
+        });
+    }
+
+    // ─── resolve_cluster_name ───────────────────────────────────────────
+
+    /// Tests touching `AUKI_CLUSTER_NAME` must hold this lock — Cargo
+    /// runs tests in parallel, and `set_var` / `remove_var` aren't
+    /// thread-safe with concurrent reads.
+    fn cluster_name_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn save_and_clear_cluster_name_env() -> Option<String> {
+        let prev = std::env::var(rust_cluster_name::ENV_VAR).ok();
+        // SAFETY: serialized via `cluster_name_env_lock`.
+        unsafe { std::env::remove_var(rust_cluster_name::ENV_VAR) };
+        prev
+    }
+
+    fn restore_cluster_name_env(prev: Option<String>) {
+        // SAFETY: serialized via `cluster_name_env_lock`.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(rust_cluster_name::ENV_VAR, v),
+                None => std::env::remove_var(rust_cluster_name::ENV_VAR),
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_cluster_name_returns_flag_when_set() {
+        let _g = cluster_name_env_lock();
+        let prev = save_and_clear_cluster_name_env();
+        let result = resolve_cluster_name(Some("sawslin"));
+        restore_cluster_name_env(prev);
+        assert_eq!(result.unwrap(), "sawslin");
+    }
+
+    #[test]
+    fn resolve_cluster_name_falls_back_to_env() {
+        let _g = cluster_name_env_lock();
+        let prev = save_and_clear_cluster_name_env();
+        // SAFETY: lock held.
+        unsafe { std::env::set_var(rust_cluster_name::ENV_VAR, "from-env") };
+        let result = resolve_cluster_name(None);
+        restore_cluster_name_env(prev);
+        assert_eq!(result.unwrap(), "from-env");
+    }
+
+    #[test]
+    fn resolve_cluster_name_raises_value_error_when_unset() {
+        Python::with_gil(|py| {
+            let _g = cluster_name_env_lock();
+            let prev = save_and_clear_cluster_name_env();
+            let result = resolve_cluster_name(None);
+            restore_cluster_name_env(prev);
+            let err = result.expect_err("missing cluster_name must raise");
+            assert!(err.is_instance_of::<PyValueError>(py));
+            assert!(err.to_string().contains("cluster_name unset"));
         });
     }
 

@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 7, 22:30 HKT, 2026
+
+**`SensorBody::JointState` variant** landed (sawslin Phase 1 Lane 0 / PR A; targets v0.0.24). New variant `SensorBody::JointState(JointState)` with `JointState { joint_names: Vec<String>, frame_rate_hz: u32 }`. Identity for an articulated-joint sensor — mirrors `sensor_msgs/JointState` shape on the producer side, but stores names as a static list rather than re-publishing them every frame (the K1 always emits the same joint set; per-frame names would be wire bloat). The frame payload — to be defined in [`auki-datatypes`](../auki-datatypes) alongside the PoseStream wire format in PR B — references this list by index, not by name.
+
+`JointState::validate()` rejects empty `joint_names` and duplicate names with the new `Error::InvalidJointNames`. Cross-language consumers indexing by name require both invariants — making the check explicit at registry-build time keeps inconsistent entries off the wire.
+
+Locked vector: `joint_state_entry_serializes_to_canonical_bytes` pins the exact JCS canonical bytes for an example K1-shaped entry (3 joint names + 60 Hz rate); `joint_state_entry_hash_is_locked` pins the XXH3-128 (`b0cffe39e34d0f326112c21c071b2c1a`). Same regression-guard pattern as the existing sensor / pointcloud / microphone / clock locked vectors. Round-trip + validation tests round out the surface.
+
+Out-of-scope for this PR (decided 2026-05-07 per the [sawslin Lane 0 conflict](https://www.notion.so/3585c8e9659280dd9093c703d88e1530)): the per-frame `JointAngles { angles: repeated float }` wire / on-disk payload. PR #52's `auki-datatypes` migration model says new payload types belong there as protobuf; PR B adds it. This PR adds only the registry-side identity, which legitimately stays in this crate.
+
+**`opencv_pnp` Frame Registry preset added** (sawslin Lane 0, locked decision #2). `FrameRegistryEntry::opencv_pnp(frame_id)` is numerically identical to `ros_optical` (right-handed, x=right y=down z=forward, meters) but is preserved as a separate preset because the semantic contract differs: "this came out of OpenCV's PnP pipeline" vs "this is a REP-103 optical frame." Sentinel publishes ArUco-marker pose streams tagged `opencv_pnp` (Phase 3+); park reads the registry entry at startup, computes one conversion matrix to its render frame. Two new tests pin the construction match and the numeric equivalence with `ros_optical` so park's render-frame conversion matrix doesn't drift; renamed `validate_accepts_all_four_presets` → `validate_accepts_all_five_presets`.
+
+---
+
 ### broodsugar's dobby · May 7, 22:00 HKT, 2026
 
 **[`auki-registry/README.md`](README.md): per-section "Departing" callouts** + corresponding [`parking_lot.md`](parking_lot.md) item. Each of the four log-payload sections (Sensor Log, Point Cloud Log, Audio Log, Pose Log) now opens with a one-line italic callout pointing at the matching migration step in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Pose Log callout additionally cross-links the root parking-lot Propagate task and notes the wrapper-removal + manifest-`(from, to)` reshape. Per-type detail (manifest tables, CBOR shapes, design rationale) stays in this README until each type physically moves to `auki-datatypes` — that doc move is sequenced with the code move per the new parking-lot item. Doc-only.

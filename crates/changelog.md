@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 7, 22:30 HKT, 2026
+
+Sawslin Phase 1 Lane 0 / PR A (targets v0.0.24; v0.0.23 is spec/scaffold-only). `auki-network`: new `cluster_name` module with `resolve(flag) -> Result<String, ClusterNameError>` (sawslin Decision #1; flag > env, fail-fast). `auki-registry`: `SensorBody::JointState { joint_names, frame_rate_hz }` variant + locked vector + `JointState::validate` (rejects empty / duplicate joint names); plus `FrameRegistryEntry::opencv_pnp` preset (locked decision #2; numerically same as `ros_optical` but semantically distinct). `auki-ros-adapter`: `JointStateMsg` mirror + `build_joint_state_registry_entry` helper. `auki-network-py`: `auki_network.cluster.resolve_cluster_name(flag=None)` PyO3 wrapper.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 `auki-datatypes`: migration architecture decisions added — manifest encoding stays JCS-JSON (not protobuf); new `auki-manifests` crate owns `build_*_log_manifest` builders + manifest schemas, extracted as Step 0 prep PR before migration step 1. `auki-logs`: encoder-aware vs encoder-agnostic `Log<T>` open question added to its parking lot, decided in step 1.

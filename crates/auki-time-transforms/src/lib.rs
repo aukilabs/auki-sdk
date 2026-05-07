@@ -124,39 +124,8 @@ fn midpoint(a: i64, b: i64) -> i64 {
     a + (b - a) / 2
 }
 
-/// Build a TimeTransform Log manifest with the four required clock-binding
-/// fields, the run-identifying `app_id` / `session_id`, plus auki-logs's
-/// required `segment_duration_ns` / `retention_ns`.
-///
-/// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
-/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
-/// (same value as the parent session directory name).
-pub fn build_manifest(
-    app_id: &str,
-    session_id: &str,
-    from_clock_id: &str,
-    from_clock_hash: &str,
-    to_clock_id: &str,
-    to_clock_hash: &str,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "from_clock_id": from_clock_id,
-        "from_clock_hash": from_clock_hash,
-        "to_clock_id": to_clock_id,
-        "to_clock_hash": to_clock_hash,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
-    })
-}
-
-fn duration_as_i64_ns(d: Duration) -> i64 {
-    d.as_nanos().min(i64::MAX as u128) as i64
-}
+// `build_manifest` (renamed `build_time_transform_log_manifest`) moved to
+// [`auki-manifests`] in Step 0 of the auki-datatypes migration.
 
 /// Background sampler. Calls `tick` every `period`, appending each entry to
 /// the log. Stops cleanly via the returned handle.
@@ -176,7 +145,7 @@ impl Sampler {
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
-        let threshold_ns = duration_as_i64_ns(discontinuity_threshold);
+        let threshold_ns = discontinuity_threshold.as_nanos().min(i64::MAX as u128) as i64;
 
         let handle = thread::spawn(move || {
             let mut log = log;
@@ -340,25 +309,9 @@ mod tests {
         assert_eq!(back, entry);
     }
 
-    #[test]
-    fn build_manifest_contains_required_fields() {
-        let m = build_manifest(
-            "boosterapp",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/monotonic",
-            "deadbeefcafefeed",
-            "K1-AABBCCDDEEFF/utc",
-            "1234567890abcdef",
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-        );
-        assert_eq!(m["app_id"], "boosterapp");
-        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(m["from_clock_id"], "K1-AABBCCDDEEFF/monotonic");
-        assert_eq!(m["to_clock_hash"], "1234567890abcdef");
-        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
-        assert_eq!(m["retention_ns"], 60_000_000_000i64);
-    }
+    // `build_manifest_contains_required_fields` moved to [`auki-manifests`]
+    // (renamed `build_time_transform_log_manifest_contains_required_fields`)
+    // in Step 0 of the auki-datatypes migration.
 
     #[test]
     fn sampler_writes_entries_then_stops_cleanly() {
@@ -370,7 +323,7 @@ mod tests {
         let clock = Box::new(ScriptedClock::new(from, to));
 
         let dir = tempfile::tempdir().unwrap();
-        let manifest = build_manifest(
+        let manifest = auki_manifests::build_time_transform_log_manifest(
             "test-app",
             "550e8400-e29b-41d4-a716-446655440000",
             "test/from",

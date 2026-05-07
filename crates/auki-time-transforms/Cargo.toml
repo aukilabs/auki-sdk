@@ -16,3 +16,9 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3"
 ciborium = "0.2"
+# `Sampler` integration test in src/lib.rs uses
+# `auki_manifests::build_time_transform_log_manifest` to construct the
+# log manifest. The builder moved to `auki-manifests` in Step 0 of the
+# auki-datatypes migration; production code in this crate doesn't
+# depend on it (apps that own a sampler also own the manifest).
+auki-manifests = { path = "../auki-manifests" }

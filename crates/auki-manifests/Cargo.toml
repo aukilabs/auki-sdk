@@ -1,0 +1,26 @@
+[package]
+name = "auki-manifests"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Single source of truth for the Auki SDK's log manifests — schemas + builders for Sensor Log, Pose Log, and TimeTransform Log manifests. Symmetric with `auki-datatypes` (which owns segment payload shapes); this crate owns manifest shapes. Encoding is JCS-canonical UTF-8 JSON via `auki-jcs`."
+
+[dependencies]
+# JCS-canonical JSON encoding for content-hashed manifest fields
+# (`PoseSource::canonical_bytes` / `hash`). Manifests on disk are
+# JCS-canonical JSON via this crate.
+auki-jcs = { path = "../auki-jcs" }
+# Content-addressable hashing for `PoseSource::hash`.
+auki-hash = { path = "../auki-hash" }
+# Manifests are JSON values that auki-logs accepts.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# End-to-end round-trip tests open an auki-logs Log<T> with a manifest
+# this crate built; verifying the manifest survives write/read.
+auki-logs = { path = "../auki-logs" }
+ciborium = "0.2"
+tempfile = "3"

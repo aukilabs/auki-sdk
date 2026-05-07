@@ -10,13 +10,14 @@ Scaffolding only — `proto/placeholder.proto` validates the `prost-build` pipel
 
 Each step is its own PR with its own locked conformance vector. Each step also resolves the matching per-type slop question in [`parking_lot.md`](../parking_lot.md) (decisions Nils adjudicates per-step rather than upfront).
 
-0. **Prep: extract `auki-manifests` crate.** New crate that holds the SDK's manifest contract — the `build_*_log_manifest` builders, the manifest read-side parsers + validators, and the manifest-shape schemas (currently documented in [`auki-registry/README.md`](../../auki-registry/README.md)). Symmetric with `auki-datatypes`: that crate owns segment payload shapes; this one owns manifest shapes. See the corresponding decision in [`parking_lot.md`](../parking_lot.md).
-   - **Move** `build_sensor_log_manifest` and `build_pose_log_manifest` from [`auki-registry`](../../auki-registry).
-   - **Move** `build_manifest` from [`auki-time-transforms`](../../auki-time-transforms).
-   - **Move** the manifest-table sections of [`auki-registry/README.md`](../../auki-registry/README.md) into the new crate's `README.md`.
-   - Pure refactor — no behaviour change, no encoding change. Manifest encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](../../auki-jcs); see decision in [`parking_lot.md`](../parking_lot.md).
-   - Add the new crate's per-folder `README.md` / `parking_lot.md` / `changelog.md` / `src/readme.md` / `src/sprint.md` per the [folder convention](../../../CONTRIBUTING.md).
-   - Lands **before** step 1 so step 1 can stay focused on the segment-encoder swap.
+0. **✓ Prep: extract `auki-manifests` crate** (landed 2026-05-08). Pure refactor; no behaviour change, no encoding change.
+   - **Moved** `build_sensor_log_manifest` and `build_pose_log_manifest` from [`auki-registry`](../../auki-registry) → [`auki-manifests`](../../auki-manifests).
+   - **Moved** `build_manifest` from [`auki-time-transforms`](../../auki-time-transforms) → [`auki-manifests`](../../auki-manifests) (renamed `build_time_transform_log_manifest` for unambiguity vs siblings).
+   - **Moved** `PoseSource` (inline pose-log producer identity) from [`auki-registry`](../../auki-registry) → [`auki-manifests`](../../auki-manifests) — it's manifest metadata, not a registry entry.
+   - **Moved** locked vectors `ros2_tf_source_serializes_to_canonical_bytes` + `ros2_tf_source_hash_is_locked` (M1 example → JCS bytes + `f3d296341347589c72297a0cc7c81cd8`).
+   - Manifest encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](../../auki-jcs).
+   - Per-folder docs seeded; workspace `Cargo.toml` updated; `auki-time-transforms` gains an `auki-manifests` dev-dep so the `Sampler` integration test still constructs a manifest.
+   - `cargo test -p auki-manifests` 6/6 passing; downstream tests pass workspace-wide (`auki-registry` 41 → 35 since 6 tests moved, `auki-time-transforms` 10 → 9 since 1 test moved).
 
 1. **`auki.camera` — `PinholeCameraLogEntry`** (renamed from `SensorLogEntry`).
    - Define `proto/camera.proto`. Message shape: `dynamic_intrinsics` placement is a per-step decision (see slop note in [`parking_lot.md`](../parking_lot.md)).

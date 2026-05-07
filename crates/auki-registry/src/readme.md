@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink in flight (decided 2026-05-07).** Today this crate also holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). The "Public functions" section's manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) are also drift — they belong with logs, not registries — and may move to a sibling crate or [`auki-session`](../../auki-session) during the migration.
+> **Scope shrink in flight.** Today this crate also holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08) is complete** — the manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests).
 
 ## What's here
 
@@ -168,19 +168,9 @@ pub struct Microphone {
 
 Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
 
-### `PoseSource` (inline in Pose Log manifest, not a registry entry)
+### `PoseSource` — moved to `auki-manifests` (Step 0, 2026-05-08)
 
-```rust
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PoseSource {
-    Ros2Tf {
-        publishers: Vec<String>,    // sorted ROS node names contributing to /tf
-    },
-    // future: Slam { ... }, Odometry { ... }, ...
-}
-```
-
-Lives inline in the Pose Log manifest under `"source"`. No `pose_sources/` registry — the Pose Log payload (`PoseLogEntry`) is fully self-describing, so source identity is provenance, not a decoder. Tagged-enum body is the extension point for SLAM, odometry, manual fixtures.
+`PoseSource` is the inline producer-identity tagged enum that lives in the Pose Log manifest under `"source"`. It's manifest metadata, not a registry entry — and as of Step 0 of the migration it lives in [`auki-manifests`](../../auki-manifests) alongside `build_pose_log_manifest`.
 
 ## Log payload types
 
@@ -228,33 +218,11 @@ pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Optio
 pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
 pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Option<FrameRegistryEntry>>;
 
-pub fn build_sensor_log_manifest(
-    app_id: &str,
-    session_id: &str,
-    sensor_id: &str,
-    sensor_hash: &str,
-    clock_id: &str,
-    clock_hash: &str,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value;
-
-pub fn build_pose_log_manifest(
-    app_id: &str,
-    session_id: &str,
-    clock_id: &str,
-    clock_hash: &str,
-    source: &PoseSource,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value;
+// Manifest builders moved to `auki-manifests` (Step 0, 2026-05-08):
+//   build_sensor_log_manifest, build_pose_log_manifest
 ```
 
-Both entry types also expose `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing. `PoseSource` exposes the same pair (no on-disk file is written for it — source identity rides inline in the Pose Log manifest — but the hash is useful as a regression guard for the JCS shape).
-
-`build_sensor_log_manifest` produces a `serde_json::Value` containing all eight required Sensor Log family manifest fields (the run-identifying `app_id` / `session_id`, the sensor and clock bindings, and `auki-logs`'s required `segment_duration_ns` / `retention_ns`). Same shape for Sensor Log, Point Cloud Log, and Audio Log — the `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose `body` variant tells a reader which payload type the segments hold.
-
-`build_pose_log_manifest` produces a `serde_json::Value` for Pose Log — the run-identifying fields, clock binding, inline `source` (no separate registry; provenance only), and the auki-logs base. See the [outer README's "Pose Log payload" section](../README.md#pose-log-payload--schema-v1) for the rationale on why Pose Log doesn't get its own registry.
+Each entry type also exposes `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
 
 ## `WriteOutcome`
 
@@ -286,7 +254,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (41 total)
+## Tests (35 total)
 
 | Test | Asserts |
 |------|---------|
@@ -307,14 +275,8 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `read_missing_returns_none` | Absent files are `Ok(None)`, not an error |
 | `read_with_id_mismatch_errors` | Misplaced files surface as `IdMismatch` |
 | `write_outcome_hash_accessor` | `.hash()` works on both variants |
-| `build_sensor_log_manifest_contains_all_required_fields` | Builder produces all 8 manifest fields with correct types |
-| `sensor_log_manifest_opens_a_log_round_trip` | Manifest round-trips through `auki_logs::Log::open` + `read` (integration; uses dev-dep on `auki-logs`) |
-| `ros2_tf_source_serializes_to_canonical_bytes` | Byte-exact JCS output for the M1 example ROS 2 TF source |
-| `ros2_tf_source_hash_is_locked` | `f3d296341347589c72297a0cc7c81cd8` |
-| `build_pose_log_manifest_contains_all_required_fields` | Builder produces all 7 manifest fields incl. nested `source.kind` |
 | `pose_log_entry_round_trips_through_cbor` | `PoseLogEntry` with two `TransformSample`s survives CBOR encode/decode |
 | `pose_log_entry_with_empty_transforms_round_trips` | Empty `transforms` vector is permitted and round-trips |
-| `pose_log_manifest_opens_a_log_round_trip` | Builder + `auki_logs::Log::open` + append + read back; manifest and entry both intact |
 | `ros_body_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_body` matches the field-explicit struct |
 | `ros_optical_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_optical` matches |
 | `opengl_preset_matches_explicit_construction` | `FrameRegistryEntry::opengl` matches |

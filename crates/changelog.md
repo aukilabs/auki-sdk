@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:00 HKT, 2026
+
+**Step 0 landed: new crate `auki-manifests`** owns the SDK's per-recording manifest schemas + builders. Symmetric with [`auki-datatypes`](auki-datatypes) (segment payloads) — manifests in one crate, payloads in the other. Encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](auki-jcs). `cargo test -p auki-manifests` 6/6 passing.
+
+**Moves**: `build_sensor_log_manifest` + `build_pose_log_manifest` + `PoseSource` from [`auki-registry`](auki-registry) → [`auki-manifests`](auki-manifests); `build_manifest` from [`auki-time-transforms`](auki-time-transforms) → [`auki-manifests`](auki-manifests) (renamed `build_time_transform_log_manifest`). Locked-vector tests (`ros2_tf_source_serializes_to_canonical_bytes`, `ros2_tf_source_hash_is_locked` → `f3d296341347589c72297a0cc7c81cd8`) move with their builder. Test counts: `auki-registry` 41 → 35; `auki-time-transforms` 10 → 9; new crate +6. No behaviour change, no encoding change.
+
+**Companion doc updates**: [`auki-registry`](auki-registry) README + `src/readme.md` Pose Log section points at [`auki-manifests`](auki-manifests) for `PoseSource` + `build_pose_log_manifest`; manifest tables removed from `src/readme.md`. [`auki-time-transforms`](auki-time-transforms) README manifest table replaced with a one-paragraph pointer. [`auki-datatypes/src/sprint.md`](auki-datatypes/src/sprint.md) Step 0 marked done. Root parking-lot subfolder summary gains an `auki-manifests` entry. See [`auki-manifests/changelog.md`](auki-manifests/changelog.md) for detail.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 `auki-datatypes`: migration architecture decisions added — manifest encoding stays JCS-JSON (not protobuf); new `auki-manifests` crate owns `build_*_log_manifest` builders + manifest schemas, extracted as Step 0 prep PR before migration step 1. `auki-logs`: encoder-aware vs encoder-agnostic `Log<T>` open question added to its parking lot, decided in step 1.

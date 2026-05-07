@@ -1,0 +1,304 @@
+//! Single source of truth for the Auki SDK's log manifests — schemas
+//! + builders for Sensor Log, Pose Log, and TimeTransform Log
+//! manifests.
+//!
+//! Symmetric with [`auki-datatypes`](../../auki-datatypes), which
+//! owns segment payload shapes. This crate owns manifest shapes —
+//! the per-recording metadata that lives at the root of each
+//! `auki-logs` log directory.
+//!
+//! Manifests are encoded as **JCS-canonical UTF-8 JSON** via
+//! [`auki-jcs`](../../auki-jcs). Decision pinned 2026-05-07: per-
+//! recording metadata doesn't benefit from protobuf's wire compactness,
+//! and JCS gives free cross-language byte-equivalence (handy for
+//! signing + content-addressed-hashing the inline producer identities
+//! like [`PoseSource`]).
+//!
+//! ## Surface
+//!
+//! - [`build_sensor_log_manifest`] — Sensor Log family (covers Sensor,
+//!   Point Cloud, Audio Logs; `(sensor_id, sensor_hash)` resolves to a
+//!   `SensorRegistryEntry` whose `body` variant tells a reader which
+//!   payload type the segments hold).
+//! - [`build_pose_log_manifest`] — Pose Log; `source` describes the
+//!   producer inline.
+//! - [`build_time_transform_log_manifest`] — TimeTransform Log;
+//!   four-clock-binding fields.
+//! - [`PoseSource`] — tagged-enum producer identity, lives inline in
+//!   the Pose Log manifest under `"source"`. Carries
+//!   [`PoseSource::canonical_bytes`] / [`PoseSource::hash`] for
+//!   content-addressing if a future producer variant graduates to a
+//!   sibling registry.
+
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+/// Build a Sensor Log family manifest with the run-identifying `app_id` /
+/// `session_id`, the sensor and clock bindings, and auki-logs's required
+/// `segment_duration_ns` / `retention_ns`.
+///
+/// Same shape for Sensor Log, Point Cloud Log, and Audio Log — the
+/// `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose
+/// `body` variant tells a reader which payload type the segments hold.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
+/// (same value as the parent session directory name).
+pub fn build_sensor_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    sensor_id: &str,
+    sensor_hash: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
+        "sensor_id": sensor_id,
+        "sensor_hash": sensor_hash,
+        "clock_id": clock_id,
+        "clock_hash": clock_hash,
+        "segment_duration_ns": duration_as_i64_ns(segment_duration),
+        "retention_ns": duration_as_i64_ns(retention),
+    })
+}
+
+/// Build a Pose Log manifest with the run-identifying `app_id` /
+/// `session_id`, the clock binding, the inline producer identity, and
+/// auki-logs's required `segment_duration_ns` / `retention_ns`.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
+/// (same value as the parent session directory name).
+/// `source` describes the producer — see [`PoseSource`] — and is serialized
+/// inline under the manifest's `source` key.
+pub fn build_pose_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    source: &PoseSource,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
+        "clock_id": clock_id,
+        "clock_hash": clock_hash,
+        "source": source,
+        "segment_duration_ns": duration_as_i64_ns(segment_duration),
+        "retention_ns": duration_as_i64_ns(retention),
+    })
+}
+
+/// Build a TimeTransform Log manifest with the four required clock-binding
+/// fields, the run-identifying `app_id` / `session_id`, plus auki-logs's
+/// required `segment_duration_ns` / `retention_ns`.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
+/// (same value as the parent session directory name).
+pub fn build_time_transform_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    from_clock_id: &str,
+    from_clock_hash: &str,
+    to_clock_id: &str,
+    to_clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
+        "from_clock_id": from_clock_id,
+        "from_clock_hash": from_clock_hash,
+        "to_clock_id": to_clock_id,
+        "to_clock_hash": to_clock_hash,
+        "segment_duration_ns": duration_as_i64_ns(segment_duration),
+        "retention_ns": duration_as_i64_ns(retention),
+    })
+}
+
+/// Identifies the producer of the transforms in a Pose Log. Lives **inline**
+/// in the log's manifest under the `source` key — Pose Log does not have a
+/// separate registry like Sensor Log, because the payload is fully
+/// self-describing (frame names sit in each transform); source identity is
+/// provenance, not a decoder. Tagged-enum body is the extension point for
+/// future producers (SLAM, odometry, manual fixtures, ...).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PoseSource {
+    /// ROS 2 `/tf` (and `/tf_static`, merged on capture). `publishers` is the
+    /// sorted list of ROS node names contributing to the topic. Frame pairs
+    /// are *not* part of identity — they can change at runtime; consult the
+    /// segments for what was actually observed.
+    Ros2Tf {
+        /// Sorted; ROS node names contributing to `/tf`.
+        publishers: Vec<String>,
+    },
+    // future: Slam { algorithm, map_id, ... }, Odometry { ... }, ...
+}
+
+impl PoseSource {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        // PoseSource is a plain tagged-enum of strings; serializing to a Value
+        // cannot fail in practice.
+        let v = serde_json::to_value(self).expect("PoseSource serializes to a JSON value");
+        auki_jcs::canonicalize(&v)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+}
+
+fn duration_as_i64_ns(d: Duration) -> i64 {
+    d.as_nanos().min(i64::MAX as u128) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    /// Trivial body type for the auki-logs round-trip tests — manifests are
+    /// independent of the payload `T`, so a placeholder struct is enough.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct TestEntry {
+        value: i64,
+    }
+
+    // ─── Sensor Log manifest ────────────────────────────────────────────────
+
+    #[test]
+    fn build_sensor_log_manifest_contains_all_required_fields() {
+        let m = build_sensor_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["sensor_id"], "K1-AABBCCDDEEFF/head_left_cam");
+        assert_eq!(m["sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
+        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
+        assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    #[test]
+    fn sensor_log_manifest_opens_a_log_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = build_sensor_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        let _log = auki_logs::Log::<TestEntry>::open(dir.path(), manifest).unwrap();
+        let reader = auki_logs::Log::<TestEntry>::read(dir.path()).unwrap();
+        assert_eq!(reader.manifest()["app_id"], "boosterapp");
+        assert_eq!(
+            reader.manifest()["session_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+
+    // ─── Pose Log + PoseSource ──────────────────────────────────────────────
+
+    fn m1_ros2_tf_source() -> PoseSource {
+        PoseSource::Ros2Tf {
+            publishers: vec![
+                "amcl".into(),
+                "robot_state_publisher".into(),
+                "tf_broadcaster".into(),
+            ],
+        }
+    }
+
+    /// Locks the JCS canonical bytes for the M1 example ROS 2 TF source.
+    /// Catches drift in the tagged-enum shape OR canonicalization.
+    #[test]
+    fn ros2_tf_source_serializes_to_canonical_bytes() {
+        let bytes = m1_ros2_tf_source().canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"kind":"ros2_tf","publishers":["amcl","robot_state_publisher","tf_broadcaster"]}"#
+        );
+    }
+
+    /// Locks the XXH3-128 hex of the M1 example ROS 2 TF source. Cross-cutting
+    /// guard: trips if any of `auki-jcs`, `auki-hash`, or this crate's serde
+    /// shape drifts.
+    #[test]
+    fn ros2_tf_source_hash_is_locked() {
+        assert_eq!(
+            m1_ros2_tf_source().hash(),
+            "f3d296341347589c72297a0cc7c81cd8"
+        );
+    }
+
+    #[test]
+    fn build_pose_log_manifest_contains_all_required_fields() {
+        let m = build_pose_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            &m1_ros2_tf_source(),
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["source"]["kind"], "ros2_tf");
+        assert_eq!(m["source"]["publishers"][0], "amcl");
+        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
+        assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    // ─── TimeTransform Log manifest ─────────────────────────────────────────
+
+    #[test]
+    fn build_time_transform_log_manifest_contains_required_fields() {
+        let m = build_time_transform_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/monotonic",
+            "deadbeefcafefeed",
+            "K1-AABBCCDDEEFF/utc",
+            "1234567890abcdef",
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+        );
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["from_clock_id"], "K1-AABBCCDDEEFF/monotonic");
+        assert_eq!(m["from_clock_hash"], "deadbeefcafefeed");
+        assert_eq!(m["to_clock_id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["to_clock_hash"], "1234567890abcdef");
+        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
+        assert_eq!(m["retention_ns"], 60_000_000_000i64);
+    }
+}

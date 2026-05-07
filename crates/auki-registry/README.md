@@ -288,18 +288,9 @@ JCS-canonical UTF-8 JSON. Required keys (extends auki-logs's base):
 
 **`source` is inline, not a registry reference.** Pose Log has no Pose Source Registry — payload is fully self-describing (frame names sit in each `TransformSample`), so producer identity is provenance, not a decoder. Sensor Log earns a registry because its byte payload is uninterpretable without one; Pose Log doesn't have that pressure. If/when a producer variant brings substantial identity (SLAM with `map_id` + algorithm parameters), graduating `source` to a sibling registry is straightforward — extract the body into a content-addressed JSON file and replace the inline value with `(source_id, source_hash)`.
 
-### `PoseSource` — inline producer identity
+### `PoseSource` — moved to [`auki-manifests`](../auki-manifests)
 
-Tagged-enum body. v1 ships one variant; SLAM, odometry, and manual fixtures are the named extension points.
-
-```
-PoseSource = Ros2Tf {
-  publishers: [string],     // sorted ROS node names contributing to /tf
-                            // (e.g. ["amcl", "robot_state_publisher", "tf_broadcaster"])
-}
-```
-
-Frame pairs are deliberately *not* part of identity — they can change at runtime; consult the segments for what was actually observed. `/tf_static` merges with `/tf` on capture; the static-vs-dynamic distinction is not preserved (Park can detect statics by observing they don't change).
+The inline producer-identity tagged enum (`PoseSource`) and the `build_pose_log_manifest` builder moved to [`auki-manifests`](../auki-manifests) in Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08). They're manifest concerns, not registry concerns. See [`auki-manifests/README.md`](../auki-manifests/README.md) for the current shape and the rationale.
 
 ### Payload (CBOR)
 
@@ -328,4 +319,4 @@ Each `parent_frame` / `child_frame` string in a `TransformSample` references an 
 
 ## Versioning
 
-Schema version is **1** for all types (`SensorRegistryEntry`, `ClockRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseSource`, `PoseLogEntry`, `TransformSample`). Bump on incompatible field changes. The auki-logs segment format version is independent.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) versions independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

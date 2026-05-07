@@ -11,18 +11,7 @@ The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opene
 
 ## Manifest
 
-JCS-canonical UTF-8 JSON, written via the auki-logs primitive. Required keys:
-
-| Key                    | Type    | Notes                                                                |
-| ---------------------- | ------- | -------------------------------------------------------------------- |
-| `segment_duration_ns`  | integer | > 0; from auki-logs                                                  |
-| `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                                  |
-| `app_id`               | string  | Identifier of the application that wrote this log. Same string as the daemon's `/api/info` `app` field (e.g. `boosterapp`, `sentinel`). |
-| `session_id`           | string  | UUIDv4 minted by the integrator at app boot; stable for the daemon run's lifetime. Same value as `/api/info`'s `session_id` and the parent directory name. See [`auki-session`](../auki-session) for session lifecycle. |
-| `from_clock_id`        | string  | The Clock Registry ID that the framing's `timestamp_ns` is in        |
-| `from_clock_hash`      | string  | XXH3-128 hex of the from-clock's registry entry                      |
-| `to_clock_id`          | string  | The Clock Registry ID that `offset_ns` carries you to                |
-| `to_clock_hash`        | string  | XXH3-128 hex of the to-clock's registry entry                        |
+The manifest schema and `build_time_transform_log_manifest(...)` builder live in [`auki-manifests`](../auki-manifests) (moved there 2026-05-08, Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md)) — same crate that owns the Sensor Log + Pose Log manifest builders. Encoding stays JCS-canonical UTF-8 JSON. See [`auki-manifests/README.md#timetransform-log`](../auki-manifests/README.md#timetransform-log) for the field table.
 
 A node maintains one TimeTransform Log per ordered clock pair per session.
 

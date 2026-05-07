@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 2026 05:30 HKT
+**README: API surface section.** Replaces the terse "Operator control API" section with a fuller `## API surface` section covering all four surfaces the SDK exposes: (1) Rust crate APIs (per-crate top-level public types), (2) Python (PyO3) bindings (`auki-identity-py`, `auki-network-py` with its `cluster` and `discovery` submodules), (3) the cross-app HTTP control API (full method/path/purpose table), and (4) the libp2p wire protocols (`/auki/cluster/1.0.0`, `/auki/stream/1.0.0`). The HTTP-API summary is now correct (8 endpoints, not 6) and points at `docs/control-api.md` as the source of truth. Docs-only.
+
 ### broodsugar's claude · May 7, 11:00 HKT, 2026
 
 **Frame Registry landed** in `auki-registry` + `auki-session` — third registry alongside Sensor + Clock; closes the "Frame Registry shape" parking-lot question and addresses the State of SDK doc's "Frame Registry: ✗" gap. **Will land in v0.0.22.** Pins v0.0.21 (Dagaz Batch 2).

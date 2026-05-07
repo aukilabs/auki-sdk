@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:00 HKT, 2026
+
+**[`auki-registry/README.md`](README.md): per-section "Departing" callouts** + corresponding [`parking_lot.md`](parking_lot.md) item. Each of the four log-payload sections (Sensor Log, Point Cloud Log, Audio Log, Pose Log) now opens with a one-line italic callout pointing at the matching migration step in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Pose Log callout additionally cross-links the root parking-lot Propagate task and notes the wrapper-removal + manifest-`(from, to)` reshape. Per-type detail (manifest tables, CBOR shapes, design rationale) stays in this README until each type physically moves to `auki-datatypes` — that doc move is sequenced with the code move per the new parking-lot item. Doc-only.
+
 ### broodsugar's claude · May 7, 21:15 HKT, 2026
 
 README + `src/readme.md` opening framing updated to flag the **scope-shrink-in-flight** decided 2026-05-07. The opening "the typed data shapes the SDK persists — registry entries AND log payloads" claim is the AI-drift framing identified in the same session; corrected to *"the SDK's identity catalog"* with an explicit callout that the log payload types currently here (`SensorLogEntry` / `PointCloudLogEntry` / `AudioLogEntry` / `PoseLogEntry` / `TransformSample` / `DynamicIntrinsics` / `build_pose_log_manifest`) are migrating to [`auki-datatypes`](../auki-datatypes) step-by-step. Sequence in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Content describing today's code (which still has the old types under their old names) left intact — accurate for the current state. The framing fix is what mattered. Doc-only.

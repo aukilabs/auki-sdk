@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:30 HKT, 2026
+
+**Migration architecture decisions added to [`parking_lot.md`](parking_lot.md), Step 0 added to [`src/sprint.md`](src/sprint.md).** Two upfront decisions: (1) **Manifest encoding stays JCS-JSON, not protobuf** — JCS gives free cross-language byte-equivalence which protobuf doesn't, manifests are human/browser/ad-hoc-tool-readable, and per-recording metadata doesn't benefit from wire compactness. (2) **`build_*_log_manifest` builders + manifest schemas → new `auki-manifests` crate** — symmetric with this crate (which owns segment payload shapes); `auki-manifests` owns manifest shapes. Sequenced as **Step 0** before migration step 1, pure refactor extracting `build_sensor_log_manifest` + `build_pose_log_manifest` from `auki-registry` and `build_manifest` from `auki-time-transforms`. Naming: `auki-manifests` over `auki-logging` (idiom collision in Rust — reads as observability/tracing). Doc-only.
+
 ### broodsugar's claude · May 7, 21:00 HKT, 2026
 
 **Crate renamed `auki-proto` → `auki-datatypes`.** Names the responsibility (canonical shared cross-language data types) instead of the implementation (protobuf via prost). Aligns with the rest of the workspace's concept-naming convention (`auki-registry`, `auki-logs`, `auki-session`, `auki-time-transforms`, `auki-network` — all named for their purpose, not their internals). Future-proofs against any downstream encoding switch.

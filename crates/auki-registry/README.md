@@ -20,7 +20,7 @@ Registry entries describe **what a thing is**; log payloads describe **what was 
 ```
 <app_root>/registries/sensors/<sensor_id>/<hash>.json
 <app_root>/registries/clocks/<clock_id>/<hash>.json
-<app_root>/registries/frames/<frame_id>/<hash>.json    ← coming
+<app_root>/registries/frames/<frame_id>/<hash>.json
 ```
 
 Registries live at the **app root**, shared across every session of that app. Hash-keyed writes are idempotent, so a sensor entry that doesn't change between app starts produces the same `<hash>.json` regardless of session — re-writing it would be wasted work.
@@ -312,7 +312,7 @@ There is no per-`TransformSample` timestamp in the payload — the auki-logs fra
 
 ### Frame Registry
 
-Frame IDs (`parent_frame`, `child_frame`) are opaque strings in v1. The Frame Registry — describing each named frame's coordinate conventions (handedness, axes, units, rotation semantics) — is still aspirational; it lives at `<app_root>/registries/frames/<frame_id>/<hash>.json` when implemented. Without it, frame names are labels; with it, they carry semantic identity.
+Each `parent_frame` / `child_frame` string in a `TransformSample` references an entry in the Frame Registry — a sibling to the Sensor and Clock registries that describes what each named frame's coordinate convention is (handedness, axis directions, length unit). The registry shipped in v0.0.22 with `FrameRegistryEntry { frame_id, handedness, axes, units }` plus four preset constructors covering REP-103 body, REP-103 optical, OpenGL/Three.js, and Unity. Tree structure (frame parentage) lives in the Pose Log, not in the registry — the registry declares what each frame *is in isolation*; the Pose Log declares the edges between them. Rotation representation (Hamilton quaternion `[x, y, z, w]`) is fixed at the `TransformSample` layer; not per-frame. See [`src/readme.md`](src/readme.md#frameregistryentry) for the full type definitions.
 
 ---
 

@@ -17,7 +17,7 @@ Wallet.seed() -> bytes                                     # 32-byte derived see
 auki_identity.app_instance.derive() -> str                 # "aabbccddeeff"
 ```
 
-That's it. No `sign`, no `verify`, no creation certs, no Swarm. Those land in the full `auki-py` crate later.
+That's it. No `sign`, no `verify`, no creation certs, no Swarm. The libp2p / async / streaming surface lives in the sibling [`auki-network-py`](../../auki-network-py) crate (per-component naming).
 
 ## How the wrappers map to the Rust crates
 
@@ -103,5 +103,5 @@ Build-time:
 
 ## Consumers
 
-- **Boosterapp Python sidecar** — populates `/api/info`'s `peer_id` and `app_instance` fields, persists the seed at `~/.auki/boosterapp/identity.seed`. First and primary consumer.
-- *(planned)* The full `auki-py` crate will subsume this one's surface and add Swarm + async on top. `auki-identity-py` continues as the lightweight identity-only package for sidecars that don't need the network layer.
+- **Boosterapp Python sidecar** — populates `/api/info`'s `peer_id` and `app_instance` fields, persists the seed at `~/.auki/boosterapp/identity.seed`. First and primary consumer; in production on K1 hardware against [v0.0.22](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.22).
+- **[`auki-network-py`](../../auki-network-py)** — the sibling crate (per-component naming) that adds the `auki_network.cluster` / `Stream<T>` / `discovery_client` Python surface. Consumers that need both identity primitives and networking import both packages.

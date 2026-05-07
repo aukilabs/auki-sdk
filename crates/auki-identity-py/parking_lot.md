@@ -22,11 +22,9 @@ Outstanding: someone with a Rust toolchain runs the snippet and lands a follow-u
 
 ---
 
-## Async / Swarm bindings
+## Async / Swarm bindings — **RESOLVED** (per-component, coexist)
 
-Out of scope here by design — the full `auki-py` MVP (libp2p Swarm, async runtime, Tokio integration) is the bigger track. When it lands, the question is: does `auki-identity-py` get folded into `auki-py`, or do they coexist? My instinct: coexist. `auki-identity-py` is a useful minimal package for sidecars that only need the data primitives; `auki-py` is for daemons that need the network layer. The three entry points here are stable; `auki-py` extends them.
-
-If Boosterapp's needs change (e.g. it wants Swarm-via-Python rather than via the Rust daemon), revisit.
+The async / libp2p / streaming Python surface shipped as the sibling [`auki-network-py`](../auki-network-py) crate (per-component naming decision, 2026-05-05). The two crates coexist: `auki-identity-py` stays the lightweight identity-only package for sidecars that only need the data primitives; `auki-network-py` is for daemons that need the network layer. A consumer that wants both imports both. The original parking-lot question — "does `auki-identity-py` get folded into a future `auki-py`?" — was rejected in favour of per-component naming.
 
 ---
 

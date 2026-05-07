@@ -18,7 +18,7 @@ The convention specifies `src/sprint.md` per crate (current work + next steps). 
 
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path
 - [`auki-identity/`](auki-identity/parking_lot.md) — BIP32-vs-labeled-hash derivation; encrypted-at-rest format; BIP39 mnemonics; signing-scheme v2 shape
-- [`auki-identity-py/`](auki-identity-py/parking_lot.md) — PyPI distribution policy; locked-`peer_id`-vector regeneration follow-up; async/Swarm bindings (deferred to full `auki-py`); Python version floor
+- [`auki-identity-py/`](auki-identity-py/parking_lot.md) — PyPI distribution policy; locked-`peer_id`-vector regeneration follow-up; Python version floor (the once-deferred async/Swarm bindings shipped as `auki-network-py` per the per-component naming decision)
 - [`auki-network-py/`](auki-network-py/parking_lot.md) — `pyo3-log` routing (deferred — stderr → journald is fine for K1 today); two-runtime E2E test uses fixed loopback ports (no introspection API for OS-chosen addresses); PyPI distribution policy (alongside `auki-identity-py`'s); type stubs (`auki_network.pyi`); single-task tokio runtime sizing; Python version floor
 - [`auki-jcs/`](auki-jcs/parking_lot.md) — `serde_jcs` upstream vendoring strategy
 - [`auki-logs/`](auki-logs/parking_lot.md) — per-entry checksums; reader streaming for unbounded captures

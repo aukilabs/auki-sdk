@@ -140,10 +140,10 @@ maturin develop --release
 python -c "import auki_network; print(dir(auki_network.cluster))"
 ```
 
-**Pip-from-Git (subdirectory)** — once the SDK is tagged with this crate included (planned for v0.0.14):
+**Pip-from-Git (subdirectory)** — pin a tag (the crate has been in tagged releases since v0.0.14):
 
 ```bash
-pip install "git+https://github.com/aukilabs/auki-sdk.git@<tag>#subdirectory=crates/auki-network-py"
+pip install "git+https://github.com/aukilabs/auki-sdk.git@v0.0.22#subdirectory=crates/auki-network-py"
 ```
 
 A Rust toolchain (`rustup`) and a working C compiler are required at install time. PyPI publication is parked — same status as `auki-identity-py`.

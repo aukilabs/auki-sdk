@@ -10,6 +10,14 @@ Scaffolding only — `proto/placeholder.proto` validates the `prost-build` pipel
 
 Each step is its own PR with its own locked conformance vector. Each step also resolves the matching per-type slop question in [`parking_lot.md`](../parking_lot.md) (decisions Nils adjudicates per-step rather than upfront).
 
+0. **Prep: extract `auki-manifests` crate.** New crate that holds the SDK's manifest contract — the `build_*_log_manifest` builders, the manifest read-side parsers + validators, and the manifest-shape schemas (currently documented in [`auki-registry/README.md`](../../auki-registry/README.md)). Symmetric with `auki-datatypes`: that crate owns segment payload shapes; this one owns manifest shapes. See the corresponding decision in [`parking_lot.md`](../parking_lot.md).
+   - **Move** `build_sensor_log_manifest` and `build_pose_log_manifest` from [`auki-registry`](../../auki-registry).
+   - **Move** `build_manifest` from [`auki-time-transforms`](../../auki-time-transforms).
+   - **Move** the manifest-table sections of [`auki-registry/README.md`](../../auki-registry/README.md) into the new crate's `README.md`.
+   - Pure refactor — no behaviour change, no encoding change. Manifest encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](../../auki-jcs); see decision in [`parking_lot.md`](../parking_lot.md).
+   - Add the new crate's per-folder `README.md` / `parking_lot.md` / `changelog.md` / `src/readme.md` / `src/sprint.md` per the [folder convention](../../../CONTRIBUTING.md).
+   - Lands **before** step 1 so step 1 can stay focused on the segment-encoder swap.
+
 1. **`auki.camera` — `PinholeCameraLogEntry`** (renamed from `SensorLogEntry`).
    - Define `proto/camera.proto`. Message shape: `dynamic_intrinsics` placement is a per-step decision (see slop note in [`parking_lot.md`](../parking_lot.md)).
    - Add locked conformance vector pinning a fixed `PinholeCameraLogEntry` instance to its protobuf wire bytes.

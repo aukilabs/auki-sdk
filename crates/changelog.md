@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:30 HKT, 2026
+
+`auki-datatypes`: migration architecture decisions added — manifest encoding stays JCS-JSON (not protobuf); new `auki-manifests` crate owns `build_*_log_manifest` builders + manifest schemas, extracted as Step 0 prep PR before migration step 1. `auki-logs`: encoder-aware vs encoder-agnostic `Log<T>` open question added to its parking lot, decided in step 1.
+
 ### broodsugar's dobby · May 7, 22:00 HKT, 2026
 
 `auki-registry`: per-section "Departing" callouts on the four log-payload sections in `README.md` cross-linking each migration step in `auki-datatypes/src/sprint.md`; corresponding `parking_lot.md` item documenting the doc-stays-until-code-moves rule.

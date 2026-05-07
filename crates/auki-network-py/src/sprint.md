@@ -8,7 +8,7 @@ The crate ships three Python sub-modules:
 
 - **`auki_network.cluster`** — ansuz cluster runtime + types (initial release).
 - **`auki_network.cluster.{StreamRequest, AcceptInfo, JpegFrame, PointCloudFrame, ...}`** — grimsby `Stream<T>` surface (deliverable #4 / v0.0.17) lifted by [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 (v0.0.21) to multi-`T` dispatch. `cluster.StreamDecision.accept(info, source)` produces a JPEG substream; the new `accept_pointcloud(info, source)` produces a CDR-encoded `PointCloud2` substream. Consumer side: `runtime.open_stream(peer_id, sensor_id)` opens JPEG; `runtime.open_pointcloud_stream(peer_id, sensor_id)` opens PointCloud. Each substream stays mono-`T` end-to-end.
-- **`auki_network.discovery`** — Vinland Batch 2 REST client wrapping `auki_network::discovery_client` (will land in v0.0.19). Sync-shaped `DiscoveryClient(url)` with `register` / `fetch` / `deregister`; three typed Python exceptions (`DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`). Pattern A bridge — each method `block_on`s on the existing process-wide `cluster_tokio_runtime()`.
+- **`auki_network.discovery`** — Vinland Batch 2 REST client wrapping `auki_network::discovery_client` (shipped in v0.0.19). Sync-shaped `DiscoveryClient(url)` with `register` / `fetch` / `deregister`; three typed Python exceptions (`DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`). Pattern A bridge — each method `block_on`s on the existing process-wide `cluster_tokio_runtime()`.
 
 The crate ships the full cluster-layer Python surface and nothing else:
 
@@ -27,11 +27,9 @@ Tests: 40 Rust-side smoke tests (`cargo test -p auki-network-py`); 44 Python-sid
 
 In priority order:
 
-1. **v0.0.14 release.** This crate ships in v0.0.14 — a follow-up to v0.0.13, which already cut bundling ansuz Batch 2 (PR #33, #34), the `Option<ParticipantInfo>` follow-up (PR #35), and the `auki-logs::Log<T>::set_retention` addition (PR #36) at 2026-05-05 03:00 HKT, ~4 minutes before this crate's PR was opened. v0.0.14 = v0.0.13 + this crate. BoosterApp deliverable #7 (sidecar libp2p integration) pins against v0.0.14 once cut.
+1. **Type stubs (`auki_network.pyi`).** Improves IDE autocomplete in BoosterApp's sidecar and any future Python consumer. Surface is stable; ~80 lines of `.pyi` (cluster + grimsby + Vinland + Dagaz). Tracked in [`parking_lot.md`](../parking_lot.md).
 
-2. **Boosterapp sidecar integration (deliverable #7).** First downstream consumer. Wires `cluster.spawn` into `scripts/auki_capture.py`'s lifecycle: load `cluster.json` at startup, build a `participant_provider` closure that reads from session-local state (cached `session_id`, `session_clock_id`, etc.), spawn the runtime, expose `runtime.peers()` as the new `/api/cluster` endpoint, thread `cluster_joined_at_ns` into outbound `/api/info` once the first peer connects.
-
-3. **Type stubs (`auki_network.pyi`).** Improves IDE autocomplete in BoosterApp's sidecar and any future Python consumer. Surface is stable; ~50 lines of `.pyi`. Tracked in [`parking_lot.md`](../parking_lot.md).
+2. **Layer 2 capability advertisement.** When `auki-network` ships a `/auki/capabilities/1.0.0` request-response protocol (the State of SDK doc names this as "the biggest single gap on the networking side"), the wrapper exposes it through `runtime.fetch_capabilities(peer_id)` or similar. Sibling to `discovery_client`'s shape — sync-blocking call with `block_on` on the shared tokio runtime.
 
 ## Smaller follow-ups
 

@@ -18,11 +18,9 @@ Tests: 5 Rust-side smoke tests in `lib.rs`; 13 Python-side end-to-end tests in `
 
 In priority order:
 
-1. **Fill in the locked `peer_id` literal.** `python_tests/test_basic.py`'s `LOCKED_PEER_ID_FROM_SEED_03` is currently `None` — the test asserts shape only. Run `maturin develop && python -c "import auki_identity; print(auki_identity.Wallet.from_seed(b'\\x03'*32).derive_child('peer/v1').peer_id())"`, paste the result as a literal, push a follow-up. This makes the cross-language byte-for-byte assertion strict. Tracked in [`parking_lot.md`](../parking_lot.md).
+1. **End-to-end-test the pip-from-Git install** before recommending it in the README. The `pip install git+...#subdirectory=` flow is documented but unverified. Until validated, the supported install path is `git clone && maturin develop`.
 
-2. **End-to-end-test the pip-from-Git install** before recommending it in the README. The `pip install git+...#subdirectory=` flow is documented but unverified. Until validated, the supported install path is `git clone && maturin develop`.
-
-3. **Boosterapp sidecar integration.** First downstream consumer. Once Boosterapp's `/api/info` v0.0.11 implementation is in flight, validate the `peer_id` and `app_instance` values populated through this crate match what the Rust side produces for the same hardware + same seed file.
+2. **Boosterapp sidecar integration.** Already shipped — Boosterapp's `/api/info` v0.0.11 sidecar consumes `Wallet.from_seed` + `derive_child("peer/v1")` + `peer_id()` + `app_instance.derive` end-to-end on the K1. Locked vector validated.
 
 ## Smaller follow-ups
 
@@ -32,15 +30,15 @@ In priority order:
 
 ## Open items
 
-See [`../parking_lot.md`](../parking_lot.md). Three items, all forward-looking:
+See [`../parking_lot.md`](../parking_lot.md). Forward-looking trade-offs only:
 
 - PyPI distribution policy.
-- Locked-vector regeneration (the immediate next step above).
-- Async / Swarm bindings (out of scope here; will be in the full `auki-py` crate).
 - Python version floor (currently 3.8 via abi3).
+
+The cross-language locked-vector literal is filled in (was the original "next" item; resolved 2026-05-04). Async / Swarm bindings are not deferred to a future `auki-py` — they shipped as the sibling [`auki-network-py`](../../auki-network-py) crate per the per-component naming decision.
 
 ## Out of scope by design
 
-- Async / Tokio / libp2p Swarm. Lands in the full `auki-py` crate later.
-- `Wallet.sign` / `verify` / creation certs. Same reasoning — full `auki-py` track.
+- Async / Tokio / libp2p Swarm. Lives in the sibling [`auki-network-py`](../../auki-network-py) crate (per-component naming).
+- `Wallet.sign` / `verify` / creation certs. Out of scope for the identity-py surface; the broader `auki-network-py` consumes signing internally for Vinland's Discovery `register` flow but doesn't re-expose the primitives — consumers that need raw signing wait for an `auki-jcs-py` or similar.
 - WASM. Native Python extension only.

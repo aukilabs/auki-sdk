@@ -22,9 +22,9 @@ The three Reid milestone-2 parking-lot questions are resolved and encoded in cod
 
 The crate's ansuz scope is fully shipped. Forward-looking work, not blocking:
 
-- **`auki-py` PyO3 wrapper** lives in a sibling crate (per the booster claude ask — Boosterapp's Python sidecar wraps `cluster_runtime` opaquely via `cluster.spawn`). That's a separate crate, not a follow-up here.
-- **Daemon integration** (ansuz Batch 3 — Boosterapp #7, Sentinel #8, Park #10) consumes this crate; not done in this crate.
-- **Layer 2 — capability advertisement / discovery.** Per the Reid architecture: capability identifiers are the namespaced strings already in `Capability`; what's missing is the libp2p protocol that advertises a peer's capability list at runtime and lets others query it. Likely a `libp2p::request_response` behaviour with a stable protocol id (`/auki/capabilities/1.0.0`); the `cluster_protocol` codec pattern is the template (request empty, response is a `ReachabilityRecord`). This becomes the runtime back-end for the Discovery Service shape that lands alongside Domain participation.
+- **PyO3 wrapper** lives in [`auki-network-py`](../../auki-network-py) — a sibling crate (per the per-component naming decision). Boosterapp's Python sidecar consumes it; this crate exports `pub` types so the wrapper can re-export them.
+- **Daemon integration** — Boosterapp / Sentinel / Park consume this crate as a path or git dep; daemon-side work is not done in this crate. Vinland Batch 3 daemon integrations have landed for Boosterapp + Park; Sentinel is queued.
+- **Layer 2 — capability advertisement / topic discovery.** Per the Reid architecture: capability identifiers are the namespaced strings already in `Capability`; what's missing is the libp2p protocol that advertises a peer's capability list + sensor topic list at runtime and lets others query it. Likely a `libp2p::request_response` behaviour with a stable protocol id (`/auki/capabilities/1.0.0`); the `cluster_protocol` codec pattern is the template (request empty, response carries `Vec<{topic, sensor_id, sensor_hash}>` plus `ReachabilityRecord`). This is the natural next networking deliverable now that ansuz + grimsby + Vinland + Dagaz have shipped — flagged in [State of SDK](https://www.notion.so/3565c8e9659281d4a477db09729cbe1f) as "the biggest single gap on the networking side."
 
 ## Smaller follow-ups
 

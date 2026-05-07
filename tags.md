@@ -77,7 +77,7 @@ The schema supports any of these; which authority model an ecosystem chooses is 
 ## Concrete example (one line of `tags.jsonl`)
 
 ```json
-{"data_id":"a3f2…","tag_id":"e8cb3879fcfa7f716047aa0892b0c0c0","claim_type":"domain_membership","issuer":"04a8…","issued_at_ns":1745000030500000000,"signature":null,"schema_version":1}
+{"data_id":"a3f2…","tag_id":"7e5c7d3bfc1a4e0a9d8b2c6f4e1d8a3b","claim_type":"domain_membership","issuer":"04a8…","issued_at_ns":1745000030500000000,"signature":null,"schema_version":1}
 ```
 
 (Wrapped here for readability; on disk it's a single line.)

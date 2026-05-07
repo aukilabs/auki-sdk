@@ -12,6 +12,7 @@ A single source file: [`lib.rs`](lib.rs). No external dependencies — just `std
 pub fn registries_root(app_root: &Path) -> PathBuf;
 pub fn sensor_entry_path(app_root: &Path, sensor_id: &str, hash: &str) -> PathBuf;
 pub fn clock_entry_path(app_root: &Path, clock_id: &str, hash: &str) -> PathBuf;
+pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf;
 pub fn session_root(app_root: &Path, session: &str) -> PathBuf;
 pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -> PathBuf;
 pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf;
@@ -19,13 +20,14 @@ pub fn poselog_path(session_root: &Path, pose_log_id: &str) -> PathBuf;
 pub fn id_to_segment(id: &str) -> String;
 ```
 
-## Tests (10 total)
+## Tests (11 total)
 
 | Test | Asserts |
 |------|---------|
 | `registries_root_is_under_app` | `<app>/registries` |
 | `sensor_entry_path_includes_id_substitution_and_hash_filename` | `<app>/registries/sensors/<id-subst>/<hash>.json`; `/` → `__` |
 | `clock_entry_path_uses_clocks_dir` | Same, under `clocks/` |
+| `frame_entry_path_uses_frames_dir` | Same, under `frames/` (Frame Registry; v0.0.22) |
 | `session_root_is_app_join_session_id` | `<app>/<session>` |
 | `timetransform_log_path_uses_double_underscore_separator` | Joined as `<from>__<to>`, both substituted |
 | `sensorlog_path_is_session_join_sensorlogs_join_sensor_log_id` | `<session>/sensorlogs/<sensor_log_id>` |
@@ -36,5 +38,5 @@ pub fn id_to_segment(id: &str) -> String;
 
 ## Consumers in this workspace
 
-- `auki-registry` — uses `sensor_entry_path` / `clock_entry_path` to locate registry entries. The single source of truth for the layout lives here.
+- `auki-registry` — uses `sensor_entry_path` / `clock_entry_path` / `frame_entry_path` to locate registry entries. The single source of truth for the layout lives here.
 - *Downstream apps* (boosterapp, Park) — use these helpers to construct paths for log opens and registry reads, instead of string-concatenating layout-specific directory names.

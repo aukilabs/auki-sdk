@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and (for grimsby) the `/auki/stream/1.0.0` typed-byte-stream wire primitives + a typed `Stream<T>` Rust API on top — `stream_provider` callable for the producer side, `ClusterRuntime::open_stream<T>` for the consumer side (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and the `/auki/stream/1.0.0` typed-byte-stream wire primitives + a typed `Stream<T>` Rust API on top — `stream_provider` callable for the producer side dispatching by `sensor_id` to a closed `StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` enum (Dagaz Batch 1 lifted grimsby v1's runtime-`T` pinning), `ClusterRuntime::open_stream<T>` for the consumer side (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature). For Vinland, ships `discovery_client::DiscoveryClient` against the [`aukilabs/discovery`](https://github.com/aukilabs/discovery) REST registry — wallet-signed `register` / `fetch` / `deregister` (behind the `discovery_client` feature).
 
 ## What a peer is
 
@@ -175,7 +175,7 @@ let request_id = swarm.behaviour_mut().cluster.send_request(&peer_id, ClusterReq
 
 **Always-on, no toggle.** The protocol sits idle for swarms that don't participate in a cluster (the dedicated `aukilabs/relay` infrastructure node) — there's no traffic until somebody sends a request. A toggle would just be ceremony.
 
-**Higher-level orchestration lives separately.** Auto-dialing every peer in `cluster.json`, tracking the live peer-state map, reconnecting on disconnect — all of that lands in [`ClusterRuntime`](#the-cluster-runtime-m1) below. Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves and call `send_request` / `send_response` directly. The Python sidecar wraps the runtime opaquely via the planned `auki-py` `cluster.spawn`.
+**Higher-level orchestration lives separately.** Auto-dialing every peer in `cluster.json`, tracking the live peer-state map, reconnecting on disconnect — all of that lands in [`ClusterRuntime`](#the-cluster-runtime-m1) below. Rust consumers that want fine control (Sentinel) drive the swarm event loop themselves and call `send_request` / `send_response` directly. The Python sidecar wraps the runtime opaquely via [`auki-network-py`](../auki-network-py)'s `cluster.spawn`.
 
 ## The cluster runtime (M1)
 
@@ -241,7 +241,7 @@ runtime.shutdown(); // explicit clean exit; Drop is the safety net.
 
 **Two construction paths.** `ClusterRuntime::spawn(seed, doc, swarm_config, provider)` builds the swarm internally — this is the daemon path. `ClusterRuntime::from_swarm(swarm, doc, provider)` accepts a pre-built swarm — useful when the caller needs to learn bound addresses *before* composing the cluster doc (tests, or a daemon that publishes its addresses out-of-band).
 
-**Opaque, not a `NetworkBehaviour`.** Decision recorded in the ansuz Notion doc (2026-05-05): the consumers we know about (Boosterapp via `auki-py` opaque, Sentinel direct on `cluster_protocol::Behaviour`) both want runtime shape. A future Rust consumer that wants `NetworkBehaviour` composition can build it on top of `cluster_protocol` directly.
+**Opaque, not a `NetworkBehaviour`.** Decision recorded in the ansuz Notion doc (2026-05-05): the consumers we know about (Boosterapp via [`auki-network-py`](../auki-network-py) opaque, Sentinel direct on `cluster_protocol::Behaviour`) both want runtime shape. A future Rust consumer that wants `NetworkBehaviour` composition can build it on top of `cluster_protocol` directly.
 
 **Lifecycle.** `shutdown(self)` signals the driver task and aborts it; the swarm drops, connections close at the TCP layer. The `Drop` impl runs the same cleanup as a safety net. Both paths are sync — Python wrappers don't need an async shutdown.
 
@@ -440,7 +440,7 @@ while let Some(item) = sub.frames.next().await {
 
 Dropping the `StreamSubscription` cleanly closes the substream; the producer's source-Stream gets dropped on the next pump cycle, releasing whatever resources its `Drop` holds.
 
-**Locked to ****`T = JpegFrame`**** at runtime construction time** (per grimsby D4). `open_stream<T>` is generic on the consumer side; `stream_provider`'s `T` is fixed to `JpegFrame` for grimsby v1. Generalizing to multiple producer-side `T`s on one daemon is a type-erased follow-up — defer.
+**Multi-`T` producer dispatch** (Dagaz Batch 1 lifted grimsby v1's runtime-`T` pinning per Dagaz D1). `stream_provider` returns a closed `StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` enum; the producer dispatches by `request.sensor_id` to pick which `T` per call. Each substream stays mono-`T` end-to-end (per grimsby D1 — *substream lifetime IS subscription lifetime*); `open_stream<T>` is generic on the consumer side. Adding a future `T` (NV12, poses, segmentation) is a new variant on the closed dispatch enum + a coordinated SDK-consumer release.
 
 **Backpressure** flows naturally: slow consumer → Yamux/QUIC substream backpressure → SDK pump blocks on its substream write → SDK stops pulling from the source-Stream → producer's source-Stream backpressures upstream. For live preview, the recommended source-Stream is a small bounded broadcast channel that sheds old frames before the SDK ever sees them.
 

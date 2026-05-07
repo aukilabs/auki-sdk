@@ -8,7 +8,7 @@ PyO3 bindings for a tiny slice of the Auki SDK — exactly three primitives:
 
 ## Why this exists
 
-A stepping stone. The full `auki-py` MVP — libp2p `Swarm`, async runtime, Tokio integration — is a bigger track. **This crate is the data-only slice**: three pure synchronous functions, no GIL/Tokio dance, shipped now so Boosterapp's Python sidecar can implement the [`/api/info` v0.0.11 shape](../../docs/control-api.md) ahead of the broader Python work. See the [ansuz milestone plan](https://www.notion.so/3565c8e96592809fb674f769d826c1de) for the wider picture.
+**The identity-only slice of the Python SDK.** Pure synchronous primitives — no GIL/Tokio dance, no async, no Swarm — for daemons that only need wallet, peer-id derivation, and `app_instance`. Boosterapp's Python sidecar uses it for the `/api/info` shape. The async / libp2p / streaming half lives in the sibling [`auki-network-py`](../auki-network-py) crate (per-component naming).
 
 ## Install
 
@@ -63,8 +63,8 @@ The recipes match `auki-identity` and `auki-network` byte-for-byte — a Python 
 ## What this is *not*
 
 - **Not async.** No Tokio, no `asyncio` integration. Synchronous calls only.
-- **Not the libp2p Swarm.** No dialing, no listening, no protocols. That lands in the full `auki-py` crate later.
-- **Not signing or verification.** No `Wallet.sign`, no `verify`, no creation certs. Same reasoning — full `auki-py` track.
+- **Not the libp2p Swarm.** No dialing, no listening, no protocols — those live in [`auki-network-py`](../auki-network-py).
+- **Not signing or verification.** No `Wallet.sign`, no `verify`, no creation certs. The broader [`auki-network-py`](../auki-network-py) consumes signing internally for the Vinland Discovery flow but doesn't re-expose the primitives.
 - **Not a key store.** `load_or_mint_seed` is the entire defence on disk: file mode `0o600` on Unix, raw bytes. Stronger threat models wrap their own keystore around this primitive.
 - **Not WASM.** Native Python extension; the WASM-friendly subset of `auki-identity` is not exposed here.
 
@@ -96,7 +96,7 @@ The Python suite includes a **locked cross-language `peer_id` vector** — `Wall
 
 ## Versioning
 
-Pre-1.0 alongside the rest of the SDK. The Python surface is intentionally small so the full `auki-py` crate can subsume / extend it without breaking these three entry points. When `auki-py` lands, `auki-identity-py` will continue to exist as the lightweight identity-only package.
+Pre-1.0 alongside the rest of the SDK. The Python surface is intentionally small and stable; consumers that need the libp2p / async surface import [`auki-network-py`](../auki-network-py) alongside this crate (per-component naming).
 
 ## Implementation status
 

@@ -59,24 +59,24 @@ This repo is in early development. The crates here implement a foundational subs
 | Crate | Status |
 |---|---|
 | [`auki-logs`](crates/auki-logs) | ✓ Generic segmented ring-buffer log primitive — manifest + segment files + retention eviction |
-| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock registry types and IO; Sensor Log + Point Cloud Log + Audio Log + Pose Log payload schemas (capture-only for Pose Log; `convert_pose` pending). Frame Registry pending |
+| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock + Frame registry types and IO; Sensor Log + Point Cloud Log + Audio Log + Pose Log payload schemas (capture-only for Pose Log; `convert_pose` pending). Frame Registry shipped in v0.0.22 with four preset constructors (`ros_body` / `ros_optical` / `opengl` / `unity`) and `frame_id` references on `RgbCamera` + `PointCloud`. |
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
 | [`auki-time-transforms`](crates/auki-time-transforms) | ✓ Clock sampler primitives for the TimeTransform Log |
 | [`auki-session`](crates/auki-session) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout |
 | [`auki-identity`](crates/auki-identity) | ✓ Wallet primitive: ed25519 keypairs, deterministic child derivation, signed creation certs. WASM-friendly |
-| [`auki-identity-py`](crates/auki-identity-py) | ✓ PyO3 bindings for a tiny slice of the SDK — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`. Stepping-stone Python package for Boosterapp's `/api/info` v0.0.11 sidecar; the full `auki-py` MVP (Swarm + async) is a separate, larger track |
-| [`auki-network`](crates/auki-network) | ✓ M0 + M1: peer identity (derived from wallet via `derive_child("peer/v1")`), reachability records, named capabilities, plus a libp2p `Swarm` builder behind the `swarm` feature (TCP/QUIC + Noise + Yamux + Circuit Relay v2 + mDNS + identify + ping; dial-by-peer-id helper for circuit-relay multiaddrs). All Reid M2 networking parking-lot questions resolved |
-| [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
+| [`auki-identity-py`](crates/auki-identity-py) | ✓ PyO3 bindings for the identity primitives BoosterApp's Python sidecar consumes — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id/seed`, `app_instance.derive` |
+| [`auki-network`](crates/auki-network) | ✓ libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, mDNS, identify, ping) behind the `swarm` feature; peer identity from `Wallet::derive_child("peer/v1")`; `cluster.json` loader + opaque `ClusterRuntime` driving `/auki/cluster/1.0.0` (participant exchange) and `/auki/stream/1.0.0` (typed `Stream<T>` for `JpegFrame` and `PointCloudFrame`, dispatched by `sensor_id` via the closed `StreamDispatch` enum). REST `discovery_client` (Vinland) for register/fetch/deregister against a Discovery server, behind the `discovery_client` feature. MAC-derived `app_instance` behind its own feature |
+| [`auki-network-py`](crates/auki-network-py) | ✓ PyO3 wrapper around `ClusterRuntime` + `Stream<T>` + `discovery_client`. `cluster.spawn(stream_provider=...)` accepting Python `async def` generators (Pattern A — SDK owns the asyncio loop on its tokio worker; sidecars stay sync-shaped); `runtime.open_stream(peer_id, sensor_id)` (JPEG) + `runtime.open_pointcloud_stream(peer_id, sensor_id)` (CDR `PointCloud2` bytes); `auki_network.discovery.DiscoveryClient` with sync `register` / `fetch` / `deregister` |
+| [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. `frame_id` threaded through both builders for v0.0.22's Frame Registry rollout. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
 
 **Not yet implemented:**
 
 - `convert_pose` (the Pose Log primitives — `PoseLogEntry`, `PoseSource`, `build_pose_log_manifest`, `poselog_path` — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
 - Detection Log
-- Frame Registry
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
-- Domain registration / clustering / discovery (these live in higher layers; the SDK provides primitives, not the network protocol itself)
-- The full `auki-py` MVP — libp2p Swarm + async / Tokio integration. The minimal `auki-identity-py` slice (`load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`) ships today as a stepping stone for Boosterapp's `/api/info` v0.0.11 sidecar
+- A `Session` abstraction tying clock + sensor-id minting + recording lifecycle together (today daemons construct sessions by convention)
+- Layer 2 capability advertisement (`/auki/capabilities/1.0.0`) — querying what topics a peer offers at runtime, and cross-peer Sensor / Clock / Frame Registry sync. Today registries are local-disk only; cross-peer convention agreement is by configuration
 
 ---
 
@@ -96,7 +96,7 @@ Files within an app:
 ├── registries/
 │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 │   ├── clocks/<clock_id>/<hash>.json
-│   └── frames/<frame_id>/<hash>.json     ← coming
+│   └── frames/<frame_id>/<hash>.json
 └── <session_id>/
     ├── timetransform_logs/<from_id>__<to_id>/
     │   ├── manifest.json
@@ -119,7 +119,7 @@ Files within an app:
 
 **A sensor log is one sensor stream.** Each `<sensor_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel sensor logs sharing a session, not a multi-sensor log. Buffers, intent recordings, and time-bounded captures are all sensor logs — they differ only in their `retention_ns` (backward window kept on disk; `0` = no eviction) and `duration_ns` (forward auto-stop cap; `0` = run indefinitely). The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path. Whether a daemon auto-starts any sensor log at session boot is daemon-application policy, not SDK contract.
 
-This shape is **breaking from v0.0.6** (the inner `<sensor_id>/` layer is gone).
+The on-disk shape is pre-1.0 and changes accumulate by tag — see [`changelog.md`](changelog.md) for the per-tag history. Most recent shape changes: v0.0.22 added `frames/<frame_id>/<hash>.json` with the Frame Registry and required `frame_id` on `RgbCamera` + `PointCloud` registry entries (breaking; pre-1.0, integrators regenerate); v0.0.6 removed the inner `<sensor_id>/` layer under `sensorlogs/`.
 
 ---
 
@@ -201,15 +201,31 @@ Both are exposed from Python via `ClusterRuntime.open_stream` / `ClusterRuntime.
 
 ---
 
+## Networking — clusters, streams, discovery
+
+The SDK ships a libp2p substrate behind the `auki-network` `swarm` feature. A daemon (Booster, Sentinel, Park) becomes a peer in a **cluster** — the runtime group of devices networking around a shared Domain ID — by reading a `cluster.json` discovery doc, exchanging `ParticipantInfo` over `/auki/cluster/1.0.0`, and (optionally) opening typed streams over `/auki/stream/1.0.0`.
+
+Three protocols ship today:
+
+| Protocol | Purpose | What it carries |
+|---|---|---|
+| `/auki/cluster/1.0.0` | Participant exchange | `ParticipantInfo` — `app`, `name`, `session_id`, session-clock binding, `peer_id`, `app_instance` |
+| `/auki/stream/1.0.0` | Typed sensor data streaming | A typed `StreamMessage<T>` per substream; each substream is mono-`T`. v0.0.22 ships `T = JpegFrame` (grimsby v1 — byte-identical to `GET /api/preview/latest.jpg`) and `T = PointCloudFrame` (Dagaz Batch 1 — raw CDR-encoded ROS `PointCloud2` bytes). The producer's `stream_provider` callback dispatches by `sensor_id` to pick which `T` per request via the closed `StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` enum |
+| Discovery REST (Vinland) | Multi-cluster registry | Wallet-signed `register` / `fetch` / `deregister` against [`aukilabs/discovery`](https://github.com/aukilabs/discovery). `auki-network::discovery_client` is the SDK-side client, behind the `discovery_client` feature; daemons branch at startup on `--discovery-url` (no fallback chain — D3) |
+
+Python sidecars (BoosterApp's K1 sensor capture) get the same surface via [`auki-network-py`](crates/auki-network-py) — `cluster.spawn(stream_provider=...)` accepts an `async def` generator, `runtime.open_stream` / `runtime.open_pointcloud_stream` are sync-blocking. Pattern A: SDK owns the asyncio loop on its tokio worker; sidecars stay sync-shaped.
+
+---
+
 ## Quickstart
 
-Add the SDK crates as Git dependencies in your `Cargo.toml`:
+Add the SDK crates as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
 
 ```toml
 [dependencies]
-auki-logs     = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.5" }
+auki-logs     = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.22" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.22" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.22" }
 ```
 
 Open a sensor log for one recording:
@@ -248,9 +264,13 @@ Critical wire-format and derivation chains are pinned by **locked test vectors**
 |---|---|---|
 | [`auki-hash`](crates/auki-hash) | `tests::locked_*` (existing) | XXH3-128 byte vectors (used for content-addressed registry hashes) |
 | [`auki-identity`](crates/auki-identity) | `tests::locked_derive_child_peer_v1_pubkey_vector` | `Wallet::from_seed([3u8; 32]).derive_child("peer/v1").public_key()` → 32-byte ed25519 pubkey |
+| [`auki-identity`](crates/auki-identity) | `tests::locked_sign_canonical_json_vector` | `Wallet::from_seed([3u8; 32]).sign_canonical_json(<Vinland-shaped registration>)` → exact RFC 8785 canonical bytes + 64-byte ed25519 signature |
 | [`auki-network`](crates/auki-network) | `tests::locked_seed_to_peer_id_vector` | `PeerIdentity::from_wallet(Wallet::from_seed([3u8; 32])).peer_id()` → canonical `12D3KooW…` libp2p PeerId string |
+| [`auki-network`](crates/auki-network) | `stream_protocol::tests::locked_point_cloud_frame_wire_shape_vector` | `StreamMessage::Frame { .., payload: PointCloudFrame { bytes } }` → exact JSON-on-wire bytes (with the `base64_bytes` adapter on `PointCloudFrame.bytes` — Park's browser parser must reproduce these) |
+| [`auki-network`](crates/auki-network) | `discovery_client::tests::locked_register_canonical_and_signature_vector` | Vinland Discovery `register` signed payload → exact RFC 8785 canonical bytes + 64-byte signature; pairs with Discovery's verifier-side reproduction |
+| [`auki-registry`](crates/auki-registry) | `tests::frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | `FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")` → `{"axes":{"x":"forward","y":"left","z":"up"},...}` JSON + XXH3-128 `fd0dc3789e898b71b5e16ee122a81a44` |
 
-The two-stage chain in `auki-identity` + `auki-network` together pin the `Wallet → libp2p PeerId` derivation that `cluster.json` depends on. They use the same `[3u8; 32]` seed so the locked pubkey can be inspected as the intermediate value for the locked PeerId.
+The two-stage chain in `auki-identity` + `auki-network` pins the `Wallet → libp2p PeerId` derivation that `cluster.json` depends on. The Vinland and PointCloudFrame vectors pin the wire shapes that cross language boundaries to Discovery's verifier and Park's browser-side parser. The Frame Registry vector pins the convention names so any cross-language reader (mobile companion, future Sentinel-as-consumer) parses `"forward"` / `"left"` / `"up"` byte-identically.
 
 ---
 

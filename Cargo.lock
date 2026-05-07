@@ -217,6 +217,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-manifests"
+version = "0.0.0"
+dependencies = [
+ "auki-hash",
+ "auki-jcs",
+ "auki-logs",
+ "ciborium",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "auki-network"
 version = "0.0.0"
 dependencies = [
@@ -297,6 +310,7 @@ name = "auki-time-transforms"
 version = "0.0.0"
 dependencies = [
  "auki-logs",
+ "auki-manifests",
  "ciborium",
  "libc",
  "serde",

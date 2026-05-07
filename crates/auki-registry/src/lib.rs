@@ -217,35 +217,10 @@ pub struct AudioLogEntry {
 
 // ─── Pose Log ────────────────────────────────────────────────────────────────
 
-/// Identifies the producer of the transforms in a Pose Log. Lives **inline**
-/// in the log's manifest under the `source` key — Pose Log does not have a
-/// separate registry like Sensor Log, because the payload is fully
-/// self-describing (frame names sit in each `TransformSample`); source
-/// identity is provenance, not a decoder. Tagged-enum body is the extension
-/// point for future producers (SLAM, odometry, manual fixtures, ...).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PoseSource {
-    /// ROS 2 `/tf` (and `/tf_static`, merged on capture). `publishers` is the
-    /// sorted list of ROS node names contributing to the topic. Frame pairs
-    /// are *not* part of identity — they can change at runtime; consult the
-    /// segments for what was actually observed.
-    Ros2Tf {
-        /// Sorted; ROS node names contributing to `/tf`.
-        publishers: Vec<String>,
-    },
-    // future: Slam { algorithm, map_id, ... }, Odometry { ... }, ...
-}
-
-impl PoseSource {
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        canonicalize(self)
-    }
-
-    pub fn hash(&self) -> String {
-        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
-    }
-}
+// `PoseSource` (the inline producer-identity tagged enum that lives in the
+// Pose Log manifest) moved to [`auki-manifests`] in Step 0 of the
+// auki-datatypes migration. The Pose Log payload types below stay here
+// until Step 5 of the migration; see ../auki-datatypes/src/sprint.md.
 
 /// One Pose Log entry = one batch of transforms (one ROS `TFMessage`, or
 /// the equivalent for other producers). Empty `transforms` is permitted —
@@ -273,35 +248,8 @@ pub struct TransformSample {
     pub rotation_quat: [f64; 4],
 }
 
-/// Build a Pose Log manifest with the run-identifying `app_id` /
-/// `session_id`, the clock binding, the inline producer identity, and
-/// auki-logs's required `segment_duration_ns` / `retention_ns`.
-///
-/// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
-/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
-/// (same value as the parent session directory name).
-/// `source` describes the producer — see [`PoseSource`] — and is serialized
-/// inline under the manifest's `source` key.
-pub fn build_pose_log_manifest(
-    app_id: &str,
-    session_id: &str,
-    clock_id: &str,
-    clock_hash: &str,
-    source: &PoseSource,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "clock_id": clock_id,
-        "clock_hash": clock_hash,
-        "source": source,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
-    })
-}
+// `build_pose_log_manifest` moved to [`auki-manifests`] in Step 0 of the
+// auki-datatypes migration.
 
 // ─── Clock Registry ──────────────────────────────────────────────────────────
 
@@ -680,45 +628,8 @@ pub fn read_frame(
     Ok(Some(entry))
 }
 
-// ─── Sensor Log family manifest ──────────────────────────────────────────────
-
-/// Build a Sensor Log family manifest with the run-identifying `app_id` /
-/// `session_id`, the sensor and clock bindings, and auki-logs's required
-/// `segment_duration_ns` / `retention_ns`.
-///
-/// Same shape for Sensor Log, Point Cloud Log, and Audio Log — the
-/// `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose
-/// `body` variant tells a reader which payload type the segments hold.
-///
-/// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
-/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
-/// (same value as the parent session directory name).
-pub fn build_sensor_log_manifest(
-    app_id: &str,
-    session_id: &str,
-    sensor_id: &str,
-    sensor_hash: &str,
-    clock_id: &str,
-    clock_hash: &str,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "sensor_id": sensor_id,
-        "sensor_hash": sensor_hash,
-        "clock_id": clock_id,
-        "clock_hash": clock_hash,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
-    })
-}
-
-fn duration_as_i64_ns(d: Duration) -> i64 {
-    d.as_nanos().min(i64::MAX as u128) as i64
-}
+// `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
+// auki-datatypes migration.
 
 // ─── Internals ───────────────────────────────────────────────────────────────
 
@@ -1164,110 +1075,12 @@ mod tests {
         assert_eq!(read, Some(entry));
     }
 
-    // ─── Sensor Log manifest builder ────────────────────────────────────────
-
-    #[test]
-    fn build_sensor_log_manifest_contains_all_required_fields() {
-        let m = build_sensor_log_manifest(
-            "boosterapp",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/head_left_cam",
-            "e8cb3879fcfa7f716047aa0892b0c0c0",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
-        assert_eq!(m["app_id"], "boosterapp");
-        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(m["sensor_id"], "K1-AABBCCDDEEFF/head_left_cam");
-        assert_eq!(m["sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
-        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
-        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
-        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
-        assert_eq!(m["retention_ns"], 30_000_000_000i64);
-    }
-
-    #[test]
-    fn sensor_log_manifest_opens_a_log_round_trip() {
-        // End-to-end: the builder produces a manifest auki-logs accepts, and
-        // the manifest survives a write/read cycle via the auki-logs reader.
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = build_sensor_log_manifest(
-            "boosterapp",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/head_left_cam",
-            "e8cb3879fcfa7f716047aa0892b0c0c0",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
-        // The body type doesn't matter for the manifest round-trip; pick one.
-        let _log = auki_logs::Log::<SensorLogEntry>::open(dir.path(), manifest.clone()).unwrap();
-        let reader = auki_logs::Log::<SensorLogEntry>::read(dir.path()).unwrap();
-        // The on-disk manifest matches what we wrote.
-        assert_eq!(reader.manifest()["app_id"], "boosterapp");
-        assert_eq!(
-            reader.manifest()["session_id"],
-            "550e8400-e29b-41d4-a716-446655440000"
-        );
-    }
+    // Sensor Log manifest builder + locked PoseSource vectors moved to
+    // [`auki-manifests`] in Step 0 of the auki-datatypes migration. The Pose
+    // Log payload round-trip tests below stay here until Step 5 of the
+    // migration moves the payload types themselves.
 
     // ─── Pose Log ───────────────────────────────────────────────────────────
-
-    fn m1_ros2_tf_source() -> PoseSource {
-        PoseSource::Ros2Tf {
-            publishers: vec![
-                "amcl".into(),
-                "robot_state_publisher".into(),
-                "tf_broadcaster".into(),
-            ],
-        }
-    }
-
-    /// Locks the JCS canonical bytes for the M1 example ROS 2 TF source.
-    /// Catches drift in the tagged-enum shape OR canonicalization.
-    #[test]
-    fn ros2_tf_source_serializes_to_canonical_bytes() {
-        let bytes = m1_ros2_tf_source().canonical_bytes();
-        assert_eq!(
-            std::str::from_utf8(&bytes).unwrap(),
-            r#"{"kind":"ros2_tf","publishers":["amcl","robot_state_publisher","tf_broadcaster"]}"#
-        );
-    }
-
-    /// Locks the XXH3-128 hex of the M1 example ROS 2 TF source. Cross-cutting
-    /// guard: trips if any of `auki-jcs`, `auki-hash`, or this crate's serde
-    /// shape drifts.
-    #[test]
-    fn ros2_tf_source_hash_is_locked() {
-        assert_eq!(
-            m1_ros2_tf_source().hash(),
-            "f3d296341347589c72297a0cc7c81cd8"
-        );
-    }
-
-    #[test]
-    fn build_pose_log_manifest_contains_all_required_fields() {
-        let m = build_pose_log_manifest(
-            "boosterapp",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            &m1_ros2_tf_source(),
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
-        assert_eq!(m["app_id"], "boosterapp");
-        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
-        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
-        assert_eq!(m["source"]["kind"], "ros2_tf");
-        assert_eq!(m["source"]["publishers"][0], "amcl");
-        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
-        assert_eq!(m["retention_ns"], 30_000_000_000i64);
-    }
 
     #[test]
     fn pose_log_entry_round_trips_through_cbor() {
@@ -1480,39 +1293,8 @@ mod tests {
         assert_eq!(entry, None);
     }
 
-    #[test]
-    fn pose_log_manifest_opens_a_log_round_trip() {
-        // End-to-end: builder + auki-logs open + write entry + read back.
-        let dir = tempfile::tempdir().unwrap();
-        let manifest = build_pose_log_manifest(
-            "boosterapp",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            &m1_ros2_tf_source(),
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
-        let mut log =
-            auki_logs::Log::<PoseLogEntry>::open(dir.path(), manifest.clone()).unwrap();
-        let entry = PoseLogEntry {
-            transforms: vec![TransformSample {
-                parent_frame: "base_link".into(),
-                child_frame: "head_link".into(),
-                translation: [0.0, 0.0, 1.5],
-                rotation_quat: [0.0, 0.0, 0.0, 1.0],
-            }],
-        };
-        log.append(1_000_000_000_i64, &entry).unwrap();
-        log.flush().unwrap();
-        drop(log);
-
-        let reader = auki_logs::Log::<PoseLogEntry>::read(dir.path()).unwrap();
-        assert_eq!(reader.manifest()["source"]["kind"], "ros2_tf");
-        assert_eq!(reader.manifest()["app_id"], "boosterapp");
-        let entries = reader.entries().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].timestamp_ns, 1_000_000_000_i64);
-        assert_eq!(entries[0].payload, entry);
-    }
+    // `pose_log_manifest_opens_a_log_round_trip` moved to [`auki-manifests`]
+    // in Step 0 of the auki-datatypes migration — `build_pose_log_manifest`
+    // and `PoseSource` live there now. The PoseLogEntry CBOR round-trip
+    // tests above cover this crate's payload-encoding contract.
 }

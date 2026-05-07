@@ -6,6 +6,24 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:00 HKT, 2026
+
+**Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) landed.** Pure refactor extracting manifest concerns into the new [`auki-manifests`](../auki-manifests) crate. No behaviour change, no encoding change.
+
+**Removed from this crate** (moved to [`auki-manifests`](../auki-manifests)):
+
+- `pub fn build_sensor_log_manifest(...)`
+- `pub fn build_pose_log_manifest(...)`
+- `pub enum PoseSource` (with `canonical_bytes` + `hash` impls)
+- The corresponding tests: `build_sensor_log_manifest_contains_all_required_fields`, `sensor_log_manifest_opens_a_log_round_trip`, `m1_ros2_tf_source` helper, `ros2_tf_source_serializes_to_canonical_bytes`, `ros2_tf_source_hash_is_locked`, `build_pose_log_manifest_contains_all_required_fields`, `pose_log_manifest_opens_a_log_round_trip`.
+- The private `duration_as_i64_ns` helper (only used by the moved builders).
+
+**Test count: 41 → 35.** All locked-vector semantics preserved at their new home in `auki-manifests` — the `f3d296341347589c72297a0cc7c81cd8` PoseSource hash and the M1 example JCS bytes round-trip identically.
+
+**Docs**: outer `README.md` Pose Log section now points at [`auki-manifests`](../auki-manifests) for `PoseSource` + `build_pose_log_manifest`; `src/readme.md` removed the `PoseSource` definition + builder signatures + the moved test rows. Schema-version line notes that `PoseSource` versions independently in its new home.
+
+The `PoseLogEntry` + `TransformSample` payload types still live here — those move out in Step 5 of the migration (per the [2026-05-07 Pose Log synthesis](../../parking_lot.md)). Will land in v0.0.24.
+
 ### broodsugar's dobby · May 7, 22:00 HKT, 2026
 
 **[`auki-registry/README.md`](README.md): per-section "Departing" callouts** + corresponding [`parking_lot.md`](parking_lot.md) item. Each of the four log-payload sections (Sensor Log, Point Cloud Log, Audio Log, Pose Log) now opens with a one-line italic callout pointing at the matching migration step in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Pose Log callout additionally cross-links the root parking-lot Propagate task and notes the wrapper-removal + manifest-`(from, to)` reshape. Per-type detail (manifest tables, CBOR shapes, design rationale) stays in this README until each type physically moves to `auki-datatypes` — that doc move is sequenced with the code move per the new parking-lot item. Doc-only.

@@ -6,6 +6,21 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:00 HKT, 2026
+
+**Step 0 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — new crate [`auki-manifests`](crates/auki-manifests).** Pure refactor extracting the SDK's manifest concerns from `auki-registry` and `auki-time-transforms` into a single owner. Symmetric with `auki-datatypes`: that crate owns segment payload shapes (protobuf via prost); this one owns per-recording manifest shapes (JCS-canonical UTF-8 JSON via [`auki-jcs`](crates/auki-jcs)). No behaviour change, no encoding change.
+
+**Moved into [`auki-manifests`](crates/auki-manifests):**
+
+- From [`auki-registry`](crates/auki-registry): `build_sensor_log_manifest`, `build_pose_log_manifest`, the `PoseSource` tagged enum (with `canonical_bytes` + `hash` impls), and the locked vectors that pin `PoseSource`'s wire shape (`ros2_tf_source_serializes_to_canonical_bytes` → exact JCS bytes; `ros2_tf_source_hash_is_locked` → `f3d296341347589c72297a0cc7c81cd8`).
+- From [`auki-time-transforms`](crates/auki-time-transforms): `build_manifest`, renamed `build_time_transform_log_manifest` for unambiguity vs the two siblings now living in the same crate.
+
+**Test accounting**: `auki-registry` 41 → 35 (six tests moved + one composite test deleted, coverage subsumed by the equivalent in `auki-manifests`); `auki-time-transforms` 10 → 9 (one test moved); new `auki-manifests` 6 (the moves + a sensor-log auki-logs round-trip using a placeholder body type). Total tests across the workspace unchanged; locked semantics preserved at the new home. `cargo test --workspace` clean.
+
+**Doc updates**: [`auki-registry/README.md`](crates/auki-registry/README.md) Pose Log section's `PoseSource` subsection now points at [`auki-manifests`](crates/auki-manifests); `src/readme.md` removes the moved type definitions and test rows. [`auki-time-transforms/README.md`](crates/auki-time-transforms/README.md) manifest table replaced with a one-paragraph pointer. Root [`README.md`](README.md) crate-listing table gains an `auki-manifests` row; `auki-time-transforms` row drops `build_manifest`; `auki-registry` row drops `PoseSource` + the two builders. Root [`parking_lot.md`](parking_lot.md) subfolder summary gains an `auki-manifests` entry. The `auki-datatypes` sprint marks Step 0 as ✓ done.
+
+**Production code in [`auki-time-transforms`](crates/auki-time-transforms)** now has a private inlined `as_nanos().min(i64::MAX as u128) as i64` at `Sampler::start`'s threshold conversion (one of two original call sites of the moved private `duration_as_i64_ns` helper). The crate gains an `auki-manifests` dev-dep so the `Sampler` integration test still constructs a manifest. Will land in v0.0.24.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 [`auki-datatypes`](crates/auki-datatypes) migration architecture decisions: manifest encoding stays JCS-JSON (not protobuf); new [`auki-manifests`](crates/auki-manifests) crate (to be created) owns `build_*_log_manifest` builders + manifest schemas, extracted as Step 0 prep PR before migration step 1. [`auki-logs`](crates/auki-logs) parking-lot open question added: encoder-aware vs encoder-agnostic `Log<T>` post-migration.

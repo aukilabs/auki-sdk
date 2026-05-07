@@ -72,7 +72,7 @@ This repo is in early development. The crates here implement a foundational subs
 
 **Not yet implemented:**
 
-- `convert_pose` (the Pose Log primitives — `PoseLogEntry`, `PoseSource`, `build_pose_log_manifest`, `poselog_path` — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
+- `convert_pose` (the Pose Log primitives — `PoseLogEntry` + `TransformSample` in [`auki-registry`](crates/auki-registry), `PoseSource` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-session`](crates/auki-session) — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
 - Detection Log
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
 - A `Session` abstraction tying clock + sensor-id minting + recording lifecycle together (today daemons construct sessions by convention)
@@ -137,9 +137,10 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-jcs`](crates/auki-jcs) | `canonicalize(value) -> Vec<u8>` (RFC 8785) |
 | [`auki-identity`](crates/auki-identity) | `Wallet`, `PublicKey`, `WalletId`, `Signature`, `CreationCert`, `verify(...)`, `load_or_mint_seed(...)` |
 | [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error` |
-| [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`RgbCamera`, `PointCloud`, `Microphone`), `ClockRegistryEntry`, `FrameRegistryEntry`, `SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `PoseSource`, `TransformSample`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`, `build_sensor_log_manifest`, `build_pose_log_manifest` |
+| [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`RgbCamera`, `PointCloud`, `Microphone`), `ClockRegistryEntry`, `FrameRegistryEntry`, `SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. **Log payload types departing** to [`auki-datatypes`](crates/auki-datatypes) per the migration sprint. |
+| [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `PoseSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-session`](crates/auki-session) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `id_to_segment` |
-| [`auki-time-transforms`](crates/auki-time-transforms) | `Clock` (trait), `SystemClock`, `Sampler`, `SamplerState`, `tick(...)`, `build_manifest(...)`, `TimeTransformEntry`, `TimeTransformSource` |
+| [`auki-time-transforms`](crates/auki-time-transforms) | `Clock` (trait), `SystemClock`, `Sampler`, `SamplerState`, `tick(...)`, `TimeTransformEntry`, `TimeTransformSource` |
 | [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `cluster_doc`, `swarm`, `cluster_protocol`, `cluster_runtime`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_rgb_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
 

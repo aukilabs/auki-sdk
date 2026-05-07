@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:30 HKT, 2026
+
+**[`parking_lot.md`](parking_lot.md): encoder-aware vs encoder-agnostic `Log<T>` post-migration.** New open question framing the generic-bound shape of `Log<T>` after the [`auki-datatypes`](../auki-datatypes) migration switches segment payload encoding from CBOR-via-ciborium to prost. Lean: encoding-agnostic — `auki-logs` is supposed to be format-neutral framing; bolting prost into the bound mixes concerns and locks out future encoders. Decided in step 1 of the migration. Doc-only.
+
 ### broodsugar's claude · May 7, 17:30 HKT, 2026
 
 README path-placeholder rename to track the [Control API rewrite](../../docs/control-api.md): `<session>/sensorlogs/<recording_uuid>/` → `<session>/sensorlogs/<sensor_log_id>/`. Same listing also gains a sibling line `<session>/poselogs/<pose_log_id>/` (was missing despite poselogs being a real `auki-logs` consumer since v0.0.10). Doc-only; no code changes.

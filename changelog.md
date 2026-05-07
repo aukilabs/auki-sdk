@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 7, 22:00 HKT, 2026
+
+[`auki-registry`](crates/auki-registry/README.md) README: per-section "Departing" callouts on the four log-payload sections cross-linking each migration step in [`auki-datatypes/src/sprint.md`](crates/auki-datatypes/src/sprint.md); plus a [`crates/auki-registry/parking_lot.md`](crates/auki-registry/parking_lot.md) item documenting the doc-stays-until-code-moves rule.
+
 ### broodsugar's claude · May 7, 21:15 HKT, 2026
 
 **[`auki-registry`](crates/auki-registry) README + src/readme.md framing fix.** Follow-up to the 21:00 scope-shrink decision. The crate's outer README opened with *"The typed data shapes the Auki SDK persists — registry entries (immutable identity) and log payloads (per-frame data)"* — that's the exact AI-drift framing the decision rejected (per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0), registries are identity-only). Corrected to open with *"the SDK's identity catalog"* and added a "Scope shrink in flight" callout pointing at [`auki-datatypes/src/sprint.md`](crates/auki-datatypes/src/sprint.md) for the type migration. Content describing today's code (which still has the AI-drift types under their old names) is preserved as-is — accurate for current state. The fix was the framing, not the content. Doc-only. The other crate READMEs ([`auki-logs`](crates/auki-logs), [`auki-ros-adapter`](crates/auki-ros-adapter), root README's type table) reference `SensorLogEntry` / `TransformSample` / etc. by their current names; those are accurate for today's code and get updated as their respective migration steps land in [`auki-datatypes`](crates/auki-datatypes), not pre-renamed.

@@ -123,11 +123,81 @@ This shape is **breaking from v0.0.6** (the inner `<sensor_id>/` layer is gone).
 
 ---
 
-## Operator control API
+## API surface
 
-Daemons that produce SDK sessions (BoosterApp, Sentinel, future) expose a uniform HTTP control surface so any UI — primarily [Park](https://github.com/aukilabs/park) — can drive any of them through one contract: list recordings, start/stop intent captures, peek at the latest frame, change buffer retention, request clean shutdown. Plus an mDNS service-discovery convention so consumers find daemons on the LAN automatically.
+The SDK exposes four distinct API surfaces. They serve different audiences and live in different layers of the stack.
 
-Specified in [`docs/control-api.md`](docs/control-api.md). Six endpoints, JSON over HTTP, trusted-LAN assumption (no auth in v1).
+### 1. Rust crate APIs
+
+The on-device library, organized as a Cargo workspace. Each crate is independently versioned via the repo's Git tags; pull the ones you need.
+
+| Crate | Public surface (top level) |
+|---|---|
+| [`auki-hash`](crates/auki-hash) | `hash_jcs_bytes(bytes) -> String` (XXH3-128) |
+| [`auki-jcs`](crates/auki-jcs) | `canonicalize(value) -> Vec<u8>` (RFC 8785) |
+| [`auki-identity`](crates/auki-identity) | `Wallet`, `PublicKey`, `WalletId`, `Signature`, `CreationCert`, `verify(...)`, `load_or_mint_seed(...)` |
+| [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error` |
+| [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`RgbCamera`, `PointCloud`, `Microphone`), `ClockRegistryEntry`, `FrameRegistryEntry`, `SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `PoseSource`, `TransformSample`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`, `build_sensor_log_manifest`, `build_pose_log_manifest` |
+| [`auki-session`](crates/auki-session) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `id_to_segment` |
+| [`auki-time-transforms`](crates/auki-time-transforms) | `Clock` (trait), `SystemClock`, `Sampler`, `SamplerState`, `tick(...)`, `build_manifest(...)`, `TimeTransformEntry`, `TimeTransformSource` |
+| [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `cluster_doc`, `swarm`, `cluster_protocol`, `cluster_runtime`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
+| [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_rgb_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
+
+Each crate's own README documents the public types in detail and pins the on-disk format where applicable.
+
+### 2. Python (PyO3) bindings
+
+PyO3 wrappers shipped as separate crates, one per Rust component. The pattern is **per-component naming** (no umbrella `auki-py` package).
+
+[`auki-identity-py`](crates/auki-identity-py) — wallet primitives + per-machine identity:
+
+```python
+import auki_identity
+seed   = auki_identity.load_or_mint_seed(path)        # bytes
+wallet = auki_identity.Wallet.from_seed(seed)
+peer_id = wallet.derive_child("peer/v1").peer_id()    # libp2p PeerId string
+mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine ID
+```
+
+[`auki-network-py`](crates/auki-network-py) — peer cluster runtime, live streams, Discovery client. Two submodules:
+
+| Submodule | Public surface |
+|---|---|
+| `auki_network.cluster` | `ParticipantInfo`, `PeerSnapshot`, `ClusterDoc`, `ClusterRuntime`, `StreamRequest`, `AcceptInfo`, `JpegFrame`, `PointCloudFrame`, `DeclineReason`, `EndReason`, `ProducerFrame`, `ConsumerFrame`, `StreamDecision`, `StreamSubscription`, `FrameIterator`, plus `load_doc(...)` and `spawn(...)` |
+| `auki_network.discovery` | `DiscoveryClient` — `register / fetch / deregister` |
+
+These are what consumer apps written in Python (e.g. BoosterApp's sidecar) import to participate as a peer, register live sensor streams, and join a discovery service — without reimplementing libp2p in Python.
+
+### 3. HTTP control API (cross-app operator surface)
+
+Daemons that produce SDK sessions (BoosterApp, Sentinel, future) implement a uniform HTTP control surface so any UI — primarily [Park](https://github.com/aukilabs/park) — can drive any of them through one contract. The SDK **specifies** the contract; consumer apps implement it.
+
+Specified in [`docs/control-api.md`](docs/control-api.md). All endpoints under `/api/`, JSON over HTTP, daemons bind `0.0.0.0:<port>`, trusted-LAN assumption (no auth in v1).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/info` | Session-scoped identity: `app`, `name`, `session_id`, `session_clock_id` + `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`. Same payload as the libp2p `/auki/cluster/1.0.0` protocol. |
+| `GET` | `/api/state` | `{session_uuid, recordings: [...]}` — every recording in the session, active or stopped, with full identity (`sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`) and lifecycle fields (`started_at_ns`, `stopped_at_ns`, `duration_ns`, `frame_count`, `retention_ns`). |
+| `GET` | `/api/registries/sensors/<sensor_id>/<sensor_hash>` | Hash-pinned Sensor Registry entry, served verbatim, immutable. |
+| `GET` | `/api/registries/clocks/<clock_id>/<clock_hash>` | Hash-pinned Clock Registry entry, same semantics. |
+| `GET` | `/api/preview/latest.jpg` | Latest captured frame as JPEG (poll-based; `503` if none yet). |
+| `POST` | `/api/recordings` | Start an unbounded intent recording. Returns `201 {"recording_id": "..."}`. |
+| `DELETE` | `/api/recordings/<id>` | Stop a recording — sets `stopped_at_ns`, freezes `duration_ns`, keeps the entry in `/api/state`. |
+| `PATCH` | `/api/buffer` | `{"retention_ns": <i64>}` — change the auto-started buffer's retention at runtime. |
+| `POST` | `/api/quit` | Clean shutdown — flushes logs, closes mDNS, exits. Responds `200` *before* teardown. |
+
+Plus an **mDNS service-discovery convention** on `_auki._tcp.local.` with TXT records `name` and `app` so consumers find daemons on the LAN automatically. See [`docs/control-api.md`](docs/control-api.md) for the full conformance checklist.
+
+### 4. libp2p wire protocols
+
+For peer-to-peer participation. Not REST-shaped, but they are public protocols the SDK defines.
+
+| Protocol ID | Purpose |
+|---|---|
+| `/auki/cluster/1.0.0` | Peer-to-peer `ParticipantInfo` exchange. Carries the same payload as HTTP `/api/info`. |
+| `/auki/stream/1.0.0` | Live sensor streaming. Two payload kinds today: JPEG frames (RGB cameras) and CDR-encoded `PointCloud2` (stereo / depth point clouds). |
+
+Both are exposed from Python via `ClusterRuntime.open_stream` / `ClusterRuntime.open_pointcloud_stream` in `auki-network-py`, and from Rust via the `stream_protocol` / `stream_runtime` modules in `auki-network`.
 
 ---
 

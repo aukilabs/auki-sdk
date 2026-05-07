@@ -18,9 +18,17 @@ Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation 
 
 `auki-hash` publishes locked conformance vectors so any reimplementation can be validated. Should `auki-jcs`, `auki-logs`, `auki-registry`, and `auki-time-transforms` also publish locked vectors? Concretely: a `tests/cross_language/` directory with golden bytes any port must reproduce. Boosterapp's Python sidecar is already a de facto second implementation — vectors would catch drift automatically.
 
-## `/api/state.session_uuid` vs `/api/info.session_id` naming
+## Control API `PATCH /api/sensor_logs/<id>` — mutability scope
 
-Post-ansuz `/api/info` redesign returns `session_id`; `/api/state` still returns `session_uuid`. Same value, two field names. The SDK's broader convention is `session_id` (per [`auki-session`](crates/auki-session/README.md) and the manifest spec); `session_uuid` predates that landing. Renaming `/api/state.session_uuid` → `session_id` is a breaking change to consumers expecting the old name (Park, etc.). Aligning makes the API consistent; deferring keeps existing consumers unbroken until the next coordination-tag PR. Decide with the next consumer-coordination round.
+v0.0.23 spec restricts PATCH to `retention_ns` and `duration_ns`; identity fields (`sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `session_id`) are immutable on the rationale that mutating any of them is semantically a different log. Confirm this is the right call before implementers wire it. The relaxation case worth thinking about: a `sensor_hash` that drifts mid-session because the operator updated the camera's intrinsics and the daemon re-registered the sensor — does the running log carry the old hash forever, or does the daemon close it and open a new one with the new hash? My lean: close-and-reopen is the right model, so PATCH stays restricted; flagging here so the boosterapp implementer can push back if the close-and-reopen window costs them frames they need.
+
+## Control API — cross-session enumeration without a live session
+
+v0.0.23 spec calls out `GET /api/sensor_logs` listing every on-disk session by default but keeps "browse-only daemon mode" (no live session, only read endpoints) explicitly out of scope. The "daemon must be running, with a live session, to serve any request" coupling is convenient for v1 but burns operators who want to browse historical recordings on a machine where the producer app has been uninstalled. Whether to add a `--browse-only <app_root>` daemon mode (or a separate read-only browser binary) is a v2 question. Pinning the answer affects how Park frames its "open recording from disk" UX.
+
+## Control API — `started_after` / `started_before` clock interpretation
+
+v0.0.23 spec has `started_after` / `started_before` query parameters compared per-log against each log's own `clock_id`. This works when a daemon's logs share a single clock (BoosterApp v1 — every log under one `CLOCK_REALTIME`-backed clock); it gets ambiguous as soon as a daemon writes logs across multiple clocks (e.g. a robot running both a `K1-AABBCCDDEEFF/utc` clock and a `K1-AABBCCDDEEFF/session-monotonic` clock). Options when this gets messy: (a) require a `clock_id` query param when filter values are supplied, (b) pin a designated "filter clock" the daemon advertises in `/api/info`, (c) silently drop logs whose clock is incompatible with the filter (fragile). Decide before the first heterogeneous-clock daemon ships.
 
 ## Glossary.md — additional terms to seed
 
@@ -58,7 +66,7 @@ Would let peers cache by claim identity, but adds a chicken-and-egg with `issued
 
 ## Propagate: Pose Log capture shape decided
 
-`PoseLogEntry { transforms: Vec<TransformSample> }` with inline `PoseSource` in the manifest (no Pose Source Registry — payload is self-describing; provenance only). Update [`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` to point at the actual Pose Log layout (`<session>/poselogs/<recording_uuid>/`); confirm the discovery descriptor reads cleanly against the new shape. `convert_pose` itself is still pending — capture and read are in place; composition / path-finding is not.
+`PoseLogEntry { transforms: Vec<TransformSample> }` with inline `PoseSource` in the manifest (no Pose Source Registry — payload is self-describing; provenance only). Update [`dataproducts.md`](dataproducts.md)'s `FrameTransformAvailability.log_handle` to point at the actual Pose Log layout (`<session>/poselogs/<pose_log_id>/`); confirm the discovery descriptor reads cleanly against the new shape. `convert_pose` itself is still pending — capture and read are in place; composition / path-finding is not.
 
 ## Discovery descriptor — `log_handle` semantics
 
@@ -94,6 +102,18 @@ Grimsby D3 settled on `Fn(StreamRequest) -> StreamDecision<T>` where the app ret
 
 ---
 
+## Propagate: `Session.open` mints `session_id` (SDK-mints, with optional kwarg escape hatch)
+
+Resolved 2026-05-07: `Session.open(app_root, *, app_id, app_instance, session_id=None)` — when `session_id` is `None` the SDK mints a fresh UUIDv4; when supplied, the SDK validates filesystem-safety and uses it as-is. Default is SDK-mints; the kwarg is the escape hatch for deterministic / pre-known IDs (test harnesses, replay tooling). Applies symmetrically to the new Rust `auki_session::Session::open` shape (which doesn't exist yet — the `auki-session` crate today is path-helpers-only).
+
+Why SDK-mints won: the "integrator-as-policy-boundary" framing didn't actually buy anything — every implementation mints its own UUIDs regardless, the policy "session ids are UUIDv4" is a doc-level claim either way. SDK-mints centralizes the one place that has to get UUIDv4 right and is strictly easier on callers. Cost is a `uuid` dep on `auki-session` (currently zero-dep — `uuid` v1 with the `v4` feature is tiny, no transitive deps).
+
+Docs to update when the Rust `Session` struct + `auki-session-py` first implementation land: (a) [`crates/auki-session/README.md`](crates/auki-session/README.md) — add a `Session` section and revise the "integrator generates a fresh UUIDv4 at boot" line; (b) [`crates/auki-registry/README.md`](crates/auki-registry/README.md) and [`crates/auki-time-transforms/README.md`](crates/auki-time-transforms/README.md) manifest tables — relax "minted by the integrator at app boot" to "minted by the integrator at app boot, or by `auki_session::Session::open`." Lives at root because it's cross-cutting between `auki-session` and `auki-session-py`; everything `auki-session-py`-specific lives in [`crates/auki-session-py/parking_lot.md`](crates/auki-session-py/parking_lot.md).
+
+---
+
 ## Subfolder summary
 
 - [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing
+- [`crates/auki-datatypes/`](crates/auki-datatypes/parking_lot.md) — `.proto` package naming convention; field number allocation strategy; locked conformance vector format; schema versioning policy; five per-type slop fixes (PinholeCameraLogEntry intrinsics placement, PointCloud on-disk-vs-wire drift, Audio chunk metadata, TimeTransformEntry source/discontinuous, TimeTransformSource collapse). None gating the scaffold; per-type slop fixes resolve at their matching migration step.
+- [`crates/auki-session-py/`](crates/auki-session-py/parking_lot.md) — `payload: bytes` encoding contract resolved (protobuf via auki-datatypes); libp2p control-plane design timing (deferred until this crate stabilizes); 6 resolved design decisions waiting to propagate when first implementation lands

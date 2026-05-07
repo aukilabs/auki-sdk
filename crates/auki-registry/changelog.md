@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 7, 21:15 HKT, 2026
+
+README + `src/readme.md` opening framing updated to flag the **scope-shrink-in-flight** decided 2026-05-07. The opening "the typed data shapes the SDK persists — registry entries AND log payloads" claim is the AI-drift framing identified in the same session; corrected to *"the SDK's identity catalog"* with an explicit callout that the log payload types currently here (`SensorLogEntry` / `PointCloudLogEntry` / `AudioLogEntry` / `PoseLogEntry` / `TransformSample` / `DynamicIntrinsics` / `build_pose_log_manifest`) are migrating to [`auki-datatypes`](../auki-datatypes) step-by-step. Sequence in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Content describing today's code (which still has the old types under their old names) left intact — accurate for the current state. The framing fix is what mattered. Doc-only.
+
+### broodsugar's claude · May 7, 17:30 HKT, 2026
+
+README sweep aligning Sensor/Clock-Log and Pose-Log prose with the [Control API rewrite](../../docs/control-api.md). Path placeholders: `<session>/sensorlogs/<recording_uuid>/` → `<sensor_log_id>` (in the Point Cloud Log section); `<session>/poselogs/<recording_uuid>/` → `<pose_log_id>` (in the Pose Log section). The Sensor Log manifest's `session_id` row now references `/api/info`'s `session_id` instead of `/api/state`'s `session_uuid` (`/api/state` is gone in the v0.0.23 spec). Pose Log narrative drops the "ring buffer + intent captures, distinguished only by `retention_ns`" auto-buffer framing for the unified-log model. Doc-only; no code changes.
+
 ### broodsugar's claude · May 7, 11:00 HKT, 2026
 
 **Frame Registry landed** — third registry alongside Sensor + Clock; closes the parking-lot "Frame Registry shape" question. New `FrameRegistryEntry { frame_id, handedness, axes, units }` with `Handedness { Right, Left }`, `AxisConvention { x, y, z: AxisDirection }`, `AxisDirection { Forward, Backward, Up, Down, Left, Right }`, and `LengthUnit { Meters, Millimeters, Centimeters }`. **Tree structure deliberately not on the entry** — frame parentage lives in the Pose Log via `TransformSample.parent_frame` / `child_frame`; the registry declares what each frame *is in isolation* and the Pose Log declares the edges between them. **Rotation representation deliberately not on the entry** — quaternions are fixed at the `TransformSample` layer (Hamilton convention `[x, y, z, w]`); not per-frame. **No `label` field** — `frame_id` strings are already human-readable; defer until a real ask.

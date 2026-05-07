@@ -2,7 +2,9 @@
 
 The Auki SDK's operator-control surface. Daemons that produce SDK sessions (BoosterApp, Sentinel, future) implement this API so any UI — primarily Park — can drive any of them through a single contract.
 
-This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments). The Control API is a runtime, operator-facing concern: list recordings, start/stop them, peek at the latest captured frame, change buffer retention, request a clean shutdown, and report the daemon's session-scoped identity ([`/api/info`](#get-apiinfo)) — the same content the libp2p cluster protocol exchanges peer-to-peer.
+This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments). The Control API is a runtime, operator-facing concern: list and manage sensor logs (live and historical), peek at the latest captured frame, request a clean shutdown, and report the daemon's session-scoped identity ([`/api/info`](#get-apiinfo)) — the same content the libp2p cluster protocol exchanges peer-to-peer.
+
+> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. Subsequent control-plane evolution lands as libp2p protocols (`/auki/control/info/1.0.0`, `/auki/control/sensor_logs/1.0.0`, …) using the length-prefixed JSON framing pattern from `/auki/stream/1.0.0`. The data model in this document (unified `sensor_logs`, cross-session listing, `session_id` everywhere) is transport-neutral; libp2p protocols will adapt the same shapes once the in-process Python surface (`auki-session-py`, in design — see the root [`parking_lot.md`](../parking_lot.md)) stabilizes. No new HTTP endpoints will be added; existing endpoints stay maintained.
 
 ## Conformance
 
@@ -46,7 +48,7 @@ Session-scoped identity. Returns the daemon's identity for the current session �
 | --- | --- | --- |
 | `app` | string | Application identifier (`boosterapp`, `sentinel`, `park`). MUST match the `app` mDNS TXT record when the daemon also advertises via mDNS. |
 | `name` | string | Operator-friendly label (`k1-walker`, `webcam-front`). MUST match the `name` mDNS TXT record when the daemon also advertises via mDNS. |
-| `session_id` | string | UUIDv4 minted at session boot. A session begins on app boot and ends when the daemon exits — see [`auki-session`](../crates/auki-session/README.md). Same value as `/api/state.session_uuid`. |
+| `session_id` | string | UUIDv4 minted at session boot. A session begins on app boot and ends when the daemon exits — see [`auki-session`](../crates/auki-session/README.md). The session-scoped logs in [`GET /api/sensor_logs`](#get-apisensor_logs) carry the same value as their `session_id` field. |
 | `session_clock_id` | string | Identifier for the session's monotonic clock. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). The session clock is a fresh monotonic clock the daemon registers at session boot; on this clock, the session's start is `0` trivially. |
 | `session_clock_hash` | string | Content-addressed hash pinning the exact clock-registry entry. Same hash-is-version rule as the other registries. |
 | `session_now_ns` | integer | The session clock's current value at the moment this response was generated. Strictly increasing across responses. Consumers wanting wall-clock time subtract at poll time (e.g. `consumer_utc_now − session_now_ns ≈ session_started_at_consumer_utc`); the principled cross-clock path is `convert_time` via the [TimeTransform Log](../crates/auki-time-transforms/README.md). |
@@ -57,68 +59,6 @@ Session-scoped identity. Returns the daemon's identity for the current session �
 **No canonical clock.** The SDK does not assume UTC, monotonic, or any other specific clock as canonical for the API. Every timestamp is paired with an explicit clock identity (here, `session_clock_id` + `session_clock_hash`); cross-clock conversion is what the [TimeTransform Log](../crates/auki-time-transforms/README.md) and `convert_time` exist for. Apps that treat UTC as canonical do so by *convention* — they configure a TimeTransform between their session clock and a UTC clock and consumers walk it via `convert_time`.
 
 Daemons that don't run mDNS still implement this endpoint; the operator-facing values (`name`, `app`) are operator-configurable strings (`--device-name` flag, defaults to hostname / binary name when unset).
-
-### `GET /api/state`
-
-Snapshot of the daemon's current session and all recordings, active and stopped.
-
-**Request.** No body.
-
-**Response.** `200 OK`, `application/json`:
-
-```json
-{
-  "session_uuid": "abc-123-...",
-  "recordings": [
-    {
-      "recording_id": "rec-0",
-      "retention_ns": 30000000000,
-      "started_at_ns": 1745000000000000000,
-      "stopped_at_ns": null,
-      "duration_ns": 30000000000,
-      "frame_count": 612,
-      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-      "sensor_hash": "abc123...",
-      "clock_id": "K1-AABBCCDDEEFF/utc",
-      "clock_hash": "def456..."
-    },
-    {
-      "recording_id": "rec-1",
-      "retention_ns": 0,
-      "started_at_ns": 1745000045000000000,
-      "stopped_at_ns": 1745000165000000000,
-      "duration_ns": 120000000000,
-      "frame_count": 3640,
-      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-      "sensor_hash": "abc123...",
-      "clock_id": "K1-AABBCCDDEEFF/utc",
-      "clock_hash": "def456..."
-    }
-  ]
-}
-```
-
-| Field                          | Type             | Notes                                                              |
-| ------------------------------ | ---------------- | ------------------------------------------------------------------ |
-| `session_uuid`                 | string           | The session this daemon is currently writing to.                   |
-| `recordings`                   | array            | All recordings of this session — active *and* stopped — ordered by `started_at_ns` ascending. |
-| `recordings[].recording_id`    | string           | Daemon-assigned identifier; opaque to consumers.                   |
-| `recordings[].retention_ns`    | integer          | Retention window for this recording. `0` = unbounded.              |
-| `recordings[].started_at_ns`   | integer          | ns on the clock identified by `clock_id`. Set when the recording was opened. The SDK does not assume UTC — see the [no-canonical-clock note](#get-apiinfo) on `/api/info`.    |
-| `recordings[].stopped_at_ns`   | integer \| null  | Same clock as `started_at_ns`, set the moment `DELETE /api/recordings/<id>` was processed. `null` while the recording is active. Recording state is determined by this field: `null` = active, non-null = stopped. |
-| `recordings[].duration_ns`     | integer          | Footage currently held in this recording. Computed by the daemon: `min(now - started_at_ns, retention_ns)` for an active ring buffer, `now - started_at_ns` for an active unbounded recording, `stopped_at_ns - started_at_ns` once stopped. |
-| `recordings[].frame_count`     | integer          | Frames written to this recording so far.                           |
-| `recordings[].sensor_id`       | string           | The sensor this recording streams from. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
-| `recordings[].sensor_hash`     | string           | The content-addressed hash pinning the exact sensor entry the recording was opened against. The hash IS the version — don't substitute.                                            |
-| `recordings[].clock_id`        | string           | The clock used for the recording's per-frame timestamps. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). |
-| `recordings[].clock_hash`      | string           | The content-addressed hash pinning the exact clock entry. Same hash-is-version rule.                                                  |
-
-**Important shape decisions.**
-
-- The auto-started ring buffer is `recordings[0]` with `retention_ns: 30000000000` (30 s default). It is **not** a separate `buffer` field. Daemons distinguish the buffer from intent recordings only by its `retention_ns` value. There can be exactly one auto-started buffer (started at session boot), or zero (some operator stopped it); intent recordings can be any number.
-- Stopped recordings stay in the `recordings` array for the lifetime of the session — they transition from `stopped_at_ns: null` to a non-null value, but they don't disappear. The list is "all recordings of this session," not "currently active recordings." Consumers wanting only active recordings filter on `stopped_at_ns == null`. Daemon restart resets the session (new `session_uuid`) and drops the in-memory list — stopped recordings remain on disk under `<session>/sensorlogs/<recording-id>/` regardless.
-
-> **Breaking change vs prior versions.** Pre-v0.0.10 daemons removed recordings from `/api/state` on `DELETE`. v0.0.10 daemons keep them with non-null `stopped_at_ns`. The field additions (`stopped_at_ns`, `duration_ns`) are additive — old consumers ignore the extra fields — but a pre-v0.0.10 consumer talking to a v0.0.10 daemon will see stopped recordings in `recordings[]` and may render them as if they were live. Daemons and consumers coordinate via the v0.0.10 tag: ship the daemon-side change and the consumer-side `stopped_at_ns == null` filter together.
 
 ### `GET /api/registries/sensors/<sensor_id>/<sensor_hash>`
 
@@ -144,7 +84,7 @@ Return a Clock Registry entry by its content-addressed hash. Same shape, semanti
 - `200 OK`, `application/json`, with `Cache-Control: public, max-age=31536000, immutable` — the registry entry.
 - `404 Not Found`, `application/json`: `{ "error": "no such clock entry" }` — `clock_id` exists but the requested `clock_hash` is not on disk, or `clock_id` itself is unknown.
 
-A future Frame Registry endpoint will follow the same shape (`/api/registries/frames/<frame_id>/<frame_hash>`); not yet specified — the on-disk Frame Registry is still pending in the SDK.
+A future Frame Registry endpoint will follow the same shape (`/api/registries/frames/<frame_id>/<frame_hash>`); not yet specified.
 
 ### `GET /api/preview/latest.jpg`
 
@@ -157,47 +97,153 @@ Most recent frame captured by the daemon, encoded as JPEG. Poll-based — see [v
 - `200 OK`, `image/jpeg` — the latest frame.
 - `503 Service Unavailable` — no frame captured yet (daemon just started, no source data).
 
-### `POST /api/recordings`
+### `POST /api/sensor_logs`
 
-Open a new intent recording. Always unbounded (`retention_ns: 0`); buffer-style retentions are managed via [`PATCH /api/buffer`](#patch-apibuffer) on the auto-started buffer, not by creating new recordings here.
+Open a new sensor log in the **current session**. A sensor log is a single `auki-logs::Log<T>` instance writing one sensor's stream to disk under `<session>/sensorlogs/<sensor_log_id>/`. Buffers, intent recordings, and time-bounded captures are all sensor logs — they differ only in the values of `retention_ns` and `duration_ns`.
 
-**Request.** Empty body.
-
-**Response.** `201 Created`, `application/json`:
+**Request.** `application/json`:
 
 ```json
-{ "recording_id": "rec-1" }
+{
+  "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
+  "sensor_hash": "abc123...",
+  "retention_ns": 30000000000,
+  "duration_ns": 0
+}
 ```
 
-### `DELETE /api/recordings/<id>`
+| Field | Type | Notes |
+| --- | --- | --- |
+| `sensor_id` | string | The sensor to stream from. Must be a sensor the daemon has bound for this session. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
+| `sensor_hash` | string | Content-addressed hash pinning the schema version the log is opened against. Required even though it is locally redundant within a single session — useful for cross-session data transfers and defensive against schema drift. If the daemon's live binding for `sensor_id` has a different hash, the request is rejected (see error responses). |
+| `retention_ns` | integer | Backward window kept on disk in nanoseconds. Segments older than this aged-out window are evicted on each `append`. `0` disables eviction (keep everything). Same field as `auki_logs::manifest::retention_ns`. |
+| `duration_ns` | integer | Forward cap in nanoseconds. The daemon auto-stops the log after this much time has elapsed on the log's clock since `started_at_ns`. `0` disables the cap (run indefinitely). |
 
-Stop a specific recording. Closes the log on disk; the recording transitions to a stopped state in `GET /api/state` (its `stopped_at_ns` becomes non-null and its `duration_ns` freezes at the final value), but **stays in the `recordings` array** for the lifetime of the session.
+The four corners of the `(retention_ns, duration_ns)` plane:
+
+| `retention_ns` | `duration_ns` | Use case |
+| --- | --- | --- |
+| `0` | `0` | Unbounded capture — runs forever, keeps everything. |
+| `30000000000` | `0` | Rolling pre-roll buffer — runs forever, evicts segments older than 30s. |
+| `0` | `60000000000` | Time-boxed capture — runs for 60s, keeps everything. |
+| `30000000000` | `60000000000` | Time-boxed buffer — runs for 60s, keeps only the last 30s on disk. |
+
+**Response.**
+
+- `201 Created`, `application/json`: `{ "sensor_log_id": "<uuid>" }`.
+- `400 Bad Request`, `application/json`: `{ "error": "<message>" }` — malformed body, negative `retention_ns` / `duration_ns`, unknown `sensor_id`.
+- `409 Conflict`, `application/json`: `{ "error": "sensor_hash mismatch" }` — `sensor_id` is bound but at a different `sensor_hash` than the request specified. The daemon does not silently accept the live binding's hash — schema drift is the request's job to resolve.
+
+The response shape on `201` is `{"sensor_log_id"}` only. Clients that want the full per-log fields (clock identifiers, `started_at_ns`, etc.) follow up with [`GET /api/sensor_logs?session_id=current`](#get-apisensor_logs) or [`GET /api/sensor_logs/<id>`](#get-apisensor_logsid)-style filtering.
+
+### `GET /api/sensor_logs`
+
+List sensor logs the daemon can see. **Spans every session on disk by default** — both the live session and any prior sessions whose logs the daemon's app-root contains. With no query parameters, returns every sensor log the daemon can enumerate.
+
+**Request.** No body.
+
+**Query parameters** (all optional; multiple compose as AND):
+
+| Param | Value | Effect |
+| --- | --- | --- |
+| `session_id` | `<uuid>` or the literal `current` | Restrict to one session. `current` means the daemon's live session — the same `session_id` returned by [`GET /api/info`](#get-apiinfo). |
+| `sensor_id` | `<id>` | Restrict to one sensor — useful for "find every log this camera ever wrote." |
+| `sensor_hash` | `<hash>` | Restrict to one schema version of a sensor. Cross-session by design: "find every log written against this exact camera schema." |
+| `clock_id` | `<id>` | Restrict to logs whose per-frame timestamps live on this clock. |
+| `started_after` | `<ns>` | Restrict to logs with `started_at_ns >= started_after`. Interpreted on each log's own `clock_id` — see the clock-interpretation note below. |
+| `started_before` | `<ns>` | Restrict to logs with `started_at_ns < started_before`. Same clock-interpretation rule as `started_after`. |
+
+**Response.** `200 OK`, `application/json`:
+
+```json
+{
+  "sensor_logs": [
+    {
+      "sensor_log_id": "0b3e...c41a",
+      "session_id": "abc-123-...",
+      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
+      "sensor_hash": "abc123...",
+      "clock_id": "K1-AABBCCDDEEFF/utc",
+      "clock_hash": "def456...",
+      "retention_ns": 30000000000,
+      "duration_ns": 0,
+      "started_at_ns": 1745000000000000000,
+      "stopped_at_ns": null
+    },
+    {
+      "sensor_log_id": "1f7d...e88b",
+      "session_id": "abc-123-...",
+      "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
+      "sensor_hash": "abc123...",
+      "clock_id": "K1-AABBCCDDEEFF/utc",
+      "clock_hash": "def456...",
+      "retention_ns": 0,
+      "duration_ns": 60000000000,
+      "started_at_ns": 1745000045000000000,
+      "stopped_at_ns": 1745000105000000000
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `sensor_logs` | array | All sensor logs matching the filter, ordered by `started_at_ns` ascending. |
+| `sensor_logs[].sensor_log_id` | string | Daemon-assigned identifier; opaque to consumers. Unique within `session_id`; cross-session collisions are not guaranteed to be absent (consumers key by `(session_id, sensor_log_id)` if they need a global handle). |
+| `sensor_logs[].session_id` | string | The session this log belongs to. May or may not match the daemon's live session — consumers filter by `session_id=current` when only the live session is wanted. |
+| `sensor_logs[].sensor_id` | string | The sensor this log streams from. Resolves via [`GET /api/registries/sensors/<sensor_id>/<sensor_hash>`](#get-apiregistriessensorssensor_idsensor_hash). |
+| `sensor_logs[].sensor_hash` | string | Content-addressed hash pinning the exact sensor entry the log was opened against. The hash IS the version — don't substitute. |
+| `sensor_logs[].clock_id` | string | The clock used for the log's per-frame timestamps. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). |
+| `sensor_logs[].clock_hash` | string | Content-addressed hash pinning the exact clock entry. Same hash-is-version rule. |
+| `sensor_logs[].retention_ns` | integer | Configured retention window. `0` = no eviction. Mutable on live logs via [`PATCH /api/sensor_logs/<id>`](#patch-apisensor_logsid). |
+| `sensor_logs[].duration_ns` | integer | Configured forward cap. `0` = no cap. Mutable on live logs via [`PATCH /api/sensor_logs/<id>`](#patch-apisensor_logsid). |
+| `sensor_logs[].started_at_ns` | integer | ns on the clock identified by `clock_id`. Set when the log was opened. The SDK does not assume UTC — see the [no-canonical-clock note](#get-apiinfo) on `/api/info`. |
+| `sensor_logs[].stopped_at_ns` | integer \| null | Same clock as `started_at_ns`. Set the moment the log stopped — either by [`DELETE /api/sensor_logs/<id>`](#delete-apisensor_logsid), by hitting its `duration_ns` cap, or by daemon shutdown. `null` only when the log is currently live in the daemon's current session. Logs from prior sessions always have `stopped_at_ns` set; if a daemon crashed mid-session the recovered log carries the last successfully-written timestamp as `stopped_at_ns` (see [`auki-session`](../crates/auki-session/README.md) for crash-recovery semantics). |
+
+**Liveness and extent.** The "is this log still being written" signal is `stopped_at_ns == null` paired with `session_id == <live session>`. Consumers can compute extent from `(stopped_at_ns or session_now_ns) − started_at_ns`; the daemon does not pre-compute and ship a duration field for that — `duration_ns` is the configured *cap*, not the elapsed extent. (The pre-v0.0.23 spec defined `duration_ns` as elapsed extent; that interpretation is gone — see [the changelog entry that introduced this surface](../changelog.md).)
+
+**`started_after` / `started_before` clock interpretation.** Each log's `started_at_ns` is on its own `clock_id`. Filter values are compared per-log, so a `started_after` value is meaningful when the daemon's logs share a clock or when the consumer knows which clock to address. BoosterApp v1 writes every log under a single `CLOCK_REALTIME`-backed clock, so its filter values are wall-clock nanoseconds; daemons running heterogeneous clocks document their filter semantics in their daemon-level docs. See the [parking lot](../parking_lot.md) for the open question of pinning a designated filter clock when this gets messy.
+
+**Cross-session enumeration.** The default (no filter) lists every sensor log the daemon's app-root contains, including logs from prior sessions whose `auki-session` directories the daemon can read. Daemons that have not yet enumerated their on-disk sessions at startup MAY return only the live session's logs; this is a daemon-implementation latitude, not a spec relaxation — operators should expect cross-session listing once the daemon is steady-state. The daemon must be running for any request to succeed (it's an HTTP server); a no-live-session "browsing-only" daemon mode is out of scope for v1.
+
+### `PATCH /api/sensor_logs/<id>`
+
+Mutate a live log's configuration. Only `retention_ns` and `duration_ns` are mutable; identity fields (`sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `session_id`) are immutable — changing any of them is semantically a different log.
+
+**Request.** `application/json` — at least one of:
+
+```json
+{ "retention_ns": 60000000000, "duration_ns": 0 }
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `retention_ns` | integer (optional) | New retention window. `0` disables eviction. Backed by `auki_logs::Log<T>::set_retention` — manifest is rewritten atomically; eviction is not retroactive (runs only on next `append`). |
+| `duration_ns` | integer (optional) | New forward cap. `0` disables the cap. The daemon may shorten or extend the cap on the same elapsed clock. Setting `duration_ns` to a value already exceeded by the elapsed runtime stops the log immediately on the next tick. |
+
+**Response.**
+
+- `200 OK`, `application/json` — echoes the post-PATCH values:
+  ```json
+  { "retention_ns": 60000000000, "duration_ns": 0 }
+  ```
+- `400 Bad Request`, `application/json`: `{ "error": "<message>" }` — malformed body, negative values, attempting to mutate any field outside `retention_ns` / `duration_ns`.
+- `404 Not Found`, `application/json`: `{ "error": "no such sensor log" }` — `id` is not a known live log in the current session. PATCH on a stopped or historical log returns `404`; the daemon does not rewrite manifests outside the live session.
+
+The defining new operation this surface enables: PATCH `retention_ns` from a finite value to `0` to **promote a buffer to a recording** — keep the existing pre-roll on disk, then keep everything from this point forward. The complementary direction (PATCH `retention_ns` from `0` to a finite value) does not retroactively evict; existing segments stay, future evictions follow the new window once `append` runs.
+
+### `DELETE /api/sensor_logs/<id>`
+
+Stop a live log. Closes the underlying `Log<T>` on disk; the log transitions to a stopped state in [`GET /api/sensor_logs`](#get-apisensor_logs) (its `stopped_at_ns` becomes non-null), but **stays listed** for the lifetime of the session — and beyond, since cross-session enumeration finds it on disk thereafter.
 
 **Request.** No body.
 
 **Response.**
 
-- `200 OK`, `application/json`: `{ "stopped": "rec-1" }`
-- `404 Not Found`, `application/json`: `{ "error": "no such recording" }` — `id` is unknown, or refers to a recording that is already stopped (DELETE is idempotent only in the sense that re-stopping a stopped recording is a no-op error; the on-disk state doesn't change).
+- `200 OK`, `application/json`: `{ "stopped": "<sensor_log_id>" }`.
+- `404 Not Found`, `application/json`: `{ "error": "no such sensor log" }` — `id` is not a known live log in the current session. DELETE on a stopped or historical log returns `404`; the daemon does not delete already-stopped logs.
 
-Stopping the auto-started buffer (`recordings[0]`) is permitted — the buffer enters the stopped state like any other recording.
-
-### `PATCH /api/buffer`
-
-Change the auto-started buffer's retention window at runtime.
-
-**Request.** `application/json`:
-
-```json
-{ "retention_ns": 60000000000 }
-```
-
-**Response.**
-
-- `200 OK`, `application/json`: `{ "retention_ns": 60000000000 }` (echoes the new value).
-- `400 Bad Request`, `application/json`: `{ "error": "<message>" }` for malformed body, negative `retention_ns`, etc.
-
-Acts on the auto-started buffer only (`recordings[0]`). If no buffer exists (it was stopped), this returns `400`.
+DELETE is **not** a destructive operation — it stops writing, it does not remove on-disk segments. Disk-side cleanup is governed by `retention_ns` evictions (only running while the log was live) and any out-of-band cleanup the operator runs against the app-root.
 
 ### `POST /api/quit`
 
@@ -256,7 +302,7 @@ The following are intentional v1 simplifications, documented so the next design 
 - **No authentication.** Trusted-LAN assumption above. Adding auth is the most likely v2 evolution.
 - **JSON over HTTP.** No gRPC, no protobuf, no binary framing. Operators inspect with `curl`. Trade some bytes-on-wire for human-debuggability.
 - **Single-port HTTP server.** The `image/jpeg` response from `/api/preview/latest.jpg` and the JSON responses from the other endpoints share a port. Daemons aren't expected to spin up separate transports.
-- **Buffer is `recordings[0]` (and only [0]).** A daemon has at most one auto-started buffer per session. Multiple concurrent buffers (different retentions for different recordings) is conceptually possible but adds API surface — out of scope.
+- **Spec defines the surface, app defines the lifecycle.** Whether and which sensor logs a daemon auto-creates at session boot (BoosterApp's pre-v0.0.23 30s camera buffer, an optional pointcloud buffer, etc.) is daemon-application policy, not API contract. Auto-created logs appear in [`GET /api/sensor_logs`](#get-apisensor_logs) indistinguishably from client-created ones; the spec says nothing about which (if any) the daemon creates.
 
 ---
 
@@ -265,8 +311,8 @@ The following are intentional v1 simplifications, documented so the next design 
 - **Authentication / TLS / authorization scopes.** Trust model is "trusted LAN."
 - **Streaming endpoints.** Preview is poll-only.
 - **Rate limiting.** Trusted-environment assumption.
-- **Multi-session daemons.** A daemon writes to one session at a time. Switching sessions = restarting the daemon.
-- **Multiple buffers per session.** One auto-started buffer; intent recordings are individually unbounded.
+- **Multi-session daemons.** A daemon writes to one *live* session at a time — it can read prior sessions on disk for [`GET /api/sensor_logs`](#get-apisensor_logs), but new logs always go in the live session. Switching the live session = restarting the daemon.
+- **Browse-only daemon mode.** A daemon that mounts an app-root *without* opening a live session and serves only the read endpoints. Today the daemon must be running and have a live session for any request to succeed.
 - **Cross-daemon coordination.** Each daemon's state is independent; orchestration is the consumer's (Park's) job.
 - **Push notifications / webhooks.** No daemon-to-consumer push; consumers poll.
 - **The on-disk session shape itself.** That's specified by [`auki-session`](../crates/auki-session/README.md) and the per-crate format specs. The Control API operates on top of an existing session; it doesn't define the session.
@@ -275,13 +321,9 @@ The following are intentional v1 simplifications, documented so the next design 
 
 ## Versioning
 
-This document is **Control API v1**. The path prefix `/api/` does not encode a version — daemons advertise a single API surface at a single version. When v2 ships:
+This document is **Control API v1, terminal at SDK release v0.0.23.** The path prefix `/api/` does not encode a version because there will not be an HTTP v2 — control-plane evolution beyond v0.0.23 happens via libp2p protocols (`/auki/control/...`), not new HTTP endpoints. The earlier "if v2 ships, change the path prefix or add a `Server:` header" framing is retired: the trigger for it ("a real v2 use case") has been answered, and the answer was libp2p, not a second HTTP version.
 
-- Either the path prefix changes (`/api/v2/...`), OR
-- A `Server: auki-control/2` HTTP header is required for negotiation, OR
-- A daemon that supports multiple versions exposes them at distinct ports.
-
-Decision deferred until a real v2 use case appears. Until then, `/api/` ≡ v1 ≡ this document.
+Daemons that conform to this document MUST advertise the data model exactly as specified. Daemons that *also* speak the forthcoming libp2p control protocols MAY do both — the two transports adapt the same in-process API surface and carry the same data shapes.
 
 ---
 
@@ -290,13 +332,15 @@ Decision deferred until a real v2 use case appears. Until then, `/api/` ≡ v1 �
 A daemon is conformant when:
 
 - [ ] Every endpoint above responds with the exact JSON shapes documented.
-- [ ] `recordings[0]` is the auto-started buffer with `retention_ns: 30000000000` by default.
-- [ ] Each recording in `/api/state` carries `sensor_id` + `sensor_hash` + `clock_id` + `clock_hash` matching the on-disk manifest.
-- [ ] Each recording in `/api/state` carries `stopped_at_ns` (`null` while active) and `duration_ns` (computed per the table above) on the same clock as `started_at_ns`.
-- [ ] `DELETE /api/recordings/<id>` transitions the recording to stopped state but **keeps it in the `recordings` array** with non-null `stopped_at_ns`.
-- [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
 - [ ] `/api/info` returns the full session-scoped identity shape: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns` (`null` while the daemon is alone in the cluster), `peer_id`, `app_instance`.
 - [ ] `/api/info`'s `name` / `app` match the mDNS TXT records when both are configured.
+- [ ] `/api/info`'s `session_id` is the same value `GET /api/sensor_logs?session_id=current` filters on.
+- [ ] `POST /api/sensor_logs` validates `sensor_id` / `sensor_hash` against the live session's bindings — `sensor_hash` mismatch returns `409`, unknown `sensor_id` returns `400`.
+- [ ] `GET /api/sensor_logs` with no query parameters returns every sensor log the daemon can enumerate, across every session on disk.
+- [ ] Each entry in `GET /api/sensor_logs` carries the full per-log shape: `sensor_log_id`, `session_id`, `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `retention_ns`, `duration_ns`, `started_at_ns`, `stopped_at_ns` (`null` only for live logs in the live session).
+- [ ] `PATCH /api/sensor_logs/<id>` accepts `retention_ns` and `duration_ns`; rejects mutations to any other field with `400`; returns `404` on stopped or historical logs.
+- [ ] `DELETE /api/sensor_logs/<id>` transitions the log to stopped state with non-null `stopped_at_ns`, **keeps it listed** in `GET /api/sensor_logs`, and returns `404` on stopped or historical logs.
+- [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
 - [ ] Daemon registers a session clock at session boot — a fresh monotonic clock per session, on which the session's start is `0` trivially. The `clock_id` and `clock_hash` are the values returned in `/api/info`.
 - [ ] `cluster_joined_at_ns` is `null` until first peer connection, then set once on the session clock and never reset.
 - [ ] No timestamp in any API response is described as "UTC ns" or "monotonic ns" — every timestamp is "ns on the clock identified by `<x>_clock_id`."

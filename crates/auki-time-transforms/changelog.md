@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 7, 17:30 HKT, 2026
+
+README manifest table: `session_id` row now references `/api/info`'s `session_id` instead of `/api/state`'s `session_uuid` (`/api/state` is gone in the v0.0.23 [Control API rewrite](../../docs/control-api.md)). Doc-only.
+
 ### broodsugar's claude · May 4, 10:38 HKT, 2026
 
 `build_manifest` signature gains required `app_id: &str` and `session_id: &str` parameters, threaded into the resulting `serde_json::Value`. **Breaking API change** — every caller must now supply the application identifier and the session UUIDv4. Test assertions extended to cover the two new fields; sampler integration test updated to pass them through. Closes the implementation half of the `app_id` (May 4, 08:52) and `session_id` (May 4, 10:22) spec PRs.

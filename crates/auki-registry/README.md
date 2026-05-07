@@ -1,15 +1,17 @@
 # auki-registry
 
-The typed data shapes the Auki SDK persists — registry entries (immutable identity) and log payloads (per-frame data) — together with the cross-language storage contract for registry entries.
+The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-## Two kinds of typed data
+> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `SensorLogEntry` → `PinholeCameraLogEntry`, `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Once the migration completes, `auki-registry`'s scope finally matches its name. Everything below this line describes today's state — including the AI-drift parts, marked as such.
 
-| Kind            | What it is                             | Where it lives                                          |
-| --------------- | -------------------------------------- | ------------------------------------------------------- |
-| Registry entry  | Immutable identity, one per hash       | `<app_root>/registries/<kind>/<id>/<hash>.json`         |
-| Log payload     | Per-frame mutable data                 | Inside an [`auki-logs`](../auki-logs) segment, CBOR-encoded |
+## Two kinds of typed data (today, with one departing)
 
-Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split lets the registry stay stable (no version churn from per-frame intrinsics drift) while honoring that some fields really do change over time.
+| Kind            | What it is                             | Where it lives                                          | Future home                          |
+| --------------- | -------------------------------------- | ------------------------------------------------------- | ------------------------------------ |
+| Registry entry  | Immutable identity, one per hash       | `<app_root>/registries/<kind>/<id>/<hash>.json`         | Stays in `auki-registry` (canonical) |
+| Log payload     | Per-frame mutable data — **AI-drift**  | Inside an [`auki-logs`](../auki-logs) segment, CBOR-encoded today | Moves to [`auki-datatypes`](../auki-datatypes) (protobuf) |
+
+Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
 
 ---
 
@@ -139,7 +141,7 @@ JCS-canonical UTF-8 JSON, written via auki-logs. Required keys (extends auki-log
 | `segment_duration_ns`  | integer | > 0; from auki-logs                                              |
 | `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                              |
 | `app_id`               | string  | Identifier of the application that wrote this log. Same string as the daemon's `/api/info` `app` field (e.g. `boosterapp`, `sentinel`). |
-| `session_id`           | string  | UUIDv4 minted by the integrator at app boot; stable for the daemon run's lifetime. Same value as `/api/state`'s `session_uuid` and the parent directory name. See [`auki-session`](../auki-session) for session lifecycle. |
+| `session_id`           | string  | UUIDv4 minted by the integrator at app boot; stable for the daemon run's lifetime. Same value as `/api/info`'s `session_id` and the parent directory name. See [`auki-session`](../auki-session) for session lifecycle. |
 | `clock_id`             | string  | The Clock Registry ID that the framing's `timestamp_ns` is in    |
 | `clock_hash`           | string  | XXH3-128 hex of the clock's registry entry                       |
 | `sensor_id`            | string  | The Sensor Registry ID this log captures                         |
@@ -176,7 +178,7 @@ The K1's intrinsics are essentially constant in practice, but the schema doesn't
 
 ## Point Cloud Log payload — schema v1
 
-The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. Each point-cloud recording is its own directory at `<session>/sensorlogs/<recording_uuid>/` — same path scheme as a camera sensor log, just with a different sensor whose registry entry has `SensorBody::PointCloud` (the manifest's `sensor_hash` is what tells a reader to expect `PointCloudLogEntry` payloads). Capturing camera + point cloud simultaneously means two parallel recordings sharing a session, not one multi-sensor recording. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
+The Point Cloud Log is a separate `auki_logs::Log<PointCloudLogEntry>`. Each point-cloud log is its own directory at `<session>/sensorlogs/<sensor_log_id>/` — same path scheme as a camera sensor log, just with a different sensor whose registry entry has `SensorBody::PointCloud` (the manifest's `sensor_hash` is what tells a reader to expect `PointCloudLogEntry` payloads). Capturing camera + point cloud simultaneously means two parallel sensor logs sharing a session, not one multi-sensor log. The framing's `timestamp_ns` is the scan timestamp; the payload here carries per-frame data.
 
 ### Manifest
 
@@ -260,7 +262,7 @@ The Pose Log is an `auki_logs::Log<PoseLogEntry>`. The framing's `timestamp_ns` 
 
 Pose Log answers "where was this frame relative to that one over time" — eventually consumed by the future `convert_pose` operation. v1 covers capture and read; composition / path-finding / `convert_pose` lands separately.
 
-Pose Log directories live at `<session>/poselogs/<recording_uuid>/` — same parallel-recording shape as Sensor Logs (multiple recordings per session, ring buffer + intent captures, distinguished only by `retention_ns`). Multiple recordings of the same source are fine; the integrator decides when to start and stop.
+Pose Log directories live at `<session>/poselogs/<pose_log_id>/` — same parallel-log shape as Sensor Logs (multiple logs per session, distinguished only by their manifest's `retention_ns`). Multiple logs of the same source are fine; the integrator decides when to start and stop.
 
 ### Manifest
 

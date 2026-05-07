@@ -16,19 +16,19 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
     │   ├── tags.jsonl                    ← optional TagClaim sidecar; see ../tags.md
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     ├── sensorlogs/
-    │   ├── <recording_uuid_1>/            ← one sensor stream per recording
+    │   ├── <sensor_log_id_1>/             ← one sensor stream per log
     │   │   ├── manifest.json
     │   │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
     │   │   └── segments/<padded-ns>.seg
-    │   ├── <recording_uuid_2>/
+    │   ├── <sensor_log_id_2>/
     │   │   └── ...
-    │   └── <recording_uuid_3>/
+    │   └── <sensor_log_id_3>/
     └── poselogs/
-        ├── <recording_uuid_1>/            ← one pose source per recording
+        ├── <pose_log_id_1>/               ← one pose source per log
         │   ├── manifest.json
         │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
-        └── <recording_uuid_2>/
+        └── <pose_log_id_2>/
 ```
 
 `tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
@@ -37,7 +37,7 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 
 **A session begins on app boot and ends when the daemon exits** (cleanly or otherwise). The integrator generates a fresh **UUIDv4** at boot and uses it as the session directory name and as the `session_id` in every log manifest written during the run. A daemon restart begins a new session with a new UUID; nothing on disk ties two consecutive sessions together at the SDK layer.
 
-This shape matches what the [Control API](../../docs/control-api.md) already implies (`/api/state` returns one `session_uuid`; multi-session daemons are out of scope for v1) and what the broader protocol model expects (the [Domain doc](https://www.notion.so/3565c8e965928154803af89f3b16d097) defines `session_id` as "Per-daemon UUID minted at session start; carries no implicit domain affiliation until tagged"). The SDK doesn't generate the UUID — that's the integrator's job — but every manifest writer requires the value, so the integrator must mint one before opening any log.
+This shape matches what the [Control API](../../docs/control-api.md) implies (`/api/info` returns one `session_id`; multi-session daemons are out of scope for v1) and what the broader protocol model expects (the [Domain doc](https://www.notion.so/3565c8e965928154803af89f3b16d097) defines `session_id` as "Per-daemon UUID minted at session start; carries no implicit domain affiliation until tagged"). The SDK doesn't generate the UUID — that's the integrator's job — but every manifest writer requires the value, so the integrator must mint one before opening any log.
 
 `session_id` is one of three identifiers that travel together at any call site:
 
@@ -52,7 +52,7 @@ None is derivable from the others.
 - **`<app_root>` is chosen by the integrator.** The SDK doesn't prescribe `<robot-home>/auki/<app-name>/` or any specific structure above the registries — the app picks its name and where to write. (Boosterapp uses `/home/booster/auki/boosterapp/`.)
 - **Registries shared across sessions.** Hash-keyed writes are idempotent; re-writing the same `<hash>.json` per session would be wasted work. A sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session.
 - **One TimeTransform Log per session.** Clock offsets are time-localized; the session is the natural retention boundary.
-- **A recording is one stream.** Each `<recording_uuid>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor (under `sensorlogs/`) or one pose source (under `poselogs/`). Multi-stream capture means multiple parallel recordings sharing a session, not a multi-stream recording. The auto-started ring buffer is just a recording with `retention_ns: 30s`; intent captures are recordings with `retention_ns: 0`. Nothing on disk distinguishes "buffer" from "intent" beyond the manifest's retention value. For sensor logs, identity is the manifest's `sensor_id` + `sensor_hash`; for pose logs, identity is the manifest's inline `source` block. Neither is encoded in the path.
+- **A log is one stream.** Each `<sensor_log_id>/` or `<pose_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor (under `sensorlogs/`) or one pose source (under `poselogs/`). Multi-stream capture means multiple parallel logs sharing a session, not a multi-stream log. Buffers, intent recordings, and time-bounded captures are all the same kind of log on disk — they differ only in their manifest's `retention_ns` (backward window kept on disk; `0` = no eviction). Whether a daemon auto-creates any log at session boot is daemon-application policy, not SDK contract — see the [Control API spec](../../docs/control-api.md). For sensor logs, identity is the manifest's `sensor_id` + `sensor_hash`; for pose logs, identity is the manifest's inline `source` block. Neither is encoded in the path.
 
 ## ID encoding
 
@@ -67,10 +67,10 @@ None is derivable from the others.
 | `clock_entry_path(app_root, clock_id, hash)`                    | `<app_root>/registries/clocks/<clock_id>/<hash>.json`                |
 | `session_root(app_root, session_id)`                            | `<app_root>/<session_id>`                                            |
 | `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
-| `sensorlog_path(session_root, recording_uuid)`                  | `<session_id>/sensorlogs/<recording_uuid>`                           |
-| `poselog_path(session_root, recording_uuid)`                    | `<session_id>/poselogs/<recording_uuid>`                             |
+| `sensorlog_path(session_root, sensor_log_id)`                   | `<session_id>/sensorlogs/<sensor_log_id>`                            |
+| `poselog_path(session_root, pose_log_id)`                       | `<session_id>/poselogs/<pose_log_id>`                                |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
 
 ## Versioning
 
-Layout version is **1**. Changes to directory names (`registries/`, `sensorlogs/`, `timetransform_logs/`) or to the recording-uuid layer are breaking and require an SDK major bump.
+Layout version is **1**. Changes to directory names (`registries/`, `sensorlogs/`, `poselogs/`, `timetransform_logs/`) or to the per-log identifier layer (`<sensor_log_id>`, `<pose_log_id>`) are breaking and require an SDK major bump.

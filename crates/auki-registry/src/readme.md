@@ -2,6 +2,8 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
+> **Scope shrink in flight (decided 2026-05-07).** Today this crate also holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). The "Public functions" section's manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) are also drift — they belong with logs, not registries — and may move to a sibling crate or [`auki-session`](../../auki-session) during the migration.
+
 ## What's here
 
 A single source file: [`lib.rs`](lib.rs).

@@ -6,6 +6,23 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 07:56 HKT, 2026
+
+**API-surface review walkthrough — six items filed across four parking-lots, plus three editorial items at root.** Walkthrough of the SDK's public surface after PR #55 landed [Step 0 of the `auki-datatypes` migration](crates/auki-datatypes/src/sprint.md). The marquee elevation finding (`TransformSample` is wrong-layered as an `auki-registry` payload helper) is **resolved by the migration plan** — the rename to `SpatialTransform` plus relocation to `auki-datatypes` carries the layering change with it. Six remaining smaller items now in parking-lots:
+
+- [`crates/auki-session/parking_lot.md`](crates/auki-session/parking_lot.md): crate name vs scope mismatch — `auki-session` exports only path helpers today, no `Session` runtime; rename to `auki-paths` now (zero in-workspace consumers) or footnote the README.
+- [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md): three items — `Capability(pub String)` open-string vs typed enum; `PEER_DERIVATION_LABEL` constant lives in wrong crate (semantics belong in [`auki-identity`](crates/auki-identity)); `StreamDispatch` is the streaming-stability lever and the public README should say so explicitly.
+- [`crates/auki-identity/parking_lot.md`](crates/auki-identity/parking_lot.md): missing `Result<T>` aliases — sister crates ship them, this one has two error types (`VerifyError` + `SeedError`) so needs `VerifyResult<T>` + `SeedResult<T>`.
+- [`crates/parking_lot.md`](crates/parking_lot.md): Rust vs Python surface namespacing mismatch — Python is namespaced (`auki_network.cluster.*`, `auki_network.discovery.*`), Rust is flat at crate root. Lean: mirror Python's namespacing in Rust now while pre-1.0.
+
+Three editorial items also filed at root [`parking_lot.md`](parking_lot.md):
+
+- The README's "four surfaces" framing flat-lists library bindings and protocol contracts as peers when they're two axes — suggested 2×2 reframe.
+- Five quest-name leaks in the public README (lines 213, 214, 268, 271, 274) — Rule 1 violations; mechanical scrub.
+- The `auki-logs` bullet in the on-disk-format section is stale — says "used by both Sensor and TimeTransform Logs" when Pose Log uses the same primitive too.
+
+The two README-editorial items (quest-name scrub + auki-logs bullet) bundle naturally into a single doc-only PR; surfacing for Nils to pick the cadence on the rest. Subfolder-summary updates propagated through [`crates/parking_lot.md`](crates/parking_lot.md) and the root [`parking_lot.md`](parking_lot.md) summary.
+
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **Step 0 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — new crate [`auki-manifests`](crates/auki-manifests).** Pure refactor extracting the SDK's manifest concerns from `auki-registry` and `auki-time-transforms` into a single owner. Symmetric with `auki-datatypes`: that crate owns segment payload shapes (protobuf via prost); this one owns per-recording manifest shapes (JCS-canonical UTF-8 JSON via [`auki-jcs`](crates/auki-jcs)). No behaviour change, no encoding change.

@@ -157,6 +157,46 @@ Alternatives if this becomes painful:
 
 Not blocking ansuz; revisit if real deployments hit it.
 
+## `Capability(pub String)` — open-string vs typed enum _(filed by Dobby, 2026-05-08)_
+
+`auki-network` exports `pub struct Capability(pub String);` at crate root, used inside `ParticipantInfo` and `ReachabilityRecord`. A reader of the public surface today cannot tell whether this is *deliberately* open-string (forward-compat for capabilities a consumer hasn't seen yet, e.g. a future `/auki/credits/1.0.0` advertised by a peer running a newer SDK) or just under-typed.
+
+Two options:
+
+1. **Document the open-string-by-design contract** with a short doc-comment on `Capability` ("opaque protocol-id string; consumers do not need to enumerate to recognize a single value they care about; new capabilities ship without an SDK bump"). Keeps it forward-compat. Add a parking-lot entry on the consumer side noting that consumers should compare-by-string-equality, not pattern-match.
+2. **Tighten to a typed enum with an `Other(String)` escape hatch**: `enum Capability { ClusterV1, StreamV1, Other(String) }`. Lets consumers exhaustively match the known protocols while still surviving an unknown future protocol-id from a peer. Costs: every new SDK protocol becomes a variant addition (small chore, but a public-API touch); `Other(String)` doesn't fully escape the round-trip problem because two strings denoting the same future capability could differ in casing/whitespace.
+
+Lean: (1). The same forward-compat reasoning that produced `PEER_DERIVATION_LABEL = "peer/v1"` applies to capabilities — protocol-ids are versioned strings, not closed sets. Add a doc-comment, keep the newtype, leave the open-string contract explicit. No urgency; pin before any consumer hard-codes pattern-matching.
+
+---
+
+## `PEER_DERIVATION_LABEL` constant — wrong crate _(filed by Dobby, 2026-05-08)_
+
+`pub const PEER_DERIVATION_LABEL: &str = "peer/v1"` lives at the root of `auki-network`. The constant's *meaning* belongs to [`auki-identity`](../auki-identity) — it's the label fed to `Wallet::derive_child(...)` to materialize the peer key from the wallet seed. Only the *consumer* of that derivation (the libp2p layer) lives in `auki-network`.
+
+A reader who lands in `auki-identity` looking for "what labels can I derive a child for?" finds no canonical list — the SDK's most-load-bearing label is one crate over. A reader who lands in `auki-network` finds a label constant whose semantics they cannot resolve without crossing into `auki-identity`.
+
+Two forward paths:
+
+1. **Move the constant to `auki-identity`** (e.g. `auki_identity::derivation::PEER_LABEL`); have `auki-network` re-export it for backward-compat: `pub use auki_identity::derivation::PEER_LABEL as PEER_DERIVATION_LABEL;`. Cheapest split — no source breakage, label semantics now live next to the wallet primitive that consumes them.
+2. **Move the constant + introduce a labels module in `auki-identity`** as the canonical home for every label any future child derivation will use (e.g. an eventual `app_instance/v1` per the Wallet-derived alternative discussed in this same parking-lot above). Sets up the convention before a second label needs it.
+
+Cross-references the existing [Wallet → peer-key derivation label evolution](#wallet--peer-key-derivation-label-evolution) thread above and the [BIP32-vs-labeled-hash derivation](../auki-identity/parking_lot.md) thread in `auki-identity`. Picking (2) makes the most sense the moment a second label is committed to.
+
+---
+
+## `StreamDispatch` is the streaming-stability lever — README should call it out _(filed by Dobby, 2026-05-08)_
+
+`pub enum StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` is a **closed** enum. Adding a new payload type — when an SLAM odometry stream or a cell-phone-camera variant lands — is a coordinated SDK + consumer release: bump the crate, add the variant, every consumer that wants the new sensor type opts in. The May 6 changelog entry (Dagaz Batch 1 #1) explicitly lays out the rationale ("trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries…").
+
+The decision is correct. The disclosure is missing. The root [`README.md`](../../README.md) "API surface" section presents `StreamDispatch` as an implementation detail of `/auki/stream/1.0.0` ("dispatched by `sensor_id` via the closed `StreamDispatch` enum"). To a downstream consumer reading the README to plan their integration, that's an aside — but it's actually the SDK's primary stability lever for streaming. Every new `T` is a public-API touch; that's the point.
+
+Suggest: add one sentence to the API-surface table's `/auki/stream/1.0.0` row, or to the libp2p wire-protocols section that follows, calling out the closed-enum stability model explicitly. Something like *"New payload types ship as a coordinated SDK release: a new `StreamDispatch` variant is a public-API change consumers opt into."* Doc-only; no code touch.
+
+Surfacing for editorial pass; not gating anything.
+
+---
+
 ## `app_instance` — eventual stable-id options
 
 MAC-by-convention is fragile in containers, VMs, and multi-NIC environments (see above). Long-term candidates for a stable per-machine id:

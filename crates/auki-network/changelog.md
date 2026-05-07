@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 07:56 HKT, 2026
+
+[`parking_lot.md`](parking_lot.md) gains three items from an API-surface review walkthrough: (1) **`Capability(pub String)` — open-string vs typed enum** — reader can't tell whether the open-string form is forward-compat-by-design or under-typed; lean toward documenting the open-string-by-design contract with a doc-comment, mirroring the `PEER_DERIVATION_LABEL = "peer/v1"` versioned-string pattern. (2) **`PEER_DERIVATION_LABEL` constant lives in the wrong crate** — the constant's *meaning* belongs in [`auki-identity`](../auki-identity) (it's a `Wallet::derive_child` label); the constant + label semantics should move there, with `auki-network` re-exporting for backward-compat. Cross-references the existing [Wallet → peer-key derivation label evolution](parking_lot.md#wallet--peer-key-derivation-label-evolution) thread. (3) **`StreamDispatch` is the streaming-stability lever — README should call it out** — the closed-enum-by-design rationale is correct (Dagaz Batch 1 #1) but the public README presents it as an implementation aside; suggest adding one sentence to the API-surface table calling out the closed-enum stability model explicitly. Doc-only; no code touch. Surfacing for Nils.
+
 ### broodsugar's claude · May 6, 16:30 HKT, 2026
 
 `stream_runtime` lifted to multi-`T` dispatch + `stream_protocol` gains `PointCloudFrame` — [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 1 (#1 + #2). One PR; cuts as v0.0.20.

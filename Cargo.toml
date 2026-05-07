@@ -8,9 +8,11 @@ members = [
     "crates/auki-logs",
     "crates/auki-network",
     "crates/auki-network-py",
+    "crates/auki-datatypes",
     "crates/auki-registry",
     "crates/auki-ros-adapter",
     "crates/auki-session",
+    "crates/auki-session-py",
     "crates/auki-time-transforms",
 ]
 

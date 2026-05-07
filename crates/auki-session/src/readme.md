@@ -15,8 +15,8 @@ pub fn clock_entry_path(app_root: &Path, clock_id: &str, hash: &str) -> PathBuf;
 pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf;
 pub fn session_root(app_root: &Path, session: &str) -> PathBuf;
 pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -> PathBuf;
-pub fn sensorlog_path(session_root: &Path, recording_uuid: &str) -> PathBuf;
-pub fn poselog_path(session_root: &Path, recording_uuid: &str) -> PathBuf;
+pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf;
+pub fn poselog_path(session_root: &Path, pose_log_id: &str) -> PathBuf;
 pub fn id_to_segment(id: &str) -> String;
 ```
 
@@ -28,12 +28,12 @@ pub fn id_to_segment(id: &str) -> String;
 | `sensor_entry_path_includes_id_substitution_and_hash_filename` | `<app>/registries/sensors/<id-subst>/<hash>.json`; `/` → `__` |
 | `clock_entry_path_uses_clocks_dir` | Same, under `clocks/` |
 | `frame_entry_path_uses_frames_dir` | Same, under `frames/` (Frame Registry; v0.0.22) |
-| `session_root_is_app_join_session_uuid` | `<app>/<session>` |
+| `session_root_is_app_join_session_id` | `<app>/<session>` |
 | `timetransform_log_path_uses_double_underscore_separator` | Joined as `<from>__<to>`, both substituted |
-| `sensorlog_path_is_session_join_sensorlogs_join_recording` | `<session>/sensorlogs/<recording_uuid>` |
-| `sensorlog_path_does_not_substitute_recording_uuid` | recording_uuid passes through opaque (no `/` → `__` substitution) |
-| `poselog_path_is_session_join_poselogs_join_recording` | `<session>/poselogs/<recording_uuid>` |
-| `poselog_path_does_not_substitute_recording_uuid` | Same opaque-uuid convention as sensorlog |
+| `sensorlog_path_is_session_join_sensorlogs_join_sensor_log_id` | `<session>/sensorlogs/<sensor_log_id>` |
+| `sensorlog_path_does_not_substitute_sensor_log_id` | sensor_log_id passes through opaque (no `/` → `__` substitution) |
+| `poselog_path_is_session_join_poselogs_join_pose_log_id` | `<session>/poselogs/<pose_log_id>` |
+| `poselog_path_does_not_substitute_pose_log_id` | Same opaque-id convention as sensorlog |
 | `id_to_segment_is_idempotent_for_ids_without_slashes` | No-op for ids without `/` |
 
 ## Consumers in this workspace

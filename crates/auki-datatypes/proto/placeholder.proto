@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package auki.placeholder;
+
+// Placeholder to validate the prost-build pipeline end-to-end before
+// real schemas land. Goes away once the first real .proto exists
+// (SensorLogEntry, TransformSample, JpegFrame, PointCloudFrame,
+// PoseLogEntry, TimeTransformLogEntry) — see ../src/sprint.md.
+message PipelineCheck {}

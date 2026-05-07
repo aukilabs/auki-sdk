@@ -102,22 +102,22 @@ Files within an app:
     │   ├── manifest.json
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     ├── sensorlogs/
-    │   ├── <recording_uuid_1>/            ← one sensor stream per recording
+    │   ├── <sensor_log_id_1>/             ← one sensor stream per log
     │   │   ├── manifest.json
     │   │   └── segments/<padded-ns>.seg
-    │   ├── <recording_uuid_2>/
+    │   ├── <sensor_log_id_2>/
     │   │   └── ...
-    │   └── <recording_uuid_3>/
+    │   └── <sensor_log_id_3>/
     └── poselogs/
-        ├── <recording_uuid_1>/            ← one pose source per recording
+        ├── <pose_log_id_1>/               ← one pose source per log
         │   ├── manifest.json
         │   └── segments/<padded-ns>.seg
-        └── <recording_uuid_2>/
+        └── <pose_log_id_2>/
 ```
 
 `<app_root>` is chosen by the integrator (boosterapp uses `/home/booster/auki/boosterapp/`); the SDK doesn't enforce structure above the registries. Registries live at the app root because hash-keyed writes are idempotent — a sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session, so per-session copies would be wasted work.
 
-**A recording is one sensor stream.** Each `<recording_uuid>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel recordings sharing a session, not a multi-sensor recording. The auto-started ring buffer is just a recording with `retention_ns: 30s`; intent captures are recordings with `retention_ns: 0`. The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path.
+**A sensor log is one sensor stream.** Each `<sensor_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel sensor logs sharing a session, not a multi-sensor log. Buffers, intent recordings, and time-bounded captures are all sensor logs — they differ only in their `retention_ns` (backward window kept on disk; `0` = no eviction) and `duration_ns` (forward auto-stop cap; `0` = run indefinitely). The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path. Whether a daemon auto-starts any sensor log at session boot is daemon-application policy, not SDK contract.
 
 The on-disk shape is pre-1.0 and changes accumulate by tag — see [`changelog.md`](changelog.md) for the per-tag history. Most recent shape changes: v0.0.22 added `frames/<frame_id>/<hash>.json` with the Frame Registry and required `frame_id` on `RgbCamera` + `PointCloud` registry entries (breaking; pre-1.0, integrators regenerate); v0.0.6 removed the inner `<sensor_id>/` layer under `sensorlogs/`.
 
@@ -177,13 +177,13 @@ Specified in [`docs/control-api.md`](docs/control-api.md). All endpoints under `
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/info` | Session-scoped identity: `app`, `name`, `session_id`, `session_clock_id` + `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`. Same payload as the libp2p `/auki/cluster/1.0.0` protocol. |
-| `GET` | `/api/state` | `{session_uuid, recordings: [...]}` — every recording in the session, active or stopped, with full identity (`sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`) and lifecycle fields (`started_at_ns`, `stopped_at_ns`, `duration_ns`, `frame_count`, `retention_ns`). |
+| `GET` | `/api/sensor_logs` | List sensor logs across every session on disk. Filters: `session_id` (`<uuid>` or `current`), `sensor_id`, `sensor_hash`, `clock_id`, `started_after`, `started_before` (compose as AND). Each entry: `sensor_log_id`, `session_id`, `sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`, `retention_ns`, `duration_ns`, `started_at_ns`, `stopped_at_ns` (`null` only for live logs in the live session). |
 | `GET` | `/api/registries/sensors/<sensor_id>/<sensor_hash>` | Hash-pinned Sensor Registry entry, served verbatim, immutable. |
 | `GET` | `/api/registries/clocks/<clock_id>/<clock_hash>` | Hash-pinned Clock Registry entry, same semantics. |
 | `GET` | `/api/preview/latest.jpg` | Latest captured frame as JPEG (poll-based; `503` if none yet). |
-| `POST` | `/api/recordings` | Start an unbounded intent recording. Returns `201 {"recording_id": "..."}`. |
-| `DELETE` | `/api/recordings/<id>` | Stop a recording — sets `stopped_at_ns`, freezes `duration_ns`, keeps the entry in `/api/state`. |
-| `PATCH` | `/api/buffer` | `{"retention_ns": <i64>}` — change the auto-started buffer's retention at runtime. |
+| `POST` | `/api/sensor_logs` | Open a sensor log in the live session. Body: `{sensor_id, sensor_hash, retention_ns, duration_ns}`. Returns `201 {"sensor_log_id": "..."}`. `409` on `sensor_hash` mismatch with the live binding. |
+| `PATCH` | `/api/sensor_logs/<id>` | Mutate `retention_ns` and/or `duration_ns` on a live log; identity fields are immutable. PATCH on a stopped or historical log is `404`. |
+| `DELETE` | `/api/sensor_logs/<id>` | Stop a live log — sets `stopped_at_ns`, keeps the entry listed. DELETE on a stopped or historical log is `404`. |
 | `POST` | `/api/quit` | Clean shutdown — flushes logs, closes mDNS, exits. Responds `200` *before* teardown. |
 
 Plus an **mDNS service-discovery convention** on `_auki._tcp.local.` with TXT records `name` and `app` so consumers find daemons on the LAN automatically. See [`docs/control-api.md`](docs/control-api.md) for the full conformance checklist.

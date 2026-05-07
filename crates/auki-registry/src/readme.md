@@ -1,6 +1,6 @@
 # `auki-registry/src/`
 
-Sensor + Clock Registry entries with content-addressed multi-version-by-hash on-disk storage.
+Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
 ## What's here
 
@@ -11,9 +11,10 @@ A single source file: [`lib.rs`](lib.rs).
 ```
 <app_root>/registries/sensors/<id-with-slashes-replaced-by-__>/<hash>.json
 <app_root>/registries/clocks/<id-with-slashes-replaced-by-__>/<hash>.json
+<app_root>/registries/frames/<id-with-slashes-replaced-by-__>/<hash>.json
 ```
 
-Paths come from [`auki-session`](../../auki-session) (`sensor_entry_path` / `clock_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
+Paths come from [`auki-session`](../../auki-session) (`sensor_entry_path` / `clock_entry_path` / `frame_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
 
 The hash *is* the version. There are no version counters. Re-writing identical content is a no-op (`WriteOutcome::AlreadyExists`); writing different content under the same `id` produces a sibling file (`WriteOutcome::Created` with a different hash).
 
@@ -43,10 +44,13 @@ pub struct RgbCamera {
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
+    pub frame_id: String,         // ← Frame Registry id for the camera optical frame
 }
 ```
 
 The tagged-enum body shape is the extension point for future sensor types (depth, IMU, lidar, etc.) — each gets its own variant + struct under the same envelope.
+
+`frame_id` references a [`FrameRegistryEntry`](#frameregistryentry) so a consumer can resolve the camera's coordinate convention (handedness, axes, units). Conventionally REP-103 optical (`X right, Y down, Z forward`); the SDK doesn't enforce a specific value.
 
 ### `ClockRegistryEntry`
 
@@ -88,6 +92,7 @@ pub struct PointCloud {
     pub point_step: u32,
     pub is_bigendian: bool,
     pub frame_rate_hz: u32,
+    pub frame_id: String,         // ← Frame Registry id for the point coordinates
 }
 
 pub struct PointField {
@@ -104,6 +109,49 @@ pub enum PointFieldDataType {
 ```
 
 `PointFieldDataType::byte_width()` returns the per-element width in bytes (1, 2, 4, or 8). Used by translation code (e.g. `auki-ros-adapter`) to compute output `point_step` after RGB normalization.
+
+`frame_id` references a [`FrameRegistryEntry`](#frameregistryentry) so a consumer (Park, future Sentinel) can resolve the convention of the XYZ axes carried by the per-point bytes. ROS `PointCloud2` carries `header.frame_id`; the integrator threads it through here.
+
+### `FrameRegistryEntry`
+
+```rust
+pub struct FrameRegistryEntry {
+    pub frame_id: String,
+    pub handedness: Handedness,
+    pub axes: AxisConvention,
+    pub units: LengthUnit,
+}
+
+#[serde(rename_all = "snake_case")]
+pub enum Handedness { Right, Left }
+
+pub struct AxisConvention {
+    pub x: AxisDirection,
+    pub y: AxisDirection,
+    pub z: AxisDirection,
+}
+
+#[serde(rename_all = "snake_case")]
+pub enum AxisDirection { Forward, Backward, Up, Down, Left, Right }
+
+#[serde(rename_all = "snake_case")]
+pub enum LengthUnit { Meters, Millimeters, Centimeters }
+```
+
+A named coordinate system. Tells a consumer how to interpret position and rotation data tagged with this frame: handedness, what each axis points toward semantically, and the length unit. **Tree structure lives elsewhere** — edges between frames (the TF tree) live in the Pose Log as [`TransformSample`]s. **Rotation representation** is fixed at the `TransformSample` layer (Hamilton convention `[x, y, z, w]`); not per-frame.
+
+`AxisConvention` is validated at write time: the three axes must be drawn from three distinct axis-pairs (forward/backward, left/right, up/down). Handedness consistency vs. axes is **not** cross-checked — both fields are declarations.
+
+Preset constructors fill in the four conventions that cover almost every real-world frame:
+
+```rust
+FrameRegistryEntry::ros_body(frame_id)     // right, x=forward y=left z=up,    meters (REP-103)
+FrameRegistryEntry::ros_optical(frame_id)  // right, x=right y=down z=forward, meters (REP-103 optical)
+FrameRegistryEntry::opengl(frame_id)       // right, x=right y=up z=backward,  meters
+FrameRegistryEntry::unity(frame_id)        // left,  x=right y=up z=forward,   meters
+```
+
+The on-disk JSON is fully spelled-out either way — presets are pure ergonomics, not shorthand on the wire.
 
 ### `SensorBody::Microphone`
 
@@ -173,8 +221,10 @@ All three byte buffers (`SensorLogEntry.frame`, `PointCloudLogEntry.data`, `Audi
 ```rust
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome>;
 pub fn write_clock(app_root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
+pub fn write_frame(app_root: &Path,  entry: &FrameRegistryEntry)  -> Result<WriteOutcome>;
 pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
 pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
+pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Option<FrameRegistryEntry>>;
 
 pub fn build_sensor_log_manifest(
     app_id: &str,
@@ -222,23 +272,29 @@ pub enum Error {
     Io(io::Error),
     Json(String),
     IdMismatch { expected: String, found: String },
+    InvalidAxes(String),
 }
 ```
 
-`IdMismatch` fires on read when the on-disk file's `sensor_id` / `clock_id` doesn't match the requested ID. This catches misplaced or tampered files — content addressing is meant to make tampering detectable.
+`IdMismatch` fires on read when the on-disk file's `sensor_id` / `clock_id` / `frame_id` doesn't match the requested ID. This catches misplaced or tampered files — content addressing is meant to make tampering detectable.
+
+`InvalidAxes` fires on `write_frame` (and on the `FrameRegistryEntry::validate()` standalone call) when an `AxisConvention` triplet has two axes from the same axis-pair. The on-disk write doesn't happen.
 
 ## Atomic writes
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (29 total)
+## Tests (41 total)
 
 | Test | Asserts |
 |------|---------|
 | `sensor_entry_serializes_to_canonical_bytes_matching_m1_example` | Byte-exact JCS output for the M1 example sensor entry |
 | `monotonic_clock_canonical_bytes_match_m1_example` | Same, monotonic clock |
 | `utc_clock_canonical_bytes_match_m1_example` | Same, UTC clock |
-| `sensor_entry_hash_is_locked` | `e8cb3879fcfa7f716047aa0892b0c0c0` |
+| `frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | Byte-exact JCS output for the locked Frame Registry vector (`ros_body("K1-AABBCCDDEEFF/base_link")`) |
+| `sensor_entry_hash_is_locked` | `d798fa879c80a5b00cabc1ce47ca4f7a` (recomputed at v0.0.22 with `frame_id`) |
+| `point_cloud_entry_hash_is_locked` | `79b58e4e1743d238f93fc27f1a6a5ebf` (recomputed at v0.0.22 with `frame_id`) |
+| `frame_entry_hash_is_locked` | `fd0dc3789e898b71b5e16ee122a81a44` |
 | `monotonic_clock_hash_is_locked` | `1f2176888b1a6621315033f22659b9f3` |
 | `utc_clock_hash_is_locked` | `89f84f4c2e09bef81d385b2af1d17e6c` |
 | `write_then_read_sensor_round_trip` | Write produces a file readable as the same value |
@@ -257,8 +313,18 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `pose_log_entry_round_trips_through_cbor` | `PoseLogEntry` with two `TransformSample`s survives CBOR encode/decode |
 | `pose_log_entry_with_empty_transforms_round_trips` | Empty `transforms` vector is permitted and round-trips |
 | `pose_log_manifest_opens_a_log_round_trip` | Builder + `auki_logs::Log::open` + append + read back; manifest and entry both intact |
+| `ros_body_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_body` matches the field-explicit struct |
+| `ros_optical_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_optical` matches |
+| `opengl_preset_matches_explicit_construction` | `FrameRegistryEntry::opengl` matches |
+| `unity_preset_matches_explicit_construction` | `FrameRegistryEntry::unity` matches |
+| `validate_accepts_all_four_presets` | All four presets pass orthogonality validation |
+| `validate_rejects_non_orthogonal_axes` | `x=Forward y=Backward` (same axis-pair) → `InvalidAxes` |
+| `write_frame_rejects_non_orthogonal_axes_without_touching_disk` | Validation runs before any I/O |
+| `write_then_read_frame_round_trip` | Frame entry round-trips through write+read |
+| `write_frame_is_idempotent_on_identical_content` | Same input → same hash, second write is no-op |
+| `read_frame_returns_none_for_missing_entry` | Absent file is `Ok(None)` |
 
-The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, three tests fail at once.
+The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, multiple tests fail at once.
 
 ## Consumers in this workspace
 

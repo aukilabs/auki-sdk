@@ -124,6 +124,11 @@ pub struct StaticCameraMetadata<'a> {
     pub color_space: &'a str,
     pub frame_rate_hz: u32,
     pub intrinsics_model: &'a str,
+    /// Frame Registry id for the camera optical frame. Threaded into
+    /// `RgbCamera.frame_id` so consumers can resolve a
+    /// `FrameRegistryEntry` for the camera's coordinate system.
+    /// Conventionally REP-103 optical (`X right, Y down, Z forward`).
+    pub frame_id: &'a str,
 }
 
 /// Build a `SensorRegistryEntry` from a bootstrap `CameraInfo` + integrator-
@@ -143,6 +148,7 @@ pub fn build_rgb_camera_registry_entry(
             color_space: meta.color_space.to_string(),
             intrinsics_model: meta.intrinsics_model.to_string(),
             distortion_model: info.distortion_model.clone(),
+            frame_id: meta.frame_id.to_string(),
         }),
     }
 }
@@ -423,7 +429,10 @@ fn apply_normalization(
 
 /// Build a `SensorRegistryEntry` (with `SensorBody::PointCloud`) from a
 /// bootstrap `PointCloud2` message. The integrator supplies `frame_rate_hz`
-/// out-of-band — the same way `StaticCameraMetadata` works for cameras.
+/// and `frame_id` out-of-band — the same way `StaticCameraMetadata` works
+/// for cameras. (`PointCloud2Msg` does not currently mirror ROS's
+/// `header.frame_id`; integrators source the frame id from their topic
+/// configuration or platform knowledge.)
 ///
 /// The output `fields`/`point_step` reflect [RGB(A) normalization](crate),
 /// not the raw ROS2 layout — so the registry describes the bytes that
@@ -432,6 +441,7 @@ pub fn build_point_cloud_registry_entry(
     sensor_id: impl Into<String>,
     msg: &PointCloud2Msg,
     frame_rate_hz: u32,
+    frame_id: impl Into<String>,
 ) -> auki_registry::SensorRegistryEntry {
     let normalized = normalize_layout(&msg.fields);
     auki_registry::SensorRegistryEntry {
@@ -441,6 +451,7 @@ pub fn build_point_cloud_registry_entry(
             point_step: normalized.point_step,
             is_bigendian: msg.is_bigendian,
             frame_rate_hz,
+            frame_id: frame_id.into(),
         }),
     }
 }
@@ -859,9 +870,12 @@ mod tests {
                 color_space: "BT.709",
                 frame_rate_hz: 20,
                 intrinsics_model: "pinhole",
+                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical",
             },
         );
-        assert_eq!(entry.hash(), "e8cb3879fcfa7f716047aa0892b0c0c0");
+        // Recomputed at v0.0.22 when `frame_id` was added to RgbCamera.
+        // Same hash as auki-registry's `sensor_entry_hash_is_locked`.
+        assert_eq!(entry.hash(), "d798fa879c80a5b00cabc1ce47ca4f7a");
     }
 
     #[test]
@@ -953,9 +967,11 @@ mod tests {
                 color_space: "BT.709",
                 frame_rate_hz: 20,
                 intrinsics_model: "pinhole",
+                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical",
             },
         );
-        assert_eq!(registry_entry.hash(), "e8cb3879fcfa7f716047aa0892b0c0c0");
+        // Recomputed at v0.0.22 when `frame_id` was added to RgbCamera.
+        assert_eq!(registry_entry.hash(), "d798fa879c80a5b00cabc1ce47ca4f7a");
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {
@@ -1035,11 +1051,13 @@ mod tests {
             "K1-AABBCCDDEEFF/head_depth_points",
             &msg,
             10,
+            "K1-AABBCCDDEEFF/head_left_cam_optical",
         );
         // Locked: this is the same hash exercised by auki-registry's
         // `point_cloud_entry_hash_is_locked`. If the two diverge, one of the
-        // crates drifted from the schema.
-        assert_eq!(entry.hash(), "35b318eb6b0a70cb2202083dcd1f14a2");
+        // crates drifted from the schema. Recomputed at v0.0.22 when
+        // `frame_id` was added to PointCloud.
+        assert_eq!(entry.hash(), "79b58e4e1743d238f93fc27f1a6a5ebf");
     }
 
     #[test]
@@ -1122,7 +1140,7 @@ mod tests {
         };
 
         // Registry side: rgb expanded to r/g/b uint8 fields, point_step 16 → 15.
-        let entry = build_point_cloud_registry_entry("test/cam", &msg, 30);
+        let entry = build_point_cloud_registry_entry("test/cam", &msg, 30, "test/cam_optical");
         let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
             panic!("expected PointCloud variant");
         };
@@ -1176,7 +1194,7 @@ mod tests {
             is_dense: true,
         };
 
-        let entry = build_point_cloud_registry_entry("test/cam", &msg, 30);
+        let entry = build_point_cloud_registry_entry("test/cam", &msg, 30, "test/cam_optical");
         let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
             panic!("expected PointCloud variant");
         };
@@ -1217,7 +1235,7 @@ mod tests {
             is_dense: true,
         };
 
-        let entry = build_point_cloud_registry_entry("test/lidar", &msg, 10);
+        let entry = build_point_cloud_registry_entry("test/lidar", &msg, 10, "test/lidar_frame");
         let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
             panic!("expected PointCloud variant");
         };

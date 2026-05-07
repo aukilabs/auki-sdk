@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 07:56 HKT, 2026
+
+API-surface review walkthrough — six items filed across `auki-session` (1), `auki-network` (3), `auki-identity` (1), and `crates/` (1) parking-lots; three editorial items at root [`parking_lot.md`](../parking_lot.md). Marquee elevation finding (`TransformSample` wrong-layered) **resolved by the migration plan** — rename to `SpatialTransform` + move to `auki-datatypes` carries the layering change. Per-crate items: `auki-session` name vs scope mismatch (path helpers today, no `Session` runtime); `auki-network` `Capability` open-string vs enum, `PEER_DERIVATION_LABEL` in wrong crate, `StreamDispatch` README disclosure missing; `auki-identity` missing `Result<T>` aliases. Cross-crate: Rust vs Python surface namespacing mismatch.
+
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **Step 0 landed: new crate `auki-manifests`** owns the SDK's per-recording manifest schemas + builders. Symmetric with [`auki-datatypes`](auki-datatypes) (segment payloads) — manifests in one crate, payloads in the other. Encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](auki-jcs). `cargo test -p auki-manifests` 6/6 passing.

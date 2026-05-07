@@ -48,3 +48,17 @@ Same decision shape as encrypted-at-rest: lives in a downstream crate, not in `a
 When v2 inevitably arrives (e.g. add a `not_after_ns` expiry field, add a `usage_scope` enum), the prefix changes; old verifiers fail signature check and reject; new verifiers handle both.
 
 The interesting question is whether `CreationCert` itself becomes an enum (`V1 { ... } | V2 { ... }`) or stays a struct with new optional fields. Enum is more honest about wire-format breakage; struct with options is more ergonomic. Defer until v2 has a real reason to exist.
+
+---
+
+## Missing `Result<T>` alias for crate ergonomics _(filed by Dobby, 2026-05-08)_
+
+The crate exports a public `VerifyError` enum but no `Result<T> = std::result::Result<T, VerifyError>` alias at crate root. Compare with [`auki-logs`](../auki-logs/src/lib.rs) and [`auki-registry`](../auki-registry/src/lib.rs), both of which ship `pub type Result<T> = std::result::Result<T, Error>` as a sibling to their public `Error` type. Downstream consumers of `auki-identity` therefore write `Result<T, VerifyError>` longhand where the sister crates would let them write `auki_identity::Result<T>`.
+
+The wrinkle here: `verify` is the only `Result`-returning function in the crate's *signature-verifying* surface, but `seed::load_or_mint_seed` returns `Result<[u8; 32], SeedError>` — a *different* error type. So a single crate-level `type Result<T> = ...<T, VerifyError>` would be a mismatch. Three forward paths:
+
+1. **Two aliases**: `VerifyResult<T>` and `SeedResult<T>`, exported at crate root. Mirrors the two distinct concerns the crate has (seed I/O vs signature verification).
+2. **One unified `Error` enum** wrapping `VerifyError` and `SeedError` as variants, with a single `Result<T> = std::result::Result<T, Error>`. Matches `auki-logs` / `auki-registry` exactly. Costs: a wrapper layer that callers pattern-match through, and a public-API change for `verify`'s return type.
+3. **Leave it**. Two error types, no aliases — callers spell out `Result<_, VerifyError>` and `Result<_, SeedError>` longhand. Acceptable; just a consistency miss with the rest of the workspace.
+
+Lean: (1). Cheap, mirrors the actual two-axis nature of the crate, keeps `verify` and `load_or_mint_seed` honestly distinct. No urgency; pin while the crate is still pre-1.0 and additions are non-breaking.

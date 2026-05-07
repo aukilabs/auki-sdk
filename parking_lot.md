@@ -114,9 +114,67 @@ Docs to update when the Rust `Session` struct + `auki-session-py` first implemen
 
 ---
 
+## API-surface review — items filed by Dobby, 2026-05-08
+
+These six items came out of an API-surface review walkthrough on 2026-05-08, after PR #55 landed Step 0 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md). The marquee elevation finding (`TransformSample` is wrong-layered as an `auki-registry` payload helper when it's the SDK's flagship transform primitive) is **resolved** — the migration plan moves it to `auki-datatypes` and renames it `SpatialTransform` per the Pose Log synthesis decided 2026-05-07. The remaining six items are smaller; each lives in the most-specific parking-lot it belongs in. Listed here for visibility and so a future reader can find the whole set.
+
+- **`auki-session` is path helpers, not a session.** Filed at [`crates/auki-session/parking_lot.md`](crates/auki-session/parking_lot.md). Crate name vs scope mismatch — rename to `auki-paths` now (zero in-workspace consumers) or footnote the README, mirroring PR #55's "departing" pattern for `auki-registry`. Reserves `auki-session` for the runtime abstraction the [`Session.open` Propagate item](#propagate-sessionopen-mints-session_id-sdk-mints-with-optional-kwarg-escape-hatch) above already specs.
+- **`Capability(pub String)` — open-string vs typed enum.** Filed at [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md). Doc-comment the open-string-by-design contract (lean) or tighten to a typed enum with `Other(String)` escape hatch.
+- **`PEER_DERIVATION_LABEL` lives in the wrong crate.** Filed at [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md). Constant's *meaning* belongs in `auki-identity` (it's a `Wallet::derive_child` label); only the consumer lives in `auki-network`. Move + re-export.
+- **`StreamDispatch` is the streaming-stability lever — README should call it out.** Filed at [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md). Closed-enum-by-design is correct (Dagaz Batch 1 #1); the disclosure is missing. One-sentence README addition.
+- **`auki-identity` missing `Result<T>` aliases.** Filed at [`crates/auki-identity/parking_lot.md`](crates/auki-identity/parking_lot.md). Sister crates ship `pub type Result<T>`; this one does not, and has two error types (`VerifyError` + `SeedError`) so the alias needs splitting (`VerifyResult<T>` + `SeedResult<T>`).
+- **Rust vs Python surface namespacing mismatch.** Filed at [`crates/parking_lot.md`](crates/parking_lot.md). `auki_network.cluster.*` / `auki_network.discovery.*` in Python vs flat `auki_network::` in Rust. Pick one, converge.
+
+---
+
+## API-surface — README "four surfaces" framing _(filed by Dobby, 2026-05-08)_
+
+The root [`README.md`](README.md) "API surface" section markets four peer surfaces: (1) Rust crates, (2) PyO3 bindings, (3) HTTP control API, (4) libp2p wire protocols. They aren't peers. They're two axes:
+
+- **Library surfaces.** Rust crates are the substrate; PyO3 is a *binding* of the substrate. Same contracts, two languages. Stability flows from the Rust side downhill.
+- **Protocol surfaces.** HTTP control + libp2p wire are *contracts other parties implement* — the SDK specifies, daemons implement. These are what carry locked cross-language conformance vectors and version negotiation.
+
+A reader who sees them as a flat four-list misses the asymmetry: a PyO3 binding change is non-breaking if it preserves Rust-side semantics; a `/auki/stream/1.0.0` payload addition is a coordinated bump (cf. the [`StreamDispatch` parking-lot item](crates/auki-network/parking_lot.md) on the streaming-stability lever).
+
+Suggested reframe: replace the flat numbered list with a 2×2 framing — "Library bindings" (Rust + Python) above, "Protocol contracts" (HTTP control + libp2p wire) below. The cross-language conformance-vector section that already exists then has an obvious home (it's about protocol contracts, not bindings).
+
+Doc-only; not gating any in-flight work. Pin before any future surface (e.g. a TypeScript/WASM binding for browser-side Park, or a `/auki/capabilities/1.0.0` protocol) muddies the categorization further.
+
+---
+
+## API-surface — Rule 1 quest-name leaks in the public README _(filed by Dobby, 2026-05-08)_
+
+Per the no-quest-codenames-in-public-docs convention, the root [`README.md`](README.md) leaks codenames in five places. Quest names belong in `parking_lot.md`, internal changelogs, and the `CLAUDE.md` agent guide — never in the public README.
+
+| Line | Current | Replace with |
+|---|---|---|
+| 213 | *"v0.0.22 ships `T = JpegFrame` (**grimsby v1** — byte-identical to …) and `T = PointCloudFrame` (**Dagaz Batch 1** — …)"* | *"v0.0.22 ships `T = JpegFrame` (RGB camera streaming — byte-identical to …) and `T = PointCloudFrame` (CDR-encoded `PointCloud2` streaming — …)"* |
+| 214 | *"Discovery REST (**Vinland**) | Multi-cluster registry"* | *"Discovery REST | Multi-cluster registry"* |
+| 268 | *"`sign_canonical_json(<**Vinland**-shaped registration>)`"* | *"`sign_canonical_json(<Discovery-registration shape>)`"* (or describe the shape directly without naming the quest) |
+| 271 | *"**Vinland** Discovery `register` signed payload"* | *"Discovery `register` signed payload"* |
+| 274 | *"The **Vinland** and PointCloudFrame vectors pin the wire shapes…"* | *"The Discovery-registration and PointCloudFrame vectors pin the wire shapes…"* |
+
+Mechanical scrub; no semantic change. Doc-only PR. Cheap; should land before the next external-facing release tag.
+
+---
+
+## API-surface — `auki-logs` README bullet missing Pose Log _(filed by Dobby, 2026-05-08)_
+
+The root [`README.md`](README.md) "On-disk format" section's `auki-logs` bullet reads:
+
+> `auki-logs` — segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
+
+That bullet has been stale since the Pose Log capture primitive landed. The on-disk layout diagram immediately above the bullet shows `poselogs/<pose_log_id>/manifest.json + segments/<padded-ns>.seg` — that's the same auki-logs shape, not a parallel primitive. `auki-manifests::build_pose_log_manifest` requires `segment_duration_ns` + `retention_ns` — the auki-logs base contract. Pose Log uses the same `Log<T>` generic; only the segment payload type differs.
+
+Suggested fix: change "**both** Sensor and TimeTransform Logs" → "Sensor, TimeTransform, **and Pose** Logs". Or expand into a sentence making the architectural point explicit: *"All log types — Sensor (with the Point Cloud and Audio sibling payloads), TimeTransform, and Pose — sit on the auki-logs ring-buffer primitive; the manifest schema and segment payload shape vary per log type, the segment machinery is shared."*
+
+Doc-only PR. Cheap; bundles naturally with the quest-name scrub above.
+
+---
+
 ## Subfolder summary
 
-- [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing
+- [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing; **Rust vs Python surface namespacing mismatch** (filed 2026-05-08)
 - [`crates/auki-datatypes/`](crates/auki-datatypes/parking_lot.md) — `.proto` package naming convention; field number allocation strategy; locked conformance vector format; schema versioning policy; five per-type slop fixes (PinholeCameraLogEntry intrinsics placement, PointCloud on-disk-vs-wire drift, Audio chunk metadata, TimeTransformEntry source/discontinuous, TimeTransformSource collapse). Step 0 (extract `auki-manifests`) **landed 2026-05-08**; per-type slop fixes resolve at their matching migration step.
 - [`crates/auki-manifests/`](crates/auki-manifests/parking_lot.md) — read-side parsers + validators (deferred until a second reader needs them); `PoseSource` graduation to a sibling registry (deferred until a real SLAM/odometry producer lands); Pose Log manifest reshape gated on the 2026-05-07 synthesis (lands in Step 5); manifest-schema versioning convention.
 - [`crates/auki-session-py/`](crates/auki-session-py/parking_lot.md) — `payload: bytes` encoding contract resolved (protobuf via auki-datatypes); libp2p control-plane design timing (deferred until this crate stabilizes); 6 resolved design decisions waiting to propagate when first implementation lands

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 7, 11:00 HKT, 2026
+
+New `frame_entry_path(app_root, frame_id, hash) -> PathBuf` returning `<app_root>/registries/frames/<frame_id>/<hash>.json` — peer to `sensor_entry_path` / `clock_entry_path`, same `id-with-slashes-replaced-by-__` segment convention. The on-disk layout diagram in both `lib.rs` doc-comment and outer README — which previously said `frames/<frame_id>/<hash>.json     ← coming` — now reflects the landed third registry. 1 new test; auki-session 10 → 11. Companion to the Frame Registry types added in `auki-registry` in the same PR.
+
 ### broodsugar's claude · May 4, 11:11 HKT, 2026
 
 New `poselog_path(session_root, recording_uuid) -> PathBuf` returning `<session_id>/poselogs/<recording_uuid>` — peer to `sensorlog_path`, same opaque-uuid convention. On-disk layout diagram (in both `lib.rs` doc-comment and outer README) gains the `poselogs/<recording_uuid>/` subtree alongside `sensorlogs/`. Rationale section now phrases recordings as "one stream — sensor or pose source," not "one sensor stream." 2 new tests; auki-session now at 10 tests. Companion to the Pose Log payload + builder added in `auki-registry` in the same PR.

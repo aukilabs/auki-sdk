@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 7, 11:00 HKT, 2026
+
+**Frame Registry landed** in `auki-registry` + `auki-session` — third registry alongside Sensor + Clock; closes the "Frame Registry shape" parking-lot question and addresses the State of SDK doc's "Frame Registry: ✗" gap. **Will land in v0.0.22.** Pins v0.0.21 (Dagaz Batch 2).
+
+**`auki-registry`** ships [`FrameRegistryEntry`](crates/auki-registry/src/lib.rs) `{ frame_id, handedness, axes, units }` with `Handedness { Right, Left }`, `AxisConvention { x: AxisDirection, y: AxisDirection, z: AxisDirection }`, `AxisDirection { Forward, Backward, Up, Down, Left, Right }`, and `LengthUnit { Meters, Millimeters, Centimeters }`. **Tree structure deliberately not on the entry** — frame parentage lives in the Pose Log via `TransformSample.parent_frame` / `child_frame`. **Rotation representation deliberately not on the entry** — quaternions are fixed at the `TransformSample` layer (Hamilton convention `[x, y, z, w]`). **No `label` field** — `frame_id` strings are already human-readable. Four preset constructors (`ros_body`, `ros_optical`, `opengl`, `unity`) for the conventions that cover almost every real-world frame; pure ergonomics, on-disk JSON is fully spelled-out either way. New `Error::InvalidAxes(String)` variant; `write_frame()` validates the `AxisConvention` triplet is orthogonal (three distinct axis-pairs) before touching disk.
+
+**`SensorBody::PointCloud` and `SensorBody::RgbCamera` gain a required `frame_id: String` field** in [`crates/auki-registry/src/lib.rs`](crates/auki-registry/src/lib.rs). This is what fixes the symptom that triggered this work: today the SDK ships `PointCloudFrame` bytes over the Dagaz wire (v0.0.20) with no declared coordinate convention; with this PR, the producer's `AcceptInfo.sensor_hash` transitively names the frame via `SensorRegistryEntry → frame_id → FrameRegistryEntry`, so a consumer (Park, future Sentinel) can resolve the convention to interpret the XYZ axes. **Breaking on-disk for existing Sensor Registry entries** (pre-1.0; integrators regenerate). **Cross-peer registry sync deliberately out of scope** — that's a Layer 2 networking deliverable; v1 is local-disk only and cross-peer convention agreement is by configuration.
+
+**`auki-session`** ships `frame_entry_path(app_root, frame_id, hash) -> PathBuf` — `<app_root>/registries/frames/<id>/<hash>.json`, sibling to `sensor_entry_path` / `clock_entry_path`. The `frames/<frame_id>/<hash>.json  ← coming` placeholder in the layout diagram is now real.
+
+**`auki-ros-adapter`** updated for the new fields — **breaking**: `StaticCameraMetadata` gains `frame_id: &'a str`; `build_point_cloud_registry_entry` gains a `frame_id: impl Into<String>` parameter (positioned after `frame_rate_hz`, mirroring its out-of-band-supplied shape — `PointCloud2Msg` does not mirror ROS's `header.frame_id` today; integrators source it from topic configuration). BoosterApp's sidecar Python integration will need to thread `frame_id` through when constructing entries.
+
+**Locked cross-language conformance vector** pinning `FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")` to JSON `{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","units":"meters"}` and XXH3-128 `fd0dc3789e898b71b5e16ee122a81a44`. Joins the `auki-hash` / `auki-identity` / `auki-network` cross-language conformance set. Locked sensor + point cloud hashes recomputed in lockstep: `sensor_entry_hash_is_locked` `e8cb38..` → `d798fa..`; `point_cloud_entry_hash_is_locked` `35b318..` → `79b58e..`. `auki-ros-adapter`'s `build_*_registry_entry_matches_locked_hash` tests track the same updated values — the cross-crate equality is the schema-parity guard.
+
+**Tests**: auki-registry 30 → 41 (+11 — locked vector + hash + 4 preset round-trips + 2 validate cases + write_frame disk-protection + write/read round-trip + idempotency + read-missing); auki-session 10 → 11; auki-ros-adapter still 22 (signature changes only). See [`crates/auki-registry/changelog.md`](crates/auki-registry/changelog.md), [`crates/auki-session/changelog.md`](crates/auki-session/changelog.md), [`crates/auki-ros-adapter/changelog.md`](crates/auki-ros-adapter/changelog.md) for detail.
+
 ### broodsugar's claude · May 6, 18:00 HKT, 2026
 
 [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) Batch 2 — `auki-network-py` extension for the new `T` shape. **Closes Dagaz Batch 2; cuts as v0.0.21.** Pins v0.0.20 (Dagaz Batch 1 SDK Rust core).

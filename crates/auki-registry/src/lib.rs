@@ -47,6 +47,13 @@ pub struct RgbCamera {
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
+    /// Frame Registry id for the camera optical frame — what the pixel
+    /// rays' depth axis points along, etc. Consumers look up the
+    /// matching [`FrameRegistryEntry`] under
+    /// `<app_root>/registries/frames/<frame_id>/`. Conventionally the
+    /// REP-103 optical convention (`X right, Y down, Z forward`); the
+    /// SDK does not enforce a specific convention.
+    pub frame_id: String,
 }
 
 /// Static layout of a point-cloud sensor's per-point bytes. The actual point
@@ -58,6 +65,12 @@ pub struct PointCloud {
     pub point_step: u32,
     pub is_bigendian: bool,
     pub frame_rate_hz: u32,
+    /// Frame Registry id for the coordinate system the point bytes are
+    /// in. ROS `PointCloud2` carries `header.frame_id`; the integrator
+    /// threads it through here so consumers (Park, future Sentinel)
+    /// know which Frame Registry entry tells them how to interpret the
+    /// XYZ axes and units.
+    pub frame_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,6 +347,189 @@ impl ClockRegistryEntry {
     }
 }
 
+// ─── Frame Registry ──────────────────────────────────────────────────────────
+
+/// A named coordinate system. Tells a consumer how to interpret position
+/// and rotation data tagged with this frame: handedness, what each axis
+/// points toward, and the length unit. Same content-addressed
+/// multi-version storage shape as [`SensorRegistryEntry`] and
+/// [`ClockRegistryEntry`].
+///
+/// **Tree structure lives elsewhere.** A FrameRegistryEntry declares
+/// what one frame *is in isolation*. Edges between frames (the TF tree)
+/// live in the Pose Log as [`TransformSample`]s with `parent_frame` /
+/// `child_frame` strings naming entries in this registry.
+///
+/// **Rotation representation** is fixed at the [`TransformSample`]
+/// layer (Hamilton convention, `[x, y, z, w]`); not per-frame.
+///
+/// Construct via the field-explicit struct literal or via one of the
+/// `ros_body` / `ros_optical` / `opengl` / `unity` preset constructors —
+/// the on-disk JSON is fully spelled out either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameRegistryEntry {
+    /// Stable human ID, e.g. `"K1-AABBCCDDEEFF/head_left_cam_optical"`.
+    /// Same naming convention as `sensor_id` / `clock_id`.
+    pub frame_id: String,
+    pub handedness: Handedness,
+    pub axes: AxisConvention,
+    pub units: LengthUnit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Handedness {
+    Right,
+    Left,
+}
+
+/// What each axis of the frame points toward semantically. The triplet
+/// must be drawn from three different axis-pairs (forward/backward,
+/// left/right, up/down); [`FrameRegistryEntry::validate`] enforces this.
+/// Handedness is declared independently — the SDK does not cross-check
+/// the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AxisConvention {
+    pub x: AxisDirection,
+    pub y: AxisDirection,
+    pub z: AxisDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisDirection {
+    Forward,
+    Backward,
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl AxisDirection {
+    /// Which axis-pair this direction belongs to. Two directions share a
+    /// pair iff they're parallel; a valid [`AxisConvention`] picks one
+    /// direction from each of the three pairs.
+    fn axis_pair(self) -> u8 {
+        match self {
+            AxisDirection::Forward | AxisDirection::Backward => 0,
+            AxisDirection::Left | AxisDirection::Right => 1,
+            AxisDirection::Up | AxisDirection::Down => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LengthUnit {
+    Meters,
+    Millimeters,
+    Centimeters,
+}
+
+impl FrameRegistryEntry {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        canonicalize(self)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    /// Validate that the [`AxisConvention`] is internally orthogonal —
+    /// the three axis directions must come from three distinct
+    /// axis-pairs (forward/backward, left/right, up/down). Returns
+    /// `Err(Error::InvalidAxes)` if any two share a pair.
+    ///
+    /// Handedness consistency vs. the chosen axes is **not** validated;
+    /// the integrator declares both fields and the SDK trusts the
+    /// declaration.
+    pub fn validate(&self) -> Result<()> {
+        let xp = self.axes.x.axis_pair();
+        let yp = self.axes.y.axis_pair();
+        let zp = self.axes.z.axis_pair();
+        if xp == yp || yp == zp || xp == zp {
+            return Err(Error::InvalidAxes(format!(
+                "axes must be orthogonal (drawn from three distinct \
+                 axis-pairs); got x={:?} y={:?} z={:?}",
+                self.axes.x, self.axes.y, self.axes.z
+            )));
+        }
+        Ok(())
+    }
+
+    // ─── Presets ────────────────────────────────────────────────────────────
+    //
+    // Ergonomic constructors for the four conventions that cover almost
+    // every real-world frame. The on-disk JSON is fully spelled-out
+    // either way — these are pure builders, no shorthand on the wire.
+
+    /// REP-103 body frame: right-handed, X forward, Y left, Z up, meters.
+    /// Used for robot bases (`base_link`), sensor bodies, and any frame
+    /// with a clear "forward direction of motion."
+    pub fn ros_body(frame_id: impl Into<String>) -> Self {
+        Self {
+            frame_id: frame_id.into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Forward,
+                y: AxisDirection::Left,
+                z: AxisDirection::Up,
+            },
+            units: LengthUnit::Meters,
+        }
+    }
+
+    /// REP-103 camera optical frame: right-handed, X right, Y down,
+    /// Z forward, meters. Used for camera optical centers; pixel-space
+    /// reasoning lines up with this directly.
+    pub fn ros_optical(frame_id: impl Into<String>) -> Self {
+        Self {
+            frame_id: frame_id.into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Down,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        }
+    }
+
+    /// OpenGL / Three.js: right-handed, X right, Y up, Z backward, meters.
+    /// Used for browser-side visualizers (Park) and OpenGL renderers.
+    /// "Z backward" because the camera in OpenGL convention looks down
+    /// the negative-Z axis; +Z points away from the scene.
+    pub fn opengl(frame_id: impl Into<String>) -> Self {
+        Self {
+            frame_id: frame_id.into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Up,
+                z: AxisDirection::Backward,
+            },
+            units: LengthUnit::Meters,
+        }
+    }
+
+    /// Unity: left-handed, X right, Y up, Z forward, meters. Some
+    /// pipelines still target Unity; included so producers in that
+    /// ecosystem can declare without spelling fields out by hand.
+    pub fn unity(frame_id: impl Into<String>) -> Self {
+        Self {
+            frame_id: frame_id.into(),
+            handedness: Handedness::Left,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Up,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        }
+    }
+}
+
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -356,10 +552,15 @@ impl WriteOutcome {
 pub enum Error {
     Io(io::Error),
     Json(String),
-    /// On read, the deserialized entry's `sensor_id` / `clock_id` did not
-    /// match the id in the requested path. Indicates a misplaced or tampered
-    /// file — content addressing is meant to make this detectable.
+    /// On read, the deserialized entry's `sensor_id` / `clock_id` /
+    /// `frame_id` did not match the id in the requested path. Indicates
+    /// a misplaced or tampered file — content addressing is meant to
+    /// make this detectable.
     IdMismatch { expected: String, found: String },
+    /// On write of a [`FrameRegistryEntry`], the [`AxisConvention`]
+    /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
+    /// the same axis-pair (forward/backward, left/right, or up/down).
+    InvalidAxes(String),
 }
 
 impl std::fmt::Display for Error {
@@ -370,6 +571,7 @@ impl std::fmt::Display for Error {
             Error::IdMismatch { expected, found } => {
                 write!(f, "id mismatch: expected {expected:?}, found {found:?}")
             }
+            Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
         }
     }
 }
@@ -440,6 +642,39 @@ pub fn read_clock(
         return Err(Error::IdMismatch {
             expected: clock_id.to_string(),
             found: entry.clock_id,
+        });
+    }
+    Ok(Some(entry))
+}
+
+/// Write a frame registry entry under `<app_root>/registries/frames/...`.
+/// Validates the [`AxisConvention`] before hashing — a non-orthogonal
+/// triplet is rejected with [`Error::InvalidAxes`] without touching disk.
+/// Idempotent on hash: writing identical content is a no-op.
+pub fn write_frame(app_root: &Path, entry: &FrameRegistryEntry) -> Result<WriteOutcome> {
+    entry.validate()?;
+    let bytes = entry.canonical_bytes();
+    let hash = auki_hash::hash_jcs_bytes(&bytes);
+    let path = auki_session::frame_entry_path(app_root, &entry.frame_id, &hash);
+    write_entry_at(&path, hash, &bytes)
+}
+
+/// Read a frame registry entry by `(frame_id, hash)`.
+pub fn read_frame(
+    app_root: &Path,
+    frame_id: &str,
+    hash: &str,
+) -> Result<Option<FrameRegistryEntry>> {
+    let path = auki_session::frame_entry_path(app_root, frame_id, hash);
+    let Some(bytes) = read_at(&path)? else {
+        return Ok(None);
+    };
+    let entry: FrameRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.frame_id != frame_id {
+        return Err(Error::IdMismatch {
+            expected: frame_id.to_string(),
+            found: entry.frame_id,
         });
     }
     Ok(Some(entry))
@@ -550,6 +785,7 @@ mod tests {
                 color_space: "BT.709".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "plumb_bob".into(),
+                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
             }),
         }
     }
@@ -587,7 +823,7 @@ mod tests {
         // Keys sorted by RFC 8785 §3.2.3 (lexicographic UTF-16 code units).
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb_camera","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb_camera","width":544}"#
         );
     }
 
@@ -610,12 +846,14 @@ mod tests {
     }
 
     /// Locks the XXH3-128 hex of the M1 sensor entry. Catches drift in
-    /// entry shape, canonicalization, or hashing.
+    /// entry shape, canonicalization, or hashing. Recomputed at v0.0.22
+    /// when `frame_id` was added to RgbCamera per the Frame Registry
+    /// rollout.
     #[test]
     fn sensor_entry_hash_is_locked() {
         assert_eq!(
             m1_sensor_entry().hash(),
-            "e8cb3879fcfa7f716047aa0892b0c0c0"
+            "d798fa879c80a5b00cabc1ce47ca4f7a"
         );
     }
 
@@ -832,6 +1070,7 @@ mod tests {
                 point_step: 12,
                 is_bigendian: false,
                 frame_rate_hz: 10,
+                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
             }),
         }
     }
@@ -841,7 +1080,7 @@ mod tests {
         let bytes = m1_point_cloud_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -849,9 +1088,14 @@ mod tests {
     fn point_cloud_entry_hash_is_locked() {
         // Pin the XXH3-128 of the M1 example point cloud entry.
         // Updates to this must be coordinated with any cross-language reader.
+        // Recomputed at v0.0.22 when `frame_id` was added per the Frame
+        // Registry rollout. If this trips, either (a) the canonical
+        // bytes assertion above also tripped — see that for the cause —
+        // or (b) `auki-jcs` / `auki-hash` drifted; investigate before
+        // updating.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "35b318eb6b0a70cb2202083dcd1f14a2"
+            "79b58e4e1743d238f93fc27f1a6a5ebf"
         );
     }
 
@@ -1058,6 +1302,182 @@ mod tests {
         ciborium::into_writer(&entry, &mut buf).unwrap();
         let back: PoseLogEntry = ciborium::from_reader(&buf[..]).unwrap();
         assert_eq!(back, entry);
+    }
+
+    // ─── Frame Registry tests ──────────────────────────────────────────────
+
+    fn m1_frame_entry() -> FrameRegistryEntry {
+        FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")
+    }
+
+    /// Locks the JCS canonical bytes for the locked Frame Registry vector.
+    /// Cross-language readers (Park's browser side, future Sentinel) MUST
+    /// produce these exact bytes for the same input. Joins the
+    /// `auki-hash` / `auki-identity` / `auki-network` cross-language
+    /// conformance set.
+    #[test]
+    fn frame_entry_serializes_to_canonical_bytes_matching_locked_vector() {
+        let bytes = m1_frame_entry().canonical_bytes();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(
+            s,
+            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","units":"meters"}"#,
+        );
+    }
+
+    /// Locks the XXH3-128 hex of the locked Frame Registry vector.
+    /// Trips if any of `auki-jcs`, `auki-hash`, or this crate's serde
+    /// shape drifts.
+    #[test]
+    fn frame_entry_hash_is_locked() {
+        assert_eq!(
+            m1_frame_entry().hash(),
+            "fd0dc3789e898b71b5e16ee122a81a44"
+        );
+    }
+
+    #[test]
+    fn ros_body_preset_matches_explicit_construction() {
+        let preset = FrameRegistryEntry::ros_body("frame/x");
+        let explicit = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Forward,
+                y: AxisDirection::Left,
+                z: AxisDirection::Up,
+            },
+            units: LengthUnit::Meters,
+        };
+        assert_eq!(preset, explicit);
+    }
+
+    #[test]
+    fn ros_optical_preset_matches_explicit_construction() {
+        let preset = FrameRegistryEntry::ros_optical("frame/x");
+        let explicit = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Down,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        };
+        assert_eq!(preset, explicit);
+    }
+
+    #[test]
+    fn opengl_preset_matches_explicit_construction() {
+        let preset = FrameRegistryEntry::opengl("frame/x");
+        let explicit = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Up,
+                z: AxisDirection::Backward,
+            },
+            units: LengthUnit::Meters,
+        };
+        assert_eq!(preset, explicit);
+    }
+
+    #[test]
+    fn unity_preset_matches_explicit_construction() {
+        let preset = FrameRegistryEntry::unity("frame/x");
+        let explicit = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Left,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Up,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        };
+        assert_eq!(preset, explicit);
+    }
+
+    #[test]
+    fn validate_rejects_non_orthogonal_axes() {
+        let entry = FrameRegistryEntry {
+            frame_id: "frame/x".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                // x and y both on the forward/backward pair → not orthogonal.
+                x: AxisDirection::Forward,
+                y: AxisDirection::Backward,
+                z: AxisDirection::Up,
+            },
+            units: LengthUnit::Meters,
+        };
+        match entry.validate() {
+            Err(Error::InvalidAxes(msg)) => assert!(
+                msg.contains("orthogonal"),
+                "error should mention orthogonality: {msg}"
+            ),
+            other => panic!("expected InvalidAxes; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_all_four_presets() {
+        FrameRegistryEntry::ros_body("a").validate().unwrap();
+        FrameRegistryEntry::ros_optical("b").validate().unwrap();
+        FrameRegistryEntry::opengl("c").validate().unwrap();
+        FrameRegistryEntry::unity("d").validate().unwrap();
+    }
+
+    #[test]
+    fn write_frame_rejects_non_orthogonal_axes_without_touching_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = FrameRegistryEntry {
+            frame_id: "frame/bad".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Up,
+                y: AxisDirection::Down,
+                z: AxisDirection::Forward,
+            },
+            units: LengthUnit::Meters,
+        };
+        match write_frame(dir.path(), &entry) {
+            Err(Error::InvalidAxes(_)) => {}
+            other => panic!("expected InvalidAxes; got {other:?}"),
+        }
+        // Verify nothing was written under registries/frames/.
+        let frames_root = dir.path().join("registries").join("frames");
+        assert!(!frames_root.exists(), "no on-disk write on validation failure");
+    }
+
+    #[test]
+    fn write_then_read_frame_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_frame_entry();
+        let outcome = write_frame(dir.path(), &entry).unwrap();
+        let hash = outcome.hash().to_string();
+        let read = read_frame(dir.path(), &entry.frame_id, &hash).unwrap();
+        assert_eq!(read, Some(entry));
+    }
+
+    #[test]
+    fn write_frame_is_idempotent_on_identical_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_frame_entry();
+        let first = write_frame(dir.path(), &entry).unwrap();
+        let second = write_frame(dir.path(), &entry).unwrap();
+        assert!(matches!(first, WriteOutcome::Created(_)));
+        assert!(matches!(second, WriteOutcome::AlreadyExists(_)));
+        assert_eq!(first.hash(), second.hash());
+    }
+
+    #[test]
+    fn read_frame_returns_none_for_missing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = read_frame(dir.path(), "frame/missing", "deadbeef").unwrap();
+        assert_eq!(entry, None);
     }
 
     #[test]

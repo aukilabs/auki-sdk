@@ -8,7 +8,7 @@
 //! ├── registries/
 //! │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
 //! │   ├── clocks/<clock_id>/<hash>.json
-//! │   └── frames/<frame_id>/<hash>.json     ← coming
+//! │   └── frames/<frame_id>/<hash>.json
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── manifest.json
@@ -55,6 +55,7 @@ use std::path::{Path, PathBuf};
 const REGISTRIES_DIR: &str = "registries";
 const SENSORS_DIR: &str = "sensors";
 const CLOCKS_DIR: &str = "clocks";
+const FRAMES_DIR: &str = "frames";
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
 const POSELOGS_DIR: &str = "poselogs";
@@ -77,6 +78,17 @@ pub fn clock_entry_path(app_root: &Path, clock_id: &str, hash: &str) -> PathBuf 
     registries_root(app_root)
         .join(CLOCKS_DIR)
         .join(id_to_segment(clock_id))
+        .join(format!("{hash}.json"))
+}
+
+/// `<app_root>/registries/frames/<frame_id>/<hash>.json`. Frame Registry
+/// entries declare the coordinate convention (handedness, axes, units) of
+/// a named coordinate system; sensors and pose-log transforms reference
+/// the `frame_id` to make their bytes interpretable to consumers.
+pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf {
+    registries_root(app_root)
+        .join(FRAMES_DIR)
+        .join(id_to_segment(frame_id))
         .join(format!("{hash}.json"))
 }
 
@@ -161,6 +173,21 @@ mod tests {
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/clocks/\
                  K1-AABBCCDDEEFF__utc/deadbeef.json"
+            )
+        );
+    }
+
+    #[test]
+    fn frame_entry_path_uses_frames_dir() {
+        assert_eq!(
+            frame_entry_path(
+                &app(),
+                "K1-AABBCCDDEEFF/head_left_cam_optical",
+                "cafef00d"
+            ),
+            PathBuf::from(
+                "/home/booster/auki/boosterapp/registries/frames/\
+                 K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"
             )
         );
     }

@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink in flight.** Today this crate also holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08) is complete** — the manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests).
+> **Scope shrink in flight.** Today this crate also holds log payload types (`PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08)** — manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests). **Step 1 (2026-05-08)** — `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`.
 
 ## What's here
 
@@ -175,12 +175,6 @@ Multi-mic arrays are one sensor with `channels = N` (not N independent sensors).
 ## Log payload types
 
 ```rust
-pub struct SensorLogEntry {
-    pub dynamic_intrinsics: DynamicIntrinsics,
-    #[serde(with = "serde_bytes")]
-    pub frame: Vec<u8>,
-}
-
 pub struct PointCloudLogEntry {
     pub width: u32,        // organized: cols; unorganized: total point count
     pub height: u32,       // organized: rows; unorganized: 1
@@ -206,7 +200,7 @@ pub struct TransformSample {
 }
 ```
 
-All three byte buffers (`SensorLogEntry.frame`, `PointCloudLogEntry.data`, `AudioLogEntry.data`) are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads. `PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding.
+`PointCloudLogEntry.data` and `AudioLogEntry.data` are tagged `#[serde(with = "serde_bytes")]` so CBOR encodes them as byte strings (major type 2) rather than arrays of u8 — same on-disk semantics, ~half the byte cost on typical payloads. `PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding. The camera log payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved to [`auki-datatypes`](../../auki-datatypes) at Step 1 (2026-05-08) — protobuf via prost, no longer CBOR.
 
 ## Public functions
 
@@ -294,4 +288,4 @@ The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`
 
 - `auki-k1-binary` — writes one Sensor entry + two Clock entries at startup
 - `auki-renderer` — reads the Sensor entry to recover pixel format / dimensions / color space
-- `auki-ros-adapter` — re-exports this crate; `build_rgb_camera_registry_entry` constructs entries
+- `auki-ros-adapter` — re-exports this crate alongside [`auki-datatypes`](../../auki-datatypes); `build_rgb_camera_registry_entry` constructs entries here, `build_sensor_log_entry` constructs prost-shaped `PinholeCameraLogEntry` from `auki-datatypes`

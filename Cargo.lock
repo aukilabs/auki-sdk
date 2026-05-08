@@ -161,9 +161,13 @@ dependencies = [
 name = "auki-datatypes"
 version = "0.0.0"
 dependencies = [
+ "auki-hash",
+ "auki-logs",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -286,9 +290,11 @@ dependencies = [
 name = "auki-ros-adapter"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
  "auki-registry",
  "ciborium",
  "futures",
+ "prost",
  "r2r",
  "serde",
  "tokio",

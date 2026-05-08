@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Step 1 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](auki-datatypes) now ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics`, locked wire-bytes + XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`). Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 `Option<T>` for messages) — non-autofocusing cameras pay only the message-tag overhead.
+
+**[`auki-logs`](auki-logs) became encoder-agnostic** — `Log<T>` bound switches from `T: Serialize + DeserializeOwned` to `T: LogPayload`, a tiny new trait with `encode(&self) -> Vec<u8>` + `decode(&[u8]) -> Result<Self, String>`. Resolves the encoder-aware-vs-encoder-agnostic open question in [`auki-logs/parking_lot.md`](auki-logs/parking_lot.md). ciborium dropped from production deps; `Error::Cbor` → `Error::Payload`. The `impl_log_payload!` macro in [`auki-datatypes`](auki-datatypes) gives every prost type a one-line impl; mid-migration ciborium types ([`auki-time-transforms`](auki-time-transforms)'s `TimeTransformEntry`, [`auki-manifests`](auki-manifests)'s `TestEntry` test scaffold) write theirs directly.
+
+**Moves**: `SensorLogEntry` + `DynamicIntrinsics` from [`auki-registry`](auki-registry) → [`auki-datatypes`](auki-datatypes) (renamed `PinholeCameraLogEntry`, encoded via prost). [`auki-ros-adapter`](auki-ros-adapter)'s `build_sensor_log_entry` returns the prost type; `dynamic_intrinsics_from` returns the prost `DynamicIntrinsics`. `auki-ros-adapter` re-exports `auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry}`; gets a path-dep on `auki-datatypes`.
+
+**Test counts**: `auki-datatypes` 1 → 7 (placeholder smoke + 6 camera tests including the segment round-trip seam); `auki-logs` 14 → 14; `auki-registry` 35 → 35 (no inline tests for the moved types); `auki-ros-adapter` 32 → 31 (CBOR round-trip deleted, replaced by the locked prost vector at the new home); `auki-time-transforms` 9 → 9; `auki-manifests` 6 → 6. `cargo test --workspace` clean.
+
+**Doc updates**: [`auki-logs/README.md`](auki-logs) + `src/readme.md` rewrite the entry-framing tables, public-API signatures, error variants, and "Why CBOR" → "Why encoding-agnostic". [`auki-registry/README.md`](auki-registry) + `src/readme.md` drop the `SensorLogEntry` + `DynamicIntrinsics` sections; the "scope shrink in flight" callout now reads "Step 1 (2026-05-08) is complete." [`auki-datatypes/README.md`](auki-datatypes) + `src/readme.md` updated for the first real schema landing. Root `README.md` crate-listing table gains `auki-datatypes` + `auki-manifests` rows (both were missing); `auki-registry` row drops the camera log payload types. Sprint marks Step 1 ✓ done. Two parking-lot questions resolved (`dynamic_intrinsics` placement, encoder-aware vs encoder-agnostic). Will land in v0.0.24.
+
 ### broodsugar's dobby · May 8, 07:56 HKT, 2026
 
 API-surface review walkthrough — six items filed across `auki-session` (1), `auki-network` (3), `auki-identity` (1), and `crates/` (1) parking-lots; three editorial items at root [`parking_lot.md`](../parking_lot.md). Marquee elevation finding (`TransformSample` wrong-layered) **resolved by the migration plan** — rename to `SpatialTransform` + move to `auki-datatypes` carries the layering change. Per-crate items: `auki-session` name vs scope mismatch (path helpers today, no `Session` runtime); `auki-network` `Capability` open-string vs enum, `PEER_DERIVATION_LABEL` in wrong crate, `StreamDispatch` README disclosure missing; `auki-identity` missing `Result<T>` aliases. Cross-crate: Rust vs Python surface namespacing mismatch.

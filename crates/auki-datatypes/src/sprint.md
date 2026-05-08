@@ -19,12 +19,12 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - Per-folder docs seeded; workspace `Cargo.toml` updated; `auki-time-transforms` gains an `auki-manifests` dev-dep so the `Sampler` integration test still constructs a manifest.
    - `cargo test -p auki-manifests` 6/6 passing; downstream tests pass workspace-wide (`auki-registry` 41 → 35 since 6 tests moved, `auki-time-transforms` 10 → 9 since 1 test moved).
 
-1. **`auki.camera` — `PinholeCameraLogEntry`** (renamed from `SensorLogEntry`).
-   - Define `proto/camera.proto`. Message shape: `dynamic_intrinsics` placement is a per-step decision (see slop note in [`parking_lot.md`](../parking_lot.md)).
-   - Add locked conformance vector pinning a fixed `PinholeCameraLogEntry` instance to its protobuf wire bytes.
-   - **Move** `PinholeCameraLogEntry` (née `SensorLogEntry`) and `DynamicIntrinsics` out of [`auki-registry`](../../auki-registry); update its source + tests + README.
-   - Update [`auki-logs`](../../auki-logs) segment writer/reader to use protobuf-encoded bytes for the typed `T` (segments stay length-prefixed; the payload bytes change from CBOR-via-ciborium to prost-encoded).
-   - Test the segment round-trip with the new encoding.
+1. **✓ `auki.camera` — `PinholeCameraLogEntry`** (renamed from `SensorLogEntry`; landed 2026-05-08).
+   - `proto/camera.proto` defines `PinholeCameraLogEntry { DynamicIntrinsics dynamic_intrinsics = 1; bytes frame = 2; }` + `DynamicIntrinsics { double fx, fy, cx, cy = 1..4; repeated double distortion_coefficients = 5; }`. Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 message-typed fields are `Option<T>` in prost) — non-autofocusing cameras pay only the message-tag overhead; autofocusing cameras populate per-frame. Promoting to a sibling intrinsics-update sub-stream remains possible without breaking on-disk readers.
+   - Locked conformance vectors pin both wire bytes and XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`) for the M1 example.
+   - **Moved** `PinholeCameraLogEntry` (née `SensorLogEntry`) and `DynamicIntrinsics` out of [`auki-registry`](../../auki-registry). [`auki-ros-adapter`](../../auki-ros-adapter)'s `build_sensor_log_entry` now produces the prost type; `dynamic_intrinsics` callers handle the `Option<...>` (`.as_ref().unwrap()`).
+   - [`auki-logs`](../../auki-logs) became encoding-agnostic via a new `LogPayload` trait — consumers pick prost / ciborium / their own. Per-step decision adopting the parking-lot lean. The `impl_log_payload!` macro in this crate gives every prost type a one-line impl. Mid-migration ciborium types (TimeTransformEntry) write their `LogPayload` impl directly. `auki-logs` drops ciborium from production deps; `Error::Cbor` → `Error::Payload`.
+   - End-to-end seam test: `auki_logs::Log<PinholeCameraLogEntry>` round-trip with both intrinsics-present and intrinsics-absent entries.
 
 2. **`auki.frame_stream` — `JpegFrame`** + **`auki.point_cloud_stream` — `PointCloudFrame`** (libp2p wire types).
    - Define both `.proto` files. Each is a single `bytes` field at heart.

@@ -11,6 +11,10 @@ description = "Single source of truth for the Auki SDK's shared cross-language d
 # Runtime support for prost-generated types — Message trait, encode /
 # decode, well-known types, etc.
 prost = "0.13"
+# `LogPayload` trait — every prost-generated payload type below gets a
+# blanket-style impl through the `impl_log_payload!` macro so consumers
+# can drop them straight into `auki_logs::Log<T>`.
+auki-logs = { path = "../auki-logs" }
 
 [build-dependencies]
 # Compiles .proto → Rust at build time. Output lands in OUT_DIR and is
@@ -20,3 +24,15 @@ prost-build = "0.13"
 # protoc install required on dev machines or CI. The build.rs sets
 # PROTOC to the vendored binary's path before invoking prost-build.
 protoc-bin-vendored = "3"
+
+[dev-dependencies]
+# Locked-vector tests pin both the wire bytes and their XXH3-128 hash,
+# matching the convention from `auki-manifests` / `auki-registry`. Hash
+# lock catches drift in either prost-build's output or `auki-hash`
+# itself; cross-language readers (betterproto, future Sentinel) MUST
+# match both values.
+auki-hash = { path = "../auki-hash" }
+# Segment round-trip test exercises the prost ↔ LogPayload ↔ auki-logs
+# encoder seam end-to-end through a real `Log<PinholeCameraLogEntry>`.
+serde_json = "1"
+tempfile = "3"

@@ -9,10 +9,9 @@ description = "Generic segmented ring-buffer log primitive — manifest header +
 
 [dependencies]
 auki-jcs = { path = "../auki-jcs" }
-serde = "1"
 serde_json = "1"
-ciborium = "0.2"
 
 [dev-dependencies]
+ciborium = "0.2"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"

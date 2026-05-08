@@ -1,6 +1,8 @@
 # auki-logs
 
-Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-registry`](../auki-registry) for `SensorLogEntry`, [`auki-time-transforms`](../auki-time-transforms) for `TimeTransformEntry`).
+Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-datatypes`](../auki-datatypes) for `PinholeCameraLogEntry` since 2026-05-08, [`auki-time-transforms`](../auki-time-transforms) for `TimeTransformEntry` until Step 6 of the [migration](../auki-datatypes/src/sprint.md)).
+
+Payload encoding is the consumer's choice via the [`LogPayload`](src/lib.rs) trait — this crate handles framing only. Prost types in [`auki-datatypes`](../auki-datatypes) get a blanket impl through the `impl_log_payload!` macro; mid-migration CBOR types implement it directly.
 
 The rest of this README is the **on-disk format spec, version 1** — implementations in any language must read and write segment files that conform to it.
 
@@ -56,13 +58,13 @@ The manifest is written **once**, when the log directory is first created. Re-op
 | ---- | --------------- | ---------------------------------------------------- |
 | 8    | `timestamp_ns`  | i64, little-endian                                   |
 | 4    | `payload_len`   | u32, little-endian; length of `payload` in bytes     |
-| N    | `payload`       | CBOR (RFC 8949) encoding of the entry payload        |
+| N    | `payload`       | Consumer-defined bytes per the `LogPayload` impl     |
 
 There is no entry count, no per-entry checksum, and no trailer. Readers parse entries until EOF or a short read.
 
 ## Endianness
 
-All multi-byte integers in the segment header and entry framing are little-endian. CBOR is internally big-endian per RFC 8949; the framing wraps the CBOR payload byte-for-byte without disturbing it.
+All multi-byte integers in the segment header and entry framing are little-endian. The payload bytes are opaque to the framing and pass through byte-for-byte; their internal endianness is the encoder's concern.
 
 ## Crash safety
 
@@ -85,6 +87,6 @@ A running log's `retention_ns` can be changed via `Log::set_retention(new_value)
 
 Format version is **1**. Bump for any incompatible change to the header layout, framing, or payload encoding (e.g. CBOR → another scheme). Readers MUST reject unknown versions.
 
-## Why CBOR
+## Why encoding-agnostic
 
-Segment files are durable artifacts and the SDK targets multiple platforms over its long arc. CBOR (RFC 8949) has decoders in every major language, so future iOS/glasses/web/analysis tooling can read these files without pulling in a Rust runtime. The throughput cost vs. bincode is negligible at the cadences this format is designed for. Revisit if profiling shows CBOR overhead matters.
+Earlier drafts pinned the payload encoding to CBOR via ciborium. The migration in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) replaces it with prost (protobuf) for cross-language schema enforcement. Rather than swap one hardcoded encoder for another, the crate exposes a [`LogPayload`](src/lib.rs) trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>` — and stays out of the encoder's way. Consumers pick the encoder; the framing primitive doesn't care. Decision pinned 2026-05-08 (Step 1 of the migration); see [`parking_lot.md`](parking_lot.md).

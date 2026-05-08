@@ -38,7 +38,7 @@ offset  size  field
 ─────────────────────
 0       8     timestamp_ns    i64 little-endian
 8       4     payload_len     u32 little-endian
-12      N     payload         CBOR-encoded T (length = payload_len)
+12      N     payload         T as bytes per its LogPayload impl
 ```
 
 The header carries no entry count — readers iterate until `UnexpectedEof`. This makes truncated tails (from a crash mid-write) tolerable: the truncated trailing entry is skipped silently and earlier entries are returned cleanly.
@@ -46,9 +46,14 @@ The header carries no entry count — readers iterate until `UnexpectedEof`. Thi
 ## Public API
 
 ```rust
+pub trait LogPayload: Sized {
+    fn encode(&self) -> Vec<u8>;
+    fn decode(bytes: &[u8]) -> Result<Self, String>;
+}
+
 pub struct Log<T> { ... }
 
-impl<T: Serialize + DeserializeOwned> Log<T> {
+impl<T: LogPayload> Log<T> {
     pub fn open(root: &Path, manifest: serde_json::Value) -> Result<Self>;
     pub fn append(&mut self, timestamp_ns: i64, payload: &T) -> Result<()>;
     pub fn read(root: &Path) -> Result<LogReader<T>>;
@@ -61,7 +66,7 @@ impl<T> Log<T> {
 }
 
 pub struct LogReader<T> { ... }
-impl<T: DeserializeOwned> LogReader<T> {
+impl<T: LogPayload> LogReader<T> {
     pub fn manifest(&self) -> &serde_json::Value;
     pub fn segment_starts(&self) -> &[i64];
     pub fn entries(&self) -> Result<Vec<Entry<T>>>;
@@ -103,15 +108,15 @@ If `manifest.json` already exists at `root`, it is the source of truth and the `
 ```rust
 pub enum Error {
     Io(io::Error),
-    Cbor(String),       // CBOR encode/decode failure
+    Payload(String),    // LogPayload::decode (or encode) error from the consumer's encoder
     Manifest(String),   // missing or malformed manifest fields
     Format(String),     // timestamps, payload size limits, segment header issues
 }
 ```
 
-## Why CBOR for payloads
+## Why a `LogPayload` trait, not a baked-in encoder
 
-Chosen jointly with Nils after weighing throughput vs cross-language readability. CBOR (via `ciborium`) is binary-efficient like bincode but has a stable inter-language ecosystem — important because the SDK's design ambition includes future iOS/phone/browser composition where readers may not be Rust. Revisit if profiling shows overhead at scale.
+This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) swaps the camera / pose / audio / time-transform payloads to protobuf via prost. Rather than swap one hardcoded encoder for another, the crate exposes a tiny `LogPayload` trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>`. Consumers pick their encoder. Mid-migration types (TimeTransformEntry) implement `LogPayload` over ciborium; post-migration types ([`auki-datatypes`](../../auki-datatypes)) use the `impl_log_payload!` macro to wire prost. The framing primitive stays out of the encoder's way.
 
 ## Tests (14 total)
 
@@ -134,5 +139,6 @@ Chosen jointly with Nils after weighing throughput vs cross-language readability
 ## Consumers in this workspace
 
 - `auki-time-transforms` — `Log<TimeTransformEntry>` for the 1 Hz sampler
-- `auki-ros-adapter` — `Log<SensorLogEntry>` for the ring-buffered camera frame log
+- `auki-ros-adapter` — `Log<PinholeCameraLogEntry>` for the ring-buffered camera frame log (per Step 1 of the [migration](../../auki-datatypes/src/sprint.md))
+- `auki-datatypes` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically
 - `auki-renderer` — read-only consumer for the sensor log

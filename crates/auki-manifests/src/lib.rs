@@ -177,6 +177,17 @@ mod tests {
         value: i64,
     }
 
+    impl auki_logs::LogPayload for TestEntry {
+        fn encode(&self) -> Vec<u8> {
+            let mut buf = Vec::new();
+            ciborium::into_writer(self, &mut buf).expect("ciborium encode of TestEntry");
+            buf
+        }
+        fn decode(bytes: &[u8]) -> std::result::Result<Self, String> {
+            ciborium::from_reader(bytes).map_err(|e| e.to_string())
+        }
+    }
+
     // ─── Sensor Log manifest ────────────────────────────────────────────────
 
     #[test]

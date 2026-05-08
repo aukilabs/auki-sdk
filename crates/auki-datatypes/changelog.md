@@ -6,6 +6,36 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Step 1 of the [migration](src/sprint.md) landed — first real schema. `auki.camera` ships `PinholeCameraLogEntry` + `DynamicIntrinsics`** with locked wire-bytes and XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`).
+
+**Per-step decision: `dynamic_intrinsics` is inline-optional.** `proto/camera.proto`:
+
+```proto
+message DynamicIntrinsics { double fx=1; double fy=2; double cx=3; double cy=4; repeated double distortion_coefficients=5; }
+message PinholeCameraLogEntry { DynamicIntrinsics dynamic_intrinsics=1; bytes frame=2; }
+```
+
+prost generates `dynamic_intrinsics: Option<DynamicIntrinsics>` for proto3 message fields. Non-autofocusing cameras pay only the message-tag overhead when `None`; autofocusing cameras populate per-frame. Promoting to a sibling intrinsics-update sub-stream remains a backward-compatible move (drop the field, mark its number reserved, add a sibling log) — but punted until autofocus shows up as a real workload.
+
+**`impl_log_payload!` macro** in [`src/lib.rs`](src/lib.rs) wires every prost type into [`auki_logs::LogPayload`](../auki-logs/src/lib.rs) with one line of glue:
+
+```rust
+macro_rules! impl_log_payload { ($t:ty) => { /* encode_to_vec / decode + map_err */ }; }
+impl_log_payload!(camera::PinholeCameraLogEntry);
+```
+
+Step 6's `TimeTransformEntry` will pick up the same macro; mid-migration ciborium types implement `LogPayload` directly.
+
+**Locked vectors** (`tests::pinhole_camera_log_entry_serializes_to_locked_wire_bytes` + `_hash_is_locked`) join the workspace's cross-language conformance set. Cross-language readers (Python via betterproto, future Sentinel ports) MUST reproduce the bytes byte-identically.
+
+**End-to-end seam test** opens an `auki_logs::Log<PinholeCameraLogEntry>`, appends two entries (one with intrinsics, one without), closes, re-reads, asserts both timestamp + payload byte-equality. Catches any regression in the macro wiring or the segment-framing path.
+
+**New deps**: `auki-logs` (path-dep — needs the trait); dev-deps `auki-hash` (locked hash) + `serde_json` + `tempfile` (segment round-trip). Production deps add `auki-logs` only.
+
+**Test count: 1 → 7.** Placeholder smoke test stays until Step 7 retires it. Will land in v0.0.24.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 **Migration architecture decisions added to [`parking_lot.md`](parking_lot.md), Step 0 added to [`src/sprint.md`](src/sprint.md).** Two upfront decisions: (1) **Manifest encoding stays JCS-JSON, not protobuf** — JCS gives free cross-language byte-equivalence which protobuf doesn't, manifests are human/browser/ad-hoc-tool-readable, and per-recording metadata doesn't benefit from wire compactness. (2) **`build_*_log_manifest` builders + manifest schemas → new `auki-manifests` crate** — symmetric with this crate (which owns segment payload shapes); `auki-manifests` owns manifest shapes. Sequenced as **Step 0** before migration step 1, pure refactor extracting `build_sensor_log_manifest` + `build_pose_log_manifest` from `auki-registry` and `build_manifest` from `auki-time-transforms`. Naming: `auki-manifests` over `auki-logging` (idiom collision in Rust — reads as observability/tracing). Doc-only.

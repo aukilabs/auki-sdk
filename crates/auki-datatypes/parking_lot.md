@@ -28,10 +28,6 @@ Protobuf wire format gives forward/backward compat almost for free (optional fie
 
 These are per-type design decisions to make as each `.proto` lands, surfaced when reviewing the `auki-registry` types pre-migration. Each is gating its corresponding migration step but not blocking the rest.
 
-### `PinholeCameraLogEntry` — `dynamic_intrinsics` placement
-
-Locked rename: `SensorLogEntry` → `PinholeCameraLogEntry` (names what it is — pinhole-projection camera frame entry, not a generic sensor entry). Open: should `dynamic_intrinsics` (fx, fy, cx, cy, distortion_coefficients) be on every frame entry, or in a sibling intrinsics-update sub-stream that frame entries reference? Today's design is inline — pays ~80 bytes/frame for typical Brown-Conrady cameras (intrinsics that mostly don't change every frame) — justified by the autofocus story. Cleaner alternatives: (a) `Option<DynamicIntrinsics>` so non-autofocusing cameras pay ~1 byte/frame, (b) a sibling intrinsics-update log that the frame log references by timestamp, (c) registry-side intrinsics version that bumps occasionally. Resolve before `auki.camera` `.proto` lands.
-
 ### `PointCloudLogEntry` — on-disk vs wire-format drift
 
 Today's `auki-registry::PointCloudLogEntry` has `width: u32, height: u32, is_dense: bool, data: Vec<u8>` (ROS PointCloud2-shaped, typed layout fields outside the bytes). Today's `auki-network::stream_protocol::PointCloudFrame` has `bytes: Vec<u8>` only (typed layout fields ride inside the CDR bytes). Two representations of the same data on disk vs on the wire — drift. Resolve: pick one shape and use it both places. Lean: opaque-bytes-only (`PointCloudFrame { bytes }`) — interpretation comes from the registry entry's PointCloud body; doesn't bake ROS PointCloud2 into the type. Open whether the existing typed-fields approach has any reader benefit worth the asymmetry. Resolve before `auki.point_cloud` `.proto` lands.

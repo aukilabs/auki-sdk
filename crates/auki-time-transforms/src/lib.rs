@@ -37,6 +37,21 @@ pub enum TimeTransformSource {
     LocalClockRead,
 }
 
+/// CBOR-via-ciborium encoding for the segment payload. The encoding shape
+/// changes at Step 6 of the [`auki-datatypes`](../auki-datatypes) migration
+/// when the type moves to a `.proto`; until then this impl pins the v1
+/// behaviour.
+impl auki_logs::LogPayload for TimeTransformEntry {
+    fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        ciborium::into_writer(self, &mut buf).expect("ciborium encode of TimeTransformEntry");
+        buf
+    }
+    fn decode(bytes: &[u8]) -> std::result::Result<Self, String> {
+        ciborium::from_reader(bytes).map_err(|e| e.to_string())
+    }
+}
+
 /// A pair of clock readings the sampler can pull. Production reads `CLOCK_MONOTONIC`
 /// and `CLOCK_REALTIME` via `clock_gettime`; tests script the readings.
 pub trait Clock: Send + Sync {

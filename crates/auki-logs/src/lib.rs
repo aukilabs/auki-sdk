@@ -6,6 +6,10 @@
 //! under `<root>/segments/`. Segments roll over when an appended entry's
 //! timestamp leaves the current segment's window. Segments outside the
 //! retention window are evicted on append.
+//!
+//! Payload encoding is the consumer's choice via the [`LogPayload`] trait —
+//! this crate handles framing only. See the trait docs for how to wire up a
+//! prost / serde / hand-rolled encoder.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -13,19 +17,27 @@ use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-
 const MAGIC: &[u8; 4] = b"AKLG";
 const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 16;
 const SEGMENT_EXT: &str = "seg";
 const FILENAME_DIGITS: usize = 20;
 
+/// Encoder-agnostic payload contract. The log primitive handles framing and
+/// segment rollover; the consumer picks the payload encoding by implementing
+/// this trait for their `T`. Mid-migration types use ciborium; post-migration
+/// types defined in [`auki-datatypes`](../../auki-datatypes) use prost.
+pub trait LogPayload: Sized {
+    fn encode(&self) -> Vec<u8>;
+    fn decode(bytes: &[u8]) -> std::result::Result<Self, String>;
+}
+
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
-    Cbor(String),
+    /// Payload encode/decode failed. The string is the underlying error
+    /// formatted by the encoder — prost decode errors, ciborium errors, etc.
+    Payload(String),
     Manifest(String),
     Format(String),
 }
@@ -34,7 +46,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Io(e) => write!(f, "io: {e}"),
-            Error::Cbor(s) => write!(f, "cbor: {s}"),
+            Error::Payload(s) => write!(f, "payload: {s}"),
             Error::Manifest(s) => write!(f, "manifest: {s}"),
             Error::Format(s) => write!(f, "format: {s}"),
         }
@@ -196,7 +208,7 @@ impl<T> Log<T> {
 
 impl<T> Log<T>
 where
-    T: Serialize + DeserializeOwned,
+    T: LogPayload,
 {
     /// Open or create a log directory at `root`. If `manifest.json` is missing,
     /// `manifest` is canonicalized (RFC 8785) and written. If present, the
@@ -248,9 +260,7 @@ where
             self.start_segment(start_ns)?;
         }
 
-        let mut payload_bytes = Vec::new();
-        ciborium::into_writer(payload, &mut payload_bytes)
-            .map_err(|e| Error::Cbor(e.to_string()))?;
+        let payload_bytes = payload.encode();
         let payload_len: u32 = payload_bytes
             .len()
             .try_into()
@@ -299,7 +309,7 @@ pub struct LogReader<T> {
 
 impl<T> LogReader<T>
 where
-    T: DeserializeOwned,
+    T: LogPayload,
 {
     pub fn manifest(&self) -> &serde_json::Value {
         &self.manifest
@@ -370,7 +380,7 @@ fn segment_filename(start_ns: i64) -> String {
     format!("{:0width$}.{ext}", start_ns, width = FILENAME_DIGITS, ext = SEGMENT_EXT)
 }
 
-fn read_segment_entries<T: DeserializeOwned>(path: &Path, out: &mut Vec<Entry<T>>) -> Result<()> {
+fn read_segment_entries<T: LogPayload>(path: &Path, out: &mut Vec<Entry<T>>) -> Result<()> {
     let mut reader = BufReader::new(File::open(path)?);
     let mut header = [0u8; HEADER_SIZE];
     if let Err(e) = reader.read_exact(&mut header) {
@@ -415,8 +425,7 @@ fn read_segment_entries<T: DeserializeOwned>(path: &Path, out: &mut Vec<Entry<T>
             break;
         }
 
-        let value: T = ciborium::from_reader(&payload[..])
-            .map_err(|e| Error::Cbor(e.to_string()))?;
+        let value = T::decode(&payload).map_err(Error::Payload)?;
         out.push(Entry {
             timestamp_ns,
             payload: value,
@@ -445,13 +454,24 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     struct Sample {
         n: u32,
         label: String,
+    }
+
+    impl LogPayload for Sample {
+        fn encode(&self) -> Vec<u8> {
+            let mut buf = Vec::new();
+            ciborium::into_writer(self, &mut buf).expect("ciborium encode");
+            buf
+        }
+        fn decode(bytes: &[u8]) -> std::result::Result<Self, String> {
+            ciborium::from_reader(bytes).map_err(|e| e.to_string())
+        }
     }
 
     fn manifest(segment_ns: i64, retention_ns: i64) -> serde_json::Value {

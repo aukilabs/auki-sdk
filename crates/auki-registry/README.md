@@ -2,16 +2,18 @@
 
 The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `DynamicIntrinsics`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `SensorLogEntry` → `PinholeCameraLogEntry`, `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). Once the migration completes, `auki-registry`'s scope finally matches its name. Everything below this line describes today's state — including the AI-drift parts, marked as such.
+> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). **Step 1 (2026-05-08) is complete** — `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../auki-datatypes) under the `auki.camera` `.proto` package. Everything below this line describes today's state — including the AI-drift parts, marked as such.
 
 ## Two kinds of typed data (today, with one departing)
 
 | Kind            | What it is                             | Where it lives                                          | Future home                          |
 | --------------- | -------------------------------------- | ------------------------------------------------------- | ------------------------------------ |
 | Registry entry  | Immutable identity, one per hash       | `<app_root>/registries/<kind>/<id>/<hash>.json`         | Stays in `auki-registry` (canonical) |
-| Log payload     | Per-frame mutable data — **AI-drift**  | Inside an [`auki-logs`](../auki-logs) segment, CBOR-encoded today | Moves to [`auki-datatypes`](../auki-datatypes) (protobuf) |
+| Log payload     | Per-frame mutable data — **AI-drift**  | Inside an [`auki-logs`](../auki-logs) segment, mixed encoding mid-migration | Moves to [`auki-datatypes`](../auki-datatypes) (protobuf) |
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
+
+The camera payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved at Step 1 (2026-05-08) and is now protobuf via prost. The remaining payloads (`PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`) are still here, still CBOR, until their respective steps.
 
 ---
 
@@ -128,53 +130,9 @@ ClockRegistryEntry {
 
 ---
 
-## Sensor Log payload — schema v1
+## Sensor Log payload — moved to `auki-datatypes` (Step 1, 2026-05-08)
 
-> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as `PinholeCameraLogEntry` (renamed; protobuf-encoded). See [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 1.*
-
-The Sensor Log is an `auki_logs::Log<SensorLogEntry>`. The framing's `timestamp_ns` is the frame timestamp; the payload here carries per-frame data.
-
-### Manifest
-
-JCS-canonical UTF-8 JSON, written via auki-logs. Required keys (extends auki-logs's base):
-
-| Key                    | Type    | Notes                                                            |
-| ---------------------- | ------- | ---------------------------------------------------------------- |
-| `segment_duration_ns`  | integer | > 0; from auki-logs                                              |
-| `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                              |
-| `app_id`               | string  | Identifier of the application that wrote this log. Same string as the daemon's `/api/info` `app` field (e.g. `boosterapp`, `sentinel`). |
-| `session_id`           | string  | UUIDv4 minted by the integrator at app boot; stable for the daemon run's lifetime. Same value as `/api/info`'s `session_id` and the parent directory name. See [`auki-session`](../auki-session) for session lifecycle. |
-| `clock_id`             | string  | The Clock Registry ID that the framing's `timestamp_ns` is in    |
-| `clock_hash`           | string  | XXH3-128 hex of the clock's registry entry                       |
-| `sensor_id`            | string  | The Sensor Registry ID this log captures                         |
-| `sensor_hash`          | string  | XXH3-128 hex of the sensor's registry entry                      |
-
-A reader resolves `(sensor_id, sensor_hash)` against `<app_root>/registries/sensors/<id>/<hash>.json` to recover dimensions, pixel format, and so on.
-
-### Payload (CBOR)
-
-```
-SensorLogEntry {
-  dynamic_intrinsics: DynamicIntrinsics,
-  frame:              bytes,       // image data; encoding determined by sensor's pixel_format
-}
-
-DynamicIntrinsics {
-  fx:                       f64,    // focal length in pixels
-  fy:                       f64,
-  cx:                       f64,    // principal point in pixels
-  cy:                       f64,
-  distortion_coefficients:  [f64],  // ordering matches the sensor's distortion_model
-}
-```
-
-There is no `timestamp` field in the payload — the auki-logs framing's `timestamp_ns` is the single source of truth for "when this frame was captured."
-
-### Why split static vs. dynamic
-
-`SensorRegistryEntry` is content-addressed and immutable per hash. If intrinsics shifted on every frame and lived in the registry, every frame would mint a new sensor entry — defeating the registry's "one identity per camera" semantics. Pulling intrinsics into per-frame `DynamicIntrinsics` keeps the registry stable while honoring the reality that intrinsics drift on some platforms (autofocus, runtime calibration refinement).
-
-The K1's intrinsics are essentially constant in practice, but the schema doesn't bake that assumption.
+The Sensor Log payload (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` now live in [`auki-datatypes`](../auki-datatypes) under the `auki.camera` `.proto` package. Encoding switched from CBOR to protobuf via prost. The split between static-registry-side and dynamic-per-frame intrinsics survives the move; the rationale (registry hash stability vs. autofocus drift) carried over verbatim. Manifest shape is unchanged — same `(sensor_id, sensor_hash)` resolution against the Sensor Registry tells a reader the segments hold `PinholeCameraLogEntry` rather than another payload type. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
 
 ---
 
@@ -319,4 +277,4 @@ Each `parent_frame` / `child_frame` string in a `TransformSample` references an 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `SensorLogEntry`, `DynamicIntrinsics`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) versions independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloudLogEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and `PinholeCameraLogEntry` / `DynamicIntrinsics` (now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

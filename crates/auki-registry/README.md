@@ -29,7 +29,7 @@ The camera payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved at Step
 
 Registries live at the **app root**, shared across every session of that app. Hash-keyed writes are idempotent, so a sensor entry that doesn't change between app starts produces the same `<hash>.json` regardless of session — re-writing it would be wasted work.
 
-The full session shape (registries + per-session log directories) is documented in [`auki-session`](../auki-session).
+The full session shape (registries + per-session log directories) is documented in [`auki-layout`](../auki-layout).
 
 `/` in IDs is replaced by `__` so namespaced IDs like `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory segment.
 

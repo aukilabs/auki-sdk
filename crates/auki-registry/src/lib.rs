@@ -4,7 +4,7 @@
 //! An entry is built from typed fields, canonicalized via [`auki_jcs`], hashed
 //! via [`auki_hash`], and persisted at
 //! `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json`. Path layout lives
-//! in [`auki_session`]; this crate composes its helpers. Slashes in IDs are
+//! in [`auki_layout`]; this crate composes its helpers. Slashes in IDs are
 //! replaced with `__` in path segments. Re-writing identical content is a
 //! no-op; writing different content under the same id produces a sibling file.
 //!
@@ -519,7 +519,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_session::sensor_entry_path(app_root, &entry.sensor_id, &hash);
+    let path = auki_layout::sensor_entry_path(app_root, &entry.sensor_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
@@ -527,7 +527,7 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
 pub fn write_clock(app_root: &Path, entry: &ClockRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_session::clock_entry_path(app_root, &entry.clock_id, &hash);
+    let path = auki_layout::clock_entry_path(app_root, &entry.clock_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
@@ -539,7 +539,7 @@ pub fn read_sensor(
     sensor_id: &str,
     hash: &str,
 ) -> Result<Option<SensorRegistryEntry>> {
-    let path = auki_session::sensor_entry_path(app_root, sensor_id, hash);
+    let path = auki_layout::sensor_entry_path(app_root, sensor_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -560,7 +560,7 @@ pub fn read_clock(
     clock_id: &str,
     hash: &str,
 ) -> Result<Option<ClockRegistryEntry>> {
-    let path = auki_session::clock_entry_path(app_root, clock_id, hash);
+    let path = auki_layout::clock_entry_path(app_root, clock_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -583,7 +583,7 @@ pub fn write_frame(app_root: &Path, entry: &FrameRegistryEntry) -> Result<WriteO
     entry.validate()?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_session::frame_entry_path(app_root, &entry.frame_id, &hash);
+    let path = auki_layout::frame_entry_path(app_root, &entry.frame_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
@@ -593,7 +593,7 @@ pub fn read_frame(
     frame_id: &str,
     hash: &str,
 ) -> Result<Option<FrameRegistryEntry>> {
-    let path = auki_session::frame_entry_path(app_root, frame_id, hash);
+    let path = auki_layout::frame_entry_path(app_root, frame_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };

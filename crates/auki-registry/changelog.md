@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 09:34 HKT, 2026
+
+Path-helper dep renamed: `auki-session = { path = "../auki-session" }` → `auki-layout = { path = "../auki-layout" }` in `Cargo.toml`; six call sites in `src/lib.rs` updated from `auki_session::` to `auki_layout::` (5 path constructions in `write_sensor` / `write_clock` / `write_frame` / `read_sensor` / `read_clock` / `read_frame`, plus the crate-level doc-comment `[auki_session]` link). The on-disk path layout is unchanged; the rename is purely about the upstream crate's name-vs-scope mismatch. README + `src/readme.md` cross-reference targets updated correspondingly. No code or test changes; depends on the companion rename in [`auki-layout/changelog.md`](../auki-layout/changelog.md). Doc-only at the source level (the source change is the import path).
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) landed.** `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../auki-datatypes) under the new `auki.camera` `.proto` package. Encoding switched from CBOR-via-ciborium to protobuf via prost. Manifest shape is unchanged — same `(sensor_id, sensor_hash)` resolution against the Sensor Registry tells a reader the segments hold `PinholeCameraLogEntry` rather than another payload type.

@@ -47,7 +47,7 @@ Each step is its own PR with its own locked conformance vector. Each step also r
 5. **`auki.pose` — `SpatialTransform`** (was `TransformSample`; `PoseLogEntry` wrapper goes away).
    - Define `proto/pose.proto`: `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }` plus `Vec3` and `Quat`. Flat — no `PoseLogEntry` wrapper. From/to live in the manifest, not the entry. Synthesis decided 2026-05-07 — see the corresponding Propagate task in the [root parking lot](../../../parking_lot.md).
    - **Move** `TransformSample` (renamed `SpatialTransform`) out of [`auki-registry`](../../auki-registry); drop `PoseLogEntry`. Rewrite `build_pose_log_manifest` in `auki-registry` (or move it) for the new (from, to)-keyed identity.
-   - Update [`auki-session`](../../auki-session) `poselog_path` signature: `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
+   - Update [`auki-layout`](../../auki-layout) `poselog_path` signature: `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
    - Update [`auki-logs`](../../auki-logs) segment writer/reader.
    - Locked vector.
 
@@ -65,7 +65,7 @@ Each step is its own PR with its own locked conformance vector. Each step also r
 
 [`auki-registry`](../../auki-registry)'s scope shrinks back to its **canonical** definition per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): identity + definitions only (Sensor, Frame, Clock entries). All log payload types live here; consumers add an `auki-datatypes` dep alongside their existing `auki-registry` dep.
 
-Manifests stay in `auki-registry` (or possibly migrate to `auki-session` — open) as JCS-canonical JSON via [`auki-jcs`](../../auki-jcs). This crate doesn't touch manifests; it owns segment payloads only.
+Manifests stay in `auki-registry` (or possibly migrate to `auki-layout` — open) as JCS-canonical JSON via [`auki-jcs`](../../auki-jcs). This crate doesn't touch manifests; it owns segment payloads only.
 
 ## Out-of-band
 

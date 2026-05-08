@@ -16,7 +16,7 @@ A single source file: [`lib.rs`](lib.rs).
 <app_root>/registries/frames/<id-with-slashes-replaced-by-__>/<hash>.json
 ```
 
-Paths come from [`auki-session`](../../auki-session) (`sensor_entry_path` / `clock_entry_path` / `frame_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
+Paths come from [`auki-layout`](../../auki-layout) (`sensor_entry_path` / `clock_entry_path` / `frame_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
 
 The hash *is* the version. There are no version counters. Re-writing identical content is a no-op (`WriteOutcome::AlreadyExists`); writing different content under the same `id` produces a sibling file (`WriteOutcome::Created` with a different hash).
 

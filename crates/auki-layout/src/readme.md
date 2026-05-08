@@ -1,4 +1,4 @@
-# `auki-session/src/`
+# `auki-layout/src/`
 
 Path helpers for the on-disk session shape. Spec: this crate's [outer `README.md`](../README.md).
 

@@ -1,10 +1,16 @@
-# Changelog — auki-session
+# Changelog — auki-layout
+
+(Renamed from `auki-session` 2026-05-08; entries below from before the rename retain the old crate name as historical context per the append-only convention.)
 
 Append-only changelog for this crate. See [CLAUDE.md](../../CLAUDE.md) for the format and propagation rules.
 
 Latest entry on top.
 
 ---
+
+### broodsugar's dobby · May 8, 09:34 HKT, 2026
+
+**Crate renamed `auki-session` → `auki-layout`.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) the crate doesn't provide; this crate is the *layout contract* — paths, lifecycle convention, ID encoding. The name `auki-session` is now reserved for the future Rust runtime counterpart of [`auki-session-py`](../../auki-session-py)'s in-process `Session` surface (per the [root `Session.open` Propagate item](../../parking_lot.md)). Mechanical scope: directory rename, `Cargo.toml` package name + description, workspace member entry, `Cargo.lock` package entry, [`auki-registry`](../auki-registry)'s path-dep + 6 `auki_session::` → `auki_layout::` call sites in `src/lib.rs` (5 path constructions + 1 doc comment), README headers, doc cross-references across the workspace (`auki-logs/README.md`, `auki-time-transforms/README.md`, `auki-registry/README.md` + `src/readme.md`, `auki-datatypes/src/sprint.md`, `docs/control-api.md`, root `README.md`, `Glossary.md`, root + `crates/` `parking_lot.md`). No behaviour change. Resolves the API-surface review item filed 2026-05-08 in [#56](https://github.com/aukilabs/auki-sdk/pull/56). The previous parking-lot item is replaced with a Resolved note in this crate's `parking_lot.md` per the convention.
 
 ### broodsugar's dobby · May 8, 07:56 HKT, 2026
 

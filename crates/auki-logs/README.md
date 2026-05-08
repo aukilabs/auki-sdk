@@ -26,7 +26,7 @@ The rest of this README is the **on-disk format spec, version 1** — implementa
 - `<session>/sensorlogs/<sensor_log_id>/` — one log per sensor stream
 - `<session>/poselogs/<pose_log_id>/` — one log per pose source
 
-See [`auki-session`](../auki-session) for path helpers and the full session shape.
+See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
 
 ## Manifest
 

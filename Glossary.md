@@ -54,7 +54,7 @@ The canonical scenegraph designated by a Domain Owner. The default served when a
 
 ## Session ID
 
-The identifier for a recording session — a single span of capture activity by one daemon (BoosterApp, Sentinel, etc.). Minted as a fresh UUIDv4 at daemon startup, used both as the on-disk session directory name and as the `session_id` value carried in every manifest written during the run (see [`auki-session`](crates/auki-session)).
+The identifier for a recording session — a single span of capture activity by one daemon (BoosterApp, Sentinel, etc.). Minted as a fresh UUIDv4 at daemon startup, used both as the on-disk session directory name and as the `session_id` value carried in every manifest written during the run (see [`auki-layout`](crates/auki-layout)).
 
 Orthogonal to Domain and Scenegraph: a Session ID identifies *when and by whom* data was captured, not *what it's about*. Tying a session's data products to a Domain happens after the fact via [TagClaim](tags.md).
 

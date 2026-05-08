@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 09:34 HKT, 2026
+
+`auki-session` renamed to `auki-layout` — name now reflects the crate's actual scope (the on-disk *layout contract*, not a runtime `Session` abstraction). [`auki-registry`](auki-registry) updated to use the new path-dep + `auki_layout::` import path; `auki-session` reserved for the future Rust runtime counterpart of [`auki-session-py`](auki-session-py). No behaviour change. See [`auki-layout/changelog.md`](auki-layout/changelog.md) for full mechanical scope.
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **Step 1 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](auki-datatypes) now ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics`, locked wire-bytes + XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`). Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 `Option<T>` for messages) — non-autofocusing cameras pay only the message-tag overhead.

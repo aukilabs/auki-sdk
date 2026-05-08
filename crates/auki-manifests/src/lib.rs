@@ -68,31 +68,66 @@ pub fn build_sensor_log_manifest(
     })
 }
 
-/// Build a Pose Log manifest with the run-identifying `app_id` /
-/// `session_id`, the clock binding, the inline producer identity, and
-/// auki-logs's required `segment_duration_ns` / `retention_ns`.
+/// Build a Pose Log manifest for the new `(from, to)`-keyed Pose Log
+/// shape (Step 5 of the [`auki-datatypes` migration],
+/// 2026-05-08). One Pose Log holds samples for exactly one
+/// `(from_frame_id, to_frame_id)` pair; segment entries are flat
+/// `auki_datatypes::pose::SpatialTransform`. A producer that observes a
+/// multi-pair ROS `TFMessage` is responsible for fanning the message
+/// into N parallel pose logs.
+///
+/// Carries:
+/// - `app_id` / `session_id` — run identity (same shape as siblings).
+/// - `from_frame_id` + `from_frame_hash` and `to_frame_id` +
+///   `to_frame_hash` — content-addressed pin to two
+///   `FrameRegistryEntry` records. Mirrors how
+///   `build_time_transform_log_manifest` pins `from_clock_hash` /
+///   `to_clock_hash`.
+/// - `clock_id` + `clock_hash` — the clock the framing's
+///   `timestamp_ns` is on.
+/// - `source` — inline [`PoseSource`] tagged-enum producer identity.
+/// - `writer_mode` — `"rigid"` (transform doesn't change between
+///   samples; the log captures one observation that reads back at any
+///   query time) or `"movable"` (transform varies over time; readers
+///   interpolate or step-look-up). Per the synthesis decided
+///   2026-05-07.
+/// - `expected_rate_hz` — the producer's nominal sample rate. Hint for
+///   readers (e.g. for choosing interpolation step size); not enforced
+///   by the SDK.
+/// - `segment_duration_ns` / `retention_ns` — auki-logs framing.
 ///
 /// `app_id` is the application identifier (same string as the daemon's
 /// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
-/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
-/// (same value as the parent session directory name).
-/// `source` describes the producer — see [`PoseSource`] — and is serialized
-/// inline under the manifest's `source` key.
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon
+/// run (same value as the parent session directory name).
+#[allow(clippy::too_many_arguments)]
 pub fn build_pose_log_manifest(
     app_id: &str,
     session_id: &str,
+    from_frame_id: &str,
+    from_frame_hash: &str,
+    to_frame_id: &str,
+    to_frame_hash: &str,
     clock_id: &str,
     clock_hash: &str,
     source: &PoseSource,
+    writer_mode: PoseWriterMode,
+    expected_rate_hz: u32,
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
     serde_json::json!({
         "app_id": app_id,
         "session_id": session_id,
+        "from_frame_id": from_frame_id,
+        "from_frame_hash": from_frame_hash,
+        "to_frame_id": to_frame_id,
+        "to_frame_hash": to_frame_hash,
         "clock_id": clock_id,
         "clock_hash": clock_hash,
         "source": source,
+        "writer_mode": writer_mode,
+        "expected_rate_hz": expected_rate_hz,
         "segment_duration_ns": duration_as_i64_ns(segment_duration),
         "retention_ns": duration_as_i64_ns(retention),
     })
@@ -128,12 +163,31 @@ pub fn build_time_transform_log_manifest(
     })
 }
 
+/// Writer-mode hint for a Pose Log — one of `"rigid"` (transform is
+/// stationary; the log captures a single observation that reads back
+/// at any query time) or `"movable"` (transform varies over time;
+/// readers interpolate or step-look-up). Per the synthesis decided
+/// 2026-05-07; lives in the manifest, not on segment entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PoseWriterMode {
+    /// Stationary `(from, to)` transform — e.g. a static camera mount,
+    /// a calibrated robot link. Producers SHOULD still write samples
+    /// at the manifest's `expected_rate_hz` to give downstream a
+    /// liveness signal; readers MAY treat any sample as authoritative
+    /// for the whole log lifetime.
+    Rigid,
+    /// Time-varying `(from, to)` transform — e.g. SLAM odometry,
+    /// articulated joints. Readers interpolate or step-look-up at a
+    /// query timestamp.
+    Movable,
+}
+
 /// Identifies the producer of the transforms in a Pose Log. Lives **inline**
 /// in the log's manifest under the `source` key — Pose Log does not have a
-/// separate registry like Sensor Log, because the payload is fully
-/// self-describing (frame names sit in each transform); source identity is
-/// provenance, not a decoder. Tagged-enum body is the extension point for
-/// future producers (SLAM, odometry, manual fixtures, ...).
+/// separate registry like Sensor Log, because provenance is the only thing
+/// `source` describes. Tagged-enum body is the extension point for future
+/// producers (SLAM, odometry, manual fixtures, ...).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PoseSource {
@@ -273,20 +327,43 @@ mod tests {
         let m = build_pose_log_manifest(
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/base_link",
+            "fd0dc3789e898b71b5e16ee122a81a44",
+            "K1-AABBCCDDEEFF/head_left_cam_optical",
+            "11223344556677889900aabbccddeeff",
             "K1-AABBCCDDEEFF/utc",
             "89f84f4c2e09bef81d385b2af1d17e6c",
             &m1_ros2_tf_source(),
+            PoseWriterMode::Movable,
+            100,
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
         assert_eq!(m["app_id"], "boosterapp");
         assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["from_frame_id"], "K1-AABBCCDDEEFF/base_link");
+        assert_eq!(m["from_frame_hash"], "fd0dc3789e898b71b5e16ee122a81a44");
+        assert_eq!(m["to_frame_id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
+        assert_eq!(m["to_frame_hash"], "11223344556677889900aabbccddeeff");
         assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
         assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
         assert_eq!(m["source"]["kind"], "ros2_tf");
         assert_eq!(m["source"]["publishers"][0], "amcl");
+        assert_eq!(m["writer_mode"], "movable");
+        assert_eq!(m["expected_rate_hz"], 100);
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
         assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    #[test]
+    fn build_pose_log_manifest_serializes_writer_mode_as_snake_case() {
+        let m = build_pose_log_manifest(
+            "test", "s", "from", "fh", "to", "th", "c", "ch",
+            &m1_ros2_tf_source(),
+            PoseWriterMode::Rigid, 0,
+            Duration::from_secs(1), Duration::from_secs(30),
+        );
+        assert_eq!(m["writer_mode"], "rigid");
     }
 
     // ─── TimeTransform Log manifest ─────────────────────────────────────────

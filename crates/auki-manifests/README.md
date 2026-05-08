@@ -23,8 +23,12 @@ pub fn build_sensor_log_manifest(
 
 pub fn build_pose_log_manifest(
     app_id, session_id,
+    from_frame_id, from_frame_hash,
+    to_frame_id, to_frame_hash,
     clock_id, clock_hash,
     source: &PoseSource,
+    writer_mode: PoseWriterMode,
+    expected_rate_hz: u32,
     segment_duration, retention,
 ) -> serde_json::Value;
 
@@ -39,9 +43,14 @@ pub enum PoseSource {
     Ros2Tf { publishers: Vec<String> },
     // future: Slam { algorithm, map_id, ... }, Odometry { ... }, ManualFixture { ... }
 }
+
+pub enum PoseWriterMode {
+    Rigid,    // serialized as "rigid"
+    Movable,  // serialized as "movable"
+}
 ```
 
-`PoseSource` lives **inline** in the Pose Log manifest under the `"source"` key — Pose Log has no separate registry because the segment payload is fully self-describing (frame names sit in each transform); source identity is provenance, not a decoder. Carries `canonical_bytes()` + `hash()` for content-addressing if a future producer variant graduates to a sibling registry.
+`PoseSource` lives **inline** in the Pose Log manifest under the `"source"` key — Pose Log has no separate registry because provenance is the only thing `source` describes (frame identity now lives in the manifest's `(from_frame_id, to_frame_id)` pair, not on the per-sample transforms). Carries `canonical_bytes()` + `hash()` for content-addressing if a future producer variant graduates to a sibling registry.
 
 ## Manifest schemas
 
@@ -64,19 +73,25 @@ The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auk
 
 ### Pose Log
 
+Per-`(from, to)` log identity (Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md), 2026-05-08). Each Pose Log holds samples for exactly one `(from_frame_id, to_frame_id)` pair; segment entries are flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs).
+
 | Key                   | Type            | Notes                                                            |
 | --------------------- | --------------- | ---------------------------------------------------------------- |
 | `segment_duration_ns` | integer         | > 0; from auki-logs                                              |
 | `retention_ns`        | integer         | ≥ 0; from auki-logs (0 = unbounded)                              |
 | `app_id`              | string          | Same as Sensor Log                                               |
 | `session_id`          | string          | Same as Sensor Log                                               |
+| `from_frame_id`       | string          | The Frame Registry ID for the parent frame                       |
+| `from_frame_hash`     | string          | XXH3-128 hex of the from-frame's registry entry                  |
+| `to_frame_id`         | string          | The Frame Registry ID for the child frame                        |
+| `to_frame_hash`       | string          | XXH3-128 hex of the to-frame's registry entry                    |
 | `clock_id`            | string          | The Clock Registry ID for the framing's `timestamp_ns`           |
 | `clock_hash`          | string          | XXH3-128 hex of the clock's registry entry                       |
 | `source`              | tagged enum     | Inline producer identity — `PoseSource` (e.g. `{"kind":"ros2_tf","publishers":[...]}`) |
+| `writer_mode`         | string          | `"rigid"` (stationary transform) or `"movable"` (time-varying)   |
+| `expected_rate_hz`    | integer         | Producer's nominal sample rate; reader hint, not enforced        |
 
-No `(sensor_id, sensor_hash)` pair — Pose Log has no sensor registry; the payload is self-describing via the frame names in each transform.
-
-> **Pose Log shape is changing** per the synthesis decided 2026-05-07 (per-`(from, to)` identity instead of per-producer; flat `SpatialTransform` segment entries; rigid/movable writer mode; manifest gains `from_frame_id` / `to_frame_id` / `writer_mode`). The current shape above is what lands today via Step 0; the redesign lands in Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md).
+The `(from_frame_id, to_frame_id)` pair mirrors the TimeTransform Log's `(from_clock_id, to_clock_id)` shape — each log is a single ordered pair, with the registry hashes content-addressing the FrameRegistry entries that describe each side's coordinate convention. A producer that observes a multi-pair ROS `TFMessage` is responsible for fanning the message into N parallel pose logs.
 
 ### TimeTransform Log
 
@@ -93,8 +108,8 @@ No `(sensor_id, sensor_hash)` pair — Pose Log has no sensor registry; the payl
 
 ## Versioning
 
-Schema version is **1** for all three manifest shapes (Sensor Log family, Pose Log, TimeTransform Log) and for `PoseSource`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
+Schema version is **1** for all three manifest shapes (Sensor Log family, Pose Log, TimeTransform Log) and for `PoseSource` / `PoseWriterMode`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
 
 ## Status
 
-Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) — pure refactor extracting the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time-transforms` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). No behavior change, no encoding change.
+Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time-transforms` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`.

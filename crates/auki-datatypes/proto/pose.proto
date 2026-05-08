@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package auki.pose;
+
+// Per-sample pose log payload — the segment payload for a Pose Log
+// pinned by a single `(from_frame_id, to_frame_id)` pair in its
+// manifest. The sample's timestamp rides in the auki-logs framing's
+// `timestamp_ns`, not here.
+//
+// Step 5 decision (2026-05-08): flat. The pre-migration
+// `auki_registry::PoseLogEntry { transforms: Vec<TransformSample> }`
+// wrapper goes away entirely — each segment entry IS one
+// SpatialTransform sample. Per-sample `parent_frame` / `child_frame`
+// strings (which existed on the pre-migration `TransformSample`) also
+// go — frame identity lives in the manifest now, mirroring how
+// TimeTransform Log already keys per `(from_clock_id, to_clock_id)`.
+//
+// A producer that observes a multi-pair ROS `TFMessage` is responsible
+// for fanning the message into N parallel pose logs (one per
+// `(from, to)` pair), each timestamped per the same wall-clock.
+//
+// The `(from_frame_id, to_frame_id)` pair on the manifest references
+// `FrameRegistryEntry` records via their `frame_id`; the frame hashes
+// pinned in the manifest content-address those registry entries.
+//
+// Field number ledger (never reuse, never renumber):
+//   SpatialTransform.translation = 1
+//   SpatialTransform.orientation = 2
+//   Vec3.x                       = 1
+//   Vec3.y                       = 2
+//   Vec3.z                       = 3
+//   Quat.x                       = 1
+//   Quat.y                       = 2
+//   Quat.z                       = 3
+//   Quat.w                       = 4
+
+message SpatialTransform {
+  Vec3 translation = 1;
+  Quat orientation = 2;
+}
+
+// 3-component vector, typically meters in the from→to convention
+// described by the manifest's `from_frame_hash` / `to_frame_hash`
+// FrameRegistry entries.
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Unit quaternion in `(x, y, z, w)` order — Hamilton convention,
+// matching ROS `geometry_msgs/Quaternion`. Producers SHOULD normalize
+// before writing; consumers SHOULD tolerate small drift from unit
+// length without renormalizing silently.
+message Quat {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}

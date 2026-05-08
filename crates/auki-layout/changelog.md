@@ -8,6 +8,12 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:52 HKT, 2026
+
+**`poselog_path` resigned to per-`(from, to)`-frame identity** for Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Old signature `(session_root, pose_log_id) -> PathBuf` (opaque integrator-minted ID) → new signature `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`'s per-clock-pair shape. On-disk: `<session>/poselogs/<from_id>__<to_id>` (each frame_id's `/` substituted to `__`).
+
+**Tests**: 7 → 7 (`poselog_path_is_session_join_poselogs_join_pose_log_id` and `poselog_path_does_not_substitute_pose_log_id` removed; `poselog_path_uses_double_underscore_separator` and `poselog_path_substitutes_slashes_inside_each_frame_id` added — same pattern as `timetransform_log_path`'s tests).
+
 ### broodsugar's dobby · May 8, 09:34 HKT, 2026
 
 **Crate renamed `auki-session` → `auki-layout`.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) the crate doesn't provide; this crate is the *layout contract* — paths, lifecycle convention, ID encoding. The name `auki-session` is now reserved for the future Rust runtime counterpart of [`auki-session-py`](../../auki-session-py)'s in-process `Session` surface (per the [root `Session.open` Propagate item](../../parking_lot.md)). Mechanical scope: directory rename, `Cargo.toml` package name + description, workspace member entry, `Cargo.lock` package entry, [`auki-registry`](../auki-registry)'s path-dep + 6 `auki_session::` → `auki_layout::` call sites in `src/lib.rs` (5 path constructions + 1 doc comment), README headers, doc cross-references across the workspace (`auki-logs/README.md`, `auki-time-transforms/README.md`, `auki-registry/README.md` + `src/readme.md`, `auki-datatypes/src/sprint.md`, `docs/control-api.md`, root `README.md`, `Glossary.md`, root + `crates/` `parking_lot.md`). No behaviour change. Resolves the API-surface review item filed 2026-05-08 in [#56](https://github.com/aukilabs/auki-sdk/pull/56). The previous parking-lot item is replaced with a Resolved note in this crate's `parking_lot.md` per the convention.

@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:52 HKT, 2026
+
+**`PoseLogEntry` + `TransformSample` departed at Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** Both structs are gone from [`src/lib.rs`](src/lib.rs); replaced by the flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs) with `(from_frame_id, to_frame_id)` identity in the manifest (per the 2026-05-07 synthesis). Per-sample `parent_frame` / `child_frame` strings are gone — each Pose Log holds samples for exactly one ordered frame pair, mirroring TimeTransform Log's per-clock-pair shape.
+
+**`ciborium` dev-dep dropped** — pose tests were its last user (after Steps 3/4 dropped the audio + point-cloud CBOR tests).
+
+**Tests**: 33 → 33 (`pose_log_entry_round_trips_through_cbor` and `pose_log_entry_with_empty_transforms_round_trips` removed; new round-trip tests for `SpatialTransform` live in [`auki-datatypes::tests`](../auki-datatypes/src/lib.rs) instead). The crate's scope-shrink callout marked complete: this crate is back to its canonical role of identity catalogs only.
+
+**Docs**: README's "Pose Log payload — schema v1" section replaced with a one-paragraph pointer at [`auki-datatypes`](../auki-datatypes); Frame Registry sub-section retained (registry is still here). `src/readme.md`'s "Log payload types" code block dropped both pose structs and the surrounding paragraph; scope-shrink callout updated to "complete." Schema-version line moved `PoseLogEntry` / `TransformSample` out of the in-crate list.
+
 ### broodsugar's dobby · May 8, 11:27 HKT, 2026
 
 **Filed: sensor_id convention is load-bearing for cross-peer recording provenance.** Annotated the existing "Formalize the sensor_id naming convention?" parking-lot item with the implication of the [root subscription-as-materialization keystone](../../parking_lot.md#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08): the `<platform-tag>-<machine-id>/<sensor-name>` pattern (e.g. `K1-AABBCCDDEEFF/head_left_cam`) is what makes a recording self-provenant when it moves between peers — the MAC encodes the producing device, and that encoding survives subscription, archival, and replay. An integrator naming their sensor `my-cool-camera` produces a recording with no provenance signal. Lean recorded: keep the SDK out of string-building (no `SensorId` newtype) but raise the README's status from "recommended" to "REQUIRED for cross-peer recording provenance." Pin before the unified subscription primitive lands. Doc-only.

@@ -285,7 +285,6 @@ dependencies = [
  "auki-jcs",
  "auki-layout",
  "auki-logs",
- "ciborium",
  "serde",
  "serde_json",
  "tempfile",

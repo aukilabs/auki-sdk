@@ -76,6 +76,18 @@ pub mod audio {
 
 impl_log_payload!(audio::AudioLogEntry);
 
+/// `auki.pose` — Pose Log segment payload (Migration Step 5). Flat
+/// `SpatialTransform` per entry — no `PoseLogEntry { transforms: Vec<…> }`
+/// wrapper, no per-sample `parent_frame` / `child_frame`. Frame identity
+/// lives in the log's manifest (`from_frame_id` / `from_frame_hash` /
+/// `to_frame_id` / `to_frame_hash`); each Pose Log holds one
+/// `(from, to)` pair. Quaternion is `(x, y, z, w)` Hamilton.
+pub mod pose {
+    include!(concat!(env!("OUT_DIR"), "/auki.pose.rs"));
+}
+
+impl_log_payload!(pose::SpatialTransform);
+
 /// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
 /// `/auki/stream/0.1.0`). Migration Step 2.
 pub mod frame_stream {
@@ -188,6 +200,7 @@ mod tests {
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
     use super::placeholder::PipelineCheck;
     use super::point_cloud::PointCloudLogEntry;
+    use super::pose::{Quat, SpatialTransform, Vec3};
     use prost::Message;
 
     /// Smoke test that `prost-build` actually ran, the generated code
@@ -503,5 +516,109 @@ mod tests {
         assert_eq!(entries[0].payload, step4_audio_log_entry());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
+    }
+
+    // ─── auki.pose locked vectors ────────────────────────────────────────────
+
+    /// Identity-ish pose: 1m forward translation along +x, no rotation
+    /// (unit quaternion `[0, 0, 0, 1]`). Plain integer-valued doubles
+    /// keep the wire bytes stable and human-checkable.
+    fn step5_spatial_transform() -> SpatialTransform {
+        SpatialTransform {
+            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
+            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+        }
+    }
+
+    /// Locks the prost wire bytes for the Step 5 example
+    /// `SpatialTransform`. Cross-language readers MUST reproduce these
+    /// exact bytes. Note: proto3 default-elision means zero-valued
+    /// `double` fields don't appear on the wire — `Quat { x:0, y:0,
+    /// z:0, w:1 }` encodes only its `w` field (9 bytes inside its
+    /// length-delimited envelope).
+    #[test]
+    fn spatial_transform_serializes_to_locked_wire_bytes() {
+        let bytes = step5_spatial_transform().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "0a1b09000000000000f03f110000000000000040190000000000000840\
+             120921000000000000f03f"
+        );
+    }
+
+    /// XXH3-128 of those wire bytes — joins the workspace's locked
+    /// conformance set.
+    #[test]
+    fn spatial_transform_hash_is_locked() {
+        let bytes = step5_spatial_transform().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "29fa6349ab0b3ff1f06933489db74dfd"
+        );
+    }
+
+    #[test]
+    fn spatial_transform_round_trips() {
+        let entry = step5_spatial_transform();
+        let bytes = entry.encode_to_vec();
+        let decoded = SpatialTransform::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// `LogPayload` round-trip — proves the macro-generated impl rides
+    /// the same prost path as direct `Message::encode_to_vec` / `decode`.
+    #[test]
+    fn spatial_transform_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step5_spatial_transform();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <SpatialTransform as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Default-elided round-trip — a `SpatialTransform` with both
+    /// nested fields `None` (proto3 message-typed fields are
+    /// `Option<T>` in prost) encodes to zero bytes.
+    #[test]
+    fn spatial_transform_default_round_trips() {
+        let entry = SpatialTransform { translation: None, orientation: None };
+        let bytes = entry.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = SpatialTransform::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam: open a real `auki_logs::Log<SpatialTransform>`,
+    /// append two entries (one populated, one default), close, re-read,
+    /// assert order + payload byte-equality. Pins the flat-not-wrapped
+    /// shape end-to-end through the segment writer/reader.
+    #[test]
+    fn spatial_transform_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<SpatialTransform> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step5_spatial_transform()).unwrap();
+            log.append(
+                200,
+                &SpatialTransform { translation: None, orientation: None },
+            )
+            .unwrap();
+        }
+        let reader: auki_logs::LogReader<SpatialTransform> =
+            auki_logs::Log::<SpatialTransform>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step5_spatial_transform());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.translation, None);
+        assert_eq!(entries[1].payload.orientation, None);
     }
 }

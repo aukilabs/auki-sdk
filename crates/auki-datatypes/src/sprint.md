@@ -47,12 +47,14 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - **Dropped** the `serde_bytes` dep from [`auki-registry`](../../auki-registry) — `AudioLogEntry` was its last user.
    - Locked conformance vectors pin both wire bytes (`0a1000112233445566778899aabbccddeeff` for a 16-byte `pcm_s16le` stereo fixture) and XXH3-128 hash (`a5864ae7018f28a5c094a714af1db62e`).
 
-5. **`auki.pose` — `SpatialTransform`** (was `TransformSample`; `PoseLogEntry` wrapper goes away).
-   - Define `proto/pose.proto`: `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }` plus `Vec3` and `Quat`. Flat — no `PoseLogEntry` wrapper. From/to live in the manifest, not the entry. Synthesis decided 2026-05-07 — see the corresponding Propagate task in the [root parking lot](../../../parking_lot.md).
-   - **Move** `TransformSample` (renamed `SpatialTransform`) out of [`auki-registry`](../../auki-registry); drop `PoseLogEntry`. Rewrite `build_pose_log_manifest` in `auki-registry` (or move it) for the new (from, to)-keyed identity.
-   - Update [`auki-layout`](../../auki-layout) `poselog_path` signature: `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
-   - Update [`auki-logs`](../../auki-logs) segment writer/reader.
-   - Locked vector.
+5. **✓ `auki.pose` — `SpatialTransform`** (on-disk; landed 2026-05-08).
+   - `proto/pose.proto` defines `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }` + `Vec3 { double x, y, z }` + `Quat { double x, y, z, w }`. Flat — the pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` strings (which existed on `TransformSample`) are gone too. Per the synthesis decided 2026-05-07.
+   - **Moved** `TransformSample` (renamed `SpatialTransform`) and dropped `PoseLogEntry` from [`auki-registry`](../../auki-registry); the crate's `ciborium` dev-dep dropped at the same time (pose types were its last user).
+   - **Rewrote `build_pose_log_manifest`** in [`auki-manifests`](../../auki-manifests) for the new identity: 13 args, including `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash` (mirrors `build_time_transform_log_manifest`'s clock-pair pattern), `writer_mode: PoseWriterMode` (`Rigid` or `Movable`), `expected_rate_hz: u32`. Resolves the manifest-reshape parking-lot item.
+   - **Updated `poselog_path`** in [`auki-layout`](../../auki-layout) to `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`. The on-disk segment is `<session>/poselogs/<from_id>__<to_id>` (each frame_id's `/` substituted to `__`).
+   - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
+   - Producer guidance: a multi-pair ROS `TFMessage` fans into N parallel pose logs (one per `(from, to)` pair). Each log sees one timestamped sample per source message for its pair.
+   - Locked conformance vectors pin both wire bytes (`0a1b09000000000000f03f110000000000000040190000000000000840120921000000000000f03f` for an identity-rotation 1-2-3 translation fixture) and XXH3-128 hash (`29fa6349ab0b3ff1f06933489db74dfd`).
 
 6. **`auki.time_transform` — `TimeTransformEntry`** (was misnamed `TimeTransformLogEntry` in earlier sprint drafts; correct type name is `TimeTransformEntry`).
    - Define `proto/time_transform.proto`. Resolve the slop points in [`parking_lot.md`](../parking_lot.md): move `source` to manifest; drop `discontinuous` (computed at read time); collapse or relocate `TimeTransformSource` enum.

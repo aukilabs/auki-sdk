@@ -121,17 +121,25 @@ pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf {
     session_root.join(SENSORLOGS_DIR).join(sensor_log_id)
 }
 
-/// `<app_root>/<session>/poselogs/<pose_log_id>` — one pose log = one pose
-/// source (e.g. ROS TF, SLAM, odometry). The auki-logs `manifest.json` and
-/// `segments/` directory live directly under this path. The source identity
-/// is recorded inline in the log's manifest under the `source` field, not
-/// encoded in the path. Multiple logs of the same source per session are
-/// fine — buffers, intent recordings, and time-bounded captures are all the
-/// same kind of log on disk, distinguished only by their manifest's
-/// `retention_ns`. `pose_log_id` is opaque to the SDK; the integrator
-/// mints a filesystem-safe identifier (typically a UUID).
-pub fn poselog_path(session_root: &Path, pose_log_id: &str) -> PathBuf {
-    session_root.join(POSELOGS_DIR).join(pose_log_id)
+/// `<app_root>/<session>/poselogs/<from_id>__<to_id>` — one pose log per
+/// `(from_frame_id, to_frame_id)` pair per session. Mirrors the
+/// [`timetransform_log_path`] shape (one TT log per ordered clock
+/// pair). The auki-logs `manifest.json` and `segments/` directory live
+/// directly under this path; the producer identity is recorded inline
+/// in the log's manifest under the `source` field, not encoded in the
+/// path.
+///
+/// Step 5 of the [`auki-datatypes` migration] (2026-05-08) reshaped
+/// the Pose Log to per-`(from, to)` identity — pre-migration logs
+/// keyed on an opaque `pose_log_id`. A producer that observes a
+/// multi-pair ROS `TFMessage` is responsible for fanning the message
+/// into N parallel pose logs.
+pub fn poselog_path(session_root: &Path, from_frame_id: &str, to_frame_id: &str) -> PathBuf {
+    session_root.join(POSELOGS_DIR).join(format!(
+        "{}__{}",
+        id_to_segment(from_frame_id),
+        id_to_segment(to_frame_id)
+    ))
 }
 
 /// Replace `/` with `__` so namespaced ids become a single filesystem-safe
@@ -244,20 +252,23 @@ mod tests {
     }
 
     #[test]
-    fn poselog_path_is_session_join_poselogs_join_pose_log_id() {
+    fn poselog_path_uses_double_underscore_separator() {
         let session = session_root(&app(), "abc-123");
         assert_eq!(
-            poselog_path(&session, "rec-789"),
-            PathBuf::from("/home/booster/auki/boosterapp/abc-123/poselogs/rec-789")
+            poselog_path(&session, "K1-AABB/base_link", "K1-AABB/head_left_cam_optical"),
+            PathBuf::from(
+                "/home/booster/auki/boosterapp/abc-123/poselogs/\
+                 K1-AABB__base_link__K1-AABB__head_left_cam_optical"
+            )
         );
     }
 
     #[test]
-    fn poselog_path_does_not_substitute_pose_log_id() {
-        // pose_log_id is opaque to the SDK — same convention as sensorlog_path.
+    fn poselog_path_substitutes_slashes_inside_each_frame_id() {
+        // mirrors timetransform_log_path: each side's `/` becomes `__`,
+        // then the two sides join with another `__`.
         let session = session_root(&app(), "abc-123");
-        let path = poselog_path(&session, "rec-789");
-        assert!(path.ends_with("rec-789"));
-        assert!(!path.to_string_lossy().contains("__"));
+        let path = poselog_path(&session, "from/x", "to/y");
+        assert!(path.ends_with("from__x__to__y"));
     }
 }

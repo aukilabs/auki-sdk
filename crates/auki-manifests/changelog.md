@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:52 HKT, 2026
+
+**`build_pose_log_manifest` rewritten** for Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) per the 2026-05-07 synthesis. New signature takes 13 args: `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash` (mirrors `build_time_transform_log_manifest`'s clock-pair pattern), `clock_id` + `clock_hash`, the inline `PoseSource`, plus `writer_mode: PoseWriterMode` (`Rigid` or `Movable`, JSON `"rigid"` / `"movable"`) and `expected_rate_hz: u32`. Each Pose Log holds samples for one ordered frame pair; producer fans multi-pair messages into N parallel logs.
+
+**New `PoseWriterMode` enum** — `Rigid` (stationary transform; one observation reads back at any query time) or `Movable` (time-varying; readers interpolate or step-look-up). Snake-case serialization. Lives in the manifest, not on segment entries.
+
+**Tests**: 6 → 7 (+1 `build_pose_log_manifest_serializes_writer_mode_as_snake_case`; existing `build_pose_log_manifest_contains_all_required_fields` updated for the new shape). All resolved tests pass.
+
+**Resolved parking-lot question**: Pose Log manifest reshape per the synthesis. Replaced with a "Resolved 2026-05-08" pointer.
+
 ### broodsugar's dobby · May 8, 11:27 HKT, 2026
 
 **Filed: Pose Log + TimeTransform Log self-provenance gap.** Per the [root subscription-as-materialization keystone](../../parking_lot.md#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08), recordings need to be self-provenant — but Pose Log identity (`from_frame_id` / `to_frame_id` post-Step-5) names coordinate systems, not devices, and `PoseSource::Ros2Tf { publishers }` carries the producer kind without device identity. Two robots both running ROS 2 TF would produce indistinguishable `PoseSource` values. TimeTransform Log can ride on the existing clock-ID convention if formalized. Three forward paths logged with a lean toward (a) — require frame IDs to follow the same `<platform-tag>-<machine-id>/<frame-name>` device-encoding shape sensor IDs use. Lower priority than the sensor-log fix because the Pose Log manifest is mid-rewrite (Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md)); fold the fix into the Step 5 redesign. Doc-only.

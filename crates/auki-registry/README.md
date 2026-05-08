@@ -2,7 +2,7 @@
 
 The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`PoseLogEntry`, `TransformSample`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). **Steps 1, 3, and 4 (2026-05-08) are complete** — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), and `AudioLogEntry` (Step 4, opaque-bytes-only) live in [`auki-datatypes`](../auki-datatypes). Everything below this line describes today's state — including the AI-drift parts, marked as such.
+> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (all landed 2026-05-08) moved every log payload type out — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and `SpatialTransform` (Step 5, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape). All five live in [`auki-datatypes`](../auki-datatypes); `auki-registry` now holds the Sensor / Clock / Frame registry types and IO only.
 
 ## Two kinds of typed data (today, with one departing)
 
@@ -13,7 +13,7 @@ The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
 
-The camera payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved at Step 1 (2026-05-08); `PointCloudLogEntry` moved at Step 3 (2026-05-08, opaque-bytes-only); `AudioLogEntry` moved at Step 4 (2026-05-08, opaque-bytes-only) — all three are now protobuf via prost. The remaining payloads (`PoseLogEntry`, `TransformSample`) are still here, still CBOR, until Step 5.
+All log payload types departed at Steps 1, 3, 4, and 5 of the migration (all 2026-05-08): `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5, replaced by flat `SpatialTransform` + `Vec3` + `Quat`). All five now live in [`auki-datatypes`](../auki-datatypes), protobuf via prost.
 
 ---
 
@@ -161,61 +161,22 @@ The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the 
 
 ---
 
-## Pose Log payload — schema v1
+## Pose Log payload — moved to `auki-datatypes` (Step 5, 2026-05-08)
 
-> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as flat `SpatialTransform` segment entries (protobuf-encoded). The `PoseLogEntry` wrapper goes away; `from` / `to` move to manifest identity (per-`(from, to)` log instead of per-producer). See [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 5 and [root `parking_lot.md`](../../parking_lot.md) "Pose Log capture shape" Propagate task.*
+The Pose Log payload now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.pose` `.proto` package, encoded as protobuf via prost. Step 5 of the migration landed the synthesis decided 2026-05-07: the pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame`/`child_frame` strings are gone too. The new segment entry is flat `SpatialTransform { Vec3 translation; Quat orientation }`; frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair, mirroring how TimeTransform Log already keys per `(from_clock_id, to_clock_id)`.
 
-The Pose Log is an `auki_logs::Log<PoseLogEntry>`. The framing's `timestamp_ns` is the message arrival time on the daemon's clock; the payload here carries one batch of transforms (one ROS `TFMessage`, or the equivalent for other producers).
+A producer that observes a multi-pair ROS `TFMessage` is responsible for fanning the message into N parallel pose logs (one per `(from, to)` pair). Each log has stable identity over its lifetime; the manifest carries `(from_frame_id + from_frame_hash)`, `(to_frame_id + to_frame_hash)`, `clock_id + clock_hash`, the inline `PoseSource` provenance tag, plus a `writer_mode: "rigid" | "movable"` hint and an `expected_rate_hz` rate hint per the synthesis. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the segment payload and [`auki-manifests/README.md`](../auki-manifests/README.md) for the manifest builder.
 
-Pose Log answers "where was this frame relative to that one over time" — eventually consumed by the future `convert_pose` operation. v1 covers capture and read; composition / path-finding / `convert_pose` lands separately.
+The on-disk pose-log directory is `<session>/poselogs/<from_id>__<to_id>/` (each frame_id's `/` substituted to `__` per the same convention as `timetransform_log_path`).
 
-Pose Log directories live at `<session>/poselogs/<pose_log_id>/` — same parallel-log shape as Sensor Logs (multiple logs per session, distinguished only by their manifest's `retention_ns`). Multiple logs of the same source are fine; the integrator decides when to start and stop.
-
-### Manifest
-
-JCS-canonical UTF-8 JSON. Required keys (extends auki-logs's base):
-
-| Key                    | Type    | Notes                                                            |
-| ---------------------- | ------- | ---------------------------------------------------------------- |
-| `segment_duration_ns`  | integer | > 0; from auki-logs                                              |
-| `retention_ns`         | integer | ≥ 0; from auki-logs (0 = unbounded)                              |
-| `app_id`               | string  | Application identifier (same as the daemon's `/api/info` `app`). |
-| `session_id`           | string  | UUIDv4 minted by the integrator at app boot.                     |
-| `clock_id`             | string  | The Clock Registry ID that the framing's `timestamp_ns` is in    |
-| `clock_hash`           | string  | XXH3-128 hex of the clock's registry entry                       |
-| `source`               | object  | The producer identity, inline (see below). Tagged-enum body.     |
-
-**`source` is inline, not a registry reference.** Pose Log has no Pose Source Registry — payload is fully self-describing (frame names sit in each `TransformSample`), so producer identity is provenance, not a decoder. Sensor Log earns a registry because its byte payload is uninterpretable without one; Pose Log doesn't have that pressure. If/when a producer variant brings substantial identity (SLAM with `map_id` + algorithm parameters), graduating `source` to a sibling registry is straightforward — extract the body into a content-addressed JSON file and replace the inline value with `(source_id, source_hash)`.
-
-### `PoseSource` — moved to [`auki-manifests`](../auki-manifests)
-
-The inline producer-identity tagged enum (`PoseSource`) and the `build_pose_log_manifest` builder moved to [`auki-manifests`](../auki-manifests) in Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08). They're manifest concerns, not registry concerns. See [`auki-manifests/README.md`](../auki-manifests/README.md) for the current shape and the rationale.
-
-### Payload (CBOR)
-
-```
-PoseLogEntry {
-  transforms: [TransformSample],   // empty allowed
-}
-
-TransformSample {
-  parent_frame:  string,
-  child_frame:   string,
-  translation:   [f64; 3],          // x, y, z (typically meters)
-  rotation_quat: [f64; 4],          // x, y, z, w (Hamilton convention; matches ROS)
-}
-```
-
-`f64` matches ROS `geometry_msgs` and preserves precision at large-map scales. Translation and rotation are CBOR arrays (not maps) for half the byte cost; the ordering is documented and stable.
-
-There is no per-`TransformSample` timestamp in the payload — the auki-logs framing's `timestamp_ns` is the message arrival time on the daemon's clock. ROS TF carries per-`TransformStamped` `stamp` fields too, but for the rendering use case the message arrival is what consumers need to step through. If downstream needs per-transform stamps, add them additively without breaking the existing shape.
+`convert_pose` itself is still pending — capture and read are in place; composition / path-finding lands separately.
 
 ### Frame Registry
 
-Each `parent_frame` / `child_frame` string in a `TransformSample` references an entry in the Frame Registry — a sibling to the Sensor and Clock registries that describes what each named frame's coordinate convention is (handedness, axis directions, length unit). The registry shipped in v0.0.22 with `FrameRegistryEntry { frame_id, handedness, axes, units }` plus four preset constructors covering REP-103 body, REP-103 optical, OpenGL/Three.js, and Unity. Tree structure (frame parentage) lives in the Pose Log, not in the registry — the registry declares what each frame *is in isolation*; the Pose Log declares the edges between them. Rotation representation (Hamilton quaternion `[x, y, z, w]`) is fixed at the `TransformSample` layer; not per-frame. See [`src/readme.md`](src/readme.md#frameregistryentry) for the full type definitions.
+Each `from_frame_id` / `to_frame_id` in a Pose Log manifest references an entry in the Frame Registry — a sibling to the Sensor and Clock registries that describes what each named frame's coordinate convention is (handedness, axis directions, length unit). The registry shipped in v0.0.22 with `FrameRegistryEntry { frame_id, handedness, axes, units }` plus four preset constructors covering REP-103 body, REP-103 optical, OpenGL/Three.js, and Unity. Tree structure (frame parentage) lives in the Pose Log manifests' `(from, to)` pairs, not in the registry — the registry declares what each frame *is in isolation*; the manifests declare the edges between them. Rotation representation (Hamilton quaternion `(x, y, z, w)`) is fixed at the `SpatialTransform` layer; not per-frame. See [`src/readme.md`](src/readme.md#frameregistryentry) for the full type definitions.
 
 ---
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Microphone`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and `PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` (now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Microphone`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

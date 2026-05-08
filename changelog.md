@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:45 HKT, 2026
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) gains a READMEs section codifying the propagation rule: when you add or change a crate, update its `README.md` first, then propagate up to keep [`crates/README.md`](crates/README.md) accurate. Mirrors the existing changelog / parking-lot propagation pattern. Doc-only.
+
 ### broodsugar's dobby · May 8, 09:34 HKT, 2026
 
 **Crate renamed `auki-session` → `auki-layout`.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) the crate doesn't provide; the crate is the *layout contract* — paths, lifecycle convention, ID encoding. The name `auki-session` is now reserved for the future Rust runtime counterpart of [`auki-session-py`](crates/auki-session-py)'s in-process `Session` surface (per the [root `Session.open` Propagate item](parking_lot.md)).

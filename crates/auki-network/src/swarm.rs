@@ -65,7 +65,7 @@ use std::time::Duration;
 /// libp2p protocol id used for the SDK's identify exchanges. Stable; do
 /// not change without coordinating with consumers (the agent_version
 /// string is the per-deployment knob; the protocol id is the wire format).
-pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/1.0.0";
+pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/0.0.1";
 
 /// Idle connection timeout. libp2p closes a connection that's been idle
 /// for this long; ping resets the idle timer, so this only fires if the
@@ -93,7 +93,7 @@ pub struct Behaviour {
     /// consumer daemons (BoosterApp, Sentinel); on for the dedicated
     /// `aukilabs/relay` infrastructure node.
     pub relay: Toggle<relay::Behaviour>,
-    /// `/auki/cluster/1.0.0` participant exchange. Always present — the
+    /// `/auki/cluster/0.0.1` participant exchange. Always present — the
     /// protocol sits idle for swarms that don't participate in a cluster
     /// (the dedicated `aukilabs/relay` infrastructure node), so a knob
     /// would just be ceremony. The behaviour does not auto-respond:
@@ -102,7 +102,7 @@ pub struct Behaviour {
     /// [`crate::cluster_protocol`].
     pub cluster: cluster_protocol::Behaviour,
     /// libp2p raw-substream multiplexer used by grimsby's
-    /// `/auki/stream/1.0.0` typed-byte-stream protocol. Always present —
+    /// `/auki/stream/0.1.0` typed-byte-stream protocol. Always present —
     /// the behaviour sits idle for swarms that don't open or accept any
     /// streams; a knob would just be ceremony. Bind to a specific
     /// protocol id (typically [`crate::stream_protocol::STREAM_PROTOCOL`])

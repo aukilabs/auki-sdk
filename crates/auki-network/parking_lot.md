@@ -46,7 +46,7 @@ Append-fields-with-`#[serde(default)]` is the easy path; a versioned wire format
 
 ## `SwarmConfig` minimalism — when do we add knobs?
 
-M1's `SwarmConfig` has `listen_addresses`, `agent_version`, `enable_mdns`, `enable_relay_server`. Many libp2p knobs are baked-in: idle connection timeout (60s), identify protocol id (`/auki/identify/1.0.0`), ping defaults. This is deliberate — fewer knobs means fewer ways to mis-configure.
+M1's `SwarmConfig` has `listen_addresses`, `agent_version`, `enable_mdns`, `enable_relay_server`. Many libp2p knobs are baked-in: idle connection timeout (60s), identify protocol id (`/auki/identify/0.0.1`), ping defaults. This is deliberate — fewer knobs means fewer ways to mis-configure.
 
 Knobs that consumers will likely want eventually:
 
@@ -189,9 +189,9 @@ Cross-references the existing [Wallet → peer-key derivation label evolution](#
 
 `pub enum StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` is a **closed** enum. Adding a new payload type — when an SLAM odometry stream or a cell-phone-camera variant lands — is a coordinated SDK + consumer release: bump the crate, add the variant, every consumer that wants the new sensor type opts in. The May 6 changelog entry (Dagaz Batch 1 #1) explicitly lays out the rationale ("trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries…").
 
-The decision is correct. The disclosure is missing. The root [`README.md`](../../README.md) "API surface" section presents `StreamDispatch` as an implementation detail of `/auki/stream/1.0.0` ("dispatched by `sensor_id` via the closed `StreamDispatch` enum"). To a downstream consumer reading the README to plan their integration, that's an aside — but it's actually the SDK's primary stability lever for streaming. Every new `T` is a public-API touch; that's the point.
+The decision is correct. The disclosure is missing. The root [`README.md`](../../README.md) "API surface" section presents `StreamDispatch` as an implementation detail of `/auki/stream/0.1.0` ("dispatched by `sensor_id` via the closed `StreamDispatch` enum"). To a downstream consumer reading the README to plan their integration, that's an aside — but it's actually the SDK's primary stability lever for streaming. Every new `T` is a public-API touch; that's the point.
 
-Suggest: add one sentence to the API-surface table's `/auki/stream/1.0.0` row, or to the libp2p wire-protocols section that follows, calling out the closed-enum stability model explicitly. Something like *"New payload types ship as a coordinated SDK release: a new `StreamDispatch` variant is a public-API change consumers opt into."* Doc-only; no code touch.
+Suggest: add one sentence to the API-surface table's `/auki/stream/0.1.0` row, or to the libp2p wire-protocols section that follows, calling out the closed-enum stability model explicitly. Something like *"New payload types ship as a coordinated SDK release: a new `StreamDispatch` variant is a public-API change consumers opt into."* Doc-only; no code touch.
 
 Surfacing for editorial pass; not gating anything.
 

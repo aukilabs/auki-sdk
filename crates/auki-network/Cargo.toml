@@ -11,12 +11,11 @@ description = "Networking substrate for the Auki SDK — peer identity (derived 
 # Default-off so M0 stays WASM-friendly (Console derives peer-id without
 # pulling in libp2p's transport stack). Daemons opt in.
 default = []
-# `base64` is on the swarm path because Dagaz's `PointCloudFrame.bytes`
-# uses a `#[serde(with = "base64_bytes")]` adapter to dodge serde_json's
-# array-of-integers encoding (~4× wire overhead for `Vec<u8>` payloads).
-# Tiny dep with no transitive cost; rides on the swarm feature so M0
-# (WASM) stays untouched.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:base64"]
+# Stream protocol wire types live in `auki-datatypes` (Step 2 of the
+# migration); pulled in alongside libp2p so the substream protocol can
+# encode/decode prost messages directly. base64 is no longer needed
+# under swarm — protobuf handles binary natively.
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:prost"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -50,6 +49,13 @@ thiserror = { version = "2", optional = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"], optional = true }
 # `StreamExt` for polling `swarm.next()` in the runtime task.
 futures = { version = "0.3", default-features = false, optional = true }
+# Stream-protocol wire types — `JpegFrame`, `PointCloudFrame`,
+# `StreamMessage` envelope. Step 2 of the auki-datatypes migration
+# moves these from this crate's hand-rolled serde structs to
+# auki-datatypes-owned prost types.
+auki-datatypes = { path = "../auki-datatypes", optional = true }
+# Encode/decode prost messages on the substream wire.
+prost = { version = "0.13", optional = true }
 
 # `app_instance` feature
 mac_address = { version = "1", optional = true }

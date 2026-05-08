@@ -12,7 +12,7 @@ The crate ships three Python sub-modules:
 
 The crate ships the full cluster-layer Python surface and nothing else:
 
-- `cluster.ParticipantInfo(*, app, name, ...)` — typed `#[pyclass]` with kwargs-only `#[new]`, getters for all 9 wire-shape fields, `__repr__`, `__eq__`. Wire-shape contract pinned by `auki_network::participant::ParticipantInfo` (one schema, two transports — `/api/info` HTTP + `/auki/cluster/1.0.0` libp2p).
+- `cluster.ParticipantInfo(*, app, name, ...)` — typed `#[pyclass]` with kwargs-only `#[new]`, getters for all 9 wire-shape fields, `__repr__`, `__eq__`. Wire-shape contract pinned by `auki_network::participant::ParticipantInfo` (one schema, two transports — `/api/info` HTTP + `/auki/cluster/0.0.1` libp2p).
 - `cluster.PeerSnapshot` — typed read-only view, runtime-emitted via `runtime.peers()`. Three fields: `peer_id: str`, `info: ParticipantInfo`, `first_seen_ns: int`.
 - `cluster.ClusterDoc` — opaque handle returned by `cluster.load_doc`. `peer_count` and `cluster_name` getters for sanity-checks.
 - `cluster.ClusterRuntime` — opaque handle returned by `cluster.spawn`. `peers()` from any thread (lock-light); `shutdown()` consumes (post-shutdown calls raise `RuntimeError`).

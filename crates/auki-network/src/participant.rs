@@ -6,7 +6,7 @@
 //! - **HTTP**: `GET /api/info` on the cross-app Control API (see
 //!   [`docs/control-api.md`](../../../docs/control-api.md)) returns this
 //!   exact JSON.
-//! - **libp2p**: the `/auki/cluster/1.0.0` participant protocol — a
+//! - **libp2p**: the `/auki/cluster/0.0.1` participant protocol — a
 //!   request/response exchange where each side sends its own
 //!   `ParticipantInfo` to the other (deliverable #3, separate work).
 //!

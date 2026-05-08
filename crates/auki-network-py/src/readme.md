@@ -85,7 +85,7 @@ auki_network.discovery.DiscoveryClockError                    # rare; system clo
 | `client.fetch(cluster_name)` | `discovery_client::DiscoveryClient::fetch(&str)` |
 | `client.deregister(seed, cluster_name)` | `discovery_client::DiscoveryClient::deregister(&Wallet, &str)` |
 
-The participant_provider closure is the seam where the GIL meets tokio. The wrapper holds the Python callable as `Py<PyAny>`; on each invocation (one per inbound `/auki/cluster/1.0.0` request), it acquires the GIL, calls the callable with `call0()`, and:
+The participant_provider closure is the seam where the GIL meets tokio. The wrapper holds the Python callable as `Py<PyAny>`; on each invocation (one per inbound `/auki/cluster/0.0.1` request), it acquires the GIL, calls the callable with `call0()`, and:
 
 - returns `Some(rust_info)` if the callable returned a `ParticipantInfo`,
 - returns `None` if the callable returned Python `None`, raised an exception (caught + `tracing::warn!`-logged), or returned a non-`ParticipantInfo` (also warn-logged).

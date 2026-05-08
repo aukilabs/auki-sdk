@@ -68,7 +68,7 @@ use crate::stream_types::{
 
 // ─── ParticipantInfo ─────────────────────────────────────────────────────────
 
-/// Identity card a participant exchanges over `/auki/cluster/1.0.0` and
+/// Identity card a participant exchanges over `/auki/cluster/0.0.1` and
 /// serves on `GET /api/info`. One schema, two transports — see
 /// `auki_network::participant::ParticipantInfo` for the field
 /// semantics.
@@ -393,7 +393,7 @@ pub(crate) fn cluster_tokio_runtime() -> &'static Runtime {
 
 /// Opaque handle to a running cluster runtime — drives a libp2p swarm
 /// against a [`ClusterDoc`], auto-dialing peers, exchanging
-/// [`ParticipantInfo`] over `/auki/cluster/1.0.0`, and maintaining a
+/// [`ParticipantInfo`] over `/auki/cluster/0.0.1`, and maintaining a
 /// live peer state map.
 ///
 /// Construct via [`spawn`]; consume via [`shutdown`][ClusterRuntime::shutdown].
@@ -422,7 +422,7 @@ impl ClusterRuntime {
         Ok(rt.peers().into_iter().map(PeerSnapshot::from_rust).collect())
     }
 
-    /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
+    /// Open an outbound `/auki/stream/0.1.0` subscription on `peer_id`
     /// for the named sensor with `T = JpegFrame` (grimsby deliverable
     /// #4). The producer must accept with [`PyStreamDecision.accept(...)`];
     /// for `T = PointCloudFrame` (Dagaz Batch 2) call
@@ -448,7 +448,7 @@ impl ClusterRuntime {
     ///   `args[0]` is a `DeclineReason`.
     /// - `auki_network.cluster.StreamUnreachable(detail)` — libp2p
     ///   couldn't open the substream (peer not reachable, peer doesn't
-    ///   speak `/auki/stream/1.0.0`, or the open timed out).
+    ///   speak `/auki/stream/0.1.0`, or the open timed out).
     /// - `auki_network.cluster.StreamProtocolError(detail)` — peer
     ///   wrote malformed bytes during the request/reply exchange.
     /// - `RuntimeError` if the runtime has been shut down.
@@ -495,7 +495,7 @@ impl ClusterRuntime {
         Ok(PyStreamSubscription::from_rust_jpeg(rust_sub))
     }
 
-    /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
+    /// Open an outbound `/auki/stream/0.1.0` subscription on `peer_id`
     /// for the named sensor with `T = PointCloudFrame` (Dagaz Batch 2).
     /// The producer must accept with
     /// [`PyStreamDecision.accept_pointcloud(...)`].
@@ -603,7 +603,7 @@ impl std::fmt::Debug for ClusterRuntime {
 /// rejections at connection time.
 ///
 /// `participant_provider` is a Python callable invoked **per inbound
-/// `/auki/cluster/1.0.0` request** by the cluster runtime's worker
+/// `/auki/cluster/0.0.1` request** by the cluster runtime's worker
 /// task. The wrapper acquires the GIL, calls it, and:
 ///
 /// - returns the `ParticipantInfo` to the runtime if the callable
@@ -625,7 +625,7 @@ impl std::fmt::Debug for ClusterRuntime {
 ///
 /// Kwargs (all optional, sensible defaults):
 /// - `stream_provider: Callable[[StreamRequest], StreamDecision] | None` —
-///   inbound `/auki/stream/1.0.0` request handler (grimsby deliverable
+///   inbound `/auki/stream/0.1.0` request handler (grimsby deliverable
 ///   #4). Synchronous; on `Accept`, the source must be a Python async
 ///   iterator yielding `ProducerFrame` values. Default `None` —
 ///   consumer-only mode: every inbound request gets

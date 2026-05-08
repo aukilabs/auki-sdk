@@ -26,11 +26,13 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - [`auki-logs`](../../auki-logs) became encoding-agnostic via a new `LogPayload` trait — consumers pick prost / ciborium / their own. Per-step decision adopting the parking-lot lean. The `impl_log_payload!` macro in this crate gives every prost type a one-line impl. Mid-migration ciborium types (TimeTransformEntry) write their `LogPayload` impl directly. `auki-logs` drops ciborium from production deps; `Error::Cbor` → `Error::Payload`.
    - End-to-end seam test: `auki_logs::Log<PinholeCameraLogEntry>` round-trip with both intrinsics-present and intrinsics-absent entries.
 
-2. **`auki.frame_stream` — `JpegFrame`** + **`auki.point_cloud_stream` — `PointCloudFrame`** (libp2p wire types).
-   - Define both `.proto` files. Each is a single `bytes` field at heart.
-   - Update [`auki-network`](../../auki-network)'s `stream_protocol` to use the generated types — the wire stream framing (length-prefix + envelope) stays; the `T` payload changes to protobuf bytes.
-   - Drop the `#[serde(with = "base64_bytes")]` adapter on `PointCloudFrame` — protobuf handles binary natively, no JSON-array-of-integers tax to dodge. Drops a dep on `base64`.
-   - Update the locked cross-language conformance vector for `PointCloudFrame` wire shape.
+2. **✓ `auki.frame_stream` — `JpegFrame`** + **`auki.point_cloud_stream` — `PointCloudFrame`** + **`auki.stream` envelope** (libp2p wire types; landed 2026-05-08).
+   - Three `.proto` packages: `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, and `auki.stream` (the full envelope — `StreamMessage` oneof of `StreamRequest | AcceptInfo | DeclineReason | Frame | EndReason`).
+   - Per-step decision: `Frame.payload = bytes` (T inferred from `AcceptInfo.sensor_hash` → `SensorRegistryEntry.body`). The substream is mono-T per Dagaz D1; the variant tag would be redundant on every frame.
+   - Wire format: 4-byte BE u32 length prefix + prost-encoded `StreamMessage`. The envelope itself moves to protobuf (not just inner T) so we get binary natively — drops the `#[serde(with = "base64_bytes")]` adapter and the `base64` dep on the swarm path. Old JSON-on-wire `/auki/stream/1.0.0` is retired in this PR; new protocol is `/auki/stream/0.1.0`.
+   - Workspace-wide protocol-id rename: `/auki/cluster/1.0.0` → `/auki/cluster/0.0.1`, `/auki/identify/1.0.0` → `/auki/identify/0.0.1`. Resolves the "save 1.0.0 for the first official release" stance.
+   - [`auki-network`](../../auki-network)'s `stream_protocol` re-exports the prost types from this crate; `stream_runtime`'s `T` bound switches from `Serialize + DeserializeOwned` to `prost::Message + Default`. [`auki-network-py`](../../auki-network-py)'s PyO3 wrappers updated for the prost match patterns.
+   - Locked cross-language conformance vectors for `JpegFrame` + `PointCloudFrame` wire bytes pinned in `auki-network::stream_protocol::tests`.
 
 3. **`auki.point_cloud` — `PointCloudLogEntry`** (on-disk).
    - Define `proto/point_cloud.proto`. Resolve the on-disk-vs-wire drift slop point in [`parking_lot.md`](../parking_lot.md) — typed layout fields (`width`, `height`, `is_dense`) outside the bytes vs raw-bytes-only with layout inside CDR.

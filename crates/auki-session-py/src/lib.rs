@@ -5,8 +5,8 @@
 //! This is the **source-of-truth API** for SDK control-plane
 //! operations. Both the [HTTP Control API](../../../docs/control-api.md)
 //! (frozen at SDK release v0.0.23) and the forthcoming libp2p
-//! control protocols (`/auki/control/info/1.0.0`,
-//! `/auki/control/sensor_logs/1.0.0`, …) are thin wrappers over this
+//! control protocols (`/auki/control/info/0.0.1`,
+//! `/auki/control/sensor_logs/0.0.1`, …) are thin wrappers over this
 //! surface — every consumer-facing operation maps to a method here.
 //!
 //! **Status:** scaffolding only. The Python module is empty; first

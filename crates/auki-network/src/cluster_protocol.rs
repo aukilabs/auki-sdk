@@ -1,4 +1,4 @@
-//! `/auki/cluster/1.0.0` — libp2p request-response protocol exchanging
+//! `/auki/cluster/0.0.1` — libp2p request-response protocol exchanging
 //! [`ParticipantInfo`] between cluster peers.
 //!
 //! This is the libp2p half of the **one schema, two transports** promise
@@ -46,7 +46,7 @@ use std::time::Duration;
 /// libp2p protocol id for the cluster participant exchange. Stable; do
 /// not change without coordinating with consumers (Boosterapp, Sentinel,
 /// Park, plus any cross-language reimplementation).
-pub const CLUSTER_PROTOCOL: &str = "/auki/cluster/1.0.0";
+pub const CLUSTER_PROTOCOL: &str = "/auki/cluster/0.0.1";
 
 /// Per-request timeout. A peer that doesn't respond inside this window
 /// surfaces as `OutboundFailure::Timeout` to the requester. Matched to
@@ -103,7 +103,7 @@ mod tests {
         // Wire format. If this test fails, you're looking at a breaking
         // change — coordinate with Boosterapp, Sentinel, Park, and any
         // cross-language reimplementation before touching it.
-        assert_eq!(CLUSTER_PROTOCOL, "/auki/cluster/1.0.0");
+        assert_eq!(CLUSTER_PROTOCOL, "/auki/cluster/0.0.1");
     }
 
     #[test]

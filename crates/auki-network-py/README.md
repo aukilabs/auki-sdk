@@ -60,7 +60,7 @@ runtime.shutdown()
 
 ### `Stream<T>` (grimsby + Dagaz Batch 2)
 
-Same `runtime` participates in `/auki/stream/1.0.0` substreams over the same swarm — no second libp2p stack. The producer's `stream_provider` callable returns a typed `StreamDecision`, the consumer opens a typed subscription:
+Same `runtime` participates in `/auki/stream/0.1.0` substreams over the same swarm — no second libp2p stack. The producer's `stream_provider` callable returns a typed `StreamDecision`, the consumer opens a typed subscription:
 
 ```python
 # Producer side — one callable, two T's. Each substream stays mono-T.
@@ -111,7 +111,7 @@ Stream-end signals raise typed exceptions (`StreamEndOfStream(reason)`, `StreamC
 
 ## Provider performance contract
 
-The `participant_provider` callable runs **on the cluster runtime's only worker task**. It's invoked once per inbound `/auki/cluster/1.0.0` request — the wrapper acquires the GIL, calls it, converts the result, and hands the answer to the runtime. While the GIL is held, the runtime's task is blocked on the wrapper.
+The `participant_provider` callable runs **on the cluster runtime's only worker task**. It's invoked once per inbound `/auki/cluster/0.0.1` request — the wrapper acquires the GIL, calls it, converts the result, and hands the answer to the runtime. While the GIL is held, the runtime's task is blocked on the wrapper.
 
 Brief contention (sub-100ms) is fine. Sustained contention (I/O, contended locks beyond a brief copy) measurably impacts cluster responsiveness. **Build the `ParticipantInfo` from cached state** — read your session clock value, copy a few strings, return. No HTTP calls, no database queries, no waiting on producer threads.
 

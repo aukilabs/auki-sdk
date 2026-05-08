@@ -5,7 +5,7 @@
 //! dial a peer, [`Capability`] tagging what a peer offers, and
 //! [`ParticipantInfo`] (the wire shape every Auki participant exchanges to
 //! introduce itself; one schema, two transports — `GET /api/info` and the
-//! `/auki/cluster/1.0.0` libp2p protocol).
+//! `/auki/cluster/0.0.1` libp2p protocol).
 //!
 //! M1 (behind the `swarm` feature): a libp2p `Swarm` with TCP + QUIC +
 //! Noise + Yamux. Behaviour: `identify` + `ping` always; `mdns` (on by

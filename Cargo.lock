@@ -210,6 +210,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-layout"
+version = "0.0.0"
+
+[[package]]
 name = "auki-logs"
 version = "0.0.0"
 dependencies = [
@@ -237,6 +241,7 @@ dependencies = [
 name = "auki-network"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
  "auki-identity",
  "auki-jcs",
  "base64",
@@ -246,6 +251,7 @@ dependencies = [
  "libp2p-stream",
  "mac_address",
  "multiaddr",
+ "prost",
  "reqwest",
  "serde",
  "serde_json",
@@ -299,10 +305,6 @@ dependencies = [
  "serde",
  "tokio",
 ]
-
-[[package]]
-name = "auki-layout"
-version = "0.0.0"
 
 [[package]]
 name = "auki-session-py"

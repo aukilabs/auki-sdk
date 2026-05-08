@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:42 HKT, 2026
+
+**Step 2 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md): libp2p substream wire moves to protobuf.** Three new `.proto` packages in [`auki-datatypes`](crates/auki-datatypes): `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, and `auki.stream` (full envelope). [`auki-network`](crates/auki-network)'s `stream_protocol` swaps JSON-via-`serde_json` for prost-encoded `StreamMessage`; the framing primitive (4-byte BE u32 length prefix) is unchanged but the envelope + inner T are now native binary. Drops `base64` from the `swarm` feature.
+
+**Workspace 1.0.0 → 0.0.1 protocol-id rename.** Per Nils's "save 1.0.0 for the first official release" stance: `/auki/cluster/1.0.0` → `/auki/cluster/0.0.1`, `/auki/identify/1.0.0` → `/auki/identify/0.0.1`. Legacy JSON `/auki/stream/1.0.0` retired; replaced by protobuf `/auki/stream/0.1.0`. Park + Boosterapp coordinate the cutover when picking up this SDK version.
+
+**Tests**: `auki-network` 99 → 102 (+3 locked cross-language vectors for the new prost wire shapes). Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.
+
 ### broodsugar's dobby · May 8, 09:34 HKT, 2026
 
 **Crate renamed `auki-session` → `auki-layout`.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) the crate doesn't provide; the crate is the *layout contract* — paths, lifecycle convention, ID encoding. The name `auki-session` is now reserved for the future Rust runtime counterpart of [`auki-session-py`](crates/auki-session-py)'s in-process `Session` surface (per the [root `Session.open` Propagate item](parking_lot.md)).

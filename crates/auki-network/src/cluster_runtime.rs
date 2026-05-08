@@ -4,7 +4,7 @@
 //! [`ClusterRuntime`] takes a [`ClusterDoc`] and a participant-info
 //! provider and drives a libp2p swarm against them: auto-dials every
 //! peer in the doc, exchanges [`ParticipantInfo`] over the
-//! `/auki/cluster/1.0.0` protocol, maintains a live peer-state map,
+//! `/auki/cluster/0.0.1` protocol, maintains a live peer-state map,
 //! and reconnects on disconnect with exponential backoff.
 //!
 //! ## Shape: opaque runtime, not a `NetworkBehaviour`
@@ -151,9 +151,9 @@ pub struct PeerSnapshot {
 }
 
 /// Drives a libp2p swarm against a [`ClusterDoc`], auto-dialing peers,
-/// exchanging [`ParticipantInfo`] over `/auki/cluster/1.0.0`, and
+/// exchanging [`ParticipantInfo`] over `/auki/cluster/0.0.1`, and
 /// maintaining the live peer state. As of grimsby Batch 1, also drives
-/// `/auki/stream/1.0.0` typed-byte-stream subscriptions through the
+/// `/auki/stream/0.1.0` typed-byte-stream subscriptions through the
 /// same swarm — `stream_provider` runs the producer side; `open_stream`
 /// runs the consumer side.
 ///
@@ -164,7 +164,7 @@ pub struct ClusterRuntime {
     task: Option<JoinHandle<()>>,
     /// Cloneable handle to the swarm's [`libp2p_stream::Behaviour`] used
     /// by [`crate::stream_runtime`]'s `open_stream` (consumer side) to
-    /// open outbound substreams on `/auki/stream/1.0.0`. Each call clones
+    /// open outbound substreams on `/auki/stream/0.1.0`. Each call clones
     /// this for its own `&mut self` use, per `libp2p-stream`'s
     /// per-Control backpressure model. The runtime task holds a separate
     /// clone for the inbound `accept` registration.
@@ -399,7 +399,7 @@ async fn run_task(
 
     let mut tick = tokio::time::interval(RECONNECT_TICK);
 
-    // Register inbound `/auki/stream/1.0.0` substream acceptance. Each
+    // Register inbound `/auki/stream/0.1.0` substream acceptance. Each
     // accepted substream is handed off to a per-substream task that
     // invokes `stream_provider` and pumps the source-Stream onto the
     // wire. AlreadyRegistered is unreachable in practice — the

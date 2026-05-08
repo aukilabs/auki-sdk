@@ -25,7 +25,8 @@
 use auki_network_rs::stream_protocol::{
     AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
     EndReason as RustEndReason, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
+    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest, decline_reason,
+    end_reason,
 };
 use auki_network_rs::stream_runtime::{
     ConsumerFrame as RustConsumerFrame, OpenStreamError as RustOpenStreamError,
@@ -234,21 +235,21 @@ impl PyDeclineReason {
     #[staticmethod]
     fn sensor_not_found() -> Self {
         Self {
-            inner: RustDeclineReason::SensorNotFound,
+            inner: RustDeclineReason::sensor_not_found(),
         }
     }
 
     #[staticmethod]
     fn sensor_unavailable() -> Self {
         Self {
-            inner: RustDeclineReason::SensorUnavailable,
+            inner: RustDeclineReason::sensor_unavailable(),
         }
     }
 
     #[staticmethod]
     fn producer_shutting_down() -> Self {
         Self {
-            inner: RustDeclineReason::ProducerShuttingDown,
+            inner: RustDeclineReason::producer_shutting_down(),
         }
     }
 
@@ -256,20 +257,21 @@ impl PyDeclineReason {
     #[pyo3(signature = (*, detail))]
     fn other(detail: String) -> Self {
         Self {
-            inner: RustDeclineReason::Other { detail },
+            inner: RustDeclineReason::other(detail),
         }
     }
 
     /// snake-case discriminator: `"sensor_not_found"`, `"sensor_unavailable"`,
     /// `"producer_shutting_down"`, or `"other"`. Stable across SDK versions
-    /// (matches the Rust `serde(rename_all = "snake_case")` tag).
+    /// (the prost-generated oneof tag, snake-cased per the `.proto`).
     #[getter]
     fn kind(&self) -> &'static str {
-        match &self.inner {
-            RustDeclineReason::SensorNotFound => "sensor_not_found",
-            RustDeclineReason::SensorUnavailable => "sensor_unavailable",
-            RustDeclineReason::ProducerShuttingDown => "producer_shutting_down",
-            RustDeclineReason::Other { .. } => "other",
+        match &self.inner.kind {
+            Some(decline_reason::Kind::SensorNotFound(_)) => "sensor_not_found",
+            Some(decline_reason::Kind::SensorUnavailable(_)) => "sensor_unavailable",
+            Some(decline_reason::Kind::ProducerShuttingDown(_)) => "producer_shutting_down",
+            Some(decline_reason::Kind::Other(_)) => "other",
+            None => "unspecified",
         }
     }
 
@@ -277,24 +279,27 @@ impl PyDeclineReason {
     /// `None` for the named variants.
     #[getter]
     fn detail(&self) -> Option<&str> {
-        match &self.inner {
-            RustDeclineReason::Other { detail } => Some(detail.as_str()),
+        match &self.inner.kind {
+            Some(decline_reason::Kind::Other(other)) => Some(other.detail.as_str()),
             _ => None,
         }
     }
 
     fn __repr__(&self) -> String {
-        match &self.inner {
-            RustDeclineReason::Other { detail } => {
-                format!("DeclineReason.other(detail={detail:?})")
+        match &self.inner.kind {
+            Some(decline_reason::Kind::Other(other)) => {
+                format!("DeclineReason.other(detail={:?})", other.detail)
             }
-            RustDeclineReason::SensorNotFound => "DeclineReason.sensor_not_found()".to_string(),
-            RustDeclineReason::SensorUnavailable => {
+            Some(decline_reason::Kind::SensorNotFound(_)) => {
+                "DeclineReason.sensor_not_found()".to_string()
+            }
+            Some(decline_reason::Kind::SensorUnavailable(_)) => {
                 "DeclineReason.sensor_unavailable()".to_string()
             }
-            RustDeclineReason::ProducerShuttingDown => {
+            Some(decline_reason::Kind::ProducerShuttingDown(_)) => {
                 "DeclineReason.producer_shutting_down()".to_string()
             }
+            None => "DeclineReason.<unspecified>()".to_string(),
         }
     }
 
@@ -318,21 +323,21 @@ impl PyEndReason {
     #[staticmethod]
     fn source_ended() -> Self {
         Self {
-            inner: RustEndReason::SourceEnded,
+            inner: RustEndReason::source_ended(),
         }
     }
 
     #[staticmethod]
     fn producer_shutting_down() -> Self {
         Self {
-            inner: RustEndReason::ProducerShuttingDown,
+            inner: RustEndReason::producer_shutting_down(),
         }
     }
 
     #[staticmethod]
     fn session_ended() -> Self {
         Self {
-            inner: RustEndReason::SessionEnded,
+            inner: RustEndReason::session_ended(),
         }
     }
 
@@ -340,38 +345,40 @@ impl PyEndReason {
     #[pyo3(signature = (*, detail))]
     fn producer_error(detail: String) -> Self {
         Self {
-            inner: RustEndReason::ProducerError { detail },
+            inner: RustEndReason::producer_error(detail),
         }
     }
 
     #[getter]
     fn kind(&self) -> &'static str {
-        match &self.inner {
-            RustEndReason::SourceEnded => "source_ended",
-            RustEndReason::ProducerShuttingDown => "producer_shutting_down",
-            RustEndReason::SessionEnded => "session_ended",
-            RustEndReason::ProducerError { .. } => "producer_error",
+        match &self.inner.kind {
+            Some(end_reason::Kind::SourceEnded(_)) => "source_ended",
+            Some(end_reason::Kind::ProducerShuttingDown(_)) => "producer_shutting_down",
+            Some(end_reason::Kind::SessionEnded(_)) => "session_ended",
+            Some(end_reason::Kind::ProducerError(_)) => "producer_error",
+            None => "unspecified",
         }
     }
 
     #[getter]
     fn detail(&self) -> Option<&str> {
-        match &self.inner {
-            RustEndReason::ProducerError { detail } => Some(detail.as_str()),
+        match &self.inner.kind {
+            Some(end_reason::Kind::ProducerError(err)) => Some(err.detail.as_str()),
             _ => None,
         }
     }
 
     fn __repr__(&self) -> String {
-        match &self.inner {
-            RustEndReason::ProducerError { detail } => {
-                format!("EndReason.producer_error(detail={detail:?})")
+        match &self.inner.kind {
+            Some(end_reason::Kind::ProducerError(err)) => {
+                format!("EndReason.producer_error(detail={:?})", err.detail)
             }
-            RustEndReason::SourceEnded => "EndReason.source_ended()".to_string(),
-            RustEndReason::ProducerShuttingDown => {
+            Some(end_reason::Kind::SourceEnded(_)) => "EndReason.source_ended()".to_string(),
+            Some(end_reason::Kind::ProducerShuttingDown(_)) => {
                 "EndReason.producer_shutting_down()".to_string()
             }
-            RustEndReason::SessionEnded => "EndReason.session_ended()".to_string(),
+            Some(end_reason::Kind::SessionEnded(_)) => "EndReason.session_ended()".to_string(),
+            None => "EndReason.<unspecified>()".to_string(),
         }
     }
 
@@ -732,7 +739,7 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
         // carrying the error string.
         match decision_or_err {
             Err(detail) => RustStreamDispatch::Decline {
-                reason: RustDeclineReason::Other { detail },
+                reason: RustDeclineReason::other(detail),
             },
             Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
                 reason: reason.inner,
@@ -1091,7 +1098,7 @@ create_exception!(
     StreamUnreachable,
     pyo3::exceptions::PyException,
     "`runtime.open_stream` failure: libp2p couldn't open the substream \
-     (peer not reachable, peer doesn't speak `/auki/stream/1.0.0`, or \
+     (peer not reachable, peer doesn't speak `/auki/stream/0.1.0`, or \
      the open timed out). `args[0]` is a description string."
 );
 
@@ -1439,9 +1446,8 @@ def _make(cluster):
                 sensor_id: "any".into(),
             };
             match rust_provider(request) {
-                RustStreamDispatch::Decline {
-                    reason: RustDeclineReason::SensorNotFound,
-                } => {}
+                RustStreamDispatch::Decline { reason }
+                    if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
                 _ => panic!("expected Decline(SensorNotFound)"),
             }
         });
@@ -1472,12 +1478,13 @@ def _bad(req):
                 sensor_id: "any".into(),
             };
             match rust_provider(request) {
-                RustStreamDispatch::Decline {
-                    reason: RustDeclineReason::Other { detail },
-                } => assert!(
-                    detail.contains("provider broke"),
-                    "decline detail should carry the Python error: {detail}",
-                ),
+                RustStreamDispatch::Decline { reason } => match reason.kind {
+                    Some(decline_reason::Kind::Other(decline_reason::Other { detail })) => assert!(
+                        detail.contains("provider broke"),
+                        "decline detail should carry the Python error: {detail}",
+                    ),
+                    other => panic!("expected Other variant; got {other:?}"),
+                },
                 _ => panic!("expected Decline(Other) with the Python error in detail"),
             }
         });

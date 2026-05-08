@@ -16,7 +16,7 @@ When this crate's first implementation lands (after `auki-datatypes` migrates at
 
 ## libp2p control-plane protocols — design timing
 
-Nils 2026-05-07: "Don't design those libp2p control protocols speculatively now. They'll come once the in-process SDK API (`auki-session-py`, in design) is settled — both transports adapt that." Translation: `/auki/control/info/1.0.0`, `/auki/control/sensor_logs/1.0.0`, etc. land **after** this crate stabilizes; the in-process API is the source-of-truth, and both transports (HTTP frozen at v0.0.23, libp2p forthcoming) become thin wrappers. Same length-prefixed-JSON framing pattern as `/auki/stream/1.0.0`. Don't draft these until this crate's [`src/readme.md`](src/readme.md) shows real implementation, not just the spec.
+Nils 2026-05-07: "Don't design those libp2p control protocols speculatively now. They'll come once the in-process SDK API (`auki-session-py`, in design) is settled — both transports adapt that." Translation: `/auki/control/info/0.0.1`, `/auki/control/sensor_logs/0.0.1`, etc. land **after** this crate stabilizes; the in-process API is the source-of-truth, and both transports (HTTP frozen at v0.0.23, libp2p forthcoming) become thin wrappers. Same length-prefixed-JSON framing pattern as `/auki/stream/0.1.0`. Don't draft these until this crate's [`src/readme.md`](src/readme.md) shows real implementation, not just the spec.
 
 ---
 

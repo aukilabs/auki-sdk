@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 09:42 HKT, 2026
+
+**Step 2 of the [migration](src/sprint.md) landed — libp2p substream wire moves to protobuf.** Three new `.proto` packages: `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, `auki.stream` (full envelope `StreamMessage` oneof of `Request | Accept | Decline | Frame | EndOfStream`).
+
+**Per-step decision: `Frame.payload = bytes`.** T inferred from `AcceptInfo.sensor_hash` → `SensorRegistryEntry.body` (same chain that already governs on-disk segment payloads). The substream is mono-T per Dagaz D1; oneof-on-every-frame would be redundant.
+
+**Helper constructors on the prost-generated types** — `StreamMessage::request(req) | accept(info) | decline(reason) | frame(f) | end_of_stream(reason)`, `DeclineReason::sensor_not_found() | sensor_unavailable() | producer_shutting_down() | other(detail)`, same shape on `EndReason`. Lives in `pub mod stream { … }` in [`src/lib.rs`](src/lib.rs); orphan rule satisfied since impls sit in the type's defining crate. Verbose match patterns at the call site — `match reason.kind { Some(decline_reason::Kind::SensorNotFound(_)) => … }` — were the alternative; the helpers buy ergonomics.
+
+**Locked cross-language conformance vectors** for `JpegFrame` + `PointCloudFrame` wire bytes pinned in [`auki-network::stream_protocol::tests`](../auki-network/src/stream_protocol.rs). Also pinned: a `StreamMessage::Frame { PointCloudFrame }` envelope round-trip, end-to-end through `read_message` / `write_message`. Cross-language readers (Park's browser-side decoder, future Sentinel ports) MUST reproduce these bytes.
+
+**Test count: 7 → 7** (helpers don't add new tests in this crate; the wire pin lives in `auki-network`).
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **Step 1 of the [migration](src/sprint.md) landed — first real schema. `auki.camera` ships `PinholeCameraLogEntry` + `DynamicIntrinsics`** with locked wire-bytes and XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`).

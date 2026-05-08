@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 11:27 HKT, 2026
+
+[`auki-registry`](auki-registry) + [`auki-manifests`](auki-manifests) — filed two leaf parking-lot updates supporting the root subscription-as-materialization keystone: `sensor_id` convention raised from "recommended" to "load-bearing for cross-peer recording provenance," and the Pose Log / TimeTransform Log self-provenance gap filed with forward paths.
+
 ### broodsugar's claude · May 8, 11:20 HKT, 2026
 
 **Step 4 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.audio / AudioLogEntry` (on-disk, opaque-bytes-only).** [`auki-datatypes`](auki-datatypes) gains `proto/audio.proto` with `message AudioLogEntry { bytes data = 1; }` (Option A — same stance as Step 3; declines the pre-Step-3 lean toward adding `sample_count`). [`auki-registry`](auki-registry)'s `AudioLogEntry` struct is gone; `serde_bytes` dep dropped (was its last user after PointCloudLogEntry departed at Step 3). [`auki-logs`](auki-logs) needed no changes (encoder-agnostic since Step 1). Tests: `auki-datatypes` 13 → 19 (+6 incl. locked wire-bytes vector + XXH3-128 hash); `auki-registry` unchanged. Resolves the implicit-vs-explicit chunk metadata parking-lot question.

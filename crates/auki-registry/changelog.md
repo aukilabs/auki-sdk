@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 11:27 HKT, 2026
+
+**Filed: sensor_id convention is load-bearing for cross-peer recording provenance.** Annotated the existing "Formalize the sensor_id naming convention?" parking-lot item with the implication of the [root subscription-as-materialization keystone](../../parking_lot.md#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08): the `<platform-tag>-<machine-id>/<sensor-name>` pattern (e.g. `K1-AABBCCDDEEFF/head_left_cam`) is what makes a recording self-provenant when it moves between peers — the MAC encodes the producing device, and that encoding survives subscription, archival, and replay. An integrator naming their sensor `my-cool-camera` produces a recording with no provenance signal. Lean recorded: keep the SDK out of string-building (no `SensorId` newtype) but raise the README's status from "recommended" to "REQUIRED for cross-peer recording provenance." Pin before the unified subscription primitive lands. Doc-only.
+
 ### broodsugar's claude · May 8, 11:20 HKT, 2026
 
 **`AudioLogEntry` departed at Step 4 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** The struct is gone from [`src/lib.rs`](src/lib.rs); replaced by [`auki_datatypes::audio::AudioLogEntry`](../auki-datatypes/src/lib.rs) under the `auki.audio` `.proto` package. Per-step decision: opaque-bytes-only — same stance as Step 3 for point clouds; declines the pre-Step-3 lean toward adding `sample_count`. Readers derive sample count and chunk duration from the bytes plus the `Microphone` registry body.

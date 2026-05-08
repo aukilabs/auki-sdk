@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package auki.detection;
+
+// Per-frame detection log payload — the segment payload for a Detection
+// Log produced by a Detector binding. The detection schema is defined by
+// the Detector, not by the SDK: a QR detector emits portal-uid + four
+// corners + content; an ESL detector emits class + bbox + confidence; a
+// people detector emits person bboxes. The SDK does not interpret these
+// fields — it logs them and passes them to Estimators / Extractors that
+// know how to use them. The frame's capture timestamp rides in the
+// auki-logs framing's `timestamp_ns`, not here.
+//
+// Step 8 decision (2026-05-08): opaque-bytes-only, matching the Step 3
+// stance for `auki.point_cloud` and the Step 4 stance for `auki.audio`.
+// The Detector is the single source of truth for its detection schema
+// (the analog of the SensorRegistryEntry's `Microphone` body for audio
+// or `PointCloud` body for point clouds — pinned by the Detection Log's
+// manifest via a `(detector_id, ...)` shape; the exact registry shape
+// for Detectors is TBD). Carrying detector-specific fields on this prost
+// type would either lock the SDK into knowing every detector's schema
+// or force a degenerate `oneof` of every shipped detector — neither
+// scales. Same trade Step 3 declined for point clouds.
+//
+// Closes the producer-side of the [subscription-as-materialization
+// keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with
+// `T = DetectionLogEntry`, lifecycle inherited from the sensor-log
+// primitive. No "DetectionLog" abstraction.
+//
+// Field number ledger (never reuse, never renumber):
+//   DetectionLogEntry.data = 1
+
+message DetectionLogEntry {
+  bytes data = 1;
+}

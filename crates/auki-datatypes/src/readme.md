@@ -4,13 +4,14 @@ Implementation status of `auki-datatypes`. Spec: this crate's [outer `README.md`
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). It includes eight prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
+A single source file: [`lib.rs`](lib.rs). It includes nine prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
 
 - `camera` (Step 1, 2026-05-08) — `PinholeCameraLogEntry` + `DynamicIntrinsics`.
 - `point_cloud` (Step 3, 2026-05-08) — `PointCloudLogEntry { bytes data }`. Opaque-bytes-only — layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Symmetric with the wire's `PointCloudFrame`.
 - `audio` (Step 4, 2026-05-08) — `AudioLogEntry { bytes data }`. Opaque-bytes-only — `sample_format`, `channels`, `sample_rate_hz`, `channel_layout` come from `(sensor_id, sensor_hash) → SensorBody::Microphone`.
 - `pose` (Step 5, 2026-05-08) — `SpatialTransform { Vec3 translation; Quat orientation }`, flat. No `PoseLogEntry` wrapper, no per-sample `parent_frame`/`child_frame` — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair. Quat is `(x, y, z, w)` Hamilton.
 - `time_transform` (Step 6, 2026-05-08) — `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }`. The pre-migration per-entry `source` field moved to the manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); the per-entry `discontinuous: bool` is gone (computed on read).
+- `detection` (Step 8, 2026-05-08) — `DetectionLogEntry { bytes data }`. Opaque-bytes-only — the per-frame detection schema is defined by the Detector, not the SDK (QR portal-uid + corners; ESL class + bbox + confidence; people bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. The exact registry shape that pins per-`(detector_id, ...)` interpretation is TBD; it'll be the Detection-Log analog of `SensorRegistryEntry`.
 - `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream`), `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
@@ -19,7 +20,9 @@ Plus the `impl_log_payload!` macro that wires every on-disk prost type into [`au
 
 ## What's not here yet
 
-The migration is **complete** at Step 7 (2026-05-08). Every on-disk and libp2p-wire payload type the SDK ships lives here; the `placeholder.proto` smoke-test that proved out the prost-build pipeline before any real schema landed is gone. No remaining steps.
+Every on-disk and libp2p-wire payload type the SDK ships today lives here. The 2026-05-08 migration ran from Step 0 through Step 7; Step 8 followed the same day to close the producer side of the Detector keystone. The `placeholder.proto` smoke-test that proved out the prost-build pipeline before any real schema landed is gone.
+
+The detection-log analog of `SensorRegistryEntry` — the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque `DetectionLogEntry.data` bytes — is **not in this crate's scope**; it's a forthcoming registry shape, sibling to Sensor / Frame / Clock entries. When that registry's identity body lands, it lives in [`auki-registry`](../../auki-registry) (JCS-canonical JSON) the same way `SensorBody` does, not here.
 
 ## Public surface (current)
 
@@ -62,6 +65,11 @@ pub mod time_transform {
         pub offset_ns: i64,        // to_clock - from_clock at sample instant
         pub uncertainty_ns: u32,   // m2 - m1 from the three-read protocol
     }
+}
+
+pub mod detection {
+    // prost-generated; opaque-bytes-only.
+    pub struct DetectionLogEntry { pub data: Vec<u8> }
 }
 
 pub mod frame_stream {
@@ -121,11 +129,12 @@ impl_log_payload!(point_cloud::PointCloudLogEntry);
 impl_log_payload!(audio::AudioLogEntry);
 impl_log_payload!(pose::SpatialTransform);
 impl_log_payload!(time_transform::TimeTransformEntry);
+impl_log_payload!(detection::DetectionLogEntry);
 // (Stream types don't get LogPayload — they're wire types, not on-disk
 // payloads. `Frame.payload` carries the on-disk T's prost bytes.)
 ```
 
-## Tests (31 total)
+## Tests (37 total)
 
 | Test | Asserts |
 |------|---------|
@@ -160,6 +169,12 @@ impl_log_payload!(time_transform::TimeTransformEntry);
 | `time_transform_entry_zero_offset_round_trips` | proto3 default-elision: zeroed entry encodes to zero bytes. |
 | `time_transform_entry_negative_offset_round_trips` | Negative `offset_ns` round-trips (proto3 `int64` is non-zigzag, 10-byte varint for negatives). |
 | `time_transform_entry_segment_round_trip` | End-to-end seam: open `auki_logs::Log<TimeTransformEntry>`, append two entries, close, re-read. |
+| `detection_log_entry_serializes_to_locked_wire_bytes` | Locked prost wire bytes for a 12-byte fixture: `0a0c000102030405060708090a0b`. Cross-language readers must reproduce them. |
+| `detection_log_entry_hash_is_locked` | XXH3-128 of those bytes — `94f8efe6be63d3dc5e045ab08d538a15`. |
+| `detection_log_entry_round_trips` | `encode_to_vec` → `decode` gives back the same struct. |
+| `detection_log_entry_log_payload_round_trips` | Same, via the `LogPayload` macro impl. |
+| `detection_log_entry_empty_data_round_trips` | proto3 default-elision: empty payload (Detector ran, saw nothing) encodes to zero bytes. |
+| `detection_log_entry_segment_round_trip` | End-to-end seam: open `auki_logs::Log<DetectionLogEntry>`, append two entries (one populated, one empty), close, re-read. |
 
 ## Consumers
 
@@ -170,3 +185,4 @@ impl_log_payload!(time_transform::TimeTransformEntry);
 - `auki-network`'s `stream_protocol` — re-exports `JpegFrame`, `PointCloudFrame`, and the full `auki.stream` envelope; `stream_runtime`'s `T` bound is `prost::Message + Default + Send + 'static` (Step 2, 2026-05-08).
 - `auki-network-py` — PyO3 wrappers track the prost match shape; Python surface unchanged.
 - `auki-logs` (transitive) — every on-disk prost type gets `LogPayload` for free via `impl_log_payload!`.
+- [`detectors`](https://github.com/aukilabs/detectors) (downstream) — phase-2 Detection-Log writers append `DetectionLogEntry { data: <detector-specific schema> }` to a `Log<DetectionLogEntry>`; the SDK doesn't decode `data`, so each detector controls its own schema. Step 8 unblocks phase-2 blocker #3 (the `DetectionLogEntry` type); the remaining phase-2 blockers — `Log<T>::tail()` for the read side, the Detector binding API, the `auki-sdk-py` Python binding — sit elsewhere.

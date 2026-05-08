@@ -17,7 +17,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -149,31 +148,12 @@ impl SensorRegistryEntry {
 
 // ─── Sensor Log payload ──────────────────────────────────────────────────────
 
-/// Per-frame intrinsics + distortion. Pulled out of the registry-side identity
-/// because intrinsics can refine at runtime (autofocus, calibration updates).
-///
-/// Lives in `auki-registry` so that *consumers* of a Sensor Log (renderers,
-/// analysis tools) don't have to depend on a ROS adapter just to deserialize
-/// the payload.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DynamicIntrinsics {
-    pub fx: f64,
-    pub fy: f64,
-    pub cx: f64,
-    pub cy: f64,
-    pub distortion_coefficients: Vec<f64>,
-}
-
-/// The Sensor Log payload (CBOR-encoded under auki-logs framing). The frame
-/// timestamp lives in the framing's `timestamp_ns`, not here.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SensorLogEntry {
-    pub dynamic_intrinsics: DynamicIntrinsics,
-    /// Encoded as a CBOR byte string (major type 2) rather than an array of
-    /// u8 — same on-disk semantics, ~half the byte cost for typical frames.
-    #[serde(with = "serde_bytes")]
-    pub frame: Vec<u8>,
-}
+// `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics`
+// moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera`
+// `.proto` package in Step 1 of the migration. Encoding switched from CBOR
+// to protobuf; segment payload bytes are no longer self-describing
+// (consumers resolve the schema via `(sensor_id, sensor_hash)` pointing at a
+// `SensorRegistryEntry` whose body kind tells them which `.proto` to use).
 
 /// The Point Cloud Log payload (CBOR-encoded under auki-logs framing). The
 /// frame timestamp lives in the framing's `timestamp_ns`, not here. The byte

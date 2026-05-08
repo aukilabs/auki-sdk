@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Test scaffolding `LogPayload` impl** — companion change for Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). `TestEntry` (the trivial body type the round-trip tests use to drive `auki_logs::Log<T>::open`) gained a `LogPayload` impl over ciborium so the test still compiles after the trait switch. No production-code change in this crate.
+
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **New crate scaffolded — Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** Pure refactor extracting the manifest builders from existing crates into a single owner. Symmetric with [`auki-datatypes`](../auki-datatypes), which owns segment payload shapes; this crate owns manifest shapes.

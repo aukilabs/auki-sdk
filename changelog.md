@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Step 1 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](crates/auki-datatypes) ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics` (renamed from `SensorLogEntry`), prost-encoded, locked wire-bytes + XXH3-128 hash. Camera log payload + `DynamicIntrinsics` moved out of [`auki-registry`](crates/auki-registry) to their new home; [`auki-ros-adapter`](crates/auki-ros-adapter)'s `build_sensor_log_entry` returns the prost type.
+
+**[`auki-logs`](crates/auki-logs) became encoder-agnostic** via a new `LogPayload` trait — `Log<T>`'s bound switches from `T: Serialize + DeserializeOwned` to `T: LogPayload`. Consumers pick prost / ciborium / their own. [`auki-datatypes`](crates/auki-datatypes)'s `impl_log_payload!` macro gives every prost type a one-line impl; mid-migration ciborium types implement the trait directly. ciborium drops from `auki-logs` production deps; `Error::Cbor` → `Error::Payload`.
+
+**Per-step decision pinned**: `dynamic_intrinsics` is inline-optional (non-autofocusing cameras pay only the message-tag overhead; promoting to a sibling intrinsics-update sub-stream remains backward-compatible). Two parking-lot open questions resolved (`dynamic_intrinsics` placement; encoder-aware vs encoder-agnostic `Log<T>`).
+
+**Test counts**: `auki-datatypes` 1 → 7; everything else flat. `cargo test --workspace` clean. Sprint marks Step 1 ✓ done. Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.
+
 ### broodsugar's dobby · May 8, 07:56 HKT, 2026
 
 **API-surface review walkthrough — six items filed across four parking-lots, plus three editorial items at root.** Walkthrough of the SDK's public surface after PR #55 landed [Step 0 of the `auki-datatypes` migration](crates/auki-datatypes/src/sprint.md). The marquee elevation finding (`TransformSample` is wrong-layered as an `auki-registry` payload helper) is **resolved by the migration plan** — the rename to `SpatialTransform` plus relocation to `auki-datatypes` carries the layering change with it. Six remaining smaller items now in parking-lots:

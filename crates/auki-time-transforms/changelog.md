@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**`LogPayload` impl for `TimeTransformEntry` over ciborium.** Companion to Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md), which switched [`auki-logs`](../auki-logs)'s `Log<T>` bound from `T: Serialize + DeserializeOwned` to `T: LogPayload`. `TimeTransformEntry` doesn't move to a `.proto` until Step 6 of the migration, so the impl uses ciborium directly to preserve the on-disk encoding identically. Promoted ciborium from a dev-dep to a regular dep — gone again at Step 6. **No on-disk change.** Test count 9 → 9.
+
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** `pub fn build_manifest(...)` moved to [`auki-manifests`](../auki-manifests) and renamed `build_time_transform_log_manifest` for unambiguity vs siblings (`build_sensor_log_manifest`, `build_pose_log_manifest`). The private `duration_as_i64_ns` helper was inlined at its one remaining production caller (`Sampler::start`'s threshold conversion). The `Sampler` integration test (`sampler_writes_entries_then_stops_cleanly`) now constructs its manifest via `auki_manifests::build_time_transform_log_manifest` — added as a new dev-dep on this crate. The `build_manifest_contains_required_fields` unit test moved to `auki-manifests` (renamed `build_time_transform_log_manifest_contains_required_fields`). README manifest section trimmed to a one-paragraph pointer at [`auki-manifests/README.md`](../auki-manifests/README.md). **Test count: 10 → 9** (one moved). All semantics preserved; pure refactor. Will land in v0.0.24.

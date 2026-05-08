@@ -6,6 +6,21 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) landed.** `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../auki-datatypes) under the new `auki.camera` `.proto` package. Encoding switched from CBOR-via-ciborium to protobuf via prost. Manifest shape is unchanged — same `(sensor_id, sensor_hash)` resolution against the Sensor Registry tells a reader the segments hold `PinholeCameraLogEntry` rather than another payload type.
+
+**Removed from this crate:**
+
+- `pub struct SensorLogEntry { dynamic_intrinsics, frame }` (the `pub` type; renamed to `PinholeCameraLogEntry` at the new home)
+- `pub struct DynamicIntrinsics { fx, fy, cx, cy, distortion_coefficients }`
+
+The two types had no inline tests in this crate (test count unchanged at 35).
+
+**Docs**: outer `README.md` Sensor Log payload section replaced with a one-paragraph pointer at [`auki-datatypes`](../auki-datatypes); the same crate's "two kinds of typed data" intro now spells out that the camera payload departed at Step 1 while the others (Point Cloud / Audio / Pose) are still here. `src/readme.md` Log payload types code block dropped the `SensorLogEntry` struct + the `DynamicIntrinsics` struct + the description of `SensorLogEntry.frame`'s `serde_bytes` tagging. Schema-version line updated to flag that `PinholeCameraLogEntry` + `DynamicIntrinsics` version independently in their new home.
+
+The `PoseLogEntry` + `TransformSample` payload types still live here — those move out at Step 5. `PointCloudLogEntry` (Step 3) and `AudioLogEntry` (Step 4) likewise. Will land in v0.0.24.
+
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) landed.** Pure refactor extracting manifest concerns into the new [`auki-manifests`](../auki-manifests) crate. No behaviour change, no encoding change.

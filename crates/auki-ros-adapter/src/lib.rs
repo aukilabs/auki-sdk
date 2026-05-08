@@ -1,7 +1,7 @@
 //! ROS2 → Auki translation: `sensor_msgs/CameraInfo` + `sensor_msgs/Image`
-//! into `SensorRegistryEntry` + `DynamicIntrinsics` + `SensorLogEntry`.
+//! into `SensorRegistryEntry` + `DynamicIntrinsics` + `PinholeCameraLogEntry`.
 //!
-//! Sensor Log payload schema: see [`auki-registry`](../../auki-registry/README.md).
+//! Sensor Log payload schema: see [`auki-datatypes`](../../auki-datatypes/README.md).
 //! Translation contract: [`../README.md`](../README.md).
 //!
 //! ## Architecture
@@ -86,12 +86,14 @@ pub struct PointFieldMsg {
 
 // ─── Output types written to the Sensor Log ─────────────────────────────────
 //
-// `SensorLogEntry` and `DynamicIntrinsics` previously lived here; they moved
-// into `auki-registry` so that consumers of a sensor log (renderers, analysis
-// tools) don't have to pull in a ROS adapter just to deserialize the payload.
-// Re-exported here so existing call sites keep compiling.
+// `DynamicIntrinsics` + the camera log entry now live in
+// [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`
+// (Step 1 of the migration). `PointCloudLogEntry` still lives in
+// `auki-registry` until Step 3 moves it. Re-exported here so existing call
+// sites stay short.
 
-pub use auki_registry::{DynamicIntrinsics, PointCloudLogEntry, SensorLogEntry};
+pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
+pub use auki_registry::PointCloudLogEntry;
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -153,15 +155,15 @@ pub fn build_rgb_camera_registry_entry(
     }
 }
 
-/// Build a `SensorLogEntry` from the latest `CameraInfo` snapshot + an Image.
-/// Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
+/// Build a `PinholeCameraLogEntry` from the latest `CameraInfo` snapshot + an
+/// Image. Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
 pub fn build_sensor_log_entry(
     info: &CameraInfoMsg,
     image: &ImageMsg,
-) -> (i64, SensorLogEntry) {
+) -> (i64, PinholeCameraLogEntry) {
     let timestamp_ns = stamp_to_ns(image.stamp);
-    let entry = SensorLogEntry {
-        dynamic_intrinsics: dynamic_intrinsics_from(info),
+    let entry = PinholeCameraLogEntry {
+        dynamic_intrinsics: Some(dynamic_intrinsics_from(info)),
         frame: image.data.clone(),
     };
     (timestamp_ns, entry)
@@ -892,26 +894,12 @@ mod tests {
         let (ts, entry) = build_sensor_log_entry(&info, &image);
         assert_eq!(ts, 100_000_000_500);
         assert_eq!(entry.frame, vec![0xAA, 0xBB, 0xCC, 0xDD]);
-        assert_eq!(entry.dynamic_intrinsics.fx, 400.0);
+        assert_eq!(entry.dynamic_intrinsics.as_ref().unwrap().fx, 400.0);
     }
 
-    #[test]
-    fn sensor_log_entry_round_trips_through_cbor() {
-        let entry = SensorLogEntry {
-            dynamic_intrinsics: DynamicIntrinsics {
-                fx: 400.5,
-                fy: 401.5,
-                cx: 272.0,
-                cy: 244.0,
-                distortion_coefficients: vec![1.0, 2.0, 3.0],
-            },
-            frame: vec![0; 1024],
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        let back: SensorLogEntry = ciborium::from_reader(&buf[..]).unwrap();
-        assert_eq!(back, entry);
-    }
+    // Prost round-trip lives in `auki-datatypes` (locked vector). The previous
+    // ciborium round-trip test here covered the same surface for the old CBOR
+    // shape and was deleted at Step 1 of the migration.
 
     #[test]
     fn mock_subscriber_returns_scripted_bootstrap_then_drains_events() {
@@ -998,7 +986,7 @@ mod tests {
         let (ts, entry) = &entries[0];
         assert_eq!(*ts, 200_000_000_000);
         assert_eq!(entry.frame.len(), 16);
-        assert_eq!(entry.dynamic_intrinsics.fx, 400.0);
+        assert_eq!(entry.dynamic_intrinsics.as_ref().unwrap().fx, 400.0);
     }
 
     // ─── Point cloud tests ──────────────────────────────────────────────────

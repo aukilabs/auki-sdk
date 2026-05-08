@@ -12,7 +12,10 @@ fn main() -> std::io::Result<()> {
 
     prost_build::Config::new()
         .protoc_executable(protoc)
-        .compile_protos(&["proto/placeholder.proto"], &["proto/"])?;
+        .compile_protos(
+            &["proto/placeholder.proto", "proto/camera.proto"],
+            &["proto/"],
+        )?;
 
     println!("cargo:rerun-if-changed=proto/");
     Ok(())

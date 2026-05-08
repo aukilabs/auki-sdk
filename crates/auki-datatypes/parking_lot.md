@@ -28,9 +28,9 @@ Protobuf wire format gives forward/backward compat almost for free (optional fie
 
 These are per-type design decisions to make as each `.proto` lands, surfaced when reviewing the `auki-registry` types pre-migration. Each is gating its corresponding migration step but not blocking the rest.
 
-### `PointCloudLogEntry` — on-disk vs wire-format drift
+### ✓ Resolved 2026-05-08 — `PointCloudLogEntry` is opaque-bytes-only (Step 3)
 
-Today's `auki-registry::PointCloudLogEntry` has `width: u32, height: u32, is_dense: bool, data: Vec<u8>` (ROS PointCloud2-shaped, typed layout fields outside the bytes). Today's `auki-network::stream_protocol::PointCloudFrame` has `bytes: Vec<u8>` only (typed layout fields ride inside the CDR bytes). Two representations of the same data on disk vs on the wire — drift. Resolve: pick one shape and use it both places. Lean: opaque-bytes-only (`PointCloudFrame { bytes }`) — interpretation comes from the registry entry's PointCloud body; doesn't bake ROS PointCloud2 into the type. Open whether the existing typed-fields approach has any reader benefit worth the asymmetry. Resolve before `auki.point_cloud` `.proto` lands.
+Adjudicated in favour of opaque-bytes-only: `auki.point_cloud.PointCloudLogEntry { bytes data = 1; }`. Symmetric with the wire's `PointCloudFrame { bytes }`; the ROS-shaped layout fields (`width`, `height`, `is_dense`) are gone from the per-frame type. Interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
 ### `AudioLogEntry` — implicit vs explicit chunk metadata
 

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:51 HKT, 2026
+
+**Step 3 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.point_cloud / PointCloudLogEntry` (on-disk, opaque-bytes-only).** [`auki-datatypes`](auki-datatypes) gains `proto/point_cloud.proto` with `message PointCloudLogEntry { bytes data = 1; }` (Option A — symmetric with the wire's `PointCloudFrame`; ROS-shaped `width × height × is_dense` gone, interpretation comes from the SensorRegistryEntry). [`auki-registry`](auki-registry)'s `PointCloudLogEntry` struct is gone; [`auki-ros-adapter`](auki-ros-adapter)'s `build_point_cloud_log_entry` re-exports from `auki-datatypes` and constructs only the `data` field. [`auki-logs`](auki-logs) needed no changes (encoder-agnostic since Step 1). Tests: `auki-datatypes` 7 → 13 (+6 incl. locked wire-bytes vector + XXH3-128 hash); `auki-registry` unchanged; `auki-ros-adapter` 21 → 19 (-2 stale CBOR tests). Resolves the PointCloud on-disk-vs-wire drift parking-lot question.
+
 ### broodsugar's claude · May 8, 10:11 HKT, 2026
 
 **Doc cleanup after Step 2** — [`crates/README.md`](README.md) updates the `auki-network` row's protocol id to `/auki/stream/0.1.0` and notes the prost-encoded envelope; [`auki-datatypes`](auki-datatypes) and [`auki-network`](auki-network) READMEs (outer + `src/readme.md`) catch up with the post-PR-#62 wire format (prost not JSON), framing-helper signatures (non-generic over `T`), `T` bound on `open_stream<T>` (`prost::Message + Default`), test counts (99 → 102), and locked-vector descriptions. Doc-only.

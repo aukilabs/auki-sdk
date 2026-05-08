@@ -109,6 +109,8 @@ pub fn build_point_cloud_registry_entry(
 ) -> auki_registry::SensorRegistryEntry;
 
 pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry);
+// PointCloudLogEntry is re-exported from auki_datatypes::point_cloud since
+// Step 3 (2026-05-08) — opaque-bytes-only, just `{ data: Vec<u8> }`.
 
 pub trait PointCloudSubscriber: Send {
     fn bootstrap(&mut self, timeout: Duration) -> Result<PointCloud2Msg, BootstrapError>;

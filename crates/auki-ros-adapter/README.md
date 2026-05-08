@@ -84,6 +84,8 @@ build_point_cloud_registry_entry(sensor_id, msg, frame_rate_hz) -> SensorRegistr
 build_point_cloud_log_entry(msg)                                -> (timestamp_ns, PointCloudLogEntry)
 ```
 
+`PointCloudLogEntry` is `auki_datatypes::point_cloud::PointCloudLogEntry { bytes data }` (re-exported here) since Step 3 of the migration (2026-05-08, opaque-bytes-only). The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; the producer (this crate) still uses the ROS-side `width × height` to compute `num_points` for the layout repacking, then flattens into the bytes. Readers resolve interpretation via the `(sensor_id, sensor_hash) → SensorBody::PointCloud` registry entry.
+
 Inputs are mirrors of ROS2's `sensor_msgs/PointCloud2` and `sensor_msgs/PointField`. The ROS2 `datatype` byte (1..=8) is mapped to the SDK's typed enum (`int8`..`float64`); unknown values panic loudly so wire-format drift surfaces instead of silently corrupting data.
 
 ### RGB/RGBA normalization

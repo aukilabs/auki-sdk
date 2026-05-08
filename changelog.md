@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:51 HKT, 2026
+
+**Step 3 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — `auki.point_cloud / PointCloudLogEntry` (on-disk, opaque-bytes-only).** New `auki.point_cloud` `.proto` package with `message PointCloudLogEntry { bytes data = 1; }`; [`auki-registry`](crates/auki-registry)'s pre-migration ROS-shaped struct (`width / height / is_dense / data`) is gone; [`auki-ros-adapter`](crates/auki-ros-adapter) re-exports the new prost type and only sets `data`. Symmetric with the wire's `PointCloudFrame`; resolves the on-disk-vs-wire drift parking-lot question (Option A). Tests: `auki-datatypes` 7 → 13 (+6); `auki-ros-adapter` 21 → 19 (-2 stale CBOR tests). Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.
+
 ### broodsugar's claude · May 8, 10:11 HKT, 2026
 
 **Doc cleanup after Step 2 (PR #62).** Caught the READMEs up with the post-PR reality across [root `README.md`](README.md), [`crates/README.md`](crates/README.md), [`auki-datatypes`](crates/auki-datatypes) (outer + `src/readme.md`), and [`auki-network`](crates/auki-network) (outer + `src/readme.md`): protocol IDs `/auki/cluster/0.0.1` + `/auki/stream/0.1.0`; stream wire format described as prost-encoded `StreamMessage` (not JSON-via-`serde_json`); framing helpers non-generic over `T`; `open_stream<T>`'s bound now `prost::Message + Default + Send + 'static`; locked-vector test names updated (`locked_stream_message_frame_with_point_cloud_payload` etc.); five `.proto` files enumerated in `auki-datatypes`'s layout; producer-side example uses current `StreamDispatch` + helper-constructor shape. Doc-only.

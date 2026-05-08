@@ -56,8 +56,9 @@ pub struct RgbCamera {
 }
 
 /// Static layout of a point-cloud sensor's per-point bytes. The actual point
-/// data lives in the per-frame log payload (`PointCloudLogEntry`); this
-/// describes how to interpret those bytes.
+/// data lives in the per-frame log payload
+/// ([`auki_datatypes::point_cloud::PointCloudLogEntry`]); this describes how
+/// to interpret those bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointCloud {
     pub fields: Vec<PointField>,
@@ -154,24 +155,6 @@ impl SensorRegistryEntry {
 // to protobuf; segment payload bytes are no longer self-describing
 // (consumers resolve the schema via `(sensor_id, sensor_hash)` pointing at a
 // `SensorRegistryEntry` whose body kind tells them which `.proto` to use).
-
-/// The Point Cloud Log payload (CBOR-encoded under auki-logs framing). The
-/// frame timestamp lives in the framing's `timestamp_ns`, not here. The byte
-/// layout of `data` is described by the corresponding `SensorBody::PointCloud`
-/// registry entry referenced by the log's manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PointCloudLogEntry {
-    /// Organized: cols. Unorganized: total point count.
-    pub width: u32,
-    /// Organized: rows. Unorganized: 1.
-    pub height: u32,
-    /// True if `data` contains no invalid (NaN/Inf) points.
-    pub is_dense: bool,
-    /// `data.len()` MUST equal `point_step × width × height` where `point_step`
-    /// comes from the registry entry. Encoded as a CBOR byte string.
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,
-}
 
 /// The Audio Log payload (CBOR-encoded under auki-logs framing). Each entry
 /// is one chunk of audio samples; the framing's `timestamp_ns` is the

@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:51 HKT, 2026
+
+**Step 3 of the [migration](src/sprint.md) landed — `auki.point_cloud` / `PointCloudLogEntry` (on-disk).** New `proto/point_cloud.proto` with `message PointCloudLogEntry { bytes data = 1; }` — opaque-bytes-only (Option A in the parking-lot slop point, adjudicated in favour). Symmetric with the wire's `PointCloudFrame`; the pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone — interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.
+
+**Moved** `PointCloudLogEntry` out of [`auki-registry`](../auki-registry); [`auki-ros-adapter`](../auki-ros-adapter)'s `build_point_cloud_log_entry` now returns the prost type with just `data` set. [`auki-logs`](../auki-logs) needed no changes — encoder-agnostic since Step 1.
+
+**Tests**: 7 → 13 (+6 — `serializes_to_locked_wire_bytes`, `hash_is_locked`, `round_trips`, `log_payload_round_trips`, `empty_data_round_trips`, `segment_round_trip`). Locked wire bytes for a 24-byte fixture: `0a18000102030405060708090a0b0c0d0e0f1011121314151617`. XXH3-128 hash: `4ea525d849212b2e067e33bec455c7ea`.
+
+**Resolved parking-lot question**: the on-disk-vs-wire drift slop point — adjudicated and propagated in this same PR.
+
 ### broodsugar's claude · May 8, 10:11 HKT, 2026
 
 **Doc cleanup after Step 2.** [`README.md`](README.md) layout block enumerates all five `.proto` files (placeholder + camera + frame_stream + point_cloud_stream + stream); [`src/readme.md`](src/readme.md) reflects the five generated modules, the public surface (`StreamMessage`, `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason` plus their helper constructors), and updates the consumers section (`auki-network` and `auki-network-py` both consume the Step 2 types). Status section in the outer README now lists Steps 1 and 2 as landed. Doc-only.

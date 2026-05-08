@@ -17,6 +17,7 @@ fn main() -> std::io::Result<()> {
                 "proto/placeholder.proto",
                 "proto/camera.proto",
                 "proto/frame_stream.proto",
+                "proto/point_cloud.proto",
                 "proto/point_cloud_stream.proto",
                 "proto/stream.proto",
             ],

@@ -14,7 +14,6 @@ fn main() -> std::io::Result<()> {
         .protoc_executable(protoc)
         .compile_protos(
             &[
-                "proto/placeholder.proto",
                 "proto/audio.proto",
                 "proto/camera.proto",
                 "proto/frame_stream.proto",

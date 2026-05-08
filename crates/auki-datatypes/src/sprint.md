@@ -4,7 +4,9 @@ Current work and the migration sequence to bring real schemas into this crate. S
 
 ## Now
 
-Scaffolding only — `proto/placeholder.proto` validates the `prost-build` pipeline; no real schemas defined; no downstream consumers wired up. Six log payload types currently live (as drift) in [`auki-registry`](../../auki-registry); each migration step **moves** a type from there to here, not just generates a new one in here.
+**Migration complete (Step 7, 2026-05-08).** Every on-disk log payload type lives here; the placeholder smoke-test that validated the `prost-build` pipeline before any real schema landed is gone. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time-transforms, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
+
+Pre-migration history (kept for context): six log payload types lived as drift in [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms); each migration step **moved** a type from there to here, not just generating a new one. The sequence below is preserved as a record of what was moved when.
 
 ## Migration sequence
 
@@ -65,7 +67,7 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - **Dropped** `ciborium` + `serde` + `serde_json` deps from [`auki-time-transforms`](../../auki-time-transforms) — encoding is now prost in the new home, and the sampler is a thin wrapper that doesn't need them. Picked up `auki-datatypes` (for the prost type re-export) and `auki-manifests` (for `TimeTransformSource`).
    - Locked conformance vectors pin both wire bytes (`08c0843d10fa01` for `offset_ns: 1_000_000, uncertainty_ns: 250`) and XXH3-128 hash (`b7e73628833419a7c299933d07cbe88c`); plus a JCS-canonical-bytes + hash vector for `TimeTransformSource::LocalClockRead` (`8dcea0b9b0b2219d651e0856f112cd65`).
 
-7. **Remove placeholder.** Once at least one real `.proto` exists and is consumed downstream, delete `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, and the smoke test.
+7. **✓ Remove placeholder** (landed 2026-05-08). Deleted `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, the `placeholder_pipeline_check_round_trips` smoke test, and the corresponding line in `build.rs`. The seven real `.proto` packages serve as proof that the prost-build pipeline works; the placeholder no longer earned its keep. Test count: 32 → 31.
 
 8. **Python codegen.** Lands in [`auki-session-py`](../../auki-session-py) when its first implementation starts. `betterproto` generator over the same `.proto` files; locked-vector cross-language test that the Python encoder produces byte-identical bytes to the Rust prost encoder for the same input.
 

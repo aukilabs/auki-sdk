@@ -4,9 +4,8 @@ Implementation status of `auki-datatypes`. Spec: this crate's [outer `README.md`
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). It includes nine prost-generated modules:
+A single source file: [`lib.rs`](lib.rs). It includes eight prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
 
-- `placeholder` — smoke-test only; goes away at Step 7.
 - `camera` (Step 1, 2026-05-08) — `PinholeCameraLogEntry` + `DynamicIntrinsics`.
 - `point_cloud` (Step 3, 2026-05-08) — `PointCloudLogEntry { bytes data }`. Opaque-bytes-only — layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Symmetric with the wire's `PointCloudFrame`.
 - `audio` (Step 4, 2026-05-08) — `AudioLogEntry { bytes data }`. Opaque-bytes-only — `sample_format`, `channels`, `sample_rate_hz`, `channel_layout` come from `(sensor_id, sensor_hash) → SensorBody::Microphone`.
@@ -20,7 +19,7 @@ Plus the `impl_log_payload!` macro that wires every on-disk prost type into [`au
 
 ## What's not here yet
 
-The on-disk payload migration is **complete** at Step 6. Only Step 7 remains — bookkeeping cleanup that removes `placeholder.proto` and its smoke test once another package has done the same end-to-end proof (which they have, every step since Step 1).
+The migration is **complete** at Step 7 (2026-05-08). Every on-disk and libp2p-wire payload type the SDK ships lives here; the `placeholder.proto` smoke-test that proved out the prost-build pipeline before any real schema landed is gone. No remaining steps.
 
 ## Public surface (current)
 
@@ -115,10 +114,6 @@ pub mod stream {
                                  session_ended() / producer_error(detail) -> Self; }
 }
 
-pub mod placeholder {
-    pub struct PipelineCheck {}
-}
-
 // Every on-disk prost type satisfies auki_logs::LogPayload via:
 macro_rules! impl_log_payload { ($t:ty) => { /* encode_to_vec / decode */ }; }
 impl_log_payload!(camera::PinholeCameraLogEntry);
@@ -130,11 +125,10 @@ impl_log_payload!(time_transform::TimeTransformEntry);
 // payloads. `Frame.payload` carries the on-disk T's prost bytes.)
 ```
 
-## Tests (32 total)
+## Tests (31 total)
 
 | Test | Asserts |
 |------|---------|
-| `placeholder_pipeline_check_round_trips` | `PipelineCheck::default().encode_to_vec().decode() == PipelineCheck::default()` — proves prost-build ran. Goes away with the placeholder at Step 7. |
 | `pinhole_camera_log_entry_serializes_to_locked_wire_bytes` | Locked prost wire bytes for the M1 example camera log entry. Cross-language readers must reproduce them. |
 | `pinhole_camera_log_entry_hash_is_locked` | XXH3-128 (`auki_hash::hash_jcs_bytes`) of those bytes — `0496e1f71a03e00877fc68bf16190026`. Trips if either prost-build or `auki-hash` drifts. |
 | `pinhole_camera_log_entry_round_trips` | `encode_to_vec` → `decode` gives back the same struct. |

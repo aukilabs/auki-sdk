@@ -32,7 +32,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 
 | Crate | What it does |
 |---|---|
-| [`auki-network`](auki-network) | libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, mDNS). `cluster.json` loader, `ClusterRuntime`, typed `Stream<T>` over `/auki/stream/1.0.0`, REST `discovery_client` for the Discovery server. Peer identity from `Wallet::derive_child("peer/v1")`. |
+| [`auki-network`](auki-network) | libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, mDNS). `cluster.json` loader, `ClusterRuntime`, typed `Stream<T>` over `/auki/stream/0.1.0` (prost-encoded envelope from [`auki-datatypes`](auki-datatypes)), REST `discovery_client` for the Discovery server. Peer identity from `Wallet::derive_child("peer/v1")`. |
 
 ## Adapters
 

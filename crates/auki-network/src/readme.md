@@ -10,8 +10,8 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
 - [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/0.0.1` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
 - [`cluster_runtime.rs`](cluster_runtime.rs) — opaque runtime that owns a `Swarm<Behaviour>` + tokio task and orchestrates the cluster (ansuz #4), gated behind the `swarm` feature. Auto-dials peers in a `ClusterDoc`, exchanges `ParticipantInfo`, exposes the live peer state via `peers()`, reconnects with per-peer exponential backoff. The wrapper `auki-network-py` `cluster.spawn` is built on top of this.
-- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/0.1.0` typed-byte-stream wire primitives (grimsby #1, extended by Dagaz Batch 1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (`T` for grimsby v1), `PointCloudFrame` (`T` for Dagaz Batch 1; raw CDR `bytes` field, base64-encoded inside JSON via the local `base64_bytes` adapter to dodge the array-of-integers tax), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/0.1.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
-- [`stream_runtime.rs`](stream_runtime.rs) — typed `Stream<T>` Rust API on top of `stream_protocol`'s wire primitives (grimsby #2 + #3, lifted to multi-`T` dispatch by Dagaz Batch 1), gated behind the `swarm` feature. Producer-side: `ProducerFrame<T>`, `SourceStream<T>`, `StreamDispatch` (closed enum: `AcceptJpeg` / `AcceptPointCloud` / `Decline`), `StreamProvider` (non-generic), `decline_all_streams()` convenience for consumer-only nodes. Consumer-side: `ConsumerFrame<T>`, `StreamSubscription<T>`, `StreamError`, `OpenStreamError`, `OPEN_STREAM_TIMEOUT = 30s` — generic over `T` per call. The `open_stream<T>(peer_id, request)` async method on `ClusterRuntime` opens outbound subscriptions; the runtime task spawns per-substream `handle_inbound_substream` (non-generic outer + a generic `pump_typed::<T>` helper monomorphized per variant) for each accepted inbound substream on `STREAM_PROTOCOL`. Cluster-doc trust boundary applies — outsiders' substreams are dropped silently. Per Dagaz D1: each substream is mono-`T`; the producer dispatches by `request.sensor_id` to pick which `StreamDispatch` variant per call.
+- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/0.1.0` typed-byte-stream wire primitives (grimsby #1, extended by Dagaz Batch 1, prost-encoded since Step 2 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md), 2026-05-08), gated behind the `swarm` feature. Public types are re-exports from [`auki-datatypes`](../../auki-datatypes): `StreamRequest`, `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream` — non-generic; `T`'s prost bytes ride inside `Frame.payload` and are decoded one level up by `stream_runtime` based on the `AcceptInfo.sensor_hash` handshake), `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`, `JpegFrame` (`T` for grimsby v1), `PointCloudFrame` (`T` for Dagaz Batch 1; native `bytes` field carrying raw CDR `PointCloud2`). Owned here: `StreamProtocolError` (variants `Io | Encode | Decode | MissingVariant | FrameTooLarge | EmptyFrame`), `STREAM_PROTOCOL = "/auki/stream/0.1.0"`, `MAX_FRAME_BYTES = 16 MiB`, and the framing helpers `read_message` / `write_message` (length-prefixed prost framing over `futures::AsyncReadExt/AsyncWriteExt`; non-generic — they take a `StreamMessage`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
+- [`stream_runtime.rs`](stream_runtime.rs) — typed `Stream<T>` Rust API on top of `stream_protocol`'s wire primitives (grimsby #2 + #3, lifted to multi-`T` dispatch by Dagaz Batch 1, T-bound moved to `prost::Message + Default + Send + 'static` at Step 2), gated behind the `swarm` feature. Producer-side: `ProducerFrame<T>`, `SourceStream<T>`, `StreamDispatch` (closed enum: `AcceptJpeg` / `AcceptPointCloud` / `Decline`), `StreamProvider` (non-generic), `decline_all_streams()` convenience for consumer-only nodes. Consumer-side: `ConsumerFrame<T>`, `StreamSubscription<T>`, `StreamError`, `OpenStreamError`, `OPEN_STREAM_TIMEOUT = 30s` — generic over `T: prost::Message + Default + Send + 'static` per call. The `open_stream<T>(peer_id, request)` async method on `ClusterRuntime` opens outbound subscriptions; the runtime task spawns per-substream `handle_inbound_substream` (non-generic outer + a generic `pump_typed::<T>` helper monomorphized per variant) for each accepted inbound substream on `STREAM_PROTOCOL`. Cluster-doc trust boundary applies — outsiders' substreams are dropped silently. Per Dagaz D1: each substream is mono-`T`; the producer dispatches by `request.sensor_id` to pick which `StreamDispatch` variant per call.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 - [`discovery_client.rs`](discovery_client.rs) — REST client for [`aukilabs/discovery`](https://github.com/aukilabs/discovery) (Vinland Batch 1 piece #2), gated behind the `discovery_client` feature. Public types: `DiscoveryClient`, `DiscoveryError`. Public consts: `DEFAULT_TIMEOUT = 30s`. Methods: `new`, `with_http`, `base_url`; async `register`, `fetch`, `deregister`. Wire shape locked against Discovery's verifier — JCS-canonical signing payload includes `cluster_name` (cross-cluster replay guard); base64-32 ed25519 pubkey + base64-64 signature on the wire; ±60s replay window. Deregister signs `{cluster_name, peer_id, op: "delete", timestamp_ns}` (no `public_key` in the canonical bytes — `verify_peer_id` already binds it).
 
@@ -96,7 +96,7 @@ pub mod cluster_protocol {
     pub fn behaviour() -> Behaviour;
 }
 
-// grimsby #2 + #3 (behind `swarm` feature)
+// grimsby #2 + #3 (behind `swarm` feature; Step 2 — T bound switched to prost)
 pub mod stream_runtime {
     pub const OPEN_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -146,56 +146,48 @@ pub mod stream_runtime {
             peer_id: libp2p::PeerId,
             request: StreamRequest,
         ) -> Result<StreamSubscription<T>, OpenStreamError>
-        where T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static;
+        where T: prost::Message + Default + Send + 'static;
     }
 }
 
-// grimsby #1 (behind `swarm` feature)
+// grimsby #1 (behind `swarm` feature; Step 2 — wire moved to protobuf)
 pub mod stream_protocol {
     pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
     pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;          // 16 MiB
 
-    pub struct StreamRequest { pub sensor_id: String }
-    pub struct AcceptInfo {
-        pub sensor_hash: String,
-        pub clock_id:    String,
-        pub clock_hash:  String,
-    }
-    pub enum DeclineReason {
-        SensorNotFound,
-        SensorUnavailable,
-        ProducerShuttingDown,
-        Other { detail: String },
-    }
-    pub enum EndReason {
-        SourceEnded,
-        ProducerShuttingDown,
-        SessionEnded,
-        ProducerError { detail: String },
-    }
-    pub enum StreamMessage<T> {                                  // tagged "kind" on JSON
-        Request(StreamRequest),
-        Accept(AcceptInfo),
-        Decline { reason: DeclineReason },
-        Frame { timestamp_ns: i64, seq: u64, payload: T },
-        EndOfStream { reason: EndReason },
-    }
-    pub struct JpegFrame { pub bytes: Vec<u8> }                  // T for grimsby v1; bytes serialize as JSON int-array
-    pub struct PointCloudFrame {                                  // T for Dagaz Batch 1; raw CDR PointCloud2
-        #[serde(with = "base64_bytes")]                           // bytes serialize as base64 JSON string
-        pub bytes: Vec<u8>,
+    // Re-exports from auki_datatypes (single source of truth):
+    pub use auki_datatypes::frame_stream::JpegFrame;             // { bytes: Vec<u8> } — T for grimsby v1
+    pub use auki_datatypes::point_cloud_stream::PointCloudFrame; // { bytes: Vec<u8> } — T for Dagaz Batch 1 (raw CDR PointCloud2)
+    pub use auki_datatypes::stream::{
+        AcceptInfo,           // { sensor_hash, clock_id, clock_hash }
+        DeclineReason,        // { kind: Option<decline_reason::Kind> }
+        EndReason,            // { kind: Option<end_reason::Kind> }
+        Frame,                // { timestamp_ns: i64, seq: u64, payload: Vec<u8> } — payload is prost-encoded T
+        StreamMessage,        // { variant: Option<stream_message::Variant> } — non-generic envelope
+        StreamRequest,        // { sensor_id: String }
+        decline_reason,       // module — Kind enum (SensorNotFound | SensorUnavailable | ProducerShuttingDown | Other)
+        end_reason,           // module — Kind enum (SourceEnded | ProducerShuttingDown | SessionEnded | ProducerError)
+        stream_message,       // module — Variant oneof (Request | Accept | Decline | Frame | EndOfStream)
+    };
+
+    // Owned here:
+    pub enum StreamProtocolError {
+        Io(std::io::Error),
+        Encode(prost::EncodeError),
+        Decode(prost::DecodeError),
+        MissingVariant,                                          // StreamMessage with variant: None
+        FrameTooLarge { actual: u64, max: u64 },
+        EmptyFrame,
     }
 
-    pub enum StreamProtocolError { Io, Serialize, Deserialize, FrameTooLarge, EmptyFrame }
-
-    pub async fn write_message<T: Serialize, S: AsyncWrite + Unpin>(
+    pub async fn write_message<S: AsyncWriteExt + Unpin>(
         stream: &mut S,
-        msg: &StreamMessage<T>,
+        msg: &StreamMessage,
     ) -> Result<(), StreamProtocolError>;
 
-    pub async fn read_message<T: DeserializeOwned, S: AsyncRead + Unpin>(
+    pub async fn read_message<S: AsyncReadExt + Unpin>(
         stream: &mut S,
-    ) -> Result<StreamMessage<T>, StreamProtocolError>;
+    ) -> Result<StreamMessage, StreamProtocolError>;
 }
 
 // ansuz #4 (behind `swarm` feature)
@@ -452,7 +444,7 @@ The addresses may be direct or circuit-relay-mediated. The swarm picks among the
 
 ## Tests
 
-99 unit tests + 3 integration tests + 2 doctest with `--all-features`; 81 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`; 45 unit + 3 integration + 1 doctest with `--features discovery_client`. The `app_instance` tests (9) run under `--features app_instance`; the `discovery_client` tests (9) run under `--features discovery_client`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (18 — `+5` for Dagaz Batch 1's `PointCloudFrame` round-trip + wire-size + cross-language conformance vector + framing-helpers round-trip), and the `stream_runtime` tests (8 — `+2` for Dagaz Batch 1's e2e `producer_accepts_and_streams_pointcloud_frames` and `one_producer_serves_jpeg_and_pointcloud_via_sensor_id_dispatch`) all run under `--features swarm`.
+102 unit tests + 3 integration tests + 2 doctest with `--all-features`; 84 unit + 3 integration + 2 doctest with `--features swarm`; 36 unit + 3 integration + 1 doctest with no features (M0 + `cluster_doc` + `participant`); 45 unit + 3 integration + 1 doctest with `--features app_instance`; 45 unit + 3 integration + 1 doctest with `--features discovery_client`. The `app_instance` tests (9) run under `--features app_instance`; the `discovery_client` tests (9) run under `--features discovery_client`; the `swarm` tests (8 + doctest), the `cluster_protocol` tests (3), the `cluster_runtime` tests (8), the `stream_protocol` tests (21 — `+3` for Step 2's locked prost wire bytes for `JpegFrame` + `PointCloudFrame` + full `StreamMessage::Frame { PointCloudFrame }` envelope), and the `stream_runtime` tests (8) all run under `--features swarm`.
 
 The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]`) boots a real Discovery binary on a tempdir + ephemeral loopback port. Run with `DISCOVERY_BIN=/path/to/discovery cargo test -p auki-network --features discovery_client -- --ignored discovery`.
 
@@ -498,22 +490,25 @@ The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]
 | `cluster_runtime::spawn_outside_tokio_runtime_returns_error` | Calling `from_swarm` from a `std::thread` (no tokio) → `SpawnError::NoTokioRuntime` |
 | `stream_protocol::protocol_id_is_locked` | Wire-format pin: `STREAM_PROTOCOL == "/auki/stream/0.1.0"` |
 | `stream_protocol::max_frame_bytes_is_locked` | Wire-format pin: `MAX_FRAME_BYTES == 16 MiB` |
-| `stream_protocol::request_message_round_trips_through_json` | `StreamMessage::Request` round-trips through serde-JSON, with the `kind: "request"` tag pinned |
-| `stream_protocol::accept_message_round_trips_through_json` | `StreamMessage::Accept` round-trips, `kind: "accept"` tag pinned |
-| `stream_protocol::decline_message_round_trips_through_json` | `StreamMessage::Decline { reason: SensorNotFound }` round-trips, both outer and inner `kind` tags pinned |
-| `stream_protocol::frame_message_round_trips_through_json` | `StreamMessage::Frame { ... }` round-trips, `kind: "frame"`, `seq` field pinned |
-| `stream_protocol::end_of_stream_message_round_trips_through_json` | `StreamMessage::EndOfStream { reason: ProducerError { detail } }` round-trips |
+| `stream_protocol::request_message_round_trips` | `StreamMessage::request(...)` round-trips through prost encode/decode |
+| `stream_protocol::accept_message_round_trips` | `StreamMessage::accept(...)` round-trips |
+| `stream_protocol::decline_message_round_trips` | `StreamMessage::decline(DeclineReason::sensor_not_found())` round-trips |
+| `stream_protocol::decline_other_round_trips_with_detail` | `StreamMessage::decline(DeclineReason::other("provider raised"))` round-trips with detail string preserved |
+| `stream_protocol::frame_message_round_trips` | `StreamMessage::frame(Frame { timestamp_ns, seq, payload })` round-trips |
+| `stream_protocol::end_of_stream_round_trips` | `StreamMessage::end_of_stream(EndReason::producer_error("encoder died"))` round-trips |
 | `stream_protocol::write_then_read_round_trips_a_request` | Single message survives `write_message → read_message` through an in-memory cursor; length prefix matches encoded body |
 | `stream_protocol::write_then_read_round_trips_a_full_session` | Realistic order (Request → Accept → Frame×3 → EndOfStream) survives in the same buffer in order |
 | `stream_protocol::read_rejects_oversized_frame_via_length_prefix` | Length prefix `MAX_FRAME_BYTES + 1` → `FrameTooLarge` before the payload is read (no allocation) |
 | `stream_protocol::read_rejects_empty_frame` | Length prefix `0` → `EmptyFrame` |
 | `stream_protocol::read_surfaces_eof_as_io_error` | Empty buffer → `Io(UnexpectedEof)` (consumer should treat as substream-closed) |
-| `stream_protocol::write_rejects_oversized_payload_before_io` | Payload that JSON-encodes to over `MAX_FRAME_BYTES` → `FrameTooLarge` before writing the length prefix |
-| `stream_protocol::point_cloud_frame_serializes_bytes_as_base64_string` | Wire shape pin: `PointCloudFrame { bytes: [0,1,2,3,255,254] }` → `{"bytes":"AAECA//+"}` exactly. `serde(with = "base64_bytes")` adapter drift fails loudly |
-| `stream_protocol::point_cloud_frame_round_trips_a_kilobyte_payload` | 1 KB pseudo-random payload round-trips losslessly through serde via the base64 adapter |
-| `stream_protocol::point_cloud_frame_wire_size_dodges_the_array_of_integers_tax` | 1 KB payload → < 1.5 KB JSON (vs ~3.4 KB the array-of-integers path would produce). If someone removes the adapter, this fails — Dagaz's bandwidth reasoning is preserved |
-| `stream_protocol::locked_point_cloud_frame_wire_shape_vector` | **Cross-language conformance vector.** `StreamMessage::Frame { timestamp_ns: 1_700_000_000_000_000_000, seq: 42, payload: PointCloudFrame { bytes: [0x42..0xff] } }` → exact JSON `{"kind":"frame","timestamp_ns":1700000000000000000,"seq":42,"payload":{"bytes":"QkNERQAB/v8="}}`. Park's browser-side decoder + future cross-language reimplementations pin against this |
-| `stream_protocol::point_cloud_frame_round_trips_through_framing_helpers` | Full wire-level round trip through `write_message` + `read_message` (length prefix + JSON body) for `PointCloudFrame` |
+| `stream_protocol::write_rejects_oversized_payload_before_io` | Payload that prost-encodes to over `MAX_FRAME_BYTES` → `FrameTooLarge` before writing the length prefix |
+| `stream_protocol::jpeg_frame_serializes_to_locked_wire_bytes` | **Cross-language conformance vector.** `JpegFrame { bytes: <10-byte JFIF prefix> }` → exact prost wire bytes `0a0affd8ffe000104a464946` (tag 0x0a, varint length 0x0a, payload). Park's browser parser + future cross-language reimplementations pin against this |
+| `stream_protocol::jpeg_frame_round_trips` | Round-trip through `prost::Message::encode_to_vec` / `decode` |
+| `stream_protocol::point_cloud_frame_serializes_to_locked_wire_bytes` | **Cross-language conformance vector.** `PointCloudFrame { bytes: <8-byte fixture> }` → exact prost wire bytes (same shape as `JpegFrame` but separate `.proto` package for independent evolution) |
+| `stream_protocol::point_cloud_frame_round_trips_a_kilobyte_payload` | 1 KB pseudo-random payload round-trips losslessly through prost |
+| `stream_protocol::point_cloud_frame_wire_size_is_native_binary` | 1 KB payload → 1027 bytes prost-encoded (1 byte tag + 2 bytes varint length + 1024 bytes payload). Pins the bandwidth win from moving off JSON-array-of-integers |
+| `stream_protocol::locked_stream_message_frame_with_point_cloud_payload` | **Cross-language conformance vector.** Full envelope: `StreamMessage::frame(Frame { timestamp_ns: 1_700_000_000_000_000_000, seq: 42, payload: <prost-encoded PointCloudFrame { bytes: [0x42..0xff] }> })` → exact prost-encoded bytes |
+| `stream_protocol::typed_session_matches_message_order_spec` | Realistic message-order spec from the [`auki-datatypes`](../../auki-datatypes/proto/stream.proto) docstring round-trips through the framing helpers |
 | `stream_runtime::producer_accepts_and_streams_jpeg_frames` | E2E happy path: two cluster runtimes converge, consumer opens stream, reads 3 typed frames + clean `EndOfStream { reason: SourceEnded }`; iterator exhausted after the terminator. Asserts `seq` stamping (0, 1, 2), `timestamp_ns`, `payload.bytes`, and `info.{sensor_hash, clock_id, clock_hash}` end-to-end |
 | `stream_runtime::producer_declines_unknown_sensor` | Provider returns `Decline { reason: SensorNotFound }` for unknown `sensor_id`; consumer's `open_stream` returns `Err(OpenStreamError::Declined { reason: SensorNotFound })` |
 | `stream_runtime::producer_error_signals_consumer_with_detail` | Source-Stream yields `Some(Err("encoder died"))`; consumer reads frame then sees `Err(EndOfStream { reason: ProducerError { detail: "encoder died" } })`; iterator exhausted after |
@@ -571,6 +566,8 @@ The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `request-response`, `json`, `macros`, `ed25519`) — the swarm itself plus the `cluster_protocol` JSON request-response codec.
 - *(swarm feature)* `libp2p-stream` (`=0.4.0-alpha`) — raw-substream multiplexer for grimsby's `/auki/stream/0.1.0` typed-byte-stream protocol. The libp2p umbrella crate doesn't expose `stream` as a feature in 0.56; pre-1.0; pinned exactly until the upstream surface stabilizes.
+- *(swarm feature)* `auki-datatypes` (path) — owns the prost-generated `auki.stream` package re-exported by `stream_protocol` (Step 2 of the migration, 2026-05-08).
+- *(swarm feature)* `prost` (0.13) — encode/decode the protobuf wire envelope on the substream.
 - *(swarm feature)* `thiserror` (2) — `BuildError`, `SpawnError`.
 - *(swarm feature)* `tokio` (1, features: `macros`, `rt`, `sync`, `time`) — `cluster_runtime`'s task primitives (`select!`, `oneshot`, `interval`, `Handle::try_current`).
 - *(swarm feature)* `futures` (0.3, default-features off) — `StreamExt::next` for polling `swarm.next()` in the runtime task.

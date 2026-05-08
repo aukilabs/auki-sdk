@@ -249,86 +249,88 @@ runtime.shutdown(); // explicit clean exit; Drop is the safety net.
 
 Behind the `swarm` feature. The wire primitives for **grimsby** — typed-byte-stream subscriptions over libp2p, the substrate for live sensor frames pushed from a producer (Boosterapp) to a consumer (Park) without HTTP polling.
 
-This module ships **wire primitives only**: protocol id, message envelope, framing helpers, and the `libp2p_stream::Behaviour` field on the swarm. The `Stream<T>` consumer-and-producer Rust API and the `stream_provider` runtime are separate grimsby deliverables (#2 / #3) building on these primitives. See the [grimsby Notion doc](https://www.notion.so/3575c8e965928079a955ed9573bbb398) for the design walkthrough (D1–D5 resolved 2026-05-05).
+This module ships **wire primitives only**: protocol id, message envelope re-exports from [`auki-datatypes`](../auki-datatypes), framing helpers, and the `libp2p_stream::Behaviour` field on the swarm. The `Stream<T>` consumer-and-producer Rust API and the `stream_provider` runtime are separate grimsby deliverables (#2 / #3) building on these primitives. See the [grimsby Notion doc](https://www.notion.so/3575c8e965928079a955ed9573bbb398) for the design walkthrough (D1–D5 resolved 2026-05-05).
+
+The wire moved off JSON-via-`serde_json` onto protobuf in Step 2 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08). The `auki.stream` package in `auki-datatypes` is the single source of truth; this module re-exports its types and owns the protocol id, framing helpers, and error type.
 
 ### Wire format
 
-Each `/auki/stream/0.1.0` substream is a sequence of length-prefixed `StreamMessage<T>` values, each:
+Each `/auki/stream/0.1.0` substream is a sequence of length-prefixed `StreamMessage` values, each:
 
 ```text
-+----+----+----+----+--------------------------+
-|  4-byte u32 BE length  |  JSON-serialized payload  |
-+----+----+----+----+--------------------------+
++----+----+----+----+----------------------------+
+|  4-byte u32 BE length  |  prost-encoded payload  |
++----+----+----+----+----------------------------+
 ```
 
-Length cap: 16 MiB (constant `stream_protocol::MAX_FRAME_BYTES`). Payload is a `serde_json`-encoded `StreamMessage<T>`; `T` is generic and rides inside the same JSON envelope so the framing is the same for every Stream<T> instantiation. JPEG frames (grimsby v1, `T = JpegFrame`) typically run 10–100 KB.
+Length cap: 16 MiB (constant `stream_protocol::MAX_FRAME_BYTES`). Payload is a prost-encoded `StreamMessage` (a `oneof` of `Request | Accept | Decline | Frame | EndOfStream`). Each substream is mono-`T`: `T`'s prost bytes live inside `Frame.payload`, and the SDK runtime knows which `T` to decode based on the `AcceptInfo.sensor_hash` handshake — the variant tag would be redundant on every frame. JPEG frames (grimsby v1, `T = JpegFrame`) typically run 10–100 KB; raw `PointCloud2` CDR runs ~700 KB at ~30 Hz.
 
 Healthy substream lifecycle:
 
-1. Initiator → Responder: `Request(StreamRequest { sensor_id })`
-2. Responder → Initiator: `Accept(AcceptInfo)` *or* `Decline { reason: DeclineReason }`
-3. Responder → Initiator: zero or more `Frame { timestamp_ns, seq, payload }`
-4. Responder → Initiator: `EndOfStream { reason: EndReason }` *or* substream closes
+1. Initiator → Responder: `StreamMessage::request(StreamRequest { sensor_id })`
+2. Responder → Initiator: `StreamMessage::accept(AcceptInfo)` *or* `StreamMessage::decline(DeclineReason)`
+3. Responder → Initiator: zero or more `StreamMessage::frame(Frame { timestamp_ns, seq, payload })`
+4. Responder → Initiator: `StreamMessage::end_of_stream(EndReason)` *or* substream closes
 
 Substream closing without an explicit `EndOfStream` is treated by the consumer as an implicit connection-loss equivalent. Substreams are full-duplex; future consumer→producer control messages (pause, request keyframe, params) ride the same substream as new `StreamMessage` variants without a wire change.
 
 ### Wire types
 
+The wire types are prost-generated in [`auki-datatypes`](../auki-datatypes) and re-exported here:
+
 ```rust
 pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;            // 16 MiB
 
-pub struct StreamRequest { pub sensor_id: String }
+// Re-exports from auki_datatypes::stream:
+pub struct StreamMessage { pub variant: Option<stream_message::Variant> }
+// where stream_message::Variant is the oneof Request | Accept | Decline |
+// Frame | EndOfStream.
 
+pub struct StreamRequest { pub sensor_id: String }
 pub struct AcceptInfo {
     pub sensor_hash: String,
     pub clock_id:    String,
     pub clock_hash:  String,
 }
-
-pub enum DeclineReason {
-    SensorNotFound,
-    SensorUnavailable,
-    ProducerShuttingDown,
-    Other { detail: String },
+pub struct Frame {
+    pub timestamp_ns: i64,
+    pub seq:          u64,
+    pub payload:      Vec<u8>,    // prost-encoded T; T inferred from AcceptInfo.sensor_hash
 }
+pub struct DeclineReason { pub kind: Option<decline_reason::Kind> }
+// where decline_reason::Kind is SensorNotFound | SensorUnavailable |
+// ProducerShuttingDown | Other(Other { detail: String }).
 
-pub enum EndReason {
-    SourceEnded,
-    ProducerShuttingDown,
-    SessionEnded,
-    ProducerError { detail: String },
-}
+pub struct EndReason { pub kind: Option<end_reason::Kind> }
+// where end_reason::Kind is SourceEnded | ProducerShuttingDown |
+// SessionEnded | ProducerError(ProducerError { detail: String }).
 
-pub enum StreamMessage<T> {        // tagged "kind" on JSON
-    Request(StreamRequest),
-    Accept(AcceptInfo),
-    Decline { reason: DeclineReason },
-    Frame { timestamp_ns: i64, seq: u64, payload: T },
-    EndOfStream { reason: EndReason },
-}
-
-pub struct JpegFrame { pub bytes: Vec<u8> }                   // T for grimsby v1
+// Re-exports from auki_datatypes::frame_stream / point_cloud_stream:
+pub struct JpegFrame       { pub bytes: Vec<u8> }   // T for grimsby v1
+pub struct PointCloudFrame { pub bytes: Vec<u8> }   // T for Dagaz Batch 1 (raw CDR PointCloud2)
 ```
+
+Helper constructors live alongside the prost types in `auki-datatypes`'s `stream` module — `StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`.
 
 ### Framing helpers
 
-Both helpers are generic over the `futures` async-IO traits (matches what `libp2p_stream` hands you):
+Both helpers are generic over the `futures` async-IO traits (matches what `libp2p_stream` hands you). They take a non-generic `StreamMessage` — `T` is carried as prost bytes inside `Frame.payload`, decoded one level up by the runtime.
 
 ```rust
-pub async fn write_message<T, S>(
+pub async fn write_message<S>(
     stream: &mut S,
-    msg:    &StreamMessage<T>,
+    msg:    &StreamMessage,
 ) -> Result<(), StreamProtocolError>
-where T: Serialize, S: AsyncWrite + Unpin;
+where S: AsyncWriteExt + Unpin;
 
-pub async fn read_message<T, S>(
+pub async fn read_message<S>(
     stream: &mut S,
-) -> Result<StreamMessage<T>, StreamProtocolError>
-where T: DeserializeOwned, S: AsyncRead + Unpin;
+) -> Result<StreamMessage, StreamProtocolError>
+where S: AsyncReadExt + Unpin;
 ```
 
-`write_message` does three I/O operations (4-byte length, payload, flush) so a partial write can't sit half-buffered. `read_message` reads the length prefix first and bounds-checks against `MAX_FRAME_BYTES` before allocating the body buffer. End-of-stream from the peer surfaces as `Err(StreamProtocolError::Io(e))` with `e.kind() == UnexpectedEof`. Errors leave the stream in an undefined state; callers should drop the substream rather than reuse it.
+`write_message` encodes the `StreamMessage` once, length-bounds-checks, then does three I/O operations (4-byte length, payload, flush) so a partial write can't sit half-buffered. `read_message` reads the length prefix first and bounds-checks against `MAX_FRAME_BYTES` before allocating the body buffer. End-of-stream from the peer surfaces as `Err(StreamProtocolError::Io(e))` with `e.kind() == UnexpectedEof`. A `StreamMessage` arriving with `variant: None` (peer is malformed or speaks a future protocol version) surfaces as `StreamProtocolError::MissingVariant`. Errors leave the stream in an undefined state; callers should drop the substream rather than reuse it.
 
 ### `libp2p_stream::Behaviour` integration
 
@@ -337,7 +339,7 @@ The swarm's `Behaviour` struct gains an always-on `stream:` field of type `libp2
 ```rust
 use libp2p::StreamProtocol;
 use auki_network::stream_protocol::{
-    self, STREAM_PROTOCOL, StreamMessage, StreamRequest, JpegFrame,
+    self, STREAM_PROTOCOL, StreamMessage, StreamRequest,
 };
 
 // Responder side: accept inbound substreams on the stream protocol.
@@ -347,8 +349,7 @@ let mut incoming = control
     .expect("nobody else has bound this protocol");
 
 while let Some((peer, mut sub)) = incoming.next().await {
-    let req: StreamMessage<JpegFrame> =
-        stream_protocol::read_message(&mut sub).await?;
+    let msg: StreamMessage = stream_protocol::read_message(&mut sub).await?;
     // ... `stream_provider` invocation, write Accept/Decline, push frames ...
 }
 
@@ -358,7 +359,7 @@ let mut sub = control
     .await?;
 stream_protocol::write_message(
     &mut sub,
-    &StreamMessage::<JpegFrame>::Request(StreamRequest {
+    &StreamMessage::request(StreamRequest {
         sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
     }),
 ).await?;
@@ -379,13 +380,13 @@ use auki_network::stream_protocol::{
     AcceptInfo, DeclineReason, JpegFrame, StreamRequest,
 };
 use auki_network::stream_runtime::{
-    ProducerFrame, StreamDecision, StreamProvider,
+    ProducerFrame, StreamDispatch, StreamProvider,
 };
 
-let provider: StreamProvider<JpegFrame> = Arc::new(|req: StreamRequest| {
+let provider: StreamProvider = Arc::new(|req: StreamRequest| {
     if req.sensor_id != "K1-AABBCCDDEEFF/head_left_cam" {
-        return StreamDecision::Decline {
-            reason: DeclineReason::SensorNotFound,
+        return StreamDispatch::Decline {
+            reason: DeclineReason::sensor_not_found(),
         };
     }
     let frames = vec![
@@ -395,7 +396,7 @@ let provider: StreamProvider<JpegFrame> = Arc::new(|req: StreamRequest| {
         }),
         // ... more frames pulled from a tokio broadcast channel etc.
     ];
-    StreamDecision::Accept {
+    StreamDispatch::AcceptJpeg {
         info: AcceptInfo {
             sensor_hash: "abc123…".into(),
             clock_id: "K1-AABBCCDDEEFF/session-monotonic".into(),
@@ -406,7 +407,7 @@ let provider: StreamProvider<JpegFrame> = Arc::new(|req: StreamRequest| {
 });
 ```
 
-The source-Stream's item type is `Result<ProducerFrame<T>, String>`. Yielding `Some(Err(detail))` ends the stream with `EndReason::ProducerError { detail }`; returning `None` ends with `EndReason::SourceEnded`. SDK auto-stamps `seq` (0, 1, 2, …) per substream — producers don't track it.
+The source-Stream's item type is `Result<ProducerFrame<T>, String>`. Yielding `Some(Err(detail))` ends the stream with `EndReason::producer_error(detail)`; returning `None` ends with `EndReason::source_ended()`. SDK auto-stamps `seq` (0, 1, 2, …) per substream — producers don't track it.
 
 **Consumer-only nodes** (Park, future analytics) can use the convenience helper `decline_all_streams::<JpegFrame>()` instead of constructing a no-op provider.
 

@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:11 HKT, 2026
+
+**Doc cleanup after Step 2 (PR #62).** Caught the READMEs up with the post-PR reality across [root `README.md`](README.md), [`crates/README.md`](crates/README.md), [`auki-datatypes`](crates/auki-datatypes) (outer + `src/readme.md`), and [`auki-network`](crates/auki-network) (outer + `src/readme.md`): protocol IDs `/auki/cluster/0.0.1` + `/auki/stream/0.1.0`; stream wire format described as prost-encoded `StreamMessage` (not JSON-via-`serde_json`); framing helpers non-generic over `T`; `open_stream<T>`'s bound now `prost::Message + Default + Send + 'static`; locked-vector test names updated (`locked_stream_message_frame_with_point_cloud_payload` etc.); five `.proto` files enumerated in `auki-datatypes`'s layout; producer-side example uses current `StreamDispatch` + helper-constructor shape. Doc-only.
 ### broodsugar's claude · May 8, 09:58 HKT, 2026
 
 [`Glossary.md`](Glossary.md) full coverage pass — 12 new entries closing load-bearing gaps. Added: **Real World Web**, **Daemon**, **ClusterDoc**, **`convert_time`**, **`convert_pose`** (the two core operations were absent), **Wallet**, **Peer ID**, **Sensor / Clock / Frame ID** (the `<platform-tag>-<machine-id>/<name>` format), **Sensor Registry**, **Clock Registry** (closing the Frame-Registry-only asymmetry — all three registries are now uniformly first-class glossary entries), **Manifest**, **SpatialTransform**, **TagClaim**. Also stripped the **Vinland-mode** quest-name leak + the "(D3)" decision reference from the Discovery entry (Rule 1 — quest names belong in `parking_lot.md` / internal changelogs / `CLAUDE.md`, not public docs). Root [`parking_lot.md`](parking_lot.md) Glossary-scope item updated to reflect the expanded coverage. Doc-only.

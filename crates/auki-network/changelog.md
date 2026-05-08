@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:11 HKT, 2026
+
+**Doc cleanup after Step 2.** [`README.md`](README.md) and [`src/readme.md`](src/readme.md) caught up with the post-PR-#62 reality: stream-protocol section now describes the prost wire format (length-prefixed `StreamMessage` envelope), the framing helpers as non-generic over `T` (taking `StreamMessage`, with `T`'s prost bytes carried inside `Frame.payload`), the `T` bound on `stream_runtime::open_stream<T>` as `prost::Message + Default + Send + 'static`, and the locked test list reflecting the actual current tests (renames + 3 new locked vectors for `JpegFrame` / `PointCloudFrame` / full envelope). Producer-side example uses the current `StreamDispatch` + helper-constructor shape (`DeclineReason::sensor_not_found()` etc.). Dependencies section adds `auki-datatypes` and `prost` under the `swarm` feature. Doc-only.
+
 ### broodsugar's claude · May 8, 09:42 HKT, 2026
 
 **Step 2 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md): stream wire moves to protobuf.** [`stream_protocol`](src/stream_protocol.rs) replaces JSON-via-`serde_json` with prost-encoded `StreamMessage` from [`auki-datatypes`](../auki-datatypes)'s new `auki.stream` package. The framing primitive (4-byte BE u32 length prefix) is unchanged; the envelope and payload move to protobuf. Drops the `base64_bytes` serde adapter on `PointCloudFrame.bytes` — protobuf's `bytes` is native binary, no JSON-array-of-integers tax to dodge. Drops the `base64` dep from the `swarm` feature.

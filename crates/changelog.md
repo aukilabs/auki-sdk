@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 19:46 HKT, 2026
+
+**[`auki-logs`](auki-logs) gains `Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../parking_lot.md).** New `pub fn tail(root) -> Result<TailIter<T>>`. The iterator starts at current EOF (existing entries don't replay), polls the segments dir at a configurable cadence (default 10ms), `Iterator::next` blocks while `TailIter::try_next` is non-blocking. Handles segment rollover, mid-write torn reads (surfaces as `Ok(None)`), and segment eviction. The same call works whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording. No new deps (sync, std-only). Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1; blocker #3 (`DetectionLogEntry`) lands in PR #73; #2 (Detector binding API) and #4 (`auki-sdk-py`) remain. Tests: 13 → 21 (+8). Two follow-ups filed: `Log::open` can't extend an existing partially-filled segment after re-open (production callers don't hit this — long-lived writers — but daemon-restart-resume will); `tail` v2 shapes (`tail_from(ts)` checkpoint, EOF detection, notify-based backend) deferred until a real consumer needs them.
+
 ### broodsugar's claude · May 8, 14:37 HKT, 2026
 
 **Step 7 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): placeholder cleanup. The migration is complete.** [`auki-datatypes`](auki-datatypes) drops `proto/placeholder.proto` and the corresponding module + smoke test. The seven real `.proto` packages prove the prost-build pipeline; the placeholder was scaffolding-only. Test count: 32 → 31. Doc-only at the consumer level — no downstream code touches `placeholder::PipelineCheck`. (Re-application against develop — the original Step 7 PR #70 merged into a stacked branch whose ancestry was severed by #69's squash-merge.)

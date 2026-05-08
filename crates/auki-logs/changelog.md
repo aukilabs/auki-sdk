@@ -6,6 +6,28 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 19:46 HKT, 2026
+
+**`Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../../parking_lot.md).** New `pub fn Log::<T>::tail(root: &Path) -> Result<TailIter<T>>` returns an iterator that yields newly-appended entries as they become readable. Starts at the **current EOF** of the log (existing entries are not replayed; use `read().entries()` for historical). `Iterator::next` blocks at the configurable poll cadence (default 10ms); `TailIter::try_next` is non-blocking. Drop the iterator to stop tailing.
+
+**Same call regardless of where the bytes came from.** The Detector loop is `for entry in Log::<SensorLogEntry>::tail(&path)? { ... }` whether the log is being written by a local sensor driver, materialized from a peer's stream, or opened from a recording on disk. The transport differs (zero-hop, libp2p, file source); the tail call doesn't.
+
+**Robustness:** the iterator handles segment rollover (jumps to the next `.seg` when the current one ends), torn reads from a writer mid-`append` (timestamp + length + payload are three separate writes — a tail that lands between them surfaces as `Ok(None)`, not `Err`, and recovers on the next poll), and segment eviction (advances past evicted segments without erroring). Reads are stateless per `try_next` call (file open + seek + one entry + close) so eviction or rollover between calls is fine.
+
+**No EOF detection in v1.** The iterator tails forever — no portable way to detect that all writers have closed. Callers needing clean shutdown drop the iterator or use `try_next` in their own polling loop with a stop condition. Filed as a parking-lot follow-up.
+
+**Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1** ("`Log<SensorLogEntry>::tail()`"). Phase-2 blocker #3 (`DetectionLogEntry`) shipped in [Step 8 of the `auki-datatypes` migration](../auki-datatypes/src/sprint.md). Remaining: blocker #2 (Detector binding API) and blocker #4 (`auki-sdk-py` Python binding).
+
+**Filed alongside in [`parking_lot.md`](parking_lot.md):**
+- **`Log::open` can't extend an existing partially-filled segment after re-open** (`OpenOptions::create_new(true)` fails on the existing segment file). Surfaced when the test pass tried daemon-restart-style write patterns. Lean: re-attach to the latest segment in `OpenOptions::write(true).append(true)` mode + `flock` for race safety. Not blocking the keystone work — production `tail()` consumers read from the same long-lived `Log<T>` writer.
+- **`tail` follow-on shapes** punted to future PRs: `tail_from(timestamp_ns)` for replay-from-checkpoint; EOF detection for non-streaming consumers; notify-based backend instead of polling for high-frequency streams.
+
+**Tests**: 13 → 21 (+8 — `tail_starts_at_current_eof_skipping_existing_entries`, `tail_on_empty_log_picks_up_first_entry_when_it_arrives`, `tail_blocking_next_yields_entries_in_order` (concurrent writer thread), `tail_jumps_to_next_segment_on_rollover`, `tail_tolerates_partial_entry_during_concurrent_append`, `tail_ignores_evicted_segments_and_resumes_at_newer_one`, `tail_with_poll_interval_overrides_default`).
+
+**No new deps.** `std::thread::sleep` + `std::time::Duration` from the standard library; the polling backend is intentionally simple. `notify` (filesystem events) is a future enhancement, gated behind a real profiling reason.
+
+Will land in v0.0.25.
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **`Log<T>` is encoder-agnostic** — Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) lands the resolution to the open question added 2026-05-07. New `pub trait LogPayload { encode(&self) -> Vec<u8>; decode(&[u8]) -> Result<Self, String>; }`; `Log<T>` and `LogReader<T>` bounds change from `T: Serialize + DeserializeOwned` to `T: LogPayload`. Encoder choice moves to the consumer.

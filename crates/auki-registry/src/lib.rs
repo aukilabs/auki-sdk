@@ -156,41 +156,17 @@ impl SensorRegistryEntry {
 // (consumers resolve the schema via `(sensor_id, sensor_hash)` pointing at a
 // `SensorRegistryEntry` whose body kind tells them which `.proto` to use).
 
-// ─── Pose Log ────────────────────────────────────────────────────────────────
-
-// `PoseSource` (the inline producer-identity tagged enum that lives in the
-// Pose Log manifest) moved to [`auki-manifests`] in Step 0 of the
-// auki-datatypes migration. The Pose Log payload types below stay here
-// until Step 5 of the migration; see ../auki-datatypes/src/sprint.md.
-
-/// One Pose Log entry = one batch of transforms (one ROS `TFMessage`, or
-/// the equivalent for other producers). Empty `transforms` is permitted —
-/// some producers occasionally publish empty messages.
-///
-/// The auki-logs framing's `timestamp_ns` is the message arrival time on
-/// the daemon's clock. Per-`TransformSample` timestamps from the wire
-/// format are not preserved in v1; if downstream needs them, add them
-/// alongside without breaking the existing shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PoseLogEntry {
-    pub transforms: Vec<TransformSample>,
-}
-
-/// One `parent → child` transform sample. Translation is `[x, y, z]` in
-/// the frame's units (typically meters). Rotation is a unit quaternion in
-/// `[x, y, z, w]` order (Hamilton convention; matches ROS `geometry_msgs`).
-/// `f64` matches the underlying ROS `geometry_msgs` types and preserves
-/// precision at large-map scales.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TransformSample {
-    pub parent_frame: String,
-    pub child_frame: String,
-    pub translation: [f64; 3],
-    pub rotation_quat: [f64; 4],
-}
-
-// `build_pose_log_manifest` moved to [`auki-manifests`] in Step 0 of the
-// auki-datatypes migration.
+// Pose Log payload moved to [`auki_datatypes::pose`] (Step 5 of the
+// auki-datatypes migration, 2026-05-08): flat `SpatialTransform` per
+// segment entry — no `PoseLogEntry { transforms: Vec<TransformSample> }`
+// wrapper, no per-sample `parent_frame`/`child_frame`. Frame identity
+// lives in the manifest (`from_frame_id` / `from_frame_hash` /
+// `to_frame_id` / `to_frame_hash`); each Pose Log holds one
+// `(from, to)` pair.
+//
+// `PoseSource` moved to [`auki-manifests`] at Step 0;
+// `build_pose_log_manifest` lives there too (rewritten at Step 5 for
+// the new identity).
 
 // ─── Clock Registry ──────────────────────────────────────────────────────────
 
@@ -246,11 +222,12 @@ impl ClockRegistryEntry {
 ///
 /// **Tree structure lives elsewhere.** A FrameRegistryEntry declares
 /// what one frame *is in isolation*. Edges between frames (the TF tree)
-/// live in the Pose Log as [`TransformSample`]s with `parent_frame` /
-/// `child_frame` strings naming entries in this registry.
+/// live in the Pose Log as `auki_datatypes::pose::SpatialTransform`
+/// segment entries; the `(from, to)` frame pair is pinned in the log's
+/// manifest, not on each sample.
 ///
-/// **Rotation representation** is fixed at the [`TransformSample`]
-/// layer (Hamilton convention, `[x, y, z, w]`); not per-frame.
+/// **Rotation representation** is fixed at the `SpatialTransform`
+/// layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
 ///
 /// Construct via the field-explicit struct literal or via one of the
 /// `ros_body` / `ros_optical` / `opengl` / `unity` preset constructors —
@@ -1018,45 +995,11 @@ mod tests {
 
     // Sensor Log manifest builder + locked PoseSource vectors moved to
     // [`auki-manifests`] in Step 0 of the auki-datatypes migration. The Pose
-    // Log payload round-trip tests below stay here until Step 5 of the
-    // migration moves the payload types themselves.
-
-    // ─── Pose Log ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn pose_log_entry_round_trips_through_cbor() {
-        let entry = PoseLogEntry {
-            transforms: vec![
-                TransformSample {
-                    parent_frame: "base_link".into(),
-                    child_frame: "head_link".into(),
-                    translation: [0.0, 0.0, 1.5],
-                    rotation_quat: [0.0, 0.0, 0.0, 1.0],
-                },
-                TransformSample {
-                    parent_frame: "head_link".into(),
-                    child_frame: "head_left_cam".into(),
-                    translation: [0.05, 0.02, 0.0],
-                    rotation_quat: [0.5, -0.5, 0.5, -0.5],
-                },
-            ],
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        let back: PoseLogEntry = ciborium::from_reader(&buf[..]).unwrap();
-        assert_eq!(back, entry);
-    }
-
-    #[test]
-    fn pose_log_entry_with_empty_transforms_round_trips() {
-        let entry = PoseLogEntry {
-            transforms: Vec::new(),
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        let back: PoseLogEntry = ciborium::from_reader(&buf[..]).unwrap();
-        assert_eq!(back, entry);
-    }
+    // Log payload (`PoseLogEntry` / `TransformSample`) moved to
+    // [`auki_datatypes::pose::SpatialTransform`] at Step 5 of the migration —
+    // the flat `SpatialTransform` segment entry replaced the
+    // `PoseLogEntry { transforms: Vec<...> }` wrapper, and the round-trip
+    // tests live in `auki-datatypes::tests` now.
 
     // ─── Frame Registry tests ──────────────────────────────────────────────
 

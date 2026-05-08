@@ -16,7 +16,7 @@ pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf;
 pub fn session_root(app_root: &Path, session: &str) -> PathBuf;
 pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -> PathBuf;
 pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf;
-pub fn poselog_path(session_root: &Path, pose_log_id: &str) -> PathBuf;
+pub fn poselog_path(session_root: &Path, from_frame_id: &str, to_frame_id: &str) -> PathBuf;
 pub fn id_to_segment(id: &str) -> String;
 ```
 
@@ -32,8 +32,8 @@ pub fn id_to_segment(id: &str) -> String;
 | `timetransform_log_path_uses_double_underscore_separator` | Joined as `<from>__<to>`, both substituted |
 | `sensorlog_path_is_session_join_sensorlogs_join_sensor_log_id` | `<session>/sensorlogs/<sensor_log_id>` |
 | `sensorlog_path_does_not_substitute_sensor_log_id` | sensor_log_id passes through opaque (no `/` → `__` substitution) |
-| `poselog_path_is_session_join_poselogs_join_pose_log_id` | `<session>/poselogs/<pose_log_id>` |
-| `poselog_path_does_not_substitute_pose_log_id` | Same opaque-id convention as sensorlog |
+| `poselog_path_uses_double_underscore_separator` | `<session>/poselogs/<from>__<to>`, both substituted (mirrors `timetransform_log_path`; Step 5, 2026-05-08) |
+| `poselog_path_substitutes_slashes_inside_each_frame_id` | Each frame_id's `/` → `__`, then sides join with another `__` |
 | `id_to_segment_is_idempotent_for_ids_without_slashes` | No-op for ids without `/` |
 
 ## Consumers in this workspace

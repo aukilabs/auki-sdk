@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink in flight.** Today this crate also holds log payload types (`PoseLogEntry`, `TransformSample` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08)** — manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests). **Step 1 (2026-05-08)** — `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`. **Step 3 (2026-05-08)** — `PointCloudLogEntry` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.point_cloud` `.proto` as opaque-bytes-only (`{ bytes data = 1; }`). **Step 4 (2026-05-08)** — `AudioLogEntry` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.audio` `.proto` as opaque-bytes-only; `serde_bytes` dep dropped.
+> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1); `PointCloudLogEntry` (Step 3, opaque-bytes-only); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
 
 ## What's here
 
@@ -140,7 +140,7 @@ pub enum AxisDirection { Forward, Backward, Up, Down, Left, Right }
 pub enum LengthUnit { Meters, Millimeters, Centimeters }
 ```
 
-A named coordinate system. Tells a consumer how to interpret position and rotation data tagged with this frame: handedness, what each axis points toward semantically, and the length unit. **Tree structure lives elsewhere** — edges between frames (the TF tree) live in the Pose Log as [`TransformSample`]s. **Rotation representation** is fixed at the `TransformSample` layer (Hamilton convention `[x, y, z, w]`); not per-frame.
+A named coordinate system. Tells a consumer how to interpret position and rotation data tagged with this frame: handedness, what each axis points toward semantically, and the length unit. **Tree structure lives elsewhere** — edges between frames (the TF tree) live in the Pose Log: each Pose Log holds samples for one `(from_frame_id, to_frame_id)` pair, with flat `auki_datatypes::pose::SpatialTransform` segment entries. **Rotation representation** is fixed at the `SpatialTransform` layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
 
 `AxisConvention` is validated at write time: the three axes must be drawn from three distinct axis-pairs (forward/backward, left/right, up/down). Handedness consistency vs. axes is **not** cross-checked — both fields are declarations.
 
@@ -174,20 +174,7 @@ Multi-mic arrays are one sensor with `channels = N` (not N independent sensors).
 
 ## Log payload types
 
-```rust
-pub struct PoseLogEntry {
-    pub transforms: Vec<TransformSample>,   // empty allowed
-}
-
-pub struct TransformSample {
-    pub parent_frame: String,
-    pub child_frame:  String,
-    pub translation:  [f64; 3],   // x, y, z (typically meters)
-    pub rotation_quat: [f64; 4],  // x, y, z, w (Hamilton convention; matches ROS)
-}
-```
-
-`PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding. The camera log payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved to [`auki-datatypes`](../../auki-datatypes) at Step 1 (2026-05-08); `PointCloudLogEntry` followed at Step 3 (2026-05-08, opaque-bytes-only); `AudioLogEntry` followed at Step 4 (2026-05-08, opaque-bytes-only) — all three are now protobuf via prost, no longer CBOR. With `AudioLogEntry`'s departure, the `serde_bytes` dep dropped from this crate.
+All log payload types departed at Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (all 2026-05-08): camera, point cloud, audio, and pose all live in [`auki-datatypes`](../../auki-datatypes) now. The `serde_bytes` and `ciborium` deps dropped from this crate at the same time. The crate's surface narrowed back to identity catalogs only (Sensor / Clock / Frame registry types and IO).
 
 ## Public functions
 
@@ -235,7 +222,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (35 total)
+## Tests (33 total)
 
 | Test | Asserts |
 |------|---------|
@@ -256,8 +243,6 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `read_missing_returns_none` | Absent files are `Ok(None)`, not an error |
 | `read_with_id_mismatch_errors` | Misplaced files surface as `IdMismatch` |
 | `write_outcome_hash_accessor` | `.hash()` works on both variants |
-| `pose_log_entry_round_trips_through_cbor` | `PoseLogEntry` with two `TransformSample`s survives CBOR encode/decode |
-| `pose_log_entry_with_empty_transforms_round_trips` | Empty `transforms` vector is permitted and round-trips |
 | `ros_body_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_body` matches the field-explicit struct |
 | `ros_optical_preset_matches_explicit_construction` | `FrameRegistryEntry::ros_optical` matches |
 | `opengl_preset_matches_explicit_construction` | `FrameRegistryEntry::opengl` matches |

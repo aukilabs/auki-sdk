@@ -26,11 +26,11 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
     │   │   └── ...
     │   └── <sensor_log_id_3>/
     └── poselogs/
-        ├── <pose_log_id_1>/               ← one pose source per log
+        ├── <from_id>__<to_id>/            ← one (from_frame_id, to_frame_id) pair per log
         │   ├── manifest.json
         │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
-        └── <pose_log_id_2>/
+        └── <from_id_2>__<to_id_2>/
 ```
 
 `tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
@@ -54,11 +54,11 @@ None is derivable from the others.
 - **`<app_root>` is chosen by the integrator.** The SDK doesn't prescribe `<robot-home>/auki/<app-name>/` or any specific structure above the registries — the app picks its name and where to write. (Boosterapp uses `/home/booster/auki/boosterapp/`.)
 - **Registries shared across sessions.** Hash-keyed writes are idempotent; re-writing the same `<hash>.json` per session would be wasted work. A sensor that doesn't change between app starts produces the same `<hash>.json` regardless of session.
 - **One TimeTransform Log per session.** Clock offsets are time-localized; the session is the natural retention boundary.
-- **A log is one stream.** Each `<sensor_log_id>/` or `<pose_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor (under `sensorlogs/`) or one pose source (under `poselogs/`). Multi-stream capture means multiple parallel logs sharing a session, not a multi-stream log. Buffers, intent recordings, and time-bounded captures are all the same kind of log on disk — they differ only in their manifest's `retention_ns` (backward window kept on disk; `0` = no eviction). Whether a daemon auto-creates any log at session boot is daemon-application policy, not SDK contract — see the [Control API spec](../../docs/control-api.md). For sensor logs, identity is the manifest's `sensor_id` + `sensor_hash`; for pose logs, identity is the manifest's inline `source` block. Neither is encoded in the path.
+- **A log is one stream.** Each `<sensor_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor; each `<from_id>__<to_id>/` directory under `poselogs/` is a complete log for exactly one ordered frame pair (mirrors the `timetransform_logs/` shape, where each directory is one ordered clock pair). Multi-stream capture means multiple parallel logs sharing a session, not a multi-stream log. Buffers, intent recordings, and time-bounded captures are all the same kind of log on disk — they differ only in their manifest's `retention_ns` (backward window kept on disk; `0` = no eviction). Whether a daemon auto-creates any log at session boot is daemon-application policy, not SDK contract — see the [Control API spec](../../docs/control-api.md). For sensor logs, identity is the manifest's `sensor_id` + `sensor_hash` (the path's `<sensor_log_id>` is opaque); for pose logs, identity is the manifest's `(from_frame_id, to_frame_id)` pair (encoded in the path) plus the inline `source` block describing the producer.
 
 ## ID encoding
 
-`/` in sensor / clock / frame ids is replaced with `__` so namespaced ids like `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory segment. The same substitution applies to `from_id`/`to_id` segments in TimeTransform Log paths.
+`/` in sensor / clock / frame ids is replaced with `__` so namespaced ids like `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory segment. The same substitution applies to `from_id`/`to_id` segments in TimeTransform Log and Pose Log paths.
 
 ## API
 
@@ -70,9 +70,9 @@ None is derivable from the others.
 | `session_root(app_root, session_id)`                            | `<app_root>/<session_id>`                                            |
 | `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
 | `sensorlog_path(session_root, sensor_log_id)`                   | `<session_id>/sensorlogs/<sensor_log_id>`                            |
-| `poselog_path(session_root, pose_log_id)`                       | `<session_id>/poselogs/<pose_log_id>`                                |
+| `poselog_path(session_root, from_frame_id, to_frame_id)`        | `<session_id>/poselogs/<from>__<to>`                                 |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
 
 ## Versioning
 
-Layout version is **1**. Changes to directory names (`registries/`, `sensorlogs/`, `poselogs/`, `timetransform_logs/`) or to the per-log identifier layer (`<sensor_log_id>`, `<pose_log_id>`) are breaking and require an SDK major bump.
+Layout version is **1**. Changes to directory names (`registries/`, `sensorlogs/`, `poselogs/`, `timetransform_logs/`) or to the per-log identifier layer (`<sensor_log_id>`, `<from>__<to>` for pose logs and TimeTransform logs) are breaking and require an SDK major bump.

@@ -20,9 +20,9 @@ Today `PoseSource` is inline in the Pose Log manifest. Per the [auki-registry RE
 
 `PoseSource::canonical_bytes` and `PoseSource::hash` already exist for exactly this graduation path. The decision to graduate is downstream of a real SLAM/odometry producer landing — pin then.
 
-## Pose Log manifest reshape per the synthesis (2026-05-07)
+## ✓ Resolved 2026-05-08 — Pose Log manifest reshape (Step 5)
 
-The Pose Log manifest will gain `from_frame_id`, `from_frame_hash`, `to_frame_id`, `to_frame_hash`, `writer_mode` (`"rigid"` / `"movable"`), and `expected_rate_hz` per the synthesis decided 2026-05-07. `build_pose_log_manifest`'s signature changes accordingly. This is **Step 5** of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) — keep `build_pose_log_manifest` in its current shape until then; the rewrite lands with the segment-side switch from `PoseLogEntry`-wrapper to flat `SpatialTransform`.
+Landed at Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). `build_pose_log_manifest` now takes 13 args and emits a manifest with `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash`, `writer_mode` (`PoseWriterMode::Rigid | Movable`, JSON `"rigid"` / `"movable"`), and `expected_rate_hz: u32`. The pre-migration shape is gone; segment-side switched from `PoseLogEntry { transforms: Vec<...> }` to flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs) at the same time.
 
 ## Manifest-side schema versioning vs auki-logs segment-format versioning
 

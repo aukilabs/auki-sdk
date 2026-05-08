@@ -34,6 +34,7 @@ auki-datatypes/
 │   ├── audio.proto              ← auki.audio — AudioLogEntry, opaque bytes (Step 4, 2026-05-08; on-disk)
 │   ├── camera.proto             ← auki.camera — PinholeCameraLogEntry + DynamicIntrinsics (Step 1, 2026-05-08)
 │   ├── point_cloud.proto        ← auki.point_cloud — PointCloudLogEntry, opaque bytes (Step 3, 2026-05-08; on-disk)
+│   ├── pose.proto               ← auki.pose — SpatialTransform + Vec3 + Quat (Step 5, 2026-05-08; on-disk)
 │   ├── frame_stream.proto       ← auki.frame_stream — JpegFrame (Step 2, 2026-05-08; libp2p wire)
 │   ├── point_cloud_stream.proto ← auki.point_cloud_stream — PointCloudFrame (Step 2, 2026-05-08; libp2p wire)
 │   └── stream.proto             ← auki.stream — StreamMessage envelope (Step 2, 2026-05-08; oneof of Request | Accept | Decline | Frame | EndOfStream)
@@ -53,6 +54,7 @@ auki-datatypes/
 use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};   // Step 1 (live)
 use auki_datatypes::point_cloud::PointCloudLogEntry;                       // Step 3 (live)
 use auki_datatypes::audio::AudioLogEntry;                                  // Step 4 (live)
+use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};                  // Step 5 (live)
 use auki_datatypes::frame_stream::JpegFrame;                               // Step 2 (live)
 use auki_datatypes::point_cloud_stream::PointCloudFrame;                   // Step 2 (live)
 use auki_datatypes::stream::{                                              // Step 2 (live)
@@ -61,7 +63,6 @@ use auki_datatypes::stream::{                                              // St
 use auki_datatypes::placeholder::PipelineCheck;                            // smoke test (departs Step 7)
 
 // Future, post-migration:
-// use auki_datatypes::pose::SpatialTransform;
 // use auki_datatypes::time_transform::TimeTransformEntry;
 ```
 
@@ -88,11 +89,12 @@ cargo test -p auki-datatypes
 
 ## Status
 
-Steps 1, 2, 3, and 4 of the [migration sprint](src/sprint.md) landed 2026-05-08:
+Steps 1, 2, 3, 4, and 5 of the [migration sprint](src/sprint.md) landed 2026-05-08:
 
 - **Step 1** — `auki.camera` carries `PinholeCameraLogEntry` + `DynamicIntrinsics` with locked wire-bytes and hash.
 - **Step 2** — `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, and `auki.stream` (the full envelope `StreamMessage` oneof) are the protobuf wire types that [`auki-network`](../auki-network)'s `/auki/stream/0.1.0` carries.
 - **Step 3** — `auki.point_cloud` carries `PointCloudLogEntry { bytes data = 1; }`, opaque-bytes-only. Symmetric with the wire's `PointCloudFrame { bytes }`; ROS-shaped layout fields (`width`, `height`, `is_dense`) are gone — interpretation comes from the `(sensor_id, sensor_hash) → SensorBody::PointCloud` registry entry. Locked wire-bytes vector + XXH3-128 hash + segment-round-trip seam test.
 - **Step 4** — `auki.audio` carries `AudioLogEntry { bytes data = 1; }`, opaque-bytes-only (same stance). `sample_count` and `chunk_duration_ns` derivable from the bytes plus the `Microphone` registry entry. Drops the `serde_bytes` dep from [`auki-registry`](../auki-registry).
+- **Step 5** — `auki.pose` carries `SpatialTransform { Vec3 translation; Quat orientation }`, flat. The pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` are gone — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair. Coordinated downstream: [`auki-manifests`](../auki-manifests)' `build_pose_log_manifest` rewritten with frame-pair + `writer_mode` + `expected_rate_hz`; [`auki-layout`](../auki-layout)'s `poselog_path` mirrors `timetransform_log_path`'s `(from, to)`-keyed shape. Drops the `ciborium` dev-dep from [`auki-registry`](../auki-registry).
 
-Two on-disk payloads remain (pose, time-transform) plus the `placeholder.proto` smoke-test (goes away at Step 7). See [`src/readme.md`](src/readme.md) for the current state and [`src/sprint.md`](src/sprint.md) for the migration sequence.
+One on-disk payload remains (time-transform) plus the `placeholder.proto` smoke-test (goes away at Step 7). See [`src/readme.md`](src/readme.md) for the current state and [`src/sprint.md`](src/sprint.md) for the migration sequence.

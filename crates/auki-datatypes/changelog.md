@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:52 HKT, 2026
+
+**Step 5 of the [migration](src/sprint.md) landed — `auki.pose` / `SpatialTransform` (on-disk, flat).** New `proto/pose.proto` with `SpatialTransform { Vec3 translation; Quat orientation }` + `Vec3 { double x, y, z }` + `Quat { double x, y, z, w }`. The pre-migration `auki_registry::PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` strings are gone — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair, mirroring how TimeTransform Log keys per `(from_clock_id, to_clock_id)`.
+
+**Coordinated downstream changes** (all 2026-05-08):
+- [`auki-registry`](../auki-registry): `PoseLogEntry` + `TransformSample` removed; `ciborium` dev-dep dropped (was their last user).
+- [`auki-manifests`](../auki-manifests): `build_pose_log_manifest` rewritten with 13 args including `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash`, `writer_mode: PoseWriterMode` (`Rigid` / `Movable`), `expected_rate_hz: u32` per the 2026-05-07 synthesis. New `PoseWriterMode` enum.
+- [`auki-layout`](../auki-layout): `poselog_path` now `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
+- [`auki-logs`](../auki-logs): no changes (encoder-agnostic since Step 1).
+
+**Tests**: 19 → 25 (+6 — `serializes_to_locked_wire_bytes`, `hash_is_locked`, `round_trips`, `log_payload_round_trips`, `default_round_trips`, `segment_round_trip`). Locked wire bytes for the identity-rotation 1-2-3-translation fixture: `0a1b09000000000000f03f110000000000000040190000000000000840120921000000000000f03f`. XXH3-128 hash: `29fa6349ab0b3ff1f06933489db74dfd`. proto3 default-elision means zero-valued doubles inside `Vec3`/`Quat` don't appear on the wire — pinned both in the locked vector test (the Quat's `x=y=z=0` fields are absent from the bytes) and in the dedicated `_default_round_trips` test.
+
+**Resolved parking-lot question**: the Pose Log manifest reshape per the 2026-05-07 synthesis — adjudicated and propagated in this same PR. Two slop fixes remaining (TimeTransformEntry source/discontinuous, TimeTransformSource collapse) — both resolve at Step 6.
+
 ### broodsugar's claude · May 8, 11:20 HKT, 2026
 
 **Step 4 of the [migration](src/sprint.md) landed — `auki.audio` / `AudioLogEntry` (on-disk).** New `proto/audio.proto` with `message AudioLogEntry { bytes data = 1; }` — opaque-bytes-only (Option A in the parking-lot slop point, adjudicated in favour). Same stance as Step 3 for point clouds; declines the pre-Step-3 lean toward adding `sample_count: u32`. Sample count and chunk duration are derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body — denormalizing either field would risk inconsistency for marginal reader convenience.

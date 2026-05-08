@@ -72,7 +72,7 @@ The producer side ships in [`auki-time-transforms`](crates/auki-time-transforms)
 
 ## convert_pose
 
-One of the SDK's two core operations. Translates a pose (translation + rotation) from one [Frame](#frame) into the equivalent in another, by composing transform edges along a path through the [Pose Log](#pose-log). Each edge is a [SpatialTransform](#spatialtransform) at a timestamp; the path traverses the parent-child frame relations declared per-sample. Like `convert_time`, `convert_pose` lets consumers translate across coordinate systems without a canonical frame — every position ships with a named frame identity.
+One of the SDK's two core operations. Translates a pose (translation + rotation) from one [Frame](#frame) into the equivalent in another, by composing transform edges along a path through the [Pose Log](#pose-log). Each edge is a [SpatialTransform](#spatialtransform) sample in a Pose Log keyed per `(from_frame_id, to_frame_id)`; the path traverses the frame pairs pinned in each log's manifest. Like `convert_time`, `convert_pose` lets consumers translate across coordinate systems without a canonical frame — every position ships with a named frame identity.
 
 Pose Log capture is in place; the consumer-side composition / path-finding is pending.
 
@@ -124,7 +124,7 @@ The [registry](README.md) of named clocks. `ClockRegistryEntry` records describe
 
 The third [registry](README.md) alongside Sensor + Clock. Holds [`FrameRegistryEntry`](crates/auki-registry/src/lib.rs) records — `{frame_id, handedness, axes, units}` — that declare the coordinate convention of a named frame. Lives at `<app_root>/registries/frames/<frame_id>/<hash>.json`, content-addressed by the entry's JCS hash like the other registries.
 
-Tree structure (parent-child relations between frames) lives in the Pose Log via `TransformSample.parent_frame` / `child_frame`, not in the registry — the registry declares what each frame *is in isolation*; the Pose Log declares the edges between them. Rotation representation is fixed at the `TransformSample` layer (Hamilton convention `[x, y, z, w]`); not per-frame.
+Tree structure (parent-child relations between frames) lives in the Pose Log: each Pose Log is keyed per `(from_frame_id, to_frame_id)` pair pinned in its manifest. The registry declares what each frame *is in isolation*; the Pose Log manifests declare the edges between them. Rotation representation is fixed at the [SpatialTransform](#spatialtransform) layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
 
 Four preset constructors cover the conventions for almost every real-world frame: `ros_body` (REP-103: right, x=forward y=left z=up, meters), `ros_optical` (REP-103 optical: right, x=right y=down z=forward, meters), `opengl` (right, x=right y=up z=backward, meters), `unity` (left, x=right y=up z=forward, meters). The on-disk JSON is fully spelled-out either way — presets are pure ergonomics.
 
@@ -138,11 +138,11 @@ The per-recording metadata sidecar — a JCS-canonical UTF-8 JSON file at the ro
 
 ## SpatialTransform
 
-The data type at the core of [convert_pose](#convert_pose) — a translation `[x, y, z]` plus a rotation quaternion `[x, y, z, w]` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the (parent_frame, child_frame) identity rides in the manifest. Currently in flight as a rename from the older `TransformSample` shape (per-sample frame labels) to the new flat `SpatialTransform` (per-(from, to) log identity); see Step 5 of the [auki-datatypes migration](crates/auki-datatypes/src/sprint.md).
+The data type at the core of [convert_pose](#convert_pose) — a translation `Vec3 { x, y, z }` plus a rotation quaternion `Quat { x, y, z, w }` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the `(from_frame_id, to_frame_id)` identity lives in the manifest, not on each sample. Implementation is `auki_datatypes::pose::SpatialTransform` (prost-encoded); the rename from the pre-migration `TransformSample` shape (per-sample frame labels) landed at Step 5 of the [auki-datatypes migration](crates/auki-datatypes/src/sprint.md) on 2026-05-08.
 
 ## Pose Log
 
-One of the [four logs](README.md). Stores per-batch transforms — `Vec<TransformSample>` per `auki-logs` entry, framing-timestamped on the daemon's clock. Each `TransformSample` carries `parent_frame` / `child_frame` strings (referencing entries in the Frame Registry), a translation `[x, y, z]` in the frame's units, and a rotation quaternion `[x, y, z, w]` (Hamilton). Multiple recordings per session distinguished by `retention_ns`. The log's manifest carries a [`PoseSource`](crates/auki-registry/src/lib.rs) inline (no Pose Source Registry — the payload is fully self-describing).
+One of the [four logs](README.md). Stores per-sample [SpatialTransform](#spatialtransform) entries for one `(from_frame_id, to_frame_id)` pair — same shape as TimeTransform Logs, which key per ordered clock pair. Lives at `<session>/poselogs/<from_id>__<to_id>/`. The auki-logs framing's `timestamp_ns` is the sample time on the manifest's clock; per-frame translation + Hamilton quaternion. The log's manifest pins both Frame Registry entries via `(from_frame_id, from_frame_hash) + (to_frame_id, to_frame_hash)`, the inline [Pose Source](#pose-source) provenance tag, plus `writer_mode` (`"rigid"` vs `"movable"`) and `expected_rate_hz` hints per the synthesis decided 2026-05-07. A producer that observes a multi-pair ROS `TFMessage` fans the message into N parallel pose logs.
 
 ## Sensor Log
 
@@ -158,7 +158,7 @@ One of the [four logs](README.md). Stores periodic clock-offset samples between 
 
 ## Pose Source
 
-The producer of a [Pose Log](#pose-log). A tagged-enum body — `Ros2Tf { publishers }` ships in v1, with extension points for SLAM / odometry / manual fixtures. Lives **inline** in the log's manifest under `"source"` because the Pose Log payload is fully self-describing (frame names sit in each `TransformSample`); source identity is provenance, not a decoder. Cf. Sensor Log, which earns a registry because its byte payload is uninterpretable without one.
+The producer of a [Pose Log](#pose-log). A tagged-enum body — `Ros2Tf { publishers }` ships in v1, with extension points for SLAM / odometry / manual fixtures. Lives **inline** in the log's manifest under `"source"` because frame identity (`from_frame_id`, `to_frame_id`) is also in the manifest — source is just provenance, not a decoder. Cf. Sensor Log, which earns a registry because its byte payload is uninterpretable without one. Implementation in [`auki-manifests`](crates/auki-manifests).
 
 ## Anchor
 

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:52 HKT, 2026
+
+**Step 5 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.pose / SpatialTransform` (on-disk, flat — per the 2026-05-07 synthesis).** [`auki-datatypes`](auki-datatypes) gains `proto/pose.proto` with `SpatialTransform { Vec3 translation; Quat orientation }` + `Vec3` + `Quat`. The pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` are gone — frame identity moves to the manifest's `(from_frame_id, to_frame_id)` pair (mirrors TimeTransform Log). Coordinated downstream changes: [`auki-registry`](auki-registry) drops `PoseLogEntry` + `TransformSample` + `ciborium` dev-dep (scope shrink complete: identity catalogs only); [`auki-manifests`](auki-manifests)' `build_pose_log_manifest` rewritten for 13 args (frame-pair, clock-pair, source, `writer_mode`, `expected_rate_hz`); new `PoseWriterMode` enum; [`auki-layout`](auki-layout)'s `poselog_path` switches to `(session_root, from_frame_id, to_frame_id)`. Tests: `auki-datatypes` 19 → 25 (+6); `auki-registry` 33 (net 0; +0/-2 pose CBOR tests); `auki-manifests` 6 → 7 (+1); `auki-layout` 7 (net 0; +2/-2 pose path tests). Resolves the Pose Log manifest reshape parking-lot item.
+
 ### broodsugar's dobby · May 8, 11:27 HKT, 2026
 
 [`auki-registry`](auki-registry) + [`auki-manifests`](auki-manifests) — filed two leaf parking-lot updates supporting the root subscription-as-materialization keystone: `sensor_id` convention raised from "recommended" to "load-bearing for cross-peer recording provenance," and the Pose Log / TimeTransform Log self-provenance gap filed with forward paths.

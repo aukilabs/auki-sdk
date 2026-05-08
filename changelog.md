@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:11 HKT, 2026
+
+**Doc cleanup after Step 2 (PR #62).** Caught the READMEs up with the post-PR reality across [root `README.md`](README.md), [`crates/README.md`](crates/README.md), [`auki-datatypes`](crates/auki-datatypes) (outer + `src/readme.md`), and [`auki-network`](crates/auki-network) (outer + `src/readme.md`): protocol IDs `/auki/cluster/0.0.1` + `/auki/stream/0.1.0`; stream wire format described as prost-encoded `StreamMessage` (not JSON-via-`serde_json`); framing helpers non-generic over `T`; `open_stream<T>`'s bound now `prost::Message + Default + Send + 'static`; locked-vector test names updated (`locked_stream_message_frame_with_point_cloud_payload` etc.); five `.proto` files enumerated in `auki-datatypes`'s layout; producer-side example uses current `StreamDispatch` + helper-constructor shape. Doc-only.
+
 ### broodsugar's claude · May 8, 09:42 HKT, 2026
 
 **Step 2 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md): libp2p substream wire moves to protobuf.** Three new `.proto` packages in [`auki-datatypes`](crates/auki-datatypes): `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, and `auki.stream` (full envelope). [`auki-network`](crates/auki-network)'s `stream_protocol` swaps JSON-via-`serde_json` for prost-encoded `StreamMessage`; the framing primitive (4-byte BE u32 length prefix) is unchanged but the envelope + inner T are now native binary. Drops `base64` from the `swarm` feature.

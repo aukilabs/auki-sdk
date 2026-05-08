@@ -4,20 +4,26 @@ Implementation status of `auki-datatypes`. Spec: this crate's [outer `README.md`
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). It includes two prost-generated modules — the placeholder (smoke-test) and `auki.camera` (the first real schema, landed Step 1 on 2026-05-08) — plus the `impl_log_payload!` macro that wires every prost type into [`auki_logs::LogPayload`](../../auki-logs/src/lib.rs).
+A single source file: [`lib.rs`](lib.rs). It includes five prost-generated modules:
+
+- `placeholder` — smoke-test only; goes away at Step 7.
+- `camera` (Step 1, 2026-05-08) — `PinholeCameraLogEntry` + `DynamicIntrinsics`.
+- `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
+- `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
+- `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream`), `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
+
+Plus the `impl_log_payload!` macro that wires every on-disk prost type into [`auki_logs::LogPayload`](../../auki-logs/src/lib.rs).
 
 ## What's not here yet
 
-Five remaining payload schemas. The migration sequence is in [`sprint.md`](sprint.md); the remaining `.proto` packages and their messages:
+Four remaining on-disk payload schemas. The migration sequence is in [`sprint.md`](sprint.md):
 
 - `auki.point_cloud` — `PointCloudLogEntry` (Step 3)
 - `auki.audio` — `AudioLogEntry` (Step 4)
 - `auki.pose` — `SpatialTransform` (renamed from `TransformSample`; `PoseLogEntry` wrapper goes away — Step 5)
 - `auki.time_transform` — `TimeTransformEntry` (was misnamed `TimeTransformLogEntry` in some earlier drafts — Step 6)
-- `auki.frame_stream` — `JpegFrame` (libp2p wire — Step 2)
-- `auki.point_cloud_stream` — `PointCloudFrame` (libp2p wire — Step 2)
 
-Each one **moves** a hand-written serde-derived type currently in [`auki-registry`](../../auki-registry) (or in [`auki-network`](../../auki-network)'s `stream_protocol` for the libp2p wire types) into here. The `.proto` file becomes the single source of truth; the Rust struct becomes generated; `auki-registry`'s scope shrinks back to identity-only.
+Each one **moves** a hand-written serde-derived type currently in [`auki-registry`](../../auki-registry) into here. The `.proto` file becomes the single source of truth; the Rust struct becomes generated; `auki-registry`'s scope shrinks back to identity-only.
 
 ## Public surface (current)
 
@@ -34,13 +40,65 @@ pub mod camera {
     }
 }
 
+pub mod frame_stream {
+    pub struct JpegFrame { pub bytes: Vec<u8> }
+}
+
+pub mod point_cloud_stream {
+    pub struct PointCloudFrame { pub bytes: Vec<u8> }
+}
+
+pub mod stream {
+    pub struct StreamMessage { pub variant: Option<stream_message::Variant> }
+    pub mod stream_message {
+        pub enum Variant {
+            Request(super::StreamRequest),
+            Accept(super::AcceptInfo),
+            Decline(super::DeclineReason),
+            Frame(super::Frame),
+            EndOfStream(super::EndReason),
+        }
+    }
+    pub struct StreamRequest { pub sensor_id: String }
+    pub struct AcceptInfo {
+        pub sensor_hash: String,
+        pub clock_id: String,
+        pub clock_hash: String,
+    }
+    /// `payload` carries prost-encoded `T` bytes; `T` is inferred from
+    /// the `AcceptInfo.sensor_hash` handshake (mono-T per substream).
+    pub struct Frame { pub timestamp_ns: i64, pub seq: u64, pub payload: Vec<u8> }
+    pub struct DeclineReason { pub kind: Option<decline_reason::Kind> }
+    pub mod decline_reason {
+        pub enum Kind { SensorNotFound(...), SensorUnavailable(...),
+                        ProducerShuttingDown(...), Other(Other) }
+        pub struct Other { pub detail: String }
+    }
+    pub struct EndReason { pub kind: Option<end_reason::Kind> }
+    pub mod end_reason {
+        pub enum Kind { SourceEnded(...), ProducerShuttingDown(...),
+                        SessionEnded(...), ProducerError(ProducerError) }
+        pub struct ProducerError { pub detail: String }
+    }
+
+    // Helper constructors live alongside the prost types:
+    impl StreamMessage { pub fn request(...) / accept(...) / decline(...) /
+                                 frame(...) / end_of_stream(...) -> Self; }
+    impl DeclineReason { pub fn sensor_not_found() / sensor_unavailable() /
+                                 producer_shutting_down() / other(detail) -> Self; }
+    impl EndReason     { pub fn source_ended() / producer_shutting_down() /
+                                 session_ended() / producer_error(detail) -> Self; }
+}
+
 pub mod placeholder {
     pub struct PipelineCheck {}
 }
 
-// Each prost type satisfies auki_logs::LogPayload via:
+// Every on-disk prost type satisfies auki_logs::LogPayload via:
 macro_rules! impl_log_payload { ($t:ty) => { /* encode_to_vec / decode */ }; }
 impl_log_payload!(camera::PinholeCameraLogEntry);
+// (Stream types don't get LogPayload — they're wire types, not on-disk
+// payloads. `Frame.payload` carries the on-disk T's prost bytes.)
 ```
 
 ## Tests (7 total)
@@ -58,6 +116,8 @@ impl_log_payload!(camera::PinholeCameraLogEntry);
 ## Consumers
 
 - `auki-ros-adapter` — `build_sensor_log_entry` produces `PinholeCameraLogEntry` ready for `auki_logs::Log::append` (Step 1, 2026-05-08).
-- `auki-logs` (transitive) — every prost type gets `LogPayload` for free via `impl_log_payload!`.
+- `auki-network`'s `stream_protocol` — re-exports `JpegFrame`, `PointCloudFrame`, and the full `auki.stream` envelope; `stream_runtime`'s `T` bound is `prost::Message + Default + Send + 'static` (Step 2, 2026-05-08).
+- `auki-network-py` — PyO3 wrappers track the prost match shape; Python surface unchanged.
+- `auki-logs` (transitive) — every on-disk prost type gets `LogPayload` for free via `impl_log_payload!`.
 
-The remaining downstream crates (`auki-network`'s stream protocol, `auki-time-transforms`'s sampler) come onto generated types one at a time as their migration steps land.
+The remaining downstream crate (`auki-time-transforms`'s sampler) comes onto generated types when its migration step lands.

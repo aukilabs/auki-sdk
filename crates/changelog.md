@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:11 HKT, 2026
+
+**Doc cleanup after Step 2** — [`crates/README.md`](README.md) updates the `auki-network` row's protocol id to `/auki/stream/0.1.0` and notes the prost-encoded envelope; [`auki-datatypes`](auki-datatypes) and [`auki-network`](auki-network) READMEs (outer + `src/readme.md`) catch up with the post-PR-#62 wire format (prost not JSON), framing-helper signatures (non-generic over `T`), `T` bound on `open_stream<T>` (`prost::Message + Default`), test counts (99 → 102), and locked-vector descriptions. Doc-only.
+
 ### broodsugar's claude · May 8, 09:42 HKT, 2026
 
 **Step 2 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): libp2p substream wire moves to protobuf.** [`auki-datatypes`](auki-datatypes) gains three new `.proto` packages: `auki.frame_stream` (`JpegFrame`), `auki.point_cloud_stream` (`PointCloudFrame`), and `auki.stream` (the full envelope `StreamMessage` oneof of `Request | Accept | Decline | Frame | EndOfStream`). [`auki-network`](auki-network)'s `stream_protocol` re-exports these; `stream_runtime`'s `T` bound switches from `Serialize + DeserializeOwned` to `prost::Message + Default`. The wire framing is unchanged (4-byte BE u32 length prefix); the envelope and inner T move to native binary. Drops `base64` from the `swarm` feature — no JSON-of-binary tax to dodge anymore.

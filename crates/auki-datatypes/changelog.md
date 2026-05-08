@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:11 HKT, 2026
+
+**Doc cleanup after Step 2.** [`README.md`](README.md) layout block enumerates all five `.proto` files (placeholder + camera + frame_stream + point_cloud_stream + stream); [`src/readme.md`](src/readme.md) reflects the five generated modules, the public surface (`StreamMessage`, `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason` plus their helper constructors), and updates the consumers section (`auki-network` and `auki-network-py` both consume the Step 2 types). Status section in the outer README now lists Steps 1 and 2 as landed. Doc-only.
+
 ### broodsugar's claude · May 8, 09:42 HKT, 2026
 
 **Step 2 of the [migration](src/sprint.md) landed — libp2p substream wire moves to protobuf.** Three new `.proto` packages: `auki.frame_stream { JpegFrame }`, `auki.point_cloud_stream { PointCloudFrame }`, `auki.stream` (full envelope `StreamMessage` oneof of `Request | Accept | Decline | Frame | EndOfStream`).

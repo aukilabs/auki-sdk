@@ -4,6 +4,14 @@ Definitions of key terms in the Auki SDK and the surrounding real-world-web prot
 
 ---
 
+## Real World Web
+
+The protocol surface this SDK targets — peer-to-peer networks where devices in the same physical space share a coherent view of that space (transforms, sensor frames, detections, anchors) without a central authority. Each peer is a [Daemon](#daemon); peers organize into [clusters](#cluster) around shared [Domain IDs](#domain-id); identity, signing, and content-addressing are wallet-rooted. The SDK ships the primitives the protocol composes from — registries, logs, transforms — not the protocol itself.
+
+## Daemon
+
+A long-running process that reads and writes the SDK's on-disk format and (optionally) participates in clusters as a libp2p peer. Concrete instances: BoosterApp (K1 sensor capture), Sentinel (extractor pipeline), Park (visualizer). A daemon owns a [Wallet](#wallet), reports an [App ID](#app-id) + [App Instance](#app-instance), runs zero or more [recording sessions](#session-id), and exposes a [Control API](docs/control-api.md). The SDK is the substrate; daemons are the consumers.
+
 ## Domain
 
 A unique identifier applied as a tag to data, asserting that the data describes a specific physical space. The tag is what lets disparate data types — RGB video, point clouds, poses, detections — be grouped as describing the same place; without intent, an RGB clip is just video.
@@ -34,6 +42,10 @@ The runtime group of devices networking around a shared Domain ID — a *domain-
 
 Cluster formation lives in higher layers; the SDK provides primitives, not the network protocol itself.
 
+## ClusterDoc
+
+The cluster's discovery doc — a JSON file (typically `cluster.json`) enumerating the peers participating in the cluster. Each entry pairs a [Peer ID](#peer-id) with its dialable multiaddrs and named capabilities. Distributed either statically (every peer reads `cluster.json` from disk at boot) or dynamically via [Discovery](#discovery). The ClusterDoc is the trust boundary — peers not in the doc cannot dial; libp2p's Noise layer refuses connections from unknown Peer IDs. See [`auki-network`](crates/auki-network).
+
 ## Scenegraph
 
 A structured representation of the spatial data for a Domain — typed nodes (frames, sensors, clocks) connected by transform edges. Evaluable at a timestamp by composition along a transform path:
@@ -51,6 +63,26 @@ The identifier for a specific scenegraph. Distinct from Domain ID — multiple s
 ## Map
 
 The canonical scenegraph designated by a Domain Owner. The default served when a peer asks for "the map" of a Domain without specifying a Scenegraph ID. One Map at a time per Domain, but many candidate scenegraphs.
+
+## convert_time
+
+One of the SDK's two core operations. Translates a timestamp on one [clock](#clock-registry) into the equivalent timestamp on another, by interpolating the offset samples in a [TimeTransform Log](#timetransform-log) at the source timestamp. Lets a downstream consumer correlate data captured under different clocks (e.g. ROS 2 wall-clock, robot session-monotonic, peer-supplied UTC) without picking a "canonical" clock — every timestamp ships with a named clock identity, and `convert_time` is what bridges them.
+
+The producer side ships in [`auki-time-transforms`](crates/auki-time-transforms) (the sampler that writes the log); the consumer-side composition is pending.
+
+## convert_pose
+
+One of the SDK's two core operations. Translates a pose (translation + rotation) from one [Frame](#frame) into the equivalent in another, by composing transform edges along a path through the [Pose Log](#pose-log). Each edge is a [SpatialTransform](#spatialtransform) at a timestamp; the path traverses the parent-child frame relations declared per-sample. Like `convert_time`, `convert_pose` lets consumers translate across coordinate systems without a canonical frame — every position ships with a named frame identity.
+
+Pose Log capture is in place; the consumer-side composition / path-finding is pending.
+
+## Wallet
+
+The identity primitive — an ed25519 keypair plus deterministic child derivation (label-based, like BIP32 but simpler). One wallet seed regenerates every derived key on a fresh machine: the [Peer ID](#peer-id) (`derive_child("peer/v1")`), per-Domain owner keys, signing keys for [TagClaims](#tagclaim), and so on. Foundational for content-addressing and signing across the SDK; ships in [`auki-identity`](crates/auki-identity), WASM-friendly.
+
+## Peer ID
+
+The libp2p identifier used in [`cluster.json`](#clusterdoc), `/p2p/<peer-id>` multiaddrs, and the trust check at connection time. Derived from a [Wallet](#wallet) via `Wallet::derive_child("peer/v1")` then libp2p's standard `PublicKey → multihash → multibase-base58` chain. Same wallet seed → same Peer ID, deterministic across machines and reboots.
 
 ## Session ID
 
@@ -70,11 +102,23 @@ An identifier for the specific machine an application is running on — derived 
 
 Caveats: fragile in containers, VMs, and multi-NIC environments. A wallet-derived persistent stable-id alternative is parked.
 
+## Sensor / Clock / Frame ID
+
+The id format used for sensors, clocks, and frames: `<platform-tag>-<machine-id>/<name>`. Examples: `K1-AABBCCDDEEFF/head_left_cam` (RGB camera on a K1 robot), `K1-AABBCCDDEEFF/utc` (clock), `K1-AABBCCDDEEFF/head_left_cam_optical` (frame). The platform-tag and machine-id together make the prefix locally unique to the producing daemon; the trailing name is producer-scoped. The full id is what consumers pass to discovery and stream protocols; the corresponding registry entry pins the configuration via its content-addressed hash.
+
 ## Frame
 
 A coordinate system. In robotics and Auki's pose model, frames are typed nodes in a tree — each frame is a child of another (the body's frame, a sensor's frame, the world frame), and edges between frames are transforms. A frame's *convention* — handedness, what each axis points toward, length unit — is declared explicitly in the Frame Registry; the SDK never assumes a canonical frame.
 
 Frame IDs follow the same `<platform-tag>-<machine-id>/<name>` convention as sensor and clock IDs (e.g. `"K1-AABBCCDDEEFF/head_left_cam_optical"`).
+
+## Sensor Registry
+
+The [registry](README.md) of named sensor configurations. `SensorRegistryEntry` records describe what a sensor *is* — camera intrinsics, point-cloud field layout, audio sample format — so that a [Sensor Log](#sensor-log) reader can interpret the per-frame byte payload. Lives at `<app_root>/registries/sensors/<sensor_id>/<hash>.json`, content-addressed by JCS hash; the active configuration is whichever hash sits in the live log's manifest. Implementation in [`auki-registry`](crates/auki-registry).
+
+## Clock Registry
+
+The [registry](README.md) of named clocks. `ClockRegistryEntry` records describe a clock's epoch, monotonicity guarantees, and provenance (e.g. system `CLOCK_REALTIME`, ROS 2 sim time, session-monotonic). Lives at `<app_root>/registries/clocks/<clock_id>/<hash>.json`, content-addressed by JCS hash. Every timestamp the SDK writes references a `(clock_id, clock_hash)` pair — this registry is what makes that reference resolvable, and what [convert_time](#convert_time) crosses between. Implementation in [`auki-registry`](crates/auki-registry).
 
 ## Frame Registry
 
@@ -87,6 +131,14 @@ Four preset constructors cover the conventions for almost every real-world frame
 ## Coordinate convention
 
 The four declarations that make a [Frame](#frame) interpretable: **handedness** (right or left), **axis directions** (what `+x`, `+y`, `+z` point toward semantically), **length unit** (meters / millimeters / centimeters), and **rotation representation** (fixed in this SDK at quaternion-xyzw / Hamilton convention; not per-frame). The SDK never assumes a default — every frame ships with the four declarations explicit, and the `Wallet → libp2p PeerId` model has a parallel pattern: every timestamp ships with a named clock identity, every position ships with a named frame identity.
+
+## Manifest
+
+The per-recording metadata sidecar — a JCS-canonical UTF-8 JSON file at the root of every [log](README.md)'s directory. Carries the identity references the segment payloads need (`sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`, `session_id`, `app_id`, etc.) plus the rollover/retention parameters (`segment_duration_ns`, `retention_ns`, `duration_ns`). Schemas and builders live in [`auki-manifests`](crates/auki-manifests); sibling crate to [`auki-datatypes`](crates/auki-datatypes), which owns the segment payload schemas.
+
+## SpatialTransform
+
+The data type at the core of [convert_pose](#convert_pose) — a translation `[x, y, z]` plus a rotation quaternion `[x, y, z, w]` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the (parent_frame, child_frame) identity rides in the manifest. Currently in flight as a rename from the older `TransformSample` shape (per-sample frame labels) to the new flat `SpatialTransform` (per-(from, to) log identity); see Step 5 of the [auki-datatypes migration](crates/auki-datatypes/src/sprint.md).
 
 ## Pose Log
 
@@ -110,8 +162,12 @@ The producer of a [Pose Log](#pose-log). A tagged-enum body — `Ros2Tf { publis
 
 ## Anchor
 
-A coordinate-frame fix — typically a fiducial marker (QR / ArUco) at a known location, or a SLAM-recognized scene feature. An anchor lets a peer compute its pose in a domain coordinate space by observing the anchor and looking up the published pose for that anchor's `anchor_id`. **Not directly modeled by an SDK primitive** — anchors surface today as `tag_id` values in `anchor_citation` [TagClaim](tags.md)s. The associated frame is declared explicitly in the Frame Registry; the citation just asserts that the data product saw the anchor.
+A coordinate-frame fix — typically a fiducial marker (QR / ArUco) at a known location, or a SLAM-recognized scene feature. An anchor lets a peer compute its pose in a domain coordinate space by observing the anchor and looking up the published pose for that anchor's `anchor_id`. **Not directly modeled by an SDK primitive** — anchors surface today as `tag_id` values in `anchor_citation` [TagClaim](#tagclaim)s. The associated frame is declared explicitly in the Frame Registry; the citation just asserts that the data product saw the anchor.
+
+## TagClaim
+
+A signed assertion that some data product has a property — e.g. *"this Pose Log is part of `domain_X`"*, *"this RGB clip cited anchor `Y`"*, *"the prior claim referenced here is hereby revoked"*. Issued by the holder of an issuer wallet; attached to the data via an append-only `tags.jsonl` sidecar next to the log's manifest, separate from the manifest itself (which is treated as immutable). Append-only by design — revocation is a *new* claim of `claim_type: "revoke"` referencing the prior claim's hash. The full v0 schema and claim taxonomy live in [`tags.md`](tags.md).
 
 ## Discovery
 
-The runtime registry [`aukilabs/discovery`](https://github.com/aukilabs/discovery) that lets daemons find each other on a LAN without hardcoding `cluster.json` on every device. A Vinland-mode daemon registers its `peer_id` + addresses with Discovery via signed `POST /clusters/<name>/peers`, then fetches the full `ClusterDoc` to bootstrap its libp2p mesh. The SDK ships [`auki-network::discovery_client`](crates/auki-network/src/discovery_client.rs) (Rust) and [`auki_network.discovery.DiscoveryClient`](crates/auki-network-py/src/discovery.rs) (Python) for daemons; the registry server itself lives in a separate repo. Daemons either use Discovery or a static `cluster.json`, picked at startup — no fallback (D3).
+The runtime registry [`aukilabs/discovery`](https://github.com/aukilabs/discovery) that lets daemons find each other on a LAN without hardcoding `cluster.json` on every device. A daemon using Discovery registers its `peer_id` + addresses via signed `POST /clusters/<name>/peers`, then fetches the full [ClusterDoc](#clusterdoc) to bootstrap its libp2p mesh. The SDK ships [`auki-network::discovery_client`](crates/auki-network/src/discovery_client.rs) (Rust) and [`auki_network.discovery.DiscoveryClient`](crates/auki-network-py/src/discovery.rs) (Python) for daemons; the registry server itself lives in a separate repo. Daemons either use Discovery or a static `cluster.json`, picked at startup — no fallback.

@@ -90,9 +90,9 @@ Decision: `<app_root>/registries/...` is the canonical layout. Sweep [`tags.md`]
 
 ## Grimsby follow-ups (cross-cutting items surfaced during the [grimsby](https://www.notion.so/3575c8e965928079a955ed9573bbb398) decision walkthrough — none gating grimsby itself)
 
-### `/auki/capabilities/1.0.0` — Layer 2 capability advertisement
+### `/auki/capabilities/1.0.0` — Layer 2 topic-based addressing
 
-Grimsby D2 resolved on `sensor_id`-only addressing for v1. The long-term shape is topic-based addressing (consumers asking for `rgb/head_left` instead of an internal `K1-AABBCCDDEEFF/head_left_cam`), which requires a new libp2p request-response protocol returning a `Vec<{topic, sensor_id, sensor_hash}>` so consumers can discover what a peer offers. Sibling to `/auki/cluster/1.0.0` (ansuz #3) and `/auki/stream/1.0.0` (grimsby #1); same `request_response::json::Behaviour` codec pattern. Belongs in `auki-network`. State of SDK doc flags this as "the biggest single gap on the networking side." Not gating grimsby; a parallel track once Layer 3 (admission) becomes a near-term need.
+Grimsby D2 resolved on `sensor_id`-only addressing for v1. The long-term shape is topic-based addressing (consumers asking for `rgb/head_left` instead of an internal `K1-AABBCCDDEEFF/head_left_cam`), which requires a new libp2p request-response protocol returning a `Vec<{topic, sensor_id, sensor_hash}>` so consumers can resolve a topic name to the currently-active `(sensor_id, sensor_hash)` pair offered by a peer. (Capability *discovery* — what configurations a peer's sensor supports — falls out of `<sensor_id>/<hash>.json` directory listing per the [Resolved: Sensor Capability Registry](#resolved-sensor-capability-registry-filed-by-dobby-2026-05-08) framing above.) Sibling to `/auki/cluster/1.0.0` (ansuz #3) and `/auki/stream/1.0.0` (grimsby #1); same `request_response::json::Behaviour` codec pattern. Belongs in `auki-network`. State of SDK doc flags this as "the biggest single gap on the networking side." Not gating grimsby; a parallel track once Layer 3 (admission) becomes a near-term need.
 
 ### `Log<T>` watcher primitive
 
@@ -169,6 +169,12 @@ That bullet has been stale since the Pose Log capture primitive landed. The on-d
 Suggested fix: change "**both** Sensor and TimeTransform Logs" → "Sensor, TimeTransform, **and Pose** Logs". Or expand into a sentence making the architectural point explicit: *"All log types — Sensor (with the Point Cloud and Audio sibling payloads), TimeTransform, and Pose — sit on the auki-logs ring-buffer primitive; the manifest schema and segment payload shape vary per log type, the segment machinery is shared."*
 
 Doc-only PR. Cheap; bundles naturally with the quest-name scrub above.
+
+---
+
+## Resolved: Sensor Capability Registry _(filed by Dobby, 2026-05-08)_
+
+Don't need one for now. The application can just make a `SensorRegistryEntry` for each configuration it's open to supporting; the active configuration is whichever hash sits in the live sensor log's manifest. The hash *is* the configuration agreement.
 
 ---
 

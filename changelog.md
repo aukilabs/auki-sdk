@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 08:56 HKT, 2026
+
+Root [`parking_lot.md`](parking_lot.md) gains a Resolved entry for **Sensor Capability Registry** — the SDK doesn't need one. Applications that want to advertise a configuration menu can write a `SensorRegistryEntry` per supported configuration; the active configuration is whichever hash sits in the live sensor log's manifest. The hash *is* the configuration agreement, so capability-discovery falls out of registry directory listing without a new registry kind. Adjacent edit: tightened the existing `/auki/capabilities/1.0.0` parking-lot item's heading from *"Layer 2 capability advertisement"* to *"Layer 2 topic-based addressing"* with an inline cross-reference to the resolution — the protocol's single remaining responsibility is mapping topic names to the currently-active `(sensor_id, sensor_hash)` pair, not advertising capabilities. Doc-only.
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **Step 1 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](crates/auki-datatypes) ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics` (renamed from `SensorLogEntry`), prost-encoded, locked wire-bytes + XXH3-128 hash. Camera log payload + `DynamicIntrinsics` moved out of [`auki-registry`](crates/auki-registry) to their new home; [`auki-ros-adapter`](crates/auki-ros-adapter)'s `build_sensor_log_entry` returns the prost type.

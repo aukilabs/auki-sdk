@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 12:51 HKT, 2026
+
+**Step 7 of the [migration](src/sprint.md) landed — placeholder cleanup. The migration is complete.** Deleted `proto/placeholder.proto`, the `placeholder` module in [`src/lib.rs`](src/lib.rs), the `placeholder_pipeline_check_round_trips` smoke test, and the corresponding line in [`build.rs`](build.rs). The seven real `.proto` packages (camera, point_cloud, audio, pose, time_transform, frame_stream, point_cloud_stream, stream) serve as proof that the prost-build pipeline works; the placeholder no longer earned its keep. Test count: 32 → 31.
+
 ### broodsugar's claude · May 8, 12:43 HKT, 2026
 
 **Step 6 of the [migration](src/sprint.md) landed — `auki.time_transform` / `TimeTransformEntry` (on-disk).** New `proto/time_transform.proto` with `TimeTransformEntry { int64 offset_ns = 1; uint32 uncertainty_ns = 2; }`. **All three slop points resolved**: (a) per-entry `source` moved to manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); (b) per-entry `discontinuous: bool` dropped — readers compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against their own tolerance; (c) `TimeTransformSource` kept as tagged enum at the manifest layer (Option 2 — matches `PoseSource`'s extension pattern with one variant today, `LocalClockRead`).

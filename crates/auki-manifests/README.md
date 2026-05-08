@@ -36,6 +36,7 @@ pub fn build_time_transform_log_manifest(
     app_id, session_id,
     from_clock_id, from_clock_hash,
     to_clock_id, to_clock_hash,
+    source: &TimeTransformSource,
     segment_duration, retention,
 ) -> serde_json::Value;
 
@@ -47,6 +48,11 @@ pub enum PoseSource {
 pub enum PoseWriterMode {
     Rigid,    // serialized as "rigid"
     Movable,  // serialized as "movable"
+}
+
+pub enum TimeTransformSource {
+    LocalClockRead,    // serialized as {"kind":"local_clock_read"}
+    // future: NtpSynced { server }, SyncedTo { peer_id }, ...
 }
 ```
 
@@ -95,21 +101,22 @@ The `(from_frame_id, to_frame_id)` pair mirrors the TimeTransform Log's `(from_c
 
 ### TimeTransform Log
 
-| Key                   | Type    | Notes                                                            |
-| --------------------- | ------- | ---------------------------------------------------------------- |
-| `segment_duration_ns` | integer | > 0; from auki-logs                                              |
-| `retention_ns`        | integer | ≥ 0; from auki-logs                                              |
-| `app_id`              | string  | Same as Sensor Log                                               |
-| `session_id`          | string  | Same as Sensor Log                                               |
-| `from_clock_id`       | string  | The Clock Registry ID the framing's `timestamp_ns` is on         |
-| `from_clock_hash`     | string  | XXH3-128 hex of the from-clock's registry entry                  |
-| `to_clock_id`         | string  | The Clock Registry ID `offset_ns` carries you to                 |
-| `to_clock_hash`       | string  | XXH3-128 hex of the to-clock's registry entry                    |
+| Key                   | Type            | Notes                                                            |
+| --------------------- | --------------- | ---------------------------------------------------------------- |
+| `segment_duration_ns` | integer         | > 0; from auki-logs                                              |
+| `retention_ns`        | integer         | ≥ 0; from auki-logs                                              |
+| `app_id`              | string          | Same as Sensor Log                                               |
+| `session_id`          | string          | Same as Sensor Log                                               |
+| `from_clock_id`       | string          | The Clock Registry ID the framing's `timestamp_ns` is on         |
+| `from_clock_hash`     | string          | XXH3-128 hex of the from-clock's registry entry                  |
+| `to_clock_id`         | string          | The Clock Registry ID `offset_ns` carries you to                 |
+| `to_clock_hash`       | string          | XXH3-128 hex of the to-clock's registry entry                    |
+| `source`              | tagged enum     | Inline producer identity — `TimeTransformSource` (e.g. `{"kind":"local_clock_read"}`); added at Step 6 (2026-05-08), mirrors Pose Log's shape |
 
 ## Versioning
 
-Schema version is **1** for all three manifest shapes (Sensor Log family, Pose Log, TimeTransform Log) and for `PoseSource` / `PoseWriterMode`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
+Schema version is **1** for all three manifest shapes (Sensor Log family, Pose Log, TimeTransform Log) and for `PoseSource` / `PoseWriterMode` / `TimeTransformSource`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
 
 ## Status
 
-Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time-transforms` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`.
+Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time-transforms` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`. Step 6 (2026-05-08) added `&TimeTransformSource` as a `build_time_transform_log_manifest` argument and brought `TimeTransformSource` over from [`auki-time-transforms`](../auki-time-transforms) — it's manifest metadata, not a per-entry field, mirroring `PoseSource`.

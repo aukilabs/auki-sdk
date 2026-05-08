@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 12:43 HKT, 2026
+
+**Step 6 of the [migration](src/sprint.md) landed — `auki.time_transform` / `TimeTransformEntry` (on-disk).** New `proto/time_transform.proto` with `TimeTransformEntry { int64 offset_ns = 1; uint32 uncertainty_ns = 2; }`. **All three slop points resolved**: (a) per-entry `source` moved to manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); (b) per-entry `discontinuous: bool` dropped — readers compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against their own tolerance; (c) `TimeTransformSource` kept as tagged enum at the manifest layer (Option 2 — matches `PoseSource`'s extension pattern with one variant today, `LocalClockRead`).
+
+**Moved** `TimeTransformEntry` out of [`auki-time-transforms`](../auki-time-transforms) into this crate; `TimeTransformSource` moved to [`auki-manifests`](../auki-manifests) (manifest metadata, not per-entry). [`auki-time-transforms`](../auki-time-transforms)'s `tick`/`Sampler` simplified — no more `SamplerState`, no more `discontinuity_threshold` arg.
+
+**Tests**: 25 → 32 (+7 — `serializes_to_locked_wire_bytes`, `hash_is_locked`, `round_trips`, `log_payload_round_trips`, `zero_offset_round_trips`, `negative_offset_round_trips`, `segment_round_trip`). Locked wire bytes for `offset_ns: 1_000_000, uncertainty_ns: 250` — `08c0843d10fa01` (7 bytes; both varint fields). XXH3-128 hash: `b7e73628833419a7c299933d07cbe88c`. The negative-offset test pins prost's non-zigzag varint encoding for proto3 `int64` (10 bytes for negatives).
+
+**On-disk migration complete.** All five log payload types live here as prost types; only `placeholder.proto` remains, removed at Step 7.
+
 ### broodsugar's claude · May 8, 11:52 HKT, 2026
 
 **Step 5 of the [migration](src/sprint.md) landed — `auki.pose` / `SpatialTransform` (on-disk, flat).** New `proto/pose.proto` with `SpatialTransform { Vec3 translation; Quat orientation }` + `Vec3 { double x, y, z }` + `Quat { double x, y, z, w }`. The pre-migration `auki_registry::PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` strings are gone — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair, mirroring how TimeTransform Log keys per `(from_clock_id, to_clock_id)`.

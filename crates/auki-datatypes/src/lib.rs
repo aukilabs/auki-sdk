@@ -88,6 +88,20 @@ pub mod pose {
 
 impl_log_payload!(pose::SpatialTransform);
 
+/// `auki.time_transform` — TimeTransform Log segment payload
+/// (Migration Step 6). `offset_ns` (`to_clock - from_clock`) and
+/// `uncertainty_ns` only — the pre-migration `source` field moved to
+/// the manifest as a tagged-enum `TimeTransformSource` (mirrors
+/// `PoseSource`); the pre-migration `discontinuous: bool` flag is
+/// gone (computed on read using the reader's own threshold). The
+/// sample's timestamp rides in the auki-logs framing's
+/// `timestamp_ns` (from-clock reading at the sample instant).
+pub mod time_transform {
+    include!(concat!(env!("OUT_DIR"), "/auki.time_transform.rs"));
+}
+
+impl_log_payload!(time_transform::TimeTransformEntry);
+
 /// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
 /// `/auki/stream/0.1.0`). Migration Step 2.
 pub mod frame_stream {
@@ -201,6 +215,7 @@ mod tests {
     use super::placeholder::PipelineCheck;
     use super::point_cloud::PointCloudLogEntry;
     use super::pose::{Quat, SpatialTransform, Vec3};
+    use super::time_transform::TimeTransformEntry;
     use prost::Message;
 
     /// Smoke test that `prost-build` actually ran, the generated code
@@ -620,5 +635,124 @@ mod tests {
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.translation, None);
         assert_eq!(entries[1].payload.orientation, None);
+    }
+
+    // ─── auki.time_transform locked vectors ──────────────────────────────────
+
+    /// 1 ms positive offset, 250 ns uncertainty — round numbers picked
+    /// for stable wire bytes; the values are within the realistic
+    /// monotonic↔UTC offset range a daemon would see at startup.
+    fn step6_time_transform_entry() -> TimeTransformEntry {
+        TimeTransformEntry {
+            offset_ns: 1_000_000,
+            uncertainty_ns: 250,
+        }
+    }
+
+    /// Locks the prost wire bytes for the Step 6 example
+    /// `TimeTransformEntry`. Cross-language readers MUST reproduce
+    /// these exact bytes.
+    #[test]
+    fn time_transform_entry_serializes_to_locked_wire_bytes() {
+        let bytes = step6_time_transform_entry().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        // Field 1 (offset_ns, varint): tag 0x08, value 1_000_000 → 3 bytes (`c0 84 3d`).
+        // Field 2 (uncertainty_ns, varint): tag 0x10, value 250 → 2 bytes (`fa 01`).
+        assert_eq!(hex, "08c0843d10fa01");
+    }
+
+    /// XXH3-128 of those wire bytes.
+    #[test]
+    fn time_transform_entry_hash_is_locked() {
+        let bytes = step6_time_transform_entry().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "b7e73628833419a7c299933d07cbe88c"
+        );
+    }
+
+    #[test]
+    fn time_transform_entry_round_trips() {
+        let entry = step6_time_transform_entry();
+        let bytes = entry.encode_to_vec();
+        let decoded = TimeTransformEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn time_transform_entry_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step6_time_transform_entry();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <TimeTransformEntry as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// proto3 default-elision: `offset_ns = 0` (perfectly synchronized
+    /// clocks at the sample instant) and `uncertainty_ns = 0` encode
+    /// to zero bytes.
+    #[test]
+    fn time_transform_entry_zero_offset_round_trips() {
+        let entry = TimeTransformEntry {
+            offset_ns: 0,
+            uncertainty_ns: 0,
+        };
+        let bytes = entry.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = TimeTransformEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Negative-offset round-trip — if the to-clock leads the
+    /// from-clock at the sample instant, `offset_ns` is negative.
+    /// Pins zigzag/varint signed encoding behavior (proto3 `int64`
+    /// is *not* zigzag-encoded; stays a regular varint with the
+    /// 64-bit two's-complement representation, so negatives are
+    /// 10-byte varints).
+    #[test]
+    fn time_transform_entry_negative_offset_round_trips() {
+        let entry = TimeTransformEntry {
+            offset_ns: -42_000_000,
+            uncertainty_ns: 100,
+        };
+        let bytes = entry.encode_to_vec();
+        let decoded = TimeTransformEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam: open a real `auki_logs::Log<TimeTransformEntry>`,
+    /// append two entries (one populated, one default), close, re-read,
+    /// assert order + payload byte-equality. Pins the new on-disk
+    /// shape end-to-end through the segment writer/reader.
+    #[test]
+    fn time_transform_entry_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<TimeTransformEntry> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step6_time_transform_entry()).unwrap();
+            log.append(
+                200,
+                &TimeTransformEntry {
+                    offset_ns: 0,
+                    uncertainty_ns: 0,
+                },
+            )
+            .unwrap();
+        }
+        let reader: auki_logs::LogReader<TimeTransformEntry> =
+            auki_logs::Log::<TimeTransformEntry>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step6_time_transform_entry());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.offset_ns, 0);
+        assert_eq!(entries[1].payload.uncertainty_ns, 0);
     }
 }

@@ -1,33 +1,23 @@
 # `auki-time-transforms/src/`
 
-TimeTransform Log entry shape + 1 Hz `local_clock_read` sampler. Schema spec: this crate's [outer `README.md`](../README.md).
+1 Hz `local_clock_read` sampler producing `TimeTransformEntry` records. Schema spec: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs).
+A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the data-type definitions out; this crate is now just the producer.
 
-The crate has three composable layers:
-1. The **entry payload type** ([`TimeTransformEntry`]) — a serde struct rideable on `auki_logs::Log`.
-2. The **unit-testable primitive** ([`tick`]) — pure function over a `Clock` trait + `SamplerState`.
-3. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
+The crate has two composable layers:
+1. The **unit-testable primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
+2. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
 
-## Entry payload
+## Re-exports
 
 ```rust
-pub struct TimeTransformEntry {
-    pub offset_ns: i64,         // to_clock - from_clock at the sample instant
-    pub uncertainty_ns: u32,    // window during which to_clock was read
-    pub source: TimeTransformSource,
-    pub discontinuous: bool,    // |offset - prev_offset| ≥ threshold
-}
-
-#[serde(rename_all = "snake_case")]
-pub enum TimeTransformSource {
-    LocalClockRead,    // serializes as "local_clock_read"
-}
+pub use auki_datatypes::time_transform::TimeTransformEntry;  // { offset_ns: i64, uncertainty_ns: u32 }
+pub use auki_manifests::TimeTransformSource;                  // tagged enum, lives in the manifest
 ```
 
-The framing's `timestamp_ns` (provided by `auki_logs::Log::append`) is the **from-clock reading** at the sample instant. It's not duplicated in the payload.
+The framing's `timestamp_ns` (provided by `auki_logs::Log::append`) is the **from-clock midpoint** at the sample instant. Not duplicated in the payload.
 
 ## `Clock` trait
 
@@ -44,7 +34,7 @@ Tests: `ScriptedClock` (in `#[cfg(test)] mod tests`) pops pre-loaded readings of
 
 ## The three-read protocol
 
-`tick(clock, state)` reads:
+`tick(clock)` reads:
 
 1. `m1 = clock.read_from_ns()`
 2. `r  = clock.read_to_ns()`
@@ -58,33 +48,13 @@ And computes:
 
 The third read makes `uncertainty_ns` a **real** bound on the from-clock, not a guess. It's the actual elapsed time during which the to-clock was sampled.
 
-## Discontinuity flag
+## Discontinuity is a reader concern
 
-```rust
-pub struct SamplerState {
-    pub last_offset_ns: Option<i64>,
-    pub threshold_ns: i64,
-}
-```
-
-If `|offset - prev_offset| ≥ threshold_ns`, the entry's `discontinuous` flag is set. The first sample is always `false` (no prior offset to compare against). The default threshold is **10 ms** (Sampler-level), chosen to flag NTP step corrections cleanly while ignoring chrony's smaller per-sample slews.
+Step 6 dropped the per-entry `discontinuous: bool` flag and the `SamplerState` struct that tracked the previous offset. Readers compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against their own tolerance — different readers can disagree on what counts as discontinuous, and that's the point. See the outer [README's discontinuity-detection section](../README.md#discontinuity-detection--reader-side) for the recommended 10 ms threshold and the rationale.
 
 ## Manifest builder
 
-```rust
-pub fn build_manifest(
-    app_id: &str,
-    session_id: &str,
-    from_clock_id: &str,
-    from_clock_hash: &str,
-    to_clock_id: &str,
-    to_clock_hash: &str,
-    segment_duration: Duration,
-    retention: Duration,
-) -> serde_json::Value;
-```
-
-Produces a `serde_json::Value` containing the four clock-binding fields, the run-identifying `app_id` / `session_id` (UUIDv4 minted at app boot), plus `auki-logs`'s required `segment_duration_ns` / `retention_ns`.
+The `build_time_transform_log_manifest` builder lives in [`auki-manifests`](../../auki-manifests). Step 6 added a `&TimeTransformSource` argument; the manifest carries the producer identity inline.
 
 ## Background `Sampler`
 
@@ -96,32 +66,25 @@ impl Sampler {
         log: auki_logs::Log<TimeTransformEntry>,
         clock: Box<dyn Clock>,
         period: Duration,
-        discontinuity_threshold: Duration,
     ) -> Self;
 
     pub fn stop(self) -> auki_logs::Log<TimeTransformEntry>;
 }
 ```
 
-`start` spawns a thread that calls `tick` every `period` and appends each entry to the log. `stop` signals the thread, joins, and **returns the log back** so the caller can flush/drop it on the main thread (matters for fsync ordering during shutdown).
+`start` spawns a thread that calls `tick` every `period` and appends each entry to the log. Step 6 dropped the `discontinuity_threshold` arg — discontinuity detection is now reader-side.
 
-Append failures are logged via `eprintln!` and the loop continues — a per-tick I/O hiccup shouldn't kill the sampler.
+`stop` signals the thread, joins, and **returns the log back** so the caller can flush/drop it on the main thread (matters for fsync ordering during shutdown). Append failures are logged via `eprintln!` and the loop continues — a per-tick I/O hiccup shouldn't kill the sampler.
 
-## Tests (10 total)
+## Tests (2 total)
 
 | Test | Asserts |
 |------|---------|
-| `tick_computes_offset_uncertainty_and_timestamp` | The math is right for one canned set of readings |
-| `first_tick_never_flags_discontinuous` | No prior offset → `false` regardless of magnitude |
-| `drift_smaller_than_threshold_does_not_flag` | Sub-threshold drift between two samples → `false` |
-| `step_larger_than_threshold_flags_discontinuous` | Above-threshold step → `true` |
-| `step_below_threshold_does_not_flag` | Just-below-threshold step → `false` (boundary check) |
-| `negative_step_also_flags` | Backwards UTC correction → `true` (uses `unsigned_abs`) |
-| `source_serializes_snake_case` | `LocalClockRead` → `"local_clock_read"` |
-| `entry_round_trips_through_cbor` | Full `TimeTransformEntry` survives a CBOR encode/decode cycle |
-| `build_manifest_contains_required_fields` | All 8 manifest fields present and typed correctly (incl. `app_id`, `session_id`) |
-| `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries present, sources correct, first-entry `discontinuous` invariant holds |
+| `tick_computes_offset_uncertainty_and_timestamp` | The math is right for one canned set of readings (offset, uncertainty, timestamp). |
+| `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries are written and stop cleanly via the join handle. |
+
+The Step 6 cleanup dropped 6 discontinuity-detection tests (logic moved to readers; no producer-side discontinuity to test in this crate any more), the snake-case `TimeTransformSource` test (moved to [`auki-manifests`](../../auki-manifests) where the type now lives), and the CBOR round-trip test (replaced by the prost round-trip in [`auki-datatypes::tests`](../../auki-datatypes/src/lib.rs)).
 
 ## Consumers in this workspace
 
-- `auki-k1-binary` — opens a `TimeTransform` log + spawns a `Sampler` for the lifetime of a session
+- `auki-k1-binary` (downstream, planned) — opens a `TimeTransform` log + spawns a `Sampler` for the lifetime of a session.

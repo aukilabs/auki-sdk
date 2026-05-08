@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 12:43 HKT, 2026
+
+**`TimeTransformEntry` + `TimeTransformSource` departed at Step 6 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** `TimeTransformEntry` moved to [`auki-datatypes`](../auki-datatypes) under the `auki.time_transform` `.proto` package — protobuf via prost, two fields only (`offset_ns: i64`, `uncertainty_ns: u32`). `TimeTransformSource` moved to [`auki-manifests`](../auki-manifests) — manifest metadata, mirrors `PoseSource`. Both re-exported here for short call sites.
+
+**Per-step decisions**: (a) per-entry `source` → manifest; (b) per-entry `discontinuous: bool` dropped (computed on read with reader's threshold); (c) `TimeTransformSource` kept as tagged enum at manifest layer (Option 2 — matches `PoseSource`'s extension pattern).
+
+**Simplified `tick`/`Sampler`**: no more `SamplerState` (the prev-offset-tracking struct), no more `discontinuity_threshold` arg on `Sampler::start`. The sampler is now a pure `clock → entry` pipeline; readers handle discontinuity with their own thresholds. Manual `LogPayload` impl gone — covered by `auki-datatypes`' `impl_log_payload!` macro.
+
+**Tests**: 10 → 2 (-8). Dropped: 5 discontinuity-detection tests (logic moved to readers; producer-side tests don't apply); `source_serializes_snake_case` (moved to [`auki-manifests`](../auki-manifests) where the type lives now); `entry_round_trips_through_cbor` (replaced by prost round-trip in [`auki-datatypes::tests`](../auki-datatypes/src/lib.rs)). Kept: `tick_computes_offset_uncertainty_and_timestamp` (math sanity check) + `sampler_writes_entries_then_stops_cleanly` (threaded integration test).
+
+**Cargo.toml**: dropped `ciborium`, `serde`, `serde_json` (encoding moved to prost via `auki-datatypes`); added `auki-datatypes` and `auki-manifests` as path-deps for the re-exports.
+
+**Docs**: README's "Entry payload (CBOR)" + "Discontinuity flag" sections rewritten — entry payload now lives in `auki-datatypes`; discontinuity is reader-side. `src/readme.md` reflects the simplified two-layer crate (no more "entry payload type" layer; just `tick` + `Sampler`).
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **`LogPayload` impl for `TimeTransformEntry` over ciborium.** Companion to Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md), which switched [`auki-logs`](../auki-logs)'s `Log<T>` bound from `T: Serialize + DeserializeOwned` to `T: LogPayload`. `TimeTransformEntry` doesn't move to a `.proto` until Step 6 of the migration, so the impl uses ciborium directly to preserve the on-disk encoding identically. Promoted ciborium from a dev-dep to a regular dep — gone again at Step 6. **No on-disk change.** Test count 9 → 9.

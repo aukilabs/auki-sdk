@@ -13,12 +13,19 @@ Latest entry on top.
 **Workspace 1.0.0 → 0.0.1 protocol-id rename.** Per Nils's "save 1.0.0 for the first official release" stance: `/auki/cluster/1.0.0` → `/auki/cluster/0.0.1`, `/auki/identify/1.0.0` → `/auki/identify/0.0.1`. Legacy JSON `/auki/stream/1.0.0` retired; replaced by protobuf `/auki/stream/0.1.0`. Park + Boosterapp coordinate the cutover when picking up this SDK version.
 
 **Tests**: `auki-network` 99 → 102 (+3 locked cross-language vectors for the new prost wire shapes). Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.
+### broodsugar's claude · May 8, 09:45 HKT, 2026
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) gains a READMEs section codifying the propagation rule: when you add or change a crate, update its `README.md` first, then propagate up to keep [`crates/README.md`](crates/README.md) accurate. Mirrors the existing changelog / parking-lot propagation pattern. Doc-only.
 
 ### broodsugar's dobby · May 8, 09:34 HKT, 2026
 
 **Crate renamed `auki-session` → `auki-layout`.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) the crate doesn't provide; the crate is the *layout contract* — paths, lifecycle convention, ID encoding. The name `auki-session` is now reserved for the future Rust runtime counterpart of [`auki-session-py`](crates/auki-session-py)'s in-process `Session` surface (per the [root `Session.open` Propagate item](parking_lot.md)).
 
 **Mechanical scope:** directory rename (`crates/auki-session/` → `crates/auki-layout/`); `Cargo.toml` package name + description; workspace member entry; `Cargo.lock` package entry; [`auki-registry`](crates/auki-registry)'s path-dep updated + 6 `auki_session::` → `auki_layout::` call sites in `src/lib.rs` (5 path constructions + 1 doc comment); README headers in the renamed crate; doc cross-references across the workspace ([`auki-logs/README.md`](crates/auki-logs/README.md), [`auki-time-transforms/README.md`](crates/auki-time-transforms/README.md), [`auki-registry/README.md`](crates/auki-registry/README.md) + `src/readme.md`, [`auki-datatypes/src/sprint.md`](crates/auki-datatypes/src/sprint.md), [`docs/control-api.md`](docs/control-api.md), root [`README.md`](README.md), [`Glossary.md`](Glossary.md), root + [`crates/` `parking_lot.md`](crates/parking_lot.md)). No behaviour change. Append-only changelog entries from before the rename retain the old crate name as historical context per the convention. Resolves the API-surface review item filed 2026-05-08 in [#56](https://github.com/aukilabs/auki-sdk/pull/56); the previous parking-lot item under [`auki-layout/parking_lot.md`](crates/auki-layout/parking_lot.md) is replaced with a Resolved note. See [`crates/auki-layout/changelog.md`](crates/auki-layout/changelog.md) for the leaf entry.
+
+### broodsugar's claude · May 8, 09:32 HKT, 2026
+
+New [`crates/README.md`](crates/README.md) — quick-overview index of every crate in the workspace, grouped by responsibility. Doc-only.
 
 ### broodsugar's dobby · May 8, 08:56 HKT, 2026
 

@@ -21,6 +21,12 @@ When picking up work on a component, read all three: the spec (README), the stat
 
 ---
 
+## READMEs
+
+Each crate has a `README.md` describing what the code does. When you add a new crate or change what an existing crate does, update its `README.md` first, then propagate up to keep [`crates/README.md`](crates/README.md) — the quick-overview index — accurate.
+
+---
+
 ## Changelog
 
 Every change to any document in this repo should be logged into the `changelog.md` for that folder **and** propagated as a one-liner up to every parent folder's `changelog.md`, all the way to root. See [CLAUDE.md](CLAUDE.md) for the full propagation rules.

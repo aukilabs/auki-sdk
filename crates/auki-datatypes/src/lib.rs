@@ -36,13 +36,6 @@ macro_rules! impl_log_payload {
     };
 }
 
-/// Placeholder package — pipeline-check only. Removed once the placeholder
-/// is no longer the only proof that `prost-build` ran (Step 7 of the
-/// migration in [`src/sprint.md`](sprint.md)).
-pub mod placeholder {
-    include!(concat!(env!("OUT_DIR"), "/auki.placeholder.rs"));
-}
-
 /// `auki.camera` — Pinhole camera log payload (Sensor Log family).
 /// Migration Step 1.
 pub mod camera {
@@ -212,23 +205,10 @@ pub mod stream {
 mod tests {
     use super::audio::AudioLogEntry;
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
-    use super::placeholder::PipelineCheck;
     use super::point_cloud::PointCloudLogEntry;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
     use prost::Message;
-
-    /// Smoke test that `prost-build` actually ran, the generated code
-    /// compiled, and the encode/decode round-trip works. When the
-    /// placeholder gets removed, this test goes with it — the real
-    /// schemas have their own locked conformance vectors.
-    #[test]
-    fn placeholder_pipeline_check_round_trips() {
-        let msg = PipelineCheck::default();
-        let bytes = msg.encode_to_vec();
-        let decoded = PipelineCheck::decode(&*bytes).expect("decode");
-        assert_eq!(msg, decoded);
-    }
 
     // ─── auki.camera locked vectors ──────────────────────────────────────────
 

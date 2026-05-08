@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 14:37 HKT, 2026
+
+**Step 7 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): placeholder cleanup. The migration is complete.** [`auki-datatypes`](auki-datatypes) drops `proto/placeholder.proto` and the corresponding module + smoke test. The seven real `.proto` packages prove the prost-build pipeline; the placeholder was scaffolding-only. Test count: 32 → 31. Doc-only at the consumer level — no downstream code touches `placeholder::PipelineCheck`. (Re-application against develop — the original Step 7 PR #70 merged into a stacked branch whose ancestry was severed by #69's squash-merge.)
+
 ### broodsugar's claude · May 8, 12:43 HKT, 2026
 
 **Step 6 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.time_transform / TimeTransformEntry` (on-disk).** [`auki-datatypes`](auki-datatypes) gains `proto/time_transform.proto` with `TimeTransformEntry { offset_ns, uncertainty_ns }` (two varint fields, ~7 bytes per sample at typical values). All three slop points resolved: per-entry `source` → manifest tagged-enum `TimeTransformSource` (mirrors `PoseSource`); per-entry `discontinuous: bool` dropped (reader-side); `TimeTransformSource` kept as tagged enum at the manifest layer (Option 2 — matches `PoseSource`). Coordinated downstream changes: [`auki-time-transforms`](auki-time-transforms) drops `TimeTransformEntry` + `TimeTransformSource` + `SamplerState`, simplifies `Sampler::start` (no more threshold arg), drops `ciborium` + `serde` + `serde_json` deps; [`auki-manifests`](auki-manifests) gains `TimeTransformSource` and `build_time_transform_log_manifest` takes `&TimeTransformSource`. Tests: `auki-datatypes` 25 → 32 (+7); `auki-manifests` 7 → 9 (+2 source vectors); `auki-time-transforms` 10 → 2 (-8 stale discontinuity/CBOR tests). **On-disk migration complete; only Step 7 (placeholder cleanup) remains.**

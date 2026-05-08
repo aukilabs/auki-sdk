@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:20 HKT, 2026
+
+**Step 4 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — `auki.audio / AudioLogEntry` (on-disk, opaque-bytes-only).** New `auki.audio` `.proto` package with `message AudioLogEntry { bytes data = 1; }`; [`auki-registry`](crates/auki-registry)'s pre-migration `AudioLogEntry` struct is gone, along with the `serde_bytes` dep (was its last user). Same stance as Step 3 for point clouds; declines the pre-Step-3 lean toward adding `sample_count: u32` since sample count + chunk duration are derivable from the bytes plus the `Microphone` registry body. Resolves the implicit-vs-explicit chunk metadata parking-lot question (Option A). Tests: `auki-datatypes` 13 → 19 (+6). Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.
+
 ### broodsugar's claude · May 8, 10:51 HKT, 2026
 
 **Step 3 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) landed — `auki.point_cloud / PointCloudLogEntry` (on-disk, opaque-bytes-only).** New `auki.point_cloud` `.proto` package with `message PointCloudLogEntry { bytes data = 1; }`; [`auki-registry`](crates/auki-registry)'s pre-migration ROS-shaped struct (`width / height / is_dense / data`) is gone; [`auki-ros-adapter`](crates/auki-ros-adapter) re-exports the new prost type and only sets `data`. Symmetric with the wire's `PointCloudFrame`; resolves the on-disk-vs-wire drift parking-lot question (Option A). Tests: `auki-datatypes` 7 → 13 (+6); `auki-ros-adapter` 21 → 19 (-2 stale CBOR tests). Will land in v0.0.24. See [`crates/changelog.md`](crates/changelog.md) for cross-crate detail.

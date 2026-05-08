@@ -2,7 +2,7 @@
 
 The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`AudioLogEntry`, `PoseLogEntry`, `TransformSample`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). **Steps 1 and 3 (2026-05-08) are complete** — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1) and `PointCloudLogEntry` (Step 3, opaque-bytes-only) live in [`auki-datatypes`](../auki-datatypes). Everything below this line describes today's state — including the AI-drift parts, marked as such.
+> **Scope shrink in flight (decided 2026-05-07).** This crate currently *also* holds log payload types (`PoseLogEntry`, `TransformSample`). That's AI drift — those types are payloads, not identity, and don't fit the canonical registry definition. They're migrating step-by-step into [`auki-datatypes`](../auki-datatypes) (where they get renamed and protobuf-encoded along the way: `TransformSample` → `SpatialTransform`, `PoseLogEntry` wrapper goes away). Sequence and per-step decisions live in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). **Steps 1, 3, and 4 (2026-05-08) are complete** — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), and `AudioLogEntry` (Step 4, opaque-bytes-only) live in [`auki-datatypes`](../auki-datatypes). Everything below this line describes today's state — including the AI-drift parts, marked as such.
 
 ## Two kinds of typed data (today, with one departing)
 
@@ -13,7 +13,7 @@ The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
 
-The camera payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved at Step 1 (2026-05-08); `PointCloudLogEntry` moved at Step 3 (2026-05-08, opaque-bytes-only) — both are now protobuf via prost. The remaining payloads (`AudioLogEntry`, `PoseLogEntry`, `TransformSample`) are still here, still CBOR, until their respective steps.
+The camera payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved at Step 1 (2026-05-08); `PointCloudLogEntry` moved at Step 3 (2026-05-08, opaque-bytes-only); `AudioLogEntry` moved at Step 4 (2026-05-08, opaque-bytes-only) — all three are now protobuf via prost. The remaining payloads (`PoseLogEntry`, `TransformSample`) are still here, still CBOR, until Step 5.
 
 ---
 
@@ -153,53 +153,11 @@ The bytes in the segment are the repacked layout; a `SensorBody::PointCloud` reg
 
 ---
 
-## Audio Log payload — schema v1
+## Audio Log payload — moved to `auki-datatypes` (Step 4, 2026-05-08)
 
-> *Departing — moves to [`auki-datatypes`](../auki-datatypes) as `AudioLogEntry` (protobuf-encoded; explicit `sample_count` field pending — see [`auki-datatypes/parking_lot.md`](../auki-datatypes/parking_lot.md)). [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) step 4.*
+`AudioLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.audio` `.proto` package, encoded as protobuf via prost. The Step 4 decision was **opaque-bytes-only** — `AudioLogEntry { bytes data = 1; }` — same stance as Step 3 for point clouds. The pre-Step-3 sprint lean toward adding a typed `sample_count: u32` was declined: sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body, and denormalizing a derivable field would risk inconsistency for marginal reader convenience. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
 
-The Audio Log is a separate `auki_logs::Log<AudioLogEntry>`. Each recording is one microphone (or mic array) producing samples over time; the framing's `timestamp_ns` is the **chunk's start time**.
-
-### Manifest
-
-JCS-canonical UTF-8 JSON. Same shape as the Sensor Log manifest (segment_duration_ns, retention_ns, sensor_id, sensor_hash, clock_id, clock_hash). The `(sensor_id, sensor_hash)` pair resolves to a `SensorBody::Microphone` registry entry, which is how a reader knows the segment payloads are `AudioLogEntry`.
-
-### Payload (CBOR)
-
-```
-AudioLogEntry {
-  data: bytes,    // interleaved samples; encoded as a CBOR byte string
-}
-```
-
-That's it — no per-chunk metadata. Every byte in `data` is sample data; the chunk's start time is the framing's `timestamp_ns`.
-
-### Sample layout
-
-Samples are **interleaved** per channel. For `channels = N`:
-
-```
-[s0_c0, s0_c1, ..., s0_c(N-1), s1_c0, s1_c1, ..., s1_c(N-1), ...]
-```
-
-Each sample's encoding is the registry entry's `sample_format`:
-
-| `sample_format` | Bytes per sample | Encoding                      |
-|-----------------|------------------|-------------------------------|
-| `pcm_s16le`     | 2                | signed 16-bit, little-endian  |
-| `pcm_s24le`     | 3                | signed 24-bit, little-endian  |
-| `pcm_s32le`     | 4                | signed 32-bit, little-endian  |
-| `pcm_f32le`     | 4                | IEEE 754 float32, little-endian |
-| `pcm_f64le`     | 8                | IEEE 754 float64, little-endian |
-
-So `data.len() = sample_byte_width × channels × samples_per_chunk`. Chunk size (samples per entry) is the integrator's choice; the SDK does not impose a value. Typical: 10–100 ms of samples per chunk at 48 kHz.
-
-### Why minimal payload
-
-No per-chunk silence flag, no sample count, no sequence number. Sample count is derivable from `data.len()`; silence is detectable by inspecting the bytes; sequencing comes from the framing's `timestamp_ns`. Keeping the payload bare lets compressed formats (FLAC, Opus when added) drop in cleanly — the wrapper structure stays identical, only `sample_format` changes.
-
-### Compressed formats (future)
-
-v1 specifies PCM only. When compression is added, `sample_format` gains values like `flac` or `opus`; `AudioLogEntry.data` carries one compressed packet per chunk; `sample_rate_hz` and `channels` in the registry still describe the decoded stream's properties. The schema doesn't change.
+The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `AudioLogEntry`. Sample-layout semantics (interleaved per channel; encoding per the registry's `sample_format`; compressed formats drop in cleanly via new `sample_format` values without changing the wrapper) carried over verbatim.
 
 ---
 
@@ -260,4 +218,4 @@ Each `parent_frame` / `child_frame` string in a `TransformSample` references an 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Microphone`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and `PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` (now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Microphone`, `PoseLogEntry`, `TransformSample`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and `PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` (now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

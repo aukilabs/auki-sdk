@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package auki.audio;
+
+// Per-chunk audio log payload — the segment payload for a Sensor Log
+// whose registry entry has body kind `microphone`. The chunk's start
+// timestamp rides in the auki-logs framing's `timestamp_ns`, not here.
+//
+// Step 4 decision (2026-05-08): opaque-bytes-only, matching the Step 3
+// stance for `auki.point_cloud`. The SensorRegistryEntry's
+// `Microphone { sample_format, channels, sample_rate_hz, channel_layout,
+// frame_id }` body — pinned by `(sensor_id, sensor_hash)` on the log's
+// manifest — is the single source of truth for interpretation. Sample
+// count is derivable as `data.len() / (sample_byte_width × channels)`;
+// chunk duration is derivable as `sample_count × 1e9 / sample_rate_hz`.
+// Carrying either on the per-chunk entry would denormalize derivable
+// metadata into the bytes for marginal reader convenience and risk
+// inconsistency between the field and the bytes — same trade Step 3
+// declined for point clouds. Resolves the implicit-vs-explicit
+// chunk-metadata slop point in ../parking_lot.md.
+//
+// Samples are interleaved: for `channels = N`, the byte stream is
+// `[s0_c0, s0_c1, ..., s0_cN-1, s1_c0, s1_c1, ...]`. Each sample's
+// encoding is per the registry entry's `sample_format` (e.g. `pcm_s16le`,
+// `pcm_f32le`).
+//
+// Field number ledger (never reuse, never renumber):
+//   AudioLogEntry.data = 1
+
+message AudioLogEntry {
+  bytes data = 1;
+}

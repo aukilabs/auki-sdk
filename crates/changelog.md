@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:20 HKT, 2026
+
+**Step 4 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.audio / AudioLogEntry` (on-disk, opaque-bytes-only).** [`auki-datatypes`](auki-datatypes) gains `proto/audio.proto` with `message AudioLogEntry { bytes data = 1; }` (Option A — same stance as Step 3; declines the pre-Step-3 lean toward adding `sample_count`). [`auki-registry`](auki-registry)'s `AudioLogEntry` struct is gone; `serde_bytes` dep dropped (was its last user after PointCloudLogEntry departed at Step 3). [`auki-logs`](auki-logs) needed no changes (encoder-agnostic since Step 1). Tests: `auki-datatypes` 13 → 19 (+6 incl. locked wire-bytes vector + XXH3-128 hash); `auki-registry` unchanged. Resolves the implicit-vs-explicit chunk metadata parking-lot question.
+
 ### broodsugar's claude · May 8, 10:51 HKT, 2026
 
 **Step 3 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.point_cloud / PointCloudLogEntry` (on-disk, opaque-bytes-only).** [`auki-datatypes`](auki-datatypes) gains `proto/point_cloud.proto` with `message PointCloudLogEntry { bytes data = 1; }` (Option A — symmetric with the wire's `PointCloudFrame`; ROS-shaped `width × height × is_dense` gone, interpretation comes from the SensorRegistryEntry). [`auki-registry`](auki-registry)'s `PointCloudLogEntry` struct is gone; [`auki-ros-adapter`](auki-ros-adapter)'s `build_point_cloud_log_entry` re-exports from `auki-datatypes` and constructs only the `data` field. [`auki-logs`](auki-logs) needed no changes (encoder-agnostic since Step 1). Tests: `auki-datatypes` 7 → 13 (+6 incl. locked wire-bytes vector + XXH3-128 hash); `auki-registry` unchanged; `auki-ros-adapter` 21 → 19 (-2 stale CBOR tests). Resolves the PointCloud on-disk-vs-wire drift parking-lot question.

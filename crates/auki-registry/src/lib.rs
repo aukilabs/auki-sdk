@@ -110,7 +110,7 @@ impl PointFieldDataType {
 
 /// Static identity of a microphone (or microphone array) — the bits that
 /// describe how to interpret the bytes downstream consumers will see in
-/// [`AudioLogEntry`].
+/// [`auki_datatypes::audio::AudioLogEntry`].
 ///
 /// **Multi-microphone arrays are modelled as one sensor with `channels = N`,
 /// not as N independent sensors.** This is right for physically-synchronized
@@ -155,28 +155,6 @@ impl SensorRegistryEntry {
 // to protobuf; segment payload bytes are no longer self-describing
 // (consumers resolve the schema via `(sensor_id, sensor_hash)` pointing at a
 // `SensorRegistryEntry` whose body kind tells them which `.proto` to use).
-
-/// The Audio Log payload (CBOR-encoded under auki-logs framing). Each entry
-/// is one chunk of audio samples; the framing's `timestamp_ns` is the
-/// chunk's start time. The byte layout of `data` is described by the
-/// corresponding `SensorBody::Microphone` registry entry referenced by the
-/// log's manifest.
-///
-/// Samples are **interleaved**: for `channels = N`, the byte stream is
-/// `[s0_c0, s0_c1, ..., s0_cN-1, s1_c0, s1_c1, ..., s1_cN-1, ...]`. Each
-/// sample's encoding is the registry entry's `sample_format`.
-///
-/// Chunk size (samples per entry) is the integrator's choice; the SDK does
-/// not impose a value. Typical: 10–100 ms of samples per chunk at 48 kHz.
-/// Sample count per chunk is `data.len() / (sample_byte_width × channels)`
-/// where `sample_byte_width` is determined by `sample_format`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AudioLogEntry {
-    /// Interleaved samples per the registry's `sample_format` and `channels`.
-    /// Encoded as a CBOR byte string.
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,
-}
 
 // ─── Pose Log ────────────────────────────────────────────────────────────────
 

@@ -287,7 +287,6 @@ dependencies = [
  "auki-logs",
  "ciborium",
  "serde",
- "serde_bytes",
  "serde_json",
  "tempfile",
 ]

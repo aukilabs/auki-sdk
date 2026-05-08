@@ -40,11 +40,12 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
    - Locked conformance vectors pin both wire bytes (`0a18000102030405060708090a0b0c0d0e0f1011121314151617` for a 24-byte fixture) and XXH3-128 hash (`4ea525d849212b2e067e33bec455c7ea`).
 
-4. **`auki.audio` — `AudioLogEntry`**.
-   - Define `proto/audio.proto`. Resolve the implicit-vs-explicit chunk metadata slop point — add `sample_count: u32` (or `chunk_duration_ns: i64`)?
-   - **Move** `AudioLogEntry` out of [`auki-registry`](../../auki-registry).
-   - Update [`auki-logs`](../../auki-logs).
-   - Locked vector.
+4. **✓ `auki.audio` — `AudioLogEntry`** (on-disk; landed 2026-05-08).
+   - `proto/audio.proto` defines `AudioLogEntry { bytes data = 1; }`. Per-step decision: **opaque-bytes-only** (Option A in the parking-lot slop point) — same stance as Step 3 for point clouds, declining the pre-Step-3 lean toward adding `sample_count`. Sample count derivable as `data.len() / (sample_byte_width × channels)`; chunk duration derivable as `sample_count × 1e9 / sample_rate_hz`. Reader needs the registry to interpret bytes anyway, so denormalizing either field would risk inconsistency for marginal convenience.
+   - **Moved** `AudioLogEntry` out of [`auki-registry`](../../auki-registry); no downstream consumers (no `auki-ros-adapter` builder for audio yet).
+   - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
+   - **Dropped** the `serde_bytes` dep from [`auki-registry`](../../auki-registry) — `AudioLogEntry` was its last user.
+   - Locked conformance vectors pin both wire bytes (`0a1000112233445566778899aabbccddeeff` for a 16-byte `pcm_s16le` stereo fixture) and XXH3-128 hash (`a5864ae7018f28a5c094a714af1db62e`).
 
 5. **`auki.pose` — `SpatialTransform`** (was `TransformSample`; `PoseLogEntry` wrapper goes away).
    - Define `proto/pose.proto`: `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }` plus `Vec3` and `Quat`. Flat — no `PoseLogEntry` wrapper. From/to live in the manifest, not the entry. Synthesis decided 2026-05-07 — see the corresponding Propagate task in the [root parking lot](../../../parking_lot.md).

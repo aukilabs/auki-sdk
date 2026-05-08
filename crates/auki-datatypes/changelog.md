@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:20 HKT, 2026
+
+**Step 4 of the [migration](src/sprint.md) landed — `auki.audio` / `AudioLogEntry` (on-disk).** New `proto/audio.proto` with `message AudioLogEntry { bytes data = 1; }` — opaque-bytes-only (Option A in the parking-lot slop point, adjudicated in favour). Same stance as Step 3 for point clouds; declines the pre-Step-3 lean toward adding `sample_count: u32`. Sample count and chunk duration are derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body — denormalizing either field would risk inconsistency for marginal reader convenience.
+
+**Moved** `AudioLogEntry` out of [`auki-registry`](../auki-registry); no downstream consumers needed updates (no `auki-ros-adapter` builder for audio yet). [`auki-logs`](../auki-logs) needed no changes — encoder-agnostic since Step 1.
+
+**Tests**: 13 → 19 (+6 — `serializes_to_locked_wire_bytes`, `hash_is_locked`, `round_trips`, `log_payload_round_trips`, `empty_data_round_trips`, `segment_round_trip`). Locked wire bytes for a 16-byte `pcm_s16le` stereo fixture: `0a1000112233445566778899aabbccddeeff`. XXH3-128 hash: `a5864ae7018f28a5c094a714af1db62e`.
+
+**Resolved parking-lot question**: the implicit-vs-explicit chunk-metadata slop point — adjudicated and propagated in this same PR.
+
 ### broodsugar's claude · May 8, 10:51 HKT, 2026
 
 **Step 3 of the [migration](src/sprint.md) landed — `auki.point_cloud` / `PointCloudLogEntry` (on-disk).** New `proto/point_cloud.proto` with `message PointCloudLogEntry { bytes data = 1; }` — opaque-bytes-only (Option A in the parking-lot slop point, adjudicated in favour). Symmetric with the wire's `PointCloudFrame`; the pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone — interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.

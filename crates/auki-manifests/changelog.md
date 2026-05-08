@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 8, 11:27 HKT, 2026
+
+**Filed: Pose Log + TimeTransform Log self-provenance gap.** Per the [root subscription-as-materialization keystone](../../parking_lot.md#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08), recordings need to be self-provenant — but Pose Log identity (`from_frame_id` / `to_frame_id` post-Step-5) names coordinate systems, not devices, and `PoseSource::Ros2Tf { publishers }` carries the producer kind without device identity. Two robots both running ROS 2 TF would produce indistinguishable `PoseSource` values. TimeTransform Log can ride on the existing clock-ID convention if formalized. Three forward paths logged with a lean toward (a) — require frame IDs to follow the same `<platform-tag>-<machine-id>/<frame-name>` device-encoding shape sensor IDs use. Lower priority than the sensor-log fix because the Pose Log manifest is mid-rewrite (Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md)); fold the fix into the Step 5 redesign. Doc-only.
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **Test scaffolding `LogPayload` impl** — companion change for Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). `TestEntry` (the trivial body type the round-trip tests use to drive `auki_logs::Log<T>::open`) gained a `LogPayload` impl over ciborium so the test still compiles after the trait switch. No production-code change in this crate.

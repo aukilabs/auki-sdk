@@ -27,3 +27,18 @@ The Pose Log manifest will gain `from_frame_id`, `from_frame_hash`, `to_frame_id
 ## Manifest-side schema versioning vs auki-logs segment-format versioning
 
 The README claims "schema version is 1 for all three manifest shapes" but there's no field in any manifest carrying that version number — the version is documented externally. Conversely auki-logs's segment format version IS in-band (the manifest's `version` field at the auki-logs level). Whether the manifest schema gains an explicit version field, or stays implicitly v1 documented externally, is a pin-before-second-version question. Lean: stay external until a v2 is actually staged; dual-versioning ahead of time is premature.
+
+## Pose Log + TimeTransform Log self-provenance gap _(filed by Dobby, 2026-05-08)_
+
+Per the [root subscription-as-materialization decision](../../parking_lot.md#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08), recordings need to be self-provenant — moving a log between peers must preserve "who produced this." Sensor logs solve this implicitly: `sensor_id` follows `<platform-tag>-<machine-id>/<sensor-name>` (e.g. `K1-AABBCCDDEEFF/head_left_cam`), so the producing device is encoded in the ID and survives every move.
+
+Pose Log and TimeTransform Log have no analogous convention.
+
+- **Pose Log:** identity will be `(from_frame_id, to_frame_id)` post-Step-5 synthesis (and `from_frame_hash` / `to_frame_hash`). Frame IDs name coordinate systems, not devices. `PoseSource` carries the producer *kind* (e.g. `Ros2Tf { publishers: ["amcl", "robot_state_publisher"] }`) but not the device. Two robots both running ROS 2 TF would produce indistinguishable `PoseSource` values. A pose-log recording subscribed from a peer doesn't carry "which physical robot's TF tree."
+- **TimeTransform Log:** identity is `(from_clock_id, to_clock_id, from_clock_hash, to_clock_hash)`. If clock IDs follow the same `<platform-tag>-<machine-id>/<clock-name>` convention as sensor IDs, this case is already covered by the existing convention — but the recommendation is currently buried in the registry README and not lifted into TimeTransform Log's contract. Worth pinning.
+
+**Forward paths for Pose Log:** (a) require frame IDs to follow a device-encoding convention (e.g. `K1-AABBCCDDEEFF/base_link`), making frame IDs themselves carry provenance. Symmetric with sensor IDs. (b) Add a separate `producer_peer_id` field to the Pose Log manifest. Reintroduces the `peer_id`-on-manifest pattern explicitly rejected for sensor logs in the root keystone. (c) Extend `PoseSource` variants with device identity (`Ros2Tf { publishers, machine_id }`). Makes the source enum carry both kind and device.
+
+Lean: (a). Frame IDs are already structured strings; threading the device prefix through is a documentation move, not a schema change. Symmetric with sensor IDs. Catches the case where two robots' `base_link` frames collide today.
+
+**Lower priority than the sensor-log fix** because the Pose Log manifest is mid-rewrite (Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md)). Better to fold this into the Step 5 redesign than to land a fix on a shape that's about to change. Park here until Step 5 starts.

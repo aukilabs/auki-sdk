@@ -13,7 +13,13 @@ fn main() -> std::io::Result<()> {
     prost_build::Config::new()
         .protoc_executable(protoc)
         .compile_protos(
-            &["proto/placeholder.proto", "proto/camera.proto"],
+            &[
+                "proto/placeholder.proto",
+                "proto/camera.proto",
+                "proto/frame_stream.proto",
+                "proto/point_cloud_stream.proto",
+                "proto/stream.proto",
+            ],
             &["proto/"],
         )?;
 

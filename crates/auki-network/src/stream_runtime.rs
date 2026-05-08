@@ -43,14 +43,14 @@
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::stream_protocol::{
-    AcceptInfo, DeclineReason, EndReason, JpegFrame, PointCloudFrame, STREAM_PROTOCOL,
-    StreamMessage, StreamProtocolError, StreamRequest, read_message, write_message,
+    AcceptInfo, DeclineReason, EndReason, Frame, JpegFrame, PointCloudFrame, STREAM_PROTOCOL,
+    StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message,
+    write_message,
 };
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::OpenStreamError as Libp2pOpenStreamError;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use prost::Message;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,7 +133,7 @@ pub type StreamProvider = Arc<dyn Fn(StreamRequest) -> StreamDispatch + Send + S
 /// Declines every inbound request with [`DeclineReason::SensorNotFound`].
 pub fn decline_all_streams() -> StreamProvider {
     Arc::new(|_req| StreamDispatch::Decline {
-        reason: DeclineReason::SensorNotFound,
+        reason: DeclineReason::sensor_not_found(),
     })
 }
 
@@ -250,7 +250,7 @@ impl ClusterRuntime {
         request: StreamRequest,
     ) -> Result<StreamSubscription<T>, OpenStreamError>
     where
-        T: Serialize + DeserializeOwned + Send + 'static,
+        T: Message + Default + Send + 'static,
     {
         // Each `open_stream` call gets its own clone of the Control. The
         // libp2p-stream backpressure mechanism rate-limits per-Control
@@ -273,12 +273,12 @@ impl ClusterRuntime {
         };
 
         // Wire handshake: write Request, read Reply.
-        let req_msg: StreamMessage<T> = StreamMessage::Request(request);
+        let req_msg = StreamMessage::request(request);
         write_message(&mut substream, &req_msg)
             .await
             .map_err(OpenStreamError::Protocol)?;
 
-        let reply: StreamMessage<T> = match tokio::time::timeout(
+        let reply = match tokio::time::timeout(
             OPEN_STREAM_TIMEOUT,
             read_message(&mut substream),
         )
@@ -289,23 +289,18 @@ impl ClusterRuntime {
             Ok(Ok(m)) => m,
         };
 
-        let info = match reply {
-            StreamMessage::Accept(info) => info,
-            StreamMessage::Decline { reason } => {
+        let info = match reply.variant {
+            Some(stream_message::Variant::Accept(info)) => info,
+            Some(stream_message::Variant::Decline(reason)) => {
                 return Err(OpenStreamError::Declined { reason });
             }
-            _other => {
+            _ => {
                 // Producer wrote something other than Accept / Decline as
-                // its first reply. Wire-protocol violation; treat as a
-                // protocol error. (Don't echo the message body in the
-                // error — `T` may not be `Debug` and the caller has no
-                // recovery action for "unexpected reply variant" anyway.)
+                // its first reply, or the envelope was empty. Wire-
+                // protocol violation; treat as a protocol error.
                 return Err(OpenStreamError::Protocol(
-                    StreamProtocolError::Deserialize(serde_json::Error::io(
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "expected Accept or Decline as first reply",
-                        ),
+                    StreamProtocolError::Decode(prost::DecodeError::new(
+                        "expected Accept or Decline as first reply",
                     )),
                 ));
             }
@@ -353,20 +348,17 @@ pub(crate) async fn handle_inbound_substream(
     provider: StreamProvider,
     shutdown_rx: watch::Receiver<bool>,
 ) {
-    // 1. Read the request. The Request variant doesn't carry any
-    //    `T`-dependent payload, so deserializing as
-    //    `StreamMessage<JpegFrame>` accepts the bytes regardless of
-    //    what `T` the producer ultimately picks. If a peer bizarrely
-    //    sent a Frame as its first message (wire-protocol violation),
-    //    the deserialize either fails or yields a different variant
-    //    and we drop the substream.
-    let request: StreamRequest = match read_message::<JpegFrame, _>(&mut substream).await {
-        Ok(StreamMessage::Request(req)) => req,
-        Ok(_other) => {
-            // Peer wrote something other than Request first. Drop;
-            // their open_stream call surfaces the protocol error.
-            return;
-        }
+    // 1. Read the first envelope; expect Request.
+    let request = match read_message(&mut substream).await {
+        Ok(msg) => match msg.variant {
+            Some(stream_message::Variant::Request(req)) => req,
+            _ => {
+                // Peer wrote something other than Request first, or the
+                // envelope was empty. Drop; their open_stream surfaces
+                // the protocol error on its end.
+                return;
+            }
+        },
         Err(_) => {
             // Read failed — substream's already broken.
             return;
@@ -379,8 +371,7 @@ pub(crate) async fn handle_inbound_substream(
 
     match dispatch {
         StreamDispatch::Decline { reason } => {
-            // Decline payload is `T`-free; write with any `T`.
-            let msg: StreamMessage<JpegFrame> = StreamMessage::Decline { reason };
+            let msg = StreamMessage::decline(reason);
             let _ = write_message(&mut substream, &msg).await;
         }
         StreamDispatch::AcceptJpeg { info, source } => {
@@ -409,60 +400,46 @@ async fn pump_typed<T>(
     mut source: SourceStream<T>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) where
-    T: Serialize + DeserializeOwned + Send + 'static,
+    T: Message + Default + Send + 'static,
 {
     // Write accept.
-    let accept_msg: StreamMessage<T> = StreamMessage::Accept(info);
+    let accept_msg = StreamMessage::accept(info);
     if write_message(&mut substream, &accept_msg).await.is_err() {
         return;
     }
     // Drain source into Frame messages until end-of-source, shutdown
-    // signal, or send error. Shutdown branch writes an explicit
-    // `EndOfStream { reason: ProducerShuttingDown }` before exiting
-    // (per grimsby D5b — best-effort explicit).
+    // signal, or send error.
     let mut seq: u64 = 0;
     let end_reason = loop {
         tokio::select! {
             biased;
 
-            // Shutdown signal raced ahead of the next frame — flush a
-            // typed EndOfStream and exit. The ClusterRuntime gives us
-            // a brief grace period (SHUTDOWN_GRACE) before the swarm
-            // tears down, so there's time for this write to complete
-            // on a healthy LAN substream.
             res = shutdown_rx.changed() => {
                 if res.is_ok() && *shutdown_rx.borrow() {
-                    break EndReason::ProducerShuttingDown;
+                    break EndReason::producer_shutting_down();
                 }
-                // Sender dropped without setting true (runtime exiting
-                // via Drop, not shutdown(self)) — fall through to the
-                // implicit `ConnectionLost` path on the next pump-
-                // iteration write failure. Continue polling source.
                 continue;
             }
 
             item = source.next() => match item {
                 Some(Ok(frame)) => {
-                    let msg: StreamMessage<T> = StreamMessage::Frame {
+                    let payload = frame.payload.encode_to_vec();
+                    let msg = StreamMessage::frame(Frame {
                         timestamp_ns: frame.timestamp_ns,
                         seq,
-                        payload: frame.payload,
-                    };
+                        payload,
+                    });
                     if write_message(&mut substream, &msg).await.is_err() {
-                        // Consumer disconnected mid-stream. Don't try
-                        // to write EndOfStream — the substream is dead.
                         return;
                     }
                     seq = seq.wrapping_add(1);
                 }
-                Some(Err(detail)) => break EndReason::ProducerError { detail },
-                None => break EndReason::SourceEnded,
+                Some(Err(detail)) => break EndReason::producer_error(detail),
+                None => break EndReason::source_ended(),
             },
         }
     };
-    // Write the final EndOfStream. Best-effort — if the consumer
-    // already disconnected, the write fails silently.
-    let end_msg: StreamMessage<T> = StreamMessage::EndOfStream { reason: end_reason };
+    let end_msg = StreamMessage::end_of_stream(end_reason);
     let _ = write_message(&mut substream, &end_msg).await;
 }
 
@@ -478,12 +455,12 @@ async fn consumer_reader_task<T>(
     mut substream: libp2p::Stream,
     mut tx: mpsc::Sender<Result<ConsumerFrame<T>, StreamError>>,
 ) where
-    T: DeserializeOwned + Send + 'static,
+    T: Message + Default + Send + 'static,
 {
     use futures::SinkExt;
 
     loop {
-        let msg: StreamMessage<T> = match read_message(&mut substream).await {
+        let msg = match read_message(&mut substream).await {
             Ok(m) => m,
             Err(StreamProtocolError::Io(e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
@@ -499,31 +476,34 @@ async fn consumer_reader_task<T>(
             }
         };
 
-        match msg {
-            StreamMessage::Frame { timestamp_ns, seq, payload } => {
-                let frame = ConsumerFrame { timestamp_ns, seq, payload };
+        match msg.variant {
+            Some(stream_message::Variant::Frame(f)) => {
+                let payload = match T::decode(&*f.payload) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(StreamError::Protocol(StreamProtocolError::Decode(e))))
+                            .await;
+                        return;
+                    }
+                };
+                let frame = ConsumerFrame {
+                    timestamp_ns: f.timestamp_ns,
+                    seq: f.seq,
+                    payload,
+                };
                 if tx.send(Ok(frame)).await.is_err() {
-                    // Consumer dropped the StreamSubscription. Stop
-                    // reading; substream drops with the task and
-                    // libp2p closes it cleanly.
                     return;
                 }
             }
-            StreamMessage::EndOfStream { reason } => {
+            Some(stream_message::Variant::EndOfStream(reason)) => {
                 let _ = tx.send(Err(StreamError::EndOfStream { reason })).await;
                 return;
             }
-            // Producer wrote something out-of-order (Request / Accept /
-            // Decline mid-stream). Wire-protocol violation; surface as
-            // Protocol error. (Don't echo the message body in the error
-            // — `T` may not be `Debug` and the caller has no recovery
-            // action for "unexpected mid-stream variant.")
-            _other => {
-                let err = StreamProtocolError::Deserialize(serde_json::Error::io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "unexpected message after Accept",
-                    ),
+            // Producer wrote something out-of-order, or empty envelope.
+            _ => {
+                let err = StreamProtocolError::Decode(prost::DecodeError::new(
+                    "unexpected message after Accept",
                 ));
                 let _ = tx.send(Err(StreamError::Protocol(err))).await;
                 return;
@@ -539,13 +519,12 @@ pub use crate::stream_protocol::JpegFrame as _JpegFrameReExport;
 #[allow(unused_imports)]
 use _JpegFrameReExport as _;
 
-// Static check that `JpegFrame` satisfies the bounds the runtime expects
-// for `T`. If a future refactor breaks this, the test below catches it.
+// Static check that `JpegFrame` and `PointCloudFrame` satisfy the
+// bounds the runtime expects for `T`.
 const _: fn() = || {
-    fn assert_serialize_send_static<T: Serialize + Send + 'static>() {}
-    fn assert_deserialize_send_static<T: DeserializeOwned + Send + 'static>() {}
-    assert_serialize_send_static::<JpegFrame>();
-    assert_deserialize_send_static::<JpegFrame>();
+    fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
+    assert_message_send_static::<JpegFrame>();
+    assert_message_send_static::<PointCloudFrame>();
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -556,6 +535,7 @@ mod tests {
     use crate::PeerIdentity;
     use crate::cluster_doc::{ClusterDoc, ClusterPeer};
     use crate::cluster_runtime::ClusterRuntime;
+    use crate::stream_protocol::{decline_reason, end_reason};
     use crate::swarm::{Behaviour, SwarmConfig, build_swarm};
     use futures::stream;
     use libp2p::Swarm;
@@ -663,7 +643,7 @@ mod tests {
                 }
             } else {
                 StreamDispatch::Decline {
-                    reason: DeclineReason::SensorNotFound,
+                    reason: DeclineReason::sensor_not_found(),
                 }
             }
         })
@@ -767,7 +747,7 @@ mod tests {
                 }
             }
             _ => StreamDispatch::Decline {
-                reason: DeclineReason::SensorNotFound,
+                reason: DeclineReason::sensor_not_found(),
             },
         })
     }
@@ -865,7 +845,8 @@ mod tests {
 
         let end = frames.next().await.unwrap().expect_err("expected end-of-stream marker");
         match end {
-            StreamError::EndOfStream { reason: EndReason::SourceEnded } => {}
+            StreamError::EndOfStream { reason }
+                if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
 
@@ -927,9 +908,8 @@ mod tests {
             .await;
 
         match result {
-            Err(OpenStreamError::Declined {
-                reason: DeclineReason::SensorNotFound,
-            }) => {}
+            Err(OpenStreamError::Declined { reason })
+                if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
             Err(other) => panic!("expected Declined(SensorNotFound), got error {other:?}"),
             Ok(_sub) => panic!("expected Declined, got Ok subscription"),
         }
@@ -996,10 +976,13 @@ mod tests {
 
         let end = frames.next().await.unwrap().expect_err("expected error end");
         match end {
-            StreamError::EndOfStream {
-                reason: EndReason::ProducerError { detail },
-            } => assert_eq!(detail, "encoder died"),
-            other => panic!("expected ProducerError, got {other:?}"),
+            StreamError::EndOfStream { reason } => match reason.kind {
+                Some(end_reason::Kind::ProducerError(end_reason::ProducerError { detail })) => {
+                    assert_eq!(detail, "encoder died");
+                }
+                other => panic!("expected ProducerError, got {other:?}"),
+            },
+            other => panic!("expected EndOfStream, got {other:?}"),
         }
         assert!(frames.next().await.is_none());
 
@@ -1102,9 +1085,11 @@ mod tests {
             .expect_err("expected typed end-of-stream");
 
         match next {
-            StreamError::EndOfStream {
-                reason: EndReason::ProducerShuttingDown,
-            } => {}
+            StreamError::EndOfStream { reason }
+                if matches!(
+                    reason.kind,
+                    Some(end_reason::Kind::ProducerShuttingDown(_))
+                ) => {}
             other => panic!(
                 "expected EndOfStream(ProducerShuttingDown), got {other:?}"
             ),
@@ -1190,9 +1175,8 @@ mod tests {
             sensor_id: "anything".into(),
         };
         match provider(req) {
-            StreamDispatch::Decline {
-                reason: DeclineReason::SensorNotFound,
-            } => {}
+            StreamDispatch::Decline { reason }
+                if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
             _ => panic!("decline_all_streams should always decline with SensorNotFound"),
         }
     }
@@ -1276,7 +1260,8 @@ mod tests {
 
         let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
         match end {
-            StreamError::EndOfStream { reason: EndReason::SourceEnded } => {}
+            StreamError::EndOfStream { reason }
+                if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
         assert!(frames.next().await.is_none());
@@ -1372,9 +1357,8 @@ mod tests {
             )
             .await;
         match unknown_result {
-            Err(OpenStreamError::Declined {
-                reason: DeclineReason::SensorNotFound,
-            }) => {}
+            Err(OpenStreamError::Declined { reason })
+                if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
             Err(other) => panic!("expected Declined(SensorNotFound), got {other:?}"),
             Ok(_) => panic!("expected Declined; producer should have rejected unknown sensor"),
         }

@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package auki.stream;
+
+// libp2p substream protocol envelope for `/auki/stream/0.1.0`.
+//
+// Each substream is a sequence of length-prefixed [`StreamMessage`]
+// values (4-byte big-endian u32 length + protobuf-encoded body). The
+// substream lifetime IS the subscription's lifetime (grimsby D1):
+// initiator opens the substream, writes a `Request` as the first
+// message, the responder either declines-and-closes or starts pushing
+// `Frame` messages until close.
+//
+// Per-substream `T` (mono-T per grimsby D1 / Dagaz D1): the consumer
+// resolves the producer's `AcceptInfo.sensor_hash` against its Sensor
+// Registry to learn which payload type `Frame.payload` carries. The SDK
+// runtime decodes `Frame.payload` (a length-bounded `bytes` field) as
+// the matching prost type from `auki-datatypes` (e.g. `JpegFrame`,
+// `PointCloudFrame`).
+//
+// Field number ledger (never reuse, never renumber):
+//   StreamRequest.sensor_id    = 1
+//   AcceptInfo.sensor_hash     = 1
+//   AcceptInfo.clock_id        = 2
+//   AcceptInfo.clock_hash      = 3
+//   Frame.timestamp_ns         = 1
+//   Frame.seq                  = 2
+//   Frame.payload              = 3
+//   StreamMessage.<oneof variant> = 1..5
+
+message StreamRequest {
+  string sensor_id = 1;
+}
+
+message AcceptInfo {
+  string sensor_hash = 1;
+  string clock_id = 2;
+  string clock_hash = 3;
+}
+
+message DeclineReason {
+  oneof kind {
+    SensorNotFound sensor_not_found = 1;
+    SensorUnavailable sensor_unavailable = 2;
+    ProducerShuttingDown producer_shutting_down = 3;
+    Other other = 4;
+  }
+
+  message SensorNotFound {}
+  message SensorUnavailable {}
+  message ProducerShuttingDown {}
+  message Other {
+    string detail = 1;
+  }
+}
+
+message EndReason {
+  oneof kind {
+    SourceEnded source_ended = 1;
+    ProducerShuttingDown producer_shutting_down = 2;
+    SessionEnded session_ended = 3;
+    ProducerError producer_error = 4;
+  }
+
+  message SourceEnded {}
+  message ProducerShuttingDown {}
+  message SessionEnded {}
+  message ProducerError {
+    string detail = 1;
+  }
+}
+
+message Frame {
+  int64 timestamp_ns = 1;
+  uint64 seq = 2;
+  bytes payload = 3;
+}
+
+message StreamMessage {
+  oneof variant {
+    StreamRequest request = 1;
+    AcceptInfo accept = 2;
+    DeclineReason decline = 3;
+    Frame frame = 4;
+    EndReason end_of_stream = 5;
+  }
+}

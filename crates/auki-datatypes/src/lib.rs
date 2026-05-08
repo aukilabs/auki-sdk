@@ -51,6 +51,112 @@ pub mod camera {
 
 impl_log_payload!(camera::PinholeCameraLogEntry);
 
+/// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
+/// `/auki/stream/0.1.0`). Migration Step 2.
+pub mod frame_stream {
+    include!(concat!(env!("OUT_DIR"), "/auki.frame_stream.rs"));
+}
+
+/// `auki.point_cloud_stream` — `PointCloudFrame` substream payload
+/// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
+pub mod point_cloud_stream {
+    include!(concat!(env!("OUT_DIR"), "/auki.point_cloud_stream.rs"));
+}
+
+/// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
+/// `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. The libp2p
+/// substream wire shape; mono-`T` per substream, with `Frame.payload`
+/// carrying the prost-encoded `T` bytes. Migration Step 2.
+pub mod stream {
+    include!(concat!(env!("OUT_DIR"), "/auki.stream.rs"));
+
+    impl StreamMessage {
+        pub fn request(req: StreamRequest) -> Self {
+            Self {
+                variant: Some(stream_message::Variant::Request(req)),
+            }
+        }
+        pub fn accept(info: AcceptInfo) -> Self {
+            Self {
+                variant: Some(stream_message::Variant::Accept(info)),
+            }
+        }
+        pub fn decline(reason: DeclineReason) -> Self {
+            Self {
+                variant: Some(stream_message::Variant::Decline(reason)),
+            }
+        }
+        pub fn frame(frame: Frame) -> Self {
+            Self {
+                variant: Some(stream_message::Variant::Frame(frame)),
+            }
+        }
+        pub fn end_of_stream(reason: EndReason) -> Self {
+            Self {
+                variant: Some(stream_message::Variant::EndOfStream(reason)),
+            }
+        }
+    }
+
+    impl DeclineReason {
+        pub fn sensor_not_found() -> Self {
+            Self {
+                kind: Some(decline_reason::Kind::SensorNotFound(
+                    decline_reason::SensorNotFound {},
+                )),
+            }
+        }
+        pub fn sensor_unavailable() -> Self {
+            Self {
+                kind: Some(decline_reason::Kind::SensorUnavailable(
+                    decline_reason::SensorUnavailable {},
+                )),
+            }
+        }
+        pub fn producer_shutting_down() -> Self {
+            Self {
+                kind: Some(decline_reason::Kind::ProducerShuttingDown(
+                    decline_reason::ProducerShuttingDown {},
+                )),
+            }
+        }
+        pub fn other(detail: impl Into<String>) -> Self {
+            Self {
+                kind: Some(decline_reason::Kind::Other(decline_reason::Other {
+                    detail: detail.into(),
+                })),
+            }
+        }
+    }
+
+    impl EndReason {
+        pub fn source_ended() -> Self {
+            Self {
+                kind: Some(end_reason::Kind::SourceEnded(end_reason::SourceEnded {})),
+            }
+        }
+        pub fn producer_shutting_down() -> Self {
+            Self {
+                kind: Some(end_reason::Kind::ProducerShuttingDown(
+                    end_reason::ProducerShuttingDown {},
+                )),
+            }
+        }
+        pub fn session_ended() -> Self {
+            Self {
+                kind: Some(end_reason::Kind::SessionEnded(end_reason::SessionEnded {})),
+            }
+        }
+        pub fn producer_error(detail: impl Into<String>) -> Self {
+            Self {
+                kind: Some(end_reason::Kind::ProducerError(end_reason::ProducerError {
+                    detail: detail.into(),
+                })),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};

@@ -2,7 +2,7 @@
 
 Transport-neutral in-process Python surface for the Auki SDK's session lifecycle — opening sessions, registering sensors and clocks, writing and listing sensor logs and pose logs. PyO3 bindings over the `auki-session` Rust crate.
 
-This is the **source-of-truth API** for control-plane operations. Both the [HTTP Control API](../../docs/control-api.md) (frozen at SDK release v0.0.23) and the forthcoming libp2p control protocols (`/auki/control/info/1.0.0`, `/auki/control/sensor_logs/1.0.0`, …) are thin wrappers over this surface — every consumer-facing operation maps to a method here.
+This is the **source-of-truth API** for control-plane operations. Both the [HTTP Control API](../../docs/control-api.md) (frozen at SDK release v0.0.23) and the forthcoming libp2p control protocols (`/auki/control/info/0.0.1`, `/auki/control/sensor_logs/0.0.1`, …) are thin wrappers over this surface — every consumer-facing operation maps to a method here.
 
 ## Status
 

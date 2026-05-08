@@ -6,11 +6,11 @@ Networking substrate for the SDK. Spec: this crate's [outer `README.md`](../READ
 
 - [`lib.rs`](lib.rs) — M0 data types: `PeerIdentity`, `ReachabilityRecord`, `Capability`, plus the `multiaddr_vec_serde` adapter.
 - [`cluster_doc.rs`](cluster_doc.rs) — `cluster.json` discovery-doc loader (ansuz #1). Always available (no feature gate); `std::fs`-based, runs on native targets. Public types: `ClusterDoc`, `ClusterPeer`, `LoadError`. Public fns: `load`, `default_path`, `resolve_path`. Public consts: `SUPPORTED_VERSION = 1`, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH = "registries/cluster_registries/cluster.json"`.
-- [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/1.0.0` participant protocol (libp2p). M0 — available without the `swarm` feature.
+- [`participant.rs`](participant.rs) — `ParticipantInfo`, the wire shape exchanged over `GET /api/info` (HTTP) and the `/auki/cluster/0.0.1` participant protocol (libp2p). M0 — available without the `swarm` feature.
 - [`swarm.rs`](swarm.rs) — M1 libp2p `Swarm` builder, gated behind the `swarm` feature.
-- [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/1.0.0` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
+- [`cluster_protocol.rs`](cluster_protocol.rs) — `/auki/cluster/0.0.1` request-response protocol (ansuz #3), gated behind the `swarm` feature. Wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>`; wired into `swarm::Behaviour` as the always-on `cluster:` field.
 - [`cluster_runtime.rs`](cluster_runtime.rs) — opaque runtime that owns a `Swarm<Behaviour>` + tokio task and orchestrates the cluster (ansuz #4), gated behind the `swarm` feature. Auto-dials peers in a `ClusterDoc`, exchanges `ParticipantInfo`, exposes the live peer state via `peers()`, reconnects with per-peer exponential backoff. The wrapper `auki-network-py` `cluster.spawn` is built on top of this.
-- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/1.0.0` typed-byte-stream wire primitives (grimsby #1, extended by Dagaz Batch 1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (`T` for grimsby v1), `PointCloudFrame` (`T` for Dagaz Batch 1; raw CDR `bytes` field, base64-encoded inside JSON via the local `base64_bytes` adapter to dodge the array-of-integers tax), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/1.0.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
+- [`stream_protocol.rs`](stream_protocol.rs) — `/auki/stream/0.1.0` typed-byte-stream wire primitives (grimsby #1, extended by Dagaz Batch 1), gated behind the `swarm` feature. Public types: `StreamRequest`, `StreamMessage<T>`, `AcceptInfo`, `DeclineReason`, `EndReason`, `JpegFrame` (`T` for grimsby v1), `PointCloudFrame` (`T` for Dagaz Batch 1; raw CDR `bytes` field, base64-encoded inside JSON via the local `base64_bytes` adapter to dodge the array-of-integers tax), `StreamProtocolError`. Public consts: `STREAM_PROTOCOL = "/auki/stream/0.1.0"`, `MAX_FRAME_BYTES = 16 MiB`. Public fns: `read_message<T>` / `write_message<T>` (length-prefixed JSON framing helpers over `futures::AsyncRead/Write`). The actual swarm-side multiplexer is `libp2p_stream::Behaviour`, wired into `swarm::Behaviour` as the always-on `stream:` field.
 - [`stream_runtime.rs`](stream_runtime.rs) — typed `Stream<T>` Rust API on top of `stream_protocol`'s wire primitives (grimsby #2 + #3, lifted to multi-`T` dispatch by Dagaz Batch 1), gated behind the `swarm` feature. Producer-side: `ProducerFrame<T>`, `SourceStream<T>`, `StreamDispatch` (closed enum: `AcceptJpeg` / `AcceptPointCloud` / `Decline`), `StreamProvider` (non-generic), `decline_all_streams()` convenience for consumer-only nodes. Consumer-side: `ConsumerFrame<T>`, `StreamSubscription<T>`, `StreamError`, `OpenStreamError`, `OPEN_STREAM_TIMEOUT = 30s` — generic over `T` per call. The `open_stream<T>(peer_id, request)` async method on `ClusterRuntime` opens outbound subscriptions; the runtime task spawns per-substream `handle_inbound_substream` (non-generic outer + a generic `pump_typed::<T>` helper monomorphized per variant) for each accepted inbound substream on `STREAM_PROTOCOL`. Cluster-doc trust boundary applies — outsiders' substreams are dropped silently. Per Dagaz D1: each substream is mono-`T`; the producer dispatches by `request.sensor_id` to pick which `StreamDispatch` variant per call.
 - [`app_instance.rs`](app_instance.rs) — per-machine identifier derivation (ansuz #5), gated behind the `app_instance` feature.
 - [`discovery_client.rs`](discovery_client.rs) — REST client for [`aukilabs/discovery`](https://github.com/aukilabs/discovery) (Vinland Batch 1 piece #2), gated behind the `discovery_client` feature. Public types: `DiscoveryClient`, `DiscoveryError`. Public consts: `DEFAULT_TIMEOUT = 30s`. Methods: `new`, `with_http`, `base_url`; async `register`, `fetch`, `deregister`. Wire shape locked against Discovery's verifier — JCS-canonical signing payload includes `cluster_name` (cross-cluster replay guard); base64-32 ed25519 pubkey + base64-64 signature on the wire; ±60s replay window. Deregister signs `{cluster_name, peer_id, op: "delete", timestamp_ns}` (no `public_key` in the canonical bytes — `verify_peer_id` already binds it).
@@ -78,14 +78,14 @@ pub mod swarm {
         enable_relay_server: bool,   // default false
     }
     pub enum BuildError { Transport(String), Listen { addr, source } }
-    pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/1.0.0";
+    pub const IDENTIFY_PROTOCOL: &str = "/auki/identify/0.0.1";
     pub fn build_swarm(identity: &PeerIdentity, config: SwarmConfig) -> Result<libp2p::Swarm<Behaviour>, BuildError>;
     pub fn dial_peer(swarm: &mut Swarm<Behaviour>, peer: PeerId, addresses: Vec<Multiaddr>) -> Result<(), DialError>;
 }
 
 // ansuz #3 (behind `swarm` feature)
 pub mod cluster_protocol {
-    pub const CLUSTER_PROTOCOL: &str = "/auki/cluster/1.0.0";
+    pub const CLUSTER_PROTOCOL: &str = "/auki/cluster/0.0.1";
     pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
     pub struct ClusterRequest;                       // unit struct → JSON `null`
@@ -152,7 +152,7 @@ pub mod stream_runtime {
 
 // grimsby #1 (behind `swarm` feature)
 pub mod stream_protocol {
-    pub const STREAM_PROTOCOL: &str = "/auki/stream/1.0.0";
+    pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
     pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;          // 16 MiB
 
     pub struct StreamRequest { pub sensor_id: String }
@@ -345,7 +345,7 @@ SwarmBuilder::with_existing_identity(identity.keypair().clone())
     .with_quic()
     .with_relay_client(noise::Config::new, yamux::Config::default)
     .with_behaviour(|key, relay_client| Behaviour {
-        identify:     identify::Behaviour::new(/* protocol /auki/identify/1.0.0, agent_version */),
+        identify:     identify::Behaviour::new(/* protocol /auki/identify/0.0.1, agent_version */),
         ping:         ping::Behaviour::default(),
         mdns:         Toggle::from(enable_mdns.then(|| mdns::tokio::Behaviour::new(...))),
         relay_client,
@@ -362,7 +362,7 @@ mDNS is constructed outside the closure because its constructor is fallible — 
 
 ## How `cluster_protocol` works (ansuz #3)
 
-The behaviour is `libp2p::request_response::json::Behaviour` over the protocol id `/auki/cluster/1.0.0`. Request body is the unit struct `ClusterRequest` (serializes as JSON `null` — empty by design); response is `ParticipantInfo` (same JSON as `GET /api/info`). One round-trip per query; 30 s per-request timeout.
+The behaviour is `libp2p::request_response::json::Behaviour` over the protocol id `/auki/cluster/0.0.1`. Request body is the unit struct `ClusterRequest` (serializes as JSON `null` — empty by design); response is `ParticipantInfo` (same JSON as `GET /api/info`). One round-trip per query; 30 s per-request timeout.
 
 The behaviour is wired into the swarm `Behaviour` struct as the always-on `cluster:` field — there is no `Toggle`. Swarms that don't participate in a cluster (the dedicated `aukilabs/relay` infrastructure node) just never see traffic on it; a knob would have been ceremony.
 
@@ -485,7 +485,7 @@ The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]
 | `swarm::build_with_relay_server_enabled_succeeds` | Construction-only sanity |
 | `swarm::relay_server_accepts_reservation` | Full reservation flow: client dials relay → identify exchange → listen on `/p2p/<relay>/p2p-circuit` → `RelayClient::ReservationReqAccepted` |
 | `swarm::dial_peer_helper_dials_direct_address` | The `dial_peer` helper establishes a connection by `(PeerId, addresses)` and identify exchange completes |
-| `cluster_protocol::protocol_id_is_locked` | Wire-format pin: `CLUSTER_PROTOCOL == "/auki/cluster/1.0.0"` |
+| `cluster_protocol::protocol_id_is_locked` | Wire-format pin: `CLUSTER_PROTOCOL == "/auki/cluster/0.0.1"` |
 | `cluster_protocol::request_serializes_as_json_null` | `ClusterRequest` (unit struct) serializes as JSON `null` and round-trips |
 | `cluster_protocol::two_peers_exchange_participant_info_over_tcp` | End-to-end: peer A sends `ClusterRequest`, peer B replies with its `ParticipantInfo`, A asserts received == fixture |
 | `cluster_runtime::two_runtimes_discover_each_other_via_cluster_doc` | 2-peer happy path: both spawn, converge in `peers()` within 10 s, cross-side ParticipantInfo correct, `first_seen_ns > 0` |
@@ -496,7 +496,7 @@ The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]
 | `cluster_runtime::shutdown_is_idempotent_and_drops_state` | `shutdown(self)` returns promptly without deadlock |
 | `cluster_runtime::drop_without_explicit_shutdown_cleans_up` | `Drop` runs the same cleanup as `shutdown` |
 | `cluster_runtime::spawn_outside_tokio_runtime_returns_error` | Calling `from_swarm` from a `std::thread` (no tokio) → `SpawnError::NoTokioRuntime` |
-| `stream_protocol::protocol_id_is_locked` | Wire-format pin: `STREAM_PROTOCOL == "/auki/stream/1.0.0"` |
+| `stream_protocol::protocol_id_is_locked` | Wire-format pin: `STREAM_PROTOCOL == "/auki/stream/0.1.0"` |
 | `stream_protocol::max_frame_bytes_is_locked` | Wire-format pin: `MAX_FRAME_BYTES == 16 MiB` |
 | `stream_protocol::request_message_round_trips_through_json` | `StreamMessage::Request` round-trips through serde-JSON, with the `kind: "request"` tag pinned |
 | `stream_protocol::accept_message_round_trips_through_json` | `StreamMessage::Accept` round-trips, `kind: "accept"` tag pinned |
@@ -570,7 +570,7 @@ The `tests/discovery_integration.rs` integration suite (2 tests, both `#[ignore]
 - `multiaddr` (0.18) — typed multiaddr; serde adapter local to this crate.
 - `serde` — derive on `Capability` and `ReachabilityRecord`.
 - *(swarm feature)* `libp2p` (0.56, features: `tokio`, `tcp`, `quic`, `noise`, `yamux`, `identify`, `ping`, `mdns`, `relay`, `request-response`, `json`, `macros`, `ed25519`) — the swarm itself plus the `cluster_protocol` JSON request-response codec.
-- *(swarm feature)* `libp2p-stream` (`=0.4.0-alpha`) — raw-substream multiplexer for grimsby's `/auki/stream/1.0.0` typed-byte-stream protocol. The libp2p umbrella crate doesn't expose `stream` as a feature in 0.56; pre-1.0; pinned exactly until the upstream surface stabilizes.
+- *(swarm feature)* `libp2p-stream` (`=0.4.0-alpha`) — raw-substream multiplexer for grimsby's `/auki/stream/0.1.0` typed-byte-stream protocol. The libp2p umbrella crate doesn't expose `stream` as a feature in 0.56; pre-1.0; pinned exactly until the upstream surface stabilizes.
 - *(swarm feature)* `thiserror` (2) — `BuildError`, `SpawnError`.
 - *(swarm feature)* `tokio` (1, features: `macros`, `rt`, `sync`, `time`) — `cluster_runtime`'s task primitives (`select!`, `oneshot`, `interval`, `Handle::try_current`).
 - *(swarm feature)* `futures` (0.3, default-features off) — `StreamExt::next` for polling `swarm.next()` in the runtime task.

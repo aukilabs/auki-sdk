@@ -1,6 +1,6 @@
 # auki-network
 
-Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/1.0.0` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and the `/auki/stream/1.0.0` typed-byte-stream wire primitives + a typed `Stream<T>` Rust API on top — `stream_provider` callable for the producer side dispatching by `sensor_id` to a closed `StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` enum (Dagaz Batch 1 lifted grimsby v1's runtime-`T` pinning), `ClusterRuntime::open_stream<T>` for the consumer side (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature). For Vinland, ships `discovery_client::DiscoveryClient` against the [`aukilabs/discovery`](https://github.com/aukilabs/discovery) REST registry — wallet-signed `register` / `fetch` / `deregister` (behind the `discovery_client` feature).
+Networking substrate for the Auki SDK. Layer 1 of the Reid milestone-2 networking stack: peer identity, reachability records, and named capabilities (M0 — always available, WASM-friendly), plus a libp2p `Swarm` builder with TCP + QUIC + Circuit Relay v2 + mDNS, an `identify` + `ping` behaviour, a dial-by-peer-id helper, the `/auki/cluster/0.0.1` participant-exchange request-response protocol, an opaque `ClusterRuntime` that drives the swarm against a `cluster.json`, and the `/auki/stream/0.1.0` typed-byte-stream wire primitives + a typed `Stream<T>` Rust API on top — `stream_provider` callable for the producer side dispatching by `sensor_id` to a closed `StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` enum (Dagaz Batch 1 lifted grimsby v1's runtime-`T` pinning), `ClusterRuntime::open_stream<T>` for the consumer side (M1 — behind the `swarm` feature). For the ansuz networking-demo milestone, also ships the static `cluster.json` discovery doc loader (always-on) and the `app_instance::derive` per-machine identifier helper (behind the `app_instance` feature). For Vinland, ships `discovery_client::DiscoveryClient` against the [`aukilabs/discovery`](https://github.com/aukilabs/discovery) REST registry — wallet-signed `register` / `fetch` / `deregister` (behind the `discovery_client` feature).
 
 ## What a peer is
 
@@ -54,7 +54,7 @@ ReachabilityRecord {
 The wire shape every Auki participant exchanges to introduce itself. **One schema, two transports**:
 
 - **HTTP** — `GET /api/info` on the cross-app Control API ([`docs/control-api.md`](../../docs/control-api.md)) returns this exact JSON.
-- **libp2p** — the `/auki/cluster/1.0.0` participant protocol (see [the cluster protocol](#the-cluster-protocol-m1) below), a request/response exchange where each side sends its own `ParticipantInfo` to the other.
+- **libp2p** — the `/auki/cluster/0.0.1` participant protocol (see [the cluster protocol](#the-cluster-protocol-m1) below), a request/response exchange where each side sends its own `ParticipantInfo` to the other.
 
 ```rust
 pub struct ParticipantInfo {
@@ -130,12 +130,12 @@ let swarm = build_swarm(&identity, SwarmConfig {
 
 | Field | Always-on | Notes |
 |-------|-----------|-------|
-| `identify` | yes | Protocol id `/auki/identify/1.0.0`; `agent_version` is the per-deployment knob |
+| `identify` | yes | Protocol id `/auki/identify/0.0.1`; `agent_version` is the per-deployment knob |
 | `ping` | yes | Resets the 60 s idle-connection timer |
 | `mdns` (Toggle) | gated on `enable_mdns` | `_p2p._udp.local.` advertisement; on by default for daemons. Daemons keep their existing `_auki._tcp.local.` advertisement separately (control-API discovery, unchanged) — **dual-channel** per Reid parking-lot 1a |
 | `relay_client` | yes | Lets any peer dial through a relay; consumes circuit-relay multiaddrs |
 | `relay` (Toggle) | gated on `enable_relay_server` | The relay-*server* role; off by default for consumer daemons; on for the dedicated `aukilabs/relay` infrastructure node — **both-gates** per Reid parking-lot 2c |
-| `cluster` | yes | `/auki/cluster/1.0.0` participant-exchange request-response (ansuz #3); JSON codec, 30 s per-request timeout. See [the cluster protocol](#the-cluster-protocol-m1) for usage. Always-on; sits idle on swarms that don't participate in a cluster |
+| `cluster` | yes | `/auki/cluster/0.0.1` participant-exchange request-response (ansuz #3); JSON codec, 30 s per-request timeout. See [the cluster protocol](#the-cluster-protocol-m1) for usage. Always-on; sits idle on swarms that don't participate in a cluster |
 
 The swarm's `local_peer_id` matches `identity.peer_id()` exactly — caller can rely on this for advertising. Idle connections close after 60 s.
 
@@ -145,7 +145,7 @@ The `swarm` feature pulls in `libp2p` 0.56 + tokio runtime; non-WASM. Console de
 
 ## The cluster protocol (M1)
 
-`/auki/cluster/1.0.0` is the libp2p half of `ParticipantInfo`'s **one schema, two transports** promise. A peer that reaches a daemon over HTTP (Park, querying `GET /api/info`) and a peer that reaches it over libp2p parse identical JSON out of either wire. The libp2p side is a request/response exchange; the request body is empty (`null`); the response is the responder's current `ParticipantInfo`.
+`/auki/cluster/0.0.1` is the libp2p half of `ParticipantInfo`'s **one schema, two transports** promise. A peer that reaches a daemon over HTTP (Park, querying `GET /api/info`) and a peer that reaches it over libp2p parse identical JSON out of either wire. The libp2p side is a request/response exchange; the request body is empty (`null`); the response is the responder's current `ParticipantInfo`.
 
 ```rust
 use auki_network::cluster_protocol::{self, CLUSTER_PROTOCOL, ClusterRequest};
@@ -164,7 +164,7 @@ let request_id = swarm.behaviour_mut().cluster.send_request(&peer_id, ClusterReq
 
 | | |
 |---|---|
-| Protocol id | `/auki/cluster/1.0.0` (constant `cluster_protocol::CLUSTER_PROTOCOL`) |
+| Protocol id | `/auki/cluster/0.0.1` (constant `cluster_protocol::CLUSTER_PROTOCOL`) |
 | Codec | `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>` (length-framed JSON over the libp2p stream) |
 | Request body | `ClusterRequest` (unit struct → JSON `null`) |
 | Response body | `ParticipantInfo` (same JSON as `GET /api/info`) |
@@ -253,7 +253,7 @@ This module ships **wire primitives only**: protocol id, message envelope, frami
 
 ### Wire format
 
-Each `/auki/stream/1.0.0` substream is a sequence of length-prefixed `StreamMessage<T>` values, each:
+Each `/auki/stream/0.1.0` substream is a sequence of length-prefixed `StreamMessage<T>` values, each:
 
 ```text
 +----+----+----+----+--------------------------+
@@ -275,7 +275,7 @@ Substream closing without an explicit `EndOfStream` is treated by the consumer a
 ### Wire types
 
 ```rust
-pub const STREAM_PROTOCOL: &str = "/auki/stream/1.0.0";
+pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;            // 16 MiB
 
 pub struct StreamRequest { pub sensor_id: String }
@@ -332,7 +332,7 @@ where T: DeserializeOwned, S: AsyncRead + Unpin;
 
 ### `libp2p_stream::Behaviour` integration
 
-The swarm's `Behaviour` struct gains an always-on `stream:` field of type `libp2p_stream::Behaviour`. Bind to the `/auki/stream/1.0.0` protocol on the receiving side via `Control::accept`, or open outbound via `Control::open_stream`:
+The swarm's `Behaviour` struct gains an always-on `stream:` field of type `libp2p_stream::Behaviour`. Bind to the `/auki/stream/0.1.0` protocol on the receiving side via `Control::accept`, or open outbound via `Control::open_stream`:
 
 ```rust
 use libp2p::StreamProtocol;
@@ -612,4 +612,4 @@ The peer-derivation recipe is two stable contracts plus libp2p's published encod
 
 ## Versioning
 
-`PEER_DERIVATION_LABEL` is `"peer/v1"`. A v2 label rotates the peer key without breaking the wallet (e.g. if the libp2p PeerId encoding changes). The four `networking:*` capability strings are wire-format and treated as immutable; new networking capabilities take new names. The identify protocol id `/auki/identify/1.0.0` is stable; bump the version segment if the agent_version semantics change in a way that affects parsers.
+`PEER_DERIVATION_LABEL` is `"peer/v1"`. A v2 label rotates the peer key without breaking the wallet (e.g. if the libp2p PeerId encoding changes). The four `networking:*` capability strings are wire-format and treated as immutable; new networking capabilities take new names. The identify protocol id `/auki/identify/0.0.1` is stable; bump the version segment if the agent_version semantics change in a way that affects parsers.

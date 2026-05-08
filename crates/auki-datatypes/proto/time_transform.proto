@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package auki.time_transform;
+
+// Per-sample TimeTransform Log payload — the segment payload for a
+// TimeTransform Log pinned by a single `(from_clock_id, to_clock_id)`
+// pair in its manifest. The sample's timestamp rides in the auki-logs
+// framing's `timestamp_ns` (the from-clock reading at the sample
+// instant), not here.
+//
+// Step 6 decision (2026-05-08):
+//
+// - **`source` moved to manifest.** Pre-migration entries carried a
+//   per-sample `source: TimeTransformSource` that was constant for
+//   the lifetime of every log. Storing it per-sample was redundant.
+//   It now lives on the manifest as `source: TimeTransformSource`
+//   (tagged enum, mirrors `PoseSource`'s shape). One varint saved
+//   per sample × however-many-samples-per-day.
+//
+// - **`discontinuous: bool` dropped.** Pre-migration entries carried
+//   a per-sample `discontinuous` flag computed by the writer's
+//   threshold heuristic. Bakes one writer's threshold choice into
+//   the on-disk bytes; readers may want different thresholds for
+//   different uses (debug viewer vs. interpolation-stride pick).
+//   Computed on read instead: `|offset_ns - prev_offset_ns| ≥
+//   reader_threshold`.
+//
+// Both decisions resolve corresponding slop points in
+// ../parking_lot.md.
+//
+// Field number ledger (never reuse, never renumber):
+//   TimeTransformEntry.offset_ns      = 1
+//   TimeTransformEntry.uncertainty_ns = 2
+
+message TimeTransformEntry {
+  // `to_clock - from_clock` at the sample instant, in nanoseconds.
+  // Signed because clocks can drift either direction.
+  int64 offset_ns = 1;
+
+  // Window during which the to-clock was read, expressed in
+  // from-clock nanoseconds (`m2 - m1` from the three-read protocol).
+  // Sub-microsecond on a healthy host; >1ms suggests system
+  // pressure.
+  uint32 uncertainty_ns = 2;
+}

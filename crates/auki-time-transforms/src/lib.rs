@@ -2,55 +2,31 @@
 //!
 //! Schema spec: [`../README.md`](../README.md).
 //!
-//! - [`TimeTransformEntry`] is the per-sample payload written to an [`auki_logs::Log`].
-//! - [`tick`] is the unit-testable primitive: read three clocks, build one entry.
-//! - [`Sampler`] wraps `tick` in a 1 Hz background thread for production use.
+//! - [`auki_datatypes::time_transform::TimeTransformEntry`] is the
+//!   per-sample payload (re-exported here for short call sites). Lives
+//!   in [`auki-datatypes`](../auki-datatypes) since Step 6 of the
+//!   migration (2026-05-08) — encoding switched from CBOR-via-ciborium
+//!   to protobuf via prost; pre-migration `source` and `discontinuous`
+//!   fields are gone (`source` moved to manifest, `discontinuous` is
+//!   now reader-computed).
+//! - [`TimeTransformSource`](auki_manifests::TimeTransformSource) is
+//!   re-exported from `auki-manifests` (it's manifest metadata, not a
+//!   per-entry field).
+//! - [`tick`] is the unit-testable primitive: read three clocks, build
+//!   one entry.
+//! - [`Sampler`] wraps `tick` in a 1 Hz background thread for
+//!   production use.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-
 pub use auki_logs;
 
-/// One TimeTransform sample. Lives in the segment payload (CBOR-encoded).
-///
-/// The framing's `timestamp_ns` (added by `auki_logs::Log::append`) is the
-/// from-clock reading at the sample instant — not duplicated here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimeTransformEntry {
-    /// `to_clock - from_clock` at the sample instant, in nanoseconds.
-    pub offset_ns: i64,
-    /// Window during which the to-clock was read, in from-clock nanoseconds.
-    pub uncertainty_ns: u32,
-    pub source: TimeTransformSource,
-    /// `true` iff `|offset_ns - prev_offset_ns| ≥ threshold` set on the sampler.
-    /// Always `false` on the first sample (no prior offset to compare against).
-    pub discontinuous: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TimeTransformSource {
-    LocalClockRead,
-}
-
-/// CBOR-via-ciborium encoding for the segment payload. The encoding shape
-/// changes at Step 6 of the [`auki-datatypes`](../auki-datatypes) migration
-/// when the type moves to a `.proto`; until then this impl pins the v1
-/// behaviour.
-impl auki_logs::LogPayload for TimeTransformEntry {
-    fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        ciborium::into_writer(self, &mut buf).expect("ciborium encode of TimeTransformEntry");
-        buf
-    }
-    fn decode(bytes: &[u8]) -> std::result::Result<Self, String> {
-        ciborium::from_reader(bytes).map_err(|e| e.to_string())
-    }
-}
+// Re-exports for short call sites at consumer crates.
+pub use auki_datatypes::time_transform::TimeTransformEntry;
+pub use auki_manifests::TimeTransformSource;
 
 /// A pair of clock readings the sampler can pull. Production reads `CLOCK_MONOTONIC`
 /// and `CLOCK_REALTIME` via `clock_gettime`; tests script the readings.
@@ -82,27 +58,17 @@ fn clock_gettime_ns(clk: libc::clockid_t) -> i64 {
     (ts.tv_sec as i64).saturating_mul(1_000_000_000) + ts.tv_nsec as i64
 }
 
-/// State carried between consecutive `tick` calls — the prior offset (for
-/// discontinuity detection) and the threshold (in nanoseconds).
-#[derive(Debug, Clone, Copy)]
-pub struct SamplerState {
-    pub last_offset_ns: Option<i64>,
-    pub threshold_ns: i64,
-}
-
-impl SamplerState {
-    pub fn new(threshold_ns: i64) -> Self {
-        Self {
-            last_offset_ns: None,
-            threshold_ns: threshold_ns.max(0),
-        }
-    }
-}
-
 /// Take one sample. Reads from-clock, to-clock, from-clock back-to-back
 /// (see schema spec for the three-read protocol). Returns the
 /// `(timestamp_ns, entry)` tuple ready for `Log::append`.
-pub fn tick(clock: &dyn Clock, state: &mut SamplerState) -> (i64, TimeTransformEntry) {
+///
+/// Step 6 simplification (2026-05-08): no more sampler state.
+/// Discontinuity detection is the reader's responsibility — readers
+/// compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against
+/// their own tolerance, instead of consuming a bool baked into the
+/// bytes by the writer's choice. `source` likewise moved to the
+/// manifest.
+pub fn tick(clock: &dyn Clock) -> (i64, TimeTransformEntry) {
     let m1 = clock.read_from_ns();
     let r = clock.read_to_ns();
     let m2 = clock.read_from_ns();
@@ -115,21 +81,9 @@ pub fn tick(clock: &dyn Clock, state: &mut SamplerState) -> (i64, TimeTransformE
         .try_into()
         .unwrap_or(u32::MAX);
 
-    let discontinuous = match state.last_offset_ns {
-        Some(prev) => offset_ns
-            .checked_sub(prev)
-            .map(i64::unsigned_abs)
-            .map(|d| d >= state.threshold_ns as u64)
-            .unwrap_or(true),
-        None => false,
-    };
-    state.last_offset_ns = Some(offset_ns);
-
     let entry = TimeTransformEntry {
         offset_ns,
         uncertainty_ns,
-        source: TimeTransformSource::LocalClockRead,
-        discontinuous,
     };
     (timestamp_ns, entry)
 }
@@ -150,23 +104,22 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    /// Spawn the sampling thread. Default discontinuity threshold is 10 ms;
-    /// pass a `Duration` to override.
+    /// Spawn the sampling thread. Calls `tick` every `period` and
+    /// appends each entry to the log. Step 6 (2026-05-08) dropped the
+    /// `discontinuity_threshold` parameter — readers compute
+    /// discontinuity from neighboring entries on read.
     pub fn start(
         log: auki_logs::Log<TimeTransformEntry>,
         clock: Box<dyn Clock>,
         period: Duration,
-        discontinuity_threshold: Duration,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
-        let threshold_ns = discontinuity_threshold.as_nanos().min(i64::MAX as u128) as i64;
 
         let handle = thread::spawn(move || {
             let mut log = log;
-            let mut state = SamplerState::new(threshold_ns);
             while !stop_clone.load(Ordering::Relaxed) {
-                let (timestamp_ns, entry) = tick(&*clock, &mut state);
+                let (timestamp_ns, entry) = tick(&*clock);
                 if let Err(e) = log.append(timestamp_ns, &entry) {
                     eprintln!("auki-time-transforms: append failed: {e}");
                 }
@@ -221,112 +174,22 @@ mod tests {
     fn tick_computes_offset_uncertainty_and_timestamp() {
         // m1=1000, r=2_000_000_500, m2=1200 → midpoint=1100, offset=2_000_000_500-1100=1_999_999_400, uncertainty=200.
         let clock = ScriptedClock::new([1_000, 1_200], [2_000_000_500]);
-        let mut state = SamplerState::new(10_000_000); // 10 ms threshold
-        let (ts, entry) = tick(&clock, &mut state);
+        let (ts, entry) = tick(&clock);
 
         assert_eq!(ts, 1_100);
         assert_eq!(entry.offset_ns, 1_999_999_400);
         assert_eq!(entry.uncertainty_ns, 200);
-        assert_eq!(entry.source, TimeTransformSource::LocalClockRead);
-        assert!(!entry.discontinuous, "first entry never flagged");
-    }
-
-    #[test]
-    fn first_tick_never_flags_discontinuous() {
-        let clock = ScriptedClock::new([0, 0], [10_000_000_000]); // huge offset, no prior
-        let mut state = SamplerState::new(1);
-        let (_, entry) = tick(&clock, &mut state);
-        assert!(!entry.discontinuous);
-    }
-
-    #[test]
-    fn drift_smaller_than_threshold_does_not_flag() {
-        // Two samples: offset stays approximately constant.
-        let clock = ScriptedClock::new(
-            [1_000, 1_100, 1_000_001_000, 1_000_001_100],
-            [2_000_000_500, 3_000_001_500],
-        );
-        let mut state = SamplerState::new(10_000_000); // 10 ms
-
-        let (_, e1) = tick(&clock, &mut state);
-        let (_, e2) = tick(&clock, &mut state);
-
-        // Offsets differ by ~1 µs (well under 10 ms).
-        let drift = (e2.offset_ns - e1.offset_ns).abs();
-        assert!(drift < 10_000_000, "drift was {drift}");
-        assert!(!e1.discontinuous);
-        assert!(!e2.discontinuous);
-    }
-
-    #[test]
-    fn step_larger_than_threshold_flags_discontinuous() {
-        // Sample 1: offset ≈ 2_000_000_000.
-        // Sample 2: to-clock jumps forward by 50 ms (NTP step).
-        let clock = ScriptedClock::new(
-            [1_000, 1_100, 1_000_001_000, 1_000_001_100],
-            [2_000_000_550, 3_050_001_550], // +50 ms step on top of natural progression
-        );
-        let mut state = SamplerState::new(10_000_000); // 10 ms
-
-        let (_, e1) = tick(&clock, &mut state);
-        let (_, e2) = tick(&clock, &mut state);
-        assert!(!e1.discontinuous);
-        assert!(
-            e2.discontinuous,
-            "expected step flag (offsets {} vs {})",
-            e1.offset_ns, e2.offset_ns
-        );
-    }
-
-    #[test]
-    fn step_below_threshold_does_not_flag() {
-        let clock = ScriptedClock::new(
-            [1_000, 1_100, 1_000_001_000, 1_000_001_100],
-            [2_000_000_550, 3_005_001_550], // +5 ms step (under 10 ms threshold)
-        );
-        let mut state = SamplerState::new(10_000_000);
-        let (_, e1) = tick(&clock, &mut state);
-        let (_, e2) = tick(&clock, &mut state);
-        assert!(!e1.discontinuous);
-        assert!(!e2.discontinuous);
-    }
-
-    #[test]
-    fn negative_step_also_flags() {
-        // UTC corrected backwards.
-        let clock = ScriptedClock::new(
-            [1_000, 1_100, 1_000_001_000, 1_000_001_100],
-            [2_000_000_550, 950_001_550], // jumps backwards 1+ second
-        );
-        let mut state = SamplerState::new(10_000_000);
-        let (_, _) = tick(&clock, &mut state);
-        let (_, e2) = tick(&clock, &mut state);
-        assert!(e2.discontinuous);
-    }
-
-    #[test]
-    fn source_serializes_snake_case() {
-        let json = serde_json::to_string(&TimeTransformSource::LocalClockRead).unwrap();
-        assert_eq!(json, r#""local_clock_read""#);
-    }
-
-    #[test]
-    fn entry_round_trips_through_cbor() {
-        let entry = TimeTransformEntry {
-            offset_ns: -123_456_789,
-            uncertainty_ns: 42,
-            source: TimeTransformSource::LocalClockRead,
-            discontinuous: true,
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        let back: TimeTransformEntry = ciborium::from_reader(&buf[..]).unwrap();
-        assert_eq!(back, entry);
     }
 
     // `build_manifest_contains_required_fields` moved to [`auki-manifests`]
     // (renamed `build_time_transform_log_manifest_contains_required_fields`)
-    // in Step 0 of the auki-datatypes migration.
+    // in Step 0 of the auki-datatypes migration. Discontinuity-detection
+    // tests dropped at Step 6 — `discontinuous` is a reader-side
+    // computation now, no longer baked into the entry. Source-snake-case
+    // test moved to [`auki-manifests`] alongside `TimeTransformSource`.
+    // CBOR round-trip test dropped — entry encoding moved to prost in
+    // [`auki-datatypes`](../auki-datatypes), where the round-trip test
+    // also lives.
 
     #[test]
     fn sampler_writes_entries_then_stops_cleanly() {
@@ -345,12 +208,13 @@ mod tests {
             "fhash",
             "test/to",
             "thash",
+            &auki_manifests::TimeTransformSource::LocalClockRead,
             Duration::from_millis(100),
             Duration::from_secs(60),
         );
         let log = auki_logs::Log::<TimeTransformEntry>::open(dir.path(), manifest).unwrap();
 
-        let sampler = Sampler::start(log, clock, Duration::from_millis(5), Duration::from_millis(10));
+        let sampler = Sampler::start(log, clock, Duration::from_millis(5));
         thread::sleep(Duration::from_millis(50));
         let log = sampler.stop();
         drop(log); // release file handles before re-reading
@@ -361,11 +225,11 @@ mod tests {
             !entries.is_empty(),
             "sampler should have written at least one entry"
         );
-        // First entry never flagged.
-        assert!(!entries[0].payload.discontinuous);
-        // Sources are all local_clock_read.
+        // Sample contents are pinned by auki-datatypes' round-trip tests;
+        // here we just confirm the sampler wrote something readable.
         for e in &entries {
-            assert_eq!(e.payload.source, TimeTransformSource::LocalClockRead);
+            // `uncertainty_ns` is bounded; ScriptedClock advances linearly.
+            assert!(e.payload.uncertainty_ns < 1_000_000_000);
         }
     }
 }

@@ -56,11 +56,14 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - Producer guidance: a multi-pair ROS `TFMessage` fans into N parallel pose logs (one per `(from, to)` pair). Each log sees one timestamped sample per source message for its pair.
    - Locked conformance vectors pin both wire bytes (`0a1b09000000000000f03f110000000000000040190000000000000840120921000000000000f03f` for an identity-rotation 1-2-3 translation fixture) and XXH3-128 hash (`29fa6349ab0b3ff1f06933489db74dfd`).
 
-6. **`auki.time_transform` — `TimeTransformEntry`** (was misnamed `TimeTransformLogEntry` in earlier sprint drafts; correct type name is `TimeTransformEntry`).
-   - Define `proto/time_transform.proto`. Resolve the slop points in [`parking_lot.md`](../parking_lot.md): move `source` to manifest; drop `discontinuous` (computed at read time); collapse or relocate `TimeTransformSource` enum.
-   - **Move** `TimeTransformEntry` and `TimeTransformSource` out of [`auki-time-transforms`](../../auki-time-transforms)'s data-type role (the sampler logic stays).
-   - Update its sampler integration test.
-   - Locked vector.
+6. **✓ `auki.time_transform` — `TimeTransformEntry`** (on-disk; landed 2026-05-08).
+   - `proto/time_transform.proto` defines `TimeTransformEntry { int64 offset_ns = 1; uint32 uncertainty_ns = 2; }`. Per-step decisions resolved all three slop points: (a) `source` moved to manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); (b) `discontinuous: bool` dropped — readers compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against their own tolerance; (c) `TimeTransformSource` kept as tagged enum at the manifest layer (Option 2 — matches `PoseSource`'s extension pattern with one variant today, `LocalClockRead`).
+   - **Moved** `TimeTransformEntry` out of [`auki-time-transforms`](../../auki-time-transforms) into this crate. **Moved** `TimeTransformSource` out of [`auki-time-transforms`](../../auki-time-transforms) into [`auki-manifests`](../../auki-manifests) (it's manifest metadata, not a per-entry field — same role as `PoseSource`).
+   - **Rewrote `build_time_transform_log_manifest`** in [`auki-manifests`](../../auki-manifests) to take `&TimeTransformSource`; the manifest gains a `"source"` field mirroring Pose Log's shape.
+   - **Simplified `tick()` and `Sampler::start`** in [`auki-time-transforms`](../../auki-time-transforms): no more `SamplerState`, no more `discontinuity_threshold` arg. The sampler is now a pure `clock → entry` pipeline; discontinuity detection is the reader's responsibility.
+   - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
+   - **Dropped** `ciborium` + `serde` + `serde_json` deps from [`auki-time-transforms`](../../auki-time-transforms) — encoding is now prost in the new home, and the sampler is a thin wrapper that doesn't need them. Picked up `auki-datatypes` (for the prost type re-export) and `auki-manifests` (for `TimeTransformSource`).
+   - Locked conformance vectors pin both wire bytes (`08c0843d10fa01` for `offset_ns: 1_000_000, uncertainty_ns: 250`) and XXH3-128 hash (`b7e73628833419a7c299933d07cbe88c`); plus a JCS-canonical-bytes + hash vector for `TimeTransformSource::LocalClockRead` (`8dcea0b9b0b2219d651e0856f112cd65`).
 
 7. **Remove placeholder.** Once at least one real `.proto` exists and is consumed downstream, delete `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, and the smoke test.
 

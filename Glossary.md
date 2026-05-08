@@ -154,7 +154,7 @@ One of the [four logs](README.md). Stores per-frame detection outputs from extra
 
 ## TimeTransform Log
 
-One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `from_id` / `to_id` pair. Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. Producer side ships in [`auki-time-transforms`](crates/auki-time-transforms); the consumer-side `convert_time` operation is pending.
+One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `(from_clock_id, to_clock_id)` pair — flat `TimeTransformEntry { offset_ns, uncertainty_ns }` entries (`auki_datatypes::time_transform`, prost-encoded since Step 6, 2026-05-08). Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. The manifest carries the inline `TimeTransformSource` provenance tag (`LocalClockRead` ships today; mirrors `PoseSource`'s extension pattern). Discontinuity detection (was a per-entry bool pre-migration) is reader-side now — readers compute it against their own threshold. Producer side ships in [`auki-time-transforms`](crates/auki-time-transforms); the consumer-side `convert_time` operation is pending.
 
 ## Pose Source
 

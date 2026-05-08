@@ -134,13 +134,20 @@ pub fn build_pose_log_manifest(
 }
 
 /// Build a TimeTransform Log manifest with the four required clock-binding
-/// fields, the run-identifying `app_id` / `session_id`, plus auki-logs's
-/// required `segment_duration_ns` / `retention_ns`.
+/// fields, the run-identifying `app_id` / `session_id`, the inline
+/// producer identity, and auki-logs's required `segment_duration_ns` /
+/// `retention_ns`.
+///
+/// Step 6 of the [`auki-datatypes` migration] (2026-05-08) added the
+/// `source: &TimeTransformSource` argument: per-sample `source` on
+/// `TimeTransformEntry` moved to per-log `source` on the manifest,
+/// matching how Pose Log carries `PoseSource` inline.
 ///
 /// `app_id` is the application identifier (same string as the daemon's
 /// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
-/// `session_id` is the integrator-minted UUIDv4 for the current daemon run
-/// (same value as the parent session directory name).
+/// `session_id` is the integrator-minted UUIDv4 for the current daemon
+/// run (same value as the parent session directory name).
+#[allow(clippy::too_many_arguments)]
 pub fn build_time_transform_log_manifest(
     app_id: &str,
     session_id: &str,
@@ -148,6 +155,7 @@ pub fn build_time_transform_log_manifest(
     from_clock_hash: &str,
     to_clock_id: &str,
     to_clock_hash: &str,
+    source: &TimeTransformSource,
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
@@ -158,9 +166,45 @@ pub fn build_time_transform_log_manifest(
         "from_clock_hash": from_clock_hash,
         "to_clock_id": to_clock_id,
         "to_clock_hash": to_clock_hash,
+        "source": source,
         "segment_duration_ns": duration_as_i64_ns(segment_duration),
         "retention_ns": duration_as_i64_ns(retention),
     })
+}
+
+/// Identifies the producer of the offsets in a TimeTransform Log.
+/// Lives **inline** in the log's manifest under the `"source"` key —
+/// TimeTransform Log has no separate registry because the segment
+/// payload is fully self-describing (`offset_ns` + `uncertainty_ns`);
+/// source identity is provenance, not a decoder. Tagged-enum body
+/// mirrors [`PoseSource`]'s shape for future producer variants.
+///
+/// Step 6 of the [`auki-datatypes` migration] (2026-05-08) moved this
+/// type from its pre-migration home in [`auki-time-transforms`](../../auki-time-transforms)
+/// (where it was a per-sample field on `TimeTransformEntry`) to here.
+/// One variant ships today (`LocalClockRead` — the 1 Hz sampler in
+/// [`auki-time-transforms`](../../auki-time-transforms) reading
+/// `CLOCK_MONOTONIC` and `CLOCK_REALTIME` via `clock_gettime`); the
+/// extension point is the same as `PoseSource`'s.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimeTransformSource {
+    /// The 1 Hz `clock_gettime`-based sampler in
+    /// [`auki-time-transforms`](../../auki-time-transforms). The only
+    /// producer that ships today.
+    LocalClockRead,
+    // future: NtpSynced { server }, SyncedTo { peer_id }, ...
+}
+
+impl TimeTransformSource {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let v = serde_json::to_value(self).expect("TimeTransformSource serializes to a JSON value");
+        auki_jcs::canonicalize(&v)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
 }
 
 /// Writer-mode hint for a Pose Log — one of `"rigid"` (transform is
@@ -377,6 +421,7 @@ mod tests {
             "deadbeefcafefeed",
             "K1-AABBCCDDEEFF/utc",
             "1234567890abcdef",
+            &TimeTransformSource::LocalClockRead,
             Duration::from_secs(1),
             Duration::from_secs(60),
         );
@@ -386,7 +431,30 @@ mod tests {
         assert_eq!(m["from_clock_hash"], "deadbeefcafefeed");
         assert_eq!(m["to_clock_id"], "K1-AABBCCDDEEFF/utc");
         assert_eq!(m["to_clock_hash"], "1234567890abcdef");
+        assert_eq!(m["source"]["kind"], "local_clock_read");
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
         assert_eq!(m["retention_ns"], 60_000_000_000i64);
+    }
+
+    /// Locks the JCS canonical bytes for the only `TimeTransformSource`
+    /// variant that ships today. Catches drift in tagged-enum serde
+    /// shape OR canonicalization. Mirrors `ros2_tf_source_serializes_to_canonical_bytes`.
+    #[test]
+    fn local_clock_read_source_serializes_to_canonical_bytes() {
+        let bytes = TimeTransformSource::LocalClockRead.canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"kind":"local_clock_read"}"#
+        );
+    }
+
+    /// Locked XXH3-128 hex of the canonical bytes above. Trips if any
+    /// of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts.
+    #[test]
+    fn local_clock_read_source_hash_is_locked() {
+        assert_eq!(
+            TimeTransformSource::LocalClockRead.hash(),
+            "8dcea0b9b0b2219d651e0856f112cd65"
+        );
     }
 }

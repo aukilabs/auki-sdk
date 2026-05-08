@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 12:43 HKT, 2026
+
+**`TimeTransformSource` lands here; `build_time_transform_log_manifest` gains a `source` arg** for Step 6 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Tagged-enum mirror of `PoseSource` (one variant today, `LocalClockRead`); the manifest's new `"source"` field carries inline producer identity. Moved over from [`auki-time-transforms`](../auki-time-transforms) where it was a per-entry field on `TimeTransformEntry` pre-Step-6 — manifest is its right home (matches Pose Log's shape).
+
+**Tests**: 7 → 9 (+2: `local_clock_read_source_serializes_to_canonical_bytes` pins JCS canonical bytes `{"kind":"local_clock_read"}`; `local_clock_read_source_hash_is_locked` pins XXH3-128 `8dcea0b9b0b2219d651e0856f112cd65`). Existing `build_time_transform_log_manifest_contains_required_fields` updated for the new arg.
+
 ### broodsugar's claude · May 8, 11:52 HKT, 2026
 
 **`build_pose_log_manifest` rewritten** for Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) per the 2026-05-07 synthesis. New signature takes 13 args: `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash` (mirrors `build_time_transform_log_manifest`'s clock-pair pattern), `clock_id` + `clock_hash`, the inline `PoseSource`, plus `writer_mode: PoseWriterMode` (`Rigid` or `Movable`, JSON `"rigid"` / `"movable"`) and `expected_rate_hz: u32`. Each Pose Log holds samples for one ordered frame pair; producer fans multi-pair messages into N parallel logs.

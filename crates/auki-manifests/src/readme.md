@@ -31,6 +31,7 @@ pub fn build_time_transform_log_manifest(
     app_id: &str, session_id: &str,
     from_clock_id: &str, from_clock_hash: &str,
     to_clock_id: &str, to_clock_hash: &str,
+    source: &TimeTransformSource,
     segment_duration: Duration, retention: Duration,
 ) -> serde_json::Value;
 
@@ -47,9 +48,18 @@ pub enum PoseWriterMode {
     Rigid,    // serialized as "rigid"
     Movable,  // serialized as "movable"
 }
+
+pub enum TimeTransformSource {
+    LocalClockRead,    // serialized as {"kind":"local_clock_read"}
+}
+
+impl TimeTransformSource {
+    pub fn canonical_bytes(&self) -> Vec<u8>;
+    pub fn hash(&self) -> String;
+}
 ```
 
-## Tests (7 total)
+## Tests (9 total)
 
 | Test | Asserts |
 |------|---------|
@@ -59,9 +69,11 @@ pub enum PoseWriterMode {
 | `ros2_tf_source_hash_is_locked` | M1 example → `f3d296341347589c72297a0cc7c81cd8`. Cross-cutting guard against `auki-jcs` / `auki-hash` / this crate's serde shape drifting. |
 | `build_pose_log_manifest_contains_all_required_fields` | All 13 required fields present (frame-pair × 2, clock-pair × 2, app/session, source, writer_mode, expected_rate_hz, segment/retention). |
 | `build_pose_log_manifest_serializes_writer_mode_as_snake_case` | `PoseWriterMode::Rigid` → JSON `"rigid"` (and Movable → `"movable"`). Pins the snake_case rename. |
-| `build_time_transform_log_manifest_contains_required_fields` | All required fields present (six clock-binding + `app_id` / `session_id` + the two from auki-logs). |
+| `build_time_transform_log_manifest_contains_required_fields` | All required fields present (six clock-binding + `app_id` / `session_id` + `source.kind == "local_clock_read"` + the two from auki-logs). |
+| `local_clock_read_source_serializes_to_canonical_bytes` | `TimeTransformSource::LocalClockRead` → locked JCS canonical bytes `{"kind":"local_clock_read"}`. Catches drift in tagged-enum serde shape OR canonicalization. Mirrors `ros2_tf_source_serializes_to_canonical_bytes`. |
+| `local_clock_read_source_hash_is_locked` | XXH3-128 of those canonical bytes — `8dcea0b9b0b2219d651e0856f112cd65`. |
 
-`cargo test -p auki-manifests` runs 7 tests.
+`cargo test -p auki-manifests` runs 9 tests.
 
 ## Dependencies
 

@@ -36,18 +36,15 @@ Adjudicated in favour of opaque-bytes-only: `auki.point_cloud.PointCloudLogEntry
 
 Adjudicated in favour of opaque-bytes-only — `auki.audio.AudioLogEntry { bytes data = 1; }`. Same stance as Step 3 for point clouds; declines the pre-Step-3 sprint lean toward adding `sample_count`. Sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body. Reader needs the registry to interpret bytes anyway; denormalizing either field would risk inconsistency for marginal convenience. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
-### `TimeTransformEntry` — `source` belongs in manifest, `discontinuous` is computed
+### ✓ Resolved 2026-05-08 — `TimeTransformEntry` slop points (Step 6)
 
-Today's `auki-time-transforms::TimeTransformEntry` has `offset_ns: i64, uncertainty_ns: u32, source: TimeTransformSource, discontinuous: bool`.
+All three slop points adjudicated and landed at Step 6:
 
-- **`source: TimeTransformSource`** is per-entry constant data for the lifetime of a log — every entry in the same log has the same source. Belongs in the manifest, not on every sample. Move to manifest field at migration.
-- **`discontinuous: bool`** is computed from neighboring entries (`true` iff `|offset_ns - prev_offset_ns| ≥ threshold` per the docstring). Storing it bloats every entry and bakes one writer's threshold choice into the on-disk bytes. Drop it — readers compute with their own threshold.
+- **`source` moved to manifest** — pre-migration `source: TimeTransformSource` was per-entry constant data; now lives on the manifest as `source: TimeTransformSource` (tagged enum, mirrors `PoseSource`).
+- **`discontinuous: bool` dropped** — computed by readers with their own threshold, not baked into the bytes by the writer.
+- **`TimeTransformSource` kept as tagged enum at manifest layer** (Option 2) — matches `PoseSource`'s extension pattern; one variant today (`LocalClockRead`), future producers (`NtpSynced { server }`, `SyncedTo { peer_id }`, ...) attach metadata without a schema break.
 
-Resolve before `auki.time_transform` `.proto` lands.
-
-### `TimeTransformSource` — collapse the single-variant enum
-
-Today: `enum TimeTransformSource { LocalClockRead }`. Single-variant enum "designed to grow." Premature abstraction. Two paths: (a) drop the enum entirely (manifest field becomes `producer: "local_clock_read"` string or just no field at all), or (b) keep the enum at the manifest layer (matches `PoseSource`'s tagged-enum extension pattern). Lean: (b) — the precedent is set by `PoseSource`, and the cost is one tagged-string-field on the manifest. Resolve before `auki.time_transform` `.proto` lands.
+Resolved + propagated in the same step's PR — no Propagate tasks carry over.
 
 ---
 

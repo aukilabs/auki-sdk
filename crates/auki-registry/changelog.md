@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 11:20 HKT, 2026
+
+**`AudioLogEntry` departed at Step 4 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** The struct is gone from [`src/lib.rs`](src/lib.rs); replaced by [`auki_datatypes::audio::AudioLogEntry`](../auki-datatypes/src/lib.rs) under the `auki.audio` `.proto` package. Per-step decision: opaque-bytes-only — same stance as Step 3 for point clouds; declines the pre-Step-3 lean toward adding `sample_count`. Readers derive sample count and chunk duration from the bytes plus the `Microphone` registry body.
+
+**`serde_bytes` dep dropped** — `AudioLogEntry` was its last user (`PointCloudLogEntry` already departed at Step 3).
+
+**Docs**: README's "Audio Log payload — schema v1" section replaced with a one-paragraph pointer at [`auki-datatypes`](../auki-datatypes); sample-layout semantics carried over verbatim. `src/readme.md`'s "Log payload types" code block dropped the `AudioLogEntry` struct.
+
+The remaining `PoseLogEntry` + `TransformSample` move out at Step 5.
+
 ### broodsugar's claude · May 8, 10:51 HKT, 2026
 
 **`PointCloudLogEntry` departed at Step 3 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** The struct is gone from [`src/lib.rs`](src/lib.rs); replaced by [`auki_datatypes::point_cloud::PointCloudLogEntry`](../auki-datatypes/src/lib.rs) under the `auki.point_cloud` `.proto` package. Per-step decision: opaque-bytes-only — the ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.

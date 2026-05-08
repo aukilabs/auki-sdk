@@ -32,9 +32,9 @@ These are per-type design decisions to make as each `.proto` lands, surfaced whe
 
 Adjudicated in favour of opaque-bytes-only: `auki.point_cloud.PointCloudLogEntry { bytes data = 1; }`. Symmetric with the wire's `PointCloudFrame { bytes }`; the ROS-shaped layout fields (`width`, `height`, `is_dense`) are gone from the per-frame type. Interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
-### `AudioLogEntry` — implicit vs explicit chunk metadata
+### ✓ Resolved 2026-05-08 — `AudioLogEntry` is opaque-bytes-only (Step 4)
 
-Today's `auki-registry::AudioLogEntry` has `data: Vec<u8>` only. Sample count is implicit: `data.len() / sample_byte_width / channels`. Reader has to look up registry's `sample_format` + `channels` and compute. Adding a typed `sample_count: u32` (or `chunk_duration_ns: i64`) makes the metadata honest; small bytes overhead per chunk. Lean: add `sample_count` — one varint per chunk. Resolve before `auki.audio` `.proto` lands.
+Adjudicated in favour of opaque-bytes-only — `auki.audio.AudioLogEntry { bytes data = 1; }`. Same stance as Step 3 for point clouds; declines the pre-Step-3 sprint lean toward adding `sample_count`. Sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body. Reader needs the registry to interpret bytes anyway; denormalizing either field would risk inconsistency for marginal convenience. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
 ### `TimeTransformEntry` — `source` belongs in manifest, `discontinuous` is computed
 

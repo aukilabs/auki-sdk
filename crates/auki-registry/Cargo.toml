@@ -12,7 +12,6 @@ auki-jcs = { path = "../auki-jcs" }
 auki-hash = { path = "../auki-hash" }
 auki-layout = { path = "../auki-layout" }
 serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
 serde_json = "1"
 
 [dev-dependencies]

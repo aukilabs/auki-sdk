@@ -62,6 +62,20 @@ pub mod point_cloud {
 
 impl_log_payload!(point_cloud::PointCloudLogEntry);
 
+/// `auki.audio` — opaque-bytes audio log payload (Sensor Log family).
+/// Migration Step 4. `sample_format`, `channels`, `sample_rate_hz`,
+/// `channel_layout`, `frame_id` live on the SensorRegistryEntry's
+/// `Microphone` body — interpretation comes from `(sensor_id,
+/// sensor_hash)`, not from the per-chunk log entry. Sample count and
+/// chunk duration are derivable from the bytes plus the registry; the
+/// chunk start timestamp rides in the auki-logs framing's
+/// `timestamp_ns`.
+pub mod audio {
+    include!(concat!(env!("OUT_DIR"), "/auki.audio.rs"));
+}
+
+impl_log_payload!(audio::AudioLogEntry);
+
 /// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
 /// `/auki/stream/0.1.0`). Migration Step 2.
 pub mod frame_stream {
@@ -170,6 +184,7 @@ pub mod stream {
 
 #[cfg(test)]
 mod tests {
+    use super::audio::AudioLogEntry;
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
     use super::placeholder::PipelineCheck;
     use super::point_cloud::PointCloudLogEntry;
@@ -394,6 +409,98 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
         assert_eq!(entries[0].payload, step3_point_cloud_log_entry());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.data, Vec::<u8>::new());
+    }
+
+    // ─── auki.audio locked vectors ───────────────────────────────────────────
+
+    /// 16 bytes of stereo `pcm_s16le` — 4 frames × 2 channels × 2 bytes.
+    /// Stands in for a real audio chunk; the SDK only sees opaque bytes,
+    /// so the exact contents don't matter beyond reproducibility.
+    fn step4_audio_log_entry() -> AudioLogEntry {
+        AudioLogEntry {
+            data: (0..16u8).map(|i| i.wrapping_mul(17)).collect(),
+        }
+    }
+
+    /// Locks the prost wire bytes for the Step 4 example audio log entry.
+    /// Field 1 length-delimited: tag 0x0a, varint length 0x10 (16), then
+    /// the 16 payload bytes (`0x00, 0x11, 0x22, ..., 0xff`). Cross-language
+    /// readers MUST reproduce them.
+    #[test]
+    fn audio_log_entry_serializes_to_locked_wire_bytes() {
+        let bytes = step4_audio_log_entry().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "0a1000112233445566778899aabbccddeeff"
+        );
+    }
+
+    /// XXH3-128 of those wire bytes.
+    #[test]
+    fn audio_log_entry_hash_is_locked() {
+        let bytes = step4_audio_log_entry().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "a5864ae7018f28a5c094a714af1db62e"
+        );
+    }
+
+    #[test]
+    fn audio_log_entry_round_trips() {
+        let entry = step4_audio_log_entry();
+        let bytes = entry.encode_to_vec();
+        let decoded = AudioLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// `LogPayload` round-trip — proves the macro-generated impl rides
+    /// the same prost path as direct `Message::encode_to_vec` / `decode`.
+    #[test]
+    fn audio_log_entry_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step4_audio_log_entry();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <AudioLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Empty chunk — proto3 default-elision: zero-byte chunk encodes to
+    /// zero output bytes and decodes back to the empty form.
+    #[test]
+    fn audio_log_entry_empty_data_round_trips() {
+        let entry = AudioLogEntry { data: vec![] };
+        let bytes = entry.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = AudioLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam: open a real `auki_logs::Log<AudioLogEntry>`,
+    /// append two entries (one populated, one empty), close, re-read,
+    /// assert order + payload byte-equality.
+    #[test]
+    fn audio_log_entry_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<AudioLogEntry> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step4_audio_log_entry()).unwrap();
+            log.append(200, &AudioLogEntry { data: vec![] }).unwrap();
+        }
+        let reader: auki_logs::LogReader<AudioLogEntry> =
+            auki_logs::Log::<AudioLogEntry>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step4_audio_log_entry());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }

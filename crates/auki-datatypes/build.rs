@@ -15,6 +15,7 @@ fn main() -> std::io::Result<()> {
         .compile_protos(
             &[
                 "proto/placeholder.proto",
+                "proto/audio.proto",
                 "proto/camera.proto",
                 "proto/frame_stream.proto",
                 "proto/point_cloud.proto",

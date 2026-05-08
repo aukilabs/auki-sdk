@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink in flight.** Today this crate also holds log payload types (`AudioLogEntry`, `PoseLogEntry`, `TransformSample` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08)** — manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests). **Step 1 (2026-05-08)** — `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`. **Step 3 (2026-05-08)** — `PointCloudLogEntry` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.point_cloud` `.proto` as opaque-bytes-only (`{ bytes data = 1; }`).
+> **Scope shrink in flight.** Today this crate also holds log payload types (`PoseLogEntry`, `TransformSample` — see the "Log payload types" section below). That's AI drift; they're migrating to [`auki-datatypes`](../../auki-datatypes) step-by-step (with renames and protobuf encoding along the way). Migration sequence in [`auki-datatypes/src/sprint.md`](../../auki-datatypes/src/sprint.md). **Step 0 (2026-05-08)** — manifest builders (`build_sensor_log_manifest`, `build_pose_log_manifest`) and `PoseSource` moved to [`auki-manifests`](../../auki-manifests). **Step 1 (2026-05-08)** — `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`. **Step 3 (2026-05-08)** — `PointCloudLogEntry` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.point_cloud` `.proto` as opaque-bytes-only (`{ bytes data = 1; }`). **Step 4 (2026-05-08)** — `AudioLogEntry` moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.audio` `.proto` as opaque-bytes-only; `serde_bytes` dep dropped.
 
 ## What's here
 
@@ -175,11 +175,6 @@ Multi-mic arrays are one sensor with `channels = N` (not N independent sensors).
 ## Log payload types
 
 ```rust
-pub struct AudioLogEntry {
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,     // interleaved samples per the registry's sample_format and channels
-}
-
 pub struct PoseLogEntry {
     pub transforms: Vec<TransformSample>,   // empty allowed
 }
@@ -192,7 +187,7 @@ pub struct TransformSample {
 }
 ```
 
-`AudioLogEntry.data` is tagged `#[serde(with = "serde_bytes")]` so CBOR encodes it as a byte string (major type 2) rather than an array of u8 — same on-disk semantics, ~half the byte cost on typical payloads. `PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding. The camera log payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved to [`auki-datatypes`](../../auki-datatypes) at Step 1 (2026-05-08) and `PointCloudLogEntry` followed at Step 3 (2026-05-08, opaque-bytes-only) — both protobuf via prost, no longer CBOR.
+`PoseLogEntry` is structured (no opaque buffer), so it uses normal CBOR struct encoding. The camera log payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved to [`auki-datatypes`](../../auki-datatypes) at Step 1 (2026-05-08); `PointCloudLogEntry` followed at Step 3 (2026-05-08, opaque-bytes-only); `AudioLogEntry` followed at Step 4 (2026-05-08, opaque-bytes-only) — all three are now protobuf via prost, no longer CBOR. With `AudioLogEntry`'s departure, the `serde_bytes` dep dropped from this crate.
 
 ## Public functions
 

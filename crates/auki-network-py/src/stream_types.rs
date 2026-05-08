@@ -22,10 +22,16 @@
 //! SDK's tokio worker. Caller processes (BoosterApp's `BaseHTTPServer`
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
+use auki_datatypes::joint_state::JointAngles as RustJointAngles;
+use auki_datatypes::pose::{Quat as RustQuat, SpatialTransform as RustSpatialTransform, Vec3 as RustVec3};
+use auki_datatypes::pose_stream::{
+    PoseStreamFrame as RustPoseStreamFrame, pose_stream_frame::Payload as RustPoseStreamPayload,
+};
 use auki_network_rs::stream_protocol::{
     AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
     EndReason as RustEndReason, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
+    PointCloudFrame as RustPointCloudFrame, PoseStreamFrameWire as RustPoseStreamFrameWire,
+    StreamRequest as RustStreamRequest,
 };
 use auki_network_rs::stream_runtime::{
     ConsumerFrame as RustConsumerFrame, OpenStreamError as RustOpenStreamError,
@@ -218,6 +224,201 @@ impl PyPointCloudFrame {
     }
 }
 
+// ─── PoseStream payload types ────────────────────────────────────────────────
+//
+// Sawslin Phase 1 Lane 0. Three Python-facing types — `JointAngles`,
+// `Vec3`/`Quat`/`SpatialTransform` — wrapping the prost-generated types
+// from `auki_datatypes`. Producers construct them directly and yield
+// them through `ProducerFrame.payload`; consumers receive them via
+// `ConsumerFrame.payload`.
+//
+// The wire-side `PoseStreamFrame` `oneof` envelope (per locked decision
+// #7) is invisible to the Python caller — the SDK boundary wraps the
+// payload into a `PoseStreamFrame` arm on the way out, decodes back to
+// the typed payload on the way in.
+
+/// Per-frame joint-angle vector for an articulated-joint sensor (sawslin
+/// Phase 1 boosterapp shape). Indexed to match the producer's
+/// `SensorRegistryEntry.joint_names`.
+#[pyclass(name = "JointAngles", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyJointAngles {
+    pub(crate) inner: RustJointAngles,
+}
+
+#[pymethods]
+impl PyJointAngles {
+    #[new]
+    #[pyo3(signature = (*, angles))]
+    fn new(angles: Vec<f32>) -> Self {
+        Self {
+            inner: RustJointAngles { angles },
+        }
+    }
+
+    /// Joint angles in radians. Returns a fresh Python list copy each
+    /// call; mutate at the source if you need stable identity.
+    #[getter]
+    fn angles(&self) -> Vec<f32> {
+        self.inner.angles.clone()
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.angles.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("JointAngles(<{} angles>)", self.inner.angles.len())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// 3-vector (`Vec3 { x, y, z }`) used as the translation component of
+/// [`PySpatialTransform`].
+#[pyclass(name = "Vec3", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyVec3 {
+    pub(crate) inner: RustVec3,
+}
+
+#[pymethods]
+impl PyVec3 {
+    #[new]
+    #[pyo3(signature = (x, y, z))]
+    fn new(x: f32, y: f32, z: f32) -> Self {
+        Self {
+            inner: RustVec3 { x, y, z },
+        }
+    }
+
+    #[getter]
+    fn x(&self) -> f32 {
+        self.inner.x
+    }
+
+    #[getter]
+    fn y(&self) -> f32 {
+        self.inner.y
+    }
+
+    #[getter]
+    fn z(&self) -> f32 {
+        self.inner.z
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Vec3({}, {}, {})", self.inner.x, self.inner.y, self.inner.z)
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Unit quaternion (`Quat { x, y, z, w }`, Hamilton convention) used as
+/// the orientation component of [`PySpatialTransform`].
+#[pyclass(name = "Quat", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyQuat {
+    pub(crate) inner: RustQuat,
+}
+
+#[pymethods]
+impl PyQuat {
+    #[new]
+    #[pyo3(signature = (x, y, z, w))]
+    fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Self {
+            inner: RustQuat { x, y, z, w },
+        }
+    }
+
+    #[getter]
+    fn x(&self) -> f32 {
+        self.inner.x
+    }
+
+    #[getter]
+    fn y(&self) -> f32 {
+        self.inner.y
+    }
+
+    #[getter]
+    fn z(&self) -> f32 {
+        self.inner.z
+    }
+
+    #[getter]
+    fn w(&self) -> f32 {
+        self.inner.w
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Quat({}, {}, {}, {})",
+            self.inner.x, self.inner.y, self.inner.z, self.inner.w
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// One rigid 6-DoF spatial transform — sentinel's per-marker pose
+/// payload from sawslin Phase 3+. Wraps `auki_datatypes::pose::SpatialTransform`.
+///
+/// `translation` and `orientation` are required; `None` on the
+/// underlying message would be wire-malformed at the consumer.
+#[pyclass(name = "SpatialTransform", frozen)]
+#[derive(Clone, Debug)]
+pub struct PySpatialTransform {
+    pub(crate) inner: RustSpatialTransform,
+}
+
+#[pymethods]
+impl PySpatialTransform {
+    #[new]
+    #[pyo3(signature = (*, translation, orientation))]
+    fn new(translation: PyVec3, orientation: PyQuat) -> Self {
+        Self {
+            inner: RustSpatialTransform {
+                translation: Some(translation.inner),
+                orientation: Some(orientation.inner),
+            },
+        }
+    }
+
+    #[getter]
+    fn translation(&self) -> Option<PyVec3> {
+        self.inner.translation.clone().map(|inner| PyVec3 { inner })
+    }
+
+    #[getter]
+    fn orientation(&self) -> Option<PyQuat> {
+        self.inner.orientation.clone().map(|inner| PyQuat { inner })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SpatialTransform(translation={}, orientation={})",
+            self.translation()
+                .map(|v| v.__repr__())
+                .unwrap_or_else(|| "None".into()),
+            self.orientation()
+                .map(|q| q.__repr__())
+                .unwrap_or_else(|| "None".into()),
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── DeclineReason ───────────────────────────────────────────────────────────
 
 /// Tagged union mirroring [`RustDeclineReason`]. Construct via the
@@ -382,14 +583,20 @@ impl PyEndReason {
 
 // ─── Frame payload (Jpeg vs PointCloud) ──────────────────────────────────────
 
-/// Tagged union over the two payload `T`s the SDK currently supports.
+/// Tagged union over the payload `T`s the SDK currently supports.
 /// The producer's [`PyProducerFrame`] and the consumer's [`PyConsumerFrame`]
 /// both carry one of these; the wire-side substream is mono-`T` per the
 /// matching [`RustStreamDispatch`] variant.
+///
+/// `JointAngles` and `SpatialTransform` both ride an `AcceptPoseStream`
+/// substream — the wire envelope (`PoseStreamFrame` `oneof`) is invisible
+/// to the Python caller; the SDK boundary wraps/unwraps.
 #[derive(Clone, Debug)]
 pub(crate) enum FramePayload {
     Jpeg(PyJpegFrame),
     PointCloud(PyPointCloudFrame),
+    JointAngles(PyJointAngles),
+    SpatialTransform(PySpatialTransform),
 }
 
 impl FramePayload {
@@ -400,8 +607,14 @@ impl FramePayload {
         if let Ok(pc) = payload.extract::<PyPointCloudFrame>() {
             return Ok(Self::PointCloud(pc));
         }
+        if let Ok(ja) = payload.extract::<PyJointAngles>() {
+            return Ok(Self::JointAngles(ja));
+        }
+        if let Ok(st) = payload.extract::<PySpatialTransform>() {
+            return Ok(Self::SpatialTransform(st));
+        }
         Err(PyValueError::new_err(format!(
-            "frame payload must be a JpegFrame or PointCloudFrame; got {}",
+            "frame payload must be a JpegFrame, PointCloudFrame, JointAngles, or SpatialTransform; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -413,6 +626,8 @@ impl FramePayload {
         match self {
             Self::Jpeg(f) => Py::new(py, f).expect("alloc JpegFrame").into_py(py),
             Self::PointCloud(f) => Py::new(py, f).expect("alloc PointCloudFrame").into_py(py),
+            Self::JointAngles(f) => Py::new(py, f).expect("alloc JointAngles").into_py(py),
+            Self::SpatialTransform(f) => Py::new(py, f).expect("alloc SpatialTransform").into_py(py),
         }
     }
 
@@ -420,6 +635,8 @@ impl FramePayload {
         match self {
             Self::Jpeg(f) => f.__repr__(),
             Self::PointCloud(f) => f.__repr__(),
+            Self::JointAngles(f) => f.__repr__(),
+            Self::SpatialTransform(f) => f.__repr__(),
         }
     }
 }
@@ -484,16 +701,16 @@ impl PyProducerFrame {
                 timestamp_ns: self.timestamp_ns,
                 payload: f.inner.clone(),
             }),
-            FramePayload::PointCloud(_) => Err(
-                "AcceptJpeg source yielded a ProducerFrame with PointCloudFrame payload; \
-                 the substream is mono-T — yield JpegFrame or use accept_pointcloud(..)"
-                    .into(),
-            ),
+            other => Err(format!(
+                "AcceptJpeg source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield JpegFrame or use the matching accept_*",
+                other.kind_name(),
+            )),
         }
     }
 
     /// Convert to a `RustProducerFrame<RustPointCloudFrame>`. Errors
-    /// with a human-readable detail if the payload is `Jpeg`.
+    /// with a human-readable detail if the payload is the wrong shape.
     pub(crate) fn to_rust_pointcloud(
         &self,
     ) -> Result<RustProducerFrame<RustPointCloudFrame>, String> {
@@ -502,11 +719,54 @@ impl PyProducerFrame {
                 timestamp_ns: self.timestamp_ns,
                 payload: f.inner.clone(),
             }),
-            FramePayload::Jpeg(_) => Err(
-                "AcceptPointCloud source yielded a ProducerFrame with JpegFrame payload; \
-                 the substream is mono-T — yield PointCloudFrame or use accept(..)"
-                    .into(),
-            ),
+            other => Err(format!(
+                "AcceptPointCloud source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield PointCloudFrame or use the matching accept_*",
+                other.kind_name(),
+            )),
+        }
+    }
+
+    /// Convert to a `RustProducerFrame<RustPoseStreamFrameWire>` —
+    /// wraps the typed payload (`JointAngles` or `SpatialTransform`)
+    /// into a `PoseStreamFrame` `oneof` arm, then encodes to wire
+    /// bytes. Errors if the payload is a non-pose-stream variant.
+    pub(crate) fn to_rust_pose_stream(
+        &self,
+    ) -> Result<RustProducerFrame<RustPoseStreamFrameWire>, String> {
+        let envelope = match &self.payload {
+            FramePayload::JointAngles(j) => RustPoseStreamFrame {
+                payload: Some(RustPoseStreamPayload::JointAngles(j.inner.clone())),
+            },
+            FramePayload::SpatialTransform(t) => RustPoseStreamFrame {
+                payload: Some(RustPoseStreamPayload::SpatialTransform(t.inner.clone())),
+            },
+            other => {
+                return Err(format!(
+                    "AcceptPoseStream source yielded a ProducerFrame with {} payload; \
+                     the substream is mono-T — yield JointAngles or SpatialTransform",
+                    other.kind_name(),
+                ));
+            }
+        };
+        Ok(RustProducerFrame {
+            timestamp_ns: self.timestamp_ns,
+            payload: RustPoseStreamFrameWire::encode(&envelope),
+        })
+    }
+}
+
+impl FramePayload {
+    /// Short discriminator string used in error messages (e.g.
+    /// "AcceptJpeg source yielded a ProducerFrame with JointAngles
+    /// payload"). Stable; matches the snake_case factory names on
+    /// `StreamDecision`.
+    fn kind_name(&self) -> &'static str {
+        match self {
+            FramePayload::Jpeg(_) => "JpegFrame",
+            FramePayload::PointCloud(_) => "PointCloudFrame",
+            FramePayload::JointAngles(_) => "JointAngles",
+            FramePayload::SpatialTransform(_) => "SpatialTransform",
         }
     }
 }
@@ -577,6 +837,39 @@ impl PyConsumerFrame {
             }),
         }
     }
+
+    /// Decode a wire-side `PoseStreamFrameWire` into the typed
+    /// envelope, then convert the active `oneof` arm into a
+    /// `FramePayload::JointAngles` / `FramePayload::SpatialTransform`.
+    /// Returns `Err` if the wire bytes don't decode or no arm is set
+    /// (consumer-side malformed-frame policy per
+    /// [`auki_datatypes::pose_stream::PoseStreamFrame`]'s contract).
+    fn from_rust_pose_stream(
+        frame: RustConsumerFrame<RustPoseStreamFrameWire>,
+    ) -> Result<Self, String> {
+        let envelope = frame
+            .payload
+            .decode()
+            .map_err(|e| format!("PoseStreamFrame decode failed: {e}"))?;
+        let payload = match envelope.payload {
+            Some(RustPoseStreamPayload::JointAngles(inner)) => {
+                FramePayload::JointAngles(PyJointAngles { inner })
+            }
+            Some(RustPoseStreamPayload::SpatialTransform(inner)) => {
+                FramePayload::SpatialTransform(PySpatialTransform { inner })
+            }
+            None => {
+                return Err(
+                    "PoseStreamFrame arrived with no oneof arm set — wire-malformed".into(),
+                );
+            }
+        };
+        Ok(Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload,
+        })
+    }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
@@ -610,6 +903,10 @@ pub(crate) enum DecisionInner {
         info: PyAcceptInfo,
         source: Py<PyAny>,
     },
+    AcceptPoseStream {
+        info: PyAcceptInfo,
+        source: Py<PyAny>,
+    },
     Decline {
         reason: PyDeclineReason,
     },
@@ -640,6 +937,22 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with a PoseStream source — sawslin Phase 1
+    /// Lane 0. The async iterator must yield
+    /// `ProducerFrame(payload=JointAngles(...))` (boosterapp's joint
+    /// stream) **or** `ProducerFrame(payload=SpatialTransform(...))`
+    /// (sentinel's per-marker pose stream from Phase 3+) — never both
+    /// on the same substream. The SDK wraps the typed payload into a
+    /// `PoseStreamFrame` `oneof` envelope on the wire (per locked
+    /// decision #7).
+    #[staticmethod]
+    #[pyo3(signature = (*, info, source))]
+    fn accept_pose_stream(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptPoseStream { info, source })),
+        }
+    }
+
     #[staticmethod]
     #[pyo3(signature = (reason, /))]
     fn decline(reason: PyDeclineReason) -> Self {
@@ -658,6 +971,7 @@ impl PyStreamDecision {
         match guard.as_ref() {
             Some(DecisionInner::AcceptJpeg { .. }) => "accept",
             Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
+            Some(DecisionInner::AcceptPoseStream { .. }) => "accept_pose_stream",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -753,6 +1067,16 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         pf.to_rust_pointcloud()
                     });
                 RustStreamDispatch::AcceptPointCloud {
+                    info: info.inner,
+                    source: source_stream,
+                }
+            }
+            Ok(DecisionInner::AcceptPoseStream { info, source }) => {
+                let source_stream =
+                    python_iter_into_source_stream::<RustPoseStreamFrameWire>(source, |pf| {
+                        pf.to_rust_pose_stream()
+                    });
+                RustStreamDispatch::AcceptPoseStream {
                     info: info.inner,
                     source: source_stream,
                 }
@@ -883,6 +1207,13 @@ type RustPointCloudFrameStream = Pin<
         dyn Stream<Item = Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>> + Send,
     >,
 >;
+type RustPoseStreamFrameStream = Pin<
+    Box<
+        dyn Stream<
+                Item = Result<RustConsumerFrame<RustPoseStreamFrameWire>, RustStreamError>,
+            > + Send,
+    >,
+>;
 
 /// Tagged union over the underlying typed frame-stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -891,6 +1222,7 @@ type RustPointCloudFrameStream = Pin<
 enum FrameStreamKind {
     Jpeg(RustJpegFrameStream),
     PointCloud(RustPointCloudFrameStream),
+    PoseStream(RustPoseStreamFrameStream),
 }
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
@@ -961,6 +1293,17 @@ impl PyStreamSubscription {
             frames: Mutex::new(Some(FrameStreamKind::PointCloud(rust_sub.frames))),
         }
     }
+
+    pub(crate) fn from_rust_pose_stream(
+        rust_sub: RustStreamSubscription<RustPoseStreamFrameWire>,
+    ) -> Self {
+        Self {
+            info: PyAcceptInfo {
+                inner: rust_sub.info,
+            },
+            frames: Mutex::new(Some(FrameStreamKind::PoseStream(rust_sub.frames))),
+        }
+    }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s frames. Each
@@ -980,6 +1323,7 @@ pub struct PyFrameIterator {
 enum FrameNext {
     Jpeg(Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>),
     PointCloud(Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>),
+    PoseStream(Result<RustConsumerFrame<RustPoseStreamFrameWire>, RustStreamError>),
     Done,
 }
 
@@ -1022,6 +1366,10 @@ impl PyFrameIterator {
                         Some(item) => FrameNext::PointCloud(item),
                         None => FrameNext::Done,
                     },
+                    FrameStreamKind::PoseStream(s) => match s.next().await {
+                        Some(item) => FrameNext::PoseStream(item),
+                        None => FrameNext::Done,
+                    },
                 }
             })
         });
@@ -1037,7 +1385,25 @@ impl PyFrameIterator {
                 *guard = Some(stream);
                 Ok(PyConsumerFrame::from_rust_pointcloud(frame))
             }
-            FrameNext::Jpeg(Err(stream_err)) | FrameNext::PointCloud(Err(stream_err)) => {
+            FrameNext::PoseStream(Ok(frame)) => {
+                // Decode the wire envelope into the typed payload
+                // (`JointAngles` / `SpatialTransform`). On a malformed
+                // frame, surface as a Protocol error and drop the
+                // stream — same shape the consumer-side reader uses
+                // for other wire-protocol violations.
+                match PyConsumerFrame::from_rust_pose_stream(frame) {
+                    Ok(py_frame) => {
+                        let mut guard =
+                            self.frames.lock().expect("FrameIterator mutex poisoned");
+                        *guard = Some(stream);
+                        Ok(py_frame)
+                    }
+                    Err(detail) => Err(StreamProtocolError::new_err(detail)),
+                }
+            }
+            FrameNext::Jpeg(Err(stream_err))
+            | FrameNext::PointCloud(Err(stream_err))
+            | FrameNext::PoseStream(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
@@ -1129,6 +1495,11 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyAcceptInfo>()?;
     cluster.add_class::<PyJpegFrame>()?;
     cluster.add_class::<PyPointCloudFrame>()?;
+    // Sawslin Phase 1 Lane 0 PoseStream payload types.
+    cluster.add_class::<PyJointAngles>()?;
+    cluster.add_class::<PyVec3>()?;
+    cluster.add_class::<PyQuat>()?;
+    cluster.add_class::<PySpatialTransform>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyProducerFrame>()?;

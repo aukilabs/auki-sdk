@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 8, 00:30 HKT, 2026
+
+**First three real schemas land** (sawslin Phase 1 Lane 0 / PR B; targets v0.0.24). Placeholder removed.
+
+- **`auki.pose`** — `SpatialTransform { Vec3 translation, Quat orientation }` plus `Vec3` and `Quat` primitives. Same shape as the (still pending) Pose Log redesign locked at the May-7 walkthrough; defining it here now means [Step 5](src/sprint.md)'s migration becomes a delete-the-duplicate pass instead of a rename.
+- **`auki.joint_state`** — `JointAngles { repeated float angles = 1; }`. Used both on the wire (boosterapp's PoseStream from sawslin Phase 1) and on disk (Sensor Log payload for `SensorBody::JointState` registry entries from PR A); same shape both places per the joint-state-is-a-Sensor-Log decision.
+- **`auki.pose_stream`** — `PoseStreamFrame { oneof payload { JointAngles joint_angles = 1; SpatialTransform spatial_transform = 2; } }`. The wire envelope flowing over the libp2p `AcceptPoseStream` substream variant (per [sawslin locked decision #7](https://www.notion.so/3585c8e9659280dd9093c703d88e1530)). Each substream stays mono-shape in practice, but the dispatch variant is the same for both — letting future "publishes both kinds" producers avoid a new variant.
+
+**Locked cross-language conformance vectors** for each of the four message types — pin specific message → wire-byte pairings via prost encoding. Any reimplementation (Python via `betterproto`, future Sentinel ports) must reproduce these bytes. A `print_locked_pose_vectors` debug helper prints the hex on demand for future schema-evolution work.
+
+**Build pipeline note:** prost encodes default-zero fields by omission in proto3, so the locked vector for `SpatialTransform{Vec3{1,2,3}, Quat{0,0,0,1}}` only encodes the `w` field of the Quat (the three zeros disappear). This is a feature, not a bug — but worth pinning in tests so it doesn't surprise a future locked-vector update. **`hex` dev-dep** added (~zero transitive cost) so the locked vectors compare as readable strings instead of byte arrays.
+
+**Sprint queue-jump rationale** in [`src/sprint.md`](src/sprint.md). The queue-jumped packages don't disturb the existing migration sequence — they're additive; the per-step "move from auki-registry into here" work for the remaining types (camera / point_cloud / audio / time_transform / libp2p stream types) is still planned exactly as it was.
+
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
 **Migration architecture decisions added to [`parking_lot.md`](parking_lot.md), Step 0 added to [`src/sprint.md`](src/sprint.md).** Two upfront decisions: (1) **Manifest encoding stays JCS-JSON, not protobuf** — JCS gives free cross-language byte-equivalence which protobuf doesn't, manifests are human/browser/ad-hoc-tool-readable, and per-recording metadata doesn't benefit from wire compactness. (2) **`build_*_log_manifest` builders + manifest schemas → new `auki-manifests` crate** — symmetric with this crate (which owns segment payload shapes); `auki-manifests` owns manifest shapes. Sequenced as **Step 0** before migration step 1, pure refactor extracting `build_sensor_log_manifest` + `build_pose_log_manifest` from `auki-registry` and `build_manifest` from `auki-time-transforms`. Naming: `auki-manifests` over `auki-logging` (idiom collision in Rust — reads as observability/tracing). Doc-only.

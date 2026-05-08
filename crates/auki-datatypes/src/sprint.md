@@ -4,7 +4,17 @@ Current work and the migration sequence to bring real schemas into this crate. S
 
 ## Now
 
-Scaffolding only — `proto/placeholder.proto` validates the `prost-build` pipeline; no real schemas defined; no downstream consumers wired up. Six log payload types currently live (as drift) in [`auki-registry`](../../auki-registry); each migration step **moves** a type from there to here, not just generates a new one in here.
+Three real schemas land via [sawslin Phase 1 Lane 0 PR B](https://www.notion.so/3585c8e9659280dd9093c703d88e1530) — `auki.pose` (`SpatialTransform` + `Vec3` + `Quat`), `auki.joint_state` (`JointAngles`), and `auki.pose_stream` (`PoseStreamFrame` `oneof` envelope). Each ships with locked cross-language conformance vectors. Placeholder is gone.
+
+The remaining migration steps below still hold — sawslin only pulled three packages forward. Five existing log payload types still live (as drift) in [`auki-registry`](../../auki-registry); each remaining migration step **moves** a type from there to here, not just generates a new one in here.
+
+## Sawslin queue-jump (landed in PR B)
+
+Sawslin Lane 0 needed the canonical pose payload now (sentinel's per-marker pose stream from Phase 3+ uses the same `SpatialTransform` shape the Pose Log redesign locked). Rather than ship a temporary `TransformFrame` and rename it to `SpatialTransform` later, PR B pulls Step 5's pose schema forward and adds two sibling schemas:
+
+- **`auki.pose`** (originally Step 5) — `SpatialTransform { Vec3 translation, Quat orientation }` + `Vec3` + `Quat`. Defined here as protobuf with locked conformance vectors. **Additive only:** the existing [`auki-registry::TransformSample`](../../auki-registry) and `PoseLogEntry` wrapper are still there, untouched. Step 5's full migration (move out of `auki-registry`, drop the `PoseLogEntry` wrapper, rewrite `build_pose_log_manifest` for the new `(from, to)`-keyed identity, update `auki-session::poselog_path`, update `auki-logs` segment writer/reader) stays as planned but becomes a **delete-the-duplicate** pass since `SpatialTransform` already exists here.
+- **`auki.joint_state`** (new — not previously in the migration sequence) — `JointAngles { repeated float angles = 1; }`. Used both on the wire (boosterapp's PoseStream from sawslin Phase 1) and on disk (Sensor Log payload for `SensorBody::JointState` registry entries from PR A). Same shape both places per [sawslin's joint-state-is-a-Sensor-Log decision](https://www.notion.so/3585c8e9659280dd9093c703d88e1530#L12).
+- **`auki.pose_stream`** (new) — `PoseStreamFrame { oneof payload { JointAngles joint_angles; SpatialTransform spatial_transform; } }`. The wire envelope flowing over sawslin's `AcceptPoseStream` substream, per [locked decision #7](https://www.notion.so/3585c8e9659280dd9093c703d88e1530#L7) ("same wire variant carries both shapes via the typed payload"). [`auki-network`](../../auki-network) wraps prost-encoded bytes inside the existing length-prefixed JSON framing via a `PoseStreamFrameWire` adapter — same trick `PointCloudFrame` uses today; the adapter goes away when migration step 2 lifts the framing layer to native prost binary across all `T`s.
 
 ## Migration sequence
 
@@ -44,11 +54,10 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - Locked vector.
 
 5. **`auki.pose` — `SpatialTransform`** (was `TransformSample`; `PoseLogEntry` wrapper goes away).
-   - Define `proto/pose.proto`: `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }` plus `Vec3` and `Quat`. Flat — no `PoseLogEntry` wrapper. From/to live in the manifest, not the entry. Synthesis decided 2026-05-07 — see the corresponding Propagate task in the [root parking lot](../../../parking_lot.md).
-   - **Move** `TransformSample` (renamed `SpatialTransform`) out of [`auki-registry`](../../auki-registry); drop `PoseLogEntry`. Rewrite `build_pose_log_manifest` in `auki-registry` (or move it) for the new (from, to)-keyed identity.
-   - Update [`auki-session`](../../auki-session) `poselog_path` signature: `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
-   - Update [`auki-logs`](../../auki-logs) segment writer/reader.
-   - Locked vector.
+   - **Schema landed via sawslin PR B** (queue-jumped — see "Sawslin queue-jump" above). `proto/pose.proto` exists with `SpatialTransform { Vec3 translation = 1; Quat orientation = 2; }`, `Vec3`, `Quat`, and locked conformance vectors. Flat — no `PoseLogEntry` wrapper.
+   - **Still pending:** **move** `TransformSample` (now duplicate) and `PoseLogEntry` (gone) out of [`auki-registry`](../../auki-registry); rewrite `build_pose_log_manifest` in `auki-registry` (or move it) for the new (from, to)-keyed identity.
+   - **Still pending:** update [`auki-session`](../../auki-session) `poselog_path` signature: `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`.
+   - **Still pending:** update [`auki-logs`](../../auki-logs) segment writer/reader.
 
 6. **`auki.time_transform` — `TimeTransformEntry`** (was misnamed `TimeTransformLogEntry` in earlier sprint drafts; correct type name is `TimeTransformEntry`).
    - Define `proto/time_transform.proto`. Resolve the slop points in [`parking_lot.md`](../parking_lot.md): move `source` to manifest; drop `discontinuous` (computed at read time); collapse or relocate `TimeTransformSource` enum.
@@ -56,7 +65,7 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - Update its sampler integration test.
    - Locked vector.
 
-7. **Remove placeholder.** Once at least one real `.proto` exists and is consumed downstream, delete `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, and the smoke test.
+7. ~~**Remove placeholder.**~~ **Done in sawslin PR B** alongside the queue-jumped pose / joint_state / pose_stream packages.
 
 8. **Python codegen.** Lands in [`auki-session-py`](../../auki-session-py) when its first implementation starts. `betterproto` generator over the same `.proto` files; locked-vector cross-language test that the Python encoder produces byte-identical bytes to the Rust prost encoder for the same input.
 

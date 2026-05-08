@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 8, 00:30 HKT, 2026
+
+**`AcceptPoseStream` dispatch variant + `PoseStreamFrameWire` adapter** landed (sawslin Phase 1 Lane 0 / PR B; targets v0.0.24). One new dispatch arm (`StreamDispatch::AcceptPoseStream { info, source: SourceStream<PoseStreamFrameWire> }`) carries both boosterapp's joint-angle stream and sentinel's per-marker pose stream — per [locked decision #7](https://www.notion.so/3585c8e9659280dd9093c703d88e1530), the `oneof` envelope inside [`auki_datatypes::pose_stream::PoseStreamFrame`](../auki-datatypes) does the per-frame payload kind dispatch, not the Rust enum.
+
+`PoseStreamFrameWire` is a transitional adapter — the prost-encoded `PoseStreamFrame` bytes ride inside the existing length-prefixed JSON framing via the same base64 `serde` adapter `PointCloudFrame` already uses. This keeps PR B narrow (no framing-layer migration) while getting sawslin Phase 1 working today. When [`auki-datatypes` migration step 2](../auki-datatypes/src/sprint.md) lifts the framing to native prost binary across all variants (JpegFrame + PointCloudFrame + this), `PoseStreamFrameWire` goes away and consumers ride `PoseStreamFrame` directly.
+
+`pump_typed::<PoseStreamFrameWire>` monomorphizes one more time; e2e test (`producer_accepts_and_streams_pose_frames`) exercises a substream that mixes `JointAngles` and `SpatialTransform` arms within the same `oneof` envelope (real producers stay mono-shape per substream, but the wire-level coverage is broader for round-trip safety).
+
+`auki-datatypes` and `prost` added under the existing `swarm` feature (M0 / WASM stay free of protobuf runtime).
+
 ### arshak's claude · May 7, 22:30 HKT, 2026
 
 `cluster_name` resolver helper landed (sawslin Phase 1 Lane 0 / PR A; targets v0.0.24). New always-available module [`cluster_name`](src/cluster_name.rs) with one public function — `resolve(flag: Option<&str>) -> Result<String, ClusterNameError>` — implementing sawslin Decision #1's strict precedence: flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → `ClusterNameError::Unset`. Empty-string env values treated as unset. Pure stdlib, no feature gate, no `thiserror` (Display + std::error::Error implemented manually since the swarm-feature-gated thiserror dep doesn't reach this surface). Tests cover the four-corner cases (flag-wins, env-fallback, both-unset, empty-env-as-unset) plus the explicit-empty-flag pass-through.

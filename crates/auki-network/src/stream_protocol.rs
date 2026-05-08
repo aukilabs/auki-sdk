@@ -282,6 +282,61 @@ pub struct PointCloudFrame {
     pub bytes: Vec<u8>,
 }
 
+/// PoseStream payload for `T = PoseStreamFrameWire` substreams (sawslin
+/// Phase 1 Lane 0 / locked decision #7). Wraps a prost-encoded
+/// [`auki_datatypes::pose_stream::PoseStreamFrame`] (`oneof` of
+/// `JointAngles` / `SpatialTransform`) as opaque bytes inside the
+/// existing length-prefixed JSON framing — same trick `PointCloudFrame`
+/// uses today. Encoding is protobuf via prost; the JSON envelope just
+/// carries the bytes.
+///
+/// **Why an opaque-bytes wrapper instead of riding the prost type
+/// directly?** The wire framing today (length-prefix + JSON of
+/// [`StreamMessage<T>`]) requires `T: Serialize + DeserializeOwned`.
+/// Adding Serde derives to `auki-datatypes`'s prost-generated types
+/// would couple the cross-language schema crate to the SDK's specific
+/// JSON framing. The opaque-bytes wrapper keeps `auki-datatypes` pure
+/// protobuf and gives sawslin Phase 1 a working substream today; when
+/// the [`auki-datatypes` migration step 2](../../auki-datatypes/src/sprint.md#L2)
+/// lifts the framing to native prost binary across all variants
+/// (JpegFrame + PointCloudFrame + this), this wrapper goes away and
+/// consumers ride [`PoseStreamFrame`](auki_datatypes::pose_stream::PoseStreamFrame)
+/// directly.
+///
+/// Helper methods [`encode`](Self::encode) / [`decode`](Self::decode)
+/// keep the prost ↔ wrapper boundary one line for callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseStreamFrameWire {
+    /// Prost-encoded
+    /// [`auki_datatypes::pose_stream::PoseStreamFrame`] bytes.
+    /// Base64-encoded inside the JSON envelope via the same adapter
+    /// `PointCloudFrame` uses — see [`base64_bytes`].
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+impl PoseStreamFrameWire {
+    /// Wrap a typed [`auki_datatypes::pose_stream::PoseStreamFrame`]
+    /// for transmission on the wire. Infallible — prost encoding only
+    /// fails on `Vec` allocation and that path panics anyway.
+    pub fn encode(frame: &auki_datatypes::pose_stream::PoseStreamFrame) -> Self {
+        use prost::Message;
+        Self {
+            bytes: frame.encode_to_vec(),
+        }
+    }
+
+    /// Decode the wire bytes back into the typed frame. Returns
+    /// [`prost::DecodeError`] on a malformed payload — typically
+    /// indicates a version-incompatible producer or wire corruption.
+    pub fn decode(
+        &self,
+    ) -> Result<auki_datatypes::pose_stream::PoseStreamFrame, prost::DecodeError> {
+        use prost::Message;
+        auki_datatypes::pose_stream::PoseStreamFrame::decode(&*self.bytes)
+    }
+}
+
 /// Serde adapter: serialize `Vec<u8>` as a base64-string field inside
 /// JSON, parse it back on deserialize. Used by [`PointCloudFrame::bytes`]
 /// to dodge `serde_json`'s array-of-integers encoding for `Vec<u8>`

@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+// Pose primitives — `SpatialTransform`, `Vec3`, `Quat`. Used both
+// on-disk (Pose Log entry payload, per the [Pose Log Notion doc]) and
+// on-wire (sentinel's per-marker pose substream in sawslin Phase 3+,
+// via the `auki.pose_stream.PoseStreamFrame` oneof envelope).
+//
+// Both consumers share this exact shape — the on-disk and on-wire
+// representations are byte-identical at the protobuf layer; the
+// difference lives in the framing around it (auki-logs segment headers
+// vs auki-network length-prefixed envelope).
+//
+// Reserved field numbers (forever; never re-use, even after removal):
+//   Vec3:               1, 2, 3
+//   Quat:               1, 2, 3, 4
+//   SpatialTransform:   1, 2
+
+package auki.pose;
+
+// Right-handed cartesian translation in the frame's units (typically
+// meters; the unit is declared at the Frame Registry layer, not here).
+// Component order is (x, y, z); this mirrors the `[f64; 3]` layout the
+// pre-migration Rust `TransformSample.translation` used. f32 (not f64)
+// because per-marker pose precision at sawslin scales (sub-meter) is
+// ~10 microns at f32 resolution — comfortably below sentinel's PnP
+// noise floor. Matches sawslin Lane 0's "raw float" wire-precision
+// decision.
+message Vec3 {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+// Unit quaternion in (x, y, z, w) order — Hamilton convention,
+// matches ROS `geometry_msgs/Quaternion`. Same f32 rationale as
+// `Vec3`. SDK does not normalize; producers are responsible for
+// emitting unit quaternions.
+message Quat {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+  float w = 4;
+}
+
+// One rigid 6-DoF spatial transform. Replaces the pre-migration
+// `auki_registry::TransformSample` (which carried `parent_frame` /
+// `child_frame` strings inline; under the May-7 Pose Log redesign the
+// frame pair is the *log identity* — `<session>/poselogs/<from-id>__<to-id>/` —
+// not part of every entry).
+//
+// Used in two places:
+//   1. As the segment payload of a Pose Log (sawslin Phase 3+:
+//      sentinel writes per-marker poses to disk).
+//   2. As one arm of the `auki.pose_stream.PoseStreamFrame` oneof on
+//      the `/auki/stream/1.0.0` libp2p substream (sawslin Phase 3+:
+//      sentinel publishes per-marker poses live).
+//
+// Per-frame timestamps live in the framing layer (`auki-logs`'s
+// segment header / `auki-network`'s `StreamMessage<T>`), not here.
+// The Frame Registry entries for the from/to frames live in the
+// log's manifest, not on every entry.
+message SpatialTransform {
+  Vec3 translation = 1;
+  Quat orientation = 2;
+}

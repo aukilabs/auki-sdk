@@ -14,9 +14,13 @@ default = []
 # `base64` is on the swarm path because Dagaz's `PointCloudFrame.bytes`
 # uses a `#[serde(with = "base64_bytes")]` adapter to dodge serde_json's
 # array-of-integers encoding (~4× wire overhead for `Vec<u8>` payloads).
+# Sawslin Lane 0's `PoseStreamFrameWire` reuses the same adapter for
+# its prost-encoded payload. `auki-datatypes` rides on the swarm path
+# because `PoseStreamFrameWire::encode/decode` need the prost-generated
+# types; it's a tiny crate (one prost runtime dep, generated code only).
 # Tiny dep with no transitive cost; rides on the swarm feature so M0
 # (WASM) stays untouched.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:base64"]
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:base64", "dep:auki-datatypes", "dep:prost"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -62,6 +66,13 @@ mac_address = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 auki-jcs = { path = "../auki-jcs", optional = true }
+
+# Sawslin Lane 0's `PoseStreamFrameWire` wraps prost-encoded
+# `auki_datatypes::pose_stream::PoseStreamFrame` bytes for the libp2p
+# substream. Optional via the swarm feature so the M0 / WASM build
+# stays free of protobuf runtime.
+auki-datatypes = { path = "../auki-datatypes", optional = true }
+prost = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

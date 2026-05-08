@@ -35,6 +35,11 @@ extension-module = ["pyo3/extension-module"]
 # with our own lib name `auki_network` (which is also the Python module
 # name the `#[pymodule]` macro generates the entry point for).
 auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
+# Sawslin Phase 1 Lane 0: PyO3 wrappers for `JointAngles`,
+# `Vec3`/`Quat`/`SpatialTransform`. The wrapper boundary translates
+# typed Python payloads to/from prost messages; encode/decode of the
+# wire envelope happens through `auki_network::stream_protocol::PoseStreamFrameWire`.
+auki-datatypes = { path = "../auki-datatypes" }
 # `auki-identity` for `Wallet::from_seed` — the Python wrapper takes a
 # 32-byte seed (the parent wallet's secret) on `register` / `deregister`
 # and reconstructs the Wallet internally to call into Rust's

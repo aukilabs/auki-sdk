@@ -6,6 +6,27 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 8, 00:30 HKT, 2026
+
+**PoseStream Python surface** landed (sawslin Phase 1 Lane 0 / PR B; targets v0.0.24).
+
+New Python types under `auki_network.cluster`:
+
+- `JointAngles(angles=[...])` — boosterapp's per-frame payload (joint angles in radians, indexed to match the producer's `SensorRegistryEntry.joint_names`).
+- `Vec3(x, y, z)` / `Quat(x, y, z, w)` — primitives for `SpatialTransform`.
+- `SpatialTransform(translation=Vec3(...), orientation=Quat(...))` — sentinel's per-marker pose payload from sawslin Phase 3+.
+
+New methods:
+
+- `StreamDecision.accept_pose_stream(info=..., source=...)` — producer-side factory. The async iterator yields `ProducerFrame(payload=JointAngles(...))` **or** `ProducerFrame(payload=SpatialTransform(...))`; the SDK wraps each frame into a `PoseStreamFrame` `oneof` envelope on the wire (per [locked decision #7](https://www.notion.so/3585c8e9659280dd9093c703d88e1530)).
+- `runtime.open_pose_stream(peer_id, sensor_id) -> StreamSubscription` — consumer-side. Returned subscription's `.frames()` iterator yields `ConsumerFrame` whose `.payload` is the typed `JointAngles` / `SpatialTransform` (the wire envelope is decoded inside the SDK; Python callers switch on type with `isinstance`).
+
+The `oneof` envelope (`PoseStreamFrame`) is intentionally **not exposed to Python** — the producer yields the typed payload directly, the consumer receives it directly, the wire wrapper lives at the Rust boundary. Cleaner UX than forcing the caller to construct envelopes.
+
+`FramePayload` enum gained `JointAngles` and `SpatialTransform` arms; producer-side type checking now errors with a clearer message on cross-substream type leaks (e.g. yielding a `JpegFrame` from an `accept_pose_stream` source).
+
+`auki-datatypes` added as a dep so the wrapper layer can translate between Python typed payloads and prost-generated types. `auki_network.cluster` documented surface test pinned to include the four new types.
+
 ### arshak's claude · May 7, 22:30 HKT, 2026
 
 `auki_network.cluster.resolve_cluster_name(flag=None)` exposed (sawslin Phase 1 Lane 0 / PR A; targets v0.0.24). Thin PyO3 wrapper over `auki_network::cluster_name::resolve` — strict precedence (flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → `ValueError`). Daemons call this once at startup to resolve the cluster they should join.

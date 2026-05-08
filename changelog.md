@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### arshak's claude · May 8, 00:30 HKT, 2026
+
+[Sawslin](https://www.notion.so/3585c8e9659280dd9093c703d88e1530) Phase 1 Lane 0 / **PR B** (targets v0.0.24). Pulls forward the `auki-datatypes` migration so sawslin's PoseStream payloads land as canonical protobuf types from day one rather than as temporary hand-written Rust structs that would need a rename later. Three real schemas defined in [`auki-datatypes`](crates/auki-datatypes) with locked cross-language conformance vectors:
+
+- **`auki.pose`** — `SpatialTransform { Vec3 translation, Quat orientation }` plus `Vec3` and `Quat`. Same canonical 6-DoF shape the May-7 Pose Log redesign locked; the (still pending) [Step 5 migration](crates/auki-datatypes/src/sprint.md) becomes a delete-the-duplicate pass instead of a rename.
+- **`auki.joint_state`** — `JointAngles { repeated float angles = 1; }`. Same shape on the wire (boosterapp PoseStream from Phase 1) and on disk (Sensor Log payload for `SensorBody::JointState` from PR A).
+- **`auki.pose_stream`** — `PoseStreamFrame { oneof payload { JointAngles joint_angles; SpatialTransform spatial_transform; } }`. The wire envelope flowing over the new `AcceptPoseStream` dispatch variant per [locked decision #7](https://www.notion.so/3585c8e9659280dd9093c703d88e1530).
+
+[`auki-network`](crates/auki-network) gains the `StreamDispatch::AcceptPoseStream` variant + a transitional `PoseStreamFrameWire` adapter (prost bytes wrapped in the existing length-prefixed JSON framing — same trick `PointCloudFrame` uses today; goes away when [Step 2](crates/auki-datatypes/src/sprint.md) lifts the framing to native prost binary across all `T`s). E2e test exercises both oneof arms over a real swarm round-trip.
+
+[`auki-network-py`](crates/auki-network-py) gains `JointAngles` / `Vec3` / `Quat` / `SpatialTransform` Python types, plus `StreamDecision.accept_pose_stream(...)` and `runtime.open_pose_stream(...)`. The `oneof` wire envelope is hidden from Python — producers yield typed payloads directly, consumers receive typed payloads directly.
+
+Placeholder schema removed from `auki-datatypes`. Sprint plan updated to reflect the queue-jump.
+
 ### arshak's claude · May 7, 22:30 HKT, 2026
 
 [Sawslin](https://www.notion.so/3585c8e9659280dd9093c703d88e1530) Phase 1 Lane 0 / **PR A** (clean half; targets v0.0.24 — v0.0.23 is spec/scaffold-only per Nils' recent rewrite). `auki-network`: new [`cluster_name`](crates/auki-network/src/cluster_name.rs) module — `resolve(flag) -> Result<String, ClusterNameError>` implements sawslin Decision #1's strict precedence (flag wins, `AUKI_CLUSTER_NAME` env is fallback, neither set → fail-fast). `auki-registry`: `SensorBody::JointState { joint_names, frame_rate_hz }` variant + locked XXH3-128 vector (`b0cffe39e34d0f326112c21c071b2c1a`) + `JointState::validate` (rejects empty / duplicate joint names with new `Error::InvalidJointNames`); plus `FrameRegistryEntry::opencv_pnp` preset (locked decision #2; numerically same as `ros_optical` but semantically distinct — sentinel publishes ArUco poses tagged `opencv_pnp` from Phase 3+, park reads the registry to compute one conversion matrix to its render frame). `auki-ros-adapter`: `JointStateMsg` mirror + `build_joint_state_registry_entry` helper. `auki-network-py`: `auki_network.cluster.resolve_cluster_name(flag=None)` PyO3 wrapper. PoseStream wire format + `JointAngles` / `SpatialTransform` payloads + single `AcceptPoseStream` dispatch variant (per locked decision #7 — same variant carries both shapes via the typed source) land in **PR B**, defined as protobuf messages in [`auki-datatypes`](crates/auki-datatypes) directly so the migration sweep doesn't introduce a `TransformFrame → SpatialTransform` rename later.

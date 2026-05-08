@@ -43,8 +43,9 @@
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::stream_protocol::{
-    AcceptInfo, DeclineReason, EndReason, JpegFrame, PointCloudFrame, STREAM_PROTOCOL,
-    StreamMessage, StreamProtocolError, StreamRequest, read_message, write_message,
+    AcceptInfo, DeclineReason, EndReason, JpegFrame, PointCloudFrame, PoseStreamFrameWire,
+    STREAM_PROTOCOL, StreamMessage, StreamProtocolError, StreamRequest, read_message,
+    write_message,
 };
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
@@ -109,6 +110,21 @@ pub enum StreamDispatch {
     AcceptPointCloud {
         info: AcceptInfo,
         source: SourceStream<PointCloudFrame>,
+    },
+    /// Accept the request with a PoseStream source-Stream — sawslin
+    /// Phase 1 Lane 0 / locked decision #7. Each
+    /// [`PoseStreamFrameWire`] wraps a prost-encoded
+    /// [`auki_datatypes::pose_stream::PoseStreamFrame`] (`oneof` of
+    /// `JointAngles` / `SpatialTransform`); a single dispatch variant
+    /// covers boosterapp's joint-angle stream (Phase 1) and
+    /// sentinel's per-marker pose stream (Phase 3+) at the protocol
+    /// layer. Each substream remains mono-shape in practice — the
+    /// `(sensor_id, sensor_hash)` in `info` transitively names which
+    /// `oneof` arm the producer will be sending — but the dispatch
+    /// variant is the same for both.
+    AcceptPoseStream {
+        info: AcceptInfo,
+        source: SourceStream<PoseStreamFrameWire>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -388,6 +404,9 @@ pub(crate) async fn handle_inbound_substream(
         }
         StreamDispatch::AcceptPointCloud { info, source } => {
             pump_typed::<PointCloudFrame>(substream, info, source, shutdown_rx).await;
+        }
+        StreamDispatch::AcceptPoseStream { info, source } => {
+            pump_typed::<PoseStreamFrameWire>(substream, info, source, shutdown_rx).await;
         }
     }
 }
@@ -721,6 +740,67 @@ mod tests {
                     sensor_hash: "pc-sensor-hash-3".into(),
                     clock_id: "pc/test/session-monotonic".into(),
                     clock_hash: "pc-clock-hash-3".into(),
+                },
+                source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    /// PoseStream test fixture (sawslin Phase 1 Lane 0). Yields three
+    /// `PoseStreamFrame`s — two `JointAngles` arms then one
+    /// `SpatialTransform` arm — to exercise the oneof envelope on the
+    /// wire. Real producers stay mono-shape per substream; this
+    /// fixture mixes them for round-trip coverage.
+    fn pose_stream_provider_yielding_three_frames() -> StreamProvider {
+        use auki_datatypes::joint_state::JointAngles;
+        use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
+        use auki_datatypes::pose_stream::{PoseStreamFrame, pose_stream_frame::Payload};
+
+        Arc::new(|_req| {
+            let f0 = PoseStreamFrame {
+                payload: Some(Payload::JointAngles(JointAngles {
+                    angles: vec![0.0, 0.5, -0.5],
+                })),
+            };
+            let f1 = PoseStreamFrame {
+                payload: Some(Payload::JointAngles(JointAngles {
+                    angles: vec![0.1, 0.6, -0.4],
+                })),
+            };
+            let f2 = PoseStreamFrame {
+                payload: Some(Payload::SpatialTransform(SpatialTransform {
+                    translation: Some(Vec3 {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    }),
+                    orientation: Some(Quat {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    }),
+                })),
+            };
+            let frames = vec![
+                Ok(ProducerFrame {
+                    timestamp_ns: 100,
+                    payload: PoseStreamFrameWire::encode(&f0),
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 200,
+                    payload: PoseStreamFrameWire::encode(&f1),
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 300,
+                    payload: PoseStreamFrameWire::encode(&f2),
+                }),
+            ];
+            StreamDispatch::AcceptPoseStream {
+                info: AcceptInfo {
+                    sensor_hash: "pose-sensor-hash-1".into(),
+                    clock_id: "pose/test/session-monotonic".into(),
+                    clock_hash: "pose-clock-hash-1".into(),
                 },
                 source: Box::pin(stream::iter(frames)),
             }
@@ -1273,6 +1353,118 @@ mod tests {
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.timestamp_ns, 30_000);
         assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
+
+        let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
+        match end {
+            StreamError::EndOfStream { reason: EndReason::SourceEnded } => {}
+            other => panic!("expected SourceEnded, got {other:?}"),
+        }
+        assert!(frames.next().await.is_none());
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// Sawslin Phase 1 Lane 0 e2e — exercises the
+    /// `AcceptPoseStream` dispatch arm + `PoseStreamFrameWire`
+    /// (prost-encoded `PoseStreamFrame` envelope) round-trip on the
+    /// wire. Producer yields a mix of `JointAngles` and
+    /// `SpatialTransform` oneof arms; consumer decodes back and
+    /// verifies each arm.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_pose_frames() {
+        use auki_datatypes::pose_stream::pose_stream_frame::Payload;
+
+        let id_p = PeerIdentity::from_seed(&[131u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[132u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-pose-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-pose-consumer/0").await;
+
+        let doc = ClusterDoc {
+            version: 1,
+            cluster_name: "test-posestream-happy-path".into(),
+            peers: vec![
+                cluster_peer(id_p.peer_id(), addr_p),
+                cluster_peer(id_c.peer_id(), addr_c),
+            ],
+        };
+
+        let producer = ClusterRuntime::from_swarm(
+            swarm_p,
+            doc.clone(),
+            fixture_participant_provider(id_p.peer_id(), "producer"),
+            pose_stream_provider_yielding_three_frames(),
+        )
+        .unwrap();
+        let consumer = ClusterRuntime::from_swarm(
+            swarm_c,
+            doc,
+            fixture_participant_provider(id_c.peer_id(), "consumer"),
+            decline_all_streams(),
+        )
+        .unwrap();
+
+        let connected = poll_until(
+            || consumer.peers().iter().any(|p| p.peer_id == id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected, "consumer did not see producer in cluster within 15s");
+
+        let sub: StreamSubscription<PoseStreamFrameWire> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "test/pose".into(),
+                },
+            )
+            .await
+            .expect("open_stream<PoseStreamFrameWire> should succeed");
+
+        assert_eq!(sub.info.sensor_hash, "pose-sensor-hash-1");
+        assert_eq!(sub.info.clock_id, "pose/test/session-monotonic");
+        assert_eq!(sub.info.clock_hash, "pose-clock-hash-1");
+
+        let mut frames = sub.frames;
+
+        // Frame 0 — JointAngles arm.
+        let f0 = frames.next().await.unwrap().expect("frame 0 ok");
+        assert_eq!(f0.seq, 0);
+        assert_eq!(f0.timestamp_ns, 100);
+        let decoded = f0.payload.decode().expect("frame 0 decodes");
+        match decoded.payload {
+            Some(Payload::JointAngles(j)) => assert_eq!(j.angles, vec![0.0, 0.5, -0.5]),
+            other => panic!("expected JointAngles arm, got {other:?}"),
+        }
+
+        // Frame 1 — JointAngles arm again.
+        let f1 = frames.next().await.unwrap().expect("frame 1 ok");
+        assert_eq!(f1.seq, 1);
+        assert_eq!(f1.timestamp_ns, 200);
+        let decoded = f1.payload.decode().expect("frame 1 decodes");
+        match decoded.payload {
+            Some(Payload::JointAngles(j)) => assert_eq!(j.angles, vec![0.1, 0.6, -0.4]),
+            other => panic!("expected JointAngles arm, got {other:?}"),
+        }
+
+        // Frame 2 — SpatialTransform arm. Same dispatch variant; oneof
+        // arm flips inside the wire envelope.
+        let f2 = frames.next().await.unwrap().expect("frame 2 ok");
+        assert_eq!(f2.seq, 2);
+        assert_eq!(f2.timestamp_ns, 300);
+        let decoded = f2.payload.decode().expect("frame 2 decodes");
+        match decoded.payload {
+            Some(Payload::SpatialTransform(t)) => {
+                let translation = t.translation.expect("translation set");
+                assert_eq!(translation.x, 1.0);
+                assert_eq!(translation.y, 2.0);
+                assert_eq!(translation.z, 3.0);
+                let orientation = t.orientation.expect("orientation set");
+                assert_eq!(orientation.w, 1.0);
+            }
+            other => panic!("expected SpatialTransform arm, got {other:?}"),
+        }
 
         let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
         match end {

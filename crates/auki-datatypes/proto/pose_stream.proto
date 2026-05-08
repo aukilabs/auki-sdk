@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// PoseStream wire envelope — the typed payload that flows over a
+// `/auki/stream/1.0.0` libp2p substream tagged with the
+// `AcceptPoseStream { info, source: SourceStream<PoseStreamFrame> }`
+// variant of `auki_network::stream_runtime::StreamDispatch`.
+//
+// Per [sawslin locked decision #7], one `StreamDispatch` variant
+// carries both the boosterapp shape (`JointAngles`) and the sentinel
+// shape (`SpatialTransform`); a `oneof` lets a single concrete
+// `T = PoseStreamFrame` cover both at the dispatch layer while
+// downstream consumers match on which arm is set per frame.
+//
+// Each substream remains mono-shape in practice — boosterapp publishes
+// `joint_angles` exclusively, sentinel publishes `spatial_transform`
+// exclusively — but the wire schema is the same envelope either way,
+// so an emerging "publishes both kinds" producer (currently
+// hypothetical) doesn't need a new dispatch variant. The
+// `(sensor_id, sensor_hash)` in the substream's `AcceptInfo`
+// transitively names which arm the producer will be sending, via the
+// referenced `SensorRegistryEntry.body` variant
+// (`SensorBody::JointState` ⇒ `joint_angles`; sentinel's
+// pose-marker sensor body ⇒ `spatial_transform`).
+//
+// Reserved field numbers (forever):
+//   PoseStreamFrame.payload oneof: 1, 2
+
+package auki.pose_stream;
+
+import "joint_state.proto";
+import "pose.proto";
+
+message PoseStreamFrame {
+  // One frame's worth of pose data. Exactly one arm is set per
+  // frame; an empty oneof (neither arm set) is treated as a
+  // malformed frame by the consumer. New payload kinds are added
+  // by appending to the oneof under new field numbers.
+  oneof payload {
+    auki.joint_state.JointAngles joint_angles = 1;
+    auki.pose.SpatialTransform spatial_transform = 2;
+  }
+}

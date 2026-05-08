@@ -12,6 +12,10 @@ description = "Single source of truth for the Auki SDK's shared cross-language d
 # decode, well-known types, etc.
 prost = "0.13"
 
+[dev-dependencies]
+# Used by locked-vector tests to compare wire bytes as readable hex.
+hex = "0.4"
+
 [build-dependencies]
 # Compiles .proto → Rust at build time. Output lands in OUT_DIR and is
 # included from src/lib.rs.

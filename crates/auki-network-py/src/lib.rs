@@ -516,6 +516,52 @@ impl ClusterRuntime {
     }
 
     /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
+    /// for the named sensor with `T = PoseStreamFrameWire` (sawslin
+    /// Phase 1 Lane 0). The producer must accept with
+    /// [`PyStreamDecision.accept_pose_stream(...)`].
+    ///
+    /// Same blocking shape as [`open_stream`][ClusterRuntime::open_stream]:
+    /// returns once the producer has Accepted, Declined, or the 30s
+    /// timeout fires. Returns a [`StreamSubscription`] whose frames
+    /// carry typed pose payloads — each frame's `.payload` is either a
+    /// `JointAngles` (boosterapp) or a `SpatialTransform` (sentinel
+    /// from Phase 3+); the SDK decodes the wire-side `PoseStreamFrame`
+    /// `oneof` envelope on the consumer's side. Same exception
+    /// surface as `open_stream`.
+    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
+    fn open_pose_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: String,
+    ) -> PyResult<PyStreamSubscription> {
+        let peer = PeerId::from_str(peer_id).map_err(|e| {
+            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
+        })?;
+
+        let request = RustStreamRequest { sensor_id };
+        let result = py.allow_threads(|| {
+            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
+            let rt = inner.as_ref().ok_or(())?;
+            let tokio_rt = cluster_tokio_runtime();
+            Ok(tokio_rt.block_on(async {
+                rt.open_stream::<auki_network_rs::stream_protocol::PoseStreamFrameWire>(
+                    peer, request,
+                )
+                .await
+            }))
+        });
+
+        let rust_sub = match result {
+            Err(()) => return Err(shutdown_error()),
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
+        };
+
+        Ok(PyStreamSubscription::from_rust_pose_stream(rust_sub))
+    }
+
+    /// Open an outbound `/auki/stream/1.0.0` subscription on `peer_id`
     /// for the named sensor with `T = PointCloudFrame` (Dagaz Batch 2).
     /// The producer must accept with
     /// [`PyStreamDecision.accept_pointcloud(...)`].
@@ -925,11 +971,16 @@ mod tests {
             assert!(cluster.getattr("resolve_cluster_name").is_ok());
             assert!(cluster.getattr("spawn").is_ok());
             // Grimsby Stream<T> surface (deliverable #4 / v0.0.17) +
-            // Dagaz Batch 2 PointCloudFrame (v0.0.21).
+            // Dagaz Batch 2 PointCloudFrame (v0.0.21) + sawslin Phase 1
+            // Lane 0 PoseStream payloads (targets v0.0.24).
             assert!(cluster.getattr("StreamRequest").is_ok());
             assert!(cluster.getattr("AcceptInfo").is_ok());
             assert!(cluster.getattr("JpegFrame").is_ok());
             assert!(cluster.getattr("PointCloudFrame").is_ok());
+            assert!(cluster.getattr("JointAngles").is_ok());
+            assert!(cluster.getattr("Vec3").is_ok());
+            assert!(cluster.getattr("Quat").is_ok());
+            assert!(cluster.getattr("SpatialTransform").is_ok());
             assert!(cluster.getattr("DeclineReason").is_ok());
             assert!(cluster.getattr("EndReason").is_ok());
             assert!(cluster.getattr("ProducerFrame").is_ok());

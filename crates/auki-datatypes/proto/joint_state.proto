@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// Joint state — articulated-joint angle vector. Used both on-disk
+// (Sensor Log payload for `SensorBody::JointState` registry entries —
+// see [auki-registry]) and on-wire (boosterapp's PoseStream substream
+// in sawslin Phase 1, via the `auki.pose_stream.PoseStreamFrame`
+// oneof envelope).
+//
+// The disk and wire shapes are byte-identical at the protobuf layer.
+// Every payload references the same `SensorRegistryEntry.joint_names`
+// list (resolved via the manifest's `(sensor_id, sensor_hash)`); the
+// `angles` vector indexes into it by position, not by name — keeping
+// the per-frame payload small (the K1's ~20 joints become 80 bytes).
+//
+// Velocity / effort / torque deliberately deferred. Boosterapp's
+// `/joint_states` ROS topic carries them, but sawslin Phase 1 only
+// needs positions; adding them later is additive proto fields under
+// new field numbers.
+//
+// Reserved field numbers (forever):
+//   JointAngles: 1
+
+package auki.joint_state;
+
+// Joint angles in radians, ordered to match the producer's
+// `SensorRegistryEntry.joint_names` (resolved via the manifest's
+// `(sensor_id, sensor_hash)`). f32 not f64 — radians at the K1's
+// resolution (~0.001 rad effective precision per the joint
+// encoders) are well within f32's range, and the K1 ships ~20
+// joints at ~475 Hz native, so the per-frame size matters.
+//
+// The number of `angles` MUST equal `joint_names.len()` from the
+// referenced registry entry. Producers are responsible for
+// preserving that invariant; consumers may treat a length mismatch
+// as a malformed frame.
+message JointAngles {
+  repeated float angles = 1;
+}

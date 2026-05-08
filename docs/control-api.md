@@ -48,7 +48,7 @@ Session-scoped identity. Returns the daemon's identity for the current session �
 | --- | --- | --- |
 | `app` | string | Application identifier (`boosterapp`, `sentinel`, `park`). MUST match the `app` mDNS TXT record when the daemon also advertises via mDNS. |
 | `name` | string | Operator-friendly label (`k1-walker`, `webcam-front`). MUST match the `name` mDNS TXT record when the daemon also advertises via mDNS. |
-| `session_id` | string | UUIDv4 minted at session boot. A session begins on app boot and ends when the daemon exits — see [`auki-session`](../crates/auki-session/README.md). The session-scoped logs in [`GET /api/sensor_logs`](#get-apisensor_logs) carry the same value as their `session_id` field. |
+| `session_id` | string | UUIDv4 minted at session boot. A session begins on app boot and ends when the daemon exits — see [`auki-layout`](../crates/auki-layout/README.md). The session-scoped logs in [`GET /api/sensor_logs`](#get-apisensor_logs) carry the same value as their `session_id` field. |
 | `session_clock_id` | string | Identifier for the session's monotonic clock. Resolves via [`GET /api/registries/clocks/<clock_id>/<clock_hash>`](#get-apiregistriesclocksclock_idclock_hash). The session clock is a fresh monotonic clock the daemon registers at session boot; on this clock, the session's start is `0` trivially. |
 | `session_clock_hash` | string | Content-addressed hash pinning the exact clock-registry entry. Same hash-is-version rule as the other registries. |
 | `session_now_ns` | integer | The session clock's current value at the moment this response was generated. Strictly increasing across responses. Consumers wanting wall-clock time subtract at poll time (e.g. `consumer_utc_now − session_now_ns ≈ session_started_at_consumer_utc`); the principled cross-clock path is `convert_time` via the [TimeTransform Log](../crates/auki-time-transforms/README.md). |
@@ -204,7 +204,7 @@ List sensor logs the daemon can see. **Spans every session on disk by default** 
 
 **`started_after` / `started_before` clock interpretation.** Each log's `started_at_ns` is on its own `clock_id`. Filter values are compared per-log, so a `started_after` value is meaningful when the daemon's logs share a clock or when the consumer knows which clock to address. BoosterApp v1 writes every log under a single `CLOCK_REALTIME`-backed clock, so its filter values are wall-clock nanoseconds; daemons running heterogeneous clocks document their filter semantics in their daemon-level docs. See the [parking lot](../parking_lot.md) for the open question of pinning a designated filter clock when this gets messy.
 
-**Cross-session enumeration.** The default (no filter) lists every sensor log the daemon's app-root contains, including logs from prior sessions whose `auki-session` directories the daemon can read. Daemons that have not yet enumerated their on-disk sessions at startup MAY return only the live session's logs; this is a daemon-implementation latitude, not a spec relaxation — operators should expect cross-session listing once the daemon is steady-state. The daemon must be running for any request to succeed (it's an HTTP server); a no-live-session "browsing-only" daemon mode is out of scope for v1.
+**Cross-session enumeration.** The default (no filter) lists every sensor log the daemon's app-root contains, including logs from prior sessions whose `auki-layout` directories the daemon can read. Daemons that have not yet enumerated their on-disk sessions at startup MAY return only the live session's logs; this is a daemon-implementation latitude, not a spec relaxation — operators should expect cross-session listing once the daemon is steady-state. The daemon must be running for any request to succeed (it's an HTTP server); a no-live-session "browsing-only" daemon mode is out of scope for v1.
 
 ### `PATCH /api/sensor_logs/<id>`
 
@@ -315,7 +315,7 @@ The following are intentional v1 simplifications, documented so the next design 
 - **Browse-only daemon mode.** A daemon that mounts an app-root *without* opening a live session and serves only the read endpoints. Today the daemon must be running and have a live session for any request to succeed.
 - **Cross-daemon coordination.** Each daemon's state is independent; orchestration is the consumer's (Park's) job.
 - **Push notifications / webhooks.** No daemon-to-consumer push; consumers poll.
-- **The on-disk session shape itself.** That's specified by [`auki-session`](../crates/auki-session/README.md) and the per-crate format specs. The Control API operates on top of an existing session; it doesn't define the session.
+- **The on-disk session shape itself.** That's specified by [`auki-layout`](../crates/auki-layout/README.md) and the per-crate format specs. The Control API operates on top of an existing session; it doesn't define the session.
 
 ---
 

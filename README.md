@@ -65,7 +65,7 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
 | [`auki-time-transforms`](crates/auki-time-transforms) | ✓ Clock sampler primitives for the TimeTransform Log |
-| [`auki-session`](crates/auki-session) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout |
+| [`auki-layout`](crates/auki-layout) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout (renamed from `auki-session` 2026-05-08; the old name now reserved for the future runtime `Session` abstraction) |
 | [`auki-identity`](crates/auki-identity) | ✓ Wallet primitive: ed25519 keypairs, deterministic child derivation, signed creation certs. WASM-friendly |
 | [`auki-identity-py`](crates/auki-identity-py) | ✓ PyO3 bindings for the identity primitives BoosterApp's Python sidecar consumes — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id/seed`, `app_instance.derive` |
 | [`auki-network`](crates/auki-network) | ✓ libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, mDNS, identify, ping) behind the `swarm` feature; peer identity from `Wallet::derive_child("peer/v1")`; `cluster.json` loader + opaque `ClusterRuntime` driving `/auki/cluster/1.0.0` (participant exchange) and `/auki/stream/1.0.0` (typed `Stream<T>` for `JpegFrame` and `PointCloudFrame`, dispatched by `sensor_id` via the closed `StreamDispatch` enum). REST `discovery_client` (Vinland) for register/fetch/deregister against a Discovery server, behind the `discovery_client` feature. MAC-derived `app_instance` behind its own feature |
@@ -74,7 +74,7 @@ This repo is in early development. The crates here implement a foundational subs
 
 **Not yet implemented:**
 
-- `convert_pose` (the Pose Log primitives — `PoseLogEntry` + `TransformSample` in [`auki-registry`](crates/auki-registry), `PoseSource` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-session`](crates/auki-session) — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
+- `convert_pose` (the Pose Log primitives — `PoseLogEntry` + `TransformSample` in [`auki-registry`](crates/auki-registry), `PoseSource` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-layout`](crates/auki-layout) — are in place for capture and read; the `convert_pose` operation that composes pose paths is pending)
 - Detection Log
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
 - A `Session` abstraction tying clock + sensor-id minting + recording lifecycle together (today daemons construct sessions by convention)
@@ -91,7 +91,7 @@ Logs and registries write to a documented binary + JSON format. Each format spec
 - [`auki-datatypes`](crates/auki-datatypes/README.md) — Sensor Log payload schema for Pinhole cameras, post-migration; the `.proto` files are the cross-language contract
 - [`auki-manifests`](crates/auki-manifests/README.md) — Sensor / Pose / TimeTransform Log manifest shapes (JCS-JSON)
 - [`auki-time-transforms`](crates/auki-time-transforms/README.md) — TimeTransform Log payload schema and sampling protocol
-- [`auki-session`](crates/auki-session/README.md) — the path layout and helpers below
+- [`auki-layout`](crates/auki-layout/README.md) — the path layout and helpers below
 
 Files within an app:
 
@@ -144,7 +144,7 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`RgbCamera`, `PointCloud`, `Microphone`), `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloudLogEntry`, `AudioLogEntry`, `PoseLogEntry`, `TransformSample`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. Camera log payload (`PinholeCameraLogEntry` + `DynamicIntrinsics`) moved to [`auki-datatypes`](crates/auki-datatypes) at Step 1 (2026-05-08); the remaining log payload types continue to depart per the migration sprint. |
 | [`auki-datatypes`](crates/auki-datatypes) | `camera::PinholeCameraLogEntry`, `camera::DynamicIntrinsics`, `placeholder::PipelineCheck` (departs at Step 7). Every prost type satisfies `auki_logs::LogPayload` via the in-crate `impl_log_payload!` macro. |
 | [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `PoseSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
-| [`auki-session`](crates/auki-session) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `id_to_segment` |
+| [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `id_to_segment` |
 | [`auki-time-transforms`](crates/auki-time-transforms) | `Clock` (trait), `SystemClock`, `Sampler`, `SamplerState`, `tick(...)`, `TimeTransformEntry`, `TimeTransformSource` |
 | [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `cluster_doc`, `swarm`, `cluster_protocol`, `cluster_runtime`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_rgb_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |

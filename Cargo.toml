@@ -12,7 +12,7 @@ members = [
     "crates/auki-datatypes",
     "crates/auki-registry",
     "crates/auki-ros-adapter",
-    "crates/auki-session",
+    "crates/auki-layout",
     "crates/auki-session-py",
     "crates/auki-time-transforms",
 ]

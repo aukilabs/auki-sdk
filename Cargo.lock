@@ -277,8 +277,8 @@ version = "0.0.0"
 dependencies = [
  "auki-hash",
  "auki-jcs",
+ "auki-layout",
  "auki-logs",
- "auki-session",
  "ciborium",
  "serde",
  "serde_bytes",
@@ -301,7 +301,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-session"
+name = "auki-layout"
 version = "0.0.0"
 
 [[package]]

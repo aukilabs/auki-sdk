@@ -1,6 +1,8 @@
-# auki-session
+# auki-layout
 
 Path helpers for the Auki SDK's on-disk session shape. Single source of truth for the layout that registries, logs, and sessions occupy under an app root — so that the SDK, downstream consumers, and any cross-language reimplementation all agree on where things live.
+
+> **Renamed from `auki-session` 2026-05-08.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) that this crate doesn't provide; this crate is the *layout contract*. `auki-session` is now reserved for the future Rust counterpart of [`auki-session-py`](../auki-session-py)'s in-process `Session` surface — see the [root `Session.open` Propagate item](../../parking_lot.md) for the planned shape.
 
 ## On-disk layout
 

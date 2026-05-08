@@ -1,0 +1,10 @@
+[package]
+name = "auki-layout"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "On-disk layout contract for the Auki SDK — single source of truth for app root, session, registry, and per-recording paths plus the session-lifecycle convention."
+
+[dependencies]

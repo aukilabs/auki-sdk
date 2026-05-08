@@ -34,11 +34,11 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - [`auki-network`](../../auki-network)'s `stream_protocol` re-exports the prost types from this crate; `stream_runtime`'s `T` bound switches from `Serialize + DeserializeOwned` to `prost::Message + Default`. [`auki-network-py`](../../auki-network-py)'s PyO3 wrappers updated for the prost match patterns.
    - Locked cross-language conformance vectors for `JpegFrame` + `PointCloudFrame` wire bytes pinned in `auki-network::stream_protocol::tests`.
 
-3. **`auki.point_cloud` — `PointCloudLogEntry`** (on-disk).
-   - Define `proto/point_cloud.proto`. Resolve the on-disk-vs-wire drift slop point in [`parking_lot.md`](../parking_lot.md) — typed layout fields (`width`, `height`, `is_dense`) outside the bytes vs raw-bytes-only with layout inside CDR.
-   - **Move** `PointCloudLogEntry` out of [`auki-registry`](../../auki-registry).
-   - Update [`auki-logs`](../../auki-logs) segment writer/reader.
-   - Locked vector.
+3. **✓ `auki.point_cloud` — `PointCloudLogEntry`** (on-disk; landed 2026-05-08).
+   - `proto/point_cloud.proto` defines `PointCloudLogEntry { bytes data = 1; }`. Per-step decision: **opaque-bytes-only** (Option A in the parking-lot slop point) — symmetric with the wire's `PointCloudFrame { bytes }`, doesn't bake ROS `PointCloud2`'s `width × height × is_dense` shape into the SDK type. Layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Resolves the on-disk-vs-wire drift in [`parking_lot.md`](../parking_lot.md).
+   - **Moved** `PointCloudLogEntry` out of [`auki-registry`](../../auki-registry). [`auki-ros-adapter`](../../auki-ros-adapter)'s `build_point_cloud_log_entry` now returns the prost type with just `data` set; `width` / `height` / `is_dense` are no longer carried per-frame (`apply_normalization` still uses ROS-side `msg.width × msg.height` to compute `num_points` for the layout repacking, then flattens into the bytes).
+   - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
+   - Locked conformance vectors pin both wire bytes (`0a18000102030405060708090a0b0c0d0e0f1011121314151617` for a 24-byte fixture) and XXH3-128 hash (`4ea525d849212b2e067e33bec455c7ea`).
 
 4. **`auki.audio` — `AudioLogEntry`**.
    - Define `proto/audio.proto`. Resolve the implicit-vs-explicit chunk metadata slop point — add `sample_count: u32` (or `chunk_duration_ns: i64`)?

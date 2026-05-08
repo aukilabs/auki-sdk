@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:51 HKT, 2026
+
+**`PointCloudLogEntry` departed at Step 3 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** The struct is gone from [`src/lib.rs`](src/lib.rs); replaced by [`auki_datatypes::point_cloud::PointCloudLogEntry`](../auki-datatypes/src/lib.rs) under the `auki.point_cloud` `.proto` package. Per-step decision: opaque-bytes-only — the ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.
+
+**Docs**: README's "Point Cloud Log payload — schema v1" section replaced with a one-paragraph pointer at [`auki-datatypes`](../auki-datatypes); RGB(A) normalization sub-section retained (still happens in [`auki-ros-adapter`](../auki-ros-adapter)). `src/readme.md`'s "Log payload types" code block dropped the `PointCloudLogEntry` struct + the line about its `serde_bytes` tagging. `serde_bytes` dep stays (still used by `AudioLogEntry`).
+
+The remaining `PoseLogEntry` + `TransformSample` move out at Step 5; `AudioLogEntry` at Step 4.
+
 ### broodsugar's dobby · May 8, 09:34 HKT, 2026
 
 Path-helper dep renamed: `auki-session = { path = "../auki-session" }` → `auki-layout = { path = "../auki-layout" }` in `Cargo.toml`; six call sites in `src/lib.rs` updated from `auki_session::` to `auki_layout::` (5 path constructions in `write_sensor` / `write_clock` / `write_frame` / `read_sensor` / `read_clock` / `read_frame`, plus the crate-level doc-comment `[auki_session]` link). The on-disk path layout is unchanged; the rename is purely about the upstream crate's name-vs-scope mismatch. README + `src/readme.md` cross-reference targets updated correspondingly. No code or test changes; depends on the companion rename in [`auki-layout/changelog.md`](../auki-layout/changelog.md). Doc-only at the source level (the source change is the import path).

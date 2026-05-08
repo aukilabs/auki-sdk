@@ -51,6 +51,17 @@ pub mod camera {
 
 impl_log_payload!(camera::PinholeCameraLogEntry);
 
+/// `auki.point_cloud` — opaque-bytes point-cloud log payload (Sensor Log
+/// family). Migration Step 3. Layout fields (`fields`, `point_step`,
+/// `is_bigendian`, `frame_id`) live on the SensorRegistryEntry's
+/// `PointCloud` body — interpretation comes from `(sensor_id,
+/// sensor_hash)`, not from the per-frame log entry.
+pub mod point_cloud {
+    include!(concat!(env!("OUT_DIR"), "/auki.point_cloud.rs"));
+}
+
+impl_log_payload!(point_cloud::PointCloudLogEntry);
+
 /// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
 /// `/auki/stream/0.1.0`). Migration Step 2.
 pub mod frame_stream {
@@ -161,6 +172,7 @@ pub mod stream {
 mod tests {
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
     use super::placeholder::PipelineCheck;
+    use super::point_cloud::PointCloudLogEntry;
     use prost::Message;
 
     /// Smoke test that `prost-build` actually ran, the generated code
@@ -286,5 +298,103 @@ mod tests {
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.dynamic_intrinsics, None);
         assert_eq!(entries[1].payload.frame, vec![0xab; 8]);
+    }
+
+    // ─── auki.point_cloud locked vectors ─────────────────────────────────────
+
+    /// Two XYZ float32 points = 24 bytes, deterministic content. Stands
+    /// in for a real PointCloud2 CDR payload — the SDK only sees opaque
+    /// bytes, so the exact contents don't matter beyond reproducibility.
+    fn step3_point_cloud_log_entry() -> PointCloudLogEntry {
+        PointCloudLogEntry {
+            data: (0..24u8).collect(),
+        }
+    }
+
+    /// Locks the prost wire bytes for the Step 3 example point-cloud log
+    /// entry. Cross-language readers MUST produce these exact bytes for
+    /// the same input. Field 1 length-delimited: tag 0x0a, varint
+    /// length 0x18 (24), then the 24 payload bytes.
+    #[test]
+    fn point_cloud_log_entry_serializes_to_locked_wire_bytes() {
+        let bytes = step3_point_cloud_log_entry().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "0a18000102030405060708090a0b0c0d0e0f1011121314151617"
+        );
+    }
+
+    /// XXH3-128 of those wire bytes — joins the workspace's locked
+    /// conformance set so future drift in either prost-build or
+    /// auki-hash trips the test.
+    #[test]
+    fn point_cloud_log_entry_hash_is_locked() {
+        let bytes = step3_point_cloud_log_entry().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "4ea525d849212b2e067e33bec455c7ea"
+        );
+    }
+
+    #[test]
+    fn point_cloud_log_entry_round_trips() {
+        let entry = step3_point_cloud_log_entry();
+        let bytes = entry.encode_to_vec();
+        let decoded = PointCloudLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// `LogPayload` round-trip — proves the macro-generated impl rides
+    /// the same prost path as direct `Message::encode_to_vec` /
+    /// `decode` calls.
+    #[test]
+    fn point_cloud_log_entry_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step3_point_cloud_log_entry();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <PointCloudLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Empty payload — opaque-bytes-only is honest about empty: a frame
+    /// with zero points encodes to a single tag byte (no length, no body).
+    #[test]
+    fn point_cloud_log_entry_empty_data_round_trips() {
+        let entry = PointCloudLogEntry { data: vec![] };
+        let bytes = entry.encode_to_vec();
+        // proto3 default-elision: an empty `bytes` field encodes as
+        // zero output bytes (the field is its default value).
+        assert_eq!(bytes.len(), 0);
+        let decoded = PointCloudLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam test: open a real `auki_logs::Log<PointCloudLogEntry>`,
+    /// append two entries (one populated, one empty), close, re-read,
+    /// assert order + payload byte-equality. Catches any regression in the
+    /// `LogPayload` macro wiring or the segment-framing path.
+    #[test]
+    fn point_cloud_log_entry_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<PointCloudLogEntry> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step3_point_cloud_log_entry()).unwrap();
+            log.append(200, &PointCloudLogEntry { data: vec![] }).unwrap();
+        }
+        let reader: auki_logs::LogReader<PointCloudLogEntry> =
+            auki_logs::Log::<PointCloudLogEntry>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step3_point_cloud_log_entry());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }
 }

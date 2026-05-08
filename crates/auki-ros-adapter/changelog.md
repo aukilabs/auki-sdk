@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 10:51 HKT, 2026
+
+**`build_point_cloud_log_entry` now returns the prost type** — Step 3 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Function signature `(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry)` is unchanged, but `PointCloudLogEntry` is now [`auki_datatypes::point_cloud::PointCloudLogEntry`](../auki-datatypes/src/lib.rs) (re-exported here) instead of the departed `auki_registry::PointCloudLogEntry`. Construction now sets only `data`; `width` / `height` / `is_dense` are no longer carried per-frame. The producer-side ROS shape interpretation (`apply_normalization` using `msg.width × msg.height` for `num_points`) is unchanged — the result still gets flattened into the bytes the same way.
+
+**Tests**: 21 → 19 (-2; dropped `point_cloud_log_entry_round_trips_through_cbor` and `point_cloud_log_entry_data_uses_cbor_byte_string`, both CBOR-specific encoding tests; the type is now prost). The remaining `build_point_cloud_log_entry_extracts_timestamp_and_data` test no longer asserts `width` / `height` / `is_dense`, just `timestamp + data length + data equality`.
+
 ### broodsugar's claude · May 8, 11:30 HKT, 2026
 
 **`build_sensor_log_entry` now produces the prost type** — Step 1 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). The function still has the same `(info, image) -> (i64, T)` shape, but `T` is now [`auki_datatypes::camera::PinholeCameraLogEntry`](../auki-datatypes/src/lib.rs) instead of the departed `auki_registry::SensorLogEntry`. `dynamic_intrinsics_from` returns `auki_datatypes::camera::DynamicIntrinsics` (same field names; prost-derived). `build_sensor_log_entry`'s constructor now wraps `Some(dynamic_intrinsics_from(info))` per the inline-optional decision; consumers that read the field handle the `Option<...>`.

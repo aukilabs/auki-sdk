@@ -86,14 +86,14 @@ pub struct PointFieldMsg {
 
 // ─── Output types written to the Sensor Log ─────────────────────────────────
 //
-// `DynamicIntrinsics` + the camera log entry now live in
-// [`auki-datatypes`](../../auki-datatypes) under the `auki.camera` `.proto`
-// (Step 1 of the migration). `PointCloudLogEntry` still lives in
-// `auki-registry` until Step 3 moves it. Re-exported here so existing call
-// sites stay short.
+// `DynamicIntrinsics` + the camera log entry moved to
+// [`auki-datatypes`](../../auki-datatypes)'s `auki.camera` `.proto` at
+// Step 1; `PointCloudLogEntry` followed at Step 3 under `auki.point_cloud`
+// (now opaque-bytes-only). Re-exported here so existing call sites stay
+// short.
 
 pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
-pub use auki_registry::PointCloudLogEntry;
+pub use auki_datatypes::point_cloud::PointCloudLogEntry;
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -461,6 +461,13 @@ pub fn build_point_cloud_registry_entry(
 /// Build a `PointCloudLogEntry` from a `PointCloud2` message. Returns
 /// `(timestamp_ns, entry)` ready for `auki_logs::Log::append`. Applies the
 /// same RGB(A) normalization as `build_point_cloud_registry_entry`.
+///
+/// Step 3 (2026-05-08): the entry is now opaque-bytes-only. `width` /
+/// `height` / `is_dense` no longer ride on the per-frame entry — readers
+/// resolve them via the `(sensor_id, sensor_hash)` pointing at the
+/// `SensorBody::PointCloud` registry entry. ROS-shape interpretation
+/// (`width × height × is_dense`) lives in the producer (here) and is
+/// flattened into the bytes via the registry's `point_step` and `fields`.
 pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry) {
     let timestamp_ns = stamp_to_ns(msg.stamp);
     let normalized = normalize_layout(&msg.fields);
@@ -472,12 +479,7 @@ pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogE
         num_points,
         normalized.point_step,
     );
-    let entry = PointCloudLogEntry {
-        width: msg.width,
-        height: msg.height,
-        is_dense: msg.is_dense,
-        data,
-    };
+    let entry = PointCloudLogEntry { data };
     (timestamp_ns, entry)
 }
 
@@ -1053,51 +1055,9 @@ mod tests {
         let msg = xyz_pc2(2);
         let (ts, entry) = build_point_cloud_log_entry(&msg);
         assert_eq!(ts, 100_000_000_500);
-        assert_eq!(entry.width, 2);
-        assert_eq!(entry.height, 1);
-        assert!(entry.is_dense);
         // 2 points × 12 bytes each, no normalization for xyz-only.
         assert_eq!(entry.data.len(), 24);
         assert_eq!(entry.data, msg.data);
-    }
-
-    #[test]
-    fn point_cloud_log_entry_round_trips_through_cbor() {
-        let entry = PointCloudLogEntry {
-            width: 4,
-            height: 1,
-            is_dense: true,
-            data: vec![0xAA; 48],
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        let back: PointCloudLogEntry = ciborium::from_reader(&buf[..]).unwrap();
-        assert_eq!(back, entry);
-    }
-
-    #[test]
-    fn point_cloud_log_entry_data_uses_cbor_byte_string() {
-        // Major type 2 (byte string) headers are 0x40..=0x5F. Major type 4
-        // (array) is 0x80..=0x9F. Encoding `data` as a byte string is the
-        // size win we asked for; verify we actually do it.
-        let entry = PointCloudLogEntry {
-            width: 1,
-            height: 1,
-            is_dense: true,
-            data: vec![0xFF; 100],
-        };
-        let mut buf = Vec::new();
-        ciborium::into_writer(&entry, &mut buf).unwrap();
-        // Find the start of the `data` payload by searching for a CBOR length
-        // marker prefixing 100 bytes of 0xFF. A 100-byte byte string is
-        // encoded as `0x58 0x64`; a 100-element array of 0xFF would be
-        // `0x98 0x64` followed by `0x18 0xFF` per element (= 202 bytes).
-        // Asserting buf size < 150 is enough to prove byte-string encoding.
-        assert!(
-            buf.len() < 150,
-            "expected byte-string encoding (~110 bytes), got {} bytes",
-            buf.len()
-        );
     }
 
     #[test]

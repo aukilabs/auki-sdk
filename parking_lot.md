@@ -208,6 +208,28 @@ The Detector code is identical across all three. The SDK handles transport (zero
 
 ---
 
+## Detection log lifecycle = sensor log lifecycle, with intent decoupled per detector instance _(filed by Dobby, 2026-05-08)_
+
+**Decision: a detection log is `Log<DetectionLogEntry>` — same primitive as a sensor log, same `buffer | intent_recording` choice at creation, same dedup / redistribution / provenance story. The intent is chosen by the detector instance, independently of the input sensor log's intent.**
+
+This is the producer-side closure of the [Subscription-as-materialization](#subscription-as-materialization-the-unified-detector-ingestion-architecture-filed-by-dobby-2026-05-08) keystone. The keystone established that detection logs subscribe-and-materialize like sensor logs on the consumer side; this entry says they're created with the same lifecycle on the producer side. There is no "DetectionLog" abstraction — just `Log<T>` with `T = DetectionLogEntry` and an intent picked at start. Confidence: high.
+
+**Why intent must decouple from the input log's intent.** The intent of a log is a function of who consumes its bytes downstream, not of who produced its inputs upstream. Concrete cases:
+
+- Camera intent-recording, detector buffer — capturing a 10-min walkthrough for replay, but only the live "is this shelf empty right now" alert matters. Raw frames preserved; detection log is a sliding window.
+- Camera buffer, detector intent-recording — don't keep huge raw video forever, but do keep a permanent compliance trail of every QR scanned. Sensor evicts; detection log is durable.
+- Same sensor, multiple detectors, different intents each — one camera log gets tailed by ESL (buffer, live shelf state), QR (intent-recording, audit trail), people-counter (buffer, real-time foot traffic). Three detectors, three independent intent choices, one input feed.
+
+The detector instance picks its own intent based on its downstream consumers. The input log's intent is irrelevant to that decision.
+
+**Open sub-question: buffer-intent dedup identity for detection logs.** Sensor logs dedup buffer-intent on `sensor_manifest_hash` — one buffer log per sensor per node. The natural detection-log analog is `(detector_id, input_log_id)` — two detectors of the same kind running on the same input feed share a buffer log; two detectors on different input feeds don't. Likely correct, but worth pinning explicitly before [`auki-logs`](crates/auki-logs) implements it. Intent-recording detection logs are strict-per-call (mirrors the sensor side) and don't have this question.
+
+**Who decides the intent at startup — caller or detector?** Two reasonable shapes: (a) the caller (Park, or whatever process hosts the detector) creates the output log with a chosen intent, then hands the writer-handle to the detector; or (b) the detector takes intent as a config param at startup and creates its own output log, returning the handle. Lean: (a) caller-decides. Park already manages log lifecycle for sensor logs; one consistent owner for log creation/teardown is cleaner than two. File the API shape question; pin a direction when [`auki-logs`](crates/auki-logs)'s tail/subscribe API gets implemented.
+
+**Implication for Detector phase 2 in [`detectors`](https://github.com/aukilabs/detectors).** The `DetectionLogEntry` payload type can land in [`auki-datatypes`](crates/auki-datatypes) cleanly as a new `auki.detection` package (mirrors `auki.camera`, `auki.point_cloud`, etc.). No new lifecycle code — it inherits everything from `Log<T>`. This sharpens phase-2 blocker #3 ("`DetectionLogEntry` type") into a well-shaped single PR.
+
+---
+
 ## Subfolder summary
 
 - [`crates/`](crates/parking_lot.md) — schema versioning coordination; sprint.md scaffolding still missing; **Rust vs Python surface namespacing mismatch** (filed 2026-05-08)

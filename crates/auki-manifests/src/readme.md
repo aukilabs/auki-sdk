@@ -35,6 +35,15 @@ pub fn build_time_transform_log_manifest(
     segment_duration: Duration, retention: Duration,
 ) -> serde_json::Value;
 
+pub fn build_detection_log_manifest(
+    app_id: &str, session_id: &str,
+    detector_id: &str, detector_hash: &str,
+    input_log_id: &str,
+    input_sensor_id: &str, input_sensor_hash: &str,
+    clock_id: &str, clock_hash: &str,
+    segment_duration: Duration, retention: Duration,
+) -> serde_json::Value;
+
 pub enum PoseSource {
     Ros2Tf { publishers: Vec<String> },
 }
@@ -59,7 +68,7 @@ impl TimeTransformSource {
 }
 ```
 
-## Tests (9 total)
+## Tests (12 total)
 
 | Test | Asserts |
 |------|---------|
@@ -72,8 +81,11 @@ impl TimeTransformSource {
 | `build_time_transform_log_manifest_contains_required_fields` | All required fields present (six clock-binding + `app_id` / `session_id` + `source.kind == "local_clock_read"` + the two from auki-logs). |
 | `local_clock_read_source_serializes_to_canonical_bytes` | `TimeTransformSource::LocalClockRead` → locked JCS canonical bytes `{"kind":"local_clock_read"}`. Catches drift in tagged-enum serde shape OR canonicalization. Mirrors `ros2_tf_source_serializes_to_canonical_bytes`. |
 | `local_clock_read_source_hash_is_locked` | XXH3-128 of those canonical bytes — `8dcea0b9b0b2219d651e0856f112cd65`. |
+| `build_detection_log_manifest_contains_all_required_fields` | All 11 required fields present: `app_id`, `session_id`, `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id`, `input_sensor_hash`, `clock_id`, `clock_hash`, `segment_duration_ns`, `retention_ns`. |
+| `build_detection_log_manifest_omits_intent_field` | Pins absence of `intent` — match-the-existing-builders for v1; uniform rollout is a separate PR. Provides a failing test for the future PR to update. |
+| `detection_log_manifest_opens_a_log_round_trip` | End-to-end: builder produces a manifest `auki-logs::Log<T>::open` accepts; the manifest survives a write/read cycle and surfaces both `detector_id` + `detector_hash` and `input_sensor_id` + `input_sensor_hash` (self-containedness check). |
 
-`cargo test -p auki-manifests` runs 9 tests.
+`cargo test -p auki-manifests` runs 12 tests.
 
 ## Dependencies
 
@@ -88,3 +100,4 @@ Dev-deps: `auki-logs` (round-trip test opens an actual `Log<T>`), `ciborium` (pl
 - [`auki-registry`](../../auki-registry) — uses `build_sensor_log_manifest` and `build_pose_log_manifest` in its end-to-end log integration tests (the registry crate doesn't open logs in production code, but its tests do).
 - [`auki-time-transforms`](../../auki-time-transforms) — uses `build_time_transform_log_manifest` in its `Sampler` integration test (the production sampler accepts a pre-built manifest).
 - *Downstream apps* (boosterapp, Park, future Sentinel) — call these builders directly when opening logs.
+- [`detectors`](https://github.com/aukilabs/detectors) (downstream) — the integrator (Park / Boosterapp) calls `build_detection_log_manifest` + `auki_layout::detection_log_path` to pre-create the output `Log<DetectionLogEntry>`, then hands the write-handle to the detector loop. The detector itself doesn't construct the manifest — caller-decides per the [keystone's intent-decoupling entry](../../../parking_lot.md).

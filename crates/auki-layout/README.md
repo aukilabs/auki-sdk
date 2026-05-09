@@ -25,12 +25,18 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
     │   ├── <sensor_log_id_2>/
     │   │   └── ...
     │   └── <sensor_log_id_3>/
-    └── poselogs/
-        ├── <from_id>__<to_id>/            ← one (from_frame_id, to_frame_id) pair per log
+    ├── poselogs/
+    │   ├── <from_id>__<to_id>/            ← one (from_frame_id, to_frame_id) pair per log
+    │   │   ├── manifest.json
+    │   │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
+    │   │   └── segments/<padded-ns>.seg
+    │   └── <from_id_2>__<to_id_2>/
+    └── detection_logs/
+        ├── <detector_id>__<input_log_id>/ ← one (Detector, input sensor log) pair (2026-05-09)
         │   ├── manifest.json
         │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
-        └── <from_id_2>__<to_id_2>/
+        └── ...
 ```
 
 `tags.jsonl` is the reserved sidecar for [`TagClaim`](../../tags.md) records (domain membership, anchor citations, contribution credits, …). The SDK doesn't currently write or read it — TagClaim handling lives outside the crate boundary — but the filename is documented here so any tooling that enumerates a log directory accounts for it.
@@ -71,6 +77,7 @@ None is derivable from the others.
 | `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
 | `sensorlog_path(session_root, sensor_log_id)`                   | `<session_id>/sensorlogs/<sensor_log_id>`                            |
 | `poselog_path(session_root, from_frame_id, to_frame_id)`        | `<session_id>/poselogs/<from>__<to>`                                 |
+| `detection_log_path(session_root, detector_id, input_log_id)`   | `<session_id>/detection_logs/<detector_id>__<input_log_id>` (2026-05-09) |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
 
 ## Versioning

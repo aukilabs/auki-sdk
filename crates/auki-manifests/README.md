@@ -40,6 +40,15 @@ pub fn build_time_transform_log_manifest(
     segment_duration, retention,
 ) -> serde_json::Value;
 
+pub fn build_detection_log_manifest(
+    app_id, session_id,
+    detector_id, detector_hash,
+    input_log_id,
+    input_sensor_id, input_sensor_hash,
+    clock_id, clock_hash,
+    segment_duration, retention,
+) -> serde_json::Value;
+
 pub enum PoseSource {
     Ros2Tf { publishers: Vec<String> },
     // future: Slam { algorithm, map_id, ... }, Odometry { ... }, ManualFixture { ... }
@@ -113,9 +122,29 @@ The `(from_frame_id, to_frame_id)` pair mirrors the TimeTransform Log's `(from_c
 | `to_clock_hash`       | string          | XXH3-128 hex of the to-clock's registry entry                    |
 | `source`              | tagged enum     | Inline producer identity — `TimeTransformSource` (e.g. `{"kind":"local_clock_read"}`); added at Step 6 (2026-05-08), mirrors Pose Log's shape |
 
+### Detection Log
+
+| Key                   | Type            | Notes                                                            |
+| --------------------- | --------------- | ---------------------------------------------------------------- |
+| `segment_duration_ns` | integer         | > 0; from auki-logs                                              |
+| `retention_ns`        | integer         | ≥ 0; from auki-logs                                              |
+| `app_id`              | string          | Same as Sensor Log                                               |
+| `session_id`          | string          | Same as Sensor Log                                               |
+| `detector_id`         | string          | Namespaced producer name (e.g. `"aukilabs/qr/v1"`). Mirrors `sensor_id`; opaque to the SDK |
+| `detector_hash`       | string          | Content-hash binding the producer to a specific build (e.g. `hash(commit-SHA + config)` for code-only detectors, `hash(commit-SHA + weights + config)` for ML detectors). The exact `DetectorRegistryEntry` shape is **deferred** — the manifest carries the field as an opaque string for v1 |
+| `input_log_id`        | string          | The `sensor_log_id` of the input log being tailed; pins WHICH instance of the sensor produced the frames                                  |
+| `input_sensor_id`     | string          | Copied from the input sensor log's manifest so the detection log is self-contained                          |
+| `input_sensor_hash`   | string          | Copied from the input sensor log's manifest                                                                  |
+| `clock_id`            | string          | Same clock as the input log                                                                                  |
+| `clock_hash`          | string          | Same clock-hash as the input log                                                                             |
+
+The detection log opens with [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs)'s on-disk shape `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring how Sensor Logs and Pose Logs map a log identity to a directory. Segment payloads are [`auki_datatypes::detection::DetectionLogEntry`](../auki-datatypes/src/lib.rs) (Step 8 of the migration, 2026-05-08).
+
+**No `intent` field** — the keystone's `buffer | intent_recording` dimension applies to every log but is not yet plumbed through the existing builders. Match-the-existing-builders for v1; uniform rollout is a separate PR.
+
 ## Versioning
 
-Schema version is **1** for all three manifest shapes (Sensor Log family, Pose Log, TimeTransform Log) and for `PoseSource` / `PoseWriterMode` / `TimeTransformSource`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
+Schema version is **1** for all four manifest shapes (Sensor Log family, Pose Log, TimeTransform Log, Detection Log) and for `PoseSource` / `PoseWriterMode` / `TimeTransformSource`. Bump on incompatible field changes. The `auki-logs` segment format version is independent; this crate only specifies what goes into the manifest header.
 
 ## Status
 

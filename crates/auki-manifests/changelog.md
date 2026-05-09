@@ -6,6 +6,37 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 12:40 HKT, 2026
+
+**`build_detection_log_manifest` lands** to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2 (Detector binding API). Mirrors the existing builders' shape — JCS-canonical JSON via [`auki-jcs`](../auki-jcs), 11 args:
+
+```rust
+pub fn build_detection_log_manifest(
+    app_id, session_id,
+    detector_id, detector_hash,            // content-addressed producer identity
+    input_log_id,                          // sensor_log_id of the input log
+    input_sensor_id, input_sensor_hash,    // copied from input log for self-containedness
+    clock_id, clock_hash,
+    segment_duration, retention,
+) -> serde_json::Value;
+```
+
+**Producer identity mirrors `(sensor_id, sensor_hash)`.** `detector_id` is namespaced (`"aukilabs/qr/v1"`); `detector_hash` is a content-hash binding the producer to a specific build (e.g. `hash(commit-SHA + config)` for code-only detectors, `hash(commit-SHA + weights + config)` for ML detectors). The exact `DetectorRegistryEntry` shape — what bytes go through the hasher — is **deferred** to a sibling PR; the manifest carries `detector_hash` as an opaque hex string for v1, and the SDK doesn't validate it.
+
+**Self-containedness.** The detection log copies `input_sensor_id` + `input_sensor_hash` from the input log's manifest. A reader holding only the detection log can still know what sensor produced its inputs, even after the input sensor log is evicted by retention.
+
+**No `intent` field.** Per the [keystone's intent-decoupling entry](../../parking_lot.md), `buffer | intent_recording` applies to every log, but adding it uniformly across the existing builders is a separate PR — match-the-existing-builders for v1. Filed in [`parking_lot.md`](parking_lot.md).
+
+**Caller-decides lifecycle.** Per PR #72's lean: the integrator (Park / Boosterapp) calls `build_detection_log_manifest` + [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs) to pre-create the output `Log<DetectionLogEntry>`, then hands the write-handle to the detector loop. The detector itself doesn't construct the manifest.
+
+**Tests**: 9 → 12 (+3 — `build_detection_log_manifest_contains_all_required_fields`, `build_detection_log_manifest_omits_intent_field` (pins absence so the future uniform-intent PR has a failing test to update), `detection_log_manifest_opens_a_log_round_trip` (end-to-end seam through `auki-logs::Log<T>`)).
+
+**Filed alongside in [`parking_lot.md`](parking_lot.md):**
+- **DetectorRegistry shape** — what does `detector_hash` actually hash? Lean: a structured `DetectorRegistryEntry { name, version, code_commit_sha, model_artifact_hash?, output_schema_hash, config_hash, ... }` symmetric with Sensor / Frame / Clock registry entries. Defer until Park / Boosterapp need to surface "where did this detection come from?" in a UI.
+- **Uniform `intent` field across every manifest builder** — file-and-revisit when subscription / republishing makes it concrete.
+
+Will land in v0.0.26.
+
 ### broodsugar's claude · May 8, 12:43 HKT, 2026
 
 **`TimeTransformSource` lands here; `build_time_transform_log_manifest` gains a `source` arg** for Step 6 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Tagged-enum mirror of `PoseSource` (one variant today, `LocalClockRead`); the manifest's new `"source"` field carries inline producer identity. Moved over from [`auki-time-transforms`](../auki-time-transforms) where it was a per-entry field on `TimeTransformEntry` pre-Step-6 — manifest is its right home (matches Pose Log's shape).

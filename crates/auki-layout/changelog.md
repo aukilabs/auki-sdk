@@ -8,6 +8,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 12:40 HKT, 2026
+
+**`detection_log_path(session_root, detector_id, input_log_id) -> PathBuf` lands** to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2. Resolves to `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring `poselog_path`'s `__`-joined shape. `detector_id`'s `/` are substituted to `__` (so `"aukilabs/qr/v1"` becomes `"aukilabs__qr__v1"`); `input_log_id` is opaque (typically the integrator-minted UUID `sensor_log_id` from `sensorlog_path`) and passes through unchanged. New `DETECTION_LOGS_DIR = "detection_logs"` constant.
+
+**Layout doc updated.** The on-disk tree in [`lib.rs`](src/lib.rs) and [`README.md`](README.md) now lists `detection_logs/` alongside `sensorlogs/` and `poselogs/`. Tests: 11 → 13 (+2 — `detection_log_path_keys_on_detector_id_and_input_log_id`, `detection_log_path_substitutes_slashes_in_detector_id_only`).
+
+Pairs with [`auki-manifests`](../auki-manifests)' new `build_detection_log_manifest` (same date) — together they let the integrator pre-create the output `Log<DetectionLogEntry>` and hand the write-handle to a detector loop. Caller-decides per the [keystone](../../parking_lot.md). Will land in v0.0.26.
+
 ### broodsugar's claude · May 8, 11:52 HKT, 2026
 
 **`poselog_path` resigned to per-`(from, to)`-frame identity** for Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Old signature `(session_root, pose_log_id) -> PathBuf` (opaque integrator-minted ID) → new signature `(session_root, from_frame_id, to_frame_id) -> PathBuf`, mirroring `timetransform_log_path`'s per-clock-pair shape. On-disk: `<session>/poselogs/<from_id>__<to_id>` (each frame_id's `/` substituted to `__`).

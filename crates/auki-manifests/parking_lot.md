@@ -20,6 +20,27 @@ Today `PoseSource` is inline in the Pose Log manifest. Per the [auki-registry RE
 
 `PoseSource::canonical_bytes` and `PoseSource::hash` already exist for exactly this graduation path. The decision to graduate is downstream of a real SLAM/odometry producer landing — pin then.
 
+## DetectorRegistry shape — what does `detector_hash` actually hash? _(filed 2026-05-09, alongside `build_detection_log_manifest`)_
+
+The Detection Log manifest's `(detector_id, detector_hash)` pair mirrors `(sensor_id, sensor_hash)` for sensors, but unlike Sensor Registry there's no `DetectorRegistryEntry` shape pinning what the hash covers. For v1 the manifest carries `detector_hash` as an opaque string; the integrator decides what goes in.
+
+Forward paths:
+- **(a) Hash a structured `DetectorRegistryEntry`** — e.g. `{ name, version, code_commit_sha, model_artifact_hash?, output_schema_hash, config_hash, ... }` JCS-serialized + XXH3-128. Symmetric with Sensor / Frame / Clock registry entries; pinning *what's* hashed gives provenance teeth.
+- **(b) Hash the build artifact directly** — the binary blob (Rust crate's compiled `.so` / Python wheel hash / model weights). Strong but coarse: a recompile with a no-op change re-hashes.
+- **(c) Hash a per-detector "what mattered" string the author defines** — frees the SDK from ever schematizing it; weakens cross-language reproducibility.
+
+Lean: (a). Mirrors the rest of the registry pattern. Defer implementing until Park / Boosterapp need to surface "where did this detection come from?" in a UI — provenance pressure drives the schema, not the other way around.
+
+The manifest field shape doesn't change when this lands — `detector_hash` is already an opaque hex string; the only thing that pins down is what bytes the producer hashed before writing the manifest.
+
+## Uniform `intent` field across every manifest builder _(filed 2026-05-09)_
+
+Per the [keystone's detection-log lifecycle entry](../../parking_lot.md), intent (`buffer | intent_recording`) applies to every log under the keystone, not just detection logs. The current builders (`build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`) all omit the field — match-the-existing-builders for v1.
+
+The follow-on PR adds `LogIntent` (tagged enum, `buffer` / `intent_recording`, mirrors `PoseSource` / `TimeTransformSource` shape) and threads it through every builder together. The existing `build_detection_log_manifest_omits_intent_field` test pins the absence — it will need to flip when this lands.
+
+Out of scope for the detector-binding PR because the rollout is broader than detection logs. File-and-revisit when a real consumer (subscription / republishing) needs it.
+
 ## ✓ Resolved 2026-05-08 — Pose Log manifest reshape (Step 5)
 
 Landed at Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). `build_pose_log_manifest` now takes 13 args and emits a manifest with `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash`, `writer_mode` (`PoseWriterMode::Rigid | Movable`, JSON `"rigid"` / `"movable"`), and `expected_rate_hz: u32`. The pre-migration shape is gone; segment-side switched from `PoseLogEntry { transforms: Vec<...> }` to flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs) at the same time.

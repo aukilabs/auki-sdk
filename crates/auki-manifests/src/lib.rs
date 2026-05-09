@@ -24,6 +24,10 @@
 //!   producer inline.
 //! - [`build_time_transform_log_manifest`] — TimeTransform Log;
 //!   four-clock-binding fields.
+//! - [`build_detection_log_manifest`] — Detection Log; carries
+//!   `(detector_id, detector_hash)` producer identity and copies
+//!   `(input_sensor_id, input_sensor_hash)` from the input log so the
+//!   detection log is self-contained.
 //! - [`PoseSource`] — tagged-enum producer identity, lives inline in
 //!   the Pose Log manifest under `"source"`. Carries
 //!   [`PoseSource::canonical_bytes`] / [`PoseSource::hash`] for
@@ -128,6 +132,81 @@ pub fn build_pose_log_manifest(
         "source": source,
         "writer_mode": writer_mode,
         "expected_rate_hz": expected_rate_hz,
+        "segment_duration_ns": duration_as_i64_ns(segment_duration),
+        "retention_ns": duration_as_i64_ns(retention),
+    })
+}
+
+/// Build a Detection Log manifest. One Detection Log per
+/// `(detector, input sensor log)` pair within a session.
+///
+/// Closes blocker #2 of [`detectors`](https://github.com/aukilabs/detectors)
+/// phase 2 — the read side ([`auki-logs::Log<T>::tail`](../../auki-logs))
+/// and the segment payload type ([`auki_datatypes::detection::DetectionLogEntry`](../../auki-datatypes))
+/// landed in sibling PRs. The detector loop the integrator writes is
+/// `for entry in tail(input_path)? { detector.process(...); output.append(...); }`,
+/// where `output` is the `Log<DetectionLogEntry>` opened with this
+/// manifest at [`auki_layout::detection_log_path`](../../auki-layout).
+///
+/// Carries:
+/// - `app_id` / `session_id` — run identity (same shape as siblings).
+/// - `detector_id` + `detector_hash` — content-addressed producer
+///   identity. Mirrors `(sensor_id, sensor_hash)` for sensors. The
+///   `detector_id` is namespaced and human-readable (`"aukilabs/qr/v1"`,
+///   `"aukilabs/esl/v1"`); the `detector_hash` content-binds the
+///   producer (e.g. `hash(commit-SHA + config)` for code-only
+///   detectors, `hash(commit-SHA + weights + config)` for ML
+///   detectors). The `DetectorRegistryEntry` shape that pins exactly
+///   what's hashed is **deferred** to a sibling PR — for v1 the
+///   manifest carries both as opaque strings and the SDK doesn't
+///   validate them.
+/// - `input_log_id` — the `sensor_log_id` of the input log being
+///   tailed (the directory name under `sensorlogs/`); pins WHICH
+///   instance of the sensor produced the inputs. Mirrors the
+///   `(detector_id, input_log_id)` dedup-identity lean from
+///   [the keystone's detection-log lifecycle entry](../../parking_lot.md).
+/// - `input_sensor_id` + `input_sensor_hash` — copied from the input
+///   log's manifest so the detection log is self-contained: a reader
+///   that holds only the detection log can still know what sensor
+///   produced its inputs, even after the sensor log is evicted by
+///   retention.
+/// - `clock_id` + `clock_hash` — the clock the framing's
+///   `timestamp_ns` is on. Same clock as the input log (entries
+///   are timestamp-aligned with the frame they were derived from).
+/// - `segment_duration_ns` / `retention_ns` — auki-logs framing.
+///
+/// `app_id` is the application identifier (same string as the daemon's
+/// `/api/info` `app` field). `session_id` is the integrator-minted
+/// UUIDv4 for the current daemon run.
+///
+/// **No `intent` field.** Per PR #72 the keystone's `buffer | intent_recording`
+/// dimension applies to every log, but adding it uniformly across the
+/// existing manifest builders is a separate PR — match the existing
+/// log behavior here, file the uniform update as a follow-up.
+#[allow(clippy::too_many_arguments)]
+pub fn build_detection_log_manifest(
+    app_id: &str,
+    session_id: &str,
+    detector_id: &str,
+    detector_hash: &str,
+    input_log_id: &str,
+    input_sensor_id: &str,
+    input_sensor_hash: &str,
+    clock_id: &str,
+    clock_hash: &str,
+    segment_duration: Duration,
+    retention: Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "app_id": app_id,
+        "session_id": session_id,
+        "detector_id": detector_id,
+        "detector_hash": detector_hash,
+        "input_log_id": input_log_id,
+        "input_sensor_id": input_sensor_id,
+        "input_sensor_hash": input_sensor_hash,
+        "clock_id": clock_id,
+        "clock_hash": clock_hash,
         "segment_duration_ns": duration_as_i64_ns(segment_duration),
         "retention_ns": duration_as_i64_ns(retention),
     })
@@ -456,5 +535,69 @@ mod tests {
             TimeTransformSource::LocalClockRead.hash(),
             "8dcea0b9b0b2219d651e0856f112cd65"
         );
+    }
+
+    // ─── Detection Log manifest ─────────────────────────────────────────────
+
+    fn m1_detection_log_manifest() -> serde_json::Value {
+        build_detection_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "aukilabs/qr/v1",
+            "abc123def4567890abc123def4567890",
+            "rec-456",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        )
+    }
+
+    #[test]
+    fn build_detection_log_manifest_contains_all_required_fields() {
+        let m = m1_detection_log_manifest();
+        assert_eq!(m["app_id"], "boosterapp");
+        assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["detector_id"], "aukilabs/qr/v1");
+        assert_eq!(m["detector_hash"], "abc123def4567890abc123def4567890");
+        assert_eq!(m["input_log_id"], "rec-456");
+        assert_eq!(m["input_sensor_id"], "K1-AABBCCDDEEFF/head_left_cam");
+        assert_eq!(m["input_sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
+        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
+        assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    #[test]
+    fn build_detection_log_manifest_omits_intent_field() {
+        // Per the keystone, intent (`buffer | intent_recording`) applies
+        // to every log — but the existing log builders don't carry it
+        // yet, so this builder matches them. A follow-on PR adds intent
+        // uniformly across every manifest builder. Asserting absence
+        // here so the contract is explicit and the follow-on PR has a
+        // failing test to update when it lands.
+        let m = m1_detection_log_manifest();
+        assert!(m.get("intent").is_none(), "intent field should be absent until uniform rollout");
+    }
+
+    #[test]
+    fn detection_log_manifest_opens_a_log_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = m1_detection_log_manifest();
+        let _log = auki_logs::Log::<TestEntry>::open(dir.path(), manifest).unwrap();
+        let reader = auki_logs::Log::<TestEntry>::read(dir.path()).unwrap();
+        assert_eq!(reader.manifest()["detector_id"], "aukilabs/qr/v1");
+        assert_eq!(
+            reader.manifest()["input_sensor_id"],
+            "K1-AABBCCDDEEFF/head_left_cam"
+        );
+        // Self-containedness check: the detection log alone surfaces
+        // both producer and input identities, even after the input
+        // sensor log might have been evicted.
+        assert!(reader.manifest()["detector_hash"].as_str().is_some());
+        assert!(reader.manifest()["input_sensor_hash"].as_str().is_some());
     }
 }

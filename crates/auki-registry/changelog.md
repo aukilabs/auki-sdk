@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 12:46 HKT, 2026
+
+**`SensorBody::JointEncoders { joint_count, frame_rate_hz }` variant added.** Fourth sensor-body kind alongside `RgbCamera` / `PointCloud` / `Microphone`. Per-frame data lives in [`auki_datatypes::joint_encoders::JointEncodersLogEntry`](../auki-datatypes/src/lib.rs) (on-disk) and [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`](../auki-datatypes/src/lib.rs) (libp2p stream wire) — same `repeated float angles_rad = 1` shape on both sides. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Joint angles are encoder readings — measurements before any kinematic interpretation; pose (cartesian TF) is what you compute via FK, downstream.
+
+**Layering rationale (sensor-data, not pose).** Same shape as `Microphone` (PCM bytes + `channels`/`sample_format` for deserialization), `PointCloud` (CDR bytes + `point_step`/`fields` for deserialization), `RgbCamera` (pixel bytes + intrinsics for projection). Producer ships raw measurements with just enough deserialization metadata (`joint_count`) for the consumer to read them; schema-for-interpretation (URDF) lives downstream. This is the layering call Nils made — overriding an earlier reach for a `PoseSource::JointAngles` pose-log variant. The pose-log path forced a manifest-keying decision (`(from_frame_id, to_frame_id)` is required for `Ros2Tf` but conceptually wrong for joint-space readings) and conflated the measurement layer with the interpretation layer.
+
+**Deliberately minimal.** No `joint_names: Vec<String>` (URDF lives on consumer; producer doesn't read URDF and shouldn't be authoritative for joint names — see [`parking_lot.md`](parking_lot.md#decided-2026-05-09--joint_names-placement-on-the-producer)). No `urdf_id` / `joint_name_hash` (speculative — Park is K1-monoculture today; revisit when ≥2 robot models share a Park instance). No `frame_id` (joint encoders aren't in any cartesian frame; including a `frame_id` would invite consumers to look up a Frame Registry entry that doesn't make sense for this sensor type).
+
+**Tests**: 33 → 36 (+3 — `joint_encoders_entry_serializes_to_canonical_bytes`, `joint_encoders_entry_hash_is_locked` (`cb45b0d89bcb5c738c38ff9c3c9d7768`), `write_then_read_joint_encoders_round_trip`).
+
+**Docs**: [`src/readme.md`](src/readme.md) gains a `SensorBody::JointEncoders` section pointing at the paired log/stream payloads in `auki-datatypes`.
+
 ### broodsugar's claude · May 8, 11:52 HKT, 2026
 
 **`PoseLogEntry` + `TransformSample` departed at Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** Both structs are gone from [`src/lib.rs`](src/lib.rs); replaced by the flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs) with `(from_frame_id, to_frame_id)` identity in the manifest (per the 2026-05-07 synthesis). Per-sample `parent_frame` / `child_frame` strings are gone — each Pose Log holds samples for exactly one ordered frame pair, mirroring TimeTransform Log's per-clock-pair shape.

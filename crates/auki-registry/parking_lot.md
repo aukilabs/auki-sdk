@@ -25,3 +25,15 @@ Open question: should the SDK formalize this — e.g. provide a `SensorId` newty
 ## Atomic-write tmp file cleanup
 
 If a process crashes mid-write, the `.<filename>.tmp` sidecar is left behind. There's no TTL or startup-cleanup pass. In a long-lived session, can these accumulate enough to matter? Should `write_sensor` / `write_clock` opportunistically remove stale tmp files at the start of each call, or run a cleanup pass on log/registry open?
+
+---
+
+## JointEncoders sensor body — decisions filed at landing
+
+### Decided 2026-05-09 — `joint_names` placement on the producer
+
+Decided: not on the registry entry. URDF lives with the consumer (Park, future analyses). Reason: the producer doesn't read URDF; making it declare names asks it to be authoritative for a schema it doesn't own. Joint ordering is a producer-defined invariant per log, agreed by hand-coordination at integration time. Revisit when ≥2 robot models share a Park instance — at that point either `urdf_id` for explicit coupling or `joint_name_hash` for opaque sanity-check.
+
+### Decided 2026-05-09 — `SensorBody::JointEncoders` minimalism (`joint_count` only)
+
+Decided: no `joint_name_hash`, no `urdf_id`, no per-joint metadata. `joint_count` is the deserialization invariant (matches `Microphone::channels`); anything richer is interpretation, not deserialization. Revisit when a real cross-robot mismatch shows up that `joint_count` alone doesn't catch.

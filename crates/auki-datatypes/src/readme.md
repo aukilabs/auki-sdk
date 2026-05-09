@@ -4,7 +4,7 @@ Implementation status of `auki-datatypes`. Spec: this crate's [outer `README.md`
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). It includes nine prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
+A single source file: [`lib.rs`](lib.rs). It includes the prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
 
 - `camera` (Step 1, 2026-05-08) — `PinholeCameraLogEntry` + `DynamicIntrinsics`.
 - `point_cloud` (Step 3, 2026-05-08) — `PointCloudLogEntry { bytes data }`. Opaque-bytes-only — layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Symmetric with the wire's `PointCloudFrame`.
@@ -12,8 +12,10 @@ A single source file: [`lib.rs`](lib.rs). It includes nine prost-generated modul
 - `pose` (Step 5, 2026-05-08) — `SpatialTransform { Vec3 translation; Quat orientation }`, flat. No `PoseLogEntry` wrapper, no per-sample `parent_frame`/`child_frame` — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair. Quat is `(x, y, z, w)` Hamilton.
 - `time_transform` (Step 6, 2026-05-08) — `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }`. The pre-migration per-entry `source` field moved to the manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); the per-entry `discontinuous: bool` is gone (computed on read).
 - `detection` (Step 8, 2026-05-08) — `DetectionLogEntry { bytes data }`. Opaque-bytes-only — the per-frame detection schema is defined by the Detector, not the SDK (QR portal-uid + corners; ESL class + bbox + confidence; people bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. The exact registry shape that pins per-`(detector_id, ...)` interpretation is TBD; it'll be the Detection-Log analog of `SensorRegistryEntry`.
+- `joint_encoders` (2026-05-09) — `JointEncodersLogEntry { repeated float angles_rad }`. Per-frame joint-encoder readings in radians, indexed in the producer's emit order; vector length pinned by `(sensor_id, sensor_hash) → SensorBody::JointEncoders { joint_count }`. Joint angles are encoder readings — measurements before any kinematic interpretation; FK against the URDF is a consumer-side derivation (Park).
 - `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
+- `joint_encoders_stream` (2026-05-09) — `JointEncodersFrame { repeated float angles_rad }`. libp2p `/auki/stream/0.1.0` payload. Same shape as `joint_encoders::JointEncodersLogEntry` (separate proto package so wire and disk dispatch on distinct Rust types — Step 2/3 precedent). Symmetry locked by an explicit `joint_encoders_disk_wire_byte_identical` test.
 - `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream`), `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
 
 Plus the `impl_log_payload!` macro that wires every on-disk prost type into [`auki_logs::LogPayload`](../../auki-logs/src/lib.rs).

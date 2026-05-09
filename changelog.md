@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**[`auki-network`](crates/auki-network) — sixth `/auki/message/0.0.1` design question filed: inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Pre-filed in [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md) with a SDK-owns-the-writer lean. Slate becomes six questions; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates.
+
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **[`auki-network`](crates/auki-network) — five `/auki/message/0.0.1` design questions filed.** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls — substream lifecycle, crate placement, envelope typing, message log topology, ack semantics — pre-filed in [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md) with leans for each. Moves four cross-repo questions out of [`org/src/quests/clickerlooker/parking_lot.md`](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/parking_lot.md) per the quest-README "what lives here vs in the sub-repos" rule. Doc-only PR; follow-up PR converts the leans to `### Decision —` subsections once Nils adjudicates.

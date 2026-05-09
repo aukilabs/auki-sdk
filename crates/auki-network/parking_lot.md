@@ -2,6 +2,16 @@
 
 ---
 
+## `/auki/message/0.0.1` — inbound message log ownership
+
+Does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch to a registered handler), or does the consumer write it inside their handler (mirroring how sensor logs work — caller owns the log lifecycle)?
+
+The two outcomes diverge most visibly when a handler raises before its payload-typed parsing happens — SDK-owned guarantees the log entry exists; consumer-owned needs every handler to wrap try/except to ensure log-on-error coverage. They also diverge on replay-from-disk independence — SDK-owned means demos replay even when the consumer crashed before registering a handler.
+
+**Lean: SDK owns the inbound message log.** Symmetric with the wire's fire-and-forget semantics — the runtime already accepts every well-formed envelope, capturing them is the natural extension. Replay-from-disk is a stated goal of the messaging primitive (quest README: "both peers append every message to a local message log on disk, so the demo is replayable from disk without rerunning the click"); SDK ownership makes replay independent of consumer health. Decode-failure exceptions never lose log entries. Outbound capture (the `messages_to_<peer>` knob from the message log topology question below) belongs symmetrically to the SDK on the send side — both halves SDK-owned, consumer optionally tails for application-level visibility.
+
+---
+
 ## `/auki/message/0.0.1` — substream lifecycle
 
 A new libp2p protocol carrying typed messages between peers (first application: click events from Park to a robot peer; future: actuation commands, status reports, voice events, application messages). Two shapes for the substream pump:

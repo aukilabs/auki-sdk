@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**[`auki-network`](auki-network) — sixth `/auki/message/0.0.1` design question filed in [`parking_lot.md`](auki-network/parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Lean: SDK owns the writer (symmetric with fire-and-forget wire semantics, replay-from-disk independence from consumer health, clean decode-failure exception semantics, outbound capture symmetry). Doc-only PR; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates. Slate becomes six questions.
+
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **[`auki-network`](auki-network) — five `/auki/message/0.0.1` design questions filed in [`parking_lot.md`](auki-network/parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR — substream lifecycle (lean: per-message), crate placement (lean: inside `auki-network`), envelope typing (lean: `string type_url + bytes body`), log topology (lean: per-peer-pair on the receiving side), ack semantics (lean: fire-and-forget v1). Also moves four cross-repo questions out of [`org/src/quests/clickerlooker/parking_lot.md`](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/parking_lot.md) (per-quest-README "what lives here vs in the sub-repos" rule). Doc-only PR; follow-up PR converts the leans to `### Decision —` subsections once Nils adjudicates.

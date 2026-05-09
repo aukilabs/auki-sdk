@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**Added a sixth `/auki/message/0.0.1` design question to [`parking_lot.md`](parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2): does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch), or does the consumer write it inside their handler?
+
+The two outcomes diverge on (a) decode-failure exception semantics — SDK-owned guarantees the log entry exists even when the handler raises before payload-typed parsing, consumer-owned needs every handler wrapped in try/except for the same coverage; (b) replay-from-disk independence — SDK-owned means demos replay even when the consumer crashed before registering a handler.
+
+**Lean: SDK owns the inbound message log.** Symmetric with the wire's fire-and-forget semantics; replay-from-disk is a stated quest-level goal; clean exception semantics around decode failures; outbound capture (the existing `messages_to_<peer>` knob from the message log topology question) belongs symmetrically to the SDK on the send side, so both halves SDK-owned with consumer optionally tailing for application-level visibility.
+
+This is real architectural expansion — the question wasn't in [PR #85](https://github.com/aukilabs/auki-sdk/pull/85)'s original five and shifts the message-log writer's home. Filing as a sixth open question rather than absorbing into one of the existing five so Nils sees the addition explicitly. Five-question slate becomes six.
+
+**No code changes.** Doc-only PR.
+
+---
+
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **Filed five `/auki/message/0.0.1` design questions in [`parking_lot.md`](parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR. All five carry leans:

@@ -8,7 +8,7 @@ Vinland v1 ships `DiscoveryClient::register/fetch/deregister` as one-shots. The 
 
 - **Re-register loop.** Daemons should renew their entry every `ttl/3` or so to outlive Discovery's eviction. Suggests a small task: `DiscoveryRuntime::spawn(client, wallet, cluster_name, addresses, expected_app_id?, note?, period?)` that calls `register` on a tokio interval. Owns its own task handle; `shutdown(self)` deregisters and returns.
 - **Poll-for-updates loop.** Daemons that want to see new peers without an operator nudge call `fetch(cluster_name)` on a slower interval (every 30–60s). Same runtime can host both loops.
-- **Push channel.** If Discovery grows SSE / WebSocket, the poll loop swaps for a streaming consumer of the same shape.
+- **Push channel.** If Discovery grows SSE / WebSocket, the poll loop swaps for a streaming consumer of the same shape. **Push side landed Vinland D6 — see [`subscribe` parking-lot decisions below](#vinland-d6--discovery_clientsubscribe-pre-implementation-decisions-filed-by-broodsugars-dobby-2026-05-09).** The push channel obviates the poll loop's need entirely; the re-register loop remains a separate question for whenever Discovery v2's TTL lands.
 
 Defer until Discovery v2 lands. The current one-shot surface is forward-compatible — a `DiscoveryRuntime` builds *on* `DiscoveryClient`, doesn't replace it.
 
@@ -206,3 +206,36 @@ MAC-by-convention is fragile in containers, VMs, and multi-NIC environments (see
 - **MAC + persisted nonce** — hash the MAC together with a per-install random value, persist the result. Decouples the public id from the underlying MAC; new MAC selection still produces the same id.
 
 Decide before any cross-machine coordination relies on `app_instance` being stable. ansuz only needs distinguishability, not stability.
+
+---
+
+## Vinland D6 — `discovery_client::subscribe` pre-implementation decisions _(filed by broodsugar's dobby, 2026-05-09)_
+
+Discovery's SSE endpoint (`GET /clusters/{cluster_name}/events`, `event: cluster_doc\ndata: {ClusterDoc-JSON}\n\n`) shipped 2026-05-07 against `aukilabs/discovery` commit `97c4dd8`. SDK side adds a fourth method to `DiscoveryClient` next to `register / fetch / deregister`:
+
+```rust
+pub async fn subscribe(
+    &self,
+    cluster_name: &str,
+) -> Result<impl Stream<Item = Result<ClusterDoc, SubscribeError>> + Send + 'static, SubscribeError>;
+```
+
+Paired with `ClusterRuntime::update_cluster_doc(new_doc)` so the daemon has somewhere to deliver fresh docs without tearing down the runtime. Single PR; the two pieces are tightly coupled. Daemon-side adoption (boosterapp / park / sentinel each pick up `subscribe` and feed the doc into their `ClusterRuntime`) is per-daemon-repo follow-ups after the SDK ships.
+
+Four pre-implementation decisions filed before the implementing PR per the [auki-labs-repos convention](../../CLAUDE.md):
+
+### Decision — reconnect / backoff in `subscribe`
+
+**Decided 2026-05-09. Caller owns retry; `subscribe` ends on transport failure.** Reasons: (a) any retry policy baked in (jittered exponential backoff? max retries? circuit breaker?) becomes opinionated before any daemon has hit the wall and told us what semantics they need; (b) the natural place for retry is the daemon's outer supervisory loop, which already exists for `register`; (c) making `subscribe` "just ends on failure" matches the shape of the other three `DiscoveryClient` methods (one-shot semantics, caller decides what's next). Revisit if the first daemon shipping `subscribe` reports the boilerplate is non-trivial; a sibling helper (`DiscoveryRuntime::subscribe_with_reconnect(...)` etc.) is the right place for retry, not the primitive itself.
+
+### Decision — lag signal in the subscribe stream
+
+**Decided 2026-05-09. Silently drop intermediate events; the next emitted `ClusterDoc` reconciles.** Reasons: (a) Discovery's `tokio::sync::broadcast::channel(16)` per `cluster_name` already drops events for receivers more than 16 events behind, but the next event still carries the full snapshot (idempotent recovery); (b) surfacing `Lagged` to the SDK consumer would force the consumer to decide what to do with a state that resolves itself within one more event (resubscribe? log?); (c) cluster-membership events are convergent — the consumer cares about "current peers," not "every transition," and a snapshot delivers the former. Revisit if a consumer ever needs strong ordering / no-loss semantics for cluster events (currently no consumer does).
+
+### Decision — diff events vs full snapshots on the wire
+
+**Decided 2026-05-09. Snapshots only for v1; the wire shape is locked.** Reasons: (a) snapshots are simpler to encode (`ClusterDoc` JSON; no cross-event state machine); (b) idempotent under reconnect — a fresh subscriber and a reconnecting subscriber are indistinguishable from Discovery's side; (c) survive lagged subscribers without bookkeeping (the lag-decision item above depends on this); (d) cluster sizes for the demo are <10 peers, snapshot bandwidth is negligible. Revisit when a single cluster crosses ~100 peers and snapshot serialization shows up in profiles. The forward path is additive — Discovery could emit a `cluster_doc_delta` event type in parallel without breaking `cluster_doc` consumers.
+
+### Decision — multi-cluster `subscribe` on the same `DiscoveryClient` instance
+
+**Decided 2026-05-09. v1 spawns one HTTP connection per `subscribe` call.** Reasons: (a) `DiscoveryClient`'s existing `register` / `fetch` / `deregister` methods are one-shot HTTP; an SSE long-poll on top of that is the simplest extension; (b) the v1 case is one-cluster-per-daemon (boosterapp / park / sentinel each subscribe to their own cluster, not multiple); (c) connection pooling semantics for long-lived SSE streams are non-obvious (per-host connection limits in `reqwest`, keepalive interaction, connection-shutdown ownership). Revisit if a daemon ever subscribes to multiple clusters from the same client — at that point the question is "do we share a single connection, or open one per cluster" and either answer needs explicit design.

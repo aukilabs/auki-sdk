@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 12:46 HKT, 2026
+
+**`auki.joint_encoders` / `JointEncodersLogEntry` (on-disk) and `auki.joint_encoders_stream` / `JointEncodersFrame` (wire) landed.** New paired proto packages, `repeated float angles_rad = 1` on both sides, byte-identical wire/disk shape locked by an explicit `joint_encoders_disk_wire_byte_identical` symmetry test. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Mirrors the [`Microphone`](../auki-registry/src/lib.rs) / [`PointCloud`](../auki-registry/src/lib.rs) layering — the producer ships raw measurements and just enough deserialization metadata (`joint_count` on the registry body) for the consumer to read the bytes correctly. Schema-for-interpretation lives downstream.
+
+**Why both wire and disk in the same PR.** The [Step 2/3 point-cloud pattern](src/lib.rs) — `auki.<thing>` (disk, `LogPayload`) + `auki.<thing>_stream` (wire, plain `prost::Message`) — already paid the cost of the symmetric structure. Disk-only would have forced boosterapp's existing libp2p stream path to fall back to ad-hoc bytes-on-the-wire and required a follow-up PR for the wire type. Step 2/3 had `bytes`-only payloads so symmetry was trivially true; `JointEncoders` has structured fields, so the symmetry is locked by the new explicit byte-equality test alongside the locked-vector tests.
+
+**Resolved parking-lot questions** (folded into this PR per the [migration-architecture-decisions cadence](parking_lot.md)): `JointEncodersLogEntry` and `JointEncodersFrame` are structured (`repeated float angles_rad`) and ship as a paired wire/disk package; `angles_rad` precision is f32 (matches `SpatialTransform`'s quaternion components); no `velocity_rad_per_s` / `effort_nm` companion fields in v1 (minimal-fields stance from Steps 3/4 — adding new proto fields later is cheap, baking them in now is forever).
+
+**Tests**: 37 → 46 (+9 — `joint_encoders_log_entry_serializes_to_locked_wire_bytes`, `joint_encoders_log_entry_hash_is_locked`, `joint_encoders_log_entry_round_trips`, `joint_encoders_log_entry_log_payload_round_trips`, `joint_encoders_log_entry_empty_angles_round_trips`, `joint_encoders_log_entry_segment_round_trip`, `joint_encoders_frame_serializes_to_locked_wire_bytes`, `joint_encoders_frame_round_trips`, `joint_encoders_disk_wire_byte_identical`). Locked wire bytes for the 6-DOF fixture `[0.0, 1.0, 2.0, 3.0, 4.0, 5.0]`: `0a18000000000000803f0000004000004040000080400000a040`. XXH3-128 hash: `150a56272692540cf5d8e8e93dc74b7a`.
+
 ### broodsugar's claude · May 8, 15:34 HKT, 2026
 
 **Step 8 of the [migration](src/sprint.md) landed — `auki.detection` / `DetectionLogEntry` (on-disk).** New `proto/detection.proto` with `DetectionLogEntry { bytes data = 1; }` — opaque-bytes-only, same stance as Steps 3 (point cloud) and 4 (audio). The detection schema is defined per-Detector (QR portal-uid + four corners + content; ESL class + bbox + confidence; people bboxes); the SDK does not interpret detector-specific fields. Carrying detector-specific fields on the prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales.

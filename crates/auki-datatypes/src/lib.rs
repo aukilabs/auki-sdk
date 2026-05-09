@@ -55,6 +55,21 @@ pub mod point_cloud {
 
 impl_log_payload!(point_cloud::PointCloudLogEntry);
 
+/// `auki.joint_encoders` — `JointEncodersLogEntry` Sensor Log payload.
+/// Per-frame `repeated float angles_rad`; vector length pinned by the
+/// `SensorRegistryEntry`'s `JointEncoders { joint_count }` body via
+/// `(sensor_id, sensor_hash)`. Joint angles are encoder readings —
+/// measurements before any kinematic interpretation; FK against the
+/// URDF is a consumer-side derivation. Symmetric with the wire's
+/// [`joint_encoders_stream::JointEncodersFrame`] (same
+/// `repeated float angles_rad = 1` shape on disk and wire; mirrors
+/// the point-cloud Step 2/3 pattern).
+pub mod joint_encoders {
+    include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders.rs"));
+}
+
+impl_log_payload!(joint_encoders::JointEncodersLogEntry);
+
 /// `auki.audio` — opaque-bytes audio log payload (Sensor Log family).
 /// Migration Step 4. `sample_format`, `channels`, `sample_rate_hz`,
 /// `channel_layout`, `frame_id` live on the SensorRegistryEntry's
@@ -118,6 +133,18 @@ pub mod frame_stream {
 /// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
 pub mod point_cloud_stream {
     include!(concat!(env!("OUT_DIR"), "/auki.point_cloud_stream.rs"));
+}
+
+/// `auki.joint_encoders_stream` — `JointEncodersFrame` substream payload
+/// (libp2p `/auki/stream/0.1.0`). Same shape as
+/// [`joint_encoders::JointEncodersLogEntry`] (separate proto package so
+/// the wire and log code paths dispatch on distinct Rust types — Step
+/// 2/3 precedent). No `impl_stream_payload!` macro registration —
+/// wire-side prost types are used directly by the substream runtime,
+/// same as [`frame_stream::JpegFrame`] and
+/// [`point_cloud_stream::PointCloudFrame`].
+pub mod joint_encoders_stream {
+    include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders_stream.rs"));
 }
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
@@ -219,6 +246,8 @@ mod tests {
     use super::audio::AudioLogEntry;
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
     use super::detection::DetectionLogEntry;
+    use super::joint_encoders::JointEncodersLogEntry;
+    use super::joint_encoders_stream::JointEncodersFrame;
     use super::point_cloud::PointCloudLogEntry;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
@@ -848,5 +877,150 @@ mod tests {
         assert_eq!(entries[0].payload, step8_detection_log_entry());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
+    }
+
+    // ─── auki.joint_encoders + auki.joint_encoders_stream locked vectors ─────
+
+    /// 6-DOF arm fixture, integer-valued radians for stable wire bytes.
+    /// Joint ordering is producer-defined; this fixture pins one valid
+    /// ordering so cross-language readers reproduce the byte-equal
+    /// encoding.
+    fn step_joint_encoders_log_entry() -> JointEncodersLogEntry {
+        JointEncodersLogEntry {
+            angles_rad: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        }
+    }
+
+    /// Same fixture data as the disk-side entry — the disk and wire
+    /// payloads are content-identical by design (Step 2/3 precedent).
+    /// The `joint_encoders_disk_wire_byte_identical` test below locks
+    /// that equality at byte level.
+    fn step_joint_encoders_frame() -> JointEncodersFrame {
+        JointEncodersFrame {
+            angles_rad: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        }
+    }
+
+    /// Locks the prost wire bytes for the example joint-encoders log
+    /// entry. Cross-language readers (Python via betterproto, future
+    /// boosterapp Python) MUST produce these exact bytes for the same
+    /// input. Field 1 packed-repeated float: tag 0x0a, varint length
+    /// 0x18 (24 bytes = 6 × 4), then 6 little-endian f32s.
+    #[test]
+    fn joint_encoders_log_entry_serializes_to_locked_wire_bytes() {
+        let bytes = step_joint_encoders_log_entry().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex, "0a18000000000000803f0000004000004040000080400000a040");
+    }
+
+    /// XXH3-128 of those wire bytes — joins the workspace's locked
+    /// conformance set so future drift in either prost-build or
+    /// auki-hash trips the test.
+    #[test]
+    fn joint_encoders_log_entry_hash_is_locked() {
+        let bytes = step_joint_encoders_log_entry().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "150a56272692540cf5d8e8e93dc74b7a"
+        );
+    }
+
+    #[test]
+    fn joint_encoders_log_entry_round_trips() {
+        let entry = step_joint_encoders_log_entry();
+        let bytes = entry.encode_to_vec();
+        let decoded = JointEncodersLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// `LogPayload` round-trip — proves the macro-generated impl rides
+    /// the same prost path as direct `Message::encode_to_vec` /
+    /// `decode` calls.
+    #[test]
+    fn joint_encoders_log_entry_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step_joint_encoders_log_entry();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <JointEncodersLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Empty angle vector — proto3 default-elision: a packed-repeated
+    /// float field with no elements encodes to zero bytes.
+    #[test]
+    fn joint_encoders_log_entry_empty_angles_round_trips() {
+        let entry = JointEncodersLogEntry { angles_rad: vec![] };
+        let bytes = entry.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = JointEncodersLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam test: open a real
+    /// `auki_logs::Log<JointEncodersLogEntry>`, append two entries
+    /// (one populated, one empty), close, re-read, assert order +
+    /// payload byte-equality. Catches any regression in the
+    /// `LogPayload` macro wiring or the segment-framing path.
+    #[test]
+    fn joint_encoders_log_entry_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<JointEncodersLogEntry> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step_joint_encoders_log_entry()).unwrap();
+            log.append(200, &JointEncodersLogEntry { angles_rad: vec![] })
+                .unwrap();
+        }
+        let reader: auki_logs::LogReader<JointEncodersLogEntry> =
+            auki_logs::Log::<JointEncodersLogEntry>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step_joint_encoders_log_entry());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.angles_rad, Vec::<f32>::new());
+    }
+
+    /// Locks the prost wire bytes for the example joint-encoders
+    /// substream frame. The locked hex MUST equal the hex from
+    /// `joint_encoders_log_entry_serializes_to_locked_wire_bytes`
+    /// above (same field shape, same field numbers, same fixture
+    /// data) — that equality is the symmetry assertion below. Cross-
+    /// language readers (boosterapp's libp2p stream path) pinned to
+    /// these bytes.
+    #[test]
+    fn joint_encoders_frame_serializes_to_locked_wire_bytes() {
+        let bytes = step_joint_encoders_frame().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        // Identical to disk-side hex — Step 2/3 wire/disk symmetry.
+        assert_eq!(hex, "0a18000000000000803f0000004000004040000080400000a040");
+    }
+
+    #[test]
+    fn joint_encoders_frame_round_trips() {
+        let frame = step_joint_encoders_frame();
+        let bytes = frame.encode_to_vec();
+        let decoded = JointEncodersFrame::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, frame);
+    }
+
+    /// **Symmetry assertion** — the disk-side `LogEntry` and the
+    /// wire-side `Frame` encode to byte-identical output for the
+    /// same input vector. If this ever diverges, one of the protos
+    /// drifted and the wire/disk pact is broken. Steps 2/3 didn't
+    /// need this test because the payloads were `bytes`-only
+    /// (trivially identical); JointEncoders has structured fields,
+    /// so the symmetry is locked explicitly. See
+    /// `auki-labs-repos/references/wire-disk-proto-symmetry.md`.
+    #[test]
+    fn joint_encoders_disk_wire_byte_identical() {
+        let entry = step_joint_encoders_log_entry();
+        let frame = step_joint_encoders_frame();
+        assert_eq!(entry.encode_to_vec(), frame.encode_to_vec());
     }
 }

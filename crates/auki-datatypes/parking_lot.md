@@ -52,6 +52,15 @@ Adjudicated in favour of opaque-bytes-only: `auki.detection.DetectionLogEntry { 
 
 The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a sibling shape that lives in [`auki-registry`](../../auki-registry) when needed, not in this crate. File when subscription / discovery for detection logs needs it.
 
+### ✓ Resolved 2026-05-09 — `JointEncodersLogEntry` and `JointEncodersFrame` are structured (`repeated float angles_rad`), and ship as a paired wire/disk package
+
+Decided: `auki.joint_encoders.JointEncodersLogEntry` (on disk) and `auki.joint_encoders_stream.JointEncodersFrame` (on wire), both `repeated float angles_rad = 1`. Byte-identical wire/disk shape, locked by an explicit symmetry test (`joint_encoders_disk_wire_byte_identical`) — Step 2/3 didn't need that test because `bytes`-only payloads were trivially identical. Two separate proto packages so the wire and log code paths dispatch on distinct Rust types (Step 2/3 precedent). Resolved + propagated in the same PR.
+
+Two component-decisions filed at the same PR:
+
+- **`angles_rad` precision: f32 over f64.** Going with `repeated float` (f32) to match `SpatialTransform`'s quaternion components. Revisit if a consumer needs higher precision for low-rate slow-motion replay.
+- **No `velocity_rad_per_s` / `effort_nm` companion fields on `JointEncodersLogEntry`.** v1 ships positions only — minimal-fields stance from Steps 3/4. ROS `JointState` carries velocity and effort and the K1 publishes velocity, so the upstream signal is there. Revisit when a consumer (predictive smoothing, force-controlled teleop, non-Park use) earns the addition. Adding new proto fields later is cheap (new field number); adding them now bakes them in for everyone.
+
 ---
 
 ## Migration architecture decisions

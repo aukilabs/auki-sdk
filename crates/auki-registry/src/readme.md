@@ -168,6 +168,21 @@ pub struct Microphone {
 
 Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
 
+### `SensorBody::JointEncoders`
+
+```rust
+pub struct JointEncoders {
+    pub joint_count: u32,           // sanity-check invariant; angles_rad length must match
+    pub frame_rate_hz: u32,         // expected publish rate; sizing hint for buffers
+}
+```
+
+Per-frame data lives in [`auki_datatypes::joint_encoders::JointEncodersLogEntry`](../../auki-datatypes/src/lib.rs) (`repeated float angles_rad`). On the libp2p stream wire, the same payload rides as [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`](../../auki-datatypes/src/lib.rs) — byte-identical to the disk-side entry by design (Step 2/3 precedent).
+
+Joint angles are encoder readings — measurements of joint positions, before any kinematic interpretation. The URDF that drives forward kinematics (joint space → cartesian TF) lives with the consumer (Park, future analyses), not the producer; mapping joint indices to URDF links is a consumer-side concern. Joint ordering is producer-defined and immutable per log; consumers and producers coordinate the order at integration time.
+
+Deliberately minimal — `joint_count` is the deserialization invariant (matches `Microphone::channels`); `joint_names`, `urdf_id`, and per-joint metadata are not on this body. See [`parking_lot.md`](../parking_lot.md#jointencoders-sensor-body--decisions-filed-at-landing) for the rationale and revisit triggers.
+
 ### `PoseSource` — moved to `auki-manifests` (Step 0, 2026-05-08)
 
 `PoseSource` is the inline producer-identity tagged enum that lives in the Pose Log manifest under `"source"`. It's manifest metadata, not a registry entry — and as of Step 0 of the migration it lives in [`auki-manifests`](../../auki-manifests) alongside `build_pose_log_manifest`.

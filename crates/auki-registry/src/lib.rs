@@ -35,6 +35,7 @@ pub enum SensorBody {
     RgbCamera(RgbCamera),
     PointCloud(PointCloud),
     Microphone(Microphone),
+    JointEncoders(JointEncoders),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +136,49 @@ pub struct Microphone {
     /// appropriate for generic mic arrays where the consumer does its own
     /// beam-forming.
     pub channel_layout: String,
+}
+
+/// Static identity of a joint-encoder bank — the bits that describe how
+/// to interpret the per-frame angle vector consumers will see in
+/// [`auki_datatypes::joint_encoders::JointEncodersLogEntry`] (on disk)
+/// and [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`]
+/// (on the libp2p stream wire).
+///
+/// **Joint angles are encoder readings — measurements of joint
+/// positions, before any kinematic interpretation.** Forward kinematics
+/// (joint space → cartesian TF) is a consumer-side derivation; the
+/// URDF that drives that derivation lives with the consumer (Park,
+/// future analyses), not the producer. The producer ships angle floats
+/// and just enough deserialization metadata (`joint_count`) for the
+/// consumer to read the bytes correctly. Mirrors the layering of
+/// [`RgbCamera`] / [`PointCloud`] / [`Microphone`]: producer ships
+/// raw measurements, consumer holds the schema-for-interpretation.
+///
+/// Joint ordering is producer-defined and immutable per log; mapping
+/// joint indices to URDF links is a consumer-side concern, agreed by
+/// hand-coordination at integration time.
+///
+/// Deliberately excluded fields and their parking-lot rationale:
+/// - **No `joint_names: Vec<String>`** — URDF lives on the consumer.
+///   See `parking_lot.md` "`joint_names` placement".
+/// - **No `urdf_id` / `urdf_hash`** — speculative. Park is K1-monoculture
+///   today. See `parking_lot.md` "`SensorBody::JointEncoders` minimalism".
+/// - **No `frame_id`** — joint encoders aren't in any cartesian frame;
+///   they're in joint space. Including a `frame_id` would invite
+///   consumers to look up a Frame Registry entry that doesn't make
+///   sense for this sensor type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JointEncoders {
+    /// Number of joints in each per-frame angle vector. Sanity-check
+    /// invariant for deserialization — the per-frame payload's
+    /// `angles_rad` length MUST equal this. Equivalent in spirit to
+    /// [`Microphone::channels`].
+    pub joint_count: u32,
+    /// Expected publish rate in Hz, observed at sensor bootstrap.
+    /// Sizing hint for segment duration / consumer buffers; not part
+    /// of identity logic. Same role as [`RgbCamera::frame_rate_hz`]
+    /// and [`PointCloud::frame_rate_hz`].
+    pub frame_rate_hz: u32,
 }
 
 impl SensorRegistryEntry {
@@ -765,7 +809,9 @@ mod tests {
                 cam.width = 1920;
                 cam.height = 1080;
             }
-            SensorBody::PointCloud(_) | SensorBody::Microphone(_) => {
+            SensorBody::PointCloud(_)
+            | SensorBody::Microphone(_)
+            | SensorBody::JointEncoders(_) => {
                 panic!("test was set up for RgbCamera")
             }
         }
@@ -987,6 +1033,54 @@ mod tests {
     fn write_then_read_microphone_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let entry = m1_microphone_entry();
+        let outcome = write_sensor(dir.path(), &entry).unwrap();
+        let hash = outcome.hash().to_string();
+        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        assert_eq!(read, Some(entry));
+    }
+
+    // ─── JointEncoders tests ───────────────────────────────────────────────
+
+    /// Six-DOF arm fixture — `K1` upper-arm shape, plausible publish
+    /// rate. Joint count and frame rate are the only fields the
+    /// registry body carries; URDF / joint names live with the
+    /// consumer.
+    fn m1_joint_encoders_entry() -> SensorRegistryEntry {
+        SensorRegistryEntry {
+            sensor_id: "K1-AABBCCDDEEFF/right_arm_joints".into(),
+            body: SensorBody::JointEncoders(JointEncoders {
+                joint_count: 6,
+                frame_rate_hz: 100,
+            }),
+        }
+    }
+
+    /// Locks the JCS canonical bytes for the M1 example joint-encoders
+    /// entry. Catches drift in entry shape OR canonicalization. Joins
+    /// the workspace's cross-language locked-vector set.
+    #[test]
+    fn joint_encoders_entry_serializes_to_canonical_bytes() {
+        let bytes = m1_joint_encoders_entry().canonical_bytes();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            r#"{"frame_rate_hz":100,"joint_count":6,"sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"joint_encoders"}"#
+        );
+    }
+
+    /// Locks the XXH3-128 of the canonical bytes. Trips if any of
+    /// `auki-jcs`, `auki-hash`, or this crate's serde shape drifts.
+    #[test]
+    fn joint_encoders_entry_hash_is_locked() {
+        assert_eq!(
+            m1_joint_encoders_entry().hash(),
+            "cb45b0d89bcb5c738c38ff9c3c9d7768"
+        );
+    }
+
+    #[test]
+    fn write_then_read_joint_encoders_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_joint_encoders_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
         let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();

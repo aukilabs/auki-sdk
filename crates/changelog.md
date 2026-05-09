@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 12:46 HKT, 2026
+
+**Joint-angle (encoder) sensor support landed.** [`auki-registry`](auki-registry) gains `SensorBody::JointEncoders { joint_count, frame_rate_hz }` — fourth sensor-body kind alongside RgbCamera / PointCloud / Microphone. [`auki-datatypes`](auki-datatypes) gains `proto/joint_encoders.proto` (`JointEncodersLogEntry`, on-disk) and `proto/joint_encoders_stream.proto` (`JointEncodersFrame`, libp2p stream wire) — both `repeated float angles_rad = 1`, byte-identical wire/disk shape locked by an explicit symmetry test. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Joint angles are encoder readings — measurements before any kinematic interpretation. Tests: `auki-datatypes` 37 → 46 (+9), `auki-registry` 33 → 36 (+3).
+
 ### broodsugar's claude · May 8, 15:34 HKT, 2026
 
 **Step 8 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.detection / DetectionLogEntry` (on-disk).** [`auki-datatypes`](auki-datatypes) gains `proto/detection.proto` with `DetectionLogEntry { bytes data = 1; }` — opaque-bytes-only, same stance as Steps 3 (point cloud) and 4 (audio). The detection schema is per-Detector — the SDK doesn't interpret detector-specific fields. Closes the producer side of the [subscription-as-materialization keystone](../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive. New type, not a migration of existing code. Sharpens [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #3 into landed code; the remaining blockers (`Log<T>::tail()`, Detector binding API, `auki-sdk-py`) sit elsewhere and ship as separate PRs. Tests: `auki-datatypes` 31 → 37 (+6).

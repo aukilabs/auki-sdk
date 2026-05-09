@@ -225,6 +225,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-logs-py"
+version = "0.0.0"
+dependencies = [
+ "auki-logs",
+ "pyo3",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "auki-manifests"
 version = "0.0.0"
 dependencies = [

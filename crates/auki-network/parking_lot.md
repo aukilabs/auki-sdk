@@ -2,6 +2,52 @@
 
 ---
 
+## `/auki/message/0.0.1` — substream lifecycle
+
+A new libp2p protocol carrying typed messages between peers (first application: click events from Park to a robot peer; future: actuation commands, status reports, voice events, application messages). Two shapes for the substream pump:
+
+**A. Substream-per-message.** Initiator opens a substream, writes one length-prefixed `MessageEnvelope`, closes. No inbox driver, no reconnect-on-stream-death edge cases, every send is self-contained on both wire and disk. Cost: one libp2p substream open per message.
+
+**B. Long-lived inbox substream.** Each peer pair opens one substream the first time they need to talk; all envelopes flow over it until either side disconnects. Cheaper per message after the first. Needs a per-pair inbox-multiplexer driver task with lifecycle similar to `stream_runtime`'s pump.
+
+**Lean: A.** The stated future use cases (actuation, walk-to, status, voice intents, application messages) are event-grain, not high-rate; nobody's sending 1000 envelopes/s on this protocol. Stateless on each side, replay-from-disk is trivial because each log entry is a self-contained envelope. Bypasses the edge cases stream's pump had to solve. If voice push-to-talk wants high-rate carrying, voice belongs on `/auki/stream/` as a typed `T`, not on `/auki/message/`.
+
+---
+
+## `/auki/message/0.0.1` — crate placement
+
+Sibling module to [`stream_protocol`](src/stream_protocol.rs) / [`stream_runtime`](src/stream_runtime.rs) inside this crate, or its own crate (`auki-messaging`)?
+
+**Lean: inside `auki-network`.** Both protocols share the same `libp2p_stream::Behaviour` in the swarm composition and the same `cluster.json` trust boundary. Splitting crates re-creates the swarm-wiring boilerplate without buying separation that the design calls for. Layering call worth getting right on the first PR — wrong placement is expensive to undo once the protocol has consumers.
+
+---
+
+## `/auki/message/0.0.1` — envelope typing
+
+`google.protobuf.Any` (open registry, `type_url` string per message — applications register types without SDK changes) vs. plain `string type_url + bytes body` (same expressive power, no `Any` import in every consumer) vs. a sealed `Message` oneof in the SDK enumerating every known message type.
+
+**Lean: plain `string type_url + bytes body`.** Same semantics as `google.protobuf.Any` without dragging the well-known type into every consumer's prost-generated code; matches the existing SDK precedent where [`stream::Frame.payload`](../auki-datatypes/proto/stream.proto) is opaque `bytes` and interpretation lives in registry. Apps register their own types without an SDK release. Sealed-oneof is rejected — closes the registry, breaks the "any future peer can carry its own message types" goal.
+
+Open sub-question: does the SDK ship a built-in `auki.message.v1.ClickEvent` type as part of the same [`auki-datatypes`](../auki-datatypes) proto sweep, or do consumers always define their own message types? Lean: ship the click-event type in the SDK so the click-to-look application can build against locked SDK types instead of inventing a registry on day one. Defer the generalised "registry of canonical message types" question until a third type wants to land.
+
+---
+
+## `/auki/message/0.0.1` — message log topology
+
+One log per peer multiplexing all senders (encode sender per-entry) vs. one log per peer-pair (sender becomes the producer in the manifest, `sensor_id` keyed `messages_from_<sender_peer_id>`).
+
+**Lean: per-peer-pair on the receiving side.** Matches the existing `<platform>-<machine_id>/<sensor_name>` `sensor_id` convention; keeps producer-identity story consistent with how every other sensor log is keyed. Sender side mirrors with `messages_to_<receiver_peer_id>` if bidirectional capture is wanted; defer that until someone asks (config knob on the message runtime, off by default).
+
+---
+
+## `/auki/message/0.0.1` — ack semantics
+
+Fire-and-forget vs. request/response on the same protocol. Click-to-look ships fine without an ack; a future application might need one.
+
+**Lean: fire-and-forget for v1.** Substream-per-message means the libp2p layer's substream-open-and-write success is already a coarse delivery signal on the sender side ("we got the bytes onto the wire to this peer"). Future request/response is its own protocol id (`/auki/request/0.0.1` or correlation-id-on-message-with-reply); don't conflate. Leaves the message envelope's `correlation_id` field reserved-but-unused in v1 so v2 can light it up without a wire bump.
+
+---
+
 ## `discovery_client` — `DiscoveryRuntime` (re-register / poll loop)
 
 Vinland v1 ships `DiscoveryClient::register/fetch/deregister` as one-shots. The Notion doc explicitly defers a `DiscoveryRuntime` (long-lived task that re-registers periodically and/or polls for updates) until Discovery itself grows TTL (D1) or push (D2). When that happens:

@@ -13,9 +13,11 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 const MAGIC: &[u8; 4] = b"AKLG";
 const VERSION: u16 = 1;
@@ -292,6 +294,60 @@ where
             _phantom: PhantomData,
         })
     }
+
+    /// Tail a log directory: yield newly-appended entries as they
+    /// become readable. The iterator starts at the **current end** of
+    /// the log — entries already on disk are not replayed (use
+    /// [`read`][Log::read] + [`LogReader::entries`] for historical).
+    ///
+    /// Polls the segments directory at a fixed cadence (default 10ms);
+    /// each call to [`Iterator::next`] blocks until a new entry is
+    /// readable. Drop the iterator to stop tailing.
+    ///
+    /// **Read side of the [subscription-as-materialization keystone].**
+    /// The detector loop is `for entry in Log::<T>::tail(&path)? { ... }`
+    /// — same call regardless of whether the log is being written by a
+    /// local sensor driver, materialized from a peer's stream, or
+    /// opened from a recording on disk.
+    ///
+    /// **No EOF detection.** The iterator tails forever — there is no
+    /// portable way to detect that all writers have closed. Callers
+    /// that need clean shutdown either drop the iterator or use
+    /// [`TailIter::try_next`] in a polling loop with their own stop
+    /// condition.
+    ///
+    /// **Catch-up note.** Entries appended *between* `tail()` returning
+    /// and the first `next()` call are visible. Entries that were on
+    /// disk before `tail()` was called are not. To get historical
+    /// entries plus future ones, call `read().entries()` first, then
+    /// `tail()`.
+    ///
+    /// [subscription-as-materialization keystone]: https://github.com/aukilabs/auki-sdk/blob/develop/parking_lot.md
+    pub fn tail(root: &Path) -> Result<TailIter<T>> {
+        let segments_dir = root.join("segments");
+        // Establish the starting position — current EOF of the latest
+        // segment, or "no segments yet" if the log is empty.
+        let starts = list_segments(&segments_dir)?;
+        let (current_segment, current_offset) = match starts.iter().next_back() {
+            Some(&latest) => {
+                let path = segments_dir.join(segment_filename(latest));
+                let len = fs::metadata(&path)?.len();
+                // If the segment is fresh and its header hasn't been
+                // fsynced yet, len could be < HEADER_SIZE. Clamp up so
+                // we don't try to seek before the first entry.
+                let offset = std::cmp::max(len, HEADER_SIZE as u64);
+                (Some(latest), offset)
+            }
+            None => (None, 0),
+        };
+        Ok(TailIter {
+            root: root.to_path_buf(),
+            poll_interval: Duration::from_millis(10),
+            current_segment,
+            current_offset,
+            _phantom: PhantomData,
+        })
+    }
 }
 
 impl<T> Drop for Log<T> {
@@ -328,6 +384,187 @@ where
         }
         Ok(out)
     }
+}
+
+/// Iterator returned by [`Log::tail`]. Yields entries as they are
+/// appended to the log. See [`Log::tail`] for full semantics.
+pub struct TailIter<T> {
+    root: PathBuf,
+    poll_interval: Duration,
+    /// Segment start_ns currently being tailed. `None` means the log
+    /// was empty when `tail()` was called and we haven't yet picked
+    /// up the first segment.
+    current_segment: Option<i64>,
+    /// Byte offset within the current segment file. Pointed at the
+    /// start of the next entry to read (or at EOF if caught up).
+    current_offset: u64,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: LogPayload> TailIter<T> {
+    /// Override the poll cadence (default 10ms). Lower values reduce
+    /// detection latency; higher values reduce filesystem load when
+    /// many tailers run on the same node.
+    pub fn with_poll_interval(mut self, dur: Duration) -> Self {
+        self.poll_interval = dur;
+        self
+    }
+
+    /// Non-blocking. Returns `Ok(Some(entry))` if one is ready right
+    /// now, `Ok(None)` if no entry is available yet (no I/O wait
+    /// beyond a single segment-listing). `Err(_)` only on real I/O or
+    /// payload decode failure.
+    pub fn try_next(&mut self) -> Result<Option<Entry<T>>> {
+        loop {
+            // (a) If we have no current segment, try to pick one up.
+            if self.current_segment.is_none() {
+                let starts = list_segments(&self.root.join("segments"))?;
+                match starts.iter().next() {
+                    Some(&first) => {
+                        self.current_segment = Some(first);
+                        self.current_offset = HEADER_SIZE as u64;
+                    }
+                    None => return Ok(None),
+                }
+            }
+
+            // (b) Try to read one entry from the current segment.
+            let segment_start = self.current_segment.expect("current segment set above");
+            let path = self
+                .root
+                .join("segments")
+                .join(segment_filename(segment_start));
+
+            match read_one_entry_at::<T>(&path, self.current_offset)? {
+                ReadOne::Got { entry, next_offset } => {
+                    self.current_offset = next_offset;
+                    return Ok(Some(entry));
+                }
+                ReadOne::EndOfSegment => {
+                    // Current segment exhausted (cleanly or truncated
+                    // mid-write). Look for a newer segment.
+                    let starts = list_segments(&self.root.join("segments"))?;
+                    let next = starts
+                        .iter()
+                        .copied()
+                        .find(|&s| s > segment_start);
+                    match next {
+                        Some(next_start) => {
+                            self.current_segment = Some(next_start);
+                            self.current_offset = HEADER_SIZE as u64;
+                            // Loop and try to read from the new segment.
+                            continue;
+                        }
+                        None => return Ok(None),
+                    }
+                }
+                ReadOne::SegmentMissing => {
+                    // The segment was evicted while we were tailing
+                    // (retention window collapsed past us). Treat as
+                    // "find the next surviving segment" — bump
+                    // forward, and if there isn't one, return None.
+                    let starts = list_segments(&self.root.join("segments"))?;
+                    let next = starts
+                        .iter()
+                        .copied()
+                        .find(|&s| s > segment_start);
+                    match next {
+                        Some(next_start) => {
+                            self.current_segment = Some(next_start);
+                            self.current_offset = HEADER_SIZE as u64;
+                            continue;
+                        }
+                        None => {
+                            // No surviving segments at all. Reset to
+                            // "empty log" state and return None.
+                            self.current_segment = None;
+                            self.current_offset = 0;
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: LogPayload> Iterator for TailIter<T> {
+    type Item = Result<Entry<T>>;
+
+    /// Blocks until a new entry is readable. Polls at the configured
+    /// cadence (default 10ms). Returns `Some(Err(_))` only on real I/O
+    /// or payload decode failure — not on transient "nothing yet."
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.try_next() {
+                Ok(Some(entry)) => return Some(Ok(entry)),
+                Ok(None) => thread::sleep(self.poll_interval),
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
+enum ReadOne<T> {
+    Got { entry: Entry<T>, next_offset: u64 },
+    EndOfSegment,
+    SegmentMissing,
+}
+
+/// Read exactly one entry from `path` starting at byte `offset`. The
+/// per-entry framing matches `read_segment_entries`: 8-byte timestamp,
+/// 4-byte length, payload bytes.
+///
+/// Returns `EndOfSegment` if any read short-falls (truncated mid-write
+/// or clean EOF) — the caller decides whether to stay on this segment
+/// or move on. Returns `SegmentMissing` if the file was evicted between
+/// `try_next` calls.
+fn read_one_entry_at<T: LogPayload>(path: &Path, offset: u64) -> Result<ReadOne<T>> {
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(ReadOne::SegmentMissing),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    file.seek(SeekFrom::Start(offset))?;
+
+    let mut ts_buf = [0u8; 8];
+    match file.read_exact(&mut ts_buf) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            return Ok(ReadOne::EndOfSegment);
+        }
+        Err(e) => return Err(Error::Io(e)),
+    }
+    let timestamp_ns = i64::from_le_bytes(ts_buf);
+
+    let mut len_buf = [0u8; 4];
+    match file.read_exact(&mut len_buf) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            return Ok(ReadOne::EndOfSegment);
+        }
+        Err(e) => return Err(Error::Io(e)),
+    }
+    let payload_len = u32::from_le_bytes(len_buf) as usize;
+
+    let mut payload = vec![0u8; payload_len];
+    match file.read_exact(&mut payload) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+            return Ok(ReadOne::EndOfSegment);
+        }
+        Err(e) => return Err(Error::Io(e)),
+    }
+
+    let value = T::decode(&payload).map_err(Error::Payload)?;
+    let next_offset = offset + 8 + 4 + payload_len as u64;
+    Ok(ReadOne::Got {
+        entry: Entry {
+            timestamp_ns,
+            payload: value,
+        },
+        next_offset,
+    })
 }
 
 fn required_durations(manifest: &serde_json::Value) -> Result<(i64, i64)> {
@@ -888,5 +1125,245 @@ mod tests {
         let starts: Vec<i64> = reader.segment_starts().to_vec();
         // All six segments retained.
         assert_eq!(starts, (0..=5).map(|i| i * seg).collect::<Vec<_>>());
+    }
+
+    // ─── tail() tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn tail_starts_at_current_eof_skipping_existing_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        // Single writer for the whole test — Log<T> can't extend an
+        // existing segment after re-open today (the first start_segment
+        // uses create_new(true)). The tail-side of the keystone is
+        // unaffected because the production caller is a long-lived
+        // sensor driver, not a re-opening one.
+        let mut log: Log<Sample> =
+            Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
+        log.append(100, &Sample { n: 1, label: "skip-1".into() }).unwrap();
+        log.append(200, &Sample { n: 2, label: "skip-2".into() }).unwrap();
+        log.flush().unwrap();
+
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
+        // Nothing new yet — tail starts at EOF.
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Append a new entry; tail picks it up on the next try_next.
+        log.append(300, &Sample { n: 3, label: "after-tail".into() }).unwrap();
+        log.flush().unwrap();
+
+        let entry = tail.try_next().unwrap().expect("entry should be ready");
+        assert_eq!(entry.timestamp_ns, 300);
+        assert_eq!(entry.payload.label, "after-tail");
+        assert!(tail.try_next().unwrap().is_none());
+    }
+
+    #[test]
+    fn tail_on_empty_log_picks_up_first_entry_when_it_arrives() {
+        let dir = tempfile::tempdir().unwrap();
+        // Manifest exists, no segments yet.
+        let mut log: Log<Sample> =
+            Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
+
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Append the first-ever entry; tail picks it up.
+        log.append(500, &Sample { n: 1, label: "first".into() }).unwrap();
+        log.flush().unwrap();
+
+        let entry = tail.try_next().unwrap().expect("first entry");
+        assert_eq!(entry.timestamp_ns, 500);
+        assert_eq!(entry.payload.label, "first");
+    }
+
+    #[test]
+    fn tail_blocking_next_yields_entries_in_order() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = Arc::new(Mutex::new(
+            Log::<Sample>::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap(),
+        ));
+
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path())
+            .unwrap()
+            .with_poll_interval(Duration::from_millis(2));
+
+        // Spawn a writer that appends three entries with small gaps.
+        let writer_done = Arc::new(AtomicBool::new(false));
+        let writer_done_clone = Arc::clone(&writer_done);
+        let log_clone = Arc::clone(&log);
+        let writer = std::thread::spawn(move || {
+            for i in 1..=3 {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut log = log_clone.lock().unwrap();
+                log.append(
+                    (i as i64) * 100,
+                    &Sample { n: i, label: format!("e{i}") },
+                )
+                .unwrap();
+                log.flush().unwrap();
+            }
+            writer_done_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Pull three entries via blocking next().
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            let entry = tail.next().expect("blocking next yields").unwrap();
+            got.push((entry.timestamp_ns, entry.payload.label));
+        }
+        writer.join().unwrap();
+        assert!(writer_done.load(Ordering::SeqCst));
+        assert_eq!(
+            got,
+            vec![
+                (100, "e1".to_string()),
+                (200, "e2".to_string()),
+                (300, "e3".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn tail_jumps_to_next_segment_on_rollover() {
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64; // 1s segments
+        let mut log: Log<Sample> =
+            Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+        // Seed with one entry in segment [0, 1s) so tail starts past it.
+        log.append(100, &Sample { n: 0, label: "seed".into() }).unwrap();
+        log.flush().unwrap();
+
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Append in the same segment first, then cross the rollover.
+        log.append(500, &Sample { n: 1, label: "same-seg".into() }).unwrap();
+        // Crossing 1s rolls over to segment [1s, 2s).
+        log.append(seg + 100, &Sample { n: 2, label: "next-seg".into() }).unwrap();
+        log.flush().unwrap();
+
+        let e1 = tail.try_next().unwrap().expect("same-seg entry");
+        assert_eq!(e1.payload.label, "same-seg");
+        let e2 = tail.try_next().unwrap().expect("next-seg entry");
+        assert_eq!(e2.payload.label, "next-seg");
+        assert_eq!(e2.timestamp_ns, seg + 100);
+        assert!(tail.try_next().unwrap().is_none());
+    }
+
+    #[test]
+    fn tail_tolerates_partial_entry_during_concurrent_append() {
+        // The writer's append path does timestamp / length / payload as
+        // three separate write_all calls. If the tailer reads between
+        // the length write and the payload write (or earlier), the
+        // segment looks truncated past the last full entry. tail should
+        // return Ok(None) — not Err — and recover on the next poll.
+        //
+        // We simulate this with a fixture written manually: a complete
+        // entry plus partial bytes for a "next" entry. try_next should
+        // read the complete entry and then return Ok(None) on the
+        // partial remainder.
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut log: Log<Sample> =
+            Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
+        log.append(100, &Sample { n: 1, label: "complete".into() }).unwrap();
+        log.flush().unwrap();
+
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
+        // Tail starts past the existing entry — nothing to read.
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Append a real entry the tailer should see, then add partial
+        // bytes for the next entry to simulate a mid-write tail.
+        log.append(200, &Sample { n: 2, label: "ok".into() }).unwrap();
+        log.flush().unwrap();
+
+        // First try_next reads the complete entry.
+        let entry = tail.try_next().unwrap().expect("complete entry");
+        assert_eq!(entry.timestamp_ns, 200);
+        assert_eq!(entry.payload.label, "ok");
+
+        // Manually append partial bytes (just a timestamp prefix, no
+        // length or payload) to simulate a torn write the tailer
+        // happened to observe between fsyncs.
+        {
+            let segments = list_segments(&dir.path().join("segments")).unwrap();
+            let only = *segments.iter().next().unwrap();
+            let seg_path = dir.path().join("segments").join(segment_filename(only));
+            let mut f = OpenOptions::new().append(true).open(&seg_path).unwrap();
+            // Drop just a timestamp prefix — no length, no payload.
+            f.write_all(&300i64.to_le_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        // try_next sees a partial entry → returns Ok(None) (not Err).
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Note: the tailer's offset is parked at the start of the
+        // partial entry. A real subsequent flushed append would land
+        // past that point — but auki-logs's writer doesn't know about
+        // the manual append we just did, and would write at its own
+        // tracked position (overwriting our garbage on the next flush
+        // path). For the partial-tolerance contract, "Ok(None) instead
+        // of Err on a torn read" is the property we needed to assert.
+    }
+
+    #[test]
+    fn tail_ignores_evicted_segments_and_resumes_at_newer_one() {
+        // If retention evicts the segment we're tailing, try_next
+        // should silently advance to the next surviving segment
+        // instead of erroring.
+        let dir = tempfile::tempdir().unwrap();
+        let seg = 1_000_000_000i64;
+        // 2-segment retention so segment [0, 1s) gets evicted when
+        // segment [2s, 3s) is started.
+        let manifest_2s = manifest(seg, 2 * seg);
+        {
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest_2s.clone()).unwrap();
+            log.append(0, &Sample { n: 0, label: "seg0".into() }).unwrap();
+            log.flush().unwrap();
+        }
+
+        // Tail is positioned inside segment [0, 1s).
+        let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
+        assert!(tail.try_next().unwrap().is_none());
+
+        // Write enough to evict segment [0, 1s): need to roll over
+        // such that [0, 1s) ends ≤ retention threshold.
+        let mut log: Log<Sample> = Log::open(dir.path(), manifest_2s.clone()).unwrap();
+        log.append(seg + 100, &Sample { n: 1, label: "seg1".into() }).unwrap();
+        log.append(3 * seg + 100, &Sample { n: 3, label: "seg3".into() }).unwrap();
+        log.flush().unwrap();
+        drop(log);
+
+        // Confirm the original segment was evicted.
+        let surviving = list_segments(&dir.path().join("segments")).unwrap();
+        assert!(!surviving.contains(&0i64), "segment 0 should be evicted");
+
+        // tail should advance past the evicted segment without error.
+        let mut got = Vec::new();
+        while let Some(entry) = tail.try_next().unwrap() {
+            got.push(entry.payload.label);
+        }
+        assert!(
+            got.contains(&"seg1".to_string()) || got.contains(&"seg3".to_string()),
+            "tail recovers from eviction and yields surviving entries; got {got:?}"
+        );
+    }
+
+    #[test]
+    fn tail_with_poll_interval_overrides_default() {
+        // Smoke test that the with_poll_interval builder is wired up.
+        let dir = tempfile::tempdir().unwrap();
+        let _log: Log<Sample> =
+            Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
+        let tail: TailIter<Sample> = Log::<Sample>::tail(dir.path())
+            .unwrap()
+            .with_poll_interval(Duration::from_millis(50));
+        assert_eq!(tail.poll_interval, Duration::from_millis(50));
     }
 }

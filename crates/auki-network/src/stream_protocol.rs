@@ -83,6 +83,7 @@ fn _phantom() -> Option<Wallet> {
 // `auki-datatypes`'s `auki.stream` package; this module owns the
 // protocol id, framing helpers, and error type.
 pub use auki_datatypes::frame_stream::JpegFrame;
+pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
     AcceptInfo, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
@@ -448,6 +449,52 @@ mod tests {
         let encoded = frame.encode_to_vec();
         // 1 byte tag + 2 bytes varint length (1024) + 1024 bytes payload = 1027.
         assert_eq!(encoded.len(), 1027);
+    }
+
+    /// `JointEncodersFrame` prost wire bytes (sawslin Phase B). Same
+    /// `repeated float angles_rad` shape as the on-disk
+    /// `JointEncodersLogEntry` — the two messages exist in different
+    /// proto packages purely so wire and disk dispatch on distinct Rust
+    /// types. Byte-identical wire/disk is locked by the
+    /// `joint_encoders_disk_wire_byte_identical` test in
+    /// `auki-datatypes`.
+    #[test]
+    fn joint_encoders_frame_serializes_to_locked_wire_bytes() {
+        let frame = JointEncodersFrame {
+            angles_rad: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        };
+        let bytes = frame.encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        // Field 1 (`repeated float`) packed: tag 0x0a, varint length 0x18
+        // (24 = 6 × 4 little-endian f32), then six f32s.
+        // 1.0 → 0000803f, 2.0 → 00000040, 3.0 → 00004040,
+        // 4.0 → 00008040, 5.0 → 0000a040, 6.0 → 0000c040.
+        assert_eq!(
+            hex,
+            "0a180000803f0000004000004040000080400000a0400000c040"
+        );
+    }
+
+    #[test]
+    fn joint_encoders_frame_round_trips() {
+        let frame = JointEncodersFrame {
+            angles_rad: vec![0.0, 0.5, -1.5, 3.14159],
+        };
+        let bytes = frame.encode_to_vec();
+        let back = JointEncodersFrame::decode(&*bytes).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    /// Empty `angles_rad` is the proto3 default — a `repeated` field
+    /// with no entries elides to zero bytes on the wire. Locked so the
+    /// SDK's "frame with no joints" edge case stays predictable.
+    #[test]
+    fn joint_encoders_frame_empty_vector_elides() {
+        let frame = JointEncodersFrame { angles_rad: vec![] };
+        let bytes = frame.encode_to_vec();
+        assert!(bytes.is_empty());
+        let back = JointEncodersFrame::decode(&*bytes).unwrap();
+        assert_eq!(back.angles_rad, Vec::<f32>::new());
     }
 
     /// Locked conformance vector for a `StreamMessage::Frame` carrying

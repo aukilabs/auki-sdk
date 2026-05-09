@@ -555,3 +555,214 @@ def test_open_stream_with_invalid_peer_id_raises_value_error(tmp_path: Path) -> 
             rt.open_stream(peer_id="not-a-peer-id", sensor_id="any")
     finally:
         rt.shutdown()
+
+
+# ─── JointEncoders (sawslin Phase B) ────────────────────────────────────────
+
+
+def test_joint_encoders_frame_carries_angles() -> None:
+    """sawslin Phase B — `cluster.JointEncodersFrame` is the third
+    payload `T`. Differs from `JpegFrame` / `PointCloudFrame` in
+    payload shape: a `list[float]` of joint angles (radians) instead
+    of opaque `bytes`. Length is producer-defined and pinned by the
+    `JointEncoders { joint_count }` registry body."""
+    angles = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    f = cluster.JointEncodersFrame(angles)
+    assert f.angles_rad == angles
+    assert len(f) == len(angles)
+    assert "JointEncodersFrame" in repr(f)
+    # Equality follows the inner Rust struct.
+    assert f == cluster.JointEncodersFrame(angles)
+    assert f != cluster.JointEncodersFrame(angles[:5])
+
+
+def test_joint_encoders_frame_empty_vector() -> None:
+    """Empty `angles_rad` is a valid wire shape — proto3 default-elision
+    means an empty vector encodes to zero bytes. The SDK surfaces it
+    verbatim; `joint_count` enforcement is the consumer's job."""
+    f = cluster.JointEncodersFrame([])
+    assert f.angles_rad == []
+    assert len(f) == 0
+
+
+def test_producer_frame_accepts_joint_encoders_payload() -> None:
+    pf = cluster.ProducerFrame(
+        timestamp_ns=99_000, payload=cluster.JointEncodersFrame([0.1, 0.2, 0.3])
+    )
+    assert pf.timestamp_ns == 99_000
+    assert isinstance(pf.payload, cluster.JointEncodersFrame)
+    assert pf.payload.angles_rad == [
+        pytest.approx(0.1),
+        pytest.approx(0.2),
+        pytest.approx(0.3),
+    ]
+
+
+def test_stream_decision_accept_joint_encoders_factory() -> None:
+    info = cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch")
+
+    async def _empty():
+        return
+        yield  # unreachable; makes this an async generator function
+
+    acc_je = cluster.StreamDecision.accept_joint_encoders(info=info, source=_empty())
+    assert acc_je.kind == "accept_joint_encoders"
+
+
+def test_python_producer_python_consumer_round_trip_joint_encoders(
+    tmp_path: Path,
+) -> None:
+    """sawslin Phase B cross-language conformance vector — same shape
+    as the JPEG/PointCloud round-trips but with `JointEncodersFrame`
+    end-to-end. Producer accepts via `accept_joint_encoders(...)`;
+    consumer opens via `open_joint_encoders_stream(...)`. Verifies the
+    SDK routes the third `T` through the same shared swarm without
+    crosstalk against the other two."""
+    port_a, port_b = _port_pair(4)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    # 6-DOF arm fixture — matches the SDK's locked
+    # `joint_encoders_disk_wire_byte_identical` test vector.
+    SAMPLES = [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        [1.1, 2.1, 3.1, 4.1, 5.1, 6.1],
+        [1.2, 2.2, 3.2, 4.2, 5.2, 6.2],
+    ]
+    accepted_count = 0
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        nonlocal accepted_count
+        if req.sensor_id != "arm/joints":
+            return cluster.StreamDecision.decline(
+                cluster.DeclineReason.sensor_not_found()
+            )
+        accepted_count += 1
+
+        async def gen():
+            for i, angles in enumerate(SAMPLES):
+                yield cluster.ProducerFrame(
+                    timestamp_ns=10_000 * (i + 1),
+                    payload=cluster.JointEncodersFrame(angles),
+                )
+
+        return cluster.StreamDecision.accept_joint_encoders(
+            info=cluster.AcceptInfo(
+                sensor_hash="je-sensor",
+                clock_id="arm/clock",
+                clock_hash="je-clock-hash",
+            ),
+            source=gen(),
+        )
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers() and rt_producer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        sub = rt_consumer.open_joint_encoders_stream(
+            peer_id=PEER_ID_SEED_10,
+            sensor_id="arm/joints",
+        )
+        assert sub.info.sensor_hash == "je-sensor"
+        assert sub.info.clock_id == "arm/clock"
+
+        frames = sub.frames()
+
+        for i, expected in enumerate(SAMPLES):
+            f = next(frames)
+            assert f.seq == i
+            assert f.timestamp_ns == 10_000 * (i + 1)
+            assert isinstance(f.payload, cluster.JointEncodersFrame)
+            assert f.payload.angles_rad == [pytest.approx(a) for a in expected]
+
+        with pytest.raises(cluster.StreamEndOfStream) as excinfo:
+            next(frames)
+        reason = excinfo.value.args[0]
+        assert reason.kind == "source_ended"
+
+        assert accepted_count == 1
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()
+
+
+def test_joint_encoders_payload_mismatch_ends_with_producer_error(
+    tmp_path: Path,
+) -> None:
+    """A producer that says `accept_joint_encoders(...)` but yields a
+    `JpegFrame` ends the stream with `EndReason::ProducerError` — same
+    mono-T enforcement as the JPEG/PointCloud variants."""
+    port_a, port_b = _port_pair(5)
+    doc = _two_peer_doc(tmp_path, port_a, port_b)
+
+    def producer_stream(req: cluster.StreamRequest) -> cluster.StreamDecision:
+        async def gen():
+            # Wrong T — substream is JointEncoders, but we yield a JPEG frame.
+            yield cluster.ProducerFrame(
+                timestamp_ns=1, payload=cluster.JpegFrame(b"jpeg-bytes")
+            )
+
+        return cluster.StreamDecision.accept_joint_encoders(
+            info=cluster.AcceptInfo(
+                sensor_hash="je", clock_id="c", clock_hash="ch"
+            ),
+            source=gen(),
+        )
+
+    rt_producer = cluster.spawn(
+        seed=b"\x10" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_10, "boosterapp", "robot-a"),
+        stream_provider=producer_stream,
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_a}"],
+        enable_mdns=False,
+    )
+    rt_consumer = cluster.spawn(
+        seed=b"\x11" * 32,
+        doc=doc,
+        participant_provider=_provider_for(PEER_ID_SEED_11, "park", "consumer"),
+        listen_addresses=[f"/ip4/127.0.0.1/tcp/{port_b}"],
+        enable_mdns=False,
+    )
+
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if rt_consumer.peers():
+                break
+            time.sleep(0.1)
+        assert rt_consumer.peers(), "consumer did not see producer within 15s"
+
+        sub = rt_consumer.open_joint_encoders_stream(
+            peer_id=PEER_ID_SEED_10, sensor_id="any"
+        )
+        frames = sub.frames()
+
+        with pytest.raises(cluster.StreamEndOfStream) as excinfo:
+            next(frames)
+        reason = excinfo.value.args[0]
+        assert reason.kind == "producer_error"
+        # Detail names which T it was expecting.
+        assert "JointEncodersFrame" in (reason.detail or "")
+    finally:
+        rt_producer.shutdown()
+        rt_consumer.shutdown()

@@ -24,9 +24,9 @@
 
 use auki_network_rs::stream_protocol::{
     AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
-    EndReason as RustEndReason, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest, decline_reason,
-    end_reason,
+    EndReason as RustEndReason, JointEncodersFrame as RustJointEncodersFrame,
+    JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
+    StreamRequest as RustStreamRequest, decline_reason, end_reason,
 };
 use auki_network_rs::stream_runtime::{
     ConsumerFrame as RustConsumerFrame, OpenStreamError as RustOpenStreamError,
@@ -219,6 +219,56 @@ impl PyPointCloudFrame {
     }
 }
 
+// ─── JointEncodersFrame ──────────────────────────────────────────────────────
+
+/// sawslin Phase B payload `T` — one joint-angle sample, `repeated float
+/// angles_rad` indexed in the producer's emit order. Length is pinned by
+/// the registry entry's `JointEncoders { joint_count }` body and the
+/// consumer enforces it on its side. Wire bytes are byte-identical to
+/// the on-disk `auki.joint_encoders.JointEncodersLogEntry` payload by
+/// design (locked in `auki-datatypes` by the
+/// `joint_encoders_disk_wire_byte_identical` test).
+///
+/// Differs from [`PyJpegFrame`] / [`PyPointCloudFrame`] in payload
+/// shape: a `list[float]` of joint angles, not opaque `bytes`. The
+/// underlying prost type is the same `repeated float angles_rad` Vec
+/// you'd encode by hand if there were no Python binding.
+#[pyclass(name = "JointEncodersFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyJointEncodersFrame {
+    pub(crate) inner: RustJointEncodersFrame,
+}
+
+#[pymethods]
+impl PyJointEncodersFrame {
+    #[new]
+    #[pyo3(signature = (angles_rad, /))]
+    fn new(angles_rad: Vec<f32>) -> Self {
+        Self {
+            inner: RustJointEncodersFrame { angles_rad },
+        }
+    }
+
+    /// Joint angle readings in radians, in the producer's emit order.
+    /// Returns a fresh list each call.
+    #[getter]
+    fn angles_rad(&self) -> Vec<f32> {
+        self.inner.angles_rad.clone()
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.angles_rad.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("JointEncodersFrame(<{} joints>)", self.inner.angles_rad.len())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── DeclineReason ───────────────────────────────────────────────────────────
 
 /// Tagged union mirroring [`RustDeclineReason`]. Construct via the
@@ -387,9 +437,9 @@ impl PyEndReason {
     }
 }
 
-// ─── Frame payload (Jpeg vs PointCloud) ──────────────────────────────────────
+// ─── Frame payload (Jpeg vs PointCloud vs JointEncoders) ─────────────────────
 
-/// Tagged union over the two payload `T`s the SDK currently supports.
+/// Tagged union over the payload `T`s the SDK currently supports.
 /// The producer's [`PyProducerFrame`] and the consumer's [`PyConsumerFrame`]
 /// both carry one of these; the wire-side substream is mono-`T` per the
 /// matching [`RustStreamDispatch`] variant.
@@ -397,6 +447,7 @@ impl PyEndReason {
 pub(crate) enum FramePayload {
     Jpeg(PyJpegFrame),
     PointCloud(PyPointCloudFrame),
+    JointEncoders(PyJointEncodersFrame),
 }
 
 impl FramePayload {
@@ -407,8 +458,11 @@ impl FramePayload {
         if let Ok(pc) = payload.extract::<PyPointCloudFrame>() {
             return Ok(Self::PointCloud(pc));
         }
+        if let Ok(je) = payload.extract::<PyJointEncodersFrame>() {
+            return Ok(Self::JointEncoders(je));
+        }
         Err(PyValueError::new_err(format!(
-            "frame payload must be a JpegFrame or PointCloudFrame; got {}",
+            "frame payload must be a JpegFrame, PointCloudFrame, or JointEncodersFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -420,6 +474,9 @@ impl FramePayload {
         match self {
             Self::Jpeg(f) => Py::new(py, f).expect("alloc JpegFrame").into_py(py),
             Self::PointCloud(f) => Py::new(py, f).expect("alloc PointCloudFrame").into_py(py),
+            Self::JointEncoders(f) => Py::new(py, f)
+                .expect("alloc JointEncodersFrame")
+                .into_py(py),
         }
     }
 
@@ -427,6 +484,7 @@ impl FramePayload {
         match self {
             Self::Jpeg(f) => f.__repr__(),
             Self::PointCloud(f) => f.__repr__(),
+            Self::JointEncoders(f) => f.__repr__(),
         }
     }
 }
@@ -491,16 +549,16 @@ impl PyProducerFrame {
                 timestamp_ns: self.timestamp_ns,
                 payload: f.inner.clone(),
             }),
-            FramePayload::PointCloud(_) => Err(
-                "AcceptJpeg source yielded a ProducerFrame with PointCloudFrame payload; \
-                 the substream is mono-T — yield JpegFrame or use accept_pointcloud(..)"
-                    .into(),
-            ),
+            other => Err(format!(
+                "AcceptJpeg source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield JpegFrame or use the matching factory",
+                other.kind_name(),
+            )),
         }
     }
 
     /// Convert to a `RustProducerFrame<RustPointCloudFrame>`. Errors
-    /// with a human-readable detail if the payload is `Jpeg`.
+    /// with a human-readable detail if the payload is the wrong variant.
     pub(crate) fn to_rust_pointcloud(
         &self,
     ) -> Result<RustProducerFrame<RustPointCloudFrame>, String> {
@@ -509,11 +567,39 @@ impl PyProducerFrame {
                 timestamp_ns: self.timestamp_ns,
                 payload: f.inner.clone(),
             }),
-            FramePayload::Jpeg(_) => Err(
-                "AcceptPointCloud source yielded a ProducerFrame with JpegFrame payload; \
-                 the substream is mono-T — yield PointCloudFrame or use accept(..)"
-                    .into(),
-            ),
+            other => Err(format!(
+                "AcceptPointCloud source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield PointCloudFrame or use the matching factory",
+                other.kind_name(),
+            )),
+        }
+    }
+
+    /// Convert to a `RustProducerFrame<RustJointEncodersFrame>`. Errors
+    /// with a human-readable detail if the payload is the wrong variant.
+    pub(crate) fn to_rust_joint_encoders(
+        &self,
+    ) -> Result<RustProducerFrame<RustJointEncodersFrame>, String> {
+        match &self.payload {
+            FramePayload::JointEncoders(f) => Ok(RustProducerFrame {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            other => Err(format!(
+                "AcceptJointEncoders source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield JointEncodersFrame or use the matching factory",
+                other.kind_name(),
+            )),
+        }
+    }
+}
+
+impl FramePayload {
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Jpeg(_) => "JpegFrame",
+            Self::PointCloud(_) => "PointCloudFrame",
+            Self::JointEncoders(_) => "JointEncodersFrame",
         }
     }
 }
@@ -584,6 +670,16 @@ impl PyConsumerFrame {
             }),
         }
     }
+
+    fn from_rust_joint_encoders(frame: RustConsumerFrame<RustJointEncodersFrame>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: FramePayload::JointEncoders(PyJointEncodersFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
@@ -617,6 +713,10 @@ pub(crate) enum DecisionInner {
         info: PyAcceptInfo,
         source: Py<PyAny>,
     },
+    AcceptJointEncoders {
+        info: PyAcceptInfo,
+        source: Py<PyAny>,
+    },
     Decline {
         reason: PyDeclineReason,
     },
@@ -647,6 +747,20 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with a JointEncoders source (sawslin Phase B).
+    /// The async iterator must yield
+    /// `ProducerFrame(payload=JointEncodersFrame(angles_rad))` values;
+    /// each `angles_rad` length must match the registry entry's
+    /// `JointEncoders { joint_count }` (consumer-enforced; the SDK
+    /// doesn't validate length on the wire).
+    #[staticmethod]
+    #[pyo3(signature = (*, info, source))]
+    fn accept_joint_encoders(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptJointEncoders { info, source })),
+        }
+    }
+
     #[staticmethod]
     #[pyo3(signature = (reason, /))]
     fn decline(reason: PyDeclineReason) -> Self {
@@ -656,15 +770,17 @@ impl PyStreamDecision {
     }
 
     /// Discriminator: `"accept"` (JPEG), `"accept_pointcloud"`,
-    /// `"decline"`, or `"consumed"` (post-`take`). Read-only inspection;
-    /// the actual fields aren't exposed because the source iterator is
-    /// consumed by the SDK exactly once.
+    /// `"accept_joint_encoders"`, `"decline"`, or `"consumed"`
+    /// (post-`take`). Read-only inspection; the actual fields aren't
+    /// exposed because the source iterator is consumed by the SDK
+    /// exactly once.
     #[getter]
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
         match guard.as_ref() {
             Some(DecisionInner::AcceptJpeg { .. }) => "accept",
             Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
+            Some(DecisionInner::AcceptJointEncoders { .. }) => "accept_joint_encoders",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -760,6 +876,16 @@ pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         pf.to_rust_pointcloud()
                     });
                 RustStreamDispatch::AcceptPointCloud {
+                    info: info.inner,
+                    source: source_stream,
+                }
+            }
+            Ok(DecisionInner::AcceptJointEncoders { info, source }) => {
+                let source_stream =
+                    python_iter_into_source_stream::<RustJointEncodersFrame>(source, |pf| {
+                        pf.to_rust_joint_encoders()
+                    });
+                RustStreamDispatch::AcceptJointEncoders {
                     info: info.inner,
                     source: source_stream,
                 }
@@ -890,6 +1016,13 @@ type RustPointCloudFrameStream = Pin<
         dyn Stream<Item = Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>> + Send,
     >,
 >;
+type RustJointEncodersFrameStream = Pin<
+    Box<
+        dyn Stream<
+                Item = Result<RustConsumerFrame<RustJointEncodersFrame>, RustStreamError>,
+            > + Send,
+    >,
+>;
 
 /// Tagged union over the underlying typed frame-stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -898,6 +1031,7 @@ type RustPointCloudFrameStream = Pin<
 enum FrameStreamKind {
     Jpeg(RustJpegFrameStream),
     PointCloud(RustPointCloudFrameStream),
+    JointEncoders(RustJointEncodersFrameStream),
 }
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
@@ -968,6 +1102,17 @@ impl PyStreamSubscription {
             frames: Mutex::new(Some(FrameStreamKind::PointCloud(rust_sub.frames))),
         }
     }
+
+    pub(crate) fn from_rust_joint_encoders(
+        rust_sub: RustStreamSubscription<RustJointEncodersFrame>,
+    ) -> Self {
+        Self {
+            info: PyAcceptInfo {
+                inner: rust_sub.info,
+            },
+            frames: Mutex::new(Some(FrameStreamKind::JointEncoders(rust_sub.frames))),
+        }
+    }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s frames. Each
@@ -987,6 +1132,7 @@ pub struct PyFrameIterator {
 enum FrameNext {
     Jpeg(Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>),
     PointCloud(Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>),
+    JointEncoders(Result<RustConsumerFrame<RustJointEncodersFrame>, RustStreamError>),
     Done,
 }
 
@@ -1029,6 +1175,10 @@ impl PyFrameIterator {
                         Some(item) => FrameNext::PointCloud(item),
                         None => FrameNext::Done,
                     },
+                    FrameStreamKind::JointEncoders(s) => match s.next().await {
+                        Some(item) => FrameNext::JointEncoders(item),
+                        None => FrameNext::Done,
+                    },
                 }
             })
         });
@@ -1044,7 +1194,14 @@ impl PyFrameIterator {
                 *guard = Some(stream);
                 Ok(PyConsumerFrame::from_rust_pointcloud(frame))
             }
-            FrameNext::Jpeg(Err(stream_err)) | FrameNext::PointCloud(Err(stream_err)) => {
+            FrameNext::JointEncoders(Ok(frame)) => {
+                let mut guard = self.frames.lock().expect("FrameIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyConsumerFrame::from_rust_joint_encoders(frame))
+            }
+            FrameNext::Jpeg(Err(stream_err))
+            | FrameNext::PointCloud(Err(stream_err))
+            | FrameNext::JointEncoders(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
@@ -1136,6 +1293,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyAcceptInfo>()?;
     cluster.add_class::<PyJpegFrame>()?;
     cluster.add_class::<PyPointCloudFrame>()?;
+    cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyProducerFrame>()?;

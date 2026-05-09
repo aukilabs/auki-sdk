@@ -77,7 +77,7 @@ Each step is its own PR with its own locked conformance vector. Each step also r
    - **Detection-Log registry shape — out of this crate's scope.** The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a forthcoming sibling shape that lives in [`auki-registry`](../../auki-registry), not here. File when subscription/discovery for detection logs needs it.
    - Locked conformance vectors pin both wire bytes (`0a0c000102030405060708090a0b` for a 12-byte fixture) and XXH3-128 hash (`94f8efe6be63d3dc5e045ab08d538a15`).
 
-9. **Python codegen.** Lands in [`auki-session-py`](../../auki-session-py) when its first implementation starts. `betterproto` generator over the same `.proto` files; locked-vector cross-language test that the Python encoder produces byte-identical bytes to the Rust prost encoder for the same input.
+9. **✓ Python codegen** (landed 2026-05-09). New crate [`auki-datatypes-py`](../../auki-datatypes-py) — pure-Python (no Rust, no maturin) `betterproto`-generated dataclass-shaped bindings, one submodule per `.proto` package. **Cross-language byte equality verified**: every locked vector from `*_serializes_to_locked_wire_bytes` in [`src/lib.rs`](lib.rs) has a matching Python test that pins the same hex bytes — 10/10 tests passing. `betterproto` pinned to `1.2.5`; codegen runs via [`regen.sh`](../../auki-datatypes-py/regen.sh) when `.proto` files change. **Earlier framing — that this would land in `auki-session-py`** — superseded by the per-component naming decision (root parking-lot, 2026-05-06); `auki-datatypes-py` is its own crate.
 
 ## After the migration
 

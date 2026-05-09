@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 13:05 HKT, 2026
+
+**[`parking_lot.md`](parking_lot.md): structured prost fields vs opaque bytes — when does each apply?** Filed after [#77](https://github.com/aukilabs/auki-sdk/pull/77) (JointEncoders) made the split precedent visible. Lists the seven on-disk types in two buckets — opaque-bytes (`PointCloudLogEntry`, `AudioLogEntry`, `DetectionLogEntry`) and structured (`PinholeCameraLogEntry`, `SpatialTransform`, `TimeTransformEntry`, `JointEncodersLogEntry`) — and proposes a working principle: **structured if** the bytes have a single canonical interpretation across all instances of the sensor type; **opaque-bytes if** the bytes have multiple possible layouts the producer must specify or the schema is owned downstream. Forward path: pin in [`src/readme.md`](src/readme.md) when a future payload-type design needs to reference it. Doc-only.
+
 ### broodsugar's claude · May 9, 12:46 HKT, 2026
 
 **`auki.joint_encoders` / `JointEncodersLogEntry` (on-disk) and `auki.joint_encoders_stream` / `JointEncodersFrame` (wire) landed.** New paired proto packages, `repeated float angles_rad = 1` on both sides, byte-identical wire/disk shape locked by an explicit `joint_encoders_disk_wire_byte_identical` symmetry test. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Mirrors the [`Microphone`](../auki-registry/src/lib.rs) / [`PointCloud`](../auki-registry/src/lib.rs) layering — the producer ships raw measurements and just enough deserialization metadata (`joint_count` on the registry body) for the consumer to read the bytes correctly. Schema-for-interpretation lives downstream.

@@ -22,6 +22,32 @@ Protobuf field numbers are forever — once a field gets a number, it can never 
 
 Protobuf wire format gives forward/backward compat almost for free (optional fields, unknown field handling). Most schema changes don't need version bumps. The exceptions are renaming a message, removing a required field, changing a field's type or number — those are breaking. Convention to pin: when does the SDK release tag bump? Lean: per-`.proto` major/minor in a header comment, surfaced via the registry entry's `sensor_hash` (which already pins the schema version transitively). No need for a separate "proto version" knob.
 
+## Structured prost fields vs opaque bytes — when does each apply? _(filed 2026-05-09 after [#77](https://github.com/aukilabs/auki-sdk/pull/77) made the split precedent visible)_
+
+This crate has split precedent for log payload shapes. Pinning the principle would help future PRs not relitigate per-type.
+
+**Opaque-bytes-only (`bytes data = 1`):**
+- `PointCloudLogEntry` (Step 3, 2026-05-08) — interpretation via `SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.
+- `AudioLogEntry` (Step 4, 2026-05-08) — interpretation via `SensorBody::Microphone { sample_format, channels, sample_rate_hz, ... }`.
+- `DetectionLogEntry` (Step 8, 2026-05-08) — per-Detector schema; the SDK does not interpret detector-specific fields.
+
+**Structured prost fields:**
+- `PinholeCameraLogEntry { DynamicIntrinsics dynamic_intrinsics; bytes frame }` (Step 1, 2026-05-08) — structured intrinsics inline-optional + opaque JPEG bytes.
+- `SpatialTransform { Vec3 translation; Quat orientation }` (Step 5, 2026-05-08) — fully structured.
+- `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }` (Step 6, 2026-05-08) — fully structured.
+- `JointEncodersLogEntry { repeated float angles_rad }` ([#77](https://github.com/aukilabs/auki-sdk/pull/77), 2026-05-09) — fully structured.
+
+**Working principle (lean):**
+
+- **Structured if** the bytes have a SINGLE canonical interpretation that holds across all instances of the sensor type. Examples: every pose has a translation and orientation; every time-transform sample is `(offset_ns, uncertainty_ns)`; every joint-encoder reading is `f32[joint_count]`; every pinhole camera intrinsics block is `(fx, fy, cx, cy, distortion[])`. The schema is universal; structured prost gives free language portability and field-level forward/backward compat.
+- **Opaque-bytes-only if** the bytes have MULTIPLE possible layouts a producer must specify, OR the schema is owned by a downstream consumer outside the SDK. Examples: point cloud's variable `fields` (XYZ vs XYZRGB vs XYZRGBL...) requires per-stream metadata in `SensorBody::PointCloud`; audio's `sample_format` knob requires `SensorBody::Microphone`; detection schemas are per-Detector and the SDK explicitly doesn't interpret them. Layout knowledge lives in the registry-side body type (or, for detection, with the Detector); the segment payload is just bytes.
+
+**Edge case — mixed (structured envelope + opaque bytes):** `PinholeCameraLogEntry`. The intrinsics block is structured (universal across pinhole cameras) but the frame is opaque JPEG bytes (multiple possible image-format choices). Both halves follow the principle independently.
+
+**Forward path:** pin this as a section in [`src/readme.md`](src/readme.md) alongside the migration documentation, and reference it from each new prost type's per-step decision. Each future payload type designer can then either match the principle or document why they're departing. Defer the actual writeup until a future payload-type design needs to reference it — filing here so the principle is captured before another PR relitigates it.
+
+**Confidence: medium.** The principle is descriptive of the existing types but isn't tested against weird future cases (e.g. a detector that emits structured prost on the wire because two consumers want field-level access — does it become a sibling registry-backed body, like cameras? would that make `DetectionLogEntry` un-opaque case-by-case?). Revisit when a real future case stretches it.
+
 ---
 
 ## Per-type slop fixes (surfaced 2026-05-07; resolve at the matching migration step in [`src/sprint.md`](src/sprint.md))

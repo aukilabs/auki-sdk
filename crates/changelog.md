@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 13:05 HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes) parking-lot: structured prost fields vs opaque bytes — when does each apply?** Filed after [#77](https://github.com/aukilabs/auki-sdk/pull/77) (JointEncoders) made the split precedent visible. Lists the seven on-disk types in two buckets and proposes a working principle (structured = single canonical interpretation across all instances; opaque-bytes = multiple possible layouts or schema-owned-downstream). Doc-only.
+
 ### broodsugar's claude · May 8, 19:46 HKT, 2026
 
 **[`auki-logs`](auki-logs) gains `Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../parking_lot.md).** New `pub fn tail(root) -> Result<TailIter<T>>`. The iterator starts at current EOF (existing entries don't replay), polls the segments dir at a configurable cadence (default 10ms), `Iterator::next` blocks while `TailIter::try_next` is non-blocking. Handles segment rollover, mid-write torn reads (surfaces as `Ok(None)`), and segment eviction. The same call works whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording. No new deps (sync, std-only). Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1; blocker #3 (`DetectionLogEntry`) lands in PR #73; #2 (Detector binding API) and #4 (`auki-sdk-py`) remain. Tests: 13 → 21 (+8). Two follow-ups filed: `Log::open` can't extend an existing partially-filled segment after re-open (production callers don't hit this — long-lived writers — but daemon-restart-resume will); `tail` v2 shapes (`tail_from(ts)` checkpoint, EOF detection, notify-based backend) deferred until a real consumer needs them.

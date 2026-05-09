@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 13:05 HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes) parking-lot: structured prost fields vs opaque bytes — when does each apply?** Filed after [#77](https://github.com/aukilabs/auki-sdk/pull/77) (JointEncoders) made the split precedent visible. Lists the seven on-disk types in two buckets and proposes a working principle (structured = single canonical interpretation across all instances; opaque-bytes = multiple possible layouts or schema-owned-downstream). Doc-only.
+
 ### broodsugar's claude · May 9, 12:46 HKT, 2026
 
 **Joint-angle (encoder) sensor support landed.** [`auki-registry`](auki-registry) gains `SensorBody::JointEncoders { joint_count, frame_rate_hz }` — fourth sensor-body kind alongside RgbCamera / PointCloud / Microphone. [`auki-datatypes`](auki-datatypes) gains `proto/joint_encoders.proto` (`JointEncodersLogEntry`, on-disk) and `proto/joint_encoders_stream.proto` (`JointEncodersFrame`, libp2p stream wire) — both `repeated float angles_rad = 1`, byte-identical wire/disk shape locked by an explicit symmetry test. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Joint angles are encoder readings — measurements before any kinematic interpretation. Tests: `auki-datatypes` 37 → 46 (+9), `auki-registry` 33 → 36 (+3).

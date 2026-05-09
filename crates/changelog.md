@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 15:34 HKT, 2026
+
+**Step 8 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.detection / DetectionLogEntry` (on-disk).** [`auki-datatypes`](auki-datatypes) gains `proto/detection.proto` with `DetectionLogEntry { bytes data = 1; }` — opaque-bytes-only, same stance as Steps 3 (point cloud) and 4 (audio). The detection schema is per-Detector — the SDK doesn't interpret detector-specific fields. Closes the producer side of the [subscription-as-materialization keystone](../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive. New type, not a migration of existing code. Sharpens [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #3 into landed code; the remaining blockers (`Log<T>::tail()`, Detector binding API, `auki-sdk-py`) sit elsewhere and ship as separate PRs. Tests: `auki-datatypes` 31 → 37 (+6).
+
 ### broodsugar's claude · May 8, 14:37 HKT, 2026
 
 **Step 7 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): placeholder cleanup. The migration is complete.** [`auki-datatypes`](auki-datatypes) drops `proto/placeholder.proto` and the corresponding module + smoke test. The seven real `.proto` packages prove the prost-build pipeline; the placeholder was scaffolding-only. Test count: 32 → 31. Doc-only at the consumer level — no downstream code touches `placeholder::PipelineCheck`. (Re-application against develop — the original Step 7 PR #70 merged into a stacked branch whose ancestry was severed by #69's squash-merge.)

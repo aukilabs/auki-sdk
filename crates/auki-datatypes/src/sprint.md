@@ -4,7 +4,7 @@ Current work and the migration sequence to bring real schemas into this crate. S
 
 ## Now
 
-**Migration complete (Step 7, 2026-05-08).** Every on-disk log payload type lives here; the placeholder smoke-test that validated the `prost-build` pipeline before any real schema landed is gone. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time-transforms, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
+**2026-05-08 migration complete (Step 7); Step 8 added the same day.** Every on-disk log payload type lives here. Steps 1–7 ran the migration that moved pre-existing types from [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms) into this crate; Step 8 added a new type (`DetectionLogEntry`) that closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md) and unblocks [`detectors`](https://github.com/aukilabs/detectors) phase 2's blocker #3. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time-transforms, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
 
 Pre-migration history (kept for context): six log payload types lived as drift in [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms); each migration step **moved** a type from there to here, not just generating a new one. The sequence below is preserved as a record of what was moved when.
 
@@ -69,7 +69,15 @@ Each step is its own PR with its own locked conformance vector. Each step also r
 
 7. **✓ Remove placeholder** (landed 2026-05-08). Deleted `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, the `placeholder_pipeline_check_round_trips` smoke test, and the corresponding line in `build.rs`. The seven real `.proto` packages serve as proof that the prost-build pipeline works; the placeholder no longer earned its keep. Test count: 32 → 31.
 
-8. **Python codegen.** Lands in [`auki-session-py`](../../auki-session-py) when its first implementation starts. `betterproto` generator over the same `.proto` files; locked-vector cross-language test that the Python encoder produces byte-identical bytes to the Rust prost encoder for the same input.
+8. **✓ `auki.detection` — `DetectionLogEntry`** (on-disk; landed 2026-05-08).
+   - `proto/detection.proto` defines `DetectionLogEntry { bytes data = 1; }`. Per-step decision: **opaque-bytes-only** — same stance as Steps 3 (point cloud) and 4 (audio). The detection schema is per-Detector (QR portal-uid + four corners + content; ESL class + bbox + confidence; people bboxes); the SDK does not interpret detector-specific fields. Carrying detector-specific fields on this prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales.
+   - **New type, not a migration.** Unlike Steps 1–6, no source type existed to move; Step 8 adds `DetectionLogEntry` as the producer-side closure of the [Detector keystone](../../../parking_lot.md) filed by Dobby earlier today. A Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive. No "DetectionLog" abstraction.
+   - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
+   - **Deferred for separate PRs (the rest of [`detectors`](https://github.com/aukilabs/detectors) phase 2's blockers):** `Log<T>::tail()` (the read side of the keystone, in `auki-logs`); the Detector binding API (`Detector::new(sensor_log) -> Log<DetectionLogEntry>` write-handle, location TBD between `auki-logs` and a new home); the [`auki-sdk-py`](../../auki-sdk-py) Python binding for the ESL detector. Each is its own single-PR landing; this Step 8 is the smallest piece that sits cleanly in this crate.
+   - **Detection-Log registry shape — out of this crate's scope.** The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a forthcoming sibling shape that lives in [`auki-registry`](../../auki-registry), not here. File when subscription/discovery for detection logs needs it.
+   - Locked conformance vectors pin both wire bytes (`0a0c000102030405060708090a0b` for a 12-byte fixture) and XXH3-128 hash (`94f8efe6be63d3dc5e045ab08d538a15`).
+
+9. **Python codegen.** Lands in [`auki-session-py`](../../auki-session-py) when its first implementation starts. `betterproto` generator over the same `.proto` files; locked-vector cross-language test that the Python encoder produces byte-identical bytes to the Rust prost encoder for the same input.
 
 ## After the migration
 

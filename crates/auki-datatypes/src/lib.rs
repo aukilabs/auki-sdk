@@ -69,6 +69,19 @@ pub mod audio {
 
 impl_log_payload!(audio::AudioLogEntry);
 
+/// `auki.detection` — opaque-bytes detection log payload (Detection Log
+/// family). Migration Step 8. The detection schema is defined by the
+/// Detector — the SDK does not interpret detector-specific fields.
+/// Closes the producer side of the subscription-as-materialization
+/// keystone: a Detection Log is `Log<T>` with `T = DetectionLogEntry`,
+/// lifecycle inherited from the sensor-log primitive. The frame
+/// timestamp rides in the auki-logs framing's `timestamp_ns`.
+pub mod detection {
+    include!(concat!(env!("OUT_DIR"), "/auki.detection.rs"));
+}
+
+impl_log_payload!(detection::DetectionLogEntry);
+
 /// `auki.pose` — Pose Log segment payload (Migration Step 5). Flat
 /// `SpatialTransform` per entry — no `PoseLogEntry { transforms: Vec<…> }`
 /// wrapper, no per-sample `parent_frame` / `child_frame`. Frame identity
@@ -205,6 +218,7 @@ pub mod stream {
 mod tests {
     use super::audio::AudioLogEntry;
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
+    use super::detection::DetectionLogEntry;
     use super::point_cloud::PointCloudLogEntry;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
@@ -734,5 +748,105 @@ mod tests {
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.offset_ns, 0);
         assert_eq!(entries[1].payload.uncertainty_ns, 0);
+    }
+
+    // ─── auki.detection locked vectors ───────────────────────────────────────
+
+    /// 12 bytes of deterministic content. Stands in for any Detector's
+    /// per-frame detection payload — the SDK only sees opaque bytes, so
+    /// the exact contents don't matter beyond reproducibility. The
+    /// per-detector schema (QR corners, ESL bbox, person bbox, …) sits
+    /// inside these bytes; the SDK doesn't decode it.
+    fn step8_detection_log_entry() -> DetectionLogEntry {
+        DetectionLogEntry {
+            data: (0..12u8).collect(),
+        }
+    }
+
+    /// Locks the prost wire bytes for the Step 8 example detection log
+    /// entry. Cross-language readers MUST produce these exact bytes for
+    /// the same input. Field 1 length-delimited: tag 0x0a, varint
+    /// length 0x0c (12), then the 12 payload bytes.
+    #[test]
+    fn detection_log_entry_serializes_to_locked_wire_bytes() {
+        let bytes = step8_detection_log_entry().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex, "0a0c000102030405060708090a0b");
+    }
+
+    /// XXH3-128 of those wire bytes — joins the workspace's locked
+    /// conformance set so future drift in either prost-build or
+    /// auki-hash trips the test.
+    #[test]
+    fn detection_log_entry_hash_is_locked() {
+        let bytes = step8_detection_log_entry().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "94f8efe6be63d3dc5e045ab08d538a15"
+        );
+    }
+
+    #[test]
+    fn detection_log_entry_round_trips() {
+        let entry = step8_detection_log_entry();
+        let bytes = entry.encode_to_vec();
+        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// `LogPayload` round-trip — proves the macro-generated impl rides
+    /// the same prost path as direct `Message::encode_to_vec` /
+    /// `decode` calls.
+    #[test]
+    fn detection_log_entry_log_payload_round_trips() {
+        use auki_logs::LogPayload;
+        let entry = step8_detection_log_entry();
+        let bytes = LogPayload::encode(&entry);
+        let decoded = <DetectionLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// Empty payload — opaque-bytes-only is honest about empty: a frame
+    /// with zero detections encodes to zero output bytes (proto3
+    /// default-elision) and decodes back to the empty form. A Detector
+    /// that runs and finds nothing on a frame still emits an entry —
+    /// the framing layer's `timestamp_ns` is the "I looked at this
+    /// frame and saw nothing" record; the entry's empty `data` is the
+    /// per-detector schema's choice of how to express that.
+    #[test]
+    fn detection_log_entry_empty_data_round_trips() {
+        let entry = DetectionLogEntry { data: vec![] };
+        let bytes = entry.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+    }
+
+    /// End-to-end seam test: open a real `auki_logs::Log<DetectionLogEntry>`,
+    /// append two entries (one populated, one empty), close, re-read,
+    /// assert order + payload byte-equality. Catches any regression in the
+    /// `LogPayload` macro wiring or the segment-framing path.
+    #[test]
+    fn detection_log_entry_segment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = serde_json::json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 60_000_000_000i64,
+            "kind": "test"
+        });
+        {
+            let mut log: auki_logs::Log<DetectionLogEntry> =
+                auki_logs::Log::open(dir.path(), manifest).unwrap();
+            log.append(100, &step8_detection_log_entry()).unwrap();
+            log.append(200, &DetectionLogEntry { data: vec![] }).unwrap();
+        }
+        let reader: auki_logs::LogReader<DetectionLogEntry> =
+            auki_logs::Log::<DetectionLogEntry>::read(dir.path()).unwrap();
+        let entries = reader.entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp_ns, 100);
+        assert_eq!(entries[0].payload, step8_detection_log_entry());
+        assert_eq!(entries[1].timestamp_ns, 200);
+        assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }
 }

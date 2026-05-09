@@ -211,6 +211,13 @@ Decide before any cross-machine coordination relies on `app_instance` being stab
 
 ## Vinland D6 — `discovery_client::subscribe` pre-implementation decisions _(filed by broodsugar's dobby, 2026-05-09)_
 
+**✓ Implemented 2026-05-09.** All eight decisions below were upheld in the implementing PR; `discovery_client::subscribe` and `cluster_runtime::update_cluster_doc` ship together. Two implementation choices that surfaced during the work both went with the parking-lot leans:
+
+- **`SubscribeError` placement.** Sibling enum to `DiscoveryError` (the parking-lot lean), not a `Subscribe { ... }` variant on the existing enum. Keeps the existing `register / fetch / deregister` consumers' `match` arms stable; the SSE-side error modes (per-event parse errors, mid-stream connection drop) get their own variants without widening the one-shot HTTP surface.
+- **`RuntimeCmd` actor pattern over lock-based path.** New `mpsc::Sender<RuntimeCmd>` field on `ClusterRuntime`; `update_cluster_doc` sends an `UpdateClusterDoc { new_doc, ack }` command and awaits the oneshot ack. Rationale: the diff path needs to call `swarm.disconnect_peer_id(...)` and schedule new dials, both of which must run on the swarm task. A lock-based path (`Arc<Mutex<RuntimeState>>` mutation from the public method) would require shipping a `swarm` reference across the boundary too; the actor pattern is the cleanest extension of the existing shape.
+
+The eight decisions below remain as-filed for the historical record.
+
 Discovery's SSE endpoint (`GET /clusters/{cluster_name}/events`, `event: cluster_doc\ndata: {ClusterDoc-JSON}\n\n`) shipped 2026-05-07 against `aukilabs/discovery` commit `97c4dd8`. SDK side adds a fourth method to `DiscoveryClient` next to `register / fetch / deregister`:
 
 ```rust

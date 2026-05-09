@@ -57,6 +57,7 @@ impl<T: LogPayload> Log<T> {
     pub fn open(root: &Path, manifest: serde_json::Value) -> Result<Self>;
     pub fn append(&mut self, timestamp_ns: i64, payload: &T) -> Result<()>;
     pub fn read(root: &Path) -> Result<LogReader<T>>;
+    pub fn tail(root: &Path) -> Result<TailIter<T>>;
 }
 
 impl<T> Log<T> {
@@ -70,6 +71,12 @@ impl<T: LogPayload> LogReader<T> {
     pub fn manifest(&self) -> &serde_json::Value;
     pub fn segment_starts(&self) -> &[i64];
     pub fn entries(&self) -> Result<Vec<Entry<T>>>;
+}
+
+pub struct TailIter<T> { ... }  // Iterator<Item = Result<Entry<T>>> — blocking next()
+impl<T: LogPayload> TailIter<T> {
+    pub fn with_poll_interval(self, dur: Duration) -> Self;
+    pub fn try_next(&mut self) -> Result<Option<Entry<T>>>;  // non-blocking
 }
 
 pub struct Entry<T> {
@@ -99,6 +106,8 @@ If `manifest.json` already exists at `root`, it is the source of truth and the `
 
 **Read.** Walks every `.seg` file in the segments dir in chronological order, reads each entry until EOF, returns them all. Truncated tails are silently tolerated.
 
+**Tail.** Returns a `TailIter<T>` that yields newly-appended entries as they become readable. Starts at current EOF (existing entries are not replayed); polls the segments dir at a configurable cadence (default 10ms). `Iterator::next` blocks; `TailIter::try_next` is non-blocking. The iterator handles segment rollover (jumps to the next `.seg` file when the current one ends), torn reads from a writer mid-`append` (surfaces as `Ok(None)` and recovers on the next poll), and segment eviction (advances past evicted segments without erroring). Read side of the [subscription-as-materialization keystone](../../../parking_lot.md): the same call works whether the log is being written by a local sensor driver, materialized from a peer's stream, or opened from a recording on disk.
+
 **`set_retention`.** Updates the in-memory `retention_ns` and rewrites `manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart. Affects future appends only — eviction runs as part of `append`, not as part of `set_retention` itself, so a quiescent log retains its current segments until something appends. Disk-write-first ordering: the manifest is persisted before the in-memory field is updated, so a failed write leaves the log unchanged. Use case: operator-driven endpoints like Sentinel's `PATCH /api/buffer` that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window.
 
 **Drop.** `Log<T>::drop` best-effort-closes the current segment so the SDK doesn't depend on explicit `flush()` calls for crash safety.
@@ -118,7 +127,7 @@ pub enum Error {
 
 This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) swaps the camera / pose / audio / time-transform payloads to protobuf via prost. Rather than swap one hardcoded encoder for another, the crate exposes a tiny `LogPayload` trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>`. Consumers pick their encoder. Mid-migration types (TimeTransformEntry) implement `LogPayload` over ciborium; post-migration types ([`auki-datatypes`](../../auki-datatypes)) use the `impl_log_payload!` macro to wire prost. The framing primitive stays out of the encoder's way.
 
-## Tests (14 total)
+## Tests (21 total)
 
 | Test | Asserts |
 |------|---------|
@@ -135,10 +144,18 @@ This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migrat
 | `set_retention_persists_across_reopen` | Manifest rewrite survives drop + reopen; persisted value drives eviction |
 | `set_retention_rejects_negative` | Negative argument → `Error::Manifest`; in-memory state unchanged |
 | `set_retention_zero_disables_future_eviction` | Switching from a tight retention to `0` mid-run stops further eviction |
+| `tail_starts_at_current_eof_skipping_existing_entries` | Tail begins at EOF; existing on-disk entries don't replay |
+| `tail_on_empty_log_picks_up_first_entry_when_it_arrives` | Tail on an empty log waits, then yields the first-ever append |
+| `tail_blocking_next_yields_entries_in_order` | Concurrent writer thread; tail's blocking `next()` yields three entries in append order |
+| `tail_jumps_to_next_segment_on_rollover` | After a segment-boundary append, tail follows into the new `.seg` file |
+| `tail_tolerates_partial_entry_during_concurrent_append` | Mid-write torn read surfaces as `Ok(None)`, not `Err`; tail recovers on the next poll |
+| `tail_ignores_evicted_segments_and_resumes_at_newer_one` | Retention deletes a segment under the tailer; tail advances past the gap |
+| `tail_with_poll_interval_overrides_default` | `with_poll_interval` builder sets the poll cadence on the iterator |
 
 ## Consumers in this workspace
 
 - `auki-time-transforms` — `Log<TimeTransformEntry>` for the 1 Hz sampler
 - `auki-ros-adapter` — `Log<PinholeCameraLogEntry>` for the ring-buffered camera frame log (per Step 1 of the [migration](../../auki-datatypes/src/sprint.md))
-- `auki-datatypes` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically
+- `auki-datatypes` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically; ships `DetectionLogEntry` (Step 8) for the detector pipeline
 - `auki-renderer` — read-only consumer for the sensor log
+- [`detectors`](https://github.com/aukilabs/detectors) (downstream) — phase-2 Detector runners use `Log::<SensorLogEntry>::tail()` (this PR) on the read side; the unblocking is "the same `tail` call works regardless of whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording on disk." Phase-2 blockers #1 (tail) is now resolved; #2 (Detector binding API) is next.

@@ -73,6 +73,14 @@ All multi-byte integers in the segment header and entry framing are little-endia
 - Segment writes use `O_CREAT | O_EXCL` (Rust: `create_new`) so two writers cannot accidentally share a segment file.
 - The manifest is written via temp-file + `rename` for atomicity.
 
+## Tailing
+
+A reader can also follow a log live: [`Log::tail`](src/lib.rs) returns a `TailIter<T>` that yields newly-appended entries as they become readable. The iterator starts at the **current EOF** of the log — entries on disk before `tail()` was called are not replayed (use `read().entries()` for historical). It polls the segments directory at a configurable cadence (default 10ms); each `Iterator::next` call blocks until a new entry is readable. Drop the iterator to stop tailing.
+
+This is the read side of the [subscription-as-materialization keystone](../../parking_lot.md): the same `Log<T>::tail` call works whether the bytes were captured here, materialized from a peer's stream, or opened from a recording on disk. The transport differs (zero-hop, libp2p, file source); the tail call doesn't.
+
+`TailIter::try_next` is the non-blocking variant — `Ok(Some(entry))` if one is ready, `Ok(None)` if not, `Err(_)` only on real I/O or payload decode failure. Mid-write torn reads (timestamp + length + payload are three separate writes) surface as `Ok(None)`, not `Err`; the next poll picks up the entry once the writer flushes.
+
 ## Eviction
 
 Driven by data timestamps, not wall clock. On every `append(timestamp_ns, …)` call, segments whose end (`start_ns + segment_duration_ns`) is `≤ timestamp_ns - retention_ns` become eligible for deletion. The currently-open segment is never evicted, even if its window has aged out.

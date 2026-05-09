@@ -206,6 +206,8 @@ The Detector code is identical across all three. The SDK handles transport (zero
 
 **What this defers.** Three sub-decisions are explicitly **not** pinned in this entry, to keep the keystone landable on its own merits: the buffer-log dynamic-resizing semantics when consumers come and go, the manifest field shape for `planned_range` + `truncated_at` (lives at [auki-manifests](crates/auki-manifests/parking_lot.md)), and storage backpressure when disk write throughput lags the network. File-and-revisit when the implementing PRs need them.
 
+**✓ Read-side primitive landed 2026-05-08 — `Log<T>::tail()` in [`auki-logs`](crates/auki-logs).** The simplest viable shape: starts at current EOF, polls the segments directory at a configurable cadence (default 10ms), blocking `Iterator::next()` plus a non-blocking `try_next()`. Handles segment rollover, mid-write torn reads (surfaces as `Ok(None)`), and segment eviction. No EOF detection, no `tail_from(timestamp_ns)` checkpoint, no notify-based backend — those are filed as `auki-logs` parking-lot follow-ups for when a real consumer needs them. The transport-side of the keystone (libp2p materialization of a peer's stream into a local log) and the producer-side `Log::open_subscribed` constructor are still pending; tail is the read API both will eventually feed into. Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1.
+
 ---
 
 ## Detection log lifecycle = sensor log lifecycle, with intent decoupled per detector instance _(filed by Dobby, 2026-05-08)_

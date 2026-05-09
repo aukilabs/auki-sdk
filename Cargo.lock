@@ -214,6 +214,14 @@ name = "auki-layout"
 version = "0.0.0"
 
 [[package]]
+name = "auki-layout-py"
+version = "0.0.0"
+dependencies = [
+ "auki-layout",
+ "pyo3",
+]
+
+[[package]]
 name = "auki-logs"
 version = "0.0.0"
 dependencies = [
@@ -245,6 +253,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "auki-manifests-py"
+version = "0.0.0"
+dependencies = [
+ "auki-manifests",
+ "pyo3",
+ "serde_json",
 ]
 
 [[package]]

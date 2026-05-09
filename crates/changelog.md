@@ -9,6 +9,17 @@ Latest entry on top.
 ### broodsugar's claude · May 9, 14:30 HKT, 2026
 
 **New package [`auki-datatypes-py`](auki-datatypes-py) — pure-Python betterproto-generated bindings for [`auki-datatypes`](auki-datatypes).** Closes [Step 9 of the migration sprint](auki-datatypes/src/sprint.md) — the typed-message half of [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4. Surface mirrors the Rust crate one-to-one: `auki_datatypes.<name>.<Type>` for every Rust `auki_datatypes::<name>::<Type>`. **Cross-language byte equality verified by 10/10 tests** pinning every Rust locked vector against the betterproto encoder's output. Pure Python — no Rust code, no maturin; `pyproject.toml` uses `hatchling` build backend. Codegen via `./regen.sh` requires `protoc` + `[regen]` extras (`betterproto[compiler]`, `grpcio-tools`); generated files committed so end consumers don't need protoc. `betterproto` pinned to `1.2.5`. NOT a Cargo workspace member (no Rust). Will land in v0.0.27.
+### broodsugar's claude · May 9, 14:15 HKT, 2026
+
+**Two new sibling crates land — [`auki-layout-py`](auki-layout-py) and [`auki-manifests-py`](auki-manifests-py) — companion wrappers to [`auki-logs-py`](auki-logs-py).** `auki-layout-py` exposes all 10 path helpers (`registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment`) as `#[pyfunction]`s — `str → str`, no state. `auki-manifests-py` exposes all four `build_*_log_manifest` builders, returning Python `dict`s consumers hand straight to `auki_logs.Log.open(...)`. Tagged enums (`PoseSource` / `TimeTransformSource`) take Python dict; `PoseWriterMode` takes Python `str` — sidesteps PyClass complexity. Closes the path / manifest construction gap that previously left Python consumers (e.g. the [ESL detector](https://github.com/aukilabs/detectors)) hand-rolling strings and dicts. Tests: `auki-layout-py` 3 Rust + 9 Python; `auki-manifests-py` 2 Rust + 6 Python. Both `abi3-py38` via PyO3 0.22 + maturin, mirrors [`auki-network-py`](auki-network-py) / [`auki-logs-py`](auki-logs-py). Will land in v0.0.27.
+
+### broodsugar's dobby · May 9, 14:08 HKT, 2026
+
+**[`auki-network`](auki-network) parking-lot — Vinland D6 four open questions from the kickoff brief locked.** Resolved 2026-05-09: `subscribe` item type = per-item `Result`; `update_cluster_doc` returns `Result<UpdateReport { added, removed }, UpdateError>` (no `unchanged`); `spawn_with_subscribe` convenience constructor = not in this PR; Python binding = follow-up PR after Rust types tag. See [`auki-network/parking_lot.md`](auki-network/parking_lot.md) for full reasoning. Doc-only.
+
+### broodsugar's dobby · May 9, 13:49 HKT, 2026
+
+**[`auki-network`](auki-network) parking-lot — Vinland D6 `discovery_client::subscribe` pre-implementation decisions filed.** Four decisions pinned ahead of the implementing PR for `discovery_client::subscribe` + `ClusterRuntime::update_cluster_doc`: caller-owns retry, silently-drop lag with snapshot reconciliation, full-snapshot wire (no diff events) for v1, one HTTP connection per `subscribe` call for v1. See [`auki-network/parking_lot.md`](auki-network/parking_lot.md) and [`auki-network/changelog.md`](auki-network/changelog.md). Doc-only.
 
 ### broodsugar's claude · May 9, 13:30 HKT, 2026
 

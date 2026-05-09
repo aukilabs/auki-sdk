@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 9, 12:22 HKT, 2026
+
+**Amended [`sawslin.md`](sawslin.md) — added wire-side companion proto `auki.joint_encoders_stream.JointEncodersFrame`, paired with the existing on-disk `auki.joint_encoders.JointEncodersLogEntry`.** Both messages carry the same `repeated float angles_rad = 1` field; the implementing PR now ships them as a paired Step 2/3 motion mirroring how `point_cloud_stream` / `point_cloud` shipped together. Brief gains a "Wire-side companion proto" section with the full proto spec + symmetry rationale, an extra symmetry test (`joint_encoders_disk_wire_byte_identical` — disk and wire encode identically given the same input), updated `build.rs` / `lib.rs` wiring instructions, and an updated commit-message suggestion. The disk-only kickoff would have left boosterapp's libp2p stream path with no typed payload and forced a follow-up PR to add the wire type — paired-package is cleaner and matches the precedent already set by the point cloud and JPEG stream packages. PR [#75](https://github.com/aukilabs/auki-sdk/pull/75) amended in place.
+
 ### broodsugar's dobby · May 8, 20:30 HKT, 2026
 
 **Filed [`sawslin.md`](sawslin.md) at repo root — kickoff brief for joint-angle (encoder) sensor support.** New `SensorBody::JointEncoders { joint_count, frame_rate_hz }` variant + new `auki.joint_encoders.JointEncodersLogEntry { repeated float angles_rad }` proto. Mirrors the `Microphone` / `PointCloud` shape: producer ships raw measurements with just enough deserialization metadata; schema-for-interpretation (URDF + forward kinematics) lives downstream. Overrides an earlier reach for a `PoseSource::JointAngles` pose-log path that conflated the measurement layer with the interpretation layer and forced an unnecessary manifest-keying decision. Brief covers the schema, four parking-lot decisions to pre-file, single-PR sequencing, and what NOT to land. Internal-audience document; the implementing PR follows external-framing rules ("joint-angle / encoder sensor support", no quest name in PR title or body).

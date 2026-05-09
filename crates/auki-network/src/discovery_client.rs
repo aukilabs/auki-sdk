@@ -72,6 +72,8 @@ use crate::cluster_doc::ClusterDoc;
 use auki_identity::Wallet;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use eventsource_stream::Eventsource;
+use futures::stream::{Stream, StreamExt};
 use multiaddr::Multiaddr;
 use serde::Serialize;
 use serde_json::Value;
@@ -114,6 +116,44 @@ pub enum DiscoveryError {
     /// timestamp; we can't sign without one.
     #[error("system clock: {0}")]
     Clock(String),
+}
+
+/// Failure modes for [`DiscoveryClient::subscribe`]. Sibling enum to
+/// [`DiscoveryError`] so the existing `register` / `fetch` /
+/// `deregister` consumers' `match` arms stay stable; the SSE long-poll
+/// has different error modes (per-event parse errors, mid-stream
+/// connection drop) that don't map cleanly onto the one-shot HTTP
+/// shape.
+///
+/// Returned in two places:
+/// - As `Err(_)` from `subscribe` itself, when the initial HTTP
+///   request fails to establish.
+/// - As `Err(_)` per-item on the returned stream — for parse errors
+///   (`Parse`) the stream continues; for transport drops (`Transport`)
+///   the stream ends and the caller decides whether to resubscribe.
+///
+/// Per the [caller-owns-retry decision](../parking_lot.md), `subscribe`
+/// does not auto-reconnect on transport failure.
+#[derive(Debug, thiserror::Error)]
+pub enum SubscribeError {
+    /// Connection refused, DNS error, TLS handshake failure,
+    /// mid-stream TCP RST. Surfaced once and the stream ends; caller
+    /// decides on retry policy.
+    #[error("transport: {0}")]
+    Transport(String),
+
+    /// Discovery returned a non-2xx status on the initial request.
+    /// 4xx typically means an invalid `cluster_name` (charset /
+    /// length); 5xx means Discovery is unhealthy.
+    #[error("http {status}: {body}")]
+    Status { status: u16, body: String },
+
+    /// SSE event with `event: cluster_doc` but the `data:` body
+    /// didn't parse as `ClusterDoc` JSON. Surfaced as a per-item
+    /// `Err`; the stream continues. A flaky proxy chewing the SSE
+    /// bytes mid-stream is the canonical case.
+    #[error("parse: {0}")]
+    Parse(String),
 }
 
 // ─── Wire bodies ─────────────────────────────────────────────────────────────
@@ -255,6 +295,94 @@ impl DiscoveryClient {
             });
         }
         Ok(())
+    }
+
+    /// Subscribe to live `ClusterDoc` updates for `cluster_name` via
+    /// Discovery's SSE endpoint (`GET /clusters/{cluster_name}/events`,
+    /// `Accept: text/event-stream`).
+    ///
+    /// The returned stream yields a fresh `ClusterDoc` snapshot on every
+    /// `register` / `deregister` against `cluster_name`. The first item
+    /// (if any) carries the cluster's current state at subscribe time.
+    /// Subscribing before any peer has registered is allowed — no
+    /// initial item is emitted; the stream starts producing on the
+    /// first register.
+    ///
+    /// Each event arrives on the wire as
+    /// `event: cluster_doc\ndata: {ClusterDoc-JSON}\n\n`. Discovery
+    /// emits axum-default keepalive comment lines (`: ...\n\n`) every
+    /// ~15s; the parser silently skips them — they keep the SSE
+    /// connection alive through proxies but aren't surfaced as items.
+    ///
+    /// Per-item `Result` shape:
+    /// - `Ok(ClusterDoc)` — a fresh snapshot.
+    /// - `Err(SubscribeError::Parse(_))` — a single event's JSON didn't
+    ///   parse; logged and the stream continues. Typical cause: a
+    ///   flaky proxy chewing SSE bytes mid-stream.
+    /// - `Err(SubscribeError::Transport(_))` — connection dropped;
+    ///   the stream ends after this item. **Caller decides whether to
+    ///   resubscribe** — `subscribe` does not auto-reconnect (per the
+    ///   pinned design decision; see `crates/auki-network/parking_lot.md`).
+    ///
+    /// Lag handling: Discovery's `tokio::sync::broadcast::channel(16)`
+    /// per `cluster_name` silently drops intermediate events for
+    /// receivers more than 16 events behind, but the next event still
+    /// carries the full snapshot. Consumers converge without explicit
+    /// lag handling — there is no `Lagged` variant on `SubscribeError`
+    /// by intent.
+    ///
+    /// One HTTP connection per call. Subscribing to multiple clusters
+    /// from the same `DiscoveryClient` instance opens N connections.
+    pub async fn subscribe(
+        &self,
+        cluster_name: &str,
+    ) -> Result<
+        impl Stream<Item = Result<ClusterDoc, SubscribeError>> + Send + 'static,
+        SubscribeError,
+    > {
+        let url = format!("{}/clusters/{}/events", self.base_url, cluster_name);
+        let resp = self
+            .http
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .send()
+            .await
+            .map_err(|e| SubscribeError::Transport(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(SubscribeError::Status {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        // `eventsource_stream` parses the byte stream into typed SSE
+        // events; we keep `cluster_doc`-typed events and decode `data`
+        // as `ClusterDoc` JSON. Other event types (and the empty-event
+        // keepalive comments Discovery emits) are filtered out.
+        let stream = resp
+            .bytes_stream()
+            .eventsource()
+            .filter_map(|event| async move {
+                match event {
+                    Ok(e) if e.event == "cluster_doc" => {
+                        match serde_json::from_str::<ClusterDoc>(&e.data) {
+                            Ok(doc) => Some(Ok(doc)),
+                            Err(err) => Some(Err(SubscribeError::Parse(err.to_string()))),
+                        }
+                    }
+                    // Other event types and keepalive comments — skip.
+                    // `eventsource_stream` already swallows comment-
+                    // only frames (`:keepalive\n\n`), so this branch
+                    // mostly catches future-event-type extensions.
+                    Ok(_) => None,
+                    Err(e) => Some(Err(SubscribeError::Transport(e.to_string()))),
+                }
+            });
+
+        Ok(stream)
     }
 }
 

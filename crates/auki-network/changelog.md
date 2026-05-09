@@ -6,6 +6,32 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 14:48 HKT, 2026
+
+**Live `cluster_doc` subscriptions ship — `discovery_client::subscribe` + `cluster_runtime::update_cluster_doc`.** Closes the late-joiner restart treadmill that's been biting the demo since 2026-05-07. Implements the eight pre-implementation decisions filed in [`parking_lot.md`](parking_lot.md) — caller-owns-retry, snapshots-only-on-the-wire, per-item `Result`, etc.
+
+**`DiscoveryClient::subscribe(cluster_name)`.** Consumes Discovery's SSE endpoint (`GET /clusters/{cluster_name}/events`, server-side shipped 2026-05-07 against `aukilabs/discovery@97c4dd8+`) and returns `impl Stream<Item = Result<ClusterDoc, SubscribeError>> + Send + 'static`. Each event arrives as `event: cluster_doc\ndata: {ClusterDoc-JSON}\n\n`; keepalive comments are silently skipped. `SubscribeError` is a sibling enum to the existing `DiscoveryError` (lean adopted from the parking-lot question) — `Transport` ends the stream, `Parse` is per-event-recoverable, `Status` only fires on the initial response. **No reconnect / backoff baked in** — the caller's outer supervisory loop owns retry, mirroring the one-shot semantics of `register` / `fetch` / `deregister`.
+
+**`ClusterRuntime::update_cluster_doc(new_doc) -> Result<UpdateReport, UpdateError>`.** Diffs `new_doc` against the runtime's current peer set: peer ids in `new_doc` only get scheduled for dial, peer ids in the previous doc only have their connections dropped and entries evicted, peer ids in both keep their connection and have their addresses refreshed for future redials. Returns `UpdateReport { added: Vec<PeerId>, removed: Vec<PeerId> }` — no `unchanged` field per the parking-lot decision. `UpdateError::ClusterNameMismatch` short-circuits cross-cluster updates without touching the swarm. `UpdateError::RuntimeUnavailable` surfaces when the driver task has shut down (typical post-`shutdown()` race).
+
+**Internal — `RuntimeCmd` actor channel** (lean adopted from the parking-lot implementation-choice question). `ClusterRuntime` gains `command_tx: mpsc::Sender<RuntimeCmd>` and `cluster_name: String` fields; `run_task`'s `select!` gains a fourth arm that pulls commands from `command_rx` and dispatches via `handle_command`. The diff itself runs in `apply_doc_update` — calls `swarm.disconnect_peer_id` for departed peers, mutates `known_peers` / `schedules` / `state.peers`, schedules immediate dial for added peers (matching the initial `from_swarm` schedule shape).
+
+**SSE parsing — `eventsource-stream` 0.2** (lean adopted from the parking-lot dependency question). Pure parser; no HTTP knowledge of its own. Picked over `reqwest-eventsource` because the latter adds reconnection-on-drop, which the caller-owns-retry decision explicitly rejects. Pulled in only with `--features discovery_client`. The `reqwest` feature set gains `stream` (for `Response::bytes_stream`).
+
+**Tests:**
+- `cluster_runtime` unit tests: 102 → 106 (+4) — `update_cluster_doc_rejects_cluster_name_mismatch`, `update_cluster_doc_after_shutdown_returns_runtime_unavailable`, `update_cluster_doc_dials_added_and_drops_removed_peers` (e2e two-swarm flow combining the brief's tests #1, #2, #3 — exercises both halves of the diff path plus the `UpdateReport` shape), `update_cluster_doc_no_op_returns_empty_report`.
+- `discovery_integration` integration tests (gated on `DISCOVERY_BIN`): 2 → 7 (+5 `#[ignore]`-marked) — `subscribe_initial_event_is_current_state`, `subscribe_receives_register_events`, `subscribe_receives_deregister_events`, `subscribe_to_empty_cluster_waits_for_first_register`, `subscribe_isolated_per_cluster_name`. Run via `DISCOVERY_BIN=/path/to/discovery cargo test -p auki-network --features discovery_client -- --ignored subscribe`. The long-running keepalive-skip test (`#[ignore]`, 15+ s) flagged in the brief is deferred — the keepalive logic is exercised by `eventsource-stream`'s upstream test suite, and CI gating against `--ignored` already keeps the cost off the default path.
+
+**Out of scope** (filed in [`parking_lot.md`](parking_lot.md), all explicitly excluded by the eight pre-implementation decisions):
+- `spawn_with_subscribe(...)` convenience constructor — defer until three daemons have written the loop three different ways.
+- `auki-network-py` PyO3 wrappers for the new methods — follow-up PR after the Rust surface stabilizes and gets a release tag.
+- Reconnect / backoff inside `subscribe` — caller-owns is locked.
+- `Lagged` variant on the stream item type — silent-drop-with-snapshot-reconciliation is locked.
+- `cluster_doc_delta` event type on the wire — full snapshots locked for v1.
+- `unchanged` field on `UpdateReport` — derivable from `previous_doc.peers ∖ removed`, adds noise to the typical log line.
+
+Daemon-side adoption (boosterapp / park / sentinel each pick up `subscribe` and feed the doc into their `ClusterRuntime`) is per-daemon-repo follow-ups after the SDK ships.
+
 ### broodsugar's dobby · May 9, 14:08 HKT, 2026
 
 **Vinland D6 — four open questions from the kickoff brief locked.** Decisions appended to [`parking_lot.md`](parking_lot.md): (1) **`subscribe` item type** = per-item `Result<ClusterDoc, SubscribeError>` — gives consumers a chance to log/skip a single bad event without ending the stream; interacts cleanly with the caller-owns-retry decision (no parse-error-induced reconnect cycles). (2) **`update_cluster_doc` return type** = `Result<UpdateReport { added: Vec<PeerId>, removed: Vec<PeerId> }, UpdateError>` — the diff is computed internally regardless, surfacing it costs nothing, and ignoring is `let _ = …`. **No `unchanged` field** — derivable from `previous_doc.peers ∖ removed`, adds noise to the typical log line. (3) **`spawn_with_subscribe` convenience constructor** = not in this PR — let three daemon-side adoption PRs converge on a pattern first, then unify. (4) **Python binding** = not in this PR; follow-up PR after the Rust types stabilize, mirrors the `auki-logs-py`-after-`auki-logs`-tag precedent. All four leans concurred by Nils 2026-05-09. The implementing PR can now reference these as locked decisions instead of relitigating. Doc-only.

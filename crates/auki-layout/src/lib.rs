@@ -20,11 +20,16 @@
 //!     │   ├── <sensor_log_id_2>/
 //!     │   │   └── ...
 //!     │   └── <sensor_log_id_3>/
-//!     └── poselogs/
-//!         ├── <pose_log_id_1>/               ← one pose source per log
+//!     ├── poselogs/
+//!     │   ├── <pose_log_id_1>/               ← one pose source per log
+//!     │   │   ├── manifest.json
+//!     │   │   └── segments/<padded-ns>.seg
+//!     │   └── <pose_log_id_2>/
+//!     └── detection_logs/
+//!         ├── <detector_id>__<input_log_id>/ ← one Detector × input sensor log
 //!         │   ├── manifest.json
 //!         │   └── segments/<padded-ns>.seg
-//!         └── <pose_log_id_2>/
+//!         └── ...
 //! ```
 //!
 //! - `<app_root>` is chosen by the integrator (e.g. `/home/booster/auki/boosterapp/`).
@@ -62,6 +67,7 @@ const FRAMES_DIR: &str = "frames";
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
 const POSELOGS_DIR: &str = "poselogs";
+const DETECTION_LOGS_DIR: &str = "detection_logs";
 
 /// `<app_root>/registries`.
 pub fn registries_root(app_root: &Path) -> PathBuf {
@@ -139,6 +145,35 @@ pub fn poselog_path(session_root: &Path, from_frame_id: &str, to_frame_id: &str)
         "{}__{}",
         id_to_segment(from_frame_id),
         id_to_segment(to_frame_id)
+    ))
+}
+
+/// `<app_root>/<session>/detection_logs/<detector_id>__<input_log_id>` —
+/// one detection log per `(detector, input sensor log)` pair within a
+/// session. The auki-logs `manifest.json` and `segments/` directory live
+/// directly under this path; the producer identity is recorded inline in
+/// the log's manifest under `detector_id` + `detector_hash`, mirroring
+/// how Sensor Log carries `sensor_id` + `sensor_hash`.
+///
+/// `detector_id` is namespaced (e.g. `"aukilabs/qr/v1"`) and uses the
+/// same `__` substitution as sibling helpers; `input_log_id` is the
+/// `sensor_log_id` from [`sensorlog_path`] — typically a UUID minted by
+/// the integrator when the sensor log was opened.
+///
+/// Closes blocker #2 of [`detectors`](https://github.com/aukilabs/detectors)
+/// phase 2; the [subscription-as-materialization keystone](../../../parking_lot.md)
+/// applies — the same path shape works whether the input sensor log is
+/// being written by a local driver, materialized from a peer's stream,
+/// or opened from a recording.
+pub fn detection_log_path(
+    session_root: &Path,
+    detector_id: &str,
+    input_log_id: &str,
+) -> PathBuf {
+    session_root.join(DETECTION_LOGS_DIR).join(format!(
+        "{}__{}",
+        id_to_segment(detector_id),
+        id_to_segment(input_log_id)
     ))
 }
 
@@ -270,5 +305,27 @@ mod tests {
         let session = session_root(&app(), "abc-123");
         let path = poselog_path(&session, "from/x", "to/y");
         assert!(path.ends_with("from__x__to__y"));
+    }
+
+    #[test]
+    fn detection_log_path_keys_on_detector_id_and_input_log_id() {
+        let session = session_root(&app(), "abc-123");
+        assert_eq!(
+            detection_log_path(&session, "aukilabs/qr/v1", "rec-456"),
+            PathBuf::from(
+                "/home/booster/auki/boosterapp/abc-123/detection_logs/\
+                 aukilabs__qr__v1__rec-456"
+            )
+        );
+    }
+
+    #[test]
+    fn detection_log_path_substitutes_slashes_in_detector_id_only() {
+        // Detector IDs are namespaced (`aukilabs/qr/v1`) and get `/` →
+        // `__`. The input_log_id is opaque (typically a UUID) and is
+        // not transformed — same convention as `sensorlog_path`.
+        let session = session_root(&app(), "abc-123");
+        let path = detection_log_path(&session, "qr/v1", "550e8400-e29b-41d4-a716-446655440000");
+        assert!(path.ends_with("qr__v1__550e8400-e29b-41d4-a716-446655440000"));
     }
 }

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "auki-logs-py"
+version = "0.0.0"
+description = "PyO3 bindings for auki-logs's Log<T> framing primitive — opaque-bytes Python surface for segmented ring-buffer logs."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Auki Labs Limited" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/aukilabs/auki-sdk"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "auki_logs"
+
+[tool.pytest.ini_options]
+testpaths = ["python_tests"]

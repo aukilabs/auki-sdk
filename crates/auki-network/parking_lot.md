@@ -239,3 +239,19 @@ Four pre-implementation decisions filed before the implementing PR per the [auki
 ### Decision — multi-cluster `subscribe` on the same `DiscoveryClient` instance
 
 **Decided 2026-05-09. v1 spawns one HTTP connection per `subscribe` call.** Reasons: (a) `DiscoveryClient`'s existing `register` / `fetch` / `deregister` methods are one-shot HTTP; an SSE long-poll on top of that is the simplest extension; (b) the v1 case is one-cluster-per-daemon (boosterapp / park / sentinel each subscribe to their own cluster, not multiple); (c) connection pooling semantics for long-lived SSE streams are non-obvious (per-host connection limits in `reqwest`, keepalive interaction, connection-shutdown ownership). Revisit if a daemon ever subscribes to multiple clusters from the same client — at that point the question is "do we share a single connection, or open one per cluster" and either answer needs explicit design.
+
+### Decision — `subscribe` item type
+
+**Decided 2026-05-09. Per-item `Result`: `impl Stream<Item = Result<ClusterDoc, SubscribeError>>`.** Reasons: (a) gives the consumer a chance to log/skip a single bad event (e.g. a flaky proxy chewing the SSE bytes mid-stream, a parse error on a malformed `data:` line) without ending the stream; (b) the terminal-error variant interacts badly with the [caller-owns-retry decision](#decision--reconnect--backoff-in-subscribe) above — every parse error becomes a reconnect cycle, amplifying transient noise into churn; (c) call-site cost is small — `while let Some(Ok(doc)) = stream.next().await { ... }` either way; the `Err` arm gets `tracing::warn!` and the loop continues. Confidence: high.
+
+### Decision — `update_cluster_doc` return type
+
+**Decided 2026-05-09. `Result<UpdateReport, UpdateError>` with `UpdateReport { added: Vec<PeerId>, removed: Vec<PeerId> }`.** Reasons: (a) the diff is computed internally regardless (it drives the dial / drop decisions); surfacing it costs nothing; (b) pays for itself the first time a daemon writes "joined cluster X" / "left cluster X" log lines or surfaces them in operator UI; (c) ignoring it is `let _ = runtime.update_cluster_doc(...)` — one character of noise; (d) the `()` variant is the choice we'd regret six months later when every daemon has reimplemented the diff externally. **No `unchanged: Vec<PeerId>` field** — derivable from `previous_doc.peers ∖ removed` if a caller wants it, and adds noise to the typical `info!("cluster: +{added} -{removed}")` log line. Confidence: high.
+
+### Decision — `spawn_with_subscribe` convenience constructor
+
+**Decided 2026-05-09. Not in this PR.** The "subscribe loop and feed `update_cluster_doc`" boilerplate is ~15 lines; three daemons (boosterapp / park / sentinel) writing it three different ways is what tells us the right shape for a convenience constructor. Premature unification locks in the wrong tokio task topology — does the constructor own the `JoinHandle`? does shutdown cascade? does it surface per-event errors or swallow them? Each is a real design choice that benefits from seeing real call sites. File-and-revisit after the daemon-side adoption PRs converge on a pattern. Confidence: high.
+
+### Decision — Python binding (`auki-network-py`) for `subscribe` + `update_cluster_doc`
+
+**Decided 2026-05-09. Not in this PR; follow-up PR after the Rust types stabilize.** Same precedent as `auki-logs-py` shipping after `auki-logs` had a tag — bind to a stable Rust surface, don't co-design two language surfaces in one PR. The boosterapp Python sidecar is the only Python consumer for now and can wait one release. Adding `subscribe` + `update_cluster_doc` wrappers to the existing `auki-network-py` is mechanical (the Rust surface is the design; PyO3 wraps it) — small follow-up PR after the implementing PR lands and gets a release tag. Confidence: high.

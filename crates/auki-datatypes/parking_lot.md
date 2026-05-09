@@ -46,6 +46,12 @@ All three slop points adjudicated and landed at Step 6:
 
 Resolved + propagated in the same step's PR — no Propagate tasks carry over.
 
+### ✓ Resolved 2026-05-08 — `DetectionLogEntry` is opaque-bytes-only (Step 8)
+
+Adjudicated in favour of opaque-bytes-only: `auki.detection.DetectionLogEntry { bytes data = 1; }`. Same stance as Steps 3 (point cloud) and 4 (audio); the detection schema is defined per-Detector, not by the SDK. Carrying detector-specific fields on the prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales. Resolved + propagated in the same step's PR — no Propagate task carries over.
+
+The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a sibling shape that lives in [`auki-registry`](../../auki-registry) when needed, not in this crate. File when subscription / discovery for detection logs needs it.
+
 ---
 
 ## Migration architecture decisions

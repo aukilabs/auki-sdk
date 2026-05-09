@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 8, 15:34 HKT, 2026
+
+**Step 8 of the [migration](src/sprint.md) landed — `auki.detection` / `DetectionLogEntry` (on-disk).** New `proto/detection.proto` with `DetectionLogEntry { bytes data = 1; }` — opaque-bytes-only, same stance as Steps 3 (point cloud) and 4 (audio). The detection schema is defined per-Detector (QR portal-uid + four corners + content; ESL class + bbox + confidence; people bboxes); the SDK does not interpret detector-specific fields. Carrying detector-specific fields on the prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales.
+
+**Closes the producer side of the [subscription-as-materialization keystone](../../parking_lot.md)** filed by Dobby earlier today. A Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. Sharpens [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #3 ("`DetectionLogEntry` type") into landed code.
+
+**Not a migration step in the same sense as 1–6.** No source type existed to move; this is a new type added to close the producer side of the keystone. Numbered Step 8 to slot after the placeholder cleanup at Step 7. The previous Step 8 (Python codegen) is renumbered Step 9.
+
+**`auki-logs` needed no changes** — encoder-agnostic since Step 1.
+
+**Tests**: 31 → 37 (+6 — `serializes_to_locked_wire_bytes`, `hash_is_locked`, `round_trips`, `log_payload_round_trips`, `empty_data_round_trips`, `segment_round_trip`). Locked wire bytes for a 12-byte fixture: `0a0c000102030405060708090a0b`. XXH3-128 hash: `94f8efe6be63d3dc5e045ab08d538a15`.
+
+**Out of scope for this PR** (each is its own future single-PR landing): `Log<T>::tail()` (the read side of the keystone, in [`auki-logs`](../auki-logs)); the Detector binding API; the [`auki-sdk-py`](../auki-sdk-py) Python binding; the Detection-Log analog of `SensorRegistryEntry` (lives in [`auki-registry`](../auki-registry) when subscription / discovery for detection logs needs it).
+
+**Resolved parking-lot question**: the opaque-bytes-vs-typed-shape slop point for `DetectionLogEntry` — adjudicated in favour of opaque-bytes-only and propagated in this same PR.
+
 ### broodsugar's claude · May 8, 14:37 HKT, 2026
 
 **Step 7 of the [migration](src/sprint.md) landed — placeholder cleanup. The migration is complete.** Deleted `proto/placeholder.proto`, the `placeholder` module in [`src/lib.rs`](src/lib.rs), the `placeholder_pipeline_check_round_trips` smoke test, and the corresponding line in [`build.rs`](build.rs). The seven real `.proto` packages (camera, point_cloud, audio, pose, time_transform, frame_stream, point_cloud_stream, stream) serve as proof that the prost-build pipeline works; the placeholder no longer earned its keep. Test count: 32 → 31.

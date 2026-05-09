@@ -6,6 +6,17 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 9, 16:30 HKT, 2026
+
+**`StreamDispatch::AcceptJointEncoders` ships — third `T` for `/auki/stream/0.1.0`.** sawslin Phase B's SDK side. Adds the third stream-runtime variant alongside `AcceptJpeg` (grimsby v1) and `AcceptPointCloud` (Dagaz Batch 1), unblocking BoosterApp's joint-encoders streaming work that's been parked at [`boosterapp scripts/parking_lot.md`](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) #9 since 2026-05-09 morning.
+
+**Three concrete changes in [`stream_runtime.rs`](src/stream_runtime.rs):** (1) `pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;` re-export added in [`stream_protocol.rs`](src/stream_protocol.rs) alongside the existing `JpegFrame` / `PointCloudFrame` re-exports. (2) New `StreamDispatch::AcceptJointEncoders { info: AcceptInfo, source: SourceStream<JointEncodersFrame> }` variant. (3) New dispatch arm in `handle_inbound_substream` calling `pump_typed::<JointEncodersFrame>(...)` — the pump itself is generic over `T: prost::Message`, so the new variant gets the same auto-stamped `seq`, `tokio::select!` shutdown handling, and `EndReason` semantics as the existing two.
+
+**Tests in [`stream_protocol.rs`](src/stream_protocol.rs):** (1) `joint_encoders_frame_serializes_to_locked_wire_bytes` pins the prost wire bytes for the canonical 6-DOF fixture `[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]` to `0a18 0000803f 00000040 00004040 00008040 0000a040 0000c040` (tag + 24-byte packed-float length + six little-endian f32s). Cross-language reader anchor — Park's browser-side decoder + future Sentinel ports MUST produce these exact bytes from the same input. (2) `joint_encoders_frame_round_trips` covers the encode/decode path with mixed-sign + irrational input. (3) `joint_encoders_frame_empty_vector_elides` pins proto3 default-elision behaviour: `angles_rad: vec![]` encodes to zero bytes, and `JointEncodersFrame::decode(b"")` round-trips to an empty vector — locks the "frame with no joints" edge case so the SDK doesn't grow accidental special-cases for it.
+
+**Wire/disk symmetry locked.** `auki.joint_encoders_stream.JointEncodersFrame` is byte-identical to `auki.joint_encoders.JointEncodersLogEntry` (the Sensor Log on-disk payload from sawslin Phase 1 / [PR #77](https://github.com/aukilabs/auki-sdk/pull/77)) — same `repeated float angles_rad = 1` field; the two messages exist in different proto packages purely so wire and disk dispatch on distinct Rust types. `auki-datatypes`'s existing `joint_encoders_disk_wire_byte_identical` test enforces this; producers (BoosterApp) can prost-encode once and use the bytes for both disk and wire.
+
+**Tests:** `auki-network` 88 → 91 lib tests (+3, all the `joint_encoders` ones above). `cargo test -p auki-network --features swarm` clean.
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **Filed five `/auki/message/0.0.1` design questions in [`parking_lot.md`](parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR. All five carry leans:

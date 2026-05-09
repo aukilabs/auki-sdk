@@ -539,6 +539,48 @@ impl ClusterRuntime {
         Ok(PyStreamSubscription::from_rust_pointcloud(rust_sub))
     }
 
+    /// Open an outbound `/auki/stream/0.1.0` JointEncoders subscription
+    /// on `peer_id` for the named sensor (sawslin Phase B).
+    ///
+    /// Same blocking shape as [`open_stream`][ClusterRuntime::open_stream]:
+    /// returns once the producer has Accepted, Declined, or the 30s
+    /// timeout fires. Returns a [`StreamSubscription`] whose frames
+    /// carry [`JointEncodersFrame`] payloads (joint angles in radians;
+    /// length pinned by the sensor registry entry's `joint_count`).
+    /// Same exception surface as `open_stream`.
+    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
+    fn open_joint_encoders_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: String,
+    ) -> PyResult<PyStreamSubscription> {
+        let peer = PeerId::from_str(peer_id).map_err(|e| {
+            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
+        })?;
+
+        let request = RustStreamRequest { sensor_id };
+        let result = py.allow_threads(|| {
+            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
+            let rt = inner.as_ref().ok_or(())?;
+            let tokio_rt = cluster_tokio_runtime();
+            Ok(tokio_rt.block_on(async {
+                rt.open_stream::<auki_network_rs::stream_protocol::JointEncodersFrame>(
+                    peer, request,
+                )
+                .await
+            }))
+        });
+
+        let rust_sub = match result {
+            Err(()) => return Err(shutdown_error()),
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
+        };
+
+        Ok(PyStreamSubscription::from_rust_joint_encoders(rust_sub))
+    }
+
     /// Signal the driver task to shut down and abort it. Idempotent in
     /// the sense that a second call raises rather than silently no-ops
     /// — use-after-shutdown is almost always a bug, and a noisy raise

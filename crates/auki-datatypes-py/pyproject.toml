@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "auki-datatypes-py"
+version = "0.0.0"
+description = "Python betterproto bindings for auki-datatypes — dataclass-shaped types for the Auki SDK's shared cross-language data types."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Auki Labs Limited" }]
+requires-python = ">=3.8"
+dependencies = [
+    # Runtime support for the betterproto-generated dataclasses.
+    # `==1.2.5` pins the wire-format-compat version; bumping requires
+    # re-running `regen.sh` and re-locking the cross-language vectors.
+    "betterproto==1.2.5",
+]
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/aukilabs/auki-sdk"
+
+[project.optional-dependencies]
+# `[regen]` extras pull in the codegen toolchain. End consumers don't
+# need them — only contributors who edit `.proto` files in
+# `auki-datatypes/proto/` and run `./regen.sh` to refresh the
+# generated Python.
+regen = [
+    "betterproto[compiler]==1.2.5",
+    "grpcio-tools",
+]
+# `[test]` extras pull in pytest for the locked-vector cross-language
+# byte-equality suite.
+test = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["auki_datatypes"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

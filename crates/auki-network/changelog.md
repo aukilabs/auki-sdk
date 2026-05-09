@@ -17,6 +17,23 @@ Latest entry on top.
 **Wire/disk symmetry locked.** `auki.joint_encoders_stream.JointEncodersFrame` is byte-identical to `auki.joint_encoders.JointEncodersLogEntry` (the Sensor Log on-disk payload from sawslin Phase 1 / [PR #77](https://github.com/aukilabs/auki-sdk/pull/77)) — same `repeated float angles_rad = 1` field; the two messages exist in different proto packages purely so wire and disk dispatch on distinct Rust types. `auki-datatypes`'s existing `joint_encoders_disk_wire_byte_identical` test enforces this; producers (BoosterApp) can prost-encode once and use the bytes for both disk and wire.
 
 **Tests:** `auki-network` 88 → 91 lib tests (+3, all the `joint_encoders` ones above). `cargo test -p auki-network --features swarm` clean.
+### broodsugar's dobby · May 9, 15:43 HKT, 2026
+
+**Filed five `/auki/message/0.0.1` design questions in [`parking_lot.md`](parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR. All five carry leans:
+
+- **Substream lifecycle** — substream-per-message vs long-lived inbox substream. **Lean: per-message** (event-grain, stateless, trivial replay; high-rate cases belong on `/auki/stream/` instead).
+- **Crate placement** — sibling module to [`stream_protocol`](src/stream_protocol.rs) / [`stream_runtime`](src/stream_runtime.rs) inside this crate vs new sibling crate. **Lean: inside `auki-network`** (shared `libp2p_stream::Behaviour`, shared `cluster.json` trust boundary).
+- **Envelope typing** — `google.protobuf.Any` vs plain `string type_url + bytes body` vs sealed oneof. **Lean: plain `string type_url + bytes body`** (matches existing `stream::Frame.payload` precedent; no `Any` import in every consumer; sealed-oneof rejected because it closes the registry). Sub-question filed: SDK-shipped `auki.message.v1.ClickEvent` vs app-defined-only — **lean: ship in SDK** to avoid inventing a registry on day one.
+- **Message log topology** — one log per peer (multiplex senders) vs one log per peer-pair. **Lean: per-peer-pair** (matches existing `<platform>-<machine_id>/<sensor_name>` `sensor_id` convention; sender-side outbound capture deferred behind a config knob).
+- **Ack semantics** — fire-and-forget vs request/response. **Lean: fire-and-forget v1** (substream-open-and-write success is already a coarse delivery signal; future request/response is a separate protocol id; envelope reserves `correlation_id` for v2).
+
+These move four cross-repo questions out of [`org/src/quests/clickerlooker/parking_lot.md`](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/parking_lot.md) (per-quest-README "what lives here vs in the sub-repos" rule — SDK-internal calls live here, not at the quest level). Two genuinely cross-repo opens (camera-to-trunk extrinsic source, frame-timestamp end-to-end on the existing `/auki/stream/` payload) stay at the quest level. New question this PR adds beyond the quest's original four: substream lifecycle (per-message vs inbox), which is the load-bearing call.
+
+Per the [auki-labs-repos two-PR cadence convention](https://github.com/aukilabs/auki-sdk/pull/81): this PR pre-files the open questions; once Nils adjudicates, the follow-up PR converts each `Lean:` to a `### Decision —` subsection.
+
+**No code changes.** Doc-only PR.
+
+---
 
 ### broodsugar's claude · May 9, 14:48 HKT, 2026
 

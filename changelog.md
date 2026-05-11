@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 14:48 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) — Greenland design corrections: T7 inverted to libp2p, T8 endpoint name, T14 added.** Doc-only correction to the Greenland parking-lot text in the local crate, reflecting today's three [Greenland Notion page](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2) updates. T7 (registry snapshot broadcast) is now Manager→members directly over a new `/auki/registry/0.0.1` libp2p protocol — Discovery is OUT of the live fan-out path (Q-disc-1). T8 endpoint is `GET /clusters/latest`, not `/domains/latest` (Q-disc-2; SDK code unchanged). New T14 — newly-elected Manager signs + sends a handoff notification to Discovery so late-joiners hit the live Manager peer-id; lands in PR 3.
+
 ### broodsugar's dobby · May 11, 14:34 HKT, 2026
 
 **[`crates/auki-domain`](crates/auki-domain) — Greenland T1 shipped: `DomainIdentity` + `init_domain`.** First implementing PR of the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). `DomainIdentity` carries `{wallet_id}/{name}` canonical string + the reserved `"Vinland"` singleton exception (T12). `init_domain(&Wallet, &str, &DiscoveryClient, &[Multiaddr], …) -> DomainHandle` builds the identity, registers with Discovery, returns a minimal handle. Manager-role state (heartbeats, registry mutation authority, JoinRequest admission) lands in PR 2. 12 unit tests + 2 doctests + 2 locked cross-language vectors. Glossary updated: new `Domain Identity` entry; `Domain ID` keeps its existing TagClaim role.

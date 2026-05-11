@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 15:39 HKT, 2026
+
+**[`auki-network`](auki-network) — Greenland T3 + T7 wire layer shipped: `heartbeat_protocol` + `registry_protocol`.** Two new libp2p protocols at the wire-types level. `/auki/heartbeat/0.0.1` request-response (templates off `cluster_protocol`; `HeartbeatRequest{tick_ns, manager_peer_id}` + `HeartbeatResponse{responder_peer_id}`; 10s `REQUEST_TIMEOUT` matching Greenland's tick interval). `/auki/registry/0.0.1` substream-per-snapshot fire-and-forget (templates off `stream_protocol`'s framing helpers; `SnapshotEnvelope{mutation_ns, doc: ClusterDoc}`; JSON wire; 1 MiB frame cap). `heartbeat_protocol::behaviour()` wired into the swarm `Behaviour` struct. +14 unit tests including locked cross-language vectors. PR 2b lands the Manager-side state machine in `auki-domain` (tick loop, departure tracking, mutation broadcasting).
+
 ### broodsugar's dobby · May 11, 14:48 HKT, 2026
 
 **[`auki-domain`](auki-domain) — Greenland design corrections: T7 inverted to libp2p, T8 endpoint name, T14 added.** Doc-only. T7's broadcast is now Manager→members directly over a new `/auki/registry/0.0.1` libp2p protocol (Discovery OUT of the fan-out path, per Q-disc-1). T8 endpoint is `GET /clusters/latest` (not `/domains/latest`); SDK code unchanged. New T14 — newly-elected Manager signs + sends a handoff notification to Discovery so late-joiners route to the live Manager peer. T14 lands in PR 3 (failover batch).

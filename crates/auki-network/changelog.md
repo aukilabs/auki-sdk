@@ -6,6 +6,36 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 15:39 HKT, 2026
+
+**Greenland T3 (heartbeat wire) + T7 (registry wire) — two new libp2p protocols shipped at the wire layer.** First half of [Greenland](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2)'s PR 2 (the heartbeat batch). Manager-side state machine + tick loop + mutation broadcasting land in PR 2b (in the [`auki-domain`](../auki-domain) crate). This PR is pure wire — no behaviour wired into the swarm runtime yet.
+
+**`heartbeat_protocol`** — `/auki/heartbeat/0.0.1`. Manager↔member liveness signalling, request-response shape. Templates off [`cluster_protocol`](src/cluster_protocol.rs):
+
+- `HeartbeatRequest { tick_ns: u64, manager_peer_id: PeerId }` — Manager's tick. `tick_ns` is the Manager's monotonic timestamp at send; `manager_peer_id` lets responders sanity-check (post-failover stale sender detection).
+- `HeartbeatResponse { responder_peer_id: PeerId }` — member echoes its own peer id so misrouted replies are detectable.
+- JSON wire via `request_response::json::Behaviour`. 10s `REQUEST_TIMEOUT` matching the Greenland tick interval — one timeout per tick; T4 (2-missed-tick departure) translates to ~20s departure window.
+- `heartbeat_protocol::behaviour()` wired into the swarm `Behaviour` struct as `pub heartbeat: heartbeat_protocol::Behaviour`. Inbound and outbound support enabled (any peer can become Manager).
+- 7 unit tests: protocol-id locked, round-trip JSON, locked cross-language vector for seed `[3u8; 32]`, invalid peer-id rejection, timeout const, behaviour constructible.
+
+**`registry_protocol`** — `/auki/registry/0.0.1`. Manager→members Cluster Registry snapshot broadcast, fire-and-forget shape. Templates off [`stream_protocol`](src/stream_protocol.rs)'s framing helpers but with JSON envelope (not prost) because snapshot count is small (≤10 peers at v1) and the inner `ClusterDoc` already has a JSON `serde` shape:
+
+- `SnapshotEnvelope { mutation_ns: u64, doc: ClusterDoc }` — `mutation_ns` is the Manager's monotonic timestamp at mutation commit; receivers use it as a stale-snapshot detector. `doc` is the full `ClusterDoc` — same shape as Discovery's `/clusters/{name}` response.
+- `write_envelope(stream, env)` + `read_envelope(stream) -> SnapshotEnvelope` — 4-byte big-endian length-prefixed framing, same shape as `stream_protocol`. `MAX_FRAME_BYTES = 1 MiB` (tighter than `stream_protocol`'s 16 MiB — no sensor data).
+- `RegistryProtocolError { Io, Encode, Decode, FrameTooLarge, EmptyFrame }` — same shape family as `stream_protocol::StreamProtocolError`.
+- Substream-per-snapshot lifecycle (Manager opens fresh substream via `libp2p_stream::Control::open_stream`, writes one envelope, closes; member accepts, reads, applies, closes). Same multiplexer (`libp2p_stream::Behaviour`) as `stream_protocol` — zero swarm changes.
+- 7 unit tests: protocol-id locked, JSON round-trip, write→read end-to-end through a `Cursor`, oversized-frame rejection, zero-length-frame rejection, EOF surfaces as `Io(UnexpectedEof)`, locked minimal JSON shape vector.
+
+**Why direct Manager→members over libp2p, not Discovery SSE** (per Q-disc-1 resolution, see [`crates/auki-domain/parking_lot.md`](../auki-domain/parking_lot.md)): heartbeat is already peer-to-peer per T3; layering a parallel Discovery-pushed snapshot stream creates two live-state surfaces. Single libp2p surface is cleaner. Discovery is bootstrap rendezvous only.
+
+**Why two separate protocols** (not multiplexing on one): cleaner namespacing. Heartbeat is liveness; registry snapshot is state. Future protocol additions (capability ads) get their own protocol id rather than overloading the heartbeat protocol's name.
+
+**Lab-mode versioning per Rule 11.5** — both protocols are `0.0.1`, not `1.0.0`.
+
+Tests: +14 unit tests across the two new modules. `cargo build -p auki-network --features swarm` clean. Two pre-existing flaky stream_runtime tests in the sandbox (documented in `auki-sdk-build-and-test-on-hermes.md`) — not regressions.
+
+Next: PR 2b lands the Manager-role state machine in [`auki-domain`](../auki-domain) — tick loop (T2), departure tracking (T4), local registry mutations (T6), and snapshot broadcast (T7) over this PR's wire.
+
 ### broodsugar's dobby · May 9, 16:34 HKT, 2026
 
 **Added a sixth `/auki/message/0.0.1` design question to [`parking_lot.md`](parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2): does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch), or does the consumer write it inside their handler?

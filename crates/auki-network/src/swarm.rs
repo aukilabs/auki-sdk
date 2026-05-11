@@ -52,7 +52,7 @@
 //! }).expect("build swarm");
 //! ```
 
-use crate::{PeerIdentity, cluster_protocol};
+use crate::{PeerIdentity, cluster_protocol, heartbeat_protocol};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, identify, mdns, noise, ping, relay,
     swarm::{
@@ -101,6 +101,13 @@ pub struct Behaviour {
     /// [`cluster_protocol::Behaviour::send_response`]. See
     /// [`crate::cluster_protocol`].
     pub cluster: cluster_protocol::Behaviour,
+    /// `/auki/heartbeat/0.0.1` Manager↔member liveness exchange.
+    /// Always present — the protocol sits idle until the Manager-side
+    /// state machine in [`auki-domain`](../../../auki-domain) starts
+    /// ticking. Same shape as [`cluster_protocol`]: the behaviour
+    /// does not auto-respond; receivers handle `Request` events and
+    /// call `send_response`. See [`crate::heartbeat_protocol`].
+    pub heartbeat: heartbeat_protocol::Behaviour,
     /// libp2p raw-substream multiplexer used by grimsby's
     /// `/auki/stream/0.1.0` typed-byte-stream protocol. Always present —
     /// the behaviour sits idle for swarms that don't open or accept any
@@ -212,6 +219,7 @@ pub fn build_swarm(
                 relay::Behaviour::new(local_pid, relay::Config::default())
             })),
             cluster: cluster_protocol::behaviour(),
+            heartbeat: heartbeat_protocol::behaviour(),
             stream: libp2p_stream::Behaviour::new(),
         })
         .expect("behaviour construction is infallible")

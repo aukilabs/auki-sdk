@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 17:46 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) + [`crates/auki-domain`](crates/auki-domain) — Greenland T8 SDK side: `DiscoveryClient::create_cluster` + `init_domain` wires it before `register`.** Closes the SDK side of Discovery [PR #2](https://github.com/aukilabs/discovery/pull/2) which removed lazy-create on `POST /clusters/{name}/peers`. New `DiscoveryClient::create_cluster(wallet, cluster_name)` signs `{ cluster_name, op: "create", peer_id, public_key, timestamp_ns }` JCS, POSTs `/clusters/{name}`; surfaces 201/409 as `CreateClusterOutcome::{Created, AlreadyExists{existing}}`. `init_domain` calls it before `register` and maps the 409 to the new `InitDomainError::AlreadyExists { identity, existing }` variant for Greenland T12's Vinland-race retry. +6 tests in `discovery_client`. Discovery is now safe to deploy without breaking Park / Booster / Sentinel boot paths once they bump SDK pin.
+
 ### broodsugar's claude · May 11, 16:46 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) — `ClusterDoc` gains `created_ns` + `current_manager_peer_id` to unblock Greenland T8 + T14 on the Discovery side.** Pure schema add. `created_ns: u64` (Discovery-stamped, immutable, sort key for `GET /clusters/latest`); `current_manager_peer_id: Option<PeerId>` (live Manager identity, rotated by signed handoff after every failover). Both `#[serde(default)]` for backward-compat with pre-Greenland hand-edited `cluster.json`. Locked conformance vector in `registry_protocol` updated; second vector added for the populated shape. `InitDomainError::AlreadyExists` deferred to PR 3 (failover batch) per the cross-agent coordination call — Discovery ships its atomic 409 alongside T8, SDK maps it then.

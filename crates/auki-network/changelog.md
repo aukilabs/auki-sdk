@@ -6,6 +6,21 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 17:46 HKT, 2026
+
+**`DiscoveryClient::create_cluster` — Greenland T8 SDK side shipped.** Discovery's T8 endpoint ([aukilabs/discovery#2](https://github.com/aukilabs/discovery/pull/2)) merged with first-write-wins atomic creation; this PR ships the SDK companion so `auki_domain::init_domain` can satisfy the new "cluster must exist before register" precondition.
+
+**Wire shape (matches Discovery's `CreateRequest` exactly).** New `pub async fn DiscoveryClient::create_cluster(wallet, cluster_name) -> Result<CreateClusterOutcome, DiscoveryError>` POSTs `/clusters/{name}` with body `{ peer_id, public_key, timestamp_ns, signature }`. Signed canonical bytes are JCS over `{ cluster_name, op: "create", peer_id, public_key, timestamp_ns }` — the `op` discriminator prevents a create signature being replayed as a register and vice versa.
+
+**`CreateClusterOutcome`** is a new public enum surfacing the 201/409 split:
+
+- `Created(ClusterDoc)` — the signing peer is recorded as the initial Manager (`ClusterDoc.current_manager_peer_id`).
+- `AlreadyExists { existing: ClusterDoc }` — parsed from Discovery's `{ error: "already_exists", existing: ClusterDoc }` 409 body so callers can hand the winning state straight to a join flow without an extra `fetch`. Pairs with the new `auki_domain::InitDomainError::AlreadyExists` variant for the Greenland T12 Vinland-race retry.
+
+**`DiscoveryClient::register` docs updated.** Adds the "cluster must already exist" precondition; a register against a non-existent cluster now surfaces as `DiscoveryError::Status { status: 404, .. }`. No code change to register itself — the precondition is enforced server-side by the merged Discovery T8.
+
+**Tests.** +6 unit tests in `discovery_client`: signature-verifies-under-pubkey, pubkey-reconstructs-peer-id, op-discriminator-blocks-register-replay, cross-cluster-replay-breaks-signature, JCS-canonical-bytes-shape-locked, wire-body-field-set-locked. `cargo test -p auki-network --all-features` 132/132 green (up from 126).
+
 ### broodsugar's claude · May 11, 16:46 HKT, 2026
 
 **ClusterDoc gains `created_ns` and `current_manager_peer_id` — Greenland T8 / T14 schema additions to unblock Discovery.** The `aukilabs/discovery` repo's T8 (`GET /clusters/latest`) and T14 (signed `POST /clusters/{name}/manager` handoff) are both gated on these two fields landing in the SDK's `ClusterDoc`, which serves as the shared wire shape between Discovery's responses and the Manager's snapshot broadcasts on `/auki/registry/0.0.1`.

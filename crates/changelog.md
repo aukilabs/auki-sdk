@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 17:46 HKT, 2026
+
+**[`auki-network`](auki-network) + [`auki-domain`](auki-domain) — Greenland T8 SDK side: `DiscoveryClient::create_cluster` + `init_domain` wires it before `register`.** Pairs with Discovery [PR #2](https://github.com/aukilabs/discovery/pull/2) which removed lazy-create on `POST /clusters/{name}/peers`. `create_cluster` signs `{ cluster_name, op: "create", peer_id, public_key, timestamp_ns }` JCS, POSTs `/clusters/{name}`; surfaces 201/409 as `CreateClusterOutcome::{Created(ClusterDoc), AlreadyExists { existing: ClusterDoc }}`. `auki_domain::init_domain` calls it before `register` and maps the 409 to the new `InitDomainError::AlreadyExists { identity, existing }` variant (lifts the variant out of the prior PR's deferral — Discovery now produces a 409 to map). +6 tests in `discovery_client`.
+
 ### broodsugar's claude · May 11, 16:46 HKT, 2026
 
 **[`auki-network`](auki-network) — `ClusterDoc` gains `created_ns` + `current_manager_peer_id` to unblock Discovery T8 + T14.** Pure schema add: `created_ns: u64` (Discovery-stamped, immutable, sort key for `GET /clusters/latest`) and `current_manager_peer_id: Option<PeerId>` (live Manager identity, rotated by signed `POST /clusters/{name}/manager` handoff). Both `#[serde(default)]` so pre-Greenland hand-edited `cluster.json` files still load. Locked conformance vector in `registry_protocol` updated; second locked vector added for the populated shape. +3 tests. `auki-domain` untouched — `InitDomainError::AlreadyExists` deferred to PR 3 per the cross-agent coordination call.

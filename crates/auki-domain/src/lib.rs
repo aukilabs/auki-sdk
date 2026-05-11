@@ -27,8 +27,11 @@
 //!   plus the reserved `"Vinland"` singleton exception per Greenland
 //!   T12.
 //! - [`init_domain`] — async constructor that builds the identity,
-//!   registers the cluster topic with Discovery, and returns a
-//!   [`DomainHandle`].
+//!   atomically creates the cluster on Discovery (Greenland T8) and
+//!   registers the local daemon as its first peer, returning a
+//!   [`DomainHandle`]. Surfaces the Vinland-race conflict
+//!   distinguishably as [`InitDomainError::AlreadyExists`] so T12's
+//!   `try-join → create-if-none → fall-back-to-join` retry can route.
 //!
 //! ## Naming relationship to existing concepts
 //!
@@ -43,7 +46,9 @@
 #![warn(missing_docs)]
 
 use auki_identity::{Wallet, WalletId};
-use auki_network::discovery_client::{DiscoveryClient, DiscoveryError};
+use auki_network::discovery_client::{
+    CreateClusterOutcome, DiscoveryClient, DiscoveryError,
+};
 use multiaddr::Multiaddr;
 use thiserror::Error;
 
@@ -215,14 +220,37 @@ pub enum InitDomainError {
     /// status-code failure.
     #[error("Discovery registration failed: {0}")]
     Discovery(#[from] DiscoveryError),
+
+    /// Discovery's atomic `POST /clusters/{name}` returned 409 — the
+    /// cluster name was already taken by another peer. The losing
+    /// peer reads the winner's [`ClusterDoc`] from this variant and
+    /// proceeds as a joiner (Greenland T12's Vinland-race retry
+    /// algorithm: `try-join → create-if-none → fall-back-to-join`).
+    /// `identity` is the local caller's `DomainIdentity` (the one
+    /// `init_domain` was about to claim); `existing` is Discovery's
+    /// view of the winning cluster — `existing.current_manager_peer_id`
+    /// names the live Manager the loser should route a future
+    /// `JoinRequest` at (Greenland T5).
+    #[error("Domain {identity} already exists: another peer created it first")]
+    AlreadyExists {
+        /// The identity this `init_domain` call was trying to claim.
+        identity: DomainIdentity,
+        /// The winning peer's `ClusterDoc` as returned by Discovery
+        /// in the 409 body. Carries `current_manager_peer_id` so
+        /// the loser can dial the live Manager directly.
+        existing: auki_network::cluster_doc::ClusterDoc,
+    },
 }
 
 /// Create a new Domain and register the local daemon as its first peer.
 ///
-/// Constructs a [`DomainIdentity`] from `wallet` + `name`, registers
-/// with Discovery via [`DiscoveryClient::register`], and returns a
-/// [`DomainHandle`] recording the identity. The caller becomes the
-/// initial Manager by virtue of being the only peer; Manager-role
+/// Constructs a [`DomainIdentity`] from `wallet` + `name`, calls
+/// [`DiscoveryClient::create_cluster`] (Greenland T8 atomic create) to
+/// claim the cluster, then [`DiscoveryClient::register`] to register
+/// the local daemon as the first peer, and returns a [`DomainHandle`]
+/// recording the identity. The caller becomes the initial Manager by
+/// virtue of being the create-cluster signer (Discovery records the
+/// signer in `ClusterDoc.current_manager_peer_id`); Manager-role
 /// state (heartbeat tick, registry write authority, JoinRequest
 /// admission) lands in PR 2 (Greenland T2+T3+T4+T6+T7).
 ///
@@ -288,6 +316,18 @@ pub async fn init_domain(
     };
 
     let cluster_name = identity.canonical_string();
+
+    // Greenland T8: Discovery's atomic create. Must precede register
+    // (Discovery no longer lazy-creates on first peer registration).
+    // First-write-wins; loser surfaces as `InitDomainError::AlreadyExists`
+    // so the caller can route to T12's fall-back-to-join branch.
+    match discovery.create_cluster(wallet, &cluster_name).await? {
+        CreateClusterOutcome::Created(_doc) => { /* fall through to register */ }
+        CreateClusterOutcome::AlreadyExists { existing } => {
+            return Err(InitDomainError::AlreadyExists { identity, existing });
+        }
+    }
+
     discovery
         .register(wallet, &cluster_name, addresses, expected_app_id, note)
         .await?;

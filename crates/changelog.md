@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 16:10 HKT, 2026
+
+**[`auki-domain`](auki-domain) — Greenland PR 2b: Manager-role state machine (T2 + T4 + T6 + T7 logic).** New `manager` module — `Manager` type owning the authoritative in-memory Cluster Registry for one Domain. Transport-agnostic: emits `ManagerEffect`s (`SendHeartbeat` / `BroadcastSnapshot` / `MemberDeparted`) via `EffectSink` so the swarm-backed transport (PR 2c / PR 3) is a thin translator and the state machine is testable without a real swarm. 10-second tick, 2-missed-tick departure threshold, mutation-driven `ClusterDoc` snapshot broadcast over PR 2a's `/auki/registry/0.0.1`. Multi-departure ticks coalesce into one post-tick snapshot. Snapshot peers sorted by `PeerId` for stable JSON wire form. 16 new unit tests (28 total in crate). Builds on PR 2a (#92).
+
 ### broodsugar's dobby · May 11, 15:39 HKT, 2026
 
 **[`auki-network`](auki-network) — Greenland T3 + T7 wire layer shipped: `heartbeat_protocol` + `registry_protocol`.** Two new libp2p protocols at the wire-types level. `/auki/heartbeat/0.0.1` request-response (templates off `cluster_protocol`; `HeartbeatRequest{tick_ns, manager_peer_id}` + `HeartbeatResponse{responder_peer_id}`; 10s `REQUEST_TIMEOUT` matching Greenland's tick interval). `/auki/registry/0.0.1` substream-per-snapshot fire-and-forget (templates off `stream_protocol`'s framing helpers; `SnapshotEnvelope{mutation_ns, doc: ClusterDoc}`; JSON wire; 1 MiB frame cap). `heartbeat_protocol::behaviour()` wired into the swarm `Behaviour` struct. +14 unit tests including locked cross-language vectors. PR 2b lands the Manager-side state machine in `auki-domain` (tick loop, departure tracking, mutation broadcasting).

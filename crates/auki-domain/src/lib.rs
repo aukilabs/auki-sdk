@@ -42,6 +42,8 @@
 
 #![warn(missing_docs)]
 
+pub mod manager;
+
 use auki_identity::{Wallet, WalletId};
 use auki_network::discovery_client::{DiscoveryClient, DiscoveryError};
 use multiaddr::Multiaddr;
@@ -309,7 +311,11 @@ mod tests {
         let (prefix, suffix) = s.split_once('/').expect("contains slash");
         assert_eq!(prefix.len(), 32, "wallet_id is 32-char hex");
         assert_eq!(suffix, "demo");
-        assert!(prefix.chars().all(|c| c.is_ascii_hexdigit() && (!c.is_ascii_uppercase())));
+        assert!(
+            prefix
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && (!c.is_ascii_uppercase()))
+        );
     }
 
     #[test]
@@ -373,12 +379,12 @@ mod tests {
         // at construction).
         let wallet = Wallet::from_seed(&[7u8; 32]);
         let cases = [
-            "",                          // empty
-            " ",                         // whitespace
-            "a/b",                       // contains slash
-            "héllo wörld",              // unicode
+            "",                                         // empty
+            " ",                                        // whitespace
+            "a/b",                                      // contains slash
+            "héllo wörld",                              // unicode
             "1234567890123456789012345678901234567890", // long
-            "🦀",                       // emoji
+            "🦀",                                       // emoji
         ];
         for name in cases {
             let id = DomainIdentity::user_named(&wallet, name);

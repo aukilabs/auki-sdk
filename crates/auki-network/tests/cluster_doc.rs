@@ -34,6 +34,8 @@ fn fixture_doc() -> ClusterDoc {
     ClusterDoc {
         version: 1,
         cluster_name: "demo-2026-05".to_string(),
+        created_ns: 0,
+        current_manager_peer_id: None,
         peers: vec![
             ClusterPeer {
                 peer_id: p1,

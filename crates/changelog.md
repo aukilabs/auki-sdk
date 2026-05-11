@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 16:46 HKT, 2026
+
+**[`auki-network`](auki-network) — `ClusterDoc` gains `created_ns` + `current_manager_peer_id` to unblock Discovery T8 + T14.** Pure schema add: `created_ns: u64` (Discovery-stamped, immutable, sort key for `GET /clusters/latest`) and `current_manager_peer_id: Option<PeerId>` (live Manager identity, rotated by signed `POST /clusters/{name}/manager` handoff). Both `#[serde(default)]` so pre-Greenland hand-edited `cluster.json` files still load. Locked conformance vector in `registry_protocol` updated; second locked vector added for the populated shape. +3 tests. `auki-domain` untouched — `InitDomainError::AlreadyExists` deferred to PR 3 per the cross-agent coordination call.
+
 ### broodsugar's dobby · May 11, 15:39 HKT, 2026
 
 **[`auki-network`](auki-network) — Greenland T3 + T7 wire layer shipped: `heartbeat_protocol` + `registry_protocol`.** Two new libp2p protocols at the wire-types level. `/auki/heartbeat/0.0.1` request-response (templates off `cluster_protocol`; `HeartbeatRequest{tick_ns, manager_peer_id}` + `HeartbeatResponse{responder_peer_id}`; 10s `REQUEST_TIMEOUT` matching Greenland's tick interval). `/auki/registry/0.0.1` substream-per-snapshot fire-and-forget (templates off `stream_protocol`'s framing helpers; `SnapshotEnvelope{mutation_ns, doc: ClusterDoc}`; JSON wire; 1 MiB frame cap). `heartbeat_protocol::behaviour()` wired into the swarm `Behaviour` struct. +14 unit tests including locked cross-language vectors. PR 2b lands the Manager-side state machine in `auki-domain` (tick loop, departure tracking, mutation broadcasting).

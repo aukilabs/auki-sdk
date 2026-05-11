@@ -223,6 +223,8 @@ mod tests {
             doc: ClusterDoc {
                 version: 1,
                 cluster_name: "demo-domain".into(),
+                created_ns: 0,
+                current_manager_peer_id: None,
                 peers: vec![
                     ClusterPeer {
                         peer_id: p1,
@@ -314,9 +316,11 @@ mod tests {
     /// input.
     ///
     /// Empty `peers` list, `cluster_name = "x"`, `mutation_ns = 0`,
-    /// `version = 1`. Locks the JSON serialization shape so a future
-    /// change to field order, default-elision, etc. is caught
-    /// immediately.
+    /// `version = 1`, `created_ns = 0`, no `current_manager_peer_id`.
+    /// Locks the JSON serialization shape so a future change to field
+    /// order, default-elision, etc. is caught immediately. The
+    /// `created_ns` field always serialises (required-shaped on the
+    /// wire); `current_manager_peer_id` is Option-skipped when None.
     #[test]
     fn envelope_locked_minimal_json() {
         let env = SnapshotEnvelope {
@@ -324,13 +328,44 @@ mod tests {
             doc: ClusterDoc {
                 version: 1,
                 cluster_name: "x".into(),
+                created_ns: 0,
+                current_manager_peer_id: None,
                 peers: vec![],
             },
         };
         let json = serde_json::to_string(&env).unwrap();
         assert_eq!(
             json,
-            r#"{"mutation_ns":0,"doc":{"version":1,"cluster_name":"x","peers":[]}}"#
+            r#"{"mutation_ns":0,"doc":{"version":1,"cluster_name":"x","created_ns":0,"peers":[]}}"#
         );
+    }
+
+    /// Locked vector for the post-failover shape: `current_manager_peer_id`
+    /// populated, `created_ns` populated. Pins the wire shape every
+    /// cross-language reimplementation must produce when both Greenland
+    /// fields are present.
+    #[test]
+    fn envelope_locked_with_manager_and_created_ns() {
+        let manager = fixture_peer_id(7);
+        let env = SnapshotEnvelope {
+            mutation_ns: 0,
+            doc: ClusterDoc {
+                version: 1,
+                cluster_name: "x".into(),
+                created_ns: 1_715_423_400_000_000_000,
+                current_manager_peer_id: Some(manager),
+                peers: vec![],
+            },
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        // libp2p-identity serialises PeerId as its canonical base58
+        // string; format!() the expected JSON around the runtime-derived
+        // value so the assertion stays brittle on shape but not on
+        // PeerId text (which can vary with crate version).
+        let expected_manager = manager.to_string();
+        let expected = format!(
+            r#"{{"mutation_ns":0,"doc":{{"version":1,"cluster_name":"x","created_ns":1715423400000000000,"current_manager_peer_id":"{expected_manager}","peers":[]}}}}"#
+        );
+        assert_eq!(json, expected);
     }
 }

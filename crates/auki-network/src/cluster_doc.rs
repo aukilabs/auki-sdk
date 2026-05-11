@@ -44,6 +44,8 @@
 //! {
 //!   "version": 1,
 //!   "cluster_name": "demo-2026-05",
+//!   "created_ns": 1715423400000000000,
+//!   "current_manager_peer_id": "12D3KooWGRUacXgYqsMd9V9zUYHEqtbwWSPN5x9eaA1k4VFZ7yK7",
 //!   "peers": [
 //!     {
 //!       "peer_id": "12D3KooWGRUacXgYqsMd9V9zUYHEqtbwWSPN5x9eaA1k4VFZ7yK7",
@@ -57,6 +59,14 @@
 //!   ]
 //! }
 //! ```
+//!
+//! `created_ns` and `current_manager_peer_id` are both Greenland-era
+//! additions and both default-fill via `#[serde(default)]`, so an
+//! older hand-edited `cluster.json` that omits them still loads —
+//! `created_ns` lands as `0` (sentinel "unknown locally") and
+//! `current_manager_peer_id` lands as `None`. Discovery stamps them
+//! authoritatively; in pure-config use, the operator may leave them
+//! out.
 //!
 //! ```no_run
 //! # use std::path::Path;
@@ -108,6 +118,40 @@ pub struct ClusterDoc {
     /// Human-readable cluster identifier. Surfaced in operator logs;
     /// no semantic role beyond labelling.
     pub cluster_name: String,
+    /// Discovery-stamped cluster creation timestamp, in nanoseconds
+    /// since the Unix epoch from Discovery's server-side monotonic
+    /// clock. Set once when Discovery first accepts the cluster's
+    /// `POST /clusters/{name}` and immutable thereafter; the Manager
+    /// preserves it across every broadcast and across Manager
+    /// failover. Sort key for `GET /clusters/latest` (Greenland T8) —
+    /// taking the Manager's announced bootstrap time as the sort key
+    /// would fold in real per-peer clock skew, so the server's own
+    /// clock owns the field.
+    ///
+    /// `#[serde(default)]` keeps pre-Greenland hand-edited
+    /// `cluster.json` files loading: a missing field comes back as
+    /// `0`, which downstream code treats as "unknown locally" — it's
+    /// fine for static config-file use, but a Discovery-issued doc
+    /// always carries the real value.
+    #[serde(default)]
+    pub created_ns: u64,
+    /// Live Manager peer-id, written by Discovery and refreshed every
+    /// time the cluster's Manager changes. Initially set when
+    /// Discovery accepts the cluster's `POST /clusters/{name}`
+    /// (Greenland T8) to the creating peer; rotated by the new
+    /// Manager's signed `POST /clusters/{name}/manager` handoff after
+    /// every failover (Greenland T14). Late joiners read this off
+    /// `GET /clusters/latest` to route their `JoinRequest` at the
+    /// live Manager rather than a dead one.
+    ///
+    /// Distinct from the Domain-creator wallet — that wallet's role
+    /// is one-shot at Domain creation (Greenland T6 / T1); this is
+    /// the current peer-identity authority for registry mutations.
+    /// `None` only for pre-Greenland clusters or, transiently, for a
+    /// fresh cluster between creation and the first peer
+    /// registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_manager_peer_id: Option<PeerId>,
     /// Ordered list of pinned peers.
     pub peers: Vec<ClusterPeer>,
 }
@@ -364,6 +408,8 @@ mod tests {
         ClusterDoc {
             version: 1,
             cluster_name: "demo-2026-05".to_string(),
+            created_ns: 1_715_423_400_000_000_000,
+            current_manager_peer_id: Some(p1),
             peers: vec![
                 ClusterPeer {
                     peer_id: p1,
@@ -634,6 +680,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "stability".to_string(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![ClusterPeer {
                 peer_id: p1,
                 addresses: vec!["/ip4/127.0.0.1/tcp/4001".parse().unwrap()],
@@ -645,9 +693,59 @@ mod tests {
         // None-valued optional fields are skipped on serialize.
         assert!(!json.contains("expected_app_id"));
         assert!(!json.contains("note"));
+        // `current_manager_peer_id` is also Option-skipped when None.
+        assert!(!json.contains("current_manager_peer_id"));
+        // `created_ns` is required-shaped on the wire — it serialises
+        // even at the `0` sentinel so receivers always see the field.
+        assert!(json.contains("created_ns"));
         // And the doc still round-trips clean.
         let f = write_temp_file(json.as_bytes());
         let back = load(f.path()).expect("load");
         assert_eq!(doc, back);
+    }
+
+    #[test]
+    fn pre_greenland_doc_loads_with_zero_created_ns_and_no_manager() {
+        // Backward-compatibility: an older hand-edited `cluster.json`
+        // that predates the Greenland fields must still load. Both new
+        // fields default-fill — `created_ns` to 0, `current_manager_peer_id`
+        // to None.
+        let p1 = crate::PeerIdentity::from_seed(&[8u8; 32]).peer_id();
+        let json = format!(
+            r#"{{
+              "version": 1,
+              "cluster_name": "pre-greenland",
+              "peers": [{{ "peer_id": "{p1}", "addresses": [] }}]
+            }}"#
+        );
+        let f = write_temp_file(json.as_bytes());
+        let doc = load(f.path()).expect("legacy doc should still load");
+        assert_eq!(doc.created_ns, 0);
+        assert_eq!(doc.current_manager_peer_id, None);
+    }
+
+    #[test]
+    fn greenland_doc_carries_created_ns_and_manager_through_load() {
+        // A Discovery-issued doc carries both Greenland fields; verify
+        // they survive the load → parse round-trip with the values
+        // intact.
+        let p1 = crate::PeerIdentity::from_seed(&[9u8; 32]).peer_id();
+        let p2 = crate::PeerIdentity::from_seed(&[10u8; 32]).peer_id();
+        let json = format!(
+            r#"{{
+              "version": 1,
+              "cluster_name": "greenland",
+              "created_ns": 1715423400000000000,
+              "current_manager_peer_id": "{p1}",
+              "peers": [
+                {{ "peer_id": "{p1}", "addresses": [] }},
+                {{ "peer_id": "{p2}", "addresses": [] }}
+              ]
+            }}"#
+        );
+        let f = write_temp_file(json.as_bytes());
+        let doc = load(f.path()).expect("greenland doc should load");
+        assert_eq!(doc.created_ns, 1_715_423_400_000_000_000);
+        assert_eq!(doc.current_manager_peer_id, Some(p1));
     }
 }

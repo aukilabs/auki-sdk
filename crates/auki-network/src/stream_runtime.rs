@@ -802,6 +802,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-stream-happy-path".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),
@@ -888,6 +890,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-stream-decline".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),
@@ -950,6 +954,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-stream-producer-error".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),
@@ -1024,6 +1030,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-stream-producer-shutdown".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),
@@ -1144,6 +1152,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-unreachable".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_consumer.peer_id(), addr_c),
                 cluster_peer(id_unreachable.peer_id(), unreachable_addr),
@@ -1218,6 +1228,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-pointcloud-happy-path".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),
@@ -1304,6 +1316,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-multi-t-dispatch".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_p.peer_id(), addr_p),
                 cluster_peer(id_c.peer_id(), addr_c),

@@ -8,15 +8,7 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 ## Glossary reconciliation — `Domain ID` vs `{wallet_id}/{name}`
 
-[`Glossary.md`](../../Glossary.md#domain-id) defines:
-
-> **Domain ID** — Derived as `hash(domain_owner_pubkey)` (see [`tags.md`](../../tags.md)). Used as the `tag_id` in `domain_membership` TagClaims and as the topic peers cluster around on the network.
-
-The [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2) introduces Domain identity as `{wallet_id}/{name}` — `wallet_id` is itself `hash(wallet_pubkey)` per [`auki-identity`](../auki-identity), and the new `{name}` component lets a single wallet own multiple distinguishable Domains.
-
-**Lean: extend, not replace.** `Domain ID` in the Glossary becomes a *prefix* on the new canonical identity: `Domain Identity = {Domain ID}/{name}`. The `domain_membership` TagClaim's `tag_id` keeps using `Domain ID` (the wallet hash) for tag math, but the cluster-topic-on-the-network becomes the full `{wallet_id}/{name}` string. The `"Vinland"` singleton (T12) is the one exception — its canonical identity is just `Vinland`, no wallet prefix, because it's the reserved default-Domain namespace.
-
-Resolution propagates in [PR 1 (T1)](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2) — that PR lands the canonical-string implementation and updates the Glossary entry in the same change.
+**Resolved 2026-05-11** in PR 1 (T1). [`Glossary.md`](../../Glossary.md) gains a new `Domain Identity` entry alongside the existing `Domain ID` — `Domain Identity = {Domain ID}/{name}` for user-named Domains, just `Vinland` for the reserved singleton. `Domain ID` keeps its existing definition (`hash(domain_owner_pubkey)`) and continues to identify TagClaims; the network-topic / Discovery-indexing role moves to `Domain Identity`. The `"Vinland"` singleton (T12) is the exception — no wallet prefix.
 
 ---
 

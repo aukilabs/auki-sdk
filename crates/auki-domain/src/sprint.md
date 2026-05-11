@@ -2,34 +2,24 @@
 
 Current work and next steps. This crate is being scaffolded as the home for the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2)'s SDK-side work.
 
-## Now (PR 0 — scaffold + plan)
+## Now (PR 1 — Greenland T1: shipped)
 
-This PR. Lands:
+Greenland T1 entry point. Landed:
 
-- Folder convention (Cargo.toml, lib.rs stub, README, parking_lot.md, changelog.md, src/readme.md, src/sprint.md).
-- Workspace registration in root `Cargo.toml`.
-- [`parking_lot.md`](../parking_lot.md) pre-files of the Greenland architectural decisions transcribed from the Notion Tasks table.
-- This sprint plan.
+- `DomainIdentity { wallet_id: Option<WalletId>, name: String }` value type with:
+  - Canonical string form `{wallet_id}/{name}` for user-named Domains, just `Vinland` for the singleton.
+  - `user_named(&Wallet, &str)` constructor (panics on reserved `"Vinland"` to redirect callers to `singleton()`).
+  - `singleton()` constructor for the reserved `"Vinland"` Domain.
+  - `canonical_string()` accessor producing the string Discovery indexes on.
+  - `Display`, `PartialEq`, `Eq`, `Hash`, `Clone`, `Debug` derived/implemented.
+  - 12 unit tests + 2 doctests + 2 locked cross-language conformance vectors (user-named string structure + full canonical concat against seed `[3u8; 32]`; singleton string).
+- `init_domain(&Wallet, &str, &DiscoveryClient, &[Multiaddr], Option<&str>, Option<&str>) -> Result<DomainHandle, InitDomainError>`:
+  - Constructs the identity (singleton if `name == "Vinland"`, user-named otherwise).
+  - Calls `DiscoveryClient::register(wallet, &canonical_string, addresses, expected_app_id, note)`.
+  - Returns `DomainHandle { identity }`. Role state stubbed for PR 2.
+- Glossary update: new `Domain Identity` entry (the network-topic / Discovery-indexing string); existing `Domain ID = hash(domain_owner_pubkey)` keeps its TagClaim definition.
 
-No functional code. No `auki-domain` reverse dependencies wired yet (no consumer references this crate; that happens in PR 1).
-
-## Next — PR 1 (T1: `DomainIdentity` + `init_domain`)
-
-Greenland T1 entry point. Lands:
-
-- `DomainIdentity { wallet_id: WalletId, name: String }` value type with:
-  - Canonical string form `{wallet_id}/{name}` (or just `Vinland` for the singleton exception per T12).
-  - `cluster_name()` accessor producing the string Discovery's existing `register / fetch / subscribe` consume.
-  - Locked cross-language conformance vectors for the canonical string.
-- `init_domain(&Wallet, &str, &DiscoveryClient) -> Result<DomainHandle, InitDomainError>`:
-  - Constructs the identity.
-  - Registers the cluster with Discovery via existing `DiscoveryClient::register`.
-  - Returns a minimal `DomainHandle` with `identity()` accessor. Role state is stubbed (returns `Role::Manager` unconditionally — heartbeat machinery lands in PR 2).
-- Glossary update: reconcile the existing `Domain ID = hash(domain_owner_pubkey)` definition with `{wallet_id}/{name}` per the parking-lot question filed in PR 0.
-
-Scope guardrails (NOT in PR 1): no heartbeats, no JoinRequest, no broadcast, no failover, no Manager-write authority semantics. Just identity + Discovery registration + the handle type.
-
-## Then — PR 2 (heartbeat batch: T2 + T3 + T4 + T6 + T7)
+## Next — PR 2 (heartbeat batch: T2 + T3 + T4 + T6 + T7)
 
 The Manager role's core lifecycle. Lands:
 

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 14:34 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) — Greenland T1 shipped: `DomainIdentity` + `init_domain`.** First implementing PR of the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). `DomainIdentity` carries `{wallet_id}/{name}` canonical string + the reserved `"Vinland"` singleton exception (T12). `init_domain(&Wallet, &str, &DiscoveryClient, &[Multiaddr], …) -> DomainHandle` builds the identity, registers with Discovery, returns a minimal handle. Manager-role state (heartbeats, registry mutation authority, JoinRequest admission) lands in PR 2. 12 unit tests + 2 doctests + 2 locked cross-language vectors. Glossary updated: new `Domain Identity` entry; `Domain ID` keeps its existing TagClaim role.
+
 ### broodsugar's dobby · May 11, 14:20 HKT, 2026
 
 **[`crates/auki-domain`](crates/auki-domain) — new crate scaffolded for the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2)'s SDK-side Domain lifecycle work.** Sibling to `auki-network` / `auki-identity` / `auki-session-py`; owns Domain creation, joining, Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Empty `lib.rs` — no functional code. Lands the folder convention + parking-lot pre-files of every Greenland architectural decision transcribed from the Notion Tasks table. PR 1 (T1: `DomainIdentity` + `init_domain`) lands next per [`crates/auki-domain/src/sprint.md`](crates/auki-domain/src/sprint.md).

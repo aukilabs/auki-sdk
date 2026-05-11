@@ -9,6 +9,9 @@ Latest entry on top.
 ### broodsugar's dobby · May 11, 14:34 HKT, 2026
 
 **[`auki-domain`](auki-domain) — Greenland T1 shipped: `DomainIdentity` + `init_domain`.** First implementing PR of the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). `DomainIdentity` value type carries the wallet-scoped canonical string `{wallet_id}/{name}` with the reserved `"Vinland"` singleton exception (T12); `init_domain` builds the identity, registers via `DiscoveryClient::register`, returns a minimal `DomainHandle`. 12 unit tests + 2 doctests + 2 locked cross-language vectors. Glossary updated.
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**[`auki-network`](auki-network) — sixth `/auki/message/0.0.1` design question filed in [`parking_lot.md`](auki-network/parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Lean: SDK owns the writer (symmetric with fire-and-forget wire semantics, replay-from-disk independence from consumer health, clean decode-failure exception semantics, outbound capture symmetry). Doc-only PR; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates. Slate becomes six questions.
 
 ### broodsugar's dobby · May 11, 14:20 HKT, 2026
 

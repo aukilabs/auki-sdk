@@ -5,9 +5,15 @@
 //! daemons publish their `peer_id` + `addresses` to at startup. Lets a
 //! daemon:
 //!
-//! - **`register`** — sign and POST a `RegisterRequest` for itself,
-//!   creating the cluster on first registration; gets back the full
-//!   [`ClusterDoc`] as it stood after the upsert.
+//! - **`create_cluster`** — sign and POST `POST /clusters/{name}` to
+//!   create a cluster atomically (Greenland T8). First-write-wins;
+//!   loser sees a distinguishable `AlreadyExists` outcome carrying the
+//!   winner's [`ClusterDoc`]. The signing peer becomes the cluster's
+//!   initial Manager.
+//! - **`register`** — sign and POST a `RegisterRequest` for itself.
+//!   Since Greenland T8, the cluster MUST already exist (call
+//!   `create_cluster` first) — a register against a non-existent
+//!   cluster surfaces as `DiscoveryError::Status { status: 404, .. }`.
 //! - **`fetch`** — pull the latest `ClusterDoc` for a cluster
 //!   (read-only).
 //! - **`deregister`** — sign and DELETE the daemon's own entry on
@@ -16,6 +22,15 @@
 //! Discovery's wire shape is locked (Vinland Notion doc, 2026-05-06).
 //! Briefly:
 //!
+//! - `POST   /clusters/{cluster_name}` — Greenland T8 atomic create.
+//!   Body is JSON `{ peer_id, public_key, timestamp_ns, signature }`.
+//!   Signed bytes are JCS over `{ cluster_name, op: "create", peer_id,
+//!   public_key, timestamp_ns }`. The `op: "create"` discriminator
+//!   prevents a create signature being replayed as a register (and
+//!   vice versa). 201 + ClusterDoc on success. 409 + `{ error:
+//!   "already_exists", existing: ClusterDoc }` on conflict — the
+//!   loser learns the winner's state from the body and proceeds as a
+//!   joiner.
 //! - `POST   /clusters/{cluster_name}/peers` — body is JSON
 //!   `{ peer_id, public_key, addresses, expected_app_id?, note?,
 //!   timestamp_ns, signature }`. `public_key` is base64 of the 32-byte
@@ -24,7 +39,9 @@
 //!   **including `cluster_name`** and **excluding `signature`**.
 //!   Putting `cluster_name` inside the signed payload prevents a
 //!   registration captured for cluster A being replayed against
-//!   cluster B.
+//!   cluster B. Since Greenland T8, registering into a non-existent
+//!   cluster returns 404 (no lazy-create) — callers must call
+//!   `create_cluster` first.
 //! - `GET    /clusters/{cluster_name}` — returns
 //!   `Json<ClusterDoc>`.
 //! - `DELETE /clusters/{cluster_name}/peers/{peer_id}` — body is
@@ -75,7 +92,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use eventsource_stream::Eventsource;
 use futures::stream::{Stream, StreamExt};
 use multiaddr::Multiaddr;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -158,6 +175,49 @@ pub enum SubscribeError {
 
 // ─── Wire bodies ─────────────────────────────────────────────────────────────
 
+/// Request body for `POST /clusters/{cluster_name}`. Field set matches
+/// Discovery's `CreateRequest` exactly. Signed bytes are JCS over
+/// `{ cluster_name, op: "create", peer_id, public_key, timestamp_ns }`
+/// — `cluster_name` rides in the URL path, not the body, and `op` rides
+/// in the signed canonical bytes only.
+#[derive(Debug, Serialize)]
+struct CreateClusterBody {
+    peer_id: String,
+    public_key: String,
+    timestamp_ns: i64,
+    signature: String,
+}
+
+/// Outcome of a `create_cluster` call. The 201 / 409 split is
+/// surfaced as two distinct variants rather than an error so callers
+/// (notably the Vinland-race retry algorithm in Greenland T12) can
+/// route on it without parsing error strings.
+#[derive(Debug, Clone)]
+pub enum CreateClusterOutcome {
+    /// 201: the cluster was created by this call; the signing peer is
+    /// recorded as the initial Manager. The returned [`ClusterDoc`]
+    /// carries the server-stamped `created_ns` and
+    /// `current_manager_peer_id`.
+    Created(ClusterDoc),
+    /// 409: another peer beat this call to creation. The returned
+    /// [`ClusterDoc`] is the winner's state, parsed from Discovery's
+    /// `{ error: "already_exists", existing: ClusterDoc }` body so
+    /// the loser can hand it straight to a join flow without an
+    /// extra `fetch`.
+    AlreadyExists { existing: ClusterDoc },
+}
+
+/// 409 response body shape from Discovery's `POST /clusters/{name}`.
+/// `error` is always the literal string `"already_exists"`; kept on
+/// the struct so a serde decode mismatch surfaces cleanly. `existing`
+/// is the winning peer's `ClusterDoc`.
+#[derive(Debug, Deserialize)]
+struct AlreadyExistsBody {
+    #[allow(dead_code)] // discriminator; useful for debug printing
+    error: String,
+    existing: ClusterDoc,
+}
+
 /// Request body for `POST /clusters/{cluster_name}/peers`. Field set
 /// matches Discovery's `RegisterRequest` exactly. Optional fields are
 /// omitted when `None` — both for the wire body and the JCS-canonical
@@ -228,12 +288,70 @@ impl DiscoveryClient {
         &self.base_url
     }
 
+    /// Sign and POST `POST /clusters/{cluster_name}` to create a
+    /// cluster atomically (Greenland T8).
+    ///
+    /// Discovery's create endpoint is first-write-wins: the first
+    /// signed request for a given `cluster_name` succeeds with 201 +
+    /// the freshly-stamped [`ClusterDoc`] and records the signer as
+    /// the initial Manager; subsequent requests for the same
+    /// `cluster_name` return 409 + the winner's `ClusterDoc`.
+    ///
+    /// Surfaced as two outcomes rather than success/error so the
+    /// Vinland-race retry algorithm in Greenland T12
+    /// (`try-join → create-if-none → fall-back-to-join-if-races`) can
+    /// route on the conflict without parsing error strings.
+    ///
+    /// HTTP-level failures (transport errors, non-201/409 status
+    /// codes, JSON parse failures) surface as `DiscoveryError` per
+    /// the rest of this module — typically `DiscoveryError::Status`.
+    ///
+    /// Idempotency: callers that want create-or-noop semantics can
+    /// treat both [`CreateClusterOutcome::Created`] and
+    /// [`CreateClusterOutcome::AlreadyExists`] as success — the
+    /// distinction only matters when the caller cares which peer
+    /// became initial Manager.
+    pub async fn create_cluster(
+        &self,
+        wallet: &Wallet,
+        cluster_name: &str,
+    ) -> Result<CreateClusterOutcome, DiscoveryError> {
+        let signed = SignedCreate::build(wallet, cluster_name)?;
+        let url = format!("{}/clusters/{}", self.base_url, cluster_name);
+        let resp = self.http.post(&url).json(&signed.body).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::CREATED {
+            let doc = resp.json::<ClusterDoc>().await?;
+            Ok(CreateClusterOutcome::Created(doc))
+        } else if status == reqwest::StatusCode::CONFLICT {
+            let body = resp.json::<AlreadyExistsBody>().await?;
+            Ok(CreateClusterOutcome::AlreadyExists {
+                existing: body.existing,
+            })
+        } else {
+            let body = resp.text().await.unwrap_or_default();
+            Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body,
+            })
+        }
+    }
+
     /// Sign and POST a `RegisterRequest` for `wallet`'s peer key.
     /// Discovery upserts on `peer_id` (re-registration with the same
     /// peer-key wallet replaces the prior entry) and returns the
     /// full [`ClusterDoc`] as it stood after the upsert — so the
     /// daemon can hand the doc straight to `ClusterRuntime::spawn`
     /// without a follow-up `fetch`.
+    ///
+    /// **Precondition (Greenland T8).** The cluster must already
+    /// exist. Discovery no longer lazy-creates on first registration —
+    /// a register against a non-existent `cluster_name` returns 404
+    /// (surfaced here as `DiscoveryError::Status { status: 404, .. }`).
+    /// Callers building a fresh cluster should call
+    /// [`Self::create_cluster`] first; `auki_domain::init_domain`
+    /// wires the create→register sequence and is the recommended
+    /// entry point for daemons.
     ///
     /// `addresses` are the daemon's externally-dialable libp2p
     /// multiaddrs. Empty is allowed (peer registered without
@@ -393,6 +511,47 @@ impl DiscoveryClient {
 // security-relevant code path; everything else in this module is
 // network plumbing.
 
+/// Self-contained create-cluster-payload bundle: the wire body that
+/// goes on the POST, plus the JCS-canonical bytes that were signed.
+/// Same factoring as [`SignedRegister`] so the canonical bytes are
+/// inspectable from tests without spinning up an HTTP client.
+struct SignedCreate {
+    body: CreateClusterBody,
+    #[allow(dead_code)] // kept for tests; trivial to drop if we never need it.
+    canonical: Vec<u8>,
+}
+
+impl SignedCreate {
+    fn build(wallet: &Wallet, cluster_name: &str) -> Result<Self, DiscoveryError> {
+        let signing = wallet.derive_child(PEER_DERIVATION_LABEL);
+        let signing_seed = signing.seed();
+        let peer_id_str = crate::PeerIdentity::from_seed(&signing_seed)
+            .peer_id()
+            .to_string();
+        let public_key_b64 = B64.encode(signing.public_key().0);
+        let timestamp_ns = now_ns()?;
+
+        let payload = create_payload_value(
+            cluster_name,
+            &peer_id_str,
+            &public_key_b64,
+            timestamp_ns,
+        );
+        let (canonical, signature) = signing.sign_canonical_json(&payload);
+        let signature_b64 = B64.encode(signature.0);
+
+        Ok(SignedCreate {
+            body: CreateClusterBody {
+                peer_id: peer_id_str,
+                public_key: public_key_b64,
+                timestamp_ns,
+                signature: signature_b64,
+            },
+            canonical,
+        })
+    }
+}
+
 /// Self-contained register-payload bundle: the wire body that goes on
 /// the POST, plus the JCS-canonical bytes that were signed (kept
 /// around for tests; the production `register` only ships `body`).
@@ -516,6 +675,33 @@ fn register_payload_value(
     if let Some(s) = note {
         payload.insert("note".into(), Value::String(s.into()));
     }
+    payload.insert(
+        "timestamp_ns".into(),
+        Value::Number(timestamp_ns.into()),
+    );
+    Value::Object(payload)
+}
+
+/// JCS-signing payload for create-cluster. Field set matches
+/// Discovery's `canonical_create_bytes` exactly: `{ cluster_name,
+/// op: "create", peer_id, public_key, timestamp_ns }`. Includes
+/// `public_key` (mirrors register; Discovery's verifier wants the
+/// pubkey in the canonical bytes for create even though
+/// `verify_peer_id` already binds pubkey↔peer_id, because the
+/// Discovery agent locked it that way). The `op` discriminator
+/// prevents a create signature from being replayed as a register
+/// and vice versa.
+fn create_payload_value(
+    cluster_name: &str,
+    peer_id: &str,
+    public_key_b64: &str,
+    timestamp_ns: i64,
+) -> Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("cluster_name".into(), Value::String(cluster_name.into()));
+    payload.insert("op".into(), Value::String("create".into()));
+    payload.insert("peer_id".into(), Value::String(peer_id.into()));
+    payload.insert("public_key".into(), Value::String(public_key_b64.into()));
     payload.insert(
         "timestamp_ns".into(),
         Value::Number(timestamp_ns.into()),
@@ -862,6 +1048,158 @@ mod tests {
             "ed25519 signature drifted — see crate docs for the locked recipe",
         );
     }
+
+    // ─── create_cluster tests ────────────────────────────────────────
+
+    /// The signed-create payload produces a signature that verifies
+    /// under the on-the-wire pubkey for the JCS-canonical bytes —
+    /// same rule (4) as for register, but for the create path.
+    #[test]
+    fn create_signature_verifies_under_wire_pubkey() {
+        let signed = SignedCreate::build(&parent_wallet(), "vinland")
+            .expect("build create payload");
+
+        let pubkey_bytes = B64.decode(&signed.body.public_key).unwrap();
+        let pubkey: [u8; 32] = pubkey_bytes.as_slice().try_into().unwrap();
+        let sig_bytes = B64.decode(&signed.body.signature).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+
+        let result = auki_identity::verify(
+            &IdentityPublicKey(pubkey),
+            &signed.canonical,
+            &IdentitySignature(sig_arr),
+        );
+        assert!(
+            result.is_ok(),
+            "create_cluster signature must verify under its own pubkey"
+        );
+    }
+
+    /// The on-the-wire pubkey reconstructs to the on-the-wire peer_id.
+    /// Discovery's verifier rejects otherwise with `PeerIdMismatch`.
+    #[test]
+    fn create_pubkey_reconstructs_peer_id() {
+        let signed = SignedCreate::build(&parent_wallet(), "vinland")
+            .expect("build create payload");
+        let pubkey_bytes = B64.decode(&signed.body.public_key).unwrap();
+        let pubkey_arr: [u8; 32] = pubkey_bytes.as_slice().try_into().unwrap();
+        let lp_pk = lp_ed25519::PublicKey::try_from_bytes(&pubkey_arr).unwrap();
+        let derived_peer_id = libp2p_identity::PublicKey::from(lp_pk).to_peer_id();
+        assert_eq!(derived_peer_id.to_string(), signed.body.peer_id);
+    }
+
+    /// Tampering with the `op` discriminator breaks the signature.
+    /// Confirms `op` is in the signed payload — and therefore a
+    /// captured create signature can't be replayed as a register
+    /// (where `op` is absent / different).
+    #[test]
+    fn create_op_discriminator_blocks_register_replay() {
+        let signed = SignedCreate::build(&parent_wallet(), "vinland")
+            .expect("build create payload");
+
+        let pubkey_bytes = B64.decode(&signed.body.public_key).unwrap();
+        let pubkey: [u8; 32] = pubkey_bytes.as_slice().try_into().unwrap();
+        let sig_bytes = B64.decode(&signed.body.signature).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+
+        // Rebuild canonical bytes for what would be a register-shaped
+        // payload (no `op`, plus the register-only fields). Signature
+        // for create must NOT verify against these bytes.
+        let tampered_canonical = auki_jcs::canonicalize(&register_payload_value(
+            "vinland",
+            &signed.body.peer_id,
+            &signed.body.public_key,
+            &[],
+            None,
+            None,
+            signed.body.timestamp_ns,
+        ));
+        let result = auki_identity::verify(
+            &IdentityPublicKey(pubkey),
+            &tampered_canonical,
+            &IdentitySignature(sig_arr),
+        );
+        assert!(result.is_err(), "create signature must NOT verify as register");
+    }
+
+    /// `cluster_name` is in the signed bytes. A create signature for
+    /// cluster A doesn't verify when treated as for cluster B. Same
+    /// replay guard as register's cross-cluster test.
+    #[test]
+    fn create_cross_cluster_replay_breaks_signature() {
+        let signed = SignedCreate::build(&parent_wallet(), "alpha")
+            .expect("build create payload");
+
+        let pubkey_bytes = B64.decode(&signed.body.public_key).unwrap();
+        let pubkey: [u8; 32] = pubkey_bytes.as_slice().try_into().unwrap();
+        let sig_bytes = B64.decode(&signed.body.signature).unwrap();
+        let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+
+        let tampered_canonical = auki_jcs::canonicalize(&create_payload_value(
+            "beta",
+            &signed.body.peer_id,
+            &signed.body.public_key,
+            signed.body.timestamp_ns,
+        ));
+        let result = auki_identity::verify(
+            &IdentityPublicKey(pubkey),
+            &tampered_canonical,
+            &IdentitySignature(sig_arr),
+        );
+        assert!(result.is_err(), "create signature must NOT verify against a different cluster_name");
+    }
+
+    /// Lock the JCS-canonical byte shape for create. JCS sorts keys
+    /// lexicographically — this is the exact byte stream Discovery's
+    /// verifier reconstructs and feeds to ed25519 verify. Any drift
+    /// (key renames, field set changes) is a wire break.
+    #[test]
+    fn create_canonical_bytes_shape_locked() {
+        let parent = Wallet::from_seed(&[3u8; 32]);
+        let signing = parent.derive_child(PEER_DERIVATION_LABEL);
+        let signing_seed = signing.seed();
+        let peer_id_str = crate::PeerIdentity::from_seed(&signing_seed)
+            .peer_id()
+            .to_string();
+        let public_key_b64 = B64.encode(signing.public_key().0);
+        let timestamp_ns: i64 = 1_700_000_000_000_000_000;
+
+        let canonical = auki_jcs::canonicalize(&create_payload_value(
+            "vinland",
+            &peer_id_str,
+            &public_key_b64,
+            timestamp_ns,
+        ));
+        let canonical_str =
+            std::str::from_utf8(&canonical).expect("JCS output is valid UTF-8");
+        let expected = format!(
+            r#"{{"cluster_name":"vinland","op":"create","peer_id":"{peer_id_str}","public_key":"{public_key_b64}","timestamp_ns":{timestamp_ns}}}"#,
+        );
+        assert_eq!(
+            canonical_str, expected,
+            "create-cluster JCS canonical bytes drifted from the locked recipe",
+        );
+    }
+
+    /// The wire body for create carries only the four wallet-signed
+    /// fields — `cluster_name` rides in the URL path, `op` rides in
+    /// the canonical bytes only. A schema drift here is a wire break.
+    #[test]
+    fn create_wire_body_field_set_locked() {
+        let signed = SignedCreate::build(&parent_wallet(), "vinland")
+            .expect("build create payload");
+        let json = serde_json::to_value(&signed.body).unwrap();
+        let obj = json.as_object().expect("body is a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["peer_id", "public_key", "signature", "timestamp_ns"],
+            "create wire body field set drifted — Discovery's CreateRequest decoder will reject",
+        );
+    }
+
+    // ─── client smoke tests ──────────────────────────────────────────
 
     /// `with_http` lets the caller override the default client (for
     /// instance, with a tighter timeout in tests). Smoke test: the

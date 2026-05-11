@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 14:48 HKT, 2026
+
+**[`auki-domain`](auki-domain) — Greenland design corrections: T7 inverted to libp2p, T8 endpoint name, T14 added.** Doc-only. T7's broadcast is now Manager→members directly over a new `/auki/registry/0.0.1` libp2p protocol (Discovery OUT of the fan-out path, per Q-disc-1). T8 endpoint is `GET /clusters/latest` (not `/domains/latest`); SDK code unchanged. New T14 — newly-elected Manager signs + sends a handoff notification to Discovery so late-joiners route to the live Manager peer. T14 lands in PR 3 (failover batch).
+
 ### broodsugar's dobby · May 11, 14:34 HKT, 2026
 
 **[`auki-domain`](auki-domain) — Greenland T1 shipped: `DomainIdentity` + `init_domain`.** First implementing PR of the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). `DomainIdentity` value type carries the wallet-scoped canonical string `{wallet_id}/{name}` with the reserved `"Vinland"` singleton exception (T12); `init_domain` builds the identity, registers via `DiscoveryClient::register`, returns a minimal `DomainHandle`. 12 unit tests + 2 doctests + 2 locked cross-language vectors. Glossary updated.

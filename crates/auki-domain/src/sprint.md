@@ -27,15 +27,16 @@ The Manager role's core lifecycle. Lands:
 - T3 — Heartbeat transport over libp2p peer-to-peer (new protocol `/auki/heartbeat/0.0.1` — sibling to `/auki/stream/0.1.0` and `/auki/message/0.0.1`). Lab-mode versioning per Rule 11.5 (`0.0.1`, not `1.0.0`).
 - T4 — 2-consecutive-missed-tick departure detection (~20s window).
 - T6 — Manager-authoritative registry mutations. Mutation authority = current Manager's peer identity. Wallet is one-shot at Domain creation.
-- T7 — Manager publishes a fresh full `ClusterDoc` snapshot on every registry change. Reuses Vinland D6's existing SSE fan-out path on Discovery; no Discovery wire-shape change.
+- T7 — Manager publishes a fresh full `ClusterDoc` snapshot on every registry change, **directly to cluster members over libp2p** via a new dedicated protocol `/auki/registry/0.0.1` (sibling to `/auki/heartbeat/0.0.1`). Discovery is **not** in the live-registry fan-out path (its role for the cluster lifecycle is bootstrap rendezvous only — see T8). See [`parking_lot.md`](../parking_lot.md) for the Q-disc-1 resolution that inverted the original Discovery-SSE framing.
 
-## Then — PR 3 (failover batch: T10 + T11 + T13)
+## Then — PR 3 (failover batch: T10 + T11 + T13 + T14)
 
 Manager failover machinery. Lands:
 
 - T10 — Deterministic election: oldest cluster member by registry join-time becomes Manager. Tiebreak: lower `PeerId`. No voting.
 - T11 — Sole-survivor election: N=1 quorum. Folds into T10's implementation as a documented zero-minimum check.
 - T13 — Both graceful-quit announcement and crash (T4 timeout) feed the same T10/T11 election machinery. The announcement is a new wire message on the heartbeat transport (T3).
+- T14 — Newly-elected Manager sends a signed handoff notification to Discovery (via a new `DiscoveryClient::notify_manager_handoff(wallet, cluster_name, new_manager_peer_id)` helper added in `auki-network`) so late-joiners hitting `GET /clusters/latest` route their JoinRequests to the live Manager rather than the dead one. Signed by the new Manager's `peer/v1` derivation key. See [`parking_lot.md`](../parking_lot.md) for the wire-shape spec.
 
 ## Then — PR 4 (T5: `JoinRequest`)
 
@@ -54,10 +55,12 @@ See [`parking_lot.md`](../parking_lot.md). Locked decisions transcribed from the
 - Departure threshold = 2 consecutive missed responses (T4 ← Q3).
 - JoinRequest fields = `peer_id` + reachability only; no wallet creds, no capabilities (T5 ← Q4).
 - Mutation authority = current Manager's peer identity; wallet is one-shot at Domain creation (T6 ← Q8). Known security caveat documented for a future hardening quest.
-- Broadcast envelope = full `ClusterDoc` snapshot on every mutation; existing SSE wire shape unchanged (T7 ← Q5).
+- Broadcast envelope = full `ClusterDoc` snapshot on every mutation, **libp2p Manager→members directly** via new `/auki/registry/0.0.1` protocol; Discovery is bootstrap-rendezvous only, not in the live fan-out path (T7 ← Q5 + Q-disc-1).
 - Election rule = oldest cluster member by registry join-time; tiebreak lower `PeerId`; no voting; no quorum check (T10 ← Q10).
 - Sole-survivor election = N=1 (T11 ← Q11). Split-brain on network partition is the accepted trade-off.
 - Failover triggers = both graceful announcement and crash detection feed the same election machinery (T13 ← Q9).
+- Newly-elected Manager signs + sends a Manager-handoff notification to Discovery (T14 ← Q14) so late-joiners route to the live Manager. SDK side authors + signs; Discovery side verifies + persists.
+- Discovery endpoint for headless join: `GET /clusters/latest` (T8 ← Q-disc-2). SDK code unchanged — already passes the canonical Domain Identity string as `cluster_name`. Discovery-side schema gets `created_ns: i64` + `current_manager_peer_id: Option<PeerId>` additions; SDK picks them up on the next `auki-network` tag bump.
 - Park UI: accept any string for Domain name in v1 (T9 ← Q12). T1's `init_domain(&str)` signature already permits this.
 - Headless daemons fall back to default Domain `"Vinland"` when no Domain exists; reserved singleton (T12 ← Q7).
 

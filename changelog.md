@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 15:39 HKT, 2026
+
+**[`auki-network`](crates/auki-network) — Greenland T3 + T7 wire layer shipped.** Two new libp2p protocols at the wire-types level (PR 2a of the Greenland heartbeat batch): `/auki/heartbeat/0.0.1` for Manager↔member liveness (request-response, JSON), `/auki/registry/0.0.1` for Manager→members snapshot broadcast (substream-per-snapshot, JSON, 1 MiB cap). `heartbeat_protocol::Behaviour` field added to the swarm `Behaviour`. +14 unit tests. PR 2b lands the Manager state machine in `auki-domain` on top of this wire.
+
 ### broodsugar's dobby · May 11, 14:48 HKT, 2026
 
 **[`crates/auki-domain`](crates/auki-domain) — Greenland design corrections: T7 inverted to libp2p, T8 endpoint name, T14 added.** Doc-only correction to the Greenland parking-lot text in the local crate, reflecting today's three [Greenland Notion page](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2) updates. T7 (registry snapshot broadcast) is now Manager→members directly over a new `/auki/registry/0.0.1` libp2p protocol — Discovery is OUT of the live fan-out path (Q-disc-1). T8 endpoint is `GET /clusters/latest`, not `/domains/latest` (Q-disc-2; SDK code unchanged). New T14 — newly-elected Manager signs + sends a handoff notification to Discovery so late-joiners hit the live Manager peer-id; lands in PR 3.

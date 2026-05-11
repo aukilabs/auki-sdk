@@ -38,6 +38,12 @@ pub mod cluster_protocol;
 pub mod cluster_runtime;
 
 #[cfg(feature = "swarm")]
+pub mod heartbeat_protocol;
+
+#[cfg(feature = "swarm")]
+pub mod registry_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod stream_protocol;
 
 #[cfg(feature = "swarm")]

@@ -26,7 +26,11 @@ The entity that controls a Domain — concretely, the holder of the keypair whos
 
 ## Domain ID
 
-The identifier for a Domain. Derived as `hash(domain_owner_pubkey)` (see [`tags.md`](tags.md)). Used as the `tag_id` in `domain_membership` TagClaims and as the topic peers cluster around on the network.
+The identifier for a Domain. Derived as `hash(domain_owner_pubkey)` (see [`tags.md`](tags.md)). Used as the `tag_id` in `domain_membership` TagClaims.
+
+## Domain Identity
+
+The canonical string a Domain is indexed by on the network — what peers register with on Discovery and cluster around. `{Domain ID}/{name}` for user-named Domains (e.g. `d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a/demo-2026-05`), letting one wallet own multiple distinguishable Domains. One exception: the reserved `"Vinland"` singleton (the default Domain headless daemons fall back to when no Domain exists yet) has the canonical identity `Vinland` with no wallet prefix; Discovery serializes its creation so the singleton property holds. See [`crates/auki-domain`](crates/auki-domain) for the construction primitive ([`DomainIdentity`](crates/auki-domain/src/lib.rs)).
 
 **Domain ID, Scenegraph ID, and Session ID are three distinct identifiers** — they answer different questions, and none is derivable from another:
 

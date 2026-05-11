@@ -176,6 +176,7 @@ version = "0.0.0"
 dependencies = [
  "auki-identity",
  "auki-network",
+ "libp2p-identity",
  "multiaddr",
  "thiserror 2.0.18",
  "tokio",

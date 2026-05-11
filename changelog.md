@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 16:10 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) — Greenland PR 2b: Manager-role state machine.** Lands T2 + T4 + T6 + T7 *logic* on top of PR 2a's wire layer (#92). New `manager` module: `Manager` type owns the authoritative in-memory Cluster Registry, emits `ManagerEffect`s into an `EffectSink` (transport-agnostic — swarm wiring deferred to PR 2c). 10-second tick cadence, 2-missed-tick departure threshold, mutation-driven `ClusterDoc` snapshot broadcast. Multi-departure ticks coalesce into one post-tick snapshot. Snapshot peers sorted by `PeerId` for stable JSON wire form. 16 new unit tests in `manager::tests` (28 total in crate).
+
 ### broodsugar's dobby · May 11, 15:39 HKT, 2026
 
 **[`auki-network`](crates/auki-network) — Greenland T3 + T7 wire layer shipped.** Two new libp2p protocols at the wire-types level (PR 2a of the Greenland heartbeat batch): `/auki/heartbeat/0.0.1` for Manager↔member liveness (request-response, JSON), `/auki/registry/0.0.1` for Manager→members snapshot broadcast (substream-per-snapshot, JSON, 1 MiB cap). `heartbeat_protocol::Behaviour` field added to the swarm `Behaviour`. +14 unit tests. PR 2b lands the Manager state machine in `auki-domain` on top of this wire.

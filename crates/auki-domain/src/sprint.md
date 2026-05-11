@@ -19,17 +19,32 @@ Greenland T1 entry point. Landed:
   - Returns `DomainHandle { identity }`. Role state stubbed for PR 2.
 - Glossary update: new `Domain Identity` entry (the network-topic / Discovery-indexing string); existing `Domain ID = hash(domain_owner_pubkey)` keeps its TagClaim definition.
 
-## Next — PR 2 (heartbeat batch: T2 + T3 + T4 + T6 + T7)
+## Now (PR 2a — Greenland T3 + T7 wire layer: shipped, open at #92)
 
-The Manager role's core lifecycle. Lands:
+Wire-protocol definitions for the heartbeat + registry batch. Landed in `auki-network`:
 
-- T2 — Manager heartbeat sender + member responder, 10s global tick.
-- T3 — Heartbeat transport over libp2p peer-to-peer (new protocol `/auki/heartbeat/0.0.1` — sibling to `/auki/stream/0.1.0` and `/auki/message/0.0.1`). Lab-mode versioning per Rule 11.5 (`0.0.1`, not `1.0.0`).
-- T4 — 2-consecutive-missed-tick departure detection (~20s window).
-- T6 — Manager-authoritative registry mutations. Mutation authority = current Manager's peer identity. Wallet is one-shot at Domain creation.
-- T7 — Manager publishes a fresh full `ClusterDoc` snapshot on every registry change, **directly to cluster members over libp2p** via a new dedicated protocol `/auki/registry/0.0.1` (sibling to `/auki/heartbeat/0.0.1`). Discovery is **not** in the live-registry fan-out path (its role for the cluster lifecycle is bootstrap rendezvous only — see T8). See [`parking_lot.md`](../parking_lot.md) for the Q-disc-1 resolution that inverted the original Discovery-SSE framing.
+- `/auki/heartbeat/0.0.1` (T3 wire) — `request_response::json::Behaviour` with `HeartbeatRequest { tick_ns, manager_peer_id }` / `HeartbeatResponse { responder_peer_id }`. Wired into the composed `Behaviour` in `swarm.rs` so the next batch (PR 2b) can drive it.
+- `/auki/registry/0.0.1` (T7 wire) — `libp2p_stream` substream-per-message framing helpers (`write_envelope` / `read_envelope`) with `SnapshotEnvelope { mutation_ns, doc: ClusterDoc }`. `MAX_FRAME_BYTES = 1 MiB`. Generic multiplexer, no swarm-level wiring needed.
+- 14 unit/integration tests passing. Build clean.
 
-## Then — PR 3 (failover batch: T10 + T11 + T13 + T14)
+Pure wire. No state-machine logic. The Manager role lives in PR 2b.
+
+## Now (PR 2b — Greenland T2 + T4 + T6 + T7 logic: in-progress)
+
+Manager-role state machine in `auki-domain::manager`. Lands:
+
+- T2 — `Manager::tick(now_ns, sink)` driven by the caller's timer at `HEARTBEAT_INTERVAL` (10 s) cadence. Emits one `SendHeartbeat` effect per still-alive member.
+- T4 — Per-member `consecutive_missed_ticks`; departure at `MISSED_TICKS_FOR_DEPARTURE` (2) consecutive misses. Coalesced single `BroadcastSnapshot` per tick regardless of how many members depart together.
+- T6 — Authoritative in-memory Cluster Registry holding `ClusterPeer` entries keyed by `PeerId`. `add_member` / `remove_member` are the mutation API; both bump `last_mutation_ns` and emit a snapshot.
+- T7 — Mutation-driven (not periodic) `BroadcastSnapshot` carrying the full `ClusterDoc` over the PR 2a wire. Snapshot peers sorted by `PeerId` so the JSON form is stable for the same logical state.
+
+Transport-agnostic: `Manager` emits `ManagerEffect`s into an `EffectSink`; a swarm-backed transport (PR 2c or absorbed into PR 3) translates each effect onto the wire. `MockEffectSink` in tests assert on emission directly without standing up a real swarm.
+
+16 unit tests passing.
+
+**Deferred to PR 2c (or PR 3):** the `ClusterRuntime`-backed transport that bridges `ManagerEffect`s onto real libp2p calls + the `Member` consumer that applies inbound snapshots via `ClusterRuntime::update_cluster_doc` and responds to heartbeats. PR 2b's Manager is verified-by-test in isolation so PR 2c is "wire it up", not "design + test it".
+
+## Next — PR 3 (failover batch: T10 + T11 + T13 + T14)
 
 Manager failover machinery. Lands:
 

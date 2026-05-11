@@ -6,6 +6,25 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 11, 16:10 HKT, 2026
+
+**Greenland PR 2b — Manager-role state machine (T2 + T4 + T6 + T7 logic).** Lands `auki-domain::manager` — a transport-agnostic state machine for the Manager role, tested in isolation without standing up a real swarm. Builds on PR 2a's wire layer (`/auki/heartbeat/0.0.1` and `/auki/registry/0.0.1` definitions in `auki-network`).
+
+- **`Manager`** — owns the authoritative in-memory Cluster Registry for one Domain. Holds the Manager's own peer/addresses/app-id/note plus a `HashMap<PeerId, MemberEntry>` of tracked Members. Mutation API: `add_member`, `remove_member`, `tick`, `record_response`, `record_failure`.
+- **T2 — tick cadence.** Caller drives `tick(now_ns, sink)` at `HEARTBEAT_INTERVAL` (10 s, tunable via `ManagerConfig` for tests). Each tick emits one `SendHeartbeat` effect per still-alive Member carrying `HeartbeatRequest { tick_ns: now_ns, manager_peer_id: self }`.
+- **T4 — departure detection.** Per-Member `consecutive_missed_ticks` increments on every tick before dispatch; resets to 0 on every matching `record_response`. At `MISSED_TICKS_FOR_DEPARTURE` (2) the Member is removed. Multiple departures in one tick are coalesced into ONE post-tick snapshot.
+- **T6 — Manager-authoritative registry.** Add/remove/tick are the only paths that mutate state; each mutation bumps `last_mutation_ns` (caller-supplied monotonic clock). The Manager itself is NOT in the `members` map — it appears in outgoing snapshots through `self_*` fields.
+- **T7 — mutation-driven snapshot broadcast.** Every mutation emits exactly one `BroadcastSnapshot` effect carrying a fresh `SnapshotEnvelope { mutation_ns, doc: ClusterDoc }`. Snapshot peers are sorted by `PeerId` so the JSON wire form is stable for the same logical state — important for future signature-over-JSON receivers.
+- **Transport-agnostic via `EffectSink`.** `Manager` emits `ManagerEffect`s (`SendHeartbeat` / `BroadcastSnapshot` / `MemberDeparted`) into a sink the caller provides. `MockEffectSink` in tests collects effects for assertions; a swarm-backed transport (PR 2c / PR 3) translates each effect into the corresponding libp2p call. The state machine is `!Send`-friendly — single-task driver, no internal locks.
+- **16 unit tests in `manager::tests`** — covers idempotent add, no-op remove of unknown, coalesced batch departure, miss-counter reset on response, deterministic emit order, sorted snapshot peers, manager's own addresses in snapshot, mutation_ns monotonicity. All passing (28 total in `auki-domain` lib including PR 1's identity tests).
+- **Deferred to PR 2c (or absorbed into PR 3):** the `ClusterRuntime`-backed transport that bridges `ManagerEffect`s onto real libp2p calls, plus the `Member` consumer that applies inbound snapshots via `ClusterRuntime::update_cluster_doc` and responds to heartbeats. PR 2b's Manager is verified by test in isolation.
+
+`Cargo.toml` adds: `auki-network` now opts into the `swarm` feature (needed for `heartbeat_protocol`, `registry_protocol`, and `cluster_doc::SUPPORTED_VERSION` exports); `libp2p-identity` direct dep matching the workspace pin (`0.2`, `["ed25519", "peerid", "serde"]`).
+
+Stack: lands on top of PR 2a (#92). PR 2a must merge first.
+
+---
+
 ### broodsugar's dobby · May 11, 14:48 HKT, 2026
 
 **Greenland design corrections — T7 inverted to libp2p, T8 endpoint name, T14 added.** Three updates landed on the [Greenland Notion page](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2) earlier today; this doc-only PR transcribes them into the local parking-lot and sprint plan ahead of PR 2 (heartbeat batch).

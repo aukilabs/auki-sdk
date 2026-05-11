@@ -9,7 +9,8 @@ description = "Domain lifecycle for the Auki SDK — Domain identity (wallet-sco
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
-auki-network = { path = "../auki-network", features = ["discovery_client"] }
+auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
 thiserror = "2"
 

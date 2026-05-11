@@ -1,0 +1,13 @@
+[package]
+name = "auki-domain"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Domain lifecycle for the Auki SDK — Domain identity (wallet-scoped), creation (`init_domain`), joining (`join_domain`), Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Greenland quest scaffolding; first implementation gates on Greenland PR 1 (T1)."
+
+[dependencies]
+auki-identity = { path = "../auki-identity" }
+
+[dev-dependencies]

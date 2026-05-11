@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**[`auki-network`](auki-network) — sixth `/auki/message/0.0.1` design question filed in [`parking_lot.md`](auki-network/parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Lean: SDK owns the writer (symmetric with fire-and-forget wire semantics, replay-from-disk independence from consumer health, clean decode-failure exception semantics, outbound capture symmetry). Doc-only PR; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates. Slate becomes six questions.
+
 ### broodsugar's dobby · May 11, 14:20 HKT, 2026
 
 **[`auki-domain`](auki-domain) — crate scaffolded for the Greenland quest's SDK-side Domain lifecycle work.** New crate sibling to `auki-network` / `auki-identity` / `auki-session-py`; owns Domain creation, joining, Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Empty `lib.rs` — no functional code. Lands the folder convention + parking-lot pre-files of every Greenland architectural decision transcribed from the [Notion Tasks table](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). PR 1 (T1: `DomainIdentity` + `init_domain`) lands next per [`auki-domain/src/sprint.md`](auki-domain/src/sprint.md).

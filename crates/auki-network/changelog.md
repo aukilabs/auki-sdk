@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 16:46 HKT, 2026
+
+**ClusterDoc gains `created_ns` and `current_manager_peer_id` — Greenland T8 / T14 schema additions to unblock Discovery.** The `aukilabs/discovery` repo's T8 (`GET /clusters/latest`) and T14 (signed `POST /clusters/{name}/manager` handoff) are both gated on these two fields landing in the SDK's `ClusterDoc`, which serves as the shared wire shape between Discovery's responses and the Manager's snapshot broadcasts on `/auki/registry/0.0.1`.
+
+**`created_ns: u64`** — Discovery-stamped cluster creation timestamp in nanoseconds since the Unix epoch. Server-side monotonic clock (not the Manager's announced bootstrap time — clock-skew across peers is real). Set once at cluster creation and immutable thereafter; the Manager preserves it across every broadcast and across Manager failover. Sort key for `GET /clusters/latest`.
+
+**`current_manager_peer_id: Option<PeerId>`** — live Manager peer-id, written by Discovery and refreshed every time the cluster's Manager changes. Initially set at cluster creation; rotated by the new Manager's signed `POST /clusters/{name}/manager` handoff after every failover. Distinct from the Domain-creator wallet, which is one-shot at Domain creation per T6 / T1.
+
+**Backward compatibility.** Both fields default-fill via `#[serde(default)]`. A pre-Greenland hand-edited `cluster.json` that omits them still loads — `created_ns` lands as `0` (sentinel "unknown locally") and `current_manager_peer_id` lands as `None`. `current_manager_peer_id` is `Option`-skip-when-`None` on serialise so an unmanaged doc stays compact on the wire; `created_ns` is required-shaped on serialise so receivers always see it.
+
+**Locked conformance vector updated.** The `envelope_locked_minimal_json` test in `registry_protocol` pinned the wire-byte shape of a minimal `SnapshotEnvelope`. The minimal shape now reads `{"version":1,"cluster_name":"x","created_ns":0,"peers":[]}` (omitting `current_manager_peer_id` because `None` is skipped). A second locked vector `envelope_locked_with_manager_and_created_ns` pins the populated shape every cross-language reimplementation must produce when both Greenland fields are present.
+
+**Tests.** Two new `cluster_doc` tests — `pre_greenland_doc_loads_with_zero_created_ns_and_no_manager` (legacy-doc backward-compat) and `greenland_doc_carries_created_ns_and_manager_through_load` (the populated path). One new `registry_protocol` test (the second locked vector). All 126 tests on `cargo test -p auki-network --all-features` clean.
+
+**Scope.** Pure schema add. The `InitDomainError::AlreadyExists` variant on `auki-domain::init_domain` (the other piece Discovery's atomic create needs) is deliberately deferred to Greenland PR 3 (the failover batch) per the cross-agent coordination call — Discovery ships the atomic 409 alongside T8, and the SDK side maps it to `AlreadyExists` then. No `auki-domain` touched here.
+
 ### broodsugar's dobby · May 11, 15:39 HKT, 2026
 
 **Greenland T3 (heartbeat wire) + T7 (registry wire) — two new libp2p protocols shipped at the wire layer.** First half of [Greenland](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2)'s PR 2 (the heartbeat batch). Manager-side state machine + tick loop + mutation broadcasting land in PR 2b (in the [`auki-domain`](../auki-domain) crate). This PR is pure wire — no behaviour wired into the swarm runtime yet.

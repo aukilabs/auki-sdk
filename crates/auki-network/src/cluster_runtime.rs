@@ -992,6 +992,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-2-peer".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_a.peer_id(), addr_a),
                 cluster_peer(id_b.peer_id(), addr_b),
@@ -1066,6 +1068,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-none-provider".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_a.peer_id(), addr_a),
                 cluster_peer(id_b.peer_id(), addr_b),
@@ -1131,6 +1135,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-3-peer".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_a.peer_id(), addr_a),
                 cluster_peer(id_b.peer_id(), addr_b),
@@ -1198,6 +1204,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-leave".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![
                 cluster_peer(id_a.peer_id(), addr_a),
                 cluster_peer(id_b.peer_id(), addr_b),
@@ -1294,6 +1302,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "test-trust-boundary".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![cluster_peer(pid_rt, addr_rt.clone())],
         };
 
@@ -1368,6 +1378,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "alone".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let rt = ClusterRuntime::from_swarm(
@@ -1395,6 +1407,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "drop".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let _rt = ClusterRuntime::from_swarm(
@@ -1418,6 +1432,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "no-rt".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let provider = fixture_provider(id.peer_id(), "test", "no-rt");
@@ -1444,6 +1460,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "alpha".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let rt = ClusterRuntime::from_swarm(
@@ -1457,6 +1475,8 @@ mod tests {
         let new_doc = ClusterDoc {
             version: 1,
             cluster_name: "beta".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let err = rt.update_cluster_doc(new_doc).await.expect_err("must mismatch");
@@ -1481,6 +1501,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "shut".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let rt = ClusterRuntime::from_swarm(
@@ -1513,6 +1535,8 @@ mod tests {
                 new_doc: ClusterDoc {
                     version: 1,
                     cluster_name,
+                    created_ns: 0,
+                    current_manager_peer_id: None,
                     peers: vec![],
                 },
                 ack: ack_tx,
@@ -1577,6 +1601,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "delta".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![],
         };
         let rt = ClusterRuntime::from_swarm(
@@ -1595,6 +1621,8 @@ mod tests {
             .update_cluster_doc(ClusterDoc {
                 version: 1,
                 cluster_name: "delta".into(),
+                created_ns: 0,
+                current_manager_peer_id: None,
                 peers: vec![cluster_peer(id_b.peer_id(), addr_b.clone())],
             })
             .await
@@ -1617,6 +1645,8 @@ mod tests {
             .update_cluster_doc(ClusterDoc {
                 version: 1,
                 cluster_name: "delta".into(),
+                created_ns: 0,
+                current_manager_peer_id: None,
                 peers: vec![],
             })
             .await
@@ -1643,6 +1673,8 @@ mod tests {
         let doc = ClusterDoc {
             version: 1,
             cluster_name: "noop".into(),
+            created_ns: 0,
+            current_manager_peer_id: None,
             peers: vec![cluster_peer(id_b.peer_id(), addr_b.clone())],
         };
         let rt = ClusterRuntime::from_swarm(

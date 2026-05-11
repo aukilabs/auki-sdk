@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 11, 16:46 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — `ClusterDoc` gains `created_ns` + `current_manager_peer_id` to unblock Greenland T8 + T14 on the Discovery side.** Pure schema add. `created_ns: u64` (Discovery-stamped, immutable, sort key for `GET /clusters/latest`); `current_manager_peer_id: Option<PeerId>` (live Manager identity, rotated by signed handoff after every failover). Both `#[serde(default)]` for backward-compat with pre-Greenland hand-edited `cluster.json`. Locked conformance vector in `registry_protocol` updated; second vector added for the populated shape. `InitDomainError::AlreadyExists` deferred to PR 3 (failover batch) per the cross-agent coordination call — Discovery ships its atomic 409 alongside T8, SDK maps it then.
+
 ### broodsugar's dobby · May 11, 15:39 HKT, 2026
 
 **[`auki-network`](crates/auki-network) — Greenland T3 + T7 wire layer shipped.** Two new libp2p protocols at the wire-types level (PR 2a of the Greenland heartbeat batch): `/auki/heartbeat/0.0.1` for Manager↔member liveness (request-response, JSON), `/auki/registry/0.0.1` for Manager→members snapshot broadcast (substream-per-snapshot, JSON, 1 MiB cap). `heartbeat_protocol::Behaviour` field added to the swarm `Behaviour`. +14 unit tests. PR 2b lands the Manager state machine in `auki-domain` on top of this wire.

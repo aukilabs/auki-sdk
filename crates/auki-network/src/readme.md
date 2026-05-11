@@ -49,6 +49,8 @@ pub mod cluster_doc {
     pub struct ClusterDoc {
         pub version: u32,
         pub cluster_name: String,
+        pub created_ns: u64,                          // Greenland T8: Discovery-stamped creation timestamp
+        pub current_manager_peer_id: Option<PeerId>,  // Greenland T14: live Manager identity, rotated on failover
         pub peers: Vec<ClusterPeer>,
     }
     pub struct ClusterPeer {

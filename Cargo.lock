@@ -171,6 +171,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain"
+version = "0.0.0"
+dependencies = [
+ "auki-identity",
+]
+
+[[package]]
 name = "auki-hash"
 version = "0.0.0"
 dependencies = [

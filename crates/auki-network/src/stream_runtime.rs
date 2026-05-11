@@ -43,7 +43,8 @@
 
 use crate::cluster_runtime::ClusterRuntime;
 use crate::stream_protocol::{
-    AcceptInfo, DeclineReason, EndReason, Frame, JpegFrame, PointCloudFrame, STREAM_PROTOCOL,
+    AcceptInfo, DeclineReason, EndReason, Frame, JointEncodersFrame, JpegFrame, PointCloudFrame,
+    STREAM_PROTOCOL,
     StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message,
     write_message,
 };
@@ -85,8 +86,10 @@ pub type SourceStream<T> =
     Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
 
 /// Producer's accept/decline decision for a single inbound request.
-/// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1)
-/// and `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2). Adding a new
+/// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
+/// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2), and
+/// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
+/// byte-identical to the on-disk `JointEncodersLogEntry`). Adding a new
 /// `T` is a coordinated SDK + consumer release — bump the runtime, add
 /// the variant, every consumer that wants the new sensor type opts in.
 ///
@@ -109,6 +112,17 @@ pub enum StreamDispatch {
     AcceptPointCloud {
         info: AcceptInfo,
         source: SourceStream<PointCloudFrame>,
+    },
+    /// Accept the request with a JointEncoders source-Stream — sawslin
+    /// Phase B. Each [`JointEncodersFrame`] carries one
+    /// `repeated float angles_rad` sample (joint angles in radians,
+    /// indexed in the producer's emit order, length pinned by the
+    /// registry entry's `joint_count`). Wire bytes are identical to the
+    /// on-disk `JointEncodersLogEntry` payload by design (locked in
+    /// `auki-datatypes` by `joint_encoders_disk_wire_byte_identical`).
+    AcceptJointEncoders {
+        info: AcceptInfo,
+        source: SourceStream<JointEncodersFrame>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -380,6 +394,9 @@ pub(crate) async fn handle_inbound_substream(
         StreamDispatch::AcceptPointCloud { info, source } => {
             pump_typed::<PointCloudFrame>(substream, info, source, shutdown_rx).await;
         }
+        StreamDispatch::AcceptJointEncoders { info, source } => {
+            pump_typed::<JointEncodersFrame>(substream, info, source, shutdown_rx).await;
+        }
     }
 }
 
@@ -392,8 +409,9 @@ pub(crate) async fn handle_inbound_substream(
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
-/// (`JpegFrame`, `PointCloudFrame`). Adding a new variant means adding
-/// a new monomorphization plus extending [`StreamDispatch`].
+/// (`JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
+/// variant means adding a new monomorphization plus extending
+/// [`StreamDispatch`].
 async fn pump_typed<T>(
     mut substream: libp2p::Stream,
     info: AcceptInfo,

@@ -318,3 +318,32 @@ Four pre-implementation decisions filed before the implementing PR per the [auki
 ### Decision — Python binding (`auki-network-py`) for `subscribe` + `update_cluster_doc`
 
 **Decided 2026-05-09. Not in this PR; follow-up PR after the Rust types stabilize.** Same precedent as `auki-logs-py` shipping after `auki-logs` had a tag — bind to a stable Rust surface, don't co-design two language surfaces in one PR. The boosterapp Python sidecar is the only Python consumer for now and can wait one release. Adding `subscribe` + `update_cluster_doc` wrappers to the existing `auki-network-py` is mechanical (the Rust surface is the design; PyO3 wraps it) — small follow-up PR after the implementing PR lands and gets a release tag. Confidence: high.
+
+
+---
+
+## `/auki/stream/0.1.0` — substream-accept doesn't check cluster membership
+
+[`stream_runtime::handle_inbound_substream`](src/stream_runtime.rs) accepts any inbound `/auki/stream/0.1.0` substream that libp2p's transport layer was willing to deliver — it dispatches the request to the producer's `stream_provider` callback and starts pumping frames if the provider returns `Accept*`. **There is no check that the requesting `peer_id` is in the cluster's `peers[]`.** The substream layer is open to anyone libp2p can route to.
+
+Discovered 2026-05-12 on a live K1 cutover: BoosterApp K1 #1 was producing live JPEG / pointcloud / joint-encoders frames for a Park instance even though `/api/cluster` showed `peers: 0` (Park's `peer_id` was not in the K1's `cluster.json`). Root cause: Park's libp2p stack runs with `enable_mdns: true`, which auto-discovers any libp2p peer's `peer_id` + multiaddrs on the LAN regardless of cluster membership. Park's `runtime.open_stream(K1_peer_id, ...)` happily dialed the K1's mDNS-advertised address, the K1's substream-accept handler had no membership check, and frames flowed over QUIC. The TCP-only `lsof` view didn't show the connection because libp2p QUIC is connectionless at the kernel level.
+
+This is a **real architectural gap, not just a visibility one**. `cluster.json` is supposed to be the trust boundary for every protocol the cluster runs — `/auki/cluster/0.0.1` already gates ParticipantInfo exchanges on it, but `/auki/stream/0.1.0` doesn't. A peer that's mDNS-reachable but not in the cluster doc can subscribe to any sensor the producer is willing to expose. For the demo today this is benign — Park is the only mDNS-discoverable consumer on the LAN — but the moment a third party joins the LAN, they get free read-access to every K1's sensor streams without ever appearing in `cluster.json`.
+
+Three shapes for the fix:
+
+**A. Server-side cluster check inside `handle_inbound_substream`.** Before invoking the producer's callback, check whether `_peer ∈ cluster_doc.peers[]`. Reject with `Decline { reason: PeerNotInCluster }` (new variant of `DeclineReason`) if not. Pros: fixes the bug at the SDK layer; every consumer app gets the protection by default. Cons: hard-locks the policy — no way for an app to opt into a more permissive stance (e.g. "anyone on the LAN can pull the demo camera, only cluster peers can pull pointcloud").
+
+**B. Surface the requesting `peer_id` to the `stream_provider` callback.** Today `StreamRequest { sensor_id: String }` carries only the sensor identifier; extend it to `StreamRequest { sensor_id, peer_id }` so the consumer app's callback can decide. The provider can implement whatever policy it wants — cluster-only, sensor-by-sensor, time-bounded, etc. Pros: maximum flexibility, every app picks its own trust model. Cons: every app has to reimplement the cluster-membership check (or get it wrong).
+
+**C. Both — server-side default + opt-out for permissive mode.** Default is "cluster members only" (option A); apps that want option B's flexibility set `cluster.spawn(stream_membership_check: SubstreamMembership::Custom)` and the server-side check is bypassed in favor of the consumer's callback. Pros: secure default, escape hatch for the few apps that need it. Cons: more API surface; the `Custom` mode has to expose `peer_id` to the callback anyway, so half of B is along for the ride.
+
+**Lean: B.** Reasons: (a) the existing `stream_provider` is already where consumer apps decide accept-vs-decline; making membership a same-callsite decision keeps the trust model in one place rather than split across SDK + app; (b) the BoosterApp call site is ~5 lines to add a "is this peer in `cluster_doc.peers`" check at the top of the closure, and Park's URDF FK consumer side has the same shape if it ever exposes streams; (c) avoids inventing a `SubstreamMembership` config knob for a question that's better answered at the call site; (d) matches the v0.0.27 pattern where `accept_*` factories let the producer commit to whatever shape it wants (sensor-specific clocks, custom retention, etc.) — adding `peer_id` to the dispatch input is symmetric. The cost is that consumer apps that DON'T add the check leak their streams to mDNS-discoverable strangers, but that's the same shape as the existing "if you pass `decline_all_streams` you get default-deny; otherwise you've opted in to the policy."
+
+If A wins instead, the policy lives in `cluster_runtime` and the closure stays narrow. Either is defensible; B is the lean.
+
+**Out of scope of this question — but adjacent:** mDNS itself. Is `enable_mdns: true` the right default for a cluster-scoped runtime? mDNS is great for LAN bootstrap but it's also how this bypass flowed. Discovery already covers the bootstrap case for production deployments; mDNS earns its keep in laptop-LAN demos. Filing as a separate sub-question would be premature — the substream-accept fix above closes the security hole regardless of whether mDNS stays on.
+
+**Cross-reference:** BoosterApp filed a sibling parking-lot entry on the operator-visibility half of this — `/api/cluster` doesn't show stream subscribers, so the operator can't even tell who's pulling frames. The two halves are complementary: this one is "should the K1 accept the substream at all?", the BoosterApp one is "if it does, can the operator see it?". See [boosterapp scripts/parking_lot.md](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) (entry to be added in the BoosterApp PR coordinated with this one).
+
+**Stakeholders:** Nils, Charlie (Park's stream consumer side may need adjustment if A or C wins), the next consumer app that ships a `stream_provider`.

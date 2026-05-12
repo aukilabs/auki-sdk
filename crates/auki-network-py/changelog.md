@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 16:30 HKT, 2026
+
+**`DiscoveryClient.create_cluster` + `CreateClusterOutcome` ship — Greenland T8's atomic POST exposed to Python (boosterapp T12 unblock).** Wraps the v0.0.30 Rust addition `DiscoveryClient::create_cluster(&Wallet, &str) -> Result<CreateClusterOutcome, DiscoveryError>` ([PR #95](https://github.com/aukilabs/auki-sdk/pull/95)) so headless Python daemons can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm without going through the full `auki-domain::init_domain` convenience layer (a future `auki-domain-py` crate per the auki-domain README's "PyO3 binding — separate follow-up" line).
+
+**Two concrete changes in [`discovery.rs`](src/discovery.rs):** (1) New `DiscoveryClient.create_cluster(seed, cluster_name) -> CreateClusterOutcome` Python method. Sync-blocking, mirrors `register` / `fetch` shape. Returns a typed `CreateClusterOutcome` rather than throwing on 409 — the race-loss case is normal in T12's algorithm, not exceptional. (2) New `CreateClusterOutcome` PyClass mirroring the Rust enum: `kind` is `"created"` (HTTP 201) or `"already_exists"` (HTTP 409); `doc` is the resulting `ClusterDoc` either way (the winner's existing doc on `already_exists`, parsed from Discovery's `{ error: "already_exists", existing: ClusterDoc }` body so the loser hands `outcome.doc` straight to a join flow without an extra `fetch`). `__repr__` includes the discriminator for operator legibility.
+
+**Tests in [`python_tests/test_discovery.py`](python_tests/test_discovery.py):** (1) `test_discovery_submodule_exposes_documented_surface` updated to expect `CreateClusterOutcome` in the public surface (regression catch — the surface assertion forces a deliberate decision + changelog bump for any new name). (2) `test_create_cluster_rejects_short_seed` — wrong-shape seed gates at the wrapper without touching the network. (3) `test_create_cluster_returns_created_outcome` (live) — first creator gets `kind == "created"` and a fresh ClusterDoc with `peer_count == 0`. (4) `test_create_cluster_returns_already_exists_outcome` (live) — second creator against the same name gets `kind == "already_exists"` and the winner's ClusterDoc. (5) `test_create_cluster_outcome_repr_includes_kind` — smoke test the discriminator is in `__repr__`. Live tests gated on `DISCOVERY_BIN` env var (same pattern as the existing register/fetch live tests).
+
+**Out of scope this PR:** the typed `init_domain` convenience wrapper (computes wallet-scoped DomainIdentity + create + register in one call). Lives in a future `auki-domain-py` crate per the per-component naming convention; today's BoosterApp T12 implementation hand-rolls the algorithm using `create_cluster` + `register` primitives.
+
 ### broodsugar's claude · May 9, 16:30 HKT, 2026
 
 **`JointEncodersFrame` + `accept_joint_encoders` + `open_joint_encoders_stream` ship — third `T` exposed to Python (sawslin Phase B).** Tracks the `auki-network` Rust addition of `StreamDispatch::AcceptJointEncoders` from this same release; Python callers (BoosterApp's sidecar producer side, Park's URDF-FK consumer side) can now build joint-encoder substreams over `/auki/stream/0.1.0`.

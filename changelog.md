@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 16:30 HKT, 2026
+
+**[`crates/auki-network-py`](crates/auki-network-py) — `DiscoveryClient.create_cluster` + `CreateClusterOutcome` Python binding ships.** Wraps the v0.0.30 Rust addition (PR #95) so headless Python daemons can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm. New PyClass `CreateClusterOutcome { kind: "created" | "already_exists", doc: ClusterDoc }` mirrors the Rust enum — race-loss is a typed outcome, not an exception, so the loser hands `outcome.doc` straight to a join flow without an extra `fetch`. 5 new pytest cases (surface + wrong-shape + 3 live). Unblocks [boosterapp scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) (autodiscover-or-create-default-Domain on boot — sole task in BoosterApp's Greenland slice).
 ### broodsugar's claude · May 12, 12:30 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) + [`crates/auki-network-py`](crates/auki-network-py) — kill mDNS + wire `libp2p-allow-block-list` at the swarm layer (PR A of the cluster-trust-boundary resolution).** Implements the first half of Nils's "peers only visible within their cluster, no fallback" decision. `mdns::tokio::Behaviour` removed from the swarm; new `allow_list: allow_block_list::Behaviour<AllowedPeers>` added — empty at build time, populated by `cluster_runtime` from `ClusterDoc.peers` on spawn and on every SSE update. Inbound and outbound connections from non-listed peer-ids refused at the libp2p `NetworkBehaviour` layer — outsiders see a closed socket, no protocol-level event ever fires. `SwarmConfig::enable_mdns` field gone — daemons that set it break to compile. New direct dep `libp2p-allow-block-list`. +2 unit tests asserting the trust boundary. PR B (kill `cluster.json` static config) follows.

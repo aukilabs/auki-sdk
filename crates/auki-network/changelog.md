@@ -6,6 +6,29 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 12:30 HKT, 2026
+
+**Kill mDNS + wire `libp2p-allow-block-list` at the swarm layer — cluster trust boundary enforced at the libp2p plane (PR A of the resolution filed in [parking_lot.md](parking_lot.md)).** Nils's "peers should only be visible within their cluster, no fallback" decision lands the first half of the implementation: mDNS removed, allow-list wired. `cluster.json` static-config removal is PR B.
+
+**Swarm composition** (`src/swarm.rs`):
+- `mdns: Toggle<mdns::tokio::Behaviour>` field on `Behaviour` REMOVED.
+- `mdns` feature removed from `libp2p`'s feature flag list in [`Cargo.toml`](Cargo.toml).
+- `enable_mdns: bool` REMOVED from `SwarmConfig`. No daemon announces on `_p2p._udp.local.` ever; consumers can't opt back in.
+- `allow_list: allow_block_list::Behaviour<allow_block_list::AllowedPeers>` ADDED. Empty at swarm-build time — a freshly-built swarm with no doc refuses every libp2p handshake (the production "invisible without a cluster" default).
+- New direct dep: `libp2p-allow-block-list = "0.6"` on the `swarm` feature. Not exposed as a feature on the `libp2p` umbrella crate; depended on directly. Paired with libp2p 0.56.
+
+**Cluster runtime wiring** (`src/cluster_runtime.rs`):
+- `run_task` populates the swarm's allow-list with the initial `ClusterDoc.peers` BEFORE the libp2p event loop starts driving — closes the window where an inbound handshake could race the initial population.
+- `apply_doc_update` (the `RuntimeCmd::UpdateClusterDoc` handler driven by Discovery's SSE) calls `swarm.behaviour_mut().allow_list.allow_peer(p)` for each peer added in the new doc and `.disallow_peer(p)` for each removed peer. Removed peers also get `disconnect_peer_id` (existing behaviour); the additional `disallow_peer` ensures future connection attempts from the disinvited peer are refused at the libp2p layer.
+- Added peers get into the allow-list FIRST (before the dial schedule) so a race-inbound from the new peer doesn't get refused while our outbound dial is still queueing.
+
+**How the allow-list enforces "invisible across clusters"** — `libp2p-allow-block-list::Behaviour<AllowedPeers>` implements `NetworkBehaviour::handle_pending_outbound_connection` (refuses outbound dials whose target peer-id isn't on the list) and `handle_established_inbound_connection` (closes inbound connections from peer-ids not on the list immediately after noise authenticates the peer, before any protocol-level event fires). Outsiders see a closed socket; no `identify` exchange, no `/auki/cluster/0.0.1`, no `/auki/stream/0.1.0`. One mechanism covers every libp2p protocol on the swarm.
+
+**Tests** — `+2` new tests: `freshly_built_swarm_has_empty_allow_list` (smoke-test the dark-by-default invariant) and `outsider_dial_is_refused_when_allow_list_does_not_include_peer` (asserts the trust boundary by NOT observing `identify::Event::Received` in a 2-second window when two swarms haven't been mutually allow-listed). Existing peer-to-peer swarm tests adapted via a new `allow_pair` helper that mirrors what `cluster_runtime` would do for them in production. `cargo test -p auki-network --all-features` — 138 passed (up from 132). `auki-domain` tests unaffected (12/12 green + 2 doctests). `auki-network-py` compiles after the matching `enable_mdns` kwarg removal from its `cluster.spawn`.
+
+**SwarmConfig wire change** — `enable_mdns: bool` field gone. Daemons that explicitly set `enable_mdns: false` (every test, `auki-network-py`) need a one-line diff to drop the field. Daemons that set `enable_mdns: true` (production BoosterApp / Park / Sentinel today) get a "no field named enable_mdns" compile error and must rebuild with the new Cargo manifest — intentional. Per-daemon cascade tracked in each daemon repo.
+
+**`auki-network-py` `cluster.spawn(...)`** — removed the `enable_mdns: bool` kwarg. Python consumers updating to this tag drop one kwarg from their call site.
 ### broodsugar's claude · May 12, 11:30 HKT, 2026
 
 **Filed two parking-lot items on `/auki/stream/0.1.0` after Nils surfaced a cluster-trust-boundary bypass.** Park's libp2p mDNS auto-discovered K1 #1's peer-id + addresses on the LAN; `runtime.open_stream(...)` happily dialed; K1's `/auki/stream/0.1.0` accept-handler accepted the substream because the stream plane doesn't check cluster membership. The control plane (`cluster_runtime`) already enforces a ClusterDoc trust boundary — outsiders are dropped silently and never surface in `peers()` — but `stream_runtime::handle_inbound_substream` takes the requesting `PeerId` as `_peer` (intentionally discarded) and the `StreamProvider` closure only sees `sensor_id`. Net effect: any libp2p-reachable peer subscribes regardless of membership.

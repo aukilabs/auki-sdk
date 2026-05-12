@@ -564,7 +564,6 @@ mod tests {
         SwarmConfig {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
-            enable_mdns: false,
             enable_relay_server: false,
         }
     }

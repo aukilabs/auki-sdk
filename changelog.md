@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 12:30 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) + [`crates/auki-network-py`](crates/auki-network-py) — kill mDNS + wire `libp2p-allow-block-list` at the swarm layer (PR A of the cluster-trust-boundary resolution).** Implements the first half of Nils's "peers only visible within their cluster, no fallback" decision. `mdns::tokio::Behaviour` removed from the swarm; new `allow_list: allow_block_list::Behaviour<AllowedPeers>` added — empty at build time, populated by `cluster_runtime` from `ClusterDoc.peers` on spawn and on every SSE update. Inbound and outbound connections from non-listed peer-ids refused at the libp2p `NetworkBehaviour` layer — outsiders see a closed socket, no protocol-level event ever fires. `SwarmConfig::enable_mdns` field gone — daemons that set it break to compile. New direct dep `libp2p-allow-block-list`. +2 unit tests asserting the trust boundary. PR B (kill `cluster.json` static config) follows.
 ### broodsugar's claude · May 12, 11:30 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) — filed two `/auki/stream/0.1.0` parking-lot items: cluster-trust-boundary bypass + operator visibility into subscribers.** Doc-only. Nils surfaced that `stream_runtime::handle_inbound_substream` discards the requesting `PeerId` and the `StreamProvider` only sees `sensor_id`, so any libp2p-reachable peer subscribes regardless of cluster membership (control plane enforces a trust boundary; stream plane doesn't). Sub-options: server-side gate on membership, expose `PeerId` to provider, or both. Companion question on `runtime.stream_subscribers()` accessor for operator visibility — same `(PeerId, StreamRequest)` bookkeeping serves both. Resolution sequencing: trust boundary first; visibility accessor falls out of the same data path.

@@ -286,6 +286,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "libp2p",
+ "libp2p-allow-block-list",
  "libp2p-identity",
  "libp2p-stream",
  "mac_address",

@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**`init_domain` becomes the canonical (and only sanctioned) public `ClusterRuntime` constructor.** Pairs with the [`auki-network` PR B](../auki-network/changelog.md) that killed `cluster.json` and made `ClusterRuntime::from_swarm` `#[doc(hidden)] pub`. Together they close every bypass: peers only visible within their cluster, no fallback, no Discovery-less path.
+
+**Signature change.** `init_domain` now takes `swarm: Swarm<Behaviour>`, `participant_provider: ParticipantInfoProvider`, `stream_provider: StreamProvider` in addition to the previous args, and returns `DomainHandle { identity: DomainIdentity, runtime: ClusterRuntime }` with both fields public. The `ClusterDoc` Discovery's `register` returns never leaves the SDK — it goes straight into `ClusterRuntime::from_swarm`, whose `apply_initial_doc` step populates the libp2p allow-list before the event loop starts. Park's bypass-init_domain shortcut (which existed because the old `init_domain` discarded the `ClusterDoc`) becomes unnecessary.
+
+**`DomainHandle` now owns the runtime.** Was a thin wrapper around `DomainIdentity` only; now `pub struct DomainHandle { pub identity: DomainIdentity, pub runtime: ClusterRuntime }`. Daemons feed `discovery.subscribe(&cluster_name)` events into `handle.runtime.update_cluster_doc(new_doc)` themselves — the runtime doesn't yet own its SSE subscription (filed in `auki-network/parking_lot.md` as a tightening follow-up).
+
+**`InitDomainError::RuntimeSpawn(SpawnError)`** variant added for the post-register failure path. Discovery-side calls (`create_cluster`, `register`) have already succeeded by the time the runtime is constructed, so a `RuntimeSpawn` failure means the cluster is created and the peer is registered but the runtime didn't construct — caller may need to deregister before retrying.
+
+**`Cargo.toml` dep change.** `auki-network` feature set gains `"swarm"` (previously had `"discovery_client"` only). Needed to name `Swarm<Behaviour>` and pass it to `ClusterRuntime::from_swarm`.
+
+**Tests** — 12 unit tests + 1 doctest pass with `--all-features`. (The old `init_domain` doctest's signature changed; the unchanged tests cover `DomainIdentity` shape.)
+
+**Daemon-side migration:** Park / BoosterApp / Sentinel daemons each need a per-repo PR to migrate from the old `init_domain(wallet, name, discovery, addresses, ...)` to the new `init_domain(wallet, name, discovery, swarm, addresses, ..., participant_provider, stream_provider)`. Park's PR #36 bypass path (which called `DiscoveryClient::register` directly) goes away — `init_domain` now does everything Park needs.
+
 ### broodsugar's claude · May 11, 17:46 HKT, 2026
 
 **`init_domain` now creates the cluster before registering — `InitDomainError::AlreadyExists` variant landed.** Pairs with the [`auki-network::DiscoveryClient::create_cluster`](../auki-network/changelog.md) addition shipped in the same PR. Closes the rollout-breakage the SDK agent surfaced: Discovery's new T8 deployment ([aukilabs/discovery#2](https://github.com/aukilabs/discovery/pull/2) merged) removed lazy-create on `POST /clusters/{name}/peers`, so any SDK consumer that called `register` against a fresh cluster would 404 against the new Discovery.

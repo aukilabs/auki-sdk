@@ -352,3 +352,17 @@ Two halves:
 - **Daemon side (out of crate).** Expose the SDK accessor via a new HTTP endpoint (e.g. `GET /api/streams/subscribers` returning JSON `[{peer_id, sensor_id}]`) in BoosterApp / Park / Sentinel control APIs. Out of scope for `auki-network`; file in each daemon repo once the SDK accessor ships.
 
 **Lean.** Ship the SDK accessor first, non-invasive. Pairs naturally with the trust-boundary resolution above — the same `(PeerId, StreamRequest)` data that enables the cluster-membership gate is what surfaces here. Daemons add their HTTP shims afterward.
+
+---
+
+## `ClusterRuntime` should own its Discovery SSE subscription internally _(filed by broodsugar's claude, 2026-05-12)_
+
+PR B closed the last static-config bypass: the only way to construct a `ClusterRuntime` is `auki_domain::init_domain`, which goes through Discovery's `create_cluster` + `register`. But the runtime still depends on the daemon to drive its `update_cluster_doc(new_doc)` loop — the daemon calls `discovery.subscribe(cluster_name)` separately and feeds each fresh `ClusterDoc` into the runtime.
+
+This leaves one footgun: a daemon that constructs a runtime via `init_domain` but never wires up the SSE subscription loop will operate on a stale `ClusterDoc` forever. New peers joining the cluster will be denied by libp2p (because the local allow-list never updates), and the operator-visible symptom is "the cluster's new peer can't connect" with no SDK-side diagnostic.
+
+**Lean: bake the SSE subscription into the runtime.** `init_domain` already has the `DiscoveryClient` reference; pass it (or a clone of the relevant bits) into the runtime, spawn an internal task that calls `discovery.subscribe(&cluster_name)` and pumps `update_cluster_doc(new_doc)` into the actor channel. The daemon stops needing to wire anything — Discovery → SSE → allow-list flips happen entirely inside the runtime.
+
+**Trade-off.** Adds a tokio task to the runtime's footprint (already has one for the swarm event loop; this is a second). Caller can't override the subscribe-retry policy without a config knob; today they own the loop and can do whatever they want. Need a clean shutdown story for the subscribe task that doesn't cascade through to the runtime's main task.
+
+**Why this isn't urgent.** Park (the one consumer that goes through `init_domain` today via PR #37) already wires up subscribe + `update_cluster_doc` correctly. The footgun only bites a future daemon that wires `init_domain` but forgets the subscribe loop. As long as the team is small and reviewing each other's daemons, social pressure works. Worth closing before the SDK has many external consumers.

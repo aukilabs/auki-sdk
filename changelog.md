@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) + [`crates/auki-domain`](crates/auki-domain) + [`crates/auki-network-py`](crates/auki-network-py) — kill `cluster.json` static-config + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** Closes every bypass. `cluster_doc.rs` loader half deleted (`load`, path helpers, `LoadError`, env / default-path constants); `ClusterRuntime::spawn` deleted, `from_swarm` made `#[doc(hidden)] pub` so the only public path is `auki_domain::init_domain`. `init_domain` signature grows (takes `swarm` + the two provider closures) and returns `DomainHandle { identity, runtime }` with public fields — the `ClusterDoc` Discovery returns never leaves the SDK. `auki-network-py`'s `cluster.spawn` + `cluster.load_doc` removed; Python runtime construction blocks until `auki-domain-py` ships. Daemons (Park, BoosterApp, Sentinel) migrate per-repo. Filed: "ClusterRuntime owns its SSE subscription internally" as the next tightening.
+
 ### broodsugar's claude · May 12, 12:30 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) + [`crates/auki-network-py`](crates/auki-network-py) — kill mDNS + wire `libp2p-allow-block-list` at the swarm layer (PR A of the cluster-trust-boundary resolution).** Implements the first half of Nils's "peers only visible within their cluster, no fallback" decision. `mdns::tokio::Behaviour` removed from the swarm; new `allow_list: allow_block_list::Behaviour<AllowedPeers>` added — empty at build time, populated by `cluster_runtime` from `ClusterDoc.peers` on spawn and on every SSE update. Inbound and outbound connections from non-listed peer-ids refused at the libp2p `NetworkBehaviour` layer — outsiders see a closed socket, no protocol-level event ever fires. `SwarmConfig::enable_mdns` field gone — daemons that set it break to compile. New direct dep `libp2p-allow-block-list`. +2 unit tests asserting the trust boundary. PR B (kill `cluster.json` static config) follows.

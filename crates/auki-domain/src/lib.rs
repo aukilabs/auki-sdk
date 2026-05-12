@@ -46,9 +46,13 @@
 #![warn(missing_docs)]
 
 use auki_identity::{Wallet, WalletId};
+use auki_network::cluster_runtime::{ClusterRuntime, ParticipantInfoProvider, SpawnError};
 use auki_network::discovery_client::{
     CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
+use auki_network::stream_runtime::StreamProvider;
+use auki_network::swarm::Behaviour;
+use auki_network::Swarm;
 use multiaddr::Multiaddr;
 use thiserror::Error;
 
@@ -186,25 +190,34 @@ impl std::fmt::Display for DomainIdentity {
 // ─── DomainHandle ──────────────────────────────────────────────────
 
 /// Live handle to a Domain the local daemon is participating in.
+/// Owns the [`ClusterRuntime`] for the cluster — the only path to a
+/// runtime is through [`init_domain`] (or the eventual `join_domain`),
+/// so possessing a `DomainHandle` is proof that the cluster membership
+/// the runtime enforces came from Discovery.
 ///
-/// PR 1 ships the minimum viable handle: it records the Domain's
-/// identity. PR 2 adds Manager/Member role state, the heartbeat tick,
-/// and the live Cluster Registry. PR 3 adds failover machinery. PR 4
-/// adds [`join_domain`](crate) and JoinRequest admission.
+/// `identity` is exposed for log lines and operator UI; `runtime` is
+/// the live SDK surface — call `runtime.peers()` for connected peers,
+/// `runtime.open_stream(...)` for outbound streams, and
+/// `runtime.update_cluster_doc(new_doc)` when feeding fresh
+/// `ClusterDoc`s from Discovery's SSE subscription.
 ///
-/// In PR 1, every handle is implicitly Manager-shaped because
-/// [`init_domain`] is the only constructor and a fresh Domain has
-/// exactly one peer (the caller) — there's nothing to be a Member of
-/// yet. The handle does not yet expose role-specific operations;
-/// callers can only read the identity. This is enough to let Park
-/// thread the Domain identity through to log writers, registries, and
-/// any pre-T2 manual JoinBundle exchange.
+/// Manager-role state (heartbeat tick, registry write authority,
+/// JoinRequest admission) lands on top of this handle in PR 2
+/// (Greenland T2+T3+T4+T6+T7) and PR 3 (failover). The handle stays
+/// as the daemon-facing entry point.
 pub struct DomainHandle {
-    identity: DomainIdentity,
+    /// The Domain's canonical identity.
+    pub identity: DomainIdentity,
+    /// The live cluster runtime. Driven by Discovery — the daemon
+    /// feeds it fresh [`ClusterDoc`]s from `DiscoveryClient::subscribe`
+    /// via `runtime.update_cluster_doc(new_doc)` so the libp2p
+    /// allow-list stays in sync with the cluster's membership.
+    pub runtime: ClusterRuntime,
 }
 
 impl DomainHandle {
-    /// The Domain's canonical identity.
+    /// Convenience accessor for the Domain's canonical identity.
+    /// Equivalent to `&handle.identity`.
     pub fn identity(&self) -> &DomainIdentity {
         &self.identity
     }
@@ -215,10 +228,10 @@ impl DomainHandle {
 /// Errors returned by [`init_domain`].
 #[derive(Debug, Error)]
 pub enum InitDomainError {
-    /// Discovery rejected the registration. Wraps the underlying
-    /// [`DiscoveryError`] — caller can inspect for transport vs.
-    /// status-code failure.
-    #[error("Discovery registration failed: {0}")]
+    /// Discovery rejected `create_cluster` or `register`. Wraps the
+    /// underlying [`DiscoveryError`] — caller can inspect for
+    /// transport vs. status-code failure.
+    #[error("Discovery call failed: {0}")]
     Discovery(#[from] DiscoveryError),
 
     /// Discovery's atomic `POST /clusters/{name}` returned 409 — the
@@ -240,74 +253,82 @@ pub enum InitDomainError {
         /// the loser can dial the live Manager directly.
         existing: auki_network::cluster_doc::ClusterDoc,
     },
+
+    /// `ClusterRuntime` construction failed (no tokio runtime in
+    /// scope, swarm-build failure, etc.). The Discovery side of the
+    /// call had already succeeded — the cluster is created and the
+    /// peer is registered — so the caller may need to deregister
+    /// before retrying.
+    #[error("ClusterRuntime construction failed: {0}")]
+    RuntimeSpawn(#[from] SpawnError),
 }
 
-/// Create a new Domain and register the local daemon as its first peer.
+/// Create a new Domain, register the local daemon as its first peer,
+/// and return a [`DomainHandle`] owning the live cluster runtime.
 ///
-/// Constructs a [`DomainIdentity`] from `wallet` + `name`, calls
-/// [`DiscoveryClient::create_cluster`] (Greenland T8 atomic create) to
-/// claim the cluster, then [`DiscoveryClient::register`] to register
-/// the local daemon as the first peer, and returns a [`DomainHandle`]
-/// recording the identity. The caller becomes the initial Manager by
-/// virtue of being the create-cluster signer (Discovery records the
-/// signer in `ClusterDoc.current_manager_peer_id`); Manager-role
-/// state (heartbeat tick, registry write authority, JoinRequest
-/// admission) lands in PR 2 (Greenland T2+T3+T4+T6+T7).
+/// This is **the only sanctioned public path to a [`ClusterRuntime`]**.
+/// Discovery is non-optional: the runtime's libp2p allow-list is
+/// populated from `ClusterDoc.peers`, which only comes from
+/// Discovery. There is no static-file fallback, no Discovery-less dev
+/// mode.
 ///
-/// `addresses` is the set of dialable multiaddrs other peers should
-/// use to reach this daemon. Per
-/// [`DiscoveryClient::register`]'s contract, the SDK does not infer
-/// addresses from a swarm's listeners — the caller supplies them
-/// explicitly because `0.0.0.0` listeners aren't dialable and NAT /
-/// Docker / multi-NIC break listeners-as-source-of-truth.
+/// Sequence:
+/// 1. Build a [`DomainIdentity`] from `wallet` + `name`. If
+///    `name == "Vinland"`, the reserved singleton identity is used
+///    (no `{wallet_id}/` prefix; Greenland T12 fallback target).
+/// 2. Call `DiscoveryClient::create_cluster` (Greenland T8 atomic
+///    create). On 201, the local peer is recorded as the initial
+///    Manager in `ClusterDoc.current_manager_peer_id`. On 409, return
+///    [`InitDomainError::AlreadyExists`] so the caller can route to
+///    T12's `try-join → create-if-none → fall-back-to-join` retry.
+/// 3. Call `DiscoveryClient::register` — adds the local peer to the
+///    cluster's peer list; returns the freshly-stamped `ClusterDoc`.
+/// 4. Hand `swarm`, the returned `ClusterDoc`, and the two provider
+///    closures to `ClusterRuntime::from_swarm`. The runtime's
+///    libp2p allow-list is populated from `ClusterDoc.peers` before
+///    the event loop starts driving, so the cluster trust boundary
+///    is active immediately.
+/// 5. Return [`DomainHandle { identity, runtime }`][DomainHandle].
 ///
-/// `expected_app_id` and `note` are advisory operator metadata passed
-/// verbatim to the resulting `ClusterPeer` entry. Pass `None` if the
-/// daemon doesn't yet have an opinion about either.
+/// `swarm` is built by the caller (typically via
+/// `auki_network::swarm::build_swarm`) so it can register its bound
+/// listen addresses with the daemon's control plane before the
+/// runtime starts driving it. `addresses` is the set of dialable
+/// multiaddrs other peers should use; the SDK does not infer them
+/// from the swarm's listeners (`0.0.0.0` isn't dialable; NAT / Docker
+/// break listeners-as-source-of-truth).
 ///
-/// # Singleton handling
+/// `participant_provider` and `stream_provider` are the daemon's
+/// closures for the runtime's `/auki/cluster/0.0.1` and
+/// `/auki/stream/0.1.0` accept paths respectively. See
+/// `auki_network::cluster_runtime::ParticipantInfoProvider` and
+/// `auki_network::cluster_runtime::StreamProvider`.
 ///
-/// If `name == "Vinland"`, this function constructs the reserved
-/// singleton Domain (no `{wallet_id}/` prefix). This matches the
-/// Greenland T12 flow where Booster and Sentinel headless daemons
-/// fall back to creating the singleton when Discovery's
-/// `GET /domains/latest` returns 404. The supplied `wallet` is still
-/// used to sign the Discovery `register` call — the wallet
-/// authenticates the *peer*, not the *Domain name* in this case.
+/// `expected_app_id` and `note` are advisory operator metadata
+/// passed verbatim to the resulting `ClusterPeer` entry.
 ///
-/// # Examples
+/// # SSE subscription
 ///
-/// ```no_run
-/// use auki_domain::init_domain;
-/// use auki_identity::Wallet;
-/// use auki_network::discovery_client::DiscoveryClient;
-/// use multiaddr::Multiaddr;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let wallet = Wallet::from_seed(&[7u8; 32]);
-/// let discovery = DiscoveryClient::new("https://discovery.example.com");
-/// let addr: Multiaddr = "/ip4/192.168.1.10/tcp/4001".parse()?;
-///
-/// let handle = init_domain(
-///     &wallet,
-///     "demo-2026-05",
-///     &discovery,
-///     &[addr],
-///     Some("park"),
-///     None,
-/// ).await?;
-///
-/// println!("Created Domain: {}", handle.identity());
-/// # Ok(())
-/// # }
-/// ```
+/// `init_domain` only performs the initial create-and-register; it
+/// does NOT subscribe to Discovery's SSE stream. The daemon is
+/// responsible for calling `discovery.subscribe(&cluster_name)` and
+/// feeding each fresh `ClusterDoc` into
+/// `handle.runtime.update_cluster_doc(new_doc)`. Without that loop,
+/// the local allow-list won't reflect cluster-membership changes —
+/// new peers joining the cluster will be refused by libp2p until the
+/// daemon learns about them. Filed as a follow-up tightening item
+/// in `parking_lot.md`: ClusterRuntime owning its SSE subscription
+/// internally.
 pub async fn init_domain(
     wallet: &Wallet,
     name: &str,
     discovery: &DiscoveryClient,
+    swarm: Swarm<Behaviour>,
     addresses: &[Multiaddr],
     expected_app_id: Option<&str>,
     note: Option<&str>,
+    participant_provider: ParticipantInfoProvider,
+    stream_provider: StreamProvider,
 ) -> Result<DomainHandle, InitDomainError> {
     let identity = if name == SINGLETON_DOMAIN_NAME {
         DomainIdentity::singleton()
@@ -328,11 +349,19 @@ pub async fn init_domain(
         }
     }
 
-    discovery
+    // Register the local peer and capture the doc Discovery returns
+    // — this is the only path the doc takes from Discovery into the
+    // runtime. Consumers never get to hold the `ClusterDoc` directly;
+    // it goes straight into `from_swarm` which populates the libp2p
+    // allow-list from `doc.peers` before the event loop starts.
+    let doc = discovery
         .register(wallet, &cluster_name, addresses, expected_app_id, note)
         .await?;
 
-    Ok(DomainHandle { identity })
+    let runtime =
+        ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)?;
+
+    Ok(DomainHandle { identity, runtime })
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────

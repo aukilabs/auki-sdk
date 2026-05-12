@@ -679,8 +679,6 @@ impl std::fmt::Debug for ClusterRuntime {
 ///   empty list builds a dial-only swarm.
 /// - `agent_version: str | None` — reported in libp2p `identify`
 ///   responses. Default: `auki-network-py/<crate-version>`.
-/// - `enable_mdns: bool` — `_p2p._udp.local.` LAN discovery. Default
-///   `True` (matches `SwarmConfig::default`).
 ///
 /// Raises:
 /// - `ValueError` if `seed` is not exactly 32 bytes, or if any string
@@ -690,7 +688,7 @@ impl std::fmt::Debug for ClusterRuntime {
 #[pyfunction]
 #[pyo3(
     name = "spawn",
-    text_signature = "(seed, doc, participant_provider, *, stream_provider=None, listen_addresses=None, agent_version=None, enable_mdns=True)",
+    text_signature = "(seed, doc, participant_provider, *, stream_provider=None, listen_addresses=None, agent_version=None)",
     signature = (
         seed,
         doc,
@@ -699,7 +697,6 @@ impl std::fmt::Debug for ClusterRuntime {
         stream_provider = None,
         listen_addresses = None,
         agent_version = None,
-        enable_mdns = true,
     ),
 )]
 #[allow(clippy::too_many_arguments)]
@@ -711,7 +708,6 @@ fn spawn(
     stream_provider: Option<PyObject>,
     listen_addresses: Option<Vec<String>>,
     agent_version: Option<String>,
-    enable_mdns: bool,
 ) -> PyResult<ClusterRuntime> {
     // 1. Validate seed length — wrapper-side, before calling into Rust.
     //    The runtime accepts `[u8; 32]`, so an out-of-range slice would
@@ -753,7 +749,6 @@ fn spawn(
     let swarm_config = SwarmConfig {
         listen_addresses: listen,
         agent_version,
-        enable_mdns,
         // Relay-server is the dedicated `aukilabs/relay` app's job;
         // wrapper consumers (Boosterapp, Sentinel) never want it.
         // Hardcoded off; if a future consumer needs it we'll add a

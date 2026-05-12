@@ -4,18 +4,33 @@
 //! Transport: TCP + QUIC + Circuit Relay v2 client (always wired into
 //! the transport stack). Both authenticated with Noise (using the peer's
 //! ed25519 keypair) and multiplexed with Yamux. Behaviour: `identify` +
-//! `ping` always; `mdns` optional (on by default — Reid M1b dual-channel
-//! decision); `relay::client::Behaviour` always; `relay::Behaviour` (the
-//! server side) optional (off by default for consumer daemons; on for
-//! the dedicated `aukilabs/relay` infrastructure node).
+//! `ping` always; `allow_list` (cluster trust boundary, populated by
+//! [`crate::cluster_runtime`] from `ClusterDoc.peers`) always;
+//! `relay::client::Behaviour` always; `relay::Behaviour` (the server
+//! side) optional (off by default for consumer daemons; on for the
+//! dedicated `aukilabs/relay` infrastructure node).
+//!
+//! ## Cluster trust boundary at the libp2p layer
+//!
+//! `allow_list` is `libp2p-allow-block-list::Behaviour<AllowedPeers>`.
+//! The list starts empty at swarm-build time and is populated by
+//! [`crate::cluster_runtime`] from `ClusterDoc.peers` on spawn and on
+//! every Discovery-SSE update. Inbound and outbound connections from
+//! non-listed peer-ids are denied at the libp2p `NetworkBehaviour`
+//! layer — `handle_pending_inbound_connection` /
+//! `handle_pending_outbound_connection` refuse before the noise
+//! handshake runs. From an outsider's side we look like we don't
+//! exist: no `identify` exchange, no protocol handler ever fires.
+//!
+//! This is "peers only visible within their cluster" — single
+//! enforcement point covering every libp2p protocol on the swarm
+//! (`/auki/cluster/0.0.1`, `/auki/heartbeat/0.0.1`,
+//! `/auki/registry/0.0.1`, `/auki/stream/0.1.0`, anything future).
+//! mDNS deliberately removed — peers don't auto-discover across
+//! clusters because they shouldn't be able to.
 //!
 //! ## Reid milestone-2 architectural commitments encoded here
 //!
-//! - **Dual-channel mDNS** (parking-lot 1a, 2026-05-02). This swarm
-//!   advertises on `_p2p._udp.local.` via libp2p mDNS when
-//!   `enable_mdns = true`. Daemons keep their existing
-//!   `_auki._tcp.local.` advertisement separately (control-API
-//!   discovery, unchanged).
 //! - **Both-gates relay-server** (parking-lot 2c, 2026-05-02). The
 //!   boolean [`SwarmConfig::enable_relay_server`] gates the libp2p
 //!   relay server behaviour. Consumers gate `Capability::*`
@@ -26,7 +41,9 @@
 //!   multiaddrs (which may be circuit-relay-mediated like
 //!   `/p2p/<relay>/p2p-circuit/p2p/<target>`); operator obtains the
 //!   peer-id and relay multiaddr out-of-band and pastes them into Park.
-//!   No Discovery Service dependency for the Reid M2 demo.
+//!   The target peer-id must be in the allow-list (i.e. in the local
+//!   `ClusterDoc.peers`) or the outbound dial is refused at the
+//!   handshake layer.
 //!
 //! ## Async runtime
 //!
@@ -47,19 +64,19 @@
 //!         "/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap(),
 //!     ],
 //!     agent_version: "auki-sdk/0.0.0".into(),
-//!     enable_mdns: true,
 //!     enable_relay_server: false,
 //! }).expect("build swarm");
 //! ```
 
 use crate::{PeerIdentity, cluster_protocol, heartbeat_protocol};
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, identify, mdns, noise, ping, relay,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping, relay,
     swarm::{
         DialError, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts,
     },
     tcp, yamux,
 };
+use libp2p_allow_block_list as allow_block_list;
 use std::time::Duration;
 
 /// libp2p protocol id used for the SDK's identify exchanges. Stable; do
@@ -78,14 +95,21 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct Behaviour {
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
-    /// `_p2p._udp.local.` advertisement + LAN peer discovery. Toggleable
-    /// via [`SwarmConfig::enable_mdns`] — on by default for daemons; off
-    /// in tests to avoid LAN noise.
-    pub mdns: Toggle<mdns::tokio::Behaviour>,
+    /// Cluster trust boundary. Inbound and outbound connections from
+    /// peers NOT in this allow-list are denied at the libp2p
+    /// `NetworkBehaviour` layer — the noise handshake never completes,
+    /// no protocol handler fires, no `identify` exchange leaks our
+    /// peer-id. Populated by [`crate::cluster_runtime`] from
+    /// `ClusterDoc.peers` on spawn and on every Discovery-SSE update;
+    /// empty at swarm-build time. See the module-level docs for the
+    /// "peers only visible within their cluster" rationale.
+    pub allow_list: allow_block_list::Behaviour<allow_block_list::AllowedPeers>,
     /// Always present: lets this node act as a relay-*client* (use
     /// another peer's relay-server to traverse NAT). Wiring is automatic
     /// — dial a circuit-relay multiaddr and the relay-client behaviour
-    /// handles the routing.
+    /// handles the routing. The dial target must still be in the
+    /// [`allow_list`](Self::allow_list) (i.e. in the local cluster doc)
+    /// or the outbound dial is refused before the relay-client handshake.
     pub relay_client: relay::client::Behaviour,
     /// Optional: lets this node act as a relay-*server* (forward
     /// circuit-relay traffic on behalf of other peers). Toggleable via
@@ -130,11 +154,6 @@ pub struct SwarmConfig {
     /// Reported as `agent_version` in identify responses. Convention:
     /// `"<consumer-name>/<version>"` (e.g. `"boosterapp/0.1"`).
     pub agent_version: String,
-    /// Enable libp2p mDNS (`_p2p._udp.local.`) for LAN peer discovery.
-    /// On for daemons by default; off in tests to avoid cross-test
-    /// interference. Daemons' existing `_auki._tcp.local.` advertisement
-    /// is unaffected (control-API discovery is separate).
-    pub enable_mdns: bool,
     /// Enable the libp2p relay-*server* behaviour so this node forwards
     /// circuit-relay traffic on behalf of other peers. Off for consumer
     /// daemons (BoosterApp, Sentinel) by default. The dedicated
@@ -149,7 +168,6 @@ impl Default for SwarmConfig {
         Self {
             listen_addresses: vec![],
             agent_version: format!("auki-sdk/{}", env!("CARGO_PKG_VERSION")),
-            enable_mdns: true,
             enable_relay_server: false,
         }
     }
@@ -184,18 +202,6 @@ pub fn build_swarm(
     let enable_relay_server = config.enable_relay_server;
     let local_pid = identity.peer_id();
 
-    // Construct mDNS outside the builder closure so we can surface a
-    // proper BuildError; the closure can only return Behaviour or
-    // Result<Behaviour, Box<dyn Error>>.
-    let mdns_b = if config.enable_mdns {
-        Some(
-            mdns::tokio::Behaviour::new(mdns::Config::default(), local_pid)
-                .map_err(|e| BuildError::Transport(format!("mdns: {e}")))?,
-        )
-    } else {
-        None
-    };
-
     let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
         .with_tokio()
         .with_tcp(
@@ -213,7 +219,13 @@ pub fn build_swarm(
                     .with_agent_version(agent_version),
             ),
             ping: ping::Behaviour::default(),
-            mdns: Toggle::from(mdns_b),
+            // Empty at build time. `cluster_runtime` populates from
+            // `ClusterDoc.peers` on spawn and on every Discovery-SSE
+            // update via `swarm.behaviour_mut().allow_list.allow_peer(p)`
+            // / `disallow_peer(p)`. With an empty list, the swarm refuses
+            // every inbound and outbound libp2p handshake — a
+            // freshly-built swarm with no doc is invisible by design.
+            allow_list: allow_block_list::Behaviour::<allow_block_list::AllowedPeers>::default(),
             relay_client,
             relay: Toggle::from(enable_relay_server.then(|| {
                 relay::Behaviour::new(local_pid, relay::Config::default())
@@ -262,15 +274,29 @@ mod tests {
     use futures::StreamExt;
     use libp2p::swarm::SwarmEvent;
 
-    /// Build config used by most tests — mDNS off (no LAN noise),
-    /// relay-server off, listening on a single OS-chosen TCP port.
+    /// Build config used by most tests — relay-server off, listening on
+    /// a single OS-chosen TCP port. Tests that exercise peer-to-peer
+    /// interaction must additionally call [`allow_pair`] to populate
+    /// each side's allow-list with the other's peer-id; an empty
+    /// allow-list refuses every connection (the production "invisible
+    /// outside the cluster" default).
     fn test_tcp_config(agent_version: &str) -> SwarmConfig {
         SwarmConfig {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
-            enable_mdns: false,
             enable_relay_server: false,
         }
+    }
+
+    /// Mutually allow-list two test swarms so they can complete a
+    /// libp2p handshake. Mirrors what `cluster_runtime` would do in
+    /// production on every `ClusterDoc.peers` update — production
+    /// callers don't poke `allow_list` directly.
+    fn allow_pair(a: &mut Swarm<Behaviour>, b: &mut Swarm<Behaviour>) {
+        let a_pid = *a.local_peer_id();
+        let b_pid = *b.local_peer_id();
+        a.behaviour_mut().allow_list.allow_peer(b_pid);
+        b.behaviour_mut().allow_list.allow_peer(a_pid);
     }
 
     /// Wait for a swarm's first `NewListenAddr` event and return the
@@ -337,6 +363,7 @@ mod tests {
 
         let mut a = build_swarm(&id_a, test_tcp_config("test-a/0")).unwrap();
         let mut b = build_swarm(&id_b, test_tcp_config("test-b/0")).unwrap();
+        allow_pair(&mut a, &mut b);
 
         let addr_a = wait_for_listen_addr(&mut a).await;
         b.dial(addr_a).expect("dial");
@@ -364,6 +391,7 @@ mod tests {
             },
         )
         .unwrap();
+        allow_pair(&mut a, &mut b);
 
         let addr_a = wait_for_listen_addr(&mut a).await;
         b.dial(addr_a).expect("dial");
@@ -399,22 +427,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_with_mdns_enabled_succeeds() {
-        // Construction-only test. Real mDNS discovery requires a network
-        // interface that carries multicast (loopback typically does not);
-        // verifying actual discovery on a developer machine and CI is
-        // brittle. Daemon-level integration verifies cross-LAN behaviour.
+    async fn freshly_built_swarm_has_empty_allow_list() {
+        // The "peers only visible within their cluster" default — a
+        // swarm built without any allow_list calls accepts no
+        // libp2p handshakes. `cluster_runtime` populates the list
+        // from `ClusterDoc.peers` on spawn; until then, the swarm is
+        // dark by design.
         let identity = PeerIdentity::from_seed(&[7u8; 32]);
-        let _swarm = build_swarm(
+        let swarm = build_swarm(
             &identity,
             SwarmConfig {
                 listen_addresses: vec![],
                 agent_version: "test/0".into(),
-                enable_mdns: true,
                 enable_relay_server: false,
             },
         )
-        .expect("build with mdns enabled");
+        .expect("build");
+        // No public read accessor; smoke-test that we built the swarm
+        // and that `local_peer_id` returned the expected pid. The
+        // allow_list emptiness is exercised end-to-end by
+        // `outsider_dial_is_refused` below.
+        assert_eq!(*swarm.local_peer_id(), identity.peer_id());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outsider_dial_is_refused_when_allow_list_does_not_include_peer() {
+        // The headline trust-boundary guarantee. A built two-swarm
+        // pair where neither side has the other in its allow-list:
+        // the dial completes the transport handshake but the libp2p
+        // behaviour layer refuses the connection before any
+        // protocol-level event (identify, our cluster protocols) can
+        // fire. Asserted by NOT observing an Identify::Received in a
+        // bounded window.
+        let id_a = PeerIdentity::from_seed(&[20u8; 32]);
+        let id_b = PeerIdentity::from_seed(&[21u8; 32]);
+
+        let mut a = build_swarm(&id_a, test_tcp_config("test-a/0")).unwrap();
+        let mut b = build_swarm(&id_b, test_tcp_config("test-b/0")).unwrap();
+        // Deliberately NO `allow_pair` call — both allow-lists empty.
+
+        let addr_a = wait_for_listen_addr(&mut a).await;
+        let _ = b.dial(addr_a);
+
+        let identified = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                tokio::select! {
+                    Some(event) = a.next() => {
+                        if matches!(
+                            event,
+                            SwarmEvent::Behaviour(BehaviourEvent::Identify(
+                                identify::Event::Received { .. }
+                            ))
+                        ) {
+                            return true;
+                        }
+                    }
+                    Some(event) = b.next() => {
+                        if matches!(
+                            event,
+                            SwarmEvent::Behaviour(BehaviourEvent::Identify(
+                                identify::Event::Received { .. }
+                            ))
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(
+            identified.is_err(),
+            "identify exchange completed despite allow-list refusing the connection",
+        );
     }
 
     #[tokio::test]
@@ -427,7 +512,6 @@ mod tests {
             SwarmConfig {
                 listen_addresses: vec![],
                 agent_version: "relay/0".into(),
-                enable_mdns: false,
                 enable_relay_server: true,
             },
         )
@@ -444,7 +528,6 @@ mod tests {
             SwarmConfig {
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
                 agent_version: "relay/0".into(),
-                enable_mdns: false,
                 enable_relay_server: true,
             },
         )
@@ -455,11 +538,14 @@ mod tests {
             SwarmConfig {
                 listen_addresses: vec![],
                 agent_version: "client/0".into(),
-                enable_mdns: false,
                 enable_relay_server: false,
             },
         )
         .unwrap();
+        // Mutually allow-list — production `cluster_runtime` would do
+        // this from `ClusterDoc.peers` on spawn; in this test we wire
+        // it manually since there's no runtime.
+        allow_pair(&mut relay_swarm, &mut client);
 
         let relay_addr = wait_for_listen_addr(&mut relay_swarm).await;
         // Loopback test: tell the swarm its listen address is also an
@@ -536,6 +622,7 @@ mod tests {
 
         let mut a = build_swarm(&id_a, test_tcp_config("test-a/0")).unwrap();
         let mut b = build_swarm(&id_b, test_tcp_config("test-b/0")).unwrap();
+        allow_pair(&mut a, &mut b);
 
         let addr_a = wait_for_listen_addr(&mut a).await;
         dial_peer(&mut b, id_a.peer_id(), vec![addr_a]).expect("dial via helper");

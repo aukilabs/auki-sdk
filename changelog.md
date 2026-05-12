@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 09:14 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's wallet-scoped Domain identities `{wallet_id}/{name}` carry a literal `/` — the SDK was interpolating it raw into the URL path, so Discovery's router saw four path components instead of three and 404'd before any body validation. Applied path-segment percent-encoding at all five sites (`create_cluster`, `register`, `fetch`, `deregister`, `subscribe`); singletons (`"Vinland"`) and unreserved ASCII pass through unchanged. +5 unit tests. New direct dep `percent-encoding`. Park's first-boot operator-typed Domain prompt was blocked on this — every user-named Domain hit 404 at `register` before the fix.
+
 ### broodsugar's claude · May 11, 17:46 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) + [`crates/auki-domain`](crates/auki-domain) — Greenland T8 SDK side: `DiscoveryClient::create_cluster` + `init_domain` wires it before `register`.** Closes the SDK side of Discovery [PR #2](https://github.com/aukilabs/discovery/pull/2) which removed lazy-create on `POST /clusters/{name}/peers`. New `DiscoveryClient::create_cluster(wallet, cluster_name)` signs `{ cluster_name, op: "create", peer_id, public_key, timestamp_ns }` JCS, POSTs `/clusters/{name}`; surfaces 201/409 as `CreateClusterOutcome::{Created, AlreadyExists{existing}}`. `init_domain` calls it before `register` and maps the 409 to the new `InitDomainError::AlreadyExists { identity, existing }` variant for Greenland T12's Vinland-race retry. +6 tests in `discovery_client`. Discovery is now safe to deploy without breaking Park / Booster / Sentinel boot paths once they bump SDK pin.

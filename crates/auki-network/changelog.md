@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 09:14 HKT, 2026
+
+**Bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's canonical wallet-scoped Domain identity is `{wallet_id}/{name}` — the literal `/` interpolated raw into a URL path produces four path components where Discovery's router expects three, returning 404 before any body validation. Discovery has handled `%2F`-encoded slashes correctly all along (its `cluster_name` regex permits `/` and axum decodes the percent-encoded form back to the original); the breakage was purely SDK-side.
+
+**Surfaced when:** Park PR [aukilabs/park#43](https://github.com/aukilabs/park/issues/43) collapsed Park's bootstrap onto the operator-typed Domain path, which is the first time `register` saw a wallet-scoped multi-segment `cluster_name` on the wire. Every user-named Domain (e.g. `foo`, `warehouse-3`) failed at `register` with `transport: http 404: empty body` before Discovery's body validator could even run. The singleton (`"Vinland"`, single segment) was the only working path.
+
+**Fix.** New private `encode_cluster_name` helper applies `percent_encoding::utf8_percent_encode` with a custom `CLUSTER_NAME_PATH_ENCODE_SET` (RFC 3986 path-segment-unsafe characters: `/`, `#`, `?`, `%`, control chars, space, `<>`, `{}`, `\``, `\`, double-quote). Unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, `~`) pass through unchanged so Discovery server logs and on-disk filenames stay legible for the ASCII case. Applied at all five URL-construction sites in `discovery_client.rs`: `create_cluster`, `register`, `fetch`, `deregister`, `subscribe`. The `peer_id` interpolated in `deregister`'s path stays raw — libp2p's base58 produces `[A-Za-z0-9]` only, no path-breaking characters.
+
+**Dep added.** `percent-encoding = "2"` to the `discovery_client` feature. Already in the transitive dep tree (via `url`/`reqwest`); now a direct dep.
+
+**Tests.** +5 unit tests: `cluster_name_with_slash_encodes_to_percent_2f` (the headline case), `cluster_name_unreserved_chars_pass_through`, `singleton_cluster_name_round_trips_unchanged`, `adversarial_chars_are_encoded` (defends against `#`, `?`, `%`, space), `all_url_methods_encode_cluster_name` (smoke-test that each of the five sites uses the same encoded form). `cargo test -p auki-network --all-features` 137/137 green (up from 132).
+
+**Acceptance:** `register(cluster_name = "cd37e4.../foo", …)` against a Discovery instance now produces `POST /clusters/cd37e4...%2Ffoo/peers` on the wire — Discovery's body validator fires (422/200) instead of router-level 404. Park's first-boot prompt with any operator-typed Domain name unblocks.
+
 ### broodsugar's claude · May 11, 17:46 HKT, 2026
 
 **`DiscoveryClient::create_cluster` — Greenland T8 SDK side shipped.** Discovery's T8 endpoint ([aukilabs/discovery#2](https://github.com/aukilabs/discovery/pull/2)) merged with first-write-wins atomic creation; this PR ships the SDK companion so `auki_domain::init_domain` can satisfy the new "cluster must exist before register" precondition.

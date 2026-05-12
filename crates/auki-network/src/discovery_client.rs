@@ -92,9 +92,44 @@ use base64::engine::general_purpose::STANDARD as B64;
 use eventsource_stream::Eventsource;
 use futures::stream::{Stream, StreamExt};
 use multiaddr::Multiaddr;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// Characters to percent-encode when interpolating a `cluster_name`
+/// into a URL path segment. Greenland T1's canonical wallet-scoped
+/// identity is `{wallet_id}/{name}` — the literal `/` MUST be encoded
+/// as `%2F` so Discovery's router sees one path component, not two.
+///
+/// Discovery's `cluster_name` regex (`^[A-Za-z0-9._/-]+$`) permits `/`
+/// inside a single cluster name; encoding here is purely about
+/// preserving that single-segment-ness on the wire. The set below
+/// covers RFC 3986 path-segment-unsafe characters: the path delimiter
+/// `/` itself, plus the standard control / reserved characters
+/// (`#`, `?`, `%`, `<>`, `{}`, `\``, `\`, space, double-quote).
+/// Unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, `~`)
+/// pass through untouched, which keeps Discovery's logs and on-disk
+/// filenames legible for the common ASCII case.
+const CLUSTER_NAME_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'%')
+    .add(b'\\');
+
+/// Percent-encode a `cluster_name` for inclusion in a URL path
+/// segment. See [`CLUSTER_NAME_PATH_ENCODE_SET`] for the encode set.
+fn encode_cluster_name(name: &str) -> String {
+    utf8_percent_encode(name, CLUSTER_NAME_PATH_ENCODE_SET).to_string()
+}
 
 /// Default request timeout. Each `register` / `fetch` / `deregister`
 /// call must complete (including connect + read body) within this
@@ -317,7 +352,11 @@ impl DiscoveryClient {
         cluster_name: &str,
     ) -> Result<CreateClusterOutcome, DiscoveryError> {
         let signed = SignedCreate::build(wallet, cluster_name)?;
-        let url = format!("{}/clusters/{}", self.base_url, cluster_name);
+        let url = format!(
+            "{}/clusters/{}",
+            self.base_url,
+            encode_cluster_name(cluster_name),
+        );
         let resp = self.http.post(&url).json(&signed.body).send().await?;
         let status = resp.status();
         if status == reqwest::StatusCode::CREATED {
@@ -374,7 +413,11 @@ impl DiscoveryClient {
         note: Option<&str>,
     ) -> Result<ClusterDoc, DiscoveryError> {
         let signed = SignedRegister::build(wallet, cluster_name, addresses, expected_app_id, note)?;
-        let url = format!("{}/clusters/{}/peers", self.base_url, cluster_name);
+        let url = format!(
+            "{}/clusters/{}/peers",
+            self.base_url,
+            encode_cluster_name(cluster_name),
+        );
         let resp = self.http.post(&url).json(&signed.body).send().await?;
         unwrap_cluster_doc(resp).await
     }
@@ -382,7 +425,11 @@ impl DiscoveryClient {
     /// `GET /clusters/{cluster_name}` — fetch the current cluster
     /// doc. Read-only; doesn't sign anything.
     pub async fn fetch(&self, cluster_name: &str) -> Result<ClusterDoc, DiscoveryError> {
-        let url = format!("{}/clusters/{}", self.base_url, cluster_name);
+        let url = format!(
+            "{}/clusters/{}",
+            self.base_url,
+            encode_cluster_name(cluster_name),
+        );
         let resp = self.http.get(&url).send().await?;
         unwrap_cluster_doc(resp).await
     }
@@ -399,9 +446,13 @@ impl DiscoveryClient {
         cluster_name: &str,
     ) -> Result<(), DiscoveryError> {
         let signed = SignedDeregister::build(wallet, cluster_name)?;
+        // peer_id is libp2p base58 → only `[A-Za-z0-9]`, no path-
+        // breaking characters, safe to interpolate raw.
         let url = format!(
             "{}/clusters/{}/peers/{}",
-            self.base_url, cluster_name, signed.peer_id_str
+            self.base_url,
+            encode_cluster_name(cluster_name),
+            signed.peer_id_str,
         );
         let resp = self.http.delete(&url).json(&signed.body).send().await?;
         let status = resp.status();
@@ -458,7 +509,11 @@ impl DiscoveryClient {
         impl Stream<Item = Result<ClusterDoc, SubscribeError>> + Send + 'static,
         SubscribeError,
     > {
-        let url = format!("{}/clusters/{}/events", self.base_url, cluster_name);
+        let url = format!(
+            "{}/clusters/{}/events",
+            self.base_url,
+            encode_cluster_name(cluster_name),
+        );
         let resp = self
             .http
             .get(&url)
@@ -1219,5 +1274,102 @@ mod tests {
         let a = DiscoveryClient::new("http://localhost:9999");
         let b = DiscoveryClient::new("http://localhost:9999/");
         assert_eq!(a.base_url(), b.base_url());
+    }
+
+    // ─── cluster_name URL-encoding tests ─────────────────────────────
+
+    /// Greenland T1's canonical wallet-scoped Domain identity is
+    /// `{wallet_id}/{name}`. The literal `/` MUST percent-encode as
+    /// `%2F` before riding in a URL path segment, or Discovery's
+    /// router sees the slash as a path separator and returns 404
+    /// because the route shape no longer matches.
+    #[test]
+    fn cluster_name_with_slash_encodes_to_percent_2f() {
+        let encoded = encode_cluster_name("cd37e4ce2f5d911ca0c05b2d90f6a781/foo");
+        assert_eq!(encoded, "cd37e4ce2f5d911ca0c05b2d90f6a781%2Ffoo");
+    }
+
+    /// Discovery's `cluster_name` regex (`^[A-Za-z0-9._/-]+$`) permits
+    /// `.`, `_`, and `-` as unreserved path-segment characters.
+    /// Those MUST pass through the encoder un-touched so server logs
+    /// and on-disk filenames stay legible for the ASCII case.
+    #[test]
+    fn cluster_name_unreserved_chars_pass_through() {
+        let encoded = encode_cluster_name("my-lab.v2_test");
+        assert_eq!(encoded, "my-lab.v2_test");
+    }
+
+    /// Singleton names (no slash, e.g. `Vinland`) round-trip
+    /// unchanged — the pre-Greenland code path that worked must
+    /// keep working.
+    #[test]
+    fn singleton_cluster_name_round_trips_unchanged() {
+        let encoded = encode_cluster_name("Vinland");
+        assert_eq!(encoded, "Vinland");
+    }
+
+    /// Adversarial characters that would break path / query parsing
+    /// (`#`, `?`, `%`, spaces) are encoded so a malicious or buggy
+    /// cluster_name can't bleed into the query or fragment portion of
+    /// the URL.
+    #[test]
+    fn adversarial_chars_are_encoded() {
+        assert_eq!(encode_cluster_name("a b"), "a%20b");
+        assert_eq!(encode_cluster_name("a#frag"), "a%23frag");
+        assert_eq!(encode_cluster_name("a?q"), "a%3Fq");
+        assert_eq!(encode_cluster_name("a%2F"), "a%252F");
+    }
+
+    /// Smoke-test: rebuild each `DiscoveryClient` method's URL using
+    /// the same `format!` recipe the method uses, with a wallet-scoped
+    /// `cluster_name` containing a literal slash. Every URL must have
+    /// `%2F` in place of the slash and the path-segment structure
+    /// Discovery's router expects.
+    #[test]
+    fn all_url_methods_encode_cluster_name() {
+        let base = "http://discovery.test:8080";
+        let name = "wallet_id/foo";
+        let encoded = encode_cluster_name(name);
+        // peer_id placeholder — production callers pass libp2p base58
+        // which is `[A-Za-z0-9]`, no encoding needed.
+        let peer_id = "12D3KooWFakeBase58PeerIdForTest";
+
+        // create_cluster
+        let create_url = format!("{base}/clusters/{encoded}");
+        assert!(create_url.contains("%2F"));
+        assert_eq!(
+            create_url,
+            "http://discovery.test:8080/clusters/wallet_id%2Ffoo"
+        );
+
+        // register
+        let register_url = format!("{base}/clusters/{encoded}/peers");
+        assert_eq!(
+            register_url,
+            "http://discovery.test:8080/clusters/wallet_id%2Ffoo/peers"
+        );
+
+        // fetch
+        let fetch_url = format!("{base}/clusters/{encoded}");
+        assert_eq!(
+            fetch_url,
+            "http://discovery.test:8080/clusters/wallet_id%2Ffoo"
+        );
+
+        // deregister
+        let deregister_url = format!("{base}/clusters/{encoded}/peers/{peer_id}");
+        assert_eq!(
+            deregister_url,
+            format!(
+                "http://discovery.test:8080/clusters/wallet_id%2Ffoo/peers/{peer_id}"
+            )
+        );
+
+        // subscribe (events)
+        let events_url = format!("{base}/clusters/{encoded}/events");
+        assert_eq!(
+            events_url,
+            "http://discovery.test:8080/clusters/wallet_id%2Ffoo/events"
+        );
     }
 }

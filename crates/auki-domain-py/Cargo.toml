@@ -1,0 +1,77 @@
+[package]
+name = "auki-domain-py"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PyO3 bindings for `auki-domain` — exposes `init_domain` to Python daemons (BoosterApp, Sentinel) so they can construct a `ClusterRuntime` through Discovery now that `auki-network-py`'s `cluster.spawn` is gone (auki-sdk v0.0.33+, cluster-trust-boundary PR B). Greenland Phase 1 surface; Manager-role state lands on top in subsequent PRs."
+
+[lib]
+# `cdylib` makes the crate build as a Python native extension; `rlib`
+# keeps it usable from Rust (`cargo test` against the in-tree crate,
+# which links Python via the `auto-initialize` dev-feature).
+# Lib name is `auki_domain` — same as the Python module name. Distinct
+# from `auki-network-py`'s `auki_network` so the two PyO3 wrappers can
+# both live in the workspace without a lib-name collision.
+name = "auki_domain"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# `extension-module` tells PyO3 to skip linking the Python runtime —
+# symbols are resolved at import time by the host interpreter. Standard
+# pattern for native Python extensions; `maturin develop` / `maturin
+# build` enable it via `[tool.maturin]` in `pyproject.toml`.
+#
+# Default is empty on purpose: `cargo test` wants to *link* Python (via
+# the `auto-initialize` dev-feature) so `Python::with_gil` works out of
+# the box. Enabling `extension-module` would skip that link and the
+# test binary would fail to load.
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+# Renamed via `package =` so the upstream Rust crate's name doesn't
+# collide with our own lib name `auki_domain` (which is also the Python
+# module name the `#[pymodule]` macro generates the entry point for).
+auki-domain-rs = { package = "auki-domain", path = "../auki-domain" }
+# `auki-network` for `Swarm`, `SwarmConfig`, `build_swarm`,
+# `DiscoveryClient`, `ParticipantInfoProvider`, `ClusterRuntime`,
+# `decline_all_streams` — everything `init_domain` needs to build the
+# swarm internally and that the resulting `DomainHandle` proxies
+# through to. The `swarm` feature pulls in libp2p; `discovery_client`
+# pulls in the HTTP client.
+auki-network = { path = "../auki-network", features = ["swarm", "discovery_client"] }
+# `auki-identity` for `Wallet::from_seed` — the Python wrapper takes
+# 32-byte seeds at the call boundary and reconstructs the wallet from
+# them. The wallet seeds the Domain identity + Discovery signing.
+# (`PeerIdentity` comes from `auki-network`, not `auki-identity`.)
+auki-identity = { path = "../auki-identity" }
+# `PeerId` parsing on the Python ↔ Rust seam for the duck-typed
+# `participant_provider`'s `peer_id` string. Same default-features
+# set as `auki-network-py` so the dep graph collapses to one version.
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
+# `Multiaddr` parsing for the Python `listen_addresses` + `addresses`
+# kwargs. Python passes strings; the wrapper parses them.
+multiaddr = "0.18"
+# Process-wide tokio runtime owned in `OnceLock<Runtime>`. `block_on`
+# drives the async `auki_domain::init_domain` from the sync-shaped
+# Python call site. Multi-thread because the resulting `ClusterRuntime`
+# requires `Handle::try_current()` to succeed on its driver task and
+# we want `init_domain` not to block while that task makes progress.
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# `tracing::warn!` for the participant-provider closure (catches Python
+# exceptions and logs + signals `None` so the runtime drops the reply
+# channel cleanly). Default subscriber → stderr → systemd → journald;
+# filter via `RUST_LOG`.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+# `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
+# without rebuilding per minor version.
+pyo3 = { version = "0.22", features = ["abi3-py38"] }
+
+[dev-dependencies]
+# `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
+# manually starting an interpreter; needs the runtime linked, which is
+# why we don't enable it on the production extension build.
+pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

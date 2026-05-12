@@ -51,13 +51,20 @@
 //!   [`peers`][ClusterRuntime::peers]. The doc *is* the trust boundary.
 
 use crate::{
-    ParticipantInfo, PeerIdentity,
+    ParticipantInfo,
     cluster_doc::ClusterDoc,
     cluster_protocol::ClusterRequest,
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
-    swarm::{self, Behaviour, BehaviourEvent, SwarmConfig, build_swarm},
+    swarm::{self, Behaviour, BehaviourEvent},
 };
+// `PeerIdentity`, `SwarmConfig`, `build_swarm` are referenced only by
+// the in-file `#[cfg(test)] mod tests` (which builds swarms locally
+// to drive integration scenarios). Pulled in test-only to keep the
+// non-test build warning-clean now that the production-side
+// `ClusterRuntime::spawn` convenience constructor is gone.
+#[cfg(test)]
+use crate::{PeerIdentity, swarm::{SwarmConfig, build_swarm}};
 use futures::StreamExt;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, request_response,
@@ -263,44 +270,24 @@ struct PeerEntry {
 }
 
 impl ClusterRuntime {
-    /// Build a swarm from `seed` + `swarm_config`, then drive it
-    /// against `doc`. Convenience over [`Self::from_swarm`] —
-    /// equivalent to constructing the swarm manually and handing it in.
+    /// SDK-internal constructor — drives a pre-built swarm against
+    /// `doc`. **Do not call directly from application code.** The
+    /// only sanctioned public path to a `ClusterRuntime` is
+    /// `auki_domain::init_domain` (and, when it lands, `join_domain`),
+    /// which obtains `doc` from Discovery's `register` response and
+    /// hands it to this function internally.
     ///
-    /// **`seed` is the *peer* seed**, not the wallet seed. This function
-    /// constructs the swarm's keypair via
-    /// [`PeerIdentity::from_seed(&seed)`][PeerIdentity::from_seed] — i.e.
-    /// direct ed25519 from the 32 bytes — *not* via
-    /// [`PeerIdentity::from_wallet`][PeerIdentity::from_wallet]. Wallet-rooted
-    /// consumers must derive the peer wallet first
-    /// (`Wallet::derive_child(`[`PEER_DERIVATION_LABEL`][crate::PEER_DERIVATION_LABEL]`)`)
-    /// and pass `peer_wallet.seed()` here, otherwise the swarm's PeerId
-    /// won't match the wallet-derived peer identity that operators put
-    /// into `cluster.json`. (Noise rejects connection-time PeerId
-    /// mismatches; the symptom is silent dial failures.) Mirroring
-    /// rationale lives in
-    /// [`auki-identity-py`'s `Wallet::seed`](../../auki-identity-py/src/lib.rs).
-    pub fn spawn(
-        seed: [u8; 32],
-        doc: ClusterDoc,
-        swarm_config: SwarmConfig,
-        participant_provider: ParticipantInfoProvider,
-        stream_provider: StreamProvider,
-    ) -> Result<Self, SpawnError> {
-        let identity = PeerIdentity::from_seed(&seed);
-        let swarm = build_swarm(&identity, swarm_config)?;
-        Self::from_swarm(swarm, doc, participant_provider, stream_provider)
-    }
-
-    /// Drive a pre-built swarm against `doc`. The swarm should already
-    /// be listening on its configured addresses. Use this when the
-    /// caller needs to learn the swarm's bound addresses *before*
-    /// constructing the cluster doc — e.g. tests, or a daemon that
-    /// publishes its addresses out-of-band before peers can dial it.
+    /// Calling this with a `doc` not obtained from Discovery defeats
+    /// the "peers only visible within their cluster" invariant — the
+    /// cluster trust boundary depends on `ClusterDoc.peers` reflecting
+    /// Discovery's authoritative membership. This function is `pub`
+    /// only because Rust visibility doesn't have a "crate-and-one-
+    /// friend" mode; convention enforces what visibility cannot.
     ///
-    /// The `swarm` argument carries the keypair (and therefore the
-    /// PeerId) the runtime will use; same wallet-derivation caveat as
-    /// [`spawn`][Self::spawn] applies to whatever recipe constructed it.
+    /// The swarm should already be listening on its configured
+    /// addresses; the swarm's keypair (and therefore PeerId) is what
+    /// the runtime uses.
+    #[doc(hidden)]
     pub fn from_swarm(
         swarm: Swarm<Behaviour>,
         doc: ClusterDoc,

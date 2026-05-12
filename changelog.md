@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) + [`crates/auki-domain`](crates/auki-domain) + [`crates/auki-network-py`](crates/auki-network-py) — kill `cluster.json` static-config + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** Closes every bypass. `cluster_doc.rs` loader half deleted (`load`, path helpers, `LoadError`, env / default-path constants); `ClusterRuntime::spawn` deleted, `from_swarm` made `#[doc(hidden)] pub` so the only public path is `auki_domain::init_domain`. `init_domain` signature grows (takes `swarm` + the two provider closures) and returns `DomainHandle { identity, runtime }` with public fields — the `ClusterDoc` Discovery returns never leaves the SDK. `auki-network-py`'s `cluster.spawn` + `cluster.load_doc` removed; Python runtime construction blocks until `auki-domain-py` ships. Daemons (Park, BoosterApp, Sentinel) migrate per-repo. Filed: "ClusterRuntime owns its SSE subscription internally" as the next tightening.
+
 ### broodsugar's claude · May 12, 16:30 HKT, 2026
 
 **[`crates/auki-network-py`](crates/auki-network-py) — `DiscoveryClient.create_cluster` + `CreateClusterOutcome` Python binding ships.** Wraps the v0.0.30 Rust addition (PR #95) so headless Python daemons can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm. New PyClass `CreateClusterOutcome { kind: "created" | "already_exists", doc: ClusterDoc }` mirrors the Rust enum — race-loss is a typed outcome, not an exception, so the loser hands `outcome.doc` straight to a join flow without an extra `fetch`. 5 new pytest cases (surface + wrong-shape + 3 live). Unblocks [boosterapp scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) (autodiscover-or-create-default-Domain on boot — sole task in BoosterApp's Greenland slice).

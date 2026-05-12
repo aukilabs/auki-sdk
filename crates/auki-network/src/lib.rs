@@ -31,6 +31,13 @@ pub use participant::ParticipantInfo;
 #[cfg(feature = "swarm")]
 pub mod swarm;
 
+/// Re-export of `libp2p::Swarm` so downstream crates (notably
+/// `auki-domain`) can name `auki_network::Swarm<Behaviour>` in their
+/// `init_domain` / `join_domain` signatures without taking a direct
+/// `libp2p` dep.
+#[cfg(feature = "swarm")]
+pub use libp2p::Swarm;
+
 #[cfg(feature = "swarm")]
 pub mod cluster_protocol;
 

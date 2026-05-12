@@ -6,6 +6,33 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**Kill `cluster.json` static-config loader + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** PR A landed the libp2p-allow-list enforcement; this PR closes the bypass paths that let callers obtain a runtime without going through Discovery. Combined: peers only visible within their cluster, no exceptions, no fallbacks.
+
+**`cluster_doc.rs` slimmed to wire types only.** Kept: `ClusterDoc`, `ClusterPeer` (Discovery's wire shape, Manager's `/auki/registry/0.0.1` broadcast envelope), the `multiaddr_vec_serde` adapter, and `#[serde(default)]` Greenland fields (`created_ns`, `current_manager_peer_id`). Removed: `load()` (file parser), `default_path()` / `resolve_path()` (path helpers), `LoadError` enum + `Display` / `Error` / `From<io::Error>` impls, `ENV_OVERRIDE = "AUKI_CLUSTER_DOC"`, `DEFAULT_RELATIVE_PATH`, `SUPPORTED_VERSION`, `classify_parse_error`, `extract_quoted`. Tests at `tests/cluster_doc.rs` deleted. In-file unit tests retained: `round_trips_through_serde_json`, `missing_greenland_fields_default_to_zero_and_none`, `greenland_doc_carries_created_ns_and_manager`, `pretty_serialized_form_omits_none_fields` — all exercise the wire-type half that survives.
+
+**`ClusterRuntime::spawn` and `from_swarm` made internal.** `spawn` (the `seed + SwarmConfig + doc` convenience constructor) was the public path to a runtime; deleted. `from_swarm` (the `Swarm + doc` primitive `spawn` delegated to) stays as `#[doc(hidden)] pub` so `auki-domain::init_domain` can call it — Rust visibility doesn't have a "crate-and-one-friend" mode, so convention enforces what visibility can't. The hidden constructor is documented as SDK-internal; application code MUST go through `auki_domain::init_domain`.
+
+**`auki_domain::init_domain` becomes the canonical runtime constructor.** Signature grows: now takes `swarm: Swarm<Behaviour>`, `participant_provider`, `stream_provider` in addition to the previous args, and returns `DomainHandle { identity: DomainIdentity, runtime: ClusterRuntime }` with both fields public. The `ClusterDoc` Discovery's `register` returns never leaves the SDK — it goes straight into `ClusterRuntime::from_swarm`, whose `apply_initial_doc` step populates the libp2p allow-list before the event loop starts. Park's bypass-init_domain shortcut (which existed because the old `init_domain` discarded the `ClusterDoc`) becomes unnecessary; consumers stop calling `DiscoveryClient::register` directly.
+
+**`InitDomainError` gains `RuntimeSpawn(SpawnError)`** for the post-register failure path. The Discovery-side calls (`create_cluster`, `register`) have already succeeded by the time `from_swarm` runs, so a `RuntimeSpawn` failure means the cluster is created and the peer is registered but the runtime didn't construct (no tokio runtime in scope, etc.) — caller may need to deregister before retrying. Distinct from `Discovery(DiscoveryError)` and `AlreadyExists { identity, existing }` which both surface before any registration commits.
+
+**`auki-network::Swarm` re-export.** Added `pub use libp2p::Swarm` behind the `swarm` feature so `auki-domain` can name `auki_network::Swarm<Behaviour>` in `init_domain`'s signature without taking a direct `libp2p` dep. Keeps `auki-domain`'s `Cargo.toml` minimal.
+
+**`auki-network-py` strip.** Removed `cluster.spawn(seed, doc, ...)` (the runtime constructor) and `cluster.load_doc(path)` (the cluster.json file parser) Python functions, along with `map_spawn_error` / `map_load_error` and the entire test region exercising them (~190 lines). `ClusterDoc` Python class kept — it's returned by `discovery_client` methods (still public) but no longer user-constructible. Python consumers wanting to construct a `ClusterRuntime` follow when `auki-domain-py` ships (filed as a follow-up; not in this PR — the convention is "Rust types stabilize, then PyO3 wrap" per the Greenland D6 decisions). BoosterApp's Python sidecar holds at the pre-PR-B SDK pin until `auki-domain-py` lands.
+
+**Daemon-side cascade (handled in each daemon repo as follow-ups):**
+- **BoosterApp** — drop `--cluster-doc` CLI flag and `AUKI_CLUSTER_DOC` env var; route boot through `init_domain` (or T12's algorithm once `fetch_latest` + `join_domain` land).
+- **Park** — `ClusterSource::Static` variant deleted; bypass-init_domain shortcut from PR #36 removed; the `init_domain` flow returns the full handle so Park stops calling `DiscoveryClient::register` directly.
+- **Sentinel** — same as BoosterApp.
+
+**Tests** — `cargo test -p auki-network --all-features` 124 passed (down from 138 — the loader unit tests + the `tests/cluster_doc.rs` integration file went). `cargo test -p auki-domain --all-features` 12 passed. `cargo check -p auki-network-py --all-features` clean.
+
+**Filed follow-up:** `ClusterRuntime` should own its Discovery SSE subscription internally (filed in `parking_lot.md`). The last footgun this PR doesn't close: a daemon that constructs a runtime via `init_domain` but never wires up the `discovery.subscribe(cluster_name)` → `update_cluster_doc(new_doc)` loop will operate on a stale `ClusterDoc` forever, and new peers joining the cluster get denied by the allow-list with no SDK-side diagnostic. Baking the subscription into the runtime is the cleanup.
+
+**Filed follow-up:** `auki-domain-py` PyO3 wrapper for `init_domain`. Required before Python consumers (BoosterApp sidecar) can resume runtime construction post-PR-B. Currently un-tracked — surface as a parking-lot entry in `auki-network-py` when filed.
+
 ### broodsugar's claude · May 12, 12:30 HKT, 2026
 
 **Kill mDNS + wire `libp2p-allow-block-list` at the swarm layer — cluster trust boundary enforced at the libp2p plane (PR A of the resolution filed in [parking_lot.md](parking_lot.md)).** Nils's "peers should only be visible within their cluster, no fallback" decision lands the first half of the implementation: mDNS removed, allow-list wired. `cluster.json` static-config removal is PR B.

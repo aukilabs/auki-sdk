@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**[`auki-network`](auki-network) + [`auki-domain`](auki-domain) + [`auki-network-py`](auki-network-py) — kill `cluster.json` static-config loader + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** Closes every bypass: peers only visible within their cluster, no fallback. `cluster_doc::{load, default_path, resolve_path, LoadError, ENV_OVERRIDE, DEFAULT_RELATIVE_PATH, SUPPORTED_VERSION}` removed; `ClusterRuntime::spawn` removed; `from_swarm` made `#[doc(hidden)] pub` so only `auki_domain::init_domain` (the canonical public path) calls it. `init_domain` signature grows (`swarm`, `participant_provider`, `stream_provider`) and returns `DomainHandle { identity, runtime }` so the `ClusterDoc` Discovery returns never leaves the SDK. `auki-network-py::cluster.spawn` + `cluster.load_doc` removed; Python runtime construction blocks until `auki-domain-py` ships (filed). `auki-network::Swarm` re-export added so `auki-domain` doesn't need a direct libp2p dep. 124 + 12 tests green. Filed: "ClusterRuntime owns its SSE subscription internally" tightening follow-up.
+
 ### broodsugar's claude · May 12, 16:30 HKT, 2026
 
 **[`auki-network-py`](auki-network-py) — `DiscoveryClient.create_cluster` + `CreateClusterOutcome` Python binding ships.** Wraps the v0.0.30 Rust addition (PR #95) so headless Python daemons (BoosterApp's sidecar, future Sentinel headless mode) can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm without going through the typed `auki-domain::init_domain` convenience layer. New PyClass `CreateClusterOutcome { kind: "created" | "already_exists", doc: ClusterDoc }` mirrors the Rust enum — race-loss is a normal outcome, not an exception. 5 new pytest cases in [`python_tests/test_discovery.py`](auki-network-py/python_tests/test_discovery.py) (1 surface + 1 wrong-shape + 3 live integration). Unblocks BoosterApp's [scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) Greenland T12 implementation.

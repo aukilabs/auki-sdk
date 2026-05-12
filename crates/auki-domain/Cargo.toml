@@ -9,7 +9,12 @@ description = "Domain lifecycle for the Auki SDK — Domain identity (wallet-sco
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
-auki-network = { path = "../auki-network", features = ["discovery_client"] }
+# `swarm` brings the libp2p Swarm + Behaviour and the ClusterRuntime
+# constructor that `init_domain` calls into; `discovery_client` brings
+# the HTTP client `init_domain` drives. Both required — `init_domain`
+# is the sole sanctioned constructor for a `ClusterRuntime`, and it
+# can only build one by going through Discovery.
+auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
 multiaddr = "0.18"
 thiserror = "2"
 

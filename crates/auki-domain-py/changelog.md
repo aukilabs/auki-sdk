@@ -6,6 +6,23 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 14, HKT, 2026 (hotfix)
+
+**Move `build_swarm` inside the `tokio` runtime's `block_on` — fixes `netlink-sys` "no reactor running" panic on `init_domain` deploy.** Caught during the BoosterApp v0.0.34 K1 deploy: the daemon panicked at startup with
+
+```
+thread '<unnamed>' panicked at netlink-sys-0.8.8/src/tokio.rs:45:17:
+there is no reactor running, must be called from the context of a Tokio 1.x runtime
+```
+
+inside `auki_domain.init_domain`. Phase 1 + Phase 2 of `auki-domain-py` constructed the libp2p `Swarm` via `auki_network::swarm::build_swarm` **before** entering `rt.block_on(...)` — `Wallet::from_seed` + `build_swarm` ran outside the runtime, then the async `init_or_join_domain` was driven in a separate `py.allow_threads(|| rt.block_on(...))` block. The pre-v0.0.33 `auki_network.cluster.spawn` Python entry point built the swarm INSIDE the `RustClusterRuntime::spawn` call (which itself ran inside `block_on`), so the runtime-context invariant held implicitly; the `init_domain` wrapper had to make it explicit and missed.
+
+**Fix:** the `build_swarm` call moves inside the `rt.block_on(async move { ... })` async block. `netlink-sys`'s `AsyncSocket::new()` (used by `if-watch` for libp2p's network-interface enumeration) registers a `tokio::io::unix::AsyncFd` at construction time and requires the runtime to be actively *running* — `rt.enter()` alone isn't sufficient for that check to pass on every code path. Putting the construction inside the live `block_on` future ensures the reactor is driving when the AsyncFd is registered.
+
+The error-type signature gets a sibling shape — the result is now `Result<Result<DomainHandle, InitDomainError>, String>` to surface `build_swarm`'s `BuildError` separately from `InitDomainError`. Outer `Err(String)` becomes a `PyRuntimeError`; inner `Err(InitDomainError)` continues to flow through `map_init_domain_error` (the AlreadyExists / Discovery / RuntimeSpawn paths are unchanged).
+
+Test churn: existing 12 `cargo test -p auki-domain-py` cases all still pass (the unit tests exercise input validation, not the swarm-construction path). End-to-end verification happened on K1 #1: with this patch installed via `pip3 install --user --force-reinstall ~/auki-sdk-v0.0.34/crates/auki-domain-py`, the daemon successfully called `auki_domain.init_domain` against the live Discovery binary, joined the `Vinland` Domain, and the HTTP control surface came up clean (`/api/info` + `/api/cluster` both responding).
+
 ### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
 
 **`stream_provider` kwarg wired + `init_or_join_domain` becomes the underlying call.** Closes [`parking_lot.md`](parking_lot.md) #1 (stream_provider blocker). Three coordinated changes lift the entire Phase 2 surface in one cut:

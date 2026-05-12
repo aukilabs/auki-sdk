@@ -577,9 +577,19 @@ fn init_domain_py(
             .collect::<Result<Vec<_>, _>>()?,
     };
 
-    // 4. Build the wallet and the swarm. Wallet drives the Domain
+    // 4. Build the wallet + peer identity. Wallet drives the Domain
     //    identity + Discovery signing; PeerIdentity drives the
-    //    swarm's PeerId.
+    //    swarm's PeerId. `SwarmConfig` is assembled here; the actual
+    //    swarm construction (`build_swarm`) MUST happen inside the
+    //    tokio runtime context (step 7) — libp2p's transport stack
+    //    pulls in `if-watch` / `netlink-sys`, both of which call into
+    //    `tokio::net::*` at construction time and panic with "no
+    //    reactor running, must be called from the context of a Tokio
+    //    1.x runtime" if not invoked from inside `rt.enter()`. The
+    //    pre-v0.0.33 `cluster.spawn` Python function preserved this
+    //    invariant by deferring to `RustClusterRuntime::spawn` which
+    //    called `build_swarm` internally inside the guard; this
+    //    wrapper has to do it explicitly.
     let wallet = Wallet::from_seed(&wallet_seed_bytes);
     let peer_identity = PeerIdentity::from_seed(&peer_seed_bytes);
     let agent_version = agent_version
@@ -591,9 +601,6 @@ fn init_domain_py(
         // never want it.
         enable_relay_server: false,
     };
-    let swarm = build_swarm(&peer_identity, swarm_config).map_err(|e| {
-        PyRuntimeError::new_err(format!("swarm build failed: {e}"))
-    })?;
 
     // 5. Build the participant_provider closure (duck-typed Python
     //    callable; see `build_participant_provider`). `stream_provider`
@@ -617,11 +624,13 @@ fn init_domain_py(
     //    first call.
     let discovery = DiscoveryClient::new(discovery_url);
 
-    // 7. Drive the async `init_or_join_domain` on the process-wide
-    //    tokio runtime, releasing the GIL so the Python
-    //    participant_provider / stream_provider callbacks can reacquire
-    //    it when invoked from a runtime worker thread. `block_on`
-    //    returns when the call resolves.
+    // 7. Inside the tokio runtime context: build the swarm THEN drive
+    //    the async `init_or_join_domain`. The swarm construction has
+    //    to happen here (not before) because libp2p's transport stack
+    //    (`if-watch`, `netlink-sys`) requires a tokio reactor in scope
+    //    — see step 4's note. `py.allow_threads` releases the GIL so
+    //    the Python participant_provider / stream_provider callbacks
+    //    can reacquire it when invoked from a runtime worker thread.
     //
     //    `init_or_join_domain` (vs `init_domain`) collapses race-loss
     //    into the happy path — if the Domain already exists when this
@@ -634,24 +643,42 @@ fn init_domain_py(
     //    layer it on top via `auki_domain::init_domain` directly once
     //    Python wraps it (Phase 3 follow-up if/when needed).
     let wallet_for_call = wallet;
-    let result: Result<RustDomainHandle, InitDomainError> = py.allow_threads(|| {
-        let rt = domain_tokio_runtime();
-        let _guard = rt.enter();
-        rt.block_on(async {
-            rust_init_or_join_domain(
-                &wallet_for_call,
-                domain_name,
-                &discovery,
-                swarm,
-                &advertised,
-                expected_app_id.as_deref(),
-                note.as_deref(),
-                provider,
-                stream_provider,
-            )
-            .await
-        })
-    });
+    let result: Result<Result<RustDomainHandle, InitDomainError>, String> =
+        py.allow_threads(|| {
+            let rt = domain_tokio_runtime();
+            // Construct the swarm INSIDE `rt.block_on(...)` — `rt.enter()`
+            // alone is not sufficient because libp2p's transport stack
+            // pulls in `netlink-sys`, whose `AsyncSocket::new()` calls
+            // `tokio::io::unix::AsyncFd::new()`, which requires the
+            // runtime to be actively *running* (not merely entered).
+            // Without an active reactor, AsyncFd panics with "no
+            // reactor running". The async block below drives the
+            // runtime; constructing the swarm in there means netlink
+            // can register its file-descriptor watches against the
+            // live reactor.
+            rt.block_on(async move {
+                let swarm = match build_swarm(&peer_identity, swarm_config) {
+                    Ok(s) => s,
+                    Err(e) => return Err(format!("swarm build failed: {e}")),
+                };
+                Ok(rust_init_or_join_domain(
+                    &wallet_for_call,
+                    domain_name,
+                    &discovery,
+                    swarm,
+                    &advertised,
+                    expected_app_id.as_deref(),
+                    note.as_deref(),
+                    provider,
+                    stream_provider,
+                )
+                .await)
+            })
+        });
+    let result = match result {
+        Ok(inner) => inner,
+        Err(swarm_build_err) => return Err(PyRuntimeError::new_err(swarm_build_err)),
+    };
 
     let handle = result.map_err(map_init_domain_error)?;
     let identity = handle.identity.canonical_string();

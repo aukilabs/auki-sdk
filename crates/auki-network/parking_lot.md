@@ -318,3 +318,48 @@ Four pre-implementation decisions filed before the implementing PR per the [auki
 ### Decision — Python binding (`auki-network-py`) for `subscribe` + `update_cluster_doc`
 
 **Decided 2026-05-09. Not in this PR; follow-up PR after the Rust types stabilize.** Same precedent as `auki-logs-py` shipping after `auki-logs` had a tag — bind to a stable Rust surface, don't co-design two language surfaces in one PR. The boosterapp Python sidecar is the only Python consumer for now and can wait one release. Adding `subscribe` + `update_cluster_doc` wrappers to the existing `auki-network-py` is mechanical (the Rust surface is the design; PyO3 wraps it) — small follow-up PR after the implementing PR lands and gets a release tag. Confidence: high.
+
+
+---
+
+## Cluster trust boundary at the libp2p swarm layer — RESOLVED 2026-05-12 _(filed by Nils, 2026-05-12)_
+
+**Resolved by Nils (2026-05-12). Cluster membership is enforced at the libp2p swarm layer, not per-protocol. mDNS removed. `cluster.json` static config removed. Discovery is the only peer-info source — non-optional, no fallback.**
+
+**Problem (as surfaced).** Nils observed Park rendering K1 #1's `/auki/stream/0.1.0` frames without being in K1's cluster. Two mechanisms made this possible:
+1. **mDNS auto-discovery.** libp2p's `mdns::tokio::Behaviour` announces on `_p2p._udp.local.` — every LAN libp2p peer discovers every other LAN libp2p peer regardless of cluster membership.
+2. **Swarm accepts any inbound connection.** No per-connection cluster-membership check; the underlying TCP/QUIC handshake completes before any protocol handler sees who the peer is. `stream_runtime::handle_inbound_substream` then took the substream because the requesting `PeerId` arrived as `_peer` (discarded), and the `StreamProvider` closure only saw `sensor_id`. ClusterDoc declared membership but the libp2p plane never consulted it.
+
+**Resolution.** "Peers should only be visible within their cluster. NO FALLBACK." Three concrete changes:
+
+1. **Kill mDNS.** Remove `mdns` from the libp2p feature flag list in `auki-network/Cargo.toml`; remove `Toggle<mdns::tokio::Behaviour>` from the swarm `Behaviour` struct; remove `enable_mdns: bool` from `SwarmConfig`. No daemon announces on `_p2p._udp.local.` ever.
+2. **Wire `libp2p-allow-block-list` at the swarm layer.** Add `allow_list: allow_block_list::Behaviour<AllowedPeers>` to the swarm `Behaviour`. Allow-list = `ClusterDoc.peers`. Inbound and outbound connections from non-listed peer-ids denied at the libp2p `NetworkBehaviour` layer — connection attempts refused at `handle_pending_inbound_connection` / `handle_pending_outbound_connection`. The transport handshake (noise) never completes for outsiders. They see a closed socket; no protocol handler fires; no `identify` exchange leaks our peer-id. From their side we look like we don't exist.
+3. **Kill `cluster.json` static config.** Discovery is non-optional. Remove `cluster_doc::{load, default_path, resolve_path, LoadError, ENV_OVERRIDE, DEFAULT_RELATIVE_PATH, SUPPORTED_VERSION}`. The `ClusterDoc` / `ClusterPeer` *structs* stay (Discovery wire type + Manager broadcast envelope on `/auki/registry/0.0.1`); the *file-loading half* of `cluster_doc.rs` dies. Every `ClusterRuntime::spawn(...)` variant that takes a `ClusterDoc` directly is removed or made `pub(crate)` test-only. `auki-network-py`'s `cluster.load_doc(path)` goes. Tests at `tests/cluster_doc.rs` deleted.
+
+**Update mechanics.** `cluster_runtime`'s `RuntimeCmd::UpdateClusterDoc` handler already diffs old vs new peer sets and disconnects removed peers. One new step in the same handler: call `swarm.behaviour_mut().allow_list.allow_peer(p)` for each added peer and `.disallow_peer(p)` for each removed peer. On runtime spawn, populate the allow-list from the initial doc.
+
+**Bootstrap timing.** New peer B joins Park's cluster: (1) B registers with Discovery over HTTP; (2) B dials Park over libp2p — Park's allow-list hasn't seen B yet, handshake refused; (3) in parallel, Discovery's SSE pushes the updated `ClusterDoc` to Park, allow-list flips to include B; (4) B's libp2p `Dialer` retries with backoff (~hundreds of ms), the retry succeeds. No correctness issue — a small reconnect window at join time, handled by libp2p's built-in dial retry. Worth a tracing log line on refused connections ("denied: {peer} not in cluster") for operator visibility.
+
+**Bonus property.** This trust boundary covers `/auki/stream/0.1.0`, `/auki/cluster/0.0.1`, `/auki/heartbeat/0.0.1`, `/auki/registry/0.0.1`, the future `/auki/message/0.0.1`, the future `/auki/log/0.0.1` (subscription-as-materialization keystone), and anything else built on top — for free. No per-protocol accept-handler gate to remember. One mechanism, one place.
+
+**Implementation tracked across two PRs:**
+
+- **PR A** — kill mDNS + wire allow-list at the swarm layer. `cluster_runtime` populates the allow-list from `ClusterDoc.peers` on every `UpdateClusterDoc`. Internal-to-SDK; daemons that still pass a `ClusterDoc` directly continue working until PR B.
+- **PR B** — kill `cluster.json` loader + path helpers + `ClusterRuntime::spawn` ClusterDoc variants. Discovery becomes the only sanctioned constructor path. Larger blast radius — every daemon repo (BoosterApp, Park, Sentinel, dev tooling) needs a follow-up; local dev needs a local Discovery binary running.
+
+Propagate: when both PRs land, this entry stays in the parking lot as historical record of the design call. Daemon-side migrations (BoosterApp, Park's `ClusterSource::Static` variant removal, Sentinel) land in their own repos.
+
+---
+
+## `/auki/stream/0.1.0` — operator visibility into stream subscribers _(filed by Nils, 2026-05-12)_
+
+`ClusterRuntime` doesn't surface who's currently subscribed to streams from this node. Operators inspecting BoosterApp's `/api/cluster` see the cluster's peer list but not which of those peers are actively pulling frames. Made the trust-boundary issue invisible until Nils noticed Park rendering K1 #1's RGB while K1 #1 wasn't in Park's cluster — see the resolved trust-boundary entry above for the underlying fix.
+
+Post-resolution, this question stands on its own: even with the trust boundary closed, operators still want to see active fanout for debugging and capacity planning.
+
+Two halves:
+
+- **SDK side (this crate).** Add a `runtime.stream_subscribers() -> Vec<(PeerId, StreamRequest)>` accessor for currently-open inbound substreams. Lifecycle: an entry appears when `handle_inbound_substream` calls the provider with a non-`Decline` dispatch, disappears when the pump task ends (substream dropped, peer disconnected, source ended, shutdown). Bookkeeping: a `tokio::sync::RwLock<HashMap<...>>` (or actor-pattern `RuntimeCmd::ListSubscribers`) on the runtime; the pump task inserts on accept, removes on drop via a `Drop`-guard wrapper. Read-side only — no behavior change.
+- **Daemon side (out of crate).** Expose the SDK accessor via a new HTTP endpoint (e.g. `GET /api/streams/subscribers` returning JSON `[{peer_id, sensor_id}]`) in BoosterApp / Park / Sentinel control APIs. Out of scope for `auki-network`; file in each daemon repo once the SDK accessor ships.
+
+**Lean.** Ship the SDK accessor first, non-invasive. Daemons add their HTTP shims afterward. No external API surface change; the bookkeeping is internal state plus one read accessor.

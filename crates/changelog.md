@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 11:30 HKT, 2026
+
+**[`auki-network`](auki-network) — Cluster trust boundary at the libp2p swarm layer RESOLVED 2026-05-12 by Nils.** Resolution doc-only — no code change in this PR; implementing PRs A + B follow. Nils surfaced that Park was rendering K1 #1's `/auki/stream/0.1.0` frames without being in K1's cluster — root cause: libp2p mDNS auto-discovers all LAN peers and the swarm accepts any inbound handshake before any protocol handler sees who the peer is. Resolution: kill mDNS; wire `libp2p-allow-block-list` at the swarm layer with allow-list mirroring `ClusterDoc.peers`; kill `cluster.json` static config (Discovery non-optional, NO FALLBACK). One mechanism covers every libp2p protocol — stream, cluster, heartbeat, registry, future message/log — for free. Operator-visibility accessor (`runtime.stream_subscribers()`) stays filed as a separate still-open question; ships independently.
+
 ### broodsugar's claude · May 12, 09:14 HKT, 2026
 
 **[`auki-network`](auki-network) — bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's wallet-scoped Domain identities (`{wallet_id}/{name}`) have a literal `/` — interpolated raw into the URL path, Discovery's router saw four path components instead of three and returned 404 before any body validation. New `encode_cluster_name` helper applies path-segment percent-encoding (`/` → `%2F`); applied at all five sites: `create_cluster`, `register`, `fetch`, `deregister`, `subscribe`. +5 unit tests. New direct dep `percent-encoding = "2"` (already transitive via `url`/`reqwest`). Unblocks Park's first-boot user-typed Domain prompt — every user-named Domain hit 404 at `register` before this fix; only the singleton (`"Vinland"`) worked.

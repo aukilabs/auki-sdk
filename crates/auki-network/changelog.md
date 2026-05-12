@@ -6,6 +6,26 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 11:30 HKT, 2026
+
+**Cluster trust boundary at the libp2p swarm layer — RESOLVED 2026-05-12 by Nils. Filed the resolution in `parking_lot.md` + filed the still-open operator-visibility question. Doc-only — no code change in this PR.**
+
+**Problem (as surfaced).** Nils observed Park rendering K1 #1's `/auki/stream/0.1.0` frames without being in K1's cluster. Two mechanisms made this possible: (1) libp2p mDNS auto-discovers all LAN libp2p peers regardless of cluster membership; (2) the swarm accepts any inbound TCP/QUIC handshake before any protocol handler sees who the peer is. `stream_runtime::handle_inbound_substream` took the requesting `PeerId` as `_peer` (intentionally discarded) and the `StreamProvider` closure only saw `sensor_id`. The control plane (`cluster_runtime`) enforced a ClusterDoc trust boundary; the libp2p plane never consulted it.
+
+**Resolution.** _"Peers should only be visible within their cluster. NO FALLBACK."_ Three concrete changes, tracked across two implementing PRs:
+
+- **Kill mDNS.** Remove `mdns` from the libp2p feature list; remove `Toggle<mdns::tokio::Behaviour>` from the swarm `Behaviour`; remove `enable_mdns: bool` from `SwarmConfig`. No daemon announces on `_p2p._udp.local.` ever.
+- **Wire `libp2p-allow-block-list` at the swarm layer.** Add `allow_list: allow_block_list::Behaviour<AllowedPeers>` to the swarm `Behaviour`; allow-list mirrors `ClusterDoc.peers`. Inbound/outbound connections from non-listed peer-ids denied at `handle_pending_inbound_connection` / `handle_pending_outbound_connection` — the noise handshake never completes for outsiders; they see a closed socket; no protocol handler fires; no `identify` exchange leaks our peer-id. `cluster_runtime`'s existing `UpdateClusterDoc` handler gets one new step: `allow_peer` for added peers, `disallow_peer` for removed. (PR A — kills mDNS + wires the allow-list.)
+- **Kill `cluster.json` static config.** Discovery is non-optional. Remove `cluster_doc::{load, default_path, resolve_path, LoadError, ENV_OVERRIDE, DEFAULT_RELATIVE_PATH, SUPPORTED_VERSION}` and every `ClusterRuntime::spawn(...)` variant that takes a `ClusterDoc` directly. The `ClusterDoc` / `ClusterPeer` *structs* stay (Discovery wire type + Manager broadcast envelope on `/auki/registry/0.0.1`). `auki-network-py`'s `load_doc` removed. Tests at `tests/cluster_doc.rs` deleted. Daemon-side cascade (BoosterApp `--cluster-doc` flag, Park's `ClusterSource::Static` variant, Sentinel) handled in each daemon repo. (PR B — kills the loader and forces Discovery.)
+
+**Bootstrap timing.** New peer registers with Discovery over HTTP → Discovery's SSE pushes updated `ClusterDoc` to existing peers → allow-list flips to include the new peer → libp2p `Dialer`'s built-in retry handles the small reconnect window. No correctness issue.
+
+**Bonus property.** Resolution covers every libp2p protocol on the swarm — `/auki/stream/0.1.0` today, `/auki/cluster/0.0.1`, `/auki/heartbeat/0.0.1`, `/auki/registry/0.0.1`, the future `/auki/message/0.0.1`, the future `/auki/log/0.0.1` (subscription-as-materialization keystone) — for free. One mechanism, one place.
+
+**Still open: operator visibility into stream subscribers.** `runtime.stream_subscribers() -> Vec<(PeerId, StreamRequest)>` accessor for currently-open inbound substreams. Backed by a `RwLock<HashMap<...>>` (or actor-pattern `RuntimeCmd::ListSubscribers`) with `Drop`-guarded insert/remove around the pump. Daemon lift (out of crate): `GET /api/streams/subscribers` per daemon repo. Ships separately from the trust-boundary PRs — pure read-side accessor, non-invasive.
+
+Filed in [`crates/auki-network/parking_lot.md`](parking_lot.md); summary line propagated in [`crates/parking_lot.md`](../parking_lot.md). PRs A + B follow this filing.
+
 ### broodsugar's claude · May 12, 09:14 HKT, 2026
 
 **Bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's canonical wallet-scoped Domain identity is `{wallet_id}/{name}` — the literal `/` interpolated raw into a URL path produces four path components where Discovery's router expects three, returning 404 before any body validation. Discovery has handled `%2F`-encoded slashes correctly all along (its `cluster_name` regex permits `/` and axum decodes the percent-encoded form back to the original); the breakage was purely SDK-side.

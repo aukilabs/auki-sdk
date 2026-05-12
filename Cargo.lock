@@ -182,6 +182,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain-py"
+version = "0.0.0"
+dependencies = [
+ "auki-domain",
+ "auki-identity",
+ "auki-network",
+ "libp2p-identity",
+ "multiaddr",
+ "pyo3",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "auki-hash"
 version = "0.0.0"
 dependencies = [

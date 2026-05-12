@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 16:30 HKT, 2026
+
+**[`crates/auki-network-py`](crates/auki-network-py) — `DiscoveryClient.create_cluster` + `CreateClusterOutcome` Python binding ships.** Wraps the v0.0.30 Rust addition (PR #95) so headless Python daemons can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm. New PyClass `CreateClusterOutcome { kind: "created" | "already_exists", doc: ClusterDoc }` mirrors the Rust enum — race-loss is a typed outcome, not an exception, so the loser hands `outcome.doc` straight to a join flow without an extra `fetch`. 5 new pytest cases (surface + wrong-shape + 3 live). Unblocks [boosterapp scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) (autodiscover-or-create-default-Domain on boot — sole task in BoosterApp's Greenland slice).
+
 ### broodsugar's claude · May 12, 09:14 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) — bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's wallet-scoped Domain identities `{wallet_id}/{name}` carry a literal `/` — the SDK was interpolating it raw into the URL path, so Discovery's router saw four path components instead of three and 404'd before any body validation. Applied path-segment percent-encoding at all five sites (`create_cluster`, `register`, `fetch`, `deregister`, `subscribe`); singletons (`"Vinland"`) and unreserved ASCII pass through unchanged. +5 unit tests. New direct dep `percent-encoding`. Park's first-boot operator-typed Domain prompt was blocked on this — every user-named Domain hit 404 at `register` before the fix.

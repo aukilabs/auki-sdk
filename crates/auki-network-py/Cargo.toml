@@ -12,7 +12,16 @@ description = "PyO3 bindings for `auki-network`'s `ClusterRuntime` — lets a Py
 # `rlib` keeps it usable from Rust (`cargo test` against the in-tree
 # crate, which links Python at test time via the `auto-initialize`
 # feature on dev-deps).
-name = "auki_network"
+#
+# Lib name is `auki_network_py` (NOT `auki_network`) so it doesn't
+# collide with `auki-network`'s own lib name when another in-workspace
+# crate (e.g. `auki-domain-py`) wants to dep on BOTH. Cargo refuses
+# two libs with the same `[lib] name` in one direct-dep set. The
+# Python module name stays `auki_network` — `[tool.maturin]
+# module-name = "auki_network"` in `pyproject.toml` instructs maturin
+# to rename the cdylib output during wheel build, so consumers
+# continue to `import auki_network` unchanged.
+name = "auki_network_py"
 crate-type = ["cdylib", "rlib"]
 
 [features]

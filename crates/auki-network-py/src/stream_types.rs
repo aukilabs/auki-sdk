@@ -819,7 +819,15 @@ impl PyStreamDecision {
 /// the wrapper logs the offence via `tracing::warn!` and synthesizes a
 /// `Decline { reason: Other { detail: <error string> } }` so the
 /// requester sees a typed failure rather than a hung substream.
-pub(crate) fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
+///
+/// Visibility: `pub` (was `pub(crate)`) so other in-workspace PyO3
+/// wrapper crates can reuse it. Notably [`auki-domain-py`](../../auki-domain-py)
+/// wires its Python `stream_provider` kwarg through this function in
+/// its `init_domain` / `init_or_join_domain` entry points; without
+/// reaching this adapter it would have to re-implement ~500 lines of
+/// `PyStreamDecision` / `PyAcceptInfo` / `PyDeclineReason` pyclass
+/// plumbing. Promoted 2026-05-13.
+pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
     Arc::new(move |request: RustStreamRequest| {
         let py_request = PyStreamRequest { inner: request };
 

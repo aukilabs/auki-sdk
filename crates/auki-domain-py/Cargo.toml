@@ -42,6 +42,20 @@ auki-domain-rs = { package = "auki-domain", path = "../auki-domain" }
 # through to. The `swarm` feature pulls in libp2p; `discovery_client`
 # pulls in the HTTP client.
 auki-network = { path = "../auki-network", features = ["swarm", "discovery_client"] }
+# `auki-network-py`'s `build_stream_provider` Python-callable adapter
+# (was `pub(crate)`; promoted to `pub` 2026-05-13). Lets us wire the
+# Python `stream_provider` kwarg through to a Rust `StreamProvider`
+# without re-implementing the ~500 lines of `PyStreamDecision` /
+# `PyAcceptInfo` / `PyDeclineReason` pyclass plumbing it owns. The
+# crate's `[lib] name` was renamed to `auki_network_py` in the same
+# cut so it no longer collides with `auki-network`'s lib name — both
+# can be direct deps without cargo refusing the build. `default-features
+# = false` because we don't want the `extension-module` feature
+# transitively enabled on this dep path (production wheel build for
+# `auki-domain-py` enables it on the OWN crate; transitively enabling
+# it on `auki-network-py-rs` would break the `auto-initialize` test
+# linkage there).
+auki-network-py = { path = "../auki-network-py", default-features = false }
 # `auki-identity` for `Wallet::from_seed` — the Python wrapper takes
 # 32-byte seeds at the call boundary and reconstructs the wallet from
 # them. The wallet seeds the Domain identity + Discovery signing.

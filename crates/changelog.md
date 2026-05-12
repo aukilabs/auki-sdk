@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
+
+**[`auki-domain-py`](auki-domain-py) Phase 2 + [`auki-domain`](auki-domain) `init_or_join_domain` + [`auki-network-py`](auki-network-py) `[lib] name` rename + `build_stream_provider` `pub`.** Closes [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1 and #4. Three coordinated changes lift the full producer-side surface so daemons (BoosterApp, Sentinel) can fully migrate to v0.0.33+:
+
+1. **`auki-domain::init_or_join_domain`** — sibling to `init_domain`; collapses race-loss into the happy path. Producer-only daemons that don't care about Manager identity can call this and never see `AlreadyExists`. ~40 LOC; existing `init_domain` unchanged.
+2. **`auki-network-py` `[lib] name` rename** `auki_network` → `auki_network_py`. Breaks the cargo lib-name collision that prevented sibling PyO3 crates from depending on `auki-network-py`'s Rust internals. Python module name unaffected (maturin's `module-name = "auki_network"` instructs the cdylib rename during wheel build). 1 stale `module_exposes_cluster_submodule_with_documented_surface` assertion (left over from v0.0.32; expected `load_doc`/`spawn` to be present) flipped to assert their **removal** — cluster-trust-boundary regression guard.
+3. **`build_stream_provider` promoted `pub(crate)` → `pub`** in `auki-network-py` + `mod stream_types` → `pub mod stream_types`. Now reachable from sibling crates. `auki-domain-py` reuses this ~500-line Python-callable→Rust-`StreamProvider` adapter instead of duplicating it. The `stream_provider` Python kwarg on `auki_domain.init_domain` is now functional; daemons return `auki_network.cluster.StreamDecision.accept(...)` from their callback exactly as they did pre-v0.0.33.
+
+`auki-domain-py`'s `init_domain` Python entry now uses `init_or_join_domain` underneath (race-loss → happy-path join). 12 Rust unit tests pass (was 11; new test exercises the cross-crate `build_stream_provider` link). `auki-network-py` 32 tests, `auki-domain` 12 tests.
+
 ### broodsugar's claude · May 13, HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py) — new crate ships, Phase 1: `init_domain` Python entry point.** Wraps [`auki_domain::init_domain`](auki-domain/src/lib.rs) so Python daemons (BoosterApp, Sentinel) can construct a `ClusterRuntime` through Discovery now that `auki-network-py`'s `cluster.spawn` is gone (the v0.0.33 cluster-trust-boundary PR B). Surface: `auki_domain.init_domain(wallet_seed, peer_seed, discovery_url, domain_name, addresses, participant_provider, *, listen_addresses, agent_version, expected_app_id, note) -> DomainHandle`; `DomainHandle` pyclass with `.identity` / `.peers()` / `.shutdown()`; 5 typed Python exceptions (`DomainAlreadyExists`, `DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`, `RuntimeSpawnError`). `participant_provider` wrapped via duck-typed attribute access so daemons keep returning their existing `auki_network.cluster.ParticipantInfo(...)` instances unchanged. `stream_provider` deferred to Phase 2 (blocked on the `auki-network` ↔ `auki-network-py` lib-name collision — resolution paths sketched in [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1). 11 Rust unit tests pass.

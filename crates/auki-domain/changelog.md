@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 13, HKT, 2026
+
+**`init_or_join_domain` added — race-loss collapsed into the happy path.** Sibling to `init_domain`; same arg shape, different semantics. `init_domain` returns `Err(AlreadyExists)` when Discovery's atomic `create_cluster` 409s — the caller learns Manager-vs-joiner role and can branch. `init_or_join_domain` collapses both outcomes into a "I just want into this Domain" success path: whichever peer wins `create_cluster`, the caller registers against the resulting cluster and builds the runtime exactly once. The swarm is consumed exactly once regardless of which `CreateClusterOutcome` variant fires, so there's no race window in which the swarm would need rebuilding.
+
+Targeted at producer-only daemons (BoosterApp, Sentinel) that don't care about Manager identity today — Greenland's Manager-role state (T2+T3+T4+T6+T7) is still stubbed, so the create-vs-join distinction doesn't affect functional behaviour. Daemons that need the discrimination later (failover trigger, JoinRequest admission, etc.) continue calling `init_domain` and branching on `AlreadyExists`. Two public entry points cleanly separate the use-cases.
+
+Implementation is a thin variant of `init_domain` — same DomainIdentity derivation, same register + from_swarm sequence; only `create_cluster`'s `Outcome::AlreadyExists` branch is `_ = ...`'d instead of returning `Err`. No new error variant; the same `InitDomainError::{Discovery, RuntimeSpawn}` cases apply (the third — `AlreadyExists` — is unreachable from this function by construction). ~40 LOC added; existing `init_domain` unchanged.
+
 ### broodsugar's claude · May 13, 11:21 HKT, 2026
 
 **`init_domain` becomes the canonical (and only sanctioned) public `ClusterRuntime` constructor.** Pairs with the [`auki-network` PR B](../auki-network/changelog.md) that killed `cluster.json` and made `ClusterRuntime::from_swarm` `#[doc(hidden)] pub`. Together they close every bypass: peers only visible within their cluster, no fallback, no Discovery-less path.

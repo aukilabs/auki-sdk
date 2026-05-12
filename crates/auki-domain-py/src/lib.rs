@@ -52,7 +52,10 @@
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use auki_domain_rs::{init_domain as rust_init_domain, DomainHandle as RustDomainHandle, InitDomainError};
+use auki_domain_rs::{
+    init_or_join_domain as rust_init_or_join_domain, DomainHandle as RustDomainHandle,
+    InitDomainError,
+};
 use auki_identity::Wallet;
 use auki_network::cluster_runtime::{
     ClusterRuntime as RustClusterRuntime, ParticipantInfoProvider,
@@ -62,6 +65,7 @@ use auki_network::discovery_client::{DiscoveryClient, DiscoveryError};
 use auki_network::stream_runtime::decline_all_streams;
 use auki_network::swarm::{build_swarm, SwarmConfig};
 use auki_network::{ParticipantInfo as RustParticipantInfo, PeerIdentity};
+use auki_network_py::stream_types::build_stream_provider;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::create_exception;
@@ -495,7 +499,7 @@ fn build_participant_provider(callable: Py<PyAny>) -> ParticipantInfoProvider {
 #[pyfunction]
 #[pyo3(
     name = "init_domain",
-    text_signature = "(wallet_seed, peer_seed, discovery_url, domain_name, addresses, participant_provider, *, listen_addresses=None, agent_version=None, expected_app_id=None, note=None)",
+    text_signature = "(wallet_seed, peer_seed, discovery_url, domain_name, addresses, participant_provider, *, stream_provider=None, listen_addresses=None, agent_version=None, expected_app_id=None, note=None)",
     signature = (
         wallet_seed,
         peer_seed,
@@ -504,6 +508,7 @@ fn build_participant_provider(callable: Py<PyAny>) -> ParticipantInfoProvider {
         addresses,
         participant_provider,
         *,
+        stream_provider = None,
         listen_addresses = None,
         agent_version = None,
         expected_app_id = None,
@@ -519,6 +524,7 @@ fn init_domain_py(
     domain_name: &str,
     addresses: Vec<String>,
     participant_provider: Py<PyAny>,
+    stream_provider: Option<Py<PyAny>>,
     listen_addresses: Option<Vec<String>>,
     agent_version: Option<String>,
     expected_app_id: Option<String>,
@@ -591,9 +597,18 @@ fn init_domain_py(
 
     // 5. Build the participant_provider closure (duck-typed Python
     //    callable; see `build_participant_provider`). `stream_provider`
-    //    intentionally not wired in this PR — see crate-level docs.
+    //    is wired through `auki-network-py`'s `build_stream_provider`
+    //    adapter (the same adapter `auki_network.cluster.spawn` used
+    //    pre-v0.0.33); see that function for the Python `StreamDecision`
+    //    contract. Omitting the kwarg defaults to declining every
+    //    inbound substream (`decline_all_streams`), which matches the
+    //    Rust-side default and is the right behaviour for daemons that
+    //    only consume streams, never produce.
     let provider = build_participant_provider(participant_provider);
-    let stream_provider = decline_all_streams();
+    let stream_provider = match stream_provider {
+        Some(callable) => build_stream_provider(callable),
+        None => decline_all_streams(),
+    };
 
     // 6. Build the Discovery client. Sync constructor — no I/O until
     //    `init_domain` calls into it. `DiscoveryClient::new` is
@@ -602,16 +617,28 @@ fn init_domain_py(
     //    first call.
     let discovery = DiscoveryClient::new(discovery_url);
 
-    // 7. Drive the async `init_domain` on the process-wide tokio
-    //    runtime, releasing the GIL so the Python participant_provider
-    //    callback can reacquire it when invoked from a runtime worker
-    //    thread. `block_on` returns when init_domain resolves.
+    // 7. Drive the async `init_or_join_domain` on the process-wide
+    //    tokio runtime, releasing the GIL so the Python
+    //    participant_provider / stream_provider callbacks can reacquire
+    //    it when invoked from a runtime worker thread. `block_on`
+    //    returns when the call resolves.
+    //
+    //    `init_or_join_domain` (vs `init_domain`) collapses race-loss
+    //    into the happy path — if the Domain already exists when this
+    //    daemon boots (the common case for any peer except the
+    //    Domain's initial Manager), the daemon still gets a working
+    //    runtime instead of an `AlreadyExists` exception. The Python
+    //    surface deliberately doesn't distinguish create-vs-join at
+    //    the entry point because Greenland's Manager-role state is
+    //    still stubbed; daemons that need the distinction later can
+    //    layer it on top via `auki_domain::init_domain` directly once
+    //    Python wraps it (Phase 3 follow-up if/when needed).
     let wallet_for_call = wallet;
     let result: Result<RustDomainHandle, InitDomainError> = py.allow_threads(|| {
         let rt = domain_tokio_runtime();
         let _guard = rt.enter();
         rt.block_on(async {
-            rust_init_domain(
+            rust_init_or_join_domain(
                 &wallet_for_call,
                 domain_name,
                 &discovery,
@@ -770,6 +797,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("empty domain_name must reject");
             assert!(err.to_string().contains("domain_name must not be empty"));
@@ -792,6 +820,7 @@ mod tests {
                 "Vinland",
                 vec![],
                 provider,
+                None,
                 None,
                 None,
                 None,
@@ -822,6 +851,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("16-byte wallet_seed must reject");
             assert!(err.to_string().contains("wallet_seed must be exactly 32 bytes"));
@@ -842,6 +872,7 @@ mod tests {
                 "Vinland",
                 vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
                 provider,
+                None,
                 None,
                 None,
                 None,
@@ -867,6 +898,7 @@ mod tests {
                 "Vinland",
                 vec!["not-a-multiaddr".to_string()],
                 provider,
+                None,
                 None,
                 None,
                 None,
@@ -976,6 +1008,39 @@ def make():
             let callable = module.getattr("make").unwrap().call0().unwrap().unbind();
             let provider = build_participant_provider(callable);
             assert!(provider().is_none());
+        });
+    }
+
+    /// Sanity check that the re-used `build_stream_provider` adapter
+    /// from `auki-network-py` is reachable + invokable from this crate.
+    /// The adapter wraps a Python callable into a Rust `StreamProvider`;
+    /// invoking the provider against a `StreamRequest` triggers the
+    /// callable. Wrong-shape returns collapse to a `Decline` (covered
+    /// by `auki-network-py`'s own tests; we only confirm the
+    /// cross-crate wiring works here).
+    #[test]
+    fn stream_provider_adapter_reachable_from_auki_domain_py() {
+        Python::with_gil(|py| {
+            // A trivial callable that returns `None`. The adapter
+            // catches that as a wrong-shape return and synthesizes a
+            // typed `Decline`. We don't reach into the Rust enum
+            // shape here — we just exercise that the `pub` adapter is
+            // wired and doesn't blow up.
+            let module = PyModule::from_code_bound(
+                py,
+                "def make():\n    return lambda req: None\n",
+                "sp.py",
+                "sp",
+            )
+            .expect("module");
+            let callable = module.getattr("make").unwrap().call0().unwrap().unbind();
+            let _provider = build_stream_provider(callable);
+            // The Arc is constructed; not invoked here (would require
+            // a `RustStreamRequest` we'd have to fabricate). The fact
+            // that the call compiles + links proves the lib-name
+            // rename of `auki-network-py` to `auki_network_py`
+            // worked and the `pub mod stream_types` exposure is
+            // reachable.
         });
     }
 }

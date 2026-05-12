@@ -364,6 +364,80 @@ pub async fn init_domain(
     Ok(DomainHandle { identity, runtime })
 }
 
+/// Create a new Domain **or** join the existing one, register the
+/// local daemon, and return a [`DomainHandle`] owning the live cluster
+/// runtime. Race-loss is collapsed into the happy path: whichever peer
+/// wins the atomic `create_cluster`, the local daemon registers against
+/// the resulting cluster and builds its runtime exactly once.
+///
+/// Versus [`init_domain`]: `init_domain` returns
+/// [`InitDomainError::AlreadyExists`] on race-loss so the caller can
+/// distinguish Manager-vs-joiner role and react explicitly.
+/// `init_or_join_domain` is the "I just want into this Domain, I don't
+/// care who built it" sibling — daemons that don't care about Manager
+/// identity (most producer-only daemons today, since Greenland's
+/// Manager-role state is stubbed) reach for this directly. When the
+/// Manager-role state lands (Greenland T2+T3+T4+T6+T7), this function
+/// stays useful for the "ride whoever is the current Manager" case;
+/// daemons that need to know their role at boot continue calling
+/// `init_domain` and branch on `AlreadyExists`.
+///
+/// Sequence:
+/// 1. Build the [`DomainIdentity`] from `wallet` + `name`.
+/// 2. Call `DiscoveryClient::create_cluster`. Either `Created` (this
+///    peer is the initial Manager) or `AlreadyExists` (the cluster
+///    already exists) — both treated as success here.
+/// 3. Call `DiscoveryClient::register` against the (now-existing)
+///    cluster, capture the fresh `ClusterDoc`.
+/// 4. Build the runtime via `ClusterRuntime::from_swarm`.
+/// 5. Return [`DomainHandle { identity, runtime }`][DomainHandle].
+///
+/// The swarm is consumed exactly once regardless of which branch fires,
+/// so there's no race window in which the swarm needs rebuilding.
+///
+/// Parameter shape matches [`init_domain`] verbatim; see that function
+/// for argument-by-argument documentation (including the SSE
+/// subscription note — same caveat applies, the daemon must drive
+/// `handle.runtime.update_cluster_doc(...)` from
+/// `discovery.subscribe(...)` to keep the libp2p allow-list in sync
+/// with cluster-membership changes).
+pub async fn init_or_join_domain(
+    wallet: &Wallet,
+    name: &str,
+    discovery: &DiscoveryClient,
+    swarm: Swarm<Behaviour>,
+    addresses: &[Multiaddr],
+    expected_app_id: Option<&str>,
+    note: Option<&str>,
+    participant_provider: ParticipantInfoProvider,
+    stream_provider: StreamProvider,
+) -> Result<DomainHandle, InitDomainError> {
+    let identity = if name == SINGLETON_DOMAIN_NAME {
+        DomainIdentity::singleton()
+    } else {
+        DomainIdentity::user_named(wallet, name)
+    };
+
+    let cluster_name = identity.canonical_string();
+
+    // Collapse Created and AlreadyExists into one path. `_` on the
+    // outcome is deliberate — we don't need the returned doc here
+    // because `register` returns a fresh one with the local peer
+    // included. The single round-trip-of-information is "did the
+    // cluster exist after this call?" — yes, regardless of which
+    // variant fired.
+    let _ = discovery.create_cluster(wallet, &cluster_name).await?;
+
+    let doc = discovery
+        .register(wallet, &cluster_name, addresses, expected_app_id, note)
+        .await?;
+
+    let runtime =
+        ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)?;
+
+    Ok(DomainHandle { identity, runtime })
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]

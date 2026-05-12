@@ -188,6 +188,7 @@ dependencies = [
  "auki-domain",
  "auki-identity",
  "auki-network",
+ "auki-network-py",
  "libp2p-identity",
  "multiaddr",
  "pyo3",

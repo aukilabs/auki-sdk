@@ -27,10 +27,16 @@
 
 // Path 1 (locked) for grimsby's `stream_provider` Python binding —
 // bridges Python `async def` generators onto Rust `futures::Stream`.
-// Public surface stays inside this crate; consumers call through
-// `cluster.spawn(..., stream_provider=...)` and `runtime.open_stream`.
+// `stream_bridge` stays crate-private — it's an internal pyo3-async
+// runtime helper. `stream_types` was promoted to `pub` 2026-05-13 so
+// sibling PyO3 wrapper crates (notably `auki-domain-py`) can reach
+// `build_stream_provider` and reuse the Python-callable→Rust-
+// `StreamProvider` adapter instead of re-implementing the ~500-line
+// PyStream* pyclass plumbing it owns. Python consumers continue to
+// call through `cluster.*` / `discovery.*` / future `auki_domain.*`
+// submodules; the `pub mod` exposure is a Rust-side seam only.
 mod stream_bridge;
-mod stream_types;
+pub mod stream_types;
 
 // Vinland Batch 2 — the `auki_network.discovery` Python submodule
 // wrapping `auki_network::discovery_client::DiscoveryClient`.
@@ -688,13 +694,25 @@ mod tests {
             populate_module(&module).unwrap();
 
             let cluster = module.getattr("cluster").unwrap();
-            // Ansuz surface (v0.0.14).
+            // Ansuz surface (v0.0.14). Note: `load_doc` and `spawn`
+            // were removed in v0.0.33's PR B (cluster trust boundary)
+            // — Python runtime construction lives in `auki-domain-py`
+            // now (`auki_domain.init_domain`). The pyclasses below
+            // are still returned by Discovery and threaded through
+            // `init_domain`'s internals; this test pins the surface
+            // post-PR-B.
             assert!(cluster.getattr("ParticipantInfo").is_ok());
             assert!(cluster.getattr("PeerSnapshot").is_ok());
             assert!(cluster.getattr("ClusterDoc").is_ok());
             assert!(cluster.getattr("ClusterRuntime").is_ok());
-            assert!(cluster.getattr("load_doc").is_ok());
-            assert!(cluster.getattr("spawn").is_ok());
+            assert!(
+                cluster.getattr("load_doc").is_err(),
+                "load_doc was removed in v0.0.33; if it's back, the cluster trust boundary regressed"
+            );
+            assert!(
+                cluster.getattr("spawn").is_err(),
+                "spawn was removed in v0.0.33; if it's back, the cluster trust boundary regressed — Python runtime construction must go through auki_domain.init_domain"
+            );
             // Grimsby Stream<T> surface (deliverable #4 / v0.0.17) +
             // Dagaz Batch 2 PointCloudFrame (v0.0.21).
             assert!(cluster.getattr("StreamRequest").is_ok());

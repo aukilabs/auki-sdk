@@ -27,7 +27,7 @@ app_instance = ["dep:mac_address"]
 # only — the caller drives a tokio runtime; the SDK does not own one.
 # Opt-in because it's a fairly heavy dep set that not every consumer
 # needs.
-discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio"]
+discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio", "dep:percent-encoding"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -77,6 +77,11 @@ auki-jcs = { path = "../auki-jcs", optional = true }
 # rejects. Pure parser; no HTTP knowledge of its own. Pulled in
 # only with `discovery_client`.
 eventsource-stream = { version = "0.2", optional = true }
+# Path-segment percent-encoding for cluster_name. Greenland T1's
+# wallet-scoped Domain identities are `{wallet_id}/{name}` — the literal
+# slash must be encoded as `%2F` before riding in a URL path segment, or
+# Discovery's router sees four path components instead of three and 404s.
+percent-encoding = { version = "2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

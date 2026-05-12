@@ -503,6 +503,16 @@ async fn run_task(
         .map(|p| (p.peer_id, p.addresses.clone()))
         .collect();
 
+    // Populate the swarm's libp2p allow-list with the initial doc's
+    // peers BEFORE any inbound connection can complete the noise
+    // handshake. Empty allow-list = swarm refuses every handshake;
+    // by design, a runtime that hasn't seen its doc yet is invisible.
+    // Subsequent updates flow through `apply_doc_update` which keeps
+    // the allow-list synchronised with `ClusterDoc.peers`.
+    for pid in known_peers.keys() {
+        swarm.behaviour_mut().allow_list.allow_peer(*pid);
+    }
+
     // Initial dial schedule. Peers with at least one address are
     // dialed immediately on first tick; address-less entries are
     // honoured as trusted (we'll respond to them if they dial us) but
@@ -760,29 +770,36 @@ fn apply_doc_update(
     let removed: Vec<PeerId> = old_peer_ids.difference(&new_peer_ids).copied().collect();
 
     // Dropped peers — disconnect, drop scheduling state, evict from
-    // the participant map. Order matters only for observability:
-    // disconnect first so any in-flight cluster-protocol exchanges
-    // fail fast, then forget the peer.
+    // the participant map, and pull from the swarm's allow-list so
+    // any future connection attempts (theirs or ours-on-retry) are
+    // refused at the libp2p layer. Order matters only for
+    // observability: disconnect first so any in-flight
+    // cluster-protocol exchanges fail fast, then forget the peer.
     for pid in &removed {
         // `disconnect_peer_id` is best-effort. If the peer wasn't
         // connected (or never was), it returns Err — fine, nothing
         // to disconnect. The schedule + known_peers + state cleanup
         // below run regardless.
         let _ = swarm.disconnect_peer_id(*pid);
+        swarm.behaviour_mut().allow_list.disallow_peer(*pid);
         schedules.remove(pid);
         known_peers.remove(pid);
         let mut state = state.lock().expect("state mutex poisoned");
         state.peers.remove(pid);
     }
 
-    // New peers — schedule for immediate dial (matches the initial
-    // `from_swarm` schedule shape), but only if the new doc carries
-    // at least one address for them. Address-less entries are
-    // accepted as trusted (we'll respond if they dial us) but not
-    // auto-dialed — same convention `run_task` uses for the initial
-    // schedule.
+    // New peers — add to the swarm's allow-list FIRST so that any
+    // inbound dial that races our outbound dial completes the libp2p
+    // handshake (otherwise the inbound would be refused at
+    // `handle_established_inbound_connection`). Then schedule for
+    // immediate dial (matches the initial `from_swarm` schedule shape),
+    // but only if the new doc carries at least one address for them.
+    // Address-less entries are accepted as trusted (we'll respond if
+    // they dial us) but not auto-dialed — same convention `run_task`
+    // uses for the initial schedule.
     let now = Instant::now();
     for pid in &added {
+        swarm.behaviour_mut().allow_list.allow_peer(*pid);
         // Find the addresses for this new peer in `new_doc`.
         let addrs = new_doc
             .peers
@@ -902,7 +919,6 @@ mod tests {
         SwarmConfig {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
-            enable_mdns: false,
             enable_relay_server: false,
         }
     }

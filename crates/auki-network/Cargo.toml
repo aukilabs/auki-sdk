@@ -15,7 +15,7 @@ default = []
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
 # under swarm — protobuf handles binary natively.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:prost"]
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:prost"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -37,7 +37,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # `swarm` feature
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "mdns", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
+# Cluster trust boundary at the libp2p layer. Inbound and outbound
+# connections from peer-ids not on `ClusterDoc.peers` are refused at
+# the `NetworkBehaviour` layer — the noise handshake completes (libp2p
+# constraint: peer-id is bound to the pubkey in noise) but no
+# protocol-level event fires, so outsiders never reach `identify`,
+# `/auki/cluster/0.0.1`, `/auki/stream/0.1.0`, or anything else on the
+# swarm. `cluster_runtime` populates the allow-list from
+# `ClusterDoc.peers` on spawn and on every Discovery-SSE update.
+# Not exposed as a feature on the `libp2p` umbrella crate; depend
+# directly. Version paired with libp2p 0.56.
+libp2p-allow-block-list = { version = "0.6", optional = true }
 # `libp2p-stream` ships separately (the libp2p umbrella crate doesn't re-export
 # it). 0.4.0-alpha pairs with libp2p 0.56 / libp2p-swarm 0.47. Pre-1.0; pin
 # exactly until libp2p stabilizes the surface.

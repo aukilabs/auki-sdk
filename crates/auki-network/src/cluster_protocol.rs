@@ -139,7 +139,6 @@ mod tests {
         SwarmConfig {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
-            enable_mdns: false,
             enable_relay_server: false,
         }
     }
@@ -160,10 +159,17 @@ mod tests {
     async fn two_peers_exchange_participant_info_over_tcp() {
         let id_a = PeerIdentity::from_seed(&[20u8; 32]);
         let id_b = PeerIdentity::from_seed(&[21u8; 32]);
+        let pid_a = id_a.peer_id();
         let pid_b = id_b.peer_id();
 
         let mut a = build_swarm(&id_a, test_tcp_config("test-a/0")).unwrap();
         let mut b = build_swarm(&id_b, test_tcp_config("test-b/0")).unwrap();
+        // Mutually allow-list so the libp2p handshake completes.
+        // Production cluster_runtime does this from ClusterDoc.peers
+        // on spawn; this test exercises cluster_protocol directly
+        // without a runtime, so we wire it manually.
+        a.behaviour_mut().allow_list.allow_peer(pid_b);
+        b.behaviour_mut().allow_list.allow_peer(pid_a);
 
         let b_info = fixture_info(pid_b);
 

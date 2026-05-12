@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 12:30 HKT, 2026
+
+**[`auki-network`](auki-network) + [`auki-network-py`](auki-network-py) — kill mDNS + wire `libp2p-allow-block-list` at the swarm layer (PR A of the cluster-trust-boundary resolution).** Nils's "peers only visible within their cluster, no fallback" decision lands the libp2p-layer enforcement. `mdns::tokio::Behaviour` removed from the swarm `Behaviour`; `mdns` feature removed from `libp2p` deps; `enable_mdns: bool` field removed from `SwarmConfig`. New `allow_list: allow_block_list::Behaviour<AllowedPeers>` on the swarm — empty at build time (dark by default), populated by `cluster_runtime` from `ClusterDoc.peers` on spawn and on every SSE update. Inbound and outbound connections from non-listed peer-ids refused at the libp2p `NetworkBehaviour` layer — outsiders see a closed socket, no protocol-level event ever fires. One mechanism covers every libp2p protocol on the swarm. New direct dep `libp2p-allow-block-list = "0.6"`. +2 unit tests in `swarm` (138 passed total, up from 132). `auki-network-py::cluster.spawn` drops the matching `enable_mdns` kwarg. PR B (kill `cluster.json` static config) follows.
+
 ### broodsugar's claude · May 12, 09:14 HKT, 2026
 
 **[`auki-network`](auki-network) — bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's wallet-scoped Domain identities (`{wallet_id}/{name}`) have a literal `/` — interpolated raw into the URL path, Discovery's router saw four path components instead of three and returned 404 before any body validation. New `encode_cluster_name` helper applies path-segment percent-encoding (`/` → `%2F`); applied at all five sites: `create_cluster`, `register`, `fetch`, `deregister`, `subscribe`. +5 unit tests. New direct dep `percent-encoding = "2"` (already transitive via `url`/`reqwest`). Unblocks Park's first-boot user-typed Domain prompt — every user-named Domain hit 404 at `register` before this fix; only the singleton (`"Vinland"`) worked.

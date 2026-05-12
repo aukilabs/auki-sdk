@@ -84,7 +84,8 @@
 use crate::ClusterDoc;
 use crate::cluster_tokio_runtime;
 use auki_network_rs::discovery_client::{
-    DiscoveryClient as RustDiscoveryClient, DiscoveryError as RustDiscoveryError,
+    CreateClusterOutcome as RustCreateClusterOutcome, DiscoveryClient as RustDiscoveryClient,
+    DiscoveryError as RustDiscoveryError,
 };
 use multiaddr::Multiaddr;
 use pyo3::create_exception;
@@ -255,6 +256,52 @@ impl DiscoveryClient {
         }
     }
 
+    /// `POST /clusters/{cluster_name}` — atomically create a cluster.
+    /// `seed` is the **parent** wallet seed; the wrapper signs with the
+    /// caller's wallet so Discovery can identify and record the
+    /// initial Manager (Greenland T1 / T8 — singleton-cluster bootstrap
+    /// path on the way to wallet-scoped Domains).
+    ///
+    /// Returns a [`CreateClusterOutcome`] tagged with `kind` ==
+    /// `"created"` (HTTP 201; signing peer became initial Manager) or
+    /// `"already_exists"` (HTTP 409; another peer beat this call to
+    /// creation). On `already_exists`, the returned outcome carries
+    /// the winner's [`ClusterDoc`] parsed from Discovery's
+    /// `{ error: "already_exists", existing: ClusterDoc }` body — the
+    /// loser hands `outcome.doc` straight to a join flow without an
+    /// extra `fetch`. Daemons implementing the Greenland T12
+    /// `try-join → create-if-none → fall-back-to-join` algorithm
+    /// branch on `kind` after `create_cluster` returns.
+    ///
+    /// Sync-blocking. Raises the same exceptions as `register` for
+    /// non-409 transport / parse / status failures.
+    #[pyo3(text_signature = "($self, seed, cluster_name)")]
+    fn create_cluster(
+        &self,
+        py: Python<'_>,
+        seed: &Bound<'_, PyBytes>,
+        cluster_name: &str,
+    ) -> PyResult<CreateClusterOutcome> {
+        let wallet = wallet_from_seed_bytes(seed)?;
+        let inner = self.inner.clone();
+        let cluster_name = cluster_name.to_string();
+        let result = py.allow_threads(|| {
+            let rt = cluster_tokio_runtime();
+            rt.block_on(async move { inner.create_cluster(&wallet, &cluster_name).await })
+        });
+        match result {
+            Ok(RustCreateClusterOutcome::Created(doc)) => Ok(CreateClusterOutcome {
+                kind: "created",
+                doc: ClusterDoc { inner: doc },
+            }),
+            Ok(RustCreateClusterOutcome::AlreadyExists { existing }) => Ok(CreateClusterOutcome {
+                kind: "already_exists",
+                doc: ClusterDoc { inner: existing },
+            }),
+            Err(e) => Err(map_discovery_error(e)),
+        }
+    }
+
     /// `GET /clusters/{cluster_name}` — fetch the current cluster doc.
     /// Read-only; doesn't sign anything.
     ///
@@ -308,6 +355,48 @@ impl DiscoveryClient {
     }
 }
 
+// ─── CreateClusterOutcome ────────────────────────────────────────────────────────────────
+
+/// Outcome of [`DiscoveryClient.create_cluster`]. Mirrors the Rust enum
+/// `auki_network::discovery_client::CreateClusterOutcome`.
+///
+/// `kind` is the discriminator string — `"created"` (HTTP 201; this
+/// peer became initial Manager) or `"already_exists"` (HTTP 409;
+/// another peer beat this call to creation). `doc` carries the
+/// resulting [`ClusterDoc`] in either case — the winner's state in
+/// the `already_exists` case, parsed from Discovery's
+/// `{ error: "already_exists", existing: ClusterDoc }` body so the
+/// loser can hand it straight to a join flow without an extra
+/// `fetch`.
+///
+/// Greenland T12's `try-join → create-if-none → fall-back-to-join`
+/// algorithm branches on `kind` after `create_cluster` returns:
+/// `"created"` → register against `doc` as the initial Manager;
+/// `"already_exists"` → register against `doc` as a joiner.
+#[pyclass(frozen)]
+#[derive(Clone, Debug)]
+pub struct CreateClusterOutcome {
+    /// `"created"` (201) or `"already_exists"` (409).
+    #[pyo3(get)]
+    pub kind: &'static str,
+    /// Newly-created cluster doc on `created`, or the winning peer's
+    /// existing cluster doc on `already_exists`. Either way, callable
+    /// callers can register against this doc.
+    #[pyo3(get)]
+    pub doc: ClusterDoc,
+}
+
+#[pymethods]
+impl CreateClusterOutcome {
+    fn __repr__(&self) -> String {
+        format!(
+            "CreateClusterOutcome(kind={:?}, doc=<{} peers>)",
+            self.kind,
+            self.doc.peer_count(),
+        )
+    }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────────────────
 
 fn wallet_from_seed_bytes(seed: &Bound<'_, PyBytes>) -> PyResult<auki_identity::Wallet> {
@@ -337,6 +426,7 @@ fn parse_multiaddrs(addrs: &[String]) -> PyResult<Vec<Multiaddr>> {
 
 pub(crate) fn register_module(py: Python<'_>, discovery: &Bound<'_, PyModule>) -> PyResult<()> {
     discovery.add_class::<DiscoveryClient>()?;
+    discovery.add_class::<CreateClusterOutcome>()?;
     discovery.add(
         "DiscoveryUnreachable",
         py.get_type_bound::<DiscoveryUnreachable>(),

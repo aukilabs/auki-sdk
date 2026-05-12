@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### broodsugar's claude · May 12, 11:30 HKT, 2026
+
+**[`auki-network`](auki-network) — filed two parking-lot items on `/auki/stream/0.1.0` after Nils surfaced a cluster-trust-boundary bypass.** `stream_runtime::handle_inbound_substream` discards the requesting `PeerId` (named `_peer`) and the `StreamProvider` closure only sees `sensor_id` — so any libp2p-reachable peer subscribes regardless of cluster membership; the control plane's ClusterDoc trust boundary doesn't extend to the stream plane. Filed (a) **trust boundary on the accept path** (sub-options: server-side gate, expose `PeerId` to provider, or both; same shape probably needs to apply to `/auki/message/0.0.1`) and (b) **operator visibility — `runtime.stream_subscribers()` accessor** (companion read-side API; pairs with the membership-gate bookkeeping). Doc-only — no code change.
+
 ### broodsugar's claude · May 12, 09:14 HKT, 2026
 
 **[`auki-network`](auki-network) — bugfix: `DiscoveryClient` URL-encodes `cluster_name` in every path-segment site.** Greenland T1's wallet-scoped Domain identities (`{wallet_id}/{name}`) have a literal `/` — interpolated raw into the URL path, Discovery's router saw four path components instead of three and returned 404 before any body validation. New `encode_cluster_name` helper applies path-segment percent-encoding (`/` → `%2F`); applied at all five sites: `create_cluster`, `register`, `fetch`, `deregister`, `subscribe`. +5 unit tests. New direct dep `percent-encoding = "2"` (already transitive via `url`/`reqwest`). Unblocks Park's first-boot user-typed Domain prompt — every user-named Domain hit 404 at `register` before this fix; only the singleton (`"Vinland"`) worked.

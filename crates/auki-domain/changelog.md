@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:45 HKT, 2026
+
+**SDK-T2 lands — `ClusterManager` ships with `create_cluster` + `admit_peer` + `participant_info` + Manager-side Discovery heartbeat.** New `cluster_manager` module. `ClusterManager` owns the cluster's `ClusterMembership`, the libp2p `NetworkRuntime` (from `auki-network`), the `DiscoveryClient`, and a Manager-side Discovery heartbeat tick (3s cadence — matches the v1 contract's 10s sweep). Surface:
+
+- `ClusterManager::create_cluster(name, identity, multiaddrs, discovery, swarm, stream_provider)` — atomic create on Discovery, initialize membership with self as the sole member, spawn the runtime, spawn the heartbeat tick. Returns the handle.
+- Accessors: `cluster_name`, `local_peer_id`, `is_manager`, `manager_peer_id`, `membership`, `peer_count`.
+- `admit_peer(peer_id, multiaddrs) -> ClusterMember` — Manager-only; appends to membership, pushes the updated allow-list to the runtime. Duplicate admit returns `AdmitError::AlreadyMember`. Non-Manager admit returns `AdmitError::NotManager { cluster, manager }`. v1 successor token is empty bytes (signature verification disabled per Discovery v1 contract); SDK-T4 swaps in a real signed token.
+- `participant_info(daemon_info) -> ParticipantInfo` — builds the `/api/info` JSON shape with cluster-aware fields (`is_manager`, `manager_peer_id`, `peer_id`) populated by the SDK; daemon supplies its own identity fields via `DaemonInfo`. Per BA-Q3.
+- `shutdown(self)` — cancels the heartbeat tick, deregisters from Discovery (if we're the Manager), shuts down the runtime.
+
+End-to-end live integration test against the running Discovery at `192.168.9.130:8080` verifies the full lifecycle: create → accessors → participant_info shape → admit_peer + duplicate rejection → heartbeat keeps Discovery's entry alive past the 10s sweep window (test waits 12s and asserts the cluster is still there) → shutdown deregisters cleanly. Two unit tests + 1 integration test (ignored by default).
+
+**Not in this commit** (deferred to follow-up PRs): the libp2p join protocol (SDK-T3 — needed for `join_cluster`), peer-side heartbeat (SDK-T5), cluster-internal election (SDK-T6), Manager-handoff orchestration (SDK-T7), signed successor tokens (SDK-T4, blocked on SDK-Q3), anti-entropy / reconciliation / last-writer-wins (SDK-Q5 deeper convergence). `join_cluster` as a method is not yet exposed — only `create_cluster` works end-to-end.
+
+New deps: `tokio` (was dev-only) elevated to a runtime dep for the heartbeat tick (`rt`/`time`/`macros` features); `libp2p` + `futures` added to dev-deps for the integration test (waits for the swarm's OS-chosen listen port before construction).
+
 ### Nils's claude · May 13, 09:45 HKT, 2026
 
 **Hagall SDK-T1 — `ClusterMembership` type + serde lands.** New `cluster_membership` module: `ClusterMembership { cluster_name, peers: Vec<ClusterMember> }` carries the cluster's authoritative membership document. `ClusterMember` fields = `peer_id: PeerId`, `multiaddrs: Vec<Multiaddr>`, `join_ts_ns: i64`, `successor_token: Option<Vec<u8>>` (opaque per SDK-Q3 still being open; v1 Discovery contract skips signature verification entirely, so empty bytes are fine for the demo). serde JSON with the same Multiaddr-as-string adapter as `auki-network`'s `ClusterDoc`. `ClusterMembership::filename()` returns `<cluster_name>.json` — the wire/disk filename per Hagall convention; the `foo.json` of the Hagall demo cluster is exactly that, no special-casing. `ClusterMembership::admit(member)` appends in admission order and returns the index. 9 unit tests cover round-trip (with peers, empty cluster, member-without-token, empty-multiaddrs), peer-order preservation, filename derivation, and a wire-shape-locked test that pins JSON key names against rename. 1 new doctest. **Greenland's `ClusterDoc` is untouched** — per SDK-Q1's resolution (replace), the deletion of `init_domain` / `init_or_join_domain` / Greenland-era types lands in a follow-up breaking PR once Hagall is functional end-to-end. New deps: `libp2p-identity` (with `serde` feature for canonical `PeerId` strings), `serde` (derive), and `serde_json` (dev). All 21 existing tests still pass; 0 new clippy warnings.

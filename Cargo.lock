@@ -176,6 +176,8 @@ version = "0.0.0"
 dependencies = [
  "auki-identity",
  "auki-network",
+ "futures",
+ "libp2p",
  "libp2p-identity",
  "multiaddr",
  "serde",
@@ -189,10 +191,15 @@ name = "auki-domain-py"
 version = "0.0.0"
 dependencies = [
  "auki-domain",
+ "auki-identity",
+ "auki-network",
+ "futures",
+ "libp2p",
  "libp2p-identity",
  "multiaddr",
  "pyo3",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

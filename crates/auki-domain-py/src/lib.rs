@@ -1,49 +1,55 @@
 //! Python bindings for `auki-domain`.
 //!
-//! Exposes `ClusterMembership` and `ClusterMember` so Python daemons
-//! can construct, read, mutate, and JSON-round-trip the authoritative
-//! cluster-membership document the Manager owns.
-//!
 //! Surface (under the `auki_domain` Python module):
 //!
-//! - `ClusterMember(peer_id, multiaddrs, join_ts_ns, successor_token=None)`
-//!   — value-type pyclass mirroring the Rust struct of the same name.
-//! - `ClusterMembership(cluster_name)` + `.peers`, `.admit(member)`,
-//!   `.filename`, `.to_json()`, `ClusterMembership.from_json(s)` —
-//!   matches the Rust API one-to-one.
-//!
-//! Strings on the boundary: `peer_id` is the canonical libp2p
-//! peer-id string; `multiaddrs` are the canonical text form
-//! (`/ip4/.../tcp/...`). The wrapper parses these at construction
-//! and re-stringifies them on read so Python code never sees a raw
-//! byte buffer.
+//! - `ClusterMembership` / `ClusterMember` — value-type pyclasses
+//!   mirroring the Rust types.
+//! - `DaemonInfo` — value-type pyclass the daemon constructs and
+//!   passes to `ClusterManager.participant_info`.
+//! - `ParticipantInfo` — the SDK-provided `/api/info` wire shape;
+//!   produced by `ClusterManager.participant_info`. Has a
+//!   `.to_json()` method daemons serve verbatim on their HTTP
+//!   surface.
+//! - `ClusterManager(...)` — the daemon-side cluster handle. Sync
+//!   constructor (`create_cluster`) and methods, each `block_on`s
+//!   on a process-wide multi-thread tokio runtime.
 
-use auki_domain_rs::{ClusterMember, ClusterMembership};
+use auki_domain_rs::{
+    AdmitError as RustAdmitError, ClusterManager as RustClusterManager,
+    ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
+    CreateClusterError as RustCreateClusterError, DaemonInfo as RustDaemonInfo,
+};
+use auki_identity::Wallet;
+use auki_network::ParticipantInfo as RustParticipantInfo;
+use auki_network::PeerIdentity;
+use auki_network::discovery_client::DiscoveryClient;
+use auki_network::stream_runtime::decline_all_streams;
+use auki_network::swarm::{SwarmConfig, build_swarm};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::runtime::Runtime;
+
+// ─── Process-wide tokio runtime ────────────────────────────────────
+
+fn shared_runtime() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| Runtime::new().expect("tokio runtime starts"))
+}
 
 // ─── ClusterMember pyclass ─────────────────────────────────────────
 
-/// One peer in a `ClusterMembership` document.
 #[pyclass(name = "ClusterMember")]
 #[derive(Clone)]
 pub struct PyClusterMember {
-    inner: ClusterMember,
+    inner: RustClusterMember,
 }
 
 #[pymethods]
 impl PyClusterMember {
-    /// Construct a new member.
-    ///
-    /// - `peer_id`: canonical libp2p peer-id string (e.g. `"12D3KooW…"`).
-    /// - `multiaddrs`: list of canonical multiaddr strings.
-    /// - `join_ts_ns`: unix nanoseconds at which the Manager admitted
-    ///   this peer.
-    /// - `successor_token`: optional opaque bytes; `None` for v1 demo
-    ///   peers (the v1 Discovery contract skips signature verification).
     #[new]
     #[pyo3(signature = (peer_id, multiaddrs, join_ts_ns, successor_token = None))]
     fn new(
@@ -52,17 +58,10 @@ impl PyClusterMember {
         join_ts_ns: i64,
         successor_token: Option<Vec<u8>>,
     ) -> PyResult<Self> {
-        let peer_id_parsed = PeerId::from_str(peer_id)
-            .map_err(|e| PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}")))?;
-        let multiaddrs = multiaddrs
-            .into_iter()
-            .map(|s| {
-                Multiaddr::from_str(&s)
-                    .map_err(|e| PyValueError::new_err(format!("invalid multiaddr {s:?}: {e}")))
-            })
-            .collect::<PyResult<Vec<_>>>()?;
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let multiaddrs = parse_multiaddrs(&multiaddrs)?;
         Ok(Self {
-            inner: ClusterMember {
+            inner: RustClusterMember {
                 peer_id: peer_id_parsed,
                 multiaddrs,
                 join_ts_ns,
@@ -92,16 +91,11 @@ impl PyClusterMember {
     }
 
     fn __repr__(&self) -> String {
-        let token = match &self.inner.successor_token {
-            Some(b) => format!("<{} bytes>", b.len()),
-            None => "None".to_string(),
-        };
         format!(
-            "ClusterMember(peer_id={:?}, multiaddrs={:?}, join_ts_ns={}, successor_token={})",
+            "ClusterMember(peer_id={:?}, multiaddrs={:?}, join_ts_ns={})",
             self.inner.peer_id.to_string(),
             self.multiaddrs(),
             self.inner.join_ts_ns,
-            token,
         )
     }
 
@@ -112,30 +106,23 @@ impl PyClusterMember {
 
 // ─── ClusterMembership pyclass ─────────────────────────────────────
 
-/// The cluster's authoritative membership document.
-///
-/// Held by the current Manager in RAM. The filename convention is
-/// `<cluster_name>.json` — see [`filename`].
 #[pyclass(name = "ClusterMembership")]
 pub struct PyClusterMembership {
-    inner: ClusterMembership,
+    inner: RustClusterMembership,
 }
 
 #[pymethods]
 impl PyClusterMembership {
-    /// Construct an empty membership document for `cluster_name`.
     #[new]
     fn new(cluster_name: String) -> Self {
         Self {
-            inner: ClusterMembership::new(cluster_name),
+            inner: RustClusterMembership::new(cluster_name),
         }
     }
 
-    /// Parse a JSON string into a `ClusterMembership`. Inverse of
-    /// `to_json`.
     #[staticmethod]
     fn from_json(s: &str) -> PyResult<Self> {
-        let inner: ClusterMembership = serde_json::from_str(s)
+        let inner: RustClusterMembership = serde_json::from_str(s)
             .map_err(|e| PyValueError::new_err(format!("invalid ClusterMembership JSON: {e}")))?;
         Ok(Self { inner })
     }
@@ -154,18 +141,15 @@ impl PyClusterMembership {
             .collect()
     }
 
-    /// The per-cluster filename: `<cluster_name>.json`.
     #[getter]
     fn filename(&self) -> String {
         self.inner.filename()
     }
 
-    /// Append a member. Returns the index of the new entry.
     fn admit(&mut self, member: &PyClusterMember) -> usize {
         self.inner.admit(member.inner.clone())
     }
 
-    /// Serialize to JSON. Inverse of `from_json`.
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner)
             .map_err(|e| PyTypeError::new_err(format!("serializing ClusterMembership: {e}")))
@@ -184,6 +168,399 @@ impl PyClusterMembership {
     }
 }
 
+// ─── DaemonInfo pyclass ────────────────────────────────────────────
+
+/// Daemon-side identity fields the SDK doesn't own. Passed by the
+/// daemon into `ClusterManager.participant_info` alongside the
+/// cluster-aware fields the SDK fills in.
+#[pyclass(name = "DaemonInfo")]
+#[derive(Clone)]
+pub struct PyDaemonInfo {
+    inner: RustDaemonInfo,
+}
+
+#[pymethods]
+impl PyDaemonInfo {
+    #[new]
+    #[pyo3(signature = (
+        app,
+        name,
+        session_id,
+        session_clock_id,
+        session_clock_hash,
+        session_now_ns,
+        app_instance,
+        cluster_joined_at_ns = None,
+    ))]
+    fn new(
+        app: String,
+        name: String,
+        session_id: String,
+        session_clock_id: String,
+        session_clock_hash: String,
+        session_now_ns: u64,
+        app_instance: String,
+        cluster_joined_at_ns: Option<u64>,
+    ) -> Self {
+        Self {
+            inner: RustDaemonInfo {
+                app,
+                name,
+                session_id,
+                session_clock_id,
+                session_clock_hash,
+                session_now_ns,
+                cluster_joined_at_ns,
+                app_instance,
+            },
+        }
+    }
+}
+
+// ─── ParticipantInfo pyclass ───────────────────────────────────────
+
+/// SDK-provided `/api/info` wire shape. Produced by
+/// `ClusterManager.participant_info`. Serve verbatim on the
+/// daemon's Control API.
+#[pyclass(name = "ParticipantInfo")]
+pub struct PyParticipantInfo {
+    inner: RustParticipantInfo,
+}
+
+#[pymethods]
+impl PyParticipantInfo {
+    #[getter]
+    fn app(&self) -> String {
+        self.inner.app.clone()
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    #[getter]
+    fn session_id(&self) -> String {
+        self.inner.session_id.clone()
+    }
+
+    #[getter]
+    fn session_clock_id(&self) -> String {
+        self.inner.session_clock_id.clone()
+    }
+
+    #[getter]
+    fn session_clock_hash(&self) -> String {
+        self.inner.session_clock_hash.clone()
+    }
+
+    #[getter]
+    fn session_now_ns(&self) -> u64 {
+        self.inner.session_now_ns
+    }
+
+    #[getter]
+    fn cluster_joined_at_ns(&self) -> Option<u64> {
+        self.inner.cluster_joined_at_ns
+    }
+
+    #[getter]
+    fn peer_id(&self) -> String {
+        self.inner.peer_id.to_string()
+    }
+
+    #[getter]
+    fn app_instance(&self) -> String {
+        self.inner.app_instance.clone()
+    }
+
+    #[getter]
+    fn is_manager(&self) -> bool {
+        self.inner.is_manager
+    }
+
+    #[getter]
+    fn manager_peer_id(&self) -> String {
+        self.inner.manager_peer_id.clone()
+    }
+
+    /// Serialize to the canonical `/api/info` JSON shape. Daemons
+    /// return this string verbatim from their HTTP handler.
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner)
+            .map_err(|e| PyTypeError::new_err(format!("serializing ParticipantInfo: {e}")))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ParticipantInfo(app={:?}, peer_id={:?}, is_manager={}, manager_peer_id={:?})",
+            self.inner.app,
+            self.inner.peer_id.to_string(),
+            self.inner.is_manager,
+            self.inner.manager_peer_id,
+        )
+    }
+}
+
+// ─── ClusterManager pyclass ────────────────────────────────────────
+
+/// Daemon-side cluster handle. The SDK owns the libp2p swarm, the
+/// `NetworkRuntime`, the Discovery client, the cluster membership
+/// document, and the Manager-side Discovery heartbeat tick — the
+/// daemon constructs one of these and treats it as a single object.
+///
+/// Construct with `create_cluster(...)` (you become the initial
+/// Manager). Join-existing-cluster lands in a follow-up commit once
+/// the libp2p join protocol ships.
+#[pyclass(name = "ClusterManager")]
+pub struct PyClusterManager {
+    // Wrapped in Option<Mutex<...>> so `shutdown()` can take the
+    // inner ClusterManager out by value (it consumes self). The
+    // pyclass itself remains usable but every method on it returns
+    // `RuntimeError("ClusterManager has been shut down")` after.
+    inner: Arc<Mutex<Option<RustClusterManager>>>,
+}
+
+#[pymethods]
+impl PyClusterManager {
+    /// Create a new cluster, becoming its initial Manager. Returns a
+    /// `ClusterManager` you can read membership / role state from
+    /// and feed into `participant_info` for `/api/info`.
+    ///
+    /// - `wallet_seed`: 32 bytes; deterministically derives the libp2p
+    ///   peer identity for this daemon.
+    /// - `cluster_name`: the cluster's name. Discovery accepts
+    ///   `^[A-Za-z0-9_-]{1,64}$`.
+    /// - `discovery_url`: base URL of the Discovery service (e.g.
+    ///   `http://192.168.9.130:8080`).
+    /// - `listen_addresses`: libp2p multiaddrs the swarm will listen
+    ///   on (e.g. `["/ip4/0.0.0.0/tcp/0"]`). The runtime listens
+    ///   here; the daemon advertises these to Discovery.
+    /// - `agent_version`: `agent_version` string in libp2p
+    ///   `identify` exchanges. Convention `"<app>/<version>"`.
+    #[staticmethod]
+    #[pyo3(signature = (
+        wallet_seed,
+        cluster_name,
+        discovery_url,
+        listen_addresses,
+        agent_version,
+    ))]
+    fn create_cluster(
+        py: Python<'_>,
+        wallet_seed: Vec<u8>,
+        cluster_name: &str,
+        discovery_url: &str,
+        listen_addresses: Vec<String>,
+        agent_version: &str,
+    ) -> PyResult<Self> {
+        let seed: [u8; 32] = wallet_seed
+            .try_into()
+            .map_err(|_| PyValueError::new_err("wallet_seed must be 32 bytes"))?;
+        let cluster_name = cluster_name.to_string();
+        let discovery_url = discovery_url.to_string();
+        let agent_version = agent_version.to_string();
+        let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let wallet = Wallet::from_seed(&seed);
+                let identity = PeerIdentity::from_wallet(&wallet);
+                let cfg = SwarmConfig {
+                    listen_addresses: listen_multiaddrs,
+                    agent_version,
+                    enable_relay_server: false,
+                };
+                let mut swarm = build_swarm(&identity, cfg)
+                    .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;
+
+                // Wait for at least one listen address to materialize
+                // so we can advertise it to Discovery on create.
+                let listen_addr = wait_for_listen_addr(&mut swarm)
+                    .await
+                    .map_err(|e| PyOSError::new_err(e))?;
+
+                let discovery = DiscoveryClient::new(discovery_url);
+                let manager = RustClusterManager::create_cluster(
+                    cluster_name,
+                    identity,
+                    vec![listen_addr],
+                    discovery,
+                    swarm,
+                    decline_all_streams(),
+                )
+                .await
+                .map_err(map_create_cluster_error)?;
+
+                Ok::<_, PyErr>(Self {
+                    inner: Arc::new(Mutex::new(Some(manager))),
+                })
+            })
+        })
+    }
+
+    #[getter]
+    fn cluster_name(&self) -> PyResult<String> {
+        self.with_inner(|m| Ok(m.cluster_name().to_string()))
+    }
+
+    #[getter]
+    fn local_peer_id(&self) -> PyResult<String> {
+        self.with_inner(|m| Ok(m.local_peer_id().to_string()))
+    }
+
+    #[getter]
+    fn is_manager(&self) -> PyResult<bool> {
+        self.with_inner(|m| Ok(m.is_manager()))
+    }
+
+    #[getter]
+    fn manager_peer_id(&self) -> PyResult<String> {
+        self.with_inner(|m| Ok(m.manager_peer_id().to_string()))
+    }
+
+    #[getter]
+    fn peer_count(&self) -> PyResult<usize> {
+        self.with_inner(|m| Ok(m.peer_count()))
+    }
+
+    /// Snapshot of cluster membership. Returns a `ClusterMembership`
+    /// pyclass.
+    fn membership(&self) -> PyResult<PyClusterMembership> {
+        self.with_inner(|m| {
+            Ok(PyClusterMembership {
+                inner: m.membership(),
+            })
+        })
+    }
+
+    /// Admit a new peer to the cluster (Manager-only). The runtime's
+    /// allow-list is extended; the new entry is returned.
+    fn admit_peer(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        multiaddrs: Vec<String>,
+    ) -> PyResult<PyClusterMember> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let multiaddrs = parse_multiaddrs(&multiaddrs)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let member = manager
+                    .admit_peer(peer_id_parsed, multiaddrs)
+                    .await
+                    .map_err(map_admit_error)?;
+                Ok(PyClusterMember { inner: member })
+            })
+        })
+    }
+
+    /// Build a `ParticipantInfo` with the cluster-aware fields
+    /// populated. The daemon supplies the rest via `DaemonInfo`.
+    fn participant_info(&self, daemon: &PyDaemonInfo) -> PyResult<PyParticipantInfo> {
+        self.with_inner(|m| {
+            Ok(PyParticipantInfo {
+                inner: m.participant_info(daemon.inner.clone()),
+            })
+        })
+    }
+
+    /// Shutdown — cancels the Manager heartbeat tick, deregisters
+    /// the cluster from Discovery (if we're the Manager), and shuts
+    /// down the runtime. Idempotent; subsequent calls return an
+    /// error indicating the manager has already been shut down.
+    fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let manager = {
+                    let mut guard = inner.lock().expect("ClusterManager lock");
+                    guard.take()
+                };
+                let manager = manager
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                manager.shutdown().await.map_err(|e| {
+                    PyOSError::new_err(format!("Discovery deregister failed during shutdown: {e}"))
+                })
+            })
+        })
+    }
+}
+
+impl PyClusterManager {
+    fn with_inner<R>(&self, f: impl FnOnce(&RustClusterManager) -> PyResult<R>) -> PyResult<R> {
+        let guard = self.inner.lock().expect("ClusterManager lock");
+        let manager = guard
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+        f(manager)
+    }
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────
+
+fn parse_peer_id(s: &str) -> PyResult<PeerId> {
+    PeerId::from_str(s)
+        .map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
+}
+
+fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
+    ss.iter()
+        .map(|s| {
+            Multiaddr::from_str(s)
+                .map_err(|e| PyValueError::new_err(format!("invalid multiaddr {s:?}: {e}")))
+        })
+        .collect()
+}
+
+fn map_create_cluster_error(e: RustCreateClusterError) -> PyErr {
+    match e {
+        RustCreateClusterError::Discovery(err) => {
+            PyOSError::new_err(format!("Discovery: {err}"))
+        }
+        RustCreateClusterError::AlreadyExists(name) => PyRuntimeError::new_err(format!(
+            "cluster {name:?} already exists; list and join instead"
+        )),
+        RustCreateClusterError::Runtime(err) => {
+            PyRuntimeError::new_err(format!("runtime spawn failed: {err}"))
+        }
+    }
+}
+
+fn map_admit_error(e: RustAdmitError) -> PyErr {
+    match e {
+        RustAdmitError::NotManager { cluster, manager } => PyRuntimeError::new_err(format!(
+            "not the Manager of cluster {cluster:?}; manager_peer_id={manager}"
+        )),
+        RustAdmitError::AlreadyMember(pid) => {
+            PyValueError::new_err(format!("peer {pid} is already a cluster member"))
+        }
+        RustAdmitError::Runtime(err) => PyRuntimeError::new_err(format!("runtime: {err}")),
+    }
+}
+
+async fn wait_for_listen_addr(
+    swarm: &mut auki_network::Swarm<auki_network::swarm::Behaviour>,
+) -> Result<Multiaddr, String> {
+    use futures::StreamExt;
+    use libp2p::swarm::SwarmEvent;
+    use std::time::Duration;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(SwarmEvent::NewListenAddr { address, .. }) = swarm.next().await {
+                return address;
+            }
+        }
+    })
+    .await
+    .map_err(|_| "swarm did not produce a listen address within 5s".to_string())
+}
+
 // ─── Module entry point ────────────────────────────────────────────
 
 /// `auki_domain` Python module.
@@ -191,5 +568,8 @@ impl PyClusterMembership {
 fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClusterMember>()?;
     m.add_class::<PyClusterMembership>()?;
+    m.add_class::<PyDaemonInfo>()?;
+    m.add_class::<PyParticipantInfo>()?;
+    m.add_class::<PyClusterManager>()?;
     Ok(())
 }

@@ -15,6 +15,10 @@
 
 #![warn(missing_docs)]
 
+pub mod cluster_manager;
 pub mod cluster_membership;
 
+pub use cluster_manager::{
+    AdmitError, ClusterManager, CreateClusterError, DaemonInfo, MANAGER_HEARTBEAT_INTERVAL,
+};
 pub use cluster_membership::{ClusterMember, ClusterMembership};

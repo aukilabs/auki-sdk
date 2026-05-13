@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:45 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) + [`crates/auki-domain-py`](crates/auki-domain-py) — SDK-T2 lands: `ClusterManager` (Rust + Python).** Daemon-side cluster handle that owns the membership document, the libp2p `NetworkRuntime`, the `DiscoveryClient`, and a 3s Discovery heartbeat tick. `create_cluster` / `admit_peer` / `participant_info` / `shutdown` mirror across Rust and Python; daemons (BoosterApp, Park, Sentinel) now have a complete surface for "I'm the Manager of cluster `foo`" workflows including SDK-built `/api/info` shape (per BA-Q3). End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-survives-sweep. `join_cluster` is the next gap — needs SDK-T3 (libp2p join protocol).
+
 ### Nils's claude · May 13, 11:15 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) — `ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** Per BA-Q3 in the SDK plan: all daemons (BoosterApp, Park, Sentinel) serialize the same SDK-provided shape, no per-daemon handler logic. The libp2p protocol coupling deleted in the prior commit stays gone — `ParticipantInfo` lives purely as the daemon HTTP wire shape.

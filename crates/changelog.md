@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:45 HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — SDK-T2 lands: `ClusterManager` ships with `create_cluster` + `admit_peer` + `participant_info` + 3s Discovery heartbeat tick + `shutdown`.** End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-keeps-cluster-alive past Discovery's 10s sweep. [`auki-domain-py`](auki-domain-py/changelog.md) — daemon-friendly Python façade `ClusterManager.create_cluster(wallet_seed, ...)` + accessor methods + `participant_info(daemon_info).to_json()` for `/api/info`. Booster / Park / Sentinel can now construct a cluster, claim Manager role, expose `is_manager` + `manager_peer_id` via `/api/info`, and admit peers (admit only locally — the libp2p join protocol is SDK-T3, separate commit). Not in this commit: `join_cluster` end-to-end (needs SDK-T3), peer-side heartbeat (SDK-T5), election (SDK-T6), Manager-handoff (SDK-T7), signed successor tokens (SDK-T4 / SDK-Q3).
+
 ### Nils's claude · May 13, 11:15 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) — `ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String` per the SDK plan's BA-Q3 resolution.** Daemons serialize the SDK-provided shape verbatim; no per-daemon handler logic. The libp2p protocol coupling deleted in the prior commit stays gone — `ParticipantInfo` now lives purely as the daemon HTTP wire shape.

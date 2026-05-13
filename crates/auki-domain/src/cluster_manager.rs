@@ -557,8 +557,21 @@ impl ClusterManager {
     }
 
     /// Shutdown — cancels all background tasks, deregisters the
-    /// cluster from Discovery (if we're the Manager), and shuts
-    /// down the runtime. Consumes `self`.
+    /// cluster from Discovery **only if we're the last member**,
+    /// and shuts down the runtime. Consumes `self`.
+    ///
+    /// **Manager handoff on graceful exit.** Per the Hagall quest:
+    /// "Graceful and ungraceful Manager exit are the same code path
+    /// — peers detect the loss + run the election + rotate." So if
+    /// the Manager calls `shutdown` while other peers are in the
+    /// cluster, we do NOT deregister: the surviving peers detect
+    /// our libp2p disconnection, run the election, and the winner
+    /// calls `rotate_manager` on Discovery. Deregistering on the way
+    /// out would 404 the winner's rotation and orphan the cluster.
+    /// Only when WE are the last member (membership.peers.len() <=
+    /// 1, which holds when nothing has joined or all joiners have
+    /// already shutdown) do we deregister, since there's no
+    /// successor to take over.
     pub async fn shutdown(mut self) -> Result<(), DiscoveryError> {
         // 1. Cancel background tasks FIRST so we stop touching
         //    Discovery / membership between teardown steps.
@@ -572,10 +585,19 @@ impl ClusterManager {
             task.abort();
         }
 
-        // 2. If we're the Manager, deregister the cluster.
+        // 2. Deregister from Discovery only if we're the last
+        //    member. Otherwise leave the cluster alive for the
+        //    survivors' election + handoff.
         let was_manager =
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let result = if was_manager {
+        let am_last = self
+            .membership
+            .lock()
+            .expect("membership lock")
+            .peers
+            .len()
+            <= 1;
+        let result = if was_manager && am_last {
             self.discovery.deregister(&self.cluster_name).await
         } else {
             Ok(())

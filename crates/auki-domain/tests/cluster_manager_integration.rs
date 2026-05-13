@@ -146,12 +146,21 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         .expect("cluster still in directory after sweep window");
     assert_eq!(entry.peer_count, 2, "Discovery sees the updated peer_count");
 
-    // 6. Shutdown — deregisters from Discovery.
+    // 6. Shutdown. NOTE: we admitted a fake peer above (no real
+    //    libp2p connection), so the Manager's liveness handler
+    //    never receives a Lost for it — membership.peers.len()
+    //    stays at 2, and `shutdown` correctly does NOT deregister
+    //    (the design assumes a surviving real peer would take
+    //    over). Explicit `deregister` to clean up Discovery.
     manager.shutdown().await.expect("shutdown succeeds");
+    discovery
+        .deregister(&cluster_name)
+        .await
+        .expect("explicit cleanup deregister");
     let after = discovery.list_clusters().await.expect("list_clusters after");
     assert!(
         !after.iter().any(|c| c.name == cluster_name),
-        "cluster {cluster_name} still in directory after shutdown"
+        "cluster {cluster_name} still in directory after explicit deregister"
     );
 
     eprintln!("ClusterManager full lifecycle OK against {}", discovery_url());
@@ -248,7 +257,12 @@ async fn two_managers_create_then_join_against_live_discovery() {
     assert!(peers_a.contains(&pid_a) && peers_a.contains(&pid_b));
 
     // --- Cleanup ---
+    // B exits first; A is Manager and must see B's libp2p
+    // disconnect + evict B from membership before A's own shutdown
+    // is called. Give A a moment to process the eviction so that
+    // A.shutdown finds peers.len() == 1 and deregisters cleanly.
     manager_b.shutdown().await.expect("B shutdown");
+    tokio::time::sleep(Duration::from_millis(500)).await;
     manager_a.shutdown().await.expect("A shutdown");
 
     let after = discovery.list_clusters().await.expect("list after");
@@ -377,6 +391,115 @@ async fn manager_failover_when_a_dies_b_takes_over() {
 
     eprintln!(
         "Manager failover OK against {}: A={pid_a} died, B={pid_b} took over",
+        discovery_url()
+    );
+}
+
+/// Graceful Manager exit (`shutdown()`, not `drop`). The Manager
+/// should NOT deregister the cluster from Discovery — instead the
+/// surviving peer detects the libp2p disconnection, runs the
+/// election, and calls `rotate_manager`. Symmetric with the
+/// ungraceful path above; same code path per the Hagall design.
+///
+/// Regression test for the bug where graceful Manager shutdown
+/// deregistered the cluster from Discovery, causing the surviving
+/// peer's `rotate_manager` to 404.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-graceful-it");
+
+    // --- Peer A: creates the cluster ---
+    let id_a = PeerIdentity::from_seed(&[91u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-graceful-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // --- Peer B: joins ---
+    let id_b = PeerIdentity::from_seed(&[92u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-graceful-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+    )
+    .await
+    .expect("join_cluster B");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // --- A graceful-exits via shutdown() (NOT drop) ---
+    eprintln!("A=({pid_a}) calling shutdown() gracefully…");
+    manager_a.shutdown().await.expect("A graceful shutdown");
+
+    // B should detect, elect, promote, and rotate Discovery within
+    // a few seconds.
+    eprintln!("waiting up to 5s for B to take over after A's graceful exit…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not take over within 5s after A's graceful shutdown"
+    );
+
+    // Discovery should still have the cluster (A did NOT
+    // deregister) and reflect B as the Manager.
+    let snapshot = discovery.list_clusters().await.expect("list_clusters");
+    let entry = snapshot
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .expect("cluster gone from Discovery — A wrongly deregistered on graceful exit?");
+    assert_eq!(
+        entry.manager_peer_id, pid_b,
+        "Discovery's Manager hint should rotate to B after graceful handoff"
+    );
+
+    // --- Cleanup ---
+    manager_b.shutdown().await.expect("B shutdown");
+    let after = discovery.list_clusters().await.expect("list after");
+    assert!(
+        !after.iter().any(|c| c.name == cluster_name),
+        "cluster {cluster_name} still in directory after B (last member) shutdown"
+    );
+
+    eprintln!(
+        "Graceful Manager handoff OK against {}: A={pid_a} → B={pid_b}",
         discovery_url()
     );
 }

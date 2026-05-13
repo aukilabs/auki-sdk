@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 14:30 HKT, 2026
+
+**Bug fix: graceful Manager shutdown no longer deregisters the cluster when other peers exist.** Discovered when Booster surfaced "Manager leaving cluster causes cluster to close, no new manager is elected." The old `shutdown()` unconditionally `deregister`ed Discovery if we were the Manager. With multiple peers, the surviving peer's libp2p ConnectionClosed handler fired Lost → election → `rotate_manager` — but the cluster was already gone from Discovery (`404`). Per the Hagall design ("graceful and ungraceful Manager exits are the same code path — peers detect the loss + run the election + rotate"), the Manager should NOT deregister on graceful exit when other peers can take over. Fix: `shutdown()` checks `membership.peers.len() <= 1` (we're the last member) before deregistering; otherwise leaves the cluster alive for the survivors' handoff. New integration test `manager_graceful_shutdown_passes_cluster_to_surviving_peer` is a regression test for exactly this scenario. Existing tests adjusted: `cluster_manager_full_lifecycle_against_live_discovery` (admitted a fake peer, so `shutdown` now correctly skips deregister — added an explicit `deregister` for test cleanup); `two_managers_create_then_join_against_live_discovery` (added 500ms sleep between B.shutdown and A.shutdown so A's liveness handler has time to evict B before A's own shutdown checks `peers.len()`). All 4 live tests pass against `192.168.9.130:8080`.
+
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **SDK-T6 + SDK-T7 — cluster-internal election + Manager-handoff orchestration. Failover works end-to-end.** Three new pieces:

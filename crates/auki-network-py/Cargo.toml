@@ -25,18 +25,36 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 # Renamed via `package =` so the upstream crate's name doesn't
-# collide with our own lib name.
-auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["discovery_client"] }
+# collide with our own lib name. `swarm` is needed for the stream
+# pyclass surface (StreamRequest, AcceptInfo, StreamDispatch,
+# StreamSubscription, ...); `discovery_client` for DiscoveryClient.
+auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
 # `PeerId` parsing on the Python ↔ Rust seam.
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 # `Multiaddr` parsing for the Python multiaddr string kwargs.
 multiaddr = "0.18"
-# Process-wide tokio runtime that drives the async Discovery client
-# calls behind a sync Python surface.
+# Process-wide tokio runtime — drives both the async Discovery client
+# calls and the consumer-side `FrameIterator` blocking-bridge.
 tokio = { version = "1", features = ["rt-multi-thread"] }
+# `tracing::warn!` for logged drops when the Python `stream_provider`
+# raises an exception (caught by `build_stream_provider`, surfaced as
+# `Decline { Other }`).
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
 # without rebuilding per minor version.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
+# Path 1 (locked) for grimsby's `stream_provider` Python binding —
+# bridges Python `async def` generators onto Rust `futures::Stream`.
+# Producer side only: the wrapper owns a dedicated asyncio loop in a
+# daemon thread and schedules coroutines onto it via
+# `into_future_with_locals`.
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+# `futures::Stream` / `StreamExt` for the source-Stream bridge on
+# the producer side and consumer-side substream draining.
+futures = "0.3"
 
 [dev-dependencies]
+# `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
+# manually starting an interpreter; needs the runtime linked, which is
+# why we don't enable it on the production extension build.
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

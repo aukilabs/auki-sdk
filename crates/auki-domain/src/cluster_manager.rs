@@ -383,6 +383,34 @@ impl ClusterManager {
         Ok(member)
     }
 
+    /// Open an outbound stream subscription on `peer_id` for the
+    /// named sensor. Thin delegator over
+    /// [`NetworkRuntime::open_stream`] — the cluster handle is the
+    /// daemon's natural entry point and shouldn't force consumers to
+    /// reach into the runtime directly.
+    ///
+    /// Returns once the producer has either Accepted (typed
+    /// [`StreamSubscription<T>`]) or Declined
+    /// ([`OpenStreamError::Declined { reason }`]) the request. The
+    /// peer must be a member of the cluster (checked by the
+    /// runtime's allow-list on the producer side per the
+    /// `/auki/stream/0.1.0` trust-boundary resolution 2026-05-13 —
+    /// non-cluster substreams are silently dropped).
+    ///
+    /// `T` is the typed payload the substream carries (`JpegFrame`,
+    /// `PointCloudFrame`, `JointEncodersFrame`); the consumer
+    /// statically knows which `T` to expect per call.
+    pub async fn open_stream<T>(
+        &self,
+        peer_id: PeerId,
+        request: auki_network::stream_protocol::StreamRequest,
+    ) -> Result<auki_network::stream_runtime::StreamSubscription<T>, auki_network::stream_runtime::OpenStreamError>
+    where
+        T: prost::Message + Default + Send + 'static,
+    {
+        self.runtime.open_stream::<T>(peer_id, request).await
+    }
+
     /// Construct a [`ParticipantInfo`] with the cluster-aware fields
     /// (`is_manager`, `manager_peer_id`, `peer_id`) populated by the
     /// SDK. The daemon supplies the rest of the fields via the

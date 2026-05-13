@@ -1,20 +1,46 @@
 //! Python bindings for `auki-network`.
 //!
-//! Surface (under the `auki_network` Python module):
+//! ## Python module shape
 //!
-//! - `DiscoveryClient(base_url)` — HTTP client for the Discovery
-//!   service. Sync-shaped: each method `block_on`s on a process-wide
-//!   tokio runtime. Methods mirror the Rust API: `list_clusters()`,
-//!   `create_cluster(name, manager_peer_id, manager_multiaddrs)`,
-//!   `heartbeat(name, peer_count)`,
-//!   `rotate_manager(name, manager_peer_id, manager_multiaddrs)`,
-//!   `deregister(name)`.
-//! - `ClusterEntry` — value-type pyclass; one row of Discovery's
-//!   directory snapshot. Produced by `list_clusters` /
-//!   `create_cluster` / `heartbeat` / `rotate_manager`.
-//! - `CreateClusterOutcome` — enum-like pyclass with two states
-//!   (`Created(entry)` and `AlreadyExists`); inspect via
-//!   `.is_already_exists` / `.entry`.
+//! ```text
+//! auki_network
+//!   DiscoveryClient(base_url)               # HTTP client
+//!   ClusterEntry / CreateClusterOutcome     # Discovery value types
+//!   cluster.*                                # Stream surface (see below)
+//! ```
+//!
+//! ### `auki_network.cluster` — the stream surface
+//!
+//! Producer-side types — pyclasses Boosterapp/Sentinel build inside a
+//! `stream_provider` callback:
+//!
+//! - `StreamRequest(sensor_id=...)` — the inbound request the SDK
+//!   delivers to the provider callable.
+//! - `AcceptInfo(sensor_hash=..., clock_id=..., clock_hash=...)` —
+//!   accept-time metadata the producer commits to.
+//! - `JpegFrame(bytes)` / `PointCloudFrame(bytes)` /
+//!   `JointEncodersFrame(angles_rad)` — payload `T` types.
+//! - `ProducerFrame(timestamp_ns=..., payload=...)` — what the
+//!   source async iterator yields.
+//! - `DeclineReason.*` / `EndReason.*` — typed reason factories.
+//! - `StreamDecision.accept(info, source)` /
+//!   `accept_pointcloud(info, source)` /
+//!   `accept_joint_encoders(info, source)` /
+//!   `decline(reason)` — the value the provider callable returns.
+//!
+//! Consumer-side types — returned by `ClusterManager.open_*_stream`
+//! (which lives in `auki-domain-py`; the pyclasses live here so all
+//! stream types are in one place):
+//!
+//! - `StreamSubscription(info=..., frames=...)` — accept-time
+//!   metadata + a single-use frame iterator.
+//! - `FrameIterator` — sync blocking iterator; `__next__` raises
+//!   `StreamEndOfStream(reason)` / `StreamConnectionLost` /
+//!   `StreamProtocolError(detail)` as the terminator.
+//! - `ConsumerFrame(timestamp_ns, seq, payload)` — what
+//!   `FrameIterator.__next__` yields.
+//! - Exception classes: `StreamEndOfStream`, `StreamConnectionLost`,
+//!   `StreamProtocolError`, `StreamDeclined`, `StreamUnreachable`.
 
 use auki_network_rs::discovery_client::{
     ClusterEntry as RustClusterEntry, CreateClusterOutcome as RustCreateClusterOutcome,
@@ -28,16 +54,22 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
+mod stream_bridge;
+pub mod stream_types;
+
 // ─── Process-wide tokio runtime ────────────────────────────────────
 
-/// Multi-threaded tokio runtime shared across all Discovery calls.
-/// Reqwest needs a runtime; we own one lazily on first use so the
-/// caller doesn't need an `async` Python.
-fn shared_runtime() -> &'static Runtime {
+/// Multi-threaded tokio runtime shared across all Discovery calls and
+/// the consumer-side `FrameIterator` blocking-bridge. Reqwest needs a
+/// runtime; we own one lazily on first use so the caller doesn't need
+/// an `async` Python.
+///
+/// Name matches the convention from `auki-network-py` v0.0.33 — other
+/// in-crate modules (`stream_types`) reference it as
+/// `crate::cluster_tokio_runtime()`.
+pub(crate) fn cluster_tokio_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        Runtime::new().expect("tokio runtime starts")
-    })
+    RT.get_or_init(|| Runtime::new().expect("tokio runtime starts"))
 }
 
 // ─── Error mapping ─────────────────────────────────────────────────
@@ -184,7 +216,7 @@ impl PyDiscoveryClient {
     fn list_clusters(&self, py: Python<'_>) -> PyResult<Vec<PyClusterEntry>> {
         let client = self.inner.clone();
         py.allow_threads(|| {
-            shared_runtime()
+            cluster_tokio_runtime()
                 .block_on(client.list_clusters())
                 .map(|entries| entries.into_iter().map(PyClusterEntry::from_rust).collect())
                 .map_err(map_discovery_error)
@@ -206,7 +238,7 @@ impl PyDiscoveryClient {
         let client = self.inner.clone();
         let name = name.to_string();
         py.allow_threads(|| {
-            let outcome = shared_runtime()
+            let outcome = cluster_tokio_runtime()
                 .block_on(client.create_cluster(&name, &peer_id, &multiaddrs))
                 .map_err(map_discovery_error)?;
             Ok(match outcome {
@@ -227,7 +259,7 @@ impl PyDiscoveryClient {
         let client = self.inner.clone();
         let name = name.to_string();
         py.allow_threads(|| {
-            shared_runtime()
+            cluster_tokio_runtime()
                 .block_on(client.heartbeat(&name, peer_count))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
@@ -248,7 +280,7 @@ impl PyDiscoveryClient {
         let client = self.inner.clone();
         let name = name.to_string();
         py.allow_threads(|| {
-            shared_runtime()
+            cluster_tokio_runtime()
                 .block_on(client.rotate_manager(&name, &peer_id, &multiaddrs))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
@@ -260,7 +292,7 @@ impl PyDiscoveryClient {
         let client = self.inner.clone();
         let name = name.to_string();
         py.allow_threads(|| {
-            shared_runtime()
+            cluster_tokio_runtime()
                 .block_on(client.deregister(&name))
                 .map_err(map_discovery_error)
         })
@@ -281,13 +313,34 @@ fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
         .collect()
 }
 
-// ─── Module entry point ────────────────────────────────────────────
+// ─── Module population ─────────────────────────────────────────────
+
+/// Populate `m` with the full `auki_network` Python surface:
+///
+/// - Root-level: `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`.
+/// - `cluster` submodule: every stream type (`StreamRequest`,
+///   `AcceptInfo`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`,
+///   `ProducerFrame`, `ConsumerFrame`, `DeclineReason`, `EndReason`,
+///   `StreamDecision`, `StreamSubscription`, `FrameIterator`, plus the
+///   five `Stream*` exception classes).
+///
+/// Exposed as `pub` so cross-crate consumers in the workspace
+/// (notably `auki-domain-py`'s test helpers) can build a populated
+/// module for fixture purposes.
+pub fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyClusterEntry>()?;
+    m.add_class::<PyCreateClusterOutcome>()?;
+    m.add_class::<PyDiscoveryClient>()?;
+
+    let py = m.py();
+    let cluster = PyModule::new_bound(py, "cluster")?;
+    stream_types::register(py, &cluster)?;
+    m.add_submodule(&cluster)?;
+    Ok(())
+}
 
 /// `auki_network` Python module.
 #[pymodule]
 fn auki_network(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyClusterEntry>()?;
-    m.add_class::<PyCreateClusterOutcome>()?;
-    m.add_class::<PyDiscoveryClient>()?;
-    Ok(())
+    populate_module(m)
 }

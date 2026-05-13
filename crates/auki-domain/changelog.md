@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 14:34 HKT, 2026
+
+**`/auki/info/0.0.1` wired into `ClusterManager` + breaking refactor of `DaemonInfo`. NO FALLBACKS gap closed.** Park (and any future cross-daemon Auki UI) can now resolve a cluster peer's `ParticipantInfo` over libp2p instead of via mDNS + HTTP `/api/info`. This is the last Hagall-shape gap before Park can drop mDNS entirely (PARK-T7 + PARK-T9 unblocked).
+
+**Breaking: `DaemonInfo` loses `session_now_ns` + `cluster_joined_at_ns`.** Those are dynamic — daemons couldn't keep them fresh without re-passing on every call. The SDK now owns both: `ClusterManager` stores `session_started: Instant` at construction and computes `session_now_ns = session_started.elapsed()` on each `participant_info()` call; `cluster_joined_at_ns: Arc<Mutex<Option<u64>>>` is set lazily on the first observation of any non-self peer in membership (per ansuz D3 — a one-peer cluster shouldn't tick this field).
+
+**Breaking: `ClusterManager::create_cluster` / `.join_cluster` gain a `daemon_info: DaemonInfo` parameter** (now 7-arg). Stored on the manager; reused for every `participant_info()` build (local + inbound info-request responses).
+
+**Breaking: `ClusterManager::participant_info(&self)` no longer takes a `DaemonInfo` arg.** Builds from stored state. Same `ParticipantInfo` wire shape.
+
+New `spawn_info_handler` task drains inbound `InfoRequestEvent`s from the runtime, builds a fresh `ParticipantInfo` via the shared `build_participant_info` helper, serializes to JSON, replies via the event's oneshot. Lives for the lifetime of the ClusterManager; cancelled on `shutdown`.
+
+New `ClusterManager::fetch_participant_info(peer_id) -> Result<ParticipantInfo, FetchParticipantInfoError>` public method. Thin async wrapper over `NetworkRuntime::request_participant_info` that parses the response JSON back into a `ParticipantInfo`. Park calls this for every cluster peer to populate `/api/cluster/peers` and (PARK-T7) to make the `#/` directory cluster-driven.
+
+5 live integration tests now pass against `192.168.9.130:8080` in ~12s — the new one (`cluster_peers_fetch_each_other_participant_info_over_libp2p`) creates a "park-like" A + "boosterapp-like" B, then verifies A's `fetch_participant_info(pid_b)` returns B's full `ParticipantInfo` with `app: "boosterapp"`, `name: "walker-1"`, etc., and vice versa from B's side.
+
 ### Nils's claude · May 13, 13:48 HKT, 2026
 
 **SDK-T2 PARTIAL → DONE — membership gossip wired into `ClusterManager`.** Three pieces:

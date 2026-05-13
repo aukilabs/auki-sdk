@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 15:30 HKT, 2026
+
+**`/auki/sensors/0.0.1` peer-to-peer sensor-catalog exchange lands — unblocks Park's sensor-chip row.** Cluster peers can now ask each other "what sensors are you currently publishing?" over libp2p. `/auki/info/0.0.1` (PR #110) covered identity; this is the complementary surface for the catalog the operator picks tiles from. Park's session viewer currently renders "awaiting SDK /auki/sensors/0.0.1" — this protocol delivers on that promise.
+
+New `sensors_protocol` module (~270 LOC + 5 wire-format unit tests): `SENSORS_PROTOCOL = "/auki/sensors/0.0.1"`, request-response over one substream, length-prefixed JSON framing (mirrors `/auki/info/0.0.1`), 64 KiB frame cap. `SensorsRequest {}` is empty today (future filter fields like `kind = Some("camera")` decode forward-compatibly via serde's permissive unknown-field handling). `SensorsResponse { sensors: Vec<SensorEntry> }`, where `SensorEntry` is `{ sensor_id, sensor_hash, kind }` — `sensor_id` is producer-scoped, `sensor_hash` lets consumers fetch the full `SensorRegistryEntry` from `auki-registry` separately, `kind` lets UIs pick a tile renderer without parsing the id. Empty `sensors: []` round-trips cleanly — "I have a catalog and it's empty" is a valid producer state and NOT an error.
+
+`NetworkRuntime::spawn` now returns a sixth channel: `mpsc::Receiver<SensorsRequestEvent>`. Inbound `/auki/sensors/0.0.1` substreams surface here with a `oneshot::Sender<SensorsResponse>` ack — same shape as `InfoRequestEvent`. Cluster-trust gated identically to `/auki/info/0.0.1` and `/auki/membership/0.0.1` (silent-drop non-allow-list peers — privacy by membership; non-cluster peers can't probe daemon catalogs).
+
+Outbound: `NetworkRuntime::request_sensors_catalog(peer_id) -> Result<SensorsResponse, RequestSensorsError>`. Opens substream, writes the empty request, reads response, returns. Bounded by `SENSORS_REQUEST_TIMEOUT` (5 s — well above LAN round-trip).
+
 ### Nils's claude · May 13, 14:34 HKT, 2026
 
 **`/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange lands — closes the last "Hagall fallback" gap.** Pre-Hagall, Park used mDNS + HTTP `/api/info` to resolve cluster peers' identity. Hagall constraint #6 (NO FALLBACKS) rules that out — peer-to-peer identity exchange must ride on libp2p so the cluster's trust boundary is the only one a peer's identity flows through. This PR ships the libp2p-native protocol that replaces mDNS for cross-daemon identity lookups.

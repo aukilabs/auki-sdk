@@ -36,8 +36,9 @@ use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::info_protocol::InfoResponse;
 use auki_network::network_runtime::{
     AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
-    RequestInfoError, SendJoinRequestError, SpawnError,
+    RequestInfoError, RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError,
 };
+pub use auki_network::sensors_protocol::{SensorEntry, SensorsResponse};
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
@@ -83,6 +84,30 @@ pub struct DaemonInfo {
     /// First non-loopback IEEE-administered MAC, lowercased hex
     /// without separators.
     pub app_instance: String,
+}
+
+/// Application-supplied source of truth for "which sensors am I
+/// currently publishing". The producer daemon (Booster, future
+/// robotics SDK consumers) installs an implementation via
+/// [`ClusterManager::set_sensor_catalog_provider`] right after
+/// constructing the manager; the SDK reads it in the inbound
+/// `/auki/sensors/0.0.1` handler and returns the snapshot to the
+/// requesting cluster peer.
+///
+/// Cluster peers fetch each other's catalogs via
+/// [`ClusterManager::fetch_sensors_catalog`] (Park's sensor-chip
+/// row is the canonical consumer).
+///
+/// **No fallback inside the SDK.** If no provider is registered,
+/// the inbound handler returns an empty `sensors: []` — "I have a
+/// catalog and it's empty" is a valid producer state (a daemon
+/// that's started but hasn't mounted any sensors yet).
+pub trait SensorCatalogProvider: Send + Sync + 'static {
+    /// Snapshot the producer's currently-published sensors.
+    /// Called once per inbound `/auki/sensors/0.0.1` request. Keep
+    /// it cheap — the runtime's per-substream task gives the SDK
+    /// 2 s to respond before closing the substream.
+    fn snapshot(&self) -> Vec<SensorEntry>;
 }
 
 /// Errors from [`ClusterManager::create_cluster`].
@@ -205,6 +230,18 @@ pub struct ClusterManager {
     /// the runtime, builds a [`ParticipantInfo`] from current
     /// state, and replies. Cancelled on `shutdown`.
     info_handler_task: Option<JoinHandle<()>>,
+    /// Task that drains inbound `/auki/sensors/0.0.1` requests
+    /// from the runtime, snapshots the application-supplied
+    /// [`SensorCatalogProvider`], and replies. Cancelled on
+    /// `shutdown`.
+    sensors_handler_task: Option<JoinHandle<()>>,
+    /// Application-supplied sensor catalog provider. `None` until
+    /// the daemon calls
+    /// [`Self::set_sensor_catalog_provider`]; the inbound handler
+    /// returns an empty `sensors: []` response while `None`.
+    /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
+    /// and the handler task can read concurrently.
+    sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
 }
 
 impl ClusterManager {
@@ -265,8 +302,14 @@ impl ClusterManager {
         // 3. Spawn the runtime. Initial allow-list is empty — we
         //    don't dial ourselves; the runtime expands its
         //    allow-list as peers are admitted.
-        let (runtime, join_events_rx, liveness_rx, membership_events_rx, info_events_rx) =
-            NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
+        let (
+            runtime,
+            join_events_rx,
+            liveness_rx,
+            membership_events_rx,
+            info_events_rx,
+            sensors_events_rx,
+        ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
         let heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>> =
@@ -330,6 +373,16 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         ));
 
+        // 9. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
+        //    the application-supplied provider (or return an empty
+        //    catalog if none is registered yet) and reply.
+        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let sensors_handler_task = Some(spawn_sensors_handler(
+            sensors_events_rx,
+            sensor_catalog_provider.clone(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -346,6 +399,8 @@ impl ClusterManager {
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
+            sensors_handler_task,
+            sensor_catalog_provider,
         })
     }
 
@@ -554,6 +609,41 @@ impl ClusterManager {
         Ok(info)
     }
 
+    /// Register (or replace) the application-supplied
+    /// [`SensorCatalogProvider`]. Called by the producer daemon
+    /// after constructing the `ClusterManager` — and again any
+    /// time the daemon wants to swap in a different provider.
+    ///
+    /// Inbound `/auki/sensors/0.0.1` requests received before this
+    /// call answer with an empty `sensors: []`. After this call,
+    /// each inbound request invokes [`SensorCatalogProvider::snapshot`]
+    /// on the registered provider.
+    pub fn set_sensor_catalog_provider(&self, provider: Arc<dyn SensorCatalogProvider>) {
+        *self
+            .sensor_catalog_provider
+            .lock()
+            .expect("sensor_catalog_provider lock") = Some(provider);
+    }
+
+    /// Fetch a cluster peer's current sensor catalog over the
+    /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` snapshots its registered
+    /// [`SensorCatalogProvider`] (or returns an empty list if the
+    /// daemon hasn't installed one yet) and serializes the catalog
+    /// over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the parsed
+    /// [`SensorsResponse`] ready for consumers (Park's chip row,
+    /// Sentinel's status board).
+    pub async fn fetch_sensors_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self.runtime.request_sensors_catalog(peer_id).await?;
+        Ok(response)
+    }
+
     /// Join an existing cluster by talking to its Manager. Lists
     /// Discovery, finds the entry for `cluster_name`, opens a
     /// libp2p `/auki/join/0.0.1` substream to the Manager, sends a
@@ -594,15 +684,21 @@ impl ClusterManager {
         //    can dial it for the join handshake). The allow-list
         //    expands once the Manager gossips back the full
         //    membership.
-        let (runtime, join_events_rx, liveness_rx, membership_events_rx, info_events_rx) =
-            NetworkRuntime::spawn(
-                swarm,
-                vec![AllowedPeer {
-                    peer_id: manager_peer,
-                    multiaddrs: manager_multiaddrs.clone(),
-                }],
-                stream_provider,
-            )?;
+        let (
+            runtime,
+            join_events_rx,
+            liveness_rx,
+            membership_events_rx,
+            info_events_rx,
+            sensors_events_rx,
+        ) = NetworkRuntime::spawn(
+            swarm,
+            vec![AllowedPeer {
+                peer_id: manager_peer,
+                multiaddrs: manager_multiaddrs.clone(),
+            }],
+            stream_provider,
+        )?;
 
         // 3. Wait until the runtime has dialed the Manager and the
         //    libp2p connection is established. The runtime's
@@ -719,6 +815,16 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         ));
 
+        // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
+        //     the application-supplied provider (or return an empty
+        //     catalog if none is registered yet) and reply.
+        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let sensors_handler_task = Some(spawn_sensors_handler(
+            sensors_events_rx,
+            sensor_catalog_provider.clone(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -735,6 +841,8 @@ impl ClusterManager {
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
+            sensors_handler_task,
+            sensor_catalog_provider,
         })
     }
 
@@ -757,6 +865,9 @@ impl ClusterManager {
             task.abort();
         }
         if let Some(task) = self.info_handler_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.sensors_handler_task.take() {
             task.abort();
         }
 
@@ -1153,6 +1264,40 @@ pub enum FetchParticipantInfoError {
     /// Responder's payload was not parseable as `ParticipantInfo`.
     #[error("invalid ParticipantInfo JSON from peer: {0}")]
     InvalidJson(#[from] serde_json::Error),
+}
+
+/// Errors from [`ClusterManager::fetch_sensors_catalog`].
+#[derive(Debug, Error)]
+pub enum FetchSensorsCatalogError {
+    /// libp2p / wire / timeout failure during the request.
+    #[error("request_sensors_catalog: {0}")]
+    Request(#[from] RequestSensorsError),
+}
+
+/// Spawn a task that drains inbound `/auki/sensors/0.0.1` requests
+/// from `rx` and replies on each `ack` with a freshly-snapshotted
+/// [`SensorsResponse`]. If no [`SensorCatalogProvider`] is
+/// registered, the response is an empty list — "I have a catalog
+/// and it's empty" is a valid producer state. NOT an error.
+///
+/// Lives for the lifetime of the `ClusterManager`; cancelled on
+/// `shutdown`.
+fn spawn_sensors_handler(
+    mut rx: mpsc::Receiver<SensorsRequestEvent>,
+    provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(SensorsRequestEvent { ack, .. }) = rx.recv().await {
+            let sensors = {
+                let guard = provider.lock().expect("sensor_catalog_provider lock");
+                match guard.as_ref() {
+                    Some(p) => p.snapshot(),
+                    None => Vec::new(),
+                }
+            };
+            let _ = ack.send(SensorsResponse { sensors });
+        }
+    })
 }
 
 /// Cluster-internal election (SDK-T6). Deterministic: sort

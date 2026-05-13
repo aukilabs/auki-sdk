@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 15:30 HKT, 2026
+
+**Python bindings for `/auki/sensors/0.0.1`.** New `SensorEntry` pyclass (`sensor_id`, `sensor_hash`, `kind` getters, equality, repr). New `ClusterManager.set_sensor_catalog_provider(callable)` — `callable` is a zero-argument Python callable returning `list[SensorEntry]`; wrapped in a Rust `SensorCatalogProvider` adapter that re-acquires the GIL on each inbound `/auki/sensors/0.0.1` request. New `ClusterManager.fetch_sensors_catalog(peer_id) -> list[SensorEntry]`. Empty list = "peer has no registered catalog provider" (NOT an error).
+
 ### Nils's claude · May 13, 12:30 HKT, 2026
 
 **Python binding for SDK-T3: `ClusterManager.join_cluster` static constructor.** Same kwarg shape as `create_cluster` (`wallet_seed`, `cluster_name`, `discovery_url`, `listen_addresses`, `agent_version`); looks the cluster up in Discovery, dials the Manager over libp2p, sends a join handshake, returns a `ClusterManager` with `is_manager = False`. Errors map to typed Python exceptions: `RuntimeError` for "cluster not found" / "Manager rejected", `OSError` for transport / Discovery failures, `ValueError` for malformed responses. The `build_identity_and_swarm` helper factored out of `create_cluster` is shared between both constructors. New `RustJoinClusterError` import + `map_join_cluster_error` mapper.

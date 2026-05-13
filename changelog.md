@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 15:30 HKT, 2026
+
+**`/auki/sensors/0.0.1` peer-to-peer sensor catalog exchange — unblocks Park's sensor-chip row.** Cluster peers ask each other "what sensors are you currently publishing?" over libp2p. Complements `/auki/info/0.0.1` (identity → catalog). Producer daemons (Booster) install a `SensorCatalogProvider` once at construction; consumers (Park) call `ClusterManager::fetch_sensors_catalog(peer_id)`. Empty catalog is valid — "I have one and it's empty" — NOT an error. Cluster-trust gated identically to existing protocols (silent-drop non-members). See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager handler + provider trait and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.
+
 ### Nils's claude · May 13, 14:34 HKT, 2026
 
 **`/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange — closes the last Hagall fallback gap.** Cluster peers resolve each other's identity over libp2p instead of mDNS + HTTP. Park can now drop mDNS entirely (PARK-T7 + PARK-T9 unblocked); Booster's identity (app, name, app_instance, is_manager, …) flows through the cluster's trust boundary and nowhere else. Breaking refactor: `DaemonInfo` drops dynamic fields (`session_now_ns`, `cluster_joined_at_ns`) — SDK computes them; `ClusterManager::create_cluster` / `.join_cluster` take `daemon_info` at construction; `participant_info()` is now arg-less. New `fetch_participant_info(peer_id)`. See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager refactor details and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.

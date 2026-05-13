@@ -18,7 +18,8 @@ use auki_domain_rs::{
     AdmitError as RustAdmitError, ClusterManager as RustClusterManager,
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     CreateClusterError as RustCreateClusterError, DaemonInfo as RustDaemonInfo,
-    JoinClusterError as RustJoinClusterError,
+    JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
+    SensorEntry as RustSensorEntry,
 };
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
@@ -301,6 +302,88 @@ impl PyParticipantInfo {
             self.inner.is_manager,
             self.inner.manager_peer_id,
         )
+    }
+}
+
+// ─── SensorEntry pyclass ───────────────────────────────────────────
+
+/// One row in a peer's sensor catalog. Produced by
+/// `ClusterManager.fetch_sensors_catalog(peer_id)` (consumer side)
+/// and supplied by the daemon's catalog provider callable
+/// (producer side, via `ClusterManager.set_sensor_catalog_provider`).
+#[pyclass(name = "SensorEntry")]
+#[derive(Clone)]
+pub struct PySensorEntry {
+    inner: RustSensorEntry,
+}
+
+#[pymethods]
+impl PySensorEntry {
+    #[new]
+    #[pyo3(signature = (sensor_id, sensor_hash, kind))]
+    fn new(sensor_id: String, sensor_hash: String, kind: String) -> Self {
+        Self {
+            inner: RustSensorEntry {
+                sensor_id,
+                sensor_hash,
+                kind,
+            },
+        }
+    }
+
+    #[getter]
+    fn sensor_id(&self) -> String {
+        self.inner.sensor_id.clone()
+    }
+
+    #[getter]
+    fn sensor_hash(&self) -> String {
+        self.inner.sensor_hash.clone()
+    }
+
+    #[getter]
+    fn kind(&self) -> String {
+        self.inner.kind.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SensorEntry(sensor_id={:?}, sensor_hash={:?}, kind={:?})",
+            self.inner.sensor_id, self.inner.sensor_hash, self.inner.kind,
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Adapter: wraps a Python callable returning `list[SensorEntry]` in
+/// a Rust `SensorCatalogProvider`. Called from the inbound
+/// `/auki/sensors/0.0.1` handler task — re-acquires the GIL on each
+/// snapshot.
+struct PySensorCatalogProvider {
+    callable: Py<PyAny>,
+}
+
+impl RustSensorCatalogProvider for PySensorCatalogProvider {
+    fn snapshot(&self) -> Vec<RustSensorEntry> {
+        Python::with_gil(|py| {
+            let result = self
+                .callable
+                .bind(py)
+                .call0()
+                .and_then(|res| res.extract::<Vec<PyRef<PySensorEntry>>>());
+            match result {
+                Ok(entries) => entries.into_iter().map(|e| e.inner.clone()).collect(),
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain-py: sensor_catalog_provider callable failed: {e}"
+                    );
+                    Vec::new()
+                }
+            }
+        })
     }
 }
 
@@ -610,6 +693,51 @@ impl PyClusterManager {
         })
     }
 
+    /// Register (or replace) the application-supplied sensor
+    /// catalog provider. `callable` must be a zero-argument Python
+    /// callable returning a `list[SensorEntry]`. Called by the SDK
+    /// once per inbound `/auki/sensors/0.0.1` request from a
+    /// cluster peer.
+    fn set_sensor_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
+        let provider = Arc::new(PySensorCatalogProvider { callable });
+        self.with_inner(|m| {
+            m.set_sensor_catalog_provider(provider);
+            Ok(())
+        })
+    }
+
+    /// Fetch a cluster peer's current sensor catalog over the
+    /// `/auki/sensors/0.0.1` libp2p protocol. `peer_id` must be a
+    /// current cluster member (otherwise the runtime's allow-list
+    /// refuses the substream). Returns a Python
+    /// `list[SensorEntry]` — empty list if the target peer has not
+    /// registered a catalog provider (NOT an error).
+    fn fetch_sensors_catalog(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+    ) -> PyResult<Vec<PySensorEntry>> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("ClusterManager has been shut down")
+                })?;
+                let resp = manager
+                    .fetch_sensors_catalog(peer_id_parsed)
+                    .await
+                    .map_err(map_fetch_sensors_catalog_error)?;
+                Ok(resp
+                    .sensors
+                    .into_iter()
+                    .map(|inner| PySensorEntry { inner })
+                    .collect())
+            })
+        })
+    }
+
     /// Shutdown — cancels the Manager heartbeat tick, deregisters
     /// the cluster from Discovery (if we're the Manager), and shuts
     /// down the runtime. Idempotent; subsequent calls return an
@@ -782,6 +910,14 @@ fn map_fetch_participant_info_error(e: auki_domain_rs::FetchParticipantInfoError
     }
 }
 
+fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) -> PyErr {
+    match e {
+        auki_domain_rs::FetchSensorsCatalogError::Request(err) => {
+            PyOSError::new_err(format!("fetch_sensors_catalog: {err}"))
+        }
+    }
+}
+
 async fn wait_for_listen_addr(
     swarm: &mut auki_network::Swarm<auki_network::swarm::Behaviour>,
 ) -> Result<Multiaddr, String> {
@@ -808,6 +944,7 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClusterMembership>()?;
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
+    m.add_class::<PySensorEntry>()?;
     m.add_class::<PyClusterManager>()?;
     Ok(())
 }

@@ -380,3 +380,141 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         discovery_url()
     );
 }
+
+/// Three-peer membership convergence via `/auki/membership/0.0.1`:
+/// A creates cluster, B joins, then C joins. After all joins settle,
+/// peer B's local membership must contain A + B + C — proving the
+/// Manager's post-admit broadcast reached B when C joined.
+///
+/// Without gossip, B's snapshot is frozen at join time (A + B only)
+/// and B's `/auki/stream/0.1.0` allow-list never includes C — i.e.
+/// the demo's step 14 would silently drop Charlie-Park's substreams
+/// to existing peers. This test pins the convergence behaviour.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn three_peer_membership_converges_via_gossip() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-gossip-it");
+
+    // --- Peer A creates ---
+    let id_a = PeerIdentity::from_seed(&[81u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-gossip-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+    )
+    .await
+    .expect("create_cluster A");
+    assert!(manager_a.is_manager());
+
+    // --- Peer B joins ---
+    let id_b = PeerIdentity::from_seed(&[82u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-gossip-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let _addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![_addr_b.clone()],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+    )
+    .await
+    .expect("join_cluster B");
+    assert_eq!(manager_b.manager_peer_id(), pid_a);
+
+    // B settles at 2 members (itself + A) via the JoinResponse::Accept
+    // snapshot. The gossip path is exercised by the NEXT join.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(manager_b.peer_count(), 2, "B sees A+B after its own join");
+
+    // --- Peer C joins ---
+    let id_c = PeerIdentity::from_seed(&[83u8; 32]);
+    let pid_c = id_c.peer_id();
+    let mut swarm_c = build_swarm(
+        &id_c,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-gossip-it-C/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let _addr_c = wait_for_listen_addr(&mut swarm_c).await;
+    let manager_c = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_c.clone(),
+        vec![_addr_c.clone()],
+        discovery.clone(),
+        swarm_c,
+        decline_all_streams(),
+    )
+    .await
+    .expect("join_cluster C");
+    assert_eq!(manager_c.manager_peer_id(), pid_a);
+    assert_eq!(manager_c.peer_count(), 3, "C sees A+B+C in its admit snapshot");
+
+    // The gossip-blocking assertion: B should converge to 3 members
+    // within a few seconds via the membership broadcast from A
+    // (post-admit broadcast in `ClusterManager::admit_peer`).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut b_saw_three = false;
+    while std::time::Instant::now() < deadline {
+        if manager_b.peer_count() == 3 {
+            b_saw_three = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        b_saw_three,
+        "peer B did not converge to 3-member membership within 5s — \
+         gossip did not propagate (peer_count = {})",
+        manager_b.peer_count()
+    );
+
+    // Verify B's membership shape — sorted peer-ids match all three.
+    let m_b = manager_b.membership();
+    let mut peers_b: Vec<libp2p_identity::PeerId> =
+        m_b.peers.iter().map(|p| p.peer_id).collect();
+    peers_b.sort();
+    let mut expected = vec![pid_a, pid_b, pid_c];
+    expected.sort();
+    assert_eq!(
+        peers_b, expected,
+        "B's membership should contain A + B + C after gossip"
+    );
+
+    // --- Cleanup ---
+    manager_c.shutdown().await.expect("C shutdown");
+    manager_b.shutdown().await.expect("B shutdown");
+    manager_a.shutdown().await.expect("A shutdown");
+
+    eprintln!(
+        "3-peer gossip convergence OK against {}: A={pid_a}, B={pid_b}, C={pid_c}",
+        discovery_url()
+    );
+}

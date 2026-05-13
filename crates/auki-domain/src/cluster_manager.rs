@@ -34,7 +34,8 @@ use auki_network::discovery_client::{
 };
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
-    AllowedPeer, JoinEvent, NetworkRuntime, PeerLivenessEvent, SendJoinRequestError, SpawnError,
+    AllowedPeer, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
+    SendJoinRequestError, SpawnError,
 };
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
@@ -175,6 +176,11 @@ pub struct ClusterManager {
     /// orchestrates Manager-handoff when the local peer wins.
     /// Cancelled on `shutdown`.
     liveness_handler_task: Option<JoinHandle<()>>,
+    /// Task that drains inbound `/auki/membership/0.0.1` gossip
+    /// events from the runtime, parses the membership JSON, swaps
+    /// the local membership document, and pushes the updated
+    /// allow-list to the runtime. Cancelled on `shutdown`.
+    membership_handler_task: Option<JoinHandle<()>>,
 }
 
 impl ClusterManager {
@@ -232,7 +238,7 @@ impl ClusterManager {
         // 3. Spawn the runtime. Initial allow-list is empty — we
         //    don't dial ourselves; the runtime expands its
         //    allow-list as peers are admitted.
-        let (runtime, join_events_rx, liveness_rx) =
+        let (runtime, join_events_rx, liveness_rx, membership_events_rx) =
             NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
@@ -271,6 +277,19 @@ impl ClusterManager {
             heartbeat_task.clone(),
         ));
 
+        // 7. Drain inbound /auki/membership/0.0.1 gossip events. As
+        //    the freshly-minted Manager we don't expect to receive
+        //    any (nobody else is gossiping yet), but if a stale peer
+        //    sends one we apply it last-write-wins — the next
+        //    Manager broadcast supersedes.
+        let membership_handler_task = Some(spawn_membership_handler(
+            membership_events_rx,
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -282,6 +301,7 @@ impl ClusterManager {
             heartbeat_task,
             join_handler_task,
             liveness_handler_task,
+            membership_handler_task,
         })
     }
 
@@ -380,6 +400,13 @@ impl ClusterManager {
         // Push the updated allow-list to the runtime.
         self.runtime.set_allowed_peers(new_allow_list).await?;
 
+        // Gossip the updated membership to every connected peer so
+        // existing members learn about the new joiner (the joiner
+        // itself already has the same JSON in the `JoinResponse::Accept`
+        // it just received). Fire-and-forget; per-peer errors are
+        // logged inside the broadcast tasks.
+        broadcast_current_membership(&self.runtime.handle(), &self.membership);
+
         Ok(member)
     }
 
@@ -470,7 +497,7 @@ impl ClusterManager {
         //    can dial it for the join handshake). The allow-list
         //    expands once the Manager gossips back the full
         //    membership.
-        let (runtime, join_events_rx, liveness_rx) = NetworkRuntime::spawn(
+        let (runtime, join_events_rx, liveness_rx, membership_events_rx) = NetworkRuntime::spawn(
             swarm,
             vec![AllowedPeer {
                 peer_id: manager_peer,
@@ -570,6 +597,17 @@ impl ClusterManager {
             heartbeat_task.clone(),
         ));
 
+        // 8. Drain inbound /auki/membership/0.0.1 gossip events.
+        //    The Manager pushes updates here when peers join / leave
+        //    after our own join; we apply them last-write-wins.
+        let membership_handler_task = Some(spawn_membership_handler(
+            membership_events_rx,
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -581,6 +619,7 @@ impl ClusterManager {
             heartbeat_task,
             join_handler_task,
             liveness_handler_task,
+            membership_handler_task,
         })
     }
 
@@ -597,6 +636,9 @@ impl ClusterManager {
             task.abort();
         }
         if let Some(task) = self.liveness_handler_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.membership_handler_task.take() {
             task.abort();
         }
 
@@ -750,6 +792,10 @@ fn spawn_liveness_handler(
                                     failed for {cluster_name:?}: {e}"
                                 );
                             }
+                            // Gossip the post-handoff view so survivors
+                            // converge on the new Manager identity + the
+                            // post-eviction membership.
+                            broadcast_current_membership(&runtime, &membership);
                             eprintln!(
                                 "auki-domain: cluster {cluster_name:?}: local peer \
                                 {local_peer_id} promoted to Manager after \
@@ -793,11 +839,99 @@ fn spawn_liveness_handler(
                                 failed: {e}"
                             );
                         }
+                        // Gossip the shrunken membership so remaining
+                        // peers also evict the dead one.
+                        broadcast_current_membership(&runtime, &membership);
                     }
                 }
             }
         }
     })
+}
+
+/// Spawn a task that drains inbound `/auki/membership/0.0.1` gossip
+/// events from `rx`, applies each update last-write-wins to the
+/// local `membership`, and pushes the recomputed allow-list to the
+/// `runtime`. Lives for the lifetime of the `ClusterManager`;
+/// cancelled on `shutdown`.
+///
+/// **Does NOT mutate `manager_peer_id`.** The election in
+/// `spawn_liveness_handler` is the single source of truth for who
+/// the Manager is — each peer runs the same deterministic algorithm
+/// over the same membership and converges independently. A gossip
+/// from a non-Manager (e.g. during a split-brain window) would lie
+/// about the Manager identity; ignoring the sender peer-id avoids
+/// that footgun.
+fn spawn_membership_handler(
+    mut rx: mpsc::Receiver<MembershipEvent>,
+    local_peer_id: PeerId,
+    _manager_peer_id: Arc<Mutex<PeerId>>,
+    membership: Arc<Mutex<ClusterMembership>>,
+    runtime: auki_network::NetworkRuntimeHandle,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(MembershipEvent { peer, update }) = rx.recv().await {
+            let parsed: ClusterMembership = match serde_json::from_str(&update.membership_json) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain: membership gossip from {peer}: invalid JSON: {e}"
+                    );
+                    continue;
+                }
+            };
+            // Last-write-wins: replace local membership and rebuild
+            // the allow-list. The cluster-trust gate on the runtime
+            // side already refused non-cluster senders, but any
+            // cluster member can in principle send — `manager_peer_id`
+            // intentionally stays unchanged so a non-Manager
+            // gossiper can't claim the role.
+            let new_allow_list: Vec<AllowedPeer> = {
+                let mut m = membership.lock().expect("membership lock");
+                *m = parsed;
+                m.peers
+                    .iter()
+                    .filter(|p| p.peer_id != local_peer_id)
+                    .map(|p| AllowedPeer {
+                        peer_id: p.peer_id,
+                        multiaddrs: p.multiaddrs.clone(),
+                    })
+                    .collect()
+            };
+            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                eprintln!(
+                    "auki-domain: membership gossip apply: set_allowed_peers \
+                    failed: {e}"
+                );
+            }
+        }
+    })
+}
+
+/// Serialize the current `membership` and `broadcast_membership` it
+/// over `/auki/membership/0.0.1`. Logged-and-swallow on encode
+/// failure; per-peer write failures are logged inside the runtime's
+/// per-task spawns. The Manager calls this after admit, after
+/// eviction, and on Manager-promotion.
+fn broadcast_current_membership(
+    runtime: &auki_network::NetworkRuntimeHandle,
+    membership: &Arc<Mutex<ClusterMembership>>,
+) {
+    let json = {
+        let m = membership.lock().expect("membership lock");
+        match serde_json::to_string(&*m) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "auki-domain: serializing membership for gossip failed: {e}"
+                );
+                return;
+            }
+        }
+    };
+    if let Err(e) = runtime.broadcast_membership(json) {
+        eprintln!("auki-domain: broadcast_membership failed: {e}");
+    }
 }
 
 /// Cluster-internal election (SDK-T6). Deterministic: sort
@@ -937,6 +1071,13 @@ fn spawn_join_handler(
                 membership_json: full_membership_json,
                 successor_token: member.successor_token.unwrap_or_default(),
             });
+
+            // Gossip the updated membership to every other connected
+            // peer so existing members learn about the new joiner.
+            // The new joiner itself just received the same JSON in
+            // the JoinResponse::Accept above; the broadcast targets
+            // everyone else.
+            broadcast_current_membership(&runtime, &membership);
         }
     })
 }

@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:48 HKT, 2026
+
+**SDK-T2 PARTIAL → DONE — membership gossip wired into `ClusterManager`.** Three pieces:
+
+- **`spawn_membership_handler`** task drains the new `MembershipEvent` channel returned from `NetworkRuntime::spawn`. On each event: parse the JSON, swap the local `ClusterMembership`, rebuild the allow-list, push via `NetworkRuntimeHandle::set_allowed_peers`. Deliberately does NOT mutate `manager_peer_id` — the election in `spawn_liveness_handler` is the single source of truth for Manager identity, and trusting gossip-sender-as-Manager would let a non-Manager cluster member fake the role.
+- **`broadcast_current_membership`** helper. Serializes the locked `ClusterMembership` and calls `NetworkRuntimeHandle::broadcast_membership`. Called in three places: (a) `spawn_join_handler` after a successful admit (so existing peers learn about the new joiner — the joiner itself got the same JSON in `JoinResponse::Accept`); (b) `spawn_liveness_handler`'s Manager-promotion path after the new Manager evicts the dead one; (c) `spawn_liveness_handler`'s Manager-evicts-Lost-peer path. `ClusterManager::admit_peer` (manual public API) also broadcasts post-success for symmetry.
+- **`ClusterManager` struct gains** `membership_handler_task: Option<JoinHandle<()>>`. Spawned by both `create_cluster` and `join_cluster`; cancelled on `shutdown` alongside the join + liveness + heartbeat tasks.
+
+New 3-peer convergence integration test against the live Discovery (`192.168.9.130:8080`): A creates cluster `foo`, B joins, C joins → poll for B's `peer_count()` to reach 3 within 5s. Without gossip B would stay at 2 (its admit-time snapshot). With gossip B converges within ~600ms. Passes alongside the other three live tests (full-lifecycle, two-managers-join, manager-failover); 4 live tests now total, finishing in ~12s.
+
+This unblocks **Hagall demo step 13** ("the Manager adds him to `foo.json` and propagates that to all peers in the cluster") which step 14 (Charlie-Park consumes Booster streams via the cluster-gated `/auki/stream/0.1.0`) depends on — without gossip, Booster #2's allow-list never includes Charlie-Park and Charlie-Park's stream substream is silently dropped at the gate.
+
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **SDK-T6 + SDK-T7 — cluster-internal election + Manager-handoff orchestration. Failover works end-to-end.** Three new pieces:

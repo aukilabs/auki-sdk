@@ -874,8 +874,20 @@ impl ClusterManager {
     }
 
     /// Shutdown — cancels all background tasks, deregisters the
-    /// cluster from Discovery (if we're the Manager), and shuts
-    /// down the runtime.
+    /// cluster from Discovery **only if we're the last member**,
+    /// and shuts down the runtime.
+    ///
+    /// **Manager handoff on graceful exit.** Per the Hagall quest
+    /// design ("graceful and ungraceful Manager exits are the same
+    /// code path — peers detect the loss + run the election +
+    /// rotate"): if the Manager calls `shutdown` while other peers
+    /// are in the cluster, we do NOT deregister. The surviving peers
+    /// detect our libp2p disconnection, run the cluster-internal
+    /// election, and the winner calls `rotate_manager` on Discovery.
+    /// Deregistering on the way out would 404 the winner's rotation
+    /// and orphan the cluster. Only when we are the last member
+    /// (`membership.peers.len() <= 1`) do we deregister, since there
+    /// is no successor to take over.
     ///
     /// Callable from `&self` so daemon callers holding the manager
     /// behind an `Arc` (Park's stream-consumer pattern, Boosterapp's
@@ -943,10 +955,19 @@ impl ClusterManager {
             task.abort();
         }
 
-        // 2. If we're the Manager, deregister the cluster.
+        // 2. Deregister from Discovery only if we're the last
+        //    member. Otherwise leave the cluster alive for the
+        //    survivors' election + handoff (see fn doc).
         let was_manager =
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let result = if was_manager {
+        let am_last = self
+            .membership
+            .lock()
+            .expect("membership lock")
+            .peers
+            .len()
+            <= 1;
+        let result = if was_manager && am_last {
             self.discovery.deregister(&self.cluster_name).await
         } else {
             Ok(())

@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 19:07 HKT, 2026
+
+**`swarm::is_routable_multiaddr` + `swarm::collect_routable_listen_addrs` ship — closes the loopback-advertise bug daemons that bind to `/ip4/0.0.0.0/...` were hitting.** Park bound its swarm to `0.0.0.0`, took only the first `NewListenAddr` event (which libp2p emits for loopback first), and advertised `/ip4/127.0.0.1/tcp/<port>` to Discovery — Boosters on the LAN had no dialable address to reach Park with. Both Park and `auki-domain-py::build_identity_and_swarm` had near-identical buggy `wait_for_listen_addr` helpers; the right place for the fix is the SDK, not each daemon (Hagall constraint #5).
+
+`is_routable_multiaddr(addr) -> bool`: pure classifier. Walks the multiaddr, finds the first `Ip4`/`Ip6` protocol, rejects loopback, unspecified, link-local (`fe80::/10` inlined since `Ipv6Addr::is_unicast_link_local` is unstable on current stable), and IPv4 broadcast. Multiaddrs without an IP component (`dns4/...`, `/p2p/<relay>/p2p-circuit/p2p/<target>`) are accepted by default — the operator's choice of name / relay is the routability guarantee.
+
+`collect_routable_listen_addrs(&mut swarm, window) -> Vec<Multiaddr>`: drives the swarm event loop for at most `window`, collects every `SwarmEvent::NewListenAddr` whose address passes the classifier, dedupes. Returns whatever arrived in time — possibly empty when the host has only a loopback interface; the caller decides whether to error, retry, or fall back to loopback for dev. 11 unit tests pin the classifier (every IPv4/IPv6 class plus the no-IP case); 2 `#[tokio::test]`s pin the swarm-driven helper (loopback-only bind returns `[]`; `/ip4/0.0.0.0/tcp/0` bind never leaks a non-routable address).
+
+Adopted in `auki-domain-py::build_identity_and_swarm` at the same time — Boosterapp's headless Python path now advertises every routable interface to Discovery instead of just the first one libp2p emitted. 2 s window picked over the previous code's 5 s deadline because bind is near-instant on a healthy host and libp2p emits every interface event within a few ms of the first; 2 s leaves ample slack for slow CI / macOS binds. Empty-result surfaces as a typed `PyOSError` with an actionable message (bind to `0.0.0.0` and ensure the host has a non-loopback interface) — replaces the previous "swarm did not produce a listen address within 5s" line, which was misleading when the bind succeeded but only loopback existed.
+
+Integration tests in `auki-domain` not migrated — they bind to a specific `/ip4/127.0.0.1/tcp/0` to get a deterministic OS-chosen port, which is a different (and intentional) shape than the daemon-side `0.0.0.0` enumeration.
+
+Park's adoption is a downstream PR (different repo). With this in place Park calls `auki_network::swarm::collect_routable_listen_addrs(&mut swarm, Duration::from_secs(2))` and passes the result into `ClusterManager::create_cluster` / `.join_cluster` — its in-house `wait_for_listen_addr` deletes.
+
 ### Nils's claude · May 13, 17:21 HKT, 2026
 
 **`NetworkRuntime::shutdown` takes `&self`; idempotent + safe to call under `Arc`.** Paired with the auki-domain `ClusterManager::shutdown` refactor that closes the "ghost cluster on Discovery" leak — `auki-domain` callers wrap the runtime via `ClusterManager`, but the `mut self → &self` shape change has to happen in the runtime crate too, otherwise `ClusterManager::shutdown(&self)` can't call through.

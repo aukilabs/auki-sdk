@@ -458,14 +458,14 @@ impl PyClusterManager {
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let (identity, swarm, listen_addr) =
+                let (identity, swarm, advertise_multiaddrs) =
                     build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
 
                 let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::create_cluster(
                     cluster_name,
                     identity,
-                    vec![listen_addr],
+                    advertise_multiaddrs,
                     discovery,
                     swarm,
                     provider,
@@ -524,14 +524,14 @@ impl PyClusterManager {
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let (identity, swarm, listen_addr) =
+                let (identity, swarm, advertise_multiaddrs) =
                     build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
 
                 let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::join_cluster(
                     cluster_name,
                     identity,
-                    vec![listen_addr],
+                    advertise_multiaddrs,
                     discovery,
                     swarm,
                     provider,
@@ -835,8 +835,13 @@ async fn build_identity_and_swarm(
     seed: &[u8; 32],
     listen_multiaddrs: Vec<Multiaddr>,
     agent_version: String,
-) -> PyResult<(PeerIdentity, auki_network::Swarm<auki_network::swarm::Behaviour>, Multiaddr)>
-{
+) -> PyResult<(
+    PeerIdentity,
+    auki_network::Swarm<auki_network::swarm::Behaviour>,
+    Vec<Multiaddr>,
+)> {
+    use auki_network::swarm::collect_routable_listen_addrs;
+    use std::time::Duration;
     let wallet = Wallet::from_seed(seed);
     let identity = PeerIdentity::from_wallet(&wallet);
     let cfg = SwarmConfig {
@@ -846,10 +851,20 @@ async fn build_identity_and_swarm(
     };
     let mut swarm = build_swarm(&identity, cfg)
         .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;
-    let listen_addr = wait_for_listen_addr(&mut swarm)
-        .await
-        .map_err(PyOSError::new_err)?;
-    Ok((identity, swarm, listen_addr))
+    // Drive the swarm for ~2 s to collect every NewListenAddr libp2p
+    // emits for the bind. When the daemon binds to /ip4/0.0.0.0/...,
+    // libp2p enumerates every interface in non-deterministic order;
+    // the helper drops loopback / link-local / unspecified per
+    // `is_routable_multiaddr`. Anything left is what the daemon
+    // advertises to Discovery as its dialable multiaddrs.
+    let advertise = collect_routable_listen_addrs(&mut swarm, Duration::from_secs(2)).await;
+    if advertise.is_empty() {
+        return Err(PyOSError::new_err(
+            "swarm produced no routable listen addresses within 2s — bind to \
+             /ip4/0.0.0.0/... and ensure the host has a non-loopback interface",
+        ));
+    }
+    Ok((identity, swarm, advertise))
 }
 
 fn map_join_cluster_error(e: RustJoinClusterError) -> PyErr {
@@ -922,23 +937,6 @@ fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) 
             PyOSError::new_err(format!("fetch_sensors_catalog: {err}"))
         }
     }
-}
-
-async fn wait_for_listen_addr(
-    swarm: &mut auki_network::Swarm<auki_network::swarm::Behaviour>,
-) -> Result<Multiaddr, String> {
-    use futures::StreamExt;
-    use libp2p::swarm::SwarmEvent;
-    use std::time::Duration;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(SwarmEvent::NewListenAddr { address, .. }) = swarm.next().await {
-                return address;
-            }
-        }
-    })
-    .await
-    .map_err(|_| "swarm did not produce a listen address within 5s".to_string())
 }
 
 // ─── Module entry point ────────────────────────────────────────────

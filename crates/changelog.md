@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 19:07 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `swarm::is_routable_multiaddr` + `swarm::collect_routable_listen_addrs` helpers.** Closes the daemon-side bug where binding to `/ip4/0.0.0.0/...` and taking only the first `NewListenAddr` caused the daemon to advertise `127.0.0.1` to Discovery — the LAN had no way to dial back. The classifier rejects loopback / unspecified / link-local / IPv4 broadcast and accepts both IP-bearing and IP-free (dns/relay-mediated) addresses. The collector drives the swarm for a configurable window and dedupes routable `NewListenAddr` events. `auki-domain-py::build_identity_and_swarm` adopts both — Boosterapp now advertises every routable interface to Discovery instead of just the first one libp2p emitted. 11 unit tests + 2 swarm-driven `#[tokio::test]`s. Park adoption is a downstream PR (different repo).
+
 ### Nils's claude · May 13, 15:30 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `/auki/sensors/0.0.1` peer-to-peer sensor catalog exchange.** Cluster peers fetch each other's currently-published sensor list over libp2p (cluster-trust-gated, silent-drop on non-members). Complement to `/auki/info/0.0.1` (identity); together they unblock Park's sensor-chip row (currently rendering "awaiting SDK /auki/sensors/0.0.1"). Producer daemons register an `Arc<dyn SensorCatalogProvider>` (Python: a zero-arg callable returning `list[SensorEntry]`); consumers call `ClusterManager::fetch_sensors_catalog(peer_id)`. Empty list = "peer has no provider yet" (NOT an error). `NetworkRuntime::spawn` returns a 6th channel. 5 new wire-format unit tests + 1 ignored live integration test (`cluster_peers_fetch_each_other_sensors_catalog_over_libp2p`).

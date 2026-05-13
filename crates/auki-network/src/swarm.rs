@@ -251,6 +251,91 @@ pub fn dial_peer(
     swarm.dial(opts)
 }
 
+/// `true` if `addr` carries an IP component that's routable on the
+/// local network — i.e. not loopback, not unspecified, not
+/// link-local, not IPv4 broadcast.
+///
+/// Multiaddrs without an IP component (`dns4`/`dns6`/`dnsaddr`,
+/// circuit-relay-mediated like `/p2p/<relay>/p2p-circuit/p2p/<target>`)
+/// are accepted by default — the operator's choice of name / relay
+/// is the routability guarantee, and the SDK shouldn't second-guess.
+///
+/// Used by [`collect_routable_listen_addrs`] to filter the
+/// `NewListenAddr` events libp2p emits when a swarm binds to
+/// `/ip4/0.0.0.0/...`. Daemons advertise the survivors to Discovery
+/// as `manager_multiaddrs`.
+pub fn is_routable_multiaddr(addr: &Multiaddr) -> bool {
+    use multiaddr::Protocol;
+    for proto in addr.iter() {
+        match proto {
+            Protocol::Ip4(v4) => {
+                return !v4.is_loopback()
+                    && !v4.is_unspecified()
+                    && !v4.is_link_local()
+                    && !v4.is_broadcast();
+            }
+            Protocol::Ip6(v6) => {
+                return !v6.is_loopback() && !v6.is_unspecified() && !is_ipv6_link_local(&v6);
+            }
+            _ => continue,
+        }
+    }
+    true
+}
+
+/// IPv6 link-local check (`fe80::/10`). `Ipv6Addr::is_unicast_link_local`
+/// is unstable on stable Rust as of 1.79; we inline the bit-check.
+fn is_ipv6_link_local(v6: &std::net::Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xffc0) == 0xfe80
+}
+
+/// Drive `swarm` for at most `window` and return every routable
+/// listen address it emitted (per [`is_routable_multiaddr`]).
+///
+/// Use after [`build_swarm`] to enumerate the dialable addresses to
+/// advertise to Discovery. When a swarm binds to `/ip4/0.0.0.0/...`,
+/// libp2p emits one `NewListenAddr` per host interface in
+/// non-deterministic order; this helper collects all of them and
+/// drops the unroutable ones (loopback, link-local, unspecified).
+///
+/// Returns whatever arrived within `window` — possibly empty (host
+/// has only a loopback interface, or the swarm failed to bind in
+/// time). The caller decides whether to error, retry with a longer
+/// window, or fall back to loopback for local-only development.
+/// Duplicates are filtered.
+///
+/// A `window` of 500 ms–2 s is typical: bind is usually instantaneous
+/// on a healthy host, and libp2p emits all interface events within a
+/// few milliseconds of the first.
+pub async fn collect_routable_listen_addrs(
+    swarm: &mut Swarm<Behaviour>,
+    window: std::time::Duration,
+) -> Vec<Multiaddr> {
+    use futures::StreamExt as _;
+    use libp2p::swarm::SwarmEvent;
+    let mut collected: Vec<Multiaddr> = Vec::new();
+    let deadline = tokio::time::sleep(window);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut deadline => break,
+            ev = swarm.next() => {
+                match ev {
+                    Some(SwarmEvent::NewListenAddr { address, .. }) => {
+                        if is_routable_multiaddr(&address) && !collected.contains(&address) {
+                            collected.push(address);
+                        }
+                    }
+                    Some(_) => { /* ignore other events during the bind window */ }
+                    None => break,
+                }
+            }
+        }
+    }
+    collected
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -565,5 +650,124 @@ mod tests {
         let addr_a = wait_for_listen_addr(&mut a).await;
         dial_peer(&mut b, id_a.peer_id(), vec![addr_a]).expect("dial via helper");
         run_until_mutual_identify(&mut a, &mut b).await;
+    }
+
+    // ─── is_routable_multiaddr ────────────────────────────────────────
+
+    #[test]
+    fn is_routable_rejects_ipv4_loopback() {
+        let a: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv4_unspecified() {
+        let a: Multiaddr = "/ip4/0.0.0.0/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv4_link_local() {
+        let a: Multiaddr = "/ip4/169.254.42.7/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv4_broadcast() {
+        let a: Multiaddr = "/ip4/255.255.255.255/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_accepts_ipv4_private_lan() {
+        // The Hagall demo's reachable case: 192.168.x.x.
+        let a: Multiaddr = "/ip4/192.168.9.74/tcp/4001".parse().unwrap();
+        assert!(is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_accepts_ipv4_public() {
+        let a: Multiaddr = "/ip4/8.8.8.8/tcp/4001".parse().unwrap();
+        assert!(is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv6_loopback() {
+        let a: Multiaddr = "/ip6/::1/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv6_unspecified() {
+        let a: Multiaddr = "/ip6/::/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_rejects_ipv6_link_local() {
+        let a: Multiaddr = "/ip6/fe80::1/tcp/4001".parse().unwrap();
+        assert!(!is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_accepts_ipv6_global() {
+        let a: Multiaddr = "/ip6/2001:db8::1/tcp/4001".parse().unwrap();
+        assert!(is_routable_multiaddr(&a));
+    }
+
+    #[test]
+    fn is_routable_accepts_dns_multiaddr() {
+        // No IP component — operator's choice; SDK doesn't second-guess.
+        let a: Multiaddr = "/dns4/relay.example.com/tcp/4001".parse().unwrap();
+        assert!(is_routable_multiaddr(&a));
+    }
+
+    // ─── collect_routable_listen_addrs ────────────────────────────────
+
+    #[tokio::test]
+    async fn collect_returns_empty_when_only_bound_to_loopback() {
+        // Bound only to 127.0.0.1 → every NewListenAddr fires for
+        // loopback → collect returns [].
+        let identity = PeerIdentity::from_seed(&[31u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..test_tcp_config("collect-loopback/0")
+            },
+        )
+        .unwrap();
+        let got = collect_routable_listen_addrs(&mut swarm, Duration::from_millis(500)).await;
+        assert!(
+            got.is_empty(),
+            "expected no routable addrs from a loopback-only bind, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_filters_out_loopback_when_bound_to_unspecified() {
+        // Bound to /ip4/0.0.0.0/tcp/0 → libp2p enumerates every host
+        // interface. Every returned address must pass
+        // `is_routable_multiaddr` — loopback (127.0.0.1) emissions are
+        // filtered. The number of routable addresses depends on the
+        // host (CI may have only loopback; dev machines have at least
+        // one LAN interface), so we don't assert a count — only that
+        // nothing un-routable leaked through.
+        let identity = PeerIdentity::from_seed(&[32u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse().unwrap()],
+                ..test_tcp_config("collect-unspecified/0")
+            },
+        )
+        .unwrap();
+        let got = collect_routable_listen_addrs(&mut swarm, Duration::from_secs(1)).await;
+        for addr in &got {
+            assert!(
+                is_routable_multiaddr(addr),
+                "collect surfaced an un-routable address: {addr}"
+            );
+        }
     }
 }

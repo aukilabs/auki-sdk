@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 19:07 HKT, 2026
+
+**`build_identity_and_swarm` adopts `auki_network::swarm::collect_routable_listen_addrs` — Boosterapp's headless Python path stops advertising loopback to Discovery.** Old shape grabbed the first `NewListenAddr` event libp2p emitted and passed `vec![that_one]` as the daemon's `manager_multiaddrs` to `ClusterManager::create_cluster` / `.join_cluster`. When the daemon bound to `/ip4/0.0.0.0/...` (which is how Boosterapp's K1 systemd unit runs), libp2p emits one event per interface — loopback first, then every host NIC, in non-deterministic order — so the daemon registered `/ip4/127.0.0.1/tcp/<port>` with Discovery and a Booster on another K1 had no dialable path. New shape calls the SDK helper with a 2 s window, collects every routable listen address libp2p emits, and passes all of them through. Empty-result surfaces as a typed `PyOSError` with an actionable message ("bind to /ip4/0.0.0.0/... and ensure the host has a non-loopback interface") — replaces the misleading "swarm did not produce a listen address within 5s" line, which fired even when the bind succeeded but only loopback existed. Private `wait_for_listen_addr` helper deleted (~16 LOC; the SDK now owns this).
+
+The `create_cluster` / `join_cluster` call sites switched from `vec![listen_addr]` to passing `advertise_multiaddrs` directly; no API change visible to Python callers. `ClusterManager::create_cluster` already took `Vec<Multiaddr>`, so this is a pure value-shape improvement on the Rust side.
+
 ### Nils's claude · May 13, 15:30 HKT, 2026
 
 **Python bindings for `/auki/sensors/0.0.1`.** New `SensorEntry` pyclass (`sensor_id`, `sensor_hash`, `kind` getters, equality, repr). New `ClusterManager.set_sensor_catalog_provider(callable)` — `callable` is a zero-argument Python callable returning `list[SensorEntry]`; wrapped in a Rust `SensorCatalogProvider` adapter that re-acquires the GIL on each inbound `/auki/sensors/0.0.1` request. New `ClusterManager.fetch_sensors_catalog(peer_id) -> list[SensorEntry]`. Empty list = "peer has no registered catalog provider" (NOT an error).

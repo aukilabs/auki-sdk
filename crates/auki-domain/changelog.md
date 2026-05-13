@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 15:30 HKT, 2026
+
+**`/auki/sensors/0.0.1` wired into `ClusterManager`. Park's sensor-chip row unblocked.** Producers (Booster, future robotics SDK consumers) tell the SDK what sensors they're publishing via a new `SensorCatalogProvider` trait — `Arc<dyn SensorCatalogProvider>` installed once at construction (or swapped later) via `ClusterManager::set_sensor_catalog_provider`. Inbound `/auki/sensors/0.0.1` requests snapshot the registered provider and reply; if no provider is registered the SDK returns an empty `sensors: []` — "I have a catalog and it's empty" is a valid producer state, NOT an error. NO FALLBACK inside the SDK.
+
+New `spawn_sensors_handler` task drains inbound `SensorsRequestEvent`s from the runtime, snapshots the application-supplied provider, serializes the catalog, replies via the event's oneshot. Lives for the lifetime of the ClusterManager; cancelled on `shutdown` alongside the existing five handler tasks.
+
+New `ClusterManager::fetch_sensors_catalog(peer_id) -> Result<SensorsResponse, FetchSensorsCatalogError>` public method. Thin async wrapper over `NetworkRuntime::request_sensors_catalog`. Park calls this for every cluster peer to populate its sensor-chip row (one chip per `SensorEntry`).
+
+Crate re-exports `SensorEntry`, `SensorsResponse`, `SensorCatalogProvider`, `FetchSensorsCatalogError` for consumers.
+
+New live integration test `cluster_peers_fetch_each_other_sensors_catalog_over_libp2p` (one Booster-like B with a fixed one-camera catalog, one Park-like A with no provider) verifies round-trip + empty-catalog semantics. `#[ignore]`'d like every other live test — runs against `192.168.9.130:8080` when explicitly invoked.
+
 ### Nils's claude · May 13, 14:34 HKT, 2026
 
 **`/auki/info/0.0.1` wired into `ClusterManager` + breaking refactor of `DaemonInfo`. NO FALLBACKS gap closed.** Park (and any future cross-daemon Auki UI) can now resolve a cluster peer's `ParticipantInfo` over libp2p instead of via mDNS + HTTP `/api/info`. This is the last Hagall-shape gap before Park can drop mDNS entirely (PARK-T7 + PARK-T9 unblocked).

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 15:30 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `/auki/sensors/0.0.1` peer-to-peer sensor catalog exchange.** Cluster peers fetch each other's currently-published sensor list over libp2p (cluster-trust-gated, silent-drop on non-members). Complement to `/auki/info/0.0.1` (identity); together they unblock Park's sensor-chip row (currently rendering "awaiting SDK /auki/sensors/0.0.1"). Producer daemons register an `Arc<dyn SensorCatalogProvider>` (Python: a zero-arg callable returning `list[SensorEntry]`); consumers call `ClusterManager::fetch_sensors_catalog(peer_id)`. Empty list = "peer has no provider yet" (NOT an error). `NetworkRuntime::spawn` returns a 6th channel. 5 new wire-format unit tests + 1 ignored live integration test (`cluster_peers_fetch_each_other_sensors_catalog_over_libp2p`).
+
 ### Nils's claude · May 13, 14:34 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange + `DaemonInfo` refactor.** Cluster peers fetch each other's identity over libp2p (cluster-trust-gated, silent-drop on non-members) instead of via mDNS + HTTP. Last Hagall fallback gap closed — PARK-T7 + PARK-T9 unblocked. Breaking: `DaemonInfo` drops `session_now_ns` + `cluster_joined_at_ns` (SDK computes), `ClusterManager::create_cluster` / `.join_cluster` gain a `daemon_info` parameter, `participant_info()` takes no args. New `ClusterManager::fetch_participant_info(peer_id)` returns a parsed `ParticipantInfo`. Python bindings track. 5 live tests pass against `192.168.9.130:8080` (new: `cluster_peers_fetch_each_other_participant_info_over_libp2p`).

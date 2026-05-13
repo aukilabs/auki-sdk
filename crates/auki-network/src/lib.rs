@@ -54,10 +54,14 @@ pub mod membership_protocol;
 pub mod info_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod sensors_protocol;
+
+#[cfg(feature = "swarm")]
 pub use network_runtime::{
     AllowedPeer, BroadcastMembershipError, InfoRequestEvent, JoinEvent, MembershipEvent,
     NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent, RequestInfoError,
-    SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
+    RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError,
+    UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

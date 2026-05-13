@@ -653,3 +653,117 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
         discovery_url()
     );
 }
+
+/// Cross-fetch sensor catalog over `/auki/sensors/0.0.1`: A creates,
+/// B joins. B (the "producer") installs a `SensorCatalogProvider`
+/// returning a one-camera catalog. A (the "consumer", Park-like)
+/// calls `fetch_sensors_catalog(pid_b)` and asserts the round-trip
+/// shape. Then verifies that fetching from a peer without a
+/// registered provider returns an empty catalog (NOT an error).
+///
+/// Mirrors `cluster_peers_fetch_each_other_participant_info_over_libp2p`
+/// shape — same Discovery, same swarm pattern, same trust boundary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
+    use auki_domain::{SensorCatalogProvider, SensorEntry};
+    use std::sync::Arc;
+
+    /// Test fixture provider — returns a fixed one-entry catalog.
+    struct FixedCatalog(Vec<SensorEntry>);
+    impl SensorCatalogProvider for FixedCatalog {
+        fn snapshot(&self) -> Vec<SensorEntry> {
+            self.0.clone()
+        }
+    }
+
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-sensors-it");
+
+    // A — Park-like consumer, creates the cluster. No catalog.
+    let id_a = PeerIdentity::from_seed(&[93u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-sensors-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let daemon_a = sample_daemon_info("park-a");
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+        daemon_a,
+    )
+    .await
+    .expect("create_cluster A");
+
+    // B — Booster-like producer, joins. Installs a catalog.
+    let id_b = PeerIdentity::from_seed(&[94u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-sensors-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let _addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let daemon_b = sample_daemon_info("booster-b");
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![_addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+        daemon_b,
+    )
+    .await
+    .expect("join_cluster B");
+
+    let b_catalog = vec![SensorEntry {
+        sensor_id: "K1-FAKE/head_cam".into(),
+        sensor_hash: "abc".into(),
+        kind: "camera".into(),
+    }];
+    manager_b.set_sensor_catalog_provider(Arc::new(FixedCatalog(b_catalog.clone())));
+
+    // A fetches B's sensor catalog over /auki/sensors/0.0.1.
+    let from_a = manager_a
+        .fetch_sensors_catalog(pid_b)
+        .await
+        .expect("A fetches B's sensor catalog");
+    assert_eq!(from_a.sensors.len(), 1);
+    assert_eq!(from_a.sensors[0], b_catalog[0]);
+
+    // B fetches A's sensor catalog: A never installed a provider,
+    // so the catalog is empty. This is NOT an error.
+    let from_b = manager_b
+        .fetch_sensors_catalog(pid_a)
+        .await
+        .expect("B fetches A's (empty) sensor catalog");
+    assert!(
+        from_b.sensors.is_empty(),
+        "A has no registered provider; expected empty catalog, got {:?}",
+        from_b.sensors
+    );
+
+    manager_b.shutdown().await.expect("B shutdown");
+    manager_a.shutdown().await.expect("A shutdown");
+
+    eprintln!(
+        "Cross-fetch sensor catalog OK against {}: B={pid_b} published 1 camera; A={pid_a} empty",
+        discovery_url()
+    );
+}

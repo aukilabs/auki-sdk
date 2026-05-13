@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:00 HKT, 2026
+
+**SDK-T5 — `/auki/heartbeat/0.0.1` peer-side heartbeat protocol + `PeerLivenessEvent` plumbing.** New `heartbeat_protocol` module: `pub const HEARTBEAT_PROTOCOL = "/auki/heartbeat/0.0.1"`, `Heartbeat { sent_at_unix_ns: i64 }`, 500ms cadence, 1500ms timeout (3 missed). Length-prefixed JSON framing (1 KiB cap). 5 wire-format unit tests including locked field names.
+
+`NetworkRuntime::spawn` now returns `(Self, mpsc::Receiver<JoinEvent>, mpsc::Receiver<PeerLivenessEvent>)` — third channel surfaces `Connected { peer_id }` on every fresh `ConnectionEstablished` for a known peer, and `Lost { peer_id }` either when the underlying libp2p connection closes or when no heartbeat has been received within `HEARTBEAT_TIMEOUT`. On `ConnectionEstablished`, the runtime spawns a per-peer heartbeat task (the lower-peer-id side opens the substream; the other accepts inbound). The bidirectional task writes a `Heartbeat` every 500ms and reads continuously, updating a shared per-peer last-seen timestamp. A monitor task scans every 750ms (half-`HEARTBEAT_TIMEOUT`) and fires `Lost` events for expired peers; dedupes per peer until they reconnect.
+
+`NetworkRuntimeHandle` gains `connected_peers()` so background tasks (the cluster manager's liveness handler in `auki-domain`) can probe reachability for the cluster-internal election.
+
+Net delta: +1 module (`heartbeat_protocol`, ~210 LOC including 5 tests), `network_runtime` gains ~240 LOC for the heartbeat plumbing + monitor.
+
 ### Nils's claude · May 13, 12:30 HKT, 2026
 
 **SDK-T3 — `/auki/join/0.0.1` libp2p protocol + NetworkRuntime join plumbing + connection-level trust boundary flipped to block-list.**

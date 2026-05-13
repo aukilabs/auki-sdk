@@ -262,3 +262,121 @@ async fn two_managers_create_then_join_against_live_discovery() {
         discovery_url()
     );
 }
+
+/// Failover: A creates cluster, B joins, A "dies" (clean shutdown
+/// short of deregister), B detects the loss via the peer-side
+/// heartbeat timeout, runs the election, promotes itself to
+/// Manager, calls `rotate_manager` on Discovery, and starts the
+/// Manager-side Discovery heartbeat tick.
+///
+/// To simulate A "dying" without it deregistering the cluster
+/// first (which would be the graceful exit path), we abort A's
+/// runtime via Rust's `Drop` without going through
+/// `ClusterManager::shutdown` — that's the unclean-exit path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_failover_when_a_dies_b_takes_over() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-failover-it");
+
+    // --- Peer A: creates the cluster ---
+    let id_a = PeerIdentity::from_seed(&[81u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-failover-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // --- Peer B: joins A's cluster ---
+    let id_b = PeerIdentity::from_seed(&[82u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-failover-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+    )
+    .await
+    .expect("join_cluster B");
+
+    // Give heartbeats a moment to start flowing both ways.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+    assert_eq!(manager_b.manager_peer_id(), pid_a);
+
+    // --- A "dies" (drop without going through shutdown) ---
+    eprintln!("A=({pid_a}) dying (drop without shutdown)…");
+    drop(manager_a);
+
+    // B detects the loss via the heartbeat-timeout monitor
+    // (~1500ms) plus a margin for the election + rotate_manager
+    // round-trip.
+    eprintln!("waiting up to 5s for B to detect loss + run election + rotate Discovery…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not become Manager within 5s after A died"
+    );
+    assert_eq!(manager_b.manager_peer_id(), pid_b);
+
+    // Verify Discovery sees the rotation: the cluster's
+    // manager_peer_id should now be B's.
+    let snapshot = discovery.list_clusters().await.expect("list_clusters");
+    let entry = snapshot
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .expect("cluster still in directory after failover");
+    assert_eq!(
+        entry.manager_peer_id, pid_b,
+        "Discovery's Manager hint rotated to B"
+    );
+
+    // --- Cleanup ---
+    manager_b.shutdown().await.expect("B shutdown");
+    let after = discovery.list_clusters().await.expect("list after");
+    assert!(
+        !after.iter().any(|c| c.name == cluster_name),
+        "cluster {cluster_name} still in directory after B shutdown"
+    );
+
+    eprintln!(
+        "Manager failover OK against {}: A={pid_a} died, B={pid_b} took over",
+        discovery_url()
+    );
+}

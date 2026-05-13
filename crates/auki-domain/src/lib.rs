@@ -20,6 +20,6 @@ pub mod cluster_membership;
 
 pub use cluster_manager::{
     AdmitError, ClusterManager, CreateClusterError, DaemonInfo, JoinClusterError,
-    MANAGER_HEARTBEAT_INTERVAL,
+    MANAGER_HEARTBEAT_INTERVAL, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};

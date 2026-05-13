@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:00 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T5/T6/T7: Manager failover lands.** New `/auki/heartbeat/0.0.1` peer-side heartbeat protocol (500ms cadence, 1500ms timeout); `NetworkRuntime` surfaces `PeerLivenessEvent::{Connected, Lost}`; `ClusterManager` runs the cluster-internal election (`elect_successor`: earliest-joined reachable wins, lower peer-id tie-break) on Manager death and orchestrates the handoff (rotate Discovery directory + start Manager heartbeat tick). Failover demo verified end-to-end against `192.168.9.130:8080`: A creates cluster, B joins, A dies, B detects within ~1.5s and becomes Manager.
+
+### Nils's claude · May 13, 12:30 HKT, 2026
+
 ### Nils's claude · May 13, 12:30 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — SDK-T3 lands: `/auki/join/0.0.1` protocol + `ClusterManager::join_cluster` (Rust + Python).** Joiner dials Manager, sends join request, receives gossiped membership; Manager-side handler task admits + pushes the updated allow-list to the runtime. Connection-level trust boundary flipped from `AllowedPeers` (deny inbound by default) to `BlockedPeers` (open by default) — membership enforcement moves to per-protocol gates inside the runtime, because Hagall's join handshake requires accepting inbound from peers we've never seen. End-to-end live integration test (2 peers): A creates cluster `foo`, B joins, both see identical 2-member membership, both shutdown cleanly. Passes against `192.168.9.130:8080`. **Booster / Park can now `join_cluster` an existing cluster, not just create.**

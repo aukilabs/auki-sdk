@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:00 HKT, 2026
+
+**SDK-T5/T6/T7 land: Manager failover end-to-end.** Peer-side heartbeat protocol (`/auki/heartbeat/0.0.1`, 500ms cadence, 1500ms timeout); `NetworkRuntime` surfaces peer-liveness events; `ClusterManager` runs the election + handoff. Failover demo: A creates, B joins, A dies, B detects within ~1.5s, runs election, promotes itself to Manager, rotates Discovery, starts heartbeat tick. Verified against the running Discovery at `192.168.9.130:8080`. **Booster + Park can now run the full Hagall demo lifecycle.**
+
+### Nils's claude · May 13, 12:30 HKT, 2026
+
 ### Nils's claude · May 13, 12:30 HKT, 2026
 
 **SDK-T3 lands: `ClusterManager::join_cluster` (Rust + Python) over a new `/auki/join/0.0.1` libp2p protocol.** Joiner dials Manager, sends a request, receives the gossiped membership; Manager admits + pushes the updated allow-list to the runtime. Connection-level trust boundary flipped from allow-list-deny to block-list-allow — membership enforcement moves to per-protocol gates, because Hagall's join handshake fundamentally requires accepting inbound from peers we've never seen. End-to-end live test verifies A.create + B.join converges on identical membership against the running Discovery at `192.168.9.130:8080`. Booster / Park unblocked for the joiner-side flow.

@@ -42,6 +42,10 @@ use crate::join_protocol::{
 use crate::membership_protocol::{
     MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
 };
+use crate::info_protocol::{
+    INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
+    read_info_response, write_info_request, write_info_response,
+};
 use crate::{
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
@@ -177,6 +181,58 @@ pub enum SendJoinRequestError {
     /// The full request/response round-trip didn't complete within
     /// [`JOIN_REQUEST_TIMEOUT`].
     #[error("join request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+/// Inbound `/auki/info/0.0.1` event surfaced by the runtime to its
+/// owner via the channel returned from [`NetworkRuntime::spawn`].
+///
+/// The owner (typically `auki-domain`'s `ClusterManager`) builds the
+/// requesting peer's expected response — a serialized
+/// [`crate::ParticipantInfo`] — and replies via `ack`. The runtime's
+/// per-substream task awaits the reply for up to
+/// [`INFO_RESPONSE_TIMEOUT`] before closing the substream silently.
+#[derive(Debug)]
+pub struct InfoRequestEvent {
+    /// The peer-id of the requester. Authenticated by libp2p's noise
+    /// handshake at connection-establishment time.
+    pub peer: PeerId,
+    /// The body of the request. Empty today — reserved for future
+    /// delta-fetching fields.
+    pub request: InfoRequest,
+    /// One-shot channel to reply on. Send a fully-serialized
+    /// `ParticipantInfo` JSON wrapped in an [`InfoResponse`].
+    /// Dropping the sender without sending closes the substream
+    /// silently — the requester sees an [`InfoProtocolError::Io`]
+    /// with `UnexpectedEof`.
+    pub ack: oneshot::Sender<InfoResponse>,
+}
+
+/// How long the runtime's per-substream info task waits for the
+/// owner to reply via the [`InfoRequestEvent::ack`] channel before
+/// closing the substream. Short — building a `ParticipantInfo` is
+/// reading a few `Arc<Mutex<...>>` fields and constructing a JSON
+/// string; >2 s means something is wrong with the handler.
+const INFO_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`NetworkRuntime::request_participant_info`] waits for
+/// the full open-write-read round-trip before returning a timeout
+/// error.
+pub const INFO_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Errors from [`NetworkRuntime::request_participant_info`].
+#[derive(Debug, thiserror::Error)]
+pub enum RequestInfoError {
+    /// `libp2p_stream::Control::open_stream` failed (peer not
+    /// reachable, not on the allow-list, etc.).
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    /// I/O or wire-format error reading/writing a framed message.
+    #[error("protocol: {0}")]
+    Protocol(#[source] InfoProtocolError),
+    /// The round-trip didn't complete within
+    /// [`INFO_REQUEST_TIMEOUT`].
+    #[error("info request timed out after {0:?}")]
     Timeout(Duration),
 }
 
@@ -347,9 +403,10 @@ impl NetworkRuntime {
     /// Returns the runtime + a receiver for inbound
     /// `/auki/join/0.0.1` events + a receiver for peer-liveness
     /// events + a receiver for inbound `/auki/membership/0.0.1`
-    /// gossip events. Owners that don't care about any of them
-    /// (e.g. tests) can drop the receivers; the runtime drops events
-    /// with no receiver.
+    /// gossip events + a receiver for inbound `/auki/info/0.0.1`
+    /// participant-info requests. Owners that don't care about any
+    /// of them (e.g. tests) can drop the receivers; the runtime
+    /// drops events with no receiver.
     pub fn spawn(
         swarm: Swarm<Behaviour>,
         allowed_peers: Vec<AllowedPeer>,
@@ -360,6 +417,7 @@ impl NetworkRuntime {
             mpsc::Receiver<JoinEvent>,
             mpsc::Receiver<PeerLivenessEvent>,
             mpsc::Receiver<MembershipEvent>,
+            mpsc::Receiver<InfoRequestEvent>,
         ),
         SpawnError,
     > {
@@ -375,6 +433,7 @@ impl NetworkRuntime {
         let (join_events_tx, join_events_rx) = mpsc::channel::<JoinEvent>(16);
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
         let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
+        let (info_events_tx, info_events_rx) = mpsc::channel::<InfoRequestEvent>(16);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -387,6 +446,7 @@ impl NetworkRuntime {
             join_events_tx,
             liveness_tx,
             membership_events_tx,
+            info_events_tx,
         ));
         Ok((
             Self {
@@ -401,6 +461,7 @@ impl NetworkRuntime {
             join_events_rx,
             liveness_rx,
             membership_events_rx,
+            info_events_rx,
         ))
     }
 
@@ -441,6 +502,51 @@ impl NetworkRuntime {
         {
             Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
             Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
+            Ok(Ok(r)) => r,
+        };
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's [`crate::ParticipantInfo`] over the
+    /// `/auki/info/0.0.1` libp2p protocol. Returns the response's
+    /// serialized JSON; callers deserialize via `serde_json` (the
+    /// shape is `auki_network::ParticipantInfo`).
+    ///
+    /// `peer_id` must be on the local allow-list — libp2p refuses
+    /// the substream otherwise. Daemons typically call this against
+    /// every entry in their `ClusterMembership` to populate
+    /// `/api/cluster/peers` / their own directory views.
+    ///
+    /// The full open-write-read round-trip is bounded by
+    /// [`INFO_REQUEST_TIMEOUT`] (5 s — well above LAN round-trip,
+    /// well below any operator-perceptible UI hang).
+    pub async fn request_participant_info(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<InfoResponse, RequestInfoError> {
+        let mut control = self.stream_control.clone();
+        let proto = StreamProtocol::try_from_owned(INFO_PROTOCOL.to_string())
+            .expect("INFO_PROTOCOL is a valid libp2p protocol id");
+
+        let open_fut = control.open_stream(peer_id, proto);
+        let mut substream = match tokio::time::timeout(INFO_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestInfoError::OpenStream(e)),
+            Ok(Ok(s)) => s,
+        };
+
+        write_info_request(&mut substream, &InfoRequest::default())
+            .await
+            .map_err(RequestInfoError::Protocol)?;
+
+        let response = match tokio::time::timeout(
+            INFO_REQUEST_TIMEOUT,
+            read_info_response(&mut substream),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestInfoError::Protocol(e)),
             Ok(Ok(r)) => r,
         };
         Ok(response)
@@ -566,6 +672,7 @@ async fn run_task(
     join_events_tx: mpsc::Sender<JoinEvent>,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
     membership_events_tx: mpsc::Sender<MembershipEvent>,
+    info_events_tx: mpsc::Sender<InfoRequestEvent>,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -653,6 +760,16 @@ async fn run_task(
     let mut incoming_memberships: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(membership_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/info/0.0.1` substream acceptance.
+    let info_proto = StreamProtocol::try_from_owned(INFO_PROTOCOL.to_string())
+        .expect("INFO_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_infos: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(info_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -751,6 +868,19 @@ async fn run_task(
                 }
                 let tx = membership_events_tx.clone();
                 tokio::spawn(handle_inbound_membership_substream(peer, substream, tx));
+            }
+
+            info = incoming_infos.next() => {
+                let Some((peer, substream)) = info else { return; };
+                // Same cluster-trust gate. Non-cluster peers can't
+                // fetch a daemon's ParticipantInfo — privacy by
+                // membership.
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = info_events_tx.clone();
+                tokio::spawn(handle_inbound_info_substream(peer, substream, tx));
             }
 
             _ = tick.tick() => {
@@ -1180,6 +1310,63 @@ async fn handle_inbound_membership_substream(
     }
 }
 
+/// Per-substream task for an inbound `/auki/info/0.0.1` request.
+/// Reads the framed [`InfoRequest`], forwards it to the runtime's
+/// owner via an [`InfoRequestEvent`], awaits the owner's reply (up
+/// to [`INFO_RESPONSE_TIMEOUT`]), writes the framed
+/// [`InfoResponse`] back, closes the substream.
+///
+/// Mirrors `handle_inbound_join_substream` in lifecycle — errors
+/// at any stage drop the substream silently; the requester sees
+/// `UnexpectedEof` on read.
+async fn handle_inbound_info_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    info_events_tx: mpsc::Sender<InfoRequestEvent>,
+) {
+    let request = match read_info_request(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: info substream from {peer}: read failed: {e}");
+            return;
+        }
+    };
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if info_events_tx
+        .send(InfoRequestEvent {
+            peer,
+            request,
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        // Owner has dropped the receiver — drop silently.
+        return;
+    }
+
+    let response = match tokio::time::timeout(INFO_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => {
+            eprintln!(
+                "auki-network: info handler dropped without replying for peer {peer}"
+            );
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: info handler timed out after {INFO_RESPONSE_TIMEOUT:?} for peer {peer}"
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = write_info_response(&mut substream, &response).await {
+        eprintln!("auki-network: info substream to {peer}: write response failed: {e}");
+    }
+}
+
 /// Shared implementation of `broadcast_membership` reachable from both
 /// [`NetworkRuntime::broadcast_membership`] and
 /// [`NetworkRuntimeHandle::broadcast_membership`]. Spawns one fire-
@@ -1258,7 +1445,7 @@ mod tests {
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
-        let (rt, _join_events, _liveness, _membership_events) =
+        let (rt, _join_events, _liveness, _membership_events, _info_events) =
             NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
                 .expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
@@ -1274,7 +1461,7 @@ mod tests {
         };
         let swarm = build_swarm(&identity, cfg).expect("build_swarm succeeds");
         let expected = identity.peer_id();
-        let (rt, _join_events, _liveness, _membership_events) =
+        let (rt, _join_events, _liveness, _membership_events, _info_events) =
             NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
                 .expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
@@ -1288,7 +1475,7 @@ mod tests {
         let pid_b = PeerIdentity::from_seed(&[2u8; 32]).peer_id();
         let pid_c = PeerIdentity::from_seed(&[3u8; 32]).peer_id();
 
-        let (rt, _join_events, _liveness, _membership_events) = NetworkRuntime::spawn(
+        let (rt, _join_events, _liveness, _membership_events, _info_events) = NetworkRuntime::spawn(
             swarm,
             vec![
                 AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },

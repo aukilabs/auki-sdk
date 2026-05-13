@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 14:34 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange + `DaemonInfo` refactor.** Cluster peers fetch each other's identity over libp2p (cluster-trust-gated, silent-drop on non-members) instead of via mDNS + HTTP. Last Hagall fallback gap closed — PARK-T7 + PARK-T9 unblocked. Breaking: `DaemonInfo` drops `session_now_ns` + `cluster_joined_at_ns` (SDK computes), `ClusterManager::create_cluster` / `.join_cluster` gain a `daemon_info` parameter, `participant_info()` takes no args. New `ClusterManager::fetch_participant_info(peer_id)` returns a parsed `ParticipantInfo`. Python bindings track. 5 live tests pass against `192.168.9.130:8080` (new: `cluster_peers_fetch_each_other_participant_info_over_libp2p`).
+
 ### Nils's claude · May 13, 13:48 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T2 PARTIAL → DONE: `/auki/membership/0.0.1` gossip protocol + ClusterManager handler.** Manager broadcasts the updated `ClusterMembership` JSON to all connected allow-listed peers on admit / eviction / Manager-promotion; receivers apply last-write-wins (membership + allow-list, NOT `manager_peer_id` — election owns that). Fire-and-forget framing mirrors `/auki/join/0.0.1`; cluster-trust-gated like `/auki/stream/0.1.0`. New 3-peer integration test passes against `192.168.9.130:8080` in ~600ms (4 live tests total now pass in ~12s). Unblocks Hagall demo step 13's "propagates to all peers" requirement — step 14's stream consumption depends on it (without gossip, Booster #2's allow-list never updates to include Charlie-Park, and Charlie's stream substream gets silently dropped at the trust-boundary gate).

@@ -196,9 +196,7 @@ impl PyDaemonInfo {
         session_id,
         session_clock_id,
         session_clock_hash,
-        session_now_ns,
         app_instance,
-        cluster_joined_at_ns = None,
     ))]
     fn new(
         app: String,
@@ -206,9 +204,7 @@ impl PyDaemonInfo {
         session_id: String,
         session_clock_id: String,
         session_clock_hash: String,
-        session_now_ns: u64,
         app_instance: String,
-        cluster_joined_at_ns: Option<u64>,
     ) -> Self {
         Self {
             inner: RustDaemonInfo {
@@ -217,8 +213,6 @@ impl PyDaemonInfo {
                 session_id,
                 session_clock_id,
                 session_clock_hash,
-                session_now_ns,
-                cluster_joined_at_ns,
                 app_instance,
             },
         }
@@ -353,6 +347,7 @@ impl PyClusterManager {
         discovery_url,
         listen_addresses,
         agent_version,
+        daemon_info,
         stream_provider = None,
     ))]
     fn create_cluster(
@@ -362,6 +357,7 @@ impl PyClusterManager {
         discovery_url: &str,
         listen_addresses: Vec<String>,
         agent_version: &str,
+        daemon_info: &PyDaemonInfo,
         stream_provider: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
@@ -371,6 +367,7 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
             Some(callable) => build_stream_provider(callable),
             None => decline_all_streams(),
@@ -389,6 +386,7 @@ impl PyClusterManager {
                     discovery,
                     swarm,
                     provider,
+                    daemon,
                 )
                 .await
                 .map_err(map_create_cluster_error)?;
@@ -415,6 +413,7 @@ impl PyClusterManager {
         discovery_url,
         listen_addresses,
         agent_version,
+        daemon_info,
         stream_provider = None,
     ))]
     fn join_cluster(
@@ -424,6 +423,7 @@ impl PyClusterManager {
         discovery_url: &str,
         listen_addresses: Vec<String>,
         agent_version: &str,
+        daemon_info: &PyDaemonInfo,
         stream_provider: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
@@ -433,6 +433,7 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
             Some(callable) => build_stream_provider(callable),
             None => decline_all_streams(),
@@ -451,6 +452,7 @@ impl PyClusterManager {
                     discovery,
                     swarm,
                     provider,
+                    daemon,
                 )
                 .await
                 .map_err(map_join_cluster_error)?;
@@ -568,12 +570,42 @@ impl PyClusterManager {
         })
     }
 
-    /// Build a `ParticipantInfo` with the cluster-aware fields
-    /// populated. The daemon supplies the rest via `DaemonInfo`.
-    fn participant_info(&self, daemon: &PyDaemonInfo) -> PyResult<PyParticipantInfo> {
+    /// Build a fresh `ParticipantInfo` snapshot. Combines the
+    /// stored daemon-side identity (passed at construction via
+    /// `DaemonInfo`) with SDK-tracked dynamic fields. Daemons serve
+    /// this verbatim on their Control API's `GET /api/info`.
+    fn participant_info(&self) -> PyResult<PyParticipantInfo> {
         self.with_inner(|m| {
             Ok(PyParticipantInfo {
-                inner: m.participant_info(daemon.inner.clone()),
+                inner: m.participant_info(),
+            })
+        })
+    }
+
+    /// Fetch a cluster peer's `ParticipantInfo` over the
+    /// `/auki/info/0.0.1` libp2p protocol. `peer_id` must be a
+    /// current cluster member (otherwise the runtime's allow-list
+    /// refuses the substream). Returns a Python `ParticipantInfo`
+    /// equivalent to what that peer's own `participant_info()`
+    /// would return.
+    fn fetch_participant_info(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+    ) -> PyResult<PyParticipantInfo> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard.as_ref().ok_or_else(|| {
+                    PyRuntimeError::new_err("ClusterManager has been shut down")
+                })?;
+                let info = manager
+                    .fetch_participant_info(peer_id_parsed)
+                    .await
+                    .map_err(map_fetch_participant_info_error)?;
+                Ok(PyParticipantInfo { inner: info })
             })
         })
     }
@@ -736,6 +768,17 @@ fn map_admit_error(e: RustAdmitError) -> PyErr {
             PyValueError::new_err(format!("peer {pid} is already a cluster member"))
         }
         RustAdmitError::Runtime(err) => PyRuntimeError::new_err(format!("runtime: {err}")),
+    }
+}
+
+fn map_fetch_participant_info_error(e: auki_domain_rs::FetchParticipantInfoError) -> PyErr {
+    match e {
+        auki_domain_rs::FetchParticipantInfoError::Request(err) => {
+            PyOSError::new_err(format!("fetch_participant_info: {err}"))
+        }
+        auki_domain_rs::FetchParticipantInfoError::InvalidJson(err) => {
+            PyValueError::new_err(format!("invalid ParticipantInfo JSON from peer: {err}"))
+        }
     }
 }
 

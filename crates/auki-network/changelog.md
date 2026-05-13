@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 14:34 HKT, 2026
+
+**`/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange lands — closes the last "Hagall fallback" gap.** Pre-Hagall, Park used mDNS + HTTP `/api/info` to resolve cluster peers' identity. Hagall constraint #6 (NO FALLBACKS) rules that out — peer-to-peer identity exchange must ride on libp2p so the cluster's trust boundary is the only one a peer's identity flows through. This PR ships the libp2p-native protocol that replaces mDNS for cross-daemon identity lookups.
+
+New `info_protocol` module (~230 LOC + 5 wire-format unit tests): `INFO_PROTOCOL = "/auki/info/0.0.1"`, request-response over one substream, length-prefixed JSON framing (mirrors `/auki/join/0.0.1`), 64 KiB frame cap. `InfoRequest {}` is empty today (future delta-fetching fields decode forward-compatibly via serde's permissive unknown-field handling).
+
+`NetworkRuntime::spawn` now returns a fifth channel: `mpsc::Receiver<InfoRequestEvent>`. Inbound `/auki/info/0.0.1` substreams surface here with a `oneshot::Sender<InfoResponse>` ack — same shape as `JoinEvent`. Cluster-trust gated identically to `/auki/stream/0.1.0` and `/auki/membership/0.0.1` (silent-drop non-allow-list peers — privacy by membership; non-cluster peers can't probe daemon identity).
+
+Outbound: `NetworkRuntime::request_participant_info(peer_id) -> Result<InfoResponse, RequestInfoError>`. Opens substream, writes the empty request, reads response, returns. Bounded by `INFO_REQUEST_TIMEOUT` (5s — well above LAN round-trip).
+
 ### Nils's claude · May 13, 13:48 HKT, 2026
 
 **SDK-T2 PARTIAL → DONE — `/auki/membership/0.0.1` gossip protocol lands.** Finishes the convergence half of SDK-T2 that was left open in PR #105 ("PARTIAL: convergence guarantees — anti-entropy / reconciliation / last-writer-wins — land alongside SDK-T5/T6/T7"). New `membership_protocol` module: `MEMBERSHIP_PROTOCOL = "/auki/membership/0.0.1"`, `MembershipUpdate { membership_json: String }`, length-prefixed JSON framing (mirrors `join_protocol.rs`), 1 MiB frame cap. Fire-and-forget — Manager opens substream, writes one update, closes. Cluster-trust gated like `/auki/stream/0.1.0` (silent-drop non-allow-list peers). Five wire-format unit tests including locked field-name shape.

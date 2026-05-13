@@ -47,6 +47,21 @@ fn unique_cluster_name(prefix: &str) -> String {
     format!("{prefix}-{ns}")
 }
 
+/// Build a minimal `DaemonInfo` with the static fields populated.
+/// `session_now_ns` and `cluster_joined_at_ns` are no longer on
+/// `DaemonInfo` — the SDK computes them from `session_started` +
+/// observed membership.
+fn sample_daemon_info(name: &str) -> auki_domain::DaemonInfo {
+    auki_domain::DaemonInfo {
+        app: "test-daemon".into(),
+        name: name.into(),
+        session_id: "abc".into(),
+        session_clock_id: format!("{name}/clock"),
+        session_clock_hash: "h".into(),
+        app_instance: "deadbeef".into(),
+    }
+}
+
 async fn wait_for_listen_addr(
     swarm: &mut Swarm<auki_network::swarm::Behaviour>,
 ) -> libp2p::Multiaddr {
@@ -90,6 +105,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         discovery.clone(),
         swarm,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("create_cluster succeeds");
@@ -101,20 +117,18 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
     assert_eq!(manager.manager_peer_id(), local_peer_id);
     assert_eq!(manager.peer_count(), 1, "Manager is the sole member");
 
-    // 3. participant_info shape.
-    let info = manager.participant_info(DaemonInfo {
-        app: "test-daemon".into(),
-        name: "test".into(),
-        session_id: "abc".into(),
-        session_clock_id: "test/clock".into(),
-        session_clock_hash: "h".into(),
-        session_now_ns: 1,
-        cluster_joined_at_ns: Some(1),
-        app_instance: "deadbeef".into(),
-    });
+    // 3. participant_info shape — built from stored `DaemonInfo`
+    //    (passed to `create_cluster`) + SDK-tracked dynamic fields.
+    let info = manager.participant_info();
     assert!(info.is_manager);
     assert_eq!(info.manager_peer_id, local_peer_id.to_string());
     assert_eq!(info.peer_id, local_peer_id);
+    assert_eq!(info.app, "test-daemon");
+    assert!(info.session_now_ns > 0, "session_now_ns advances after construction");
+    assert!(
+        info.cluster_joined_at_ns.is_none(),
+        "alone in cluster — cluster_joined_at_ns stays None per ansuz D3"
+    );
 
     // 4. admit_peer.
     let other_identity = PeerIdentity::from_seed(&[43u8; 32]);
@@ -187,6 +201,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         discovery.clone(),
         swarm_a,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("create_cluster A");
@@ -215,6 +230,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         discovery.clone(),
         swarm_b,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("join_cluster B");
@@ -300,6 +316,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         discovery.clone(),
         swarm_a,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("create_cluster A");
@@ -325,6 +342,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         discovery.clone(),
         swarm_b,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("join_cluster B");
@@ -416,6 +434,7 @@ async fn three_peer_membership_converges_via_gossip() {
         discovery.clone(),
         swarm_a,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("create_cluster A");
@@ -441,6 +460,7 @@ async fn three_peer_membership_converges_via_gossip() {
         discovery.clone(),
         swarm_b,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("join_cluster B");
@@ -471,6 +491,7 @@ async fn three_peer_membership_converges_via_gossip() {
         discovery.clone(),
         swarm_c,
         decline_all_streams(),
+        sample_daemon_info("test"),
     )
     .await
     .expect("join_cluster C");
@@ -515,6 +536,120 @@ async fn three_peer_membership_converges_via_gossip() {
 
     eprintln!(
         "3-peer gossip convergence OK against {}: A={pid_a}, B={pid_b}, C={pid_c}",
+        discovery_url()
+    );
+}
+
+/// Cross-fetch ParticipantInfo over `/auki/info/0.0.1`: A creates,
+/// B joins with a different `app` / `name`. After cluster
+/// convergence, A calls `manager_a.fetch_participant_info(pid_b)`
+/// and gets back B's full `ParticipantInfo` (app, name, peer_id,
+/// is_manager, manager_peer_id). And vice versa from B's side.
+///
+/// Pre-Hagall this used mDNS + HTTP `/api/info`. Post-Hagall it's
+/// libp2p-only, cluster-trust-gated. This test pins the new wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-info-it");
+
+    // A — the "park"-like daemon, creates the cluster.
+    let id_a = PeerIdentity::from_seed(&[91u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-info-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let daemon_a = auki_domain::DaemonInfo {
+        app: "park".into(),
+        name: "nils-park".into(),
+        session_id: "session-a".into(),
+        session_clock_id: "park-aabbcc/session-monotonic".into(),
+        session_clock_hash: "ha".into(),
+        app_instance: "aabbcc".into(),
+    };
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+        daemon_a,
+    )
+    .await
+    .expect("create_cluster A");
+
+    // B — the "boosterapp"-like daemon, joins.
+    let id_b = PeerIdentity::from_seed(&[92u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-info-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let _addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let daemon_b = auki_domain::DaemonInfo {
+        app: "boosterapp".into(),
+        name: "walker-1".into(),
+        session_id: "session-b".into(),
+        session_clock_id: "K1-aabbccddee/session-monotonic".into(),
+        session_clock_hash: "hb".into(),
+        app_instance: "aabbccddee".into(),
+    };
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![_addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+        daemon_b,
+    )
+    .await
+    .expect("join_cluster B");
+
+    // A fetches B's ParticipantInfo over /auki/info/0.0.1.
+    let b_info_from_a = manager_a
+        .fetch_participant_info(pid_b)
+        .await
+        .expect("A fetches B's ParticipantInfo");
+    assert_eq!(b_info_from_a.peer_id, pid_b);
+    assert_eq!(b_info_from_a.app, "boosterapp");
+    assert_eq!(b_info_from_a.name, "walker-1");
+    assert_eq!(b_info_from_a.session_id, "session-b");
+    assert_eq!(b_info_from_a.app_instance, "aabbccddee");
+    assert!(!b_info_from_a.is_manager, "B is not the Manager");
+    assert_eq!(b_info_from_a.manager_peer_id, pid_a.to_string());
+    assert!(b_info_from_a.session_now_ns > 0, "B's session clock advances");
+
+    // B fetches A's ParticipantInfo over /auki/info/0.0.1.
+    let a_info_from_b = manager_b
+        .fetch_participant_info(pid_a)
+        .await
+        .expect("B fetches A's ParticipantInfo");
+    assert_eq!(a_info_from_b.peer_id, pid_a);
+    assert_eq!(a_info_from_b.app, "park");
+    assert_eq!(a_info_from_b.name, "nils-park");
+    assert!(a_info_from_b.is_manager, "A is the Manager");
+    assert_eq!(a_info_from_b.manager_peer_id, pid_a.to_string());
+
+    manager_b.shutdown().await.expect("B shutdown");
+    manager_a.shutdown().await.expect("A shutdown");
+
+    eprintln!(
+        "Cross-fetch ParticipantInfo OK against {}: A={pid_a} (park/nils-park), B={pid_b} (boosterapp/walker-1)",
         discovery_url()
     );
 }

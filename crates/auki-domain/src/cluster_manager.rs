@@ -33,9 +33,10 @@ use auki_network::discovery_client::{
     CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
+use auki_network::info_protocol::InfoResponse;
 use auki_network::network_runtime::{
-    AllowedPeer, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
-    SendJoinRequestError, SpawnError,
+    AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
+    RequestInfoError, SendJoinRequestError, SpawnError,
 };
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
@@ -44,7 +45,7 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -55,9 +56,17 @@ use tokio::task::JoinHandle;
 /// cluster is dropped.
 pub const MANAGER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Daemon-side identity fields the SDK doesn't own. Passed by the
-/// daemon into [`ClusterManager::participant_info`] alongside the
-/// cluster-aware fields the SDK fills in.
+/// Daemon-side identity fields the SDK doesn't own. The daemon
+/// hands one of these to [`ClusterManager::create_cluster`] /
+/// [`ClusterManager::join_cluster`] **at construction time**; the
+/// ClusterManager stores it and rebuilds a fresh
+/// [`ParticipantInfo`] on each call to `participant_info()` /
+/// inbound `/auki/info/0.0.1` request.
+///
+/// Dynamic fields (`session_now_ns` from `session_started.elapsed()`,
+/// `cluster_joined_at_ns` set lazily on first non-self peer
+/// observation) live on the ClusterManager — not on `DaemonInfo` —
+/// so daemons aren't responsible for keeping them fresh.
 #[derive(Debug, Clone)]
 pub struct DaemonInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, `"park"`).
@@ -71,11 +80,6 @@ pub struct DaemonInfo {
     pub session_clock_id: String,
     /// Content-addressed hash of the clock-registry entry.
     pub session_clock_hash: String,
-    /// Session-clock value at the moment of capture.
-    pub session_now_ns: u64,
-    /// Session-clock value at first cluster connection. `None` if
-    /// the daemon hasn't connected to a cluster peer yet.
-    pub cluster_joined_at_ns: Option<u64>,
     /// First non-loopback IEEE-administered MAC, lowercased hex
     /// without separators.
     pub app_instance: String,
@@ -162,6 +166,22 @@ pub struct ClusterManager {
     runtime: NetworkRuntime,
     discovery: DiscoveryClient,
     local_multiaddrs: Vec<Multiaddr>,
+    /// Static daemon-side identity fields. Stored at construction;
+    /// combined with dynamic SDK-tracked fields (`session_now_ns`,
+    /// `cluster_joined_at_ns`, `is_manager`, `manager_peer_id`,
+    /// `peer_id`) when building a [`ParticipantInfo`].
+    daemon_info: DaemonInfo,
+    /// Wall-clock `Instant` of session boot. The session clock is
+    /// monotonic with t=0 at this moment — so the SDK computes
+    /// `session_now_ns` as `(now - session_started).as_nanos()`
+    /// every time a `ParticipantInfo` is built.
+    session_started: Instant,
+    /// Session-clock value at first observation of a peer other
+    /// than ourselves. `None` while this daemon is alone in its
+    /// cluster; set once and sticky thereafter. Mutated by
+    /// `spawn_info_handler` lazily on each `participant_info()`
+    /// build.
+    cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
     /// Manager-side Discovery heartbeat task. Wrapped in
     /// `Arc<Mutex<Option<_>>>` so the liveness handler can spawn it
     /// on Manager-promotion (SDK-T7 handoff). `Some` while this peer
@@ -181,6 +201,10 @@ pub struct ClusterManager {
     /// the local membership document, and pushes the updated
     /// allow-list to the runtime. Cancelled on `shutdown`.
     membership_handler_task: Option<JoinHandle<()>>,
+    /// Task that drains inbound `/auki/info/0.0.1` requests from
+    /// the runtime, builds a [`ParticipantInfo`] from current
+    /// state, and replies. Cancelled on `shutdown`.
+    info_handler_task: Option<JoinHandle<()>>,
 }
 
 impl ClusterManager {
@@ -207,9 +231,12 @@ impl ClusterManager {
         discovery: DiscoveryClient,
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
+        let session_started = Instant::now();
+        let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
         // 1. Atomic create on Discovery.
         match discovery
@@ -238,7 +265,7 @@ impl ClusterManager {
         // 3. Spawn the runtime. Initial allow-list is empty — we
         //    don't dial ourselves; the runtime expands its
         //    allow-list as peers are admitted.
-        let (runtime, join_events_rx, liveness_rx, membership_events_rx) =
+        let (runtime, join_events_rx, liveness_rx, membership_events_rx, info_events_rx) =
             NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
@@ -290,6 +317,19 @@ impl ClusterManager {
             runtime.handle(),
         ));
 
+        // 8. Drain inbound /auki/info/0.0.1 requests. Build a fresh
+        //    `ParticipantInfo` from stored daemon_info + dynamic SDK
+        //    state on each request and reply.
+        let info_handler_task = Some(spawn_info_handler(
+            info_events_rx,
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            daemon_info.clone(),
+            session_started,
+            cluster_joined_at_ns.clone(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -298,10 +338,14 @@ impl ClusterManager {
             runtime,
             discovery,
             local_multiaddrs,
+            daemon_info,
+            session_started,
+            cluster_joined_at_ns,
             heartbeat_task,
             join_handler_task,
             liveness_handler_task,
             membership_handler_task,
+            info_handler_task,
         })
     }
 
@@ -438,26 +482,76 @@ impl ClusterManager {
         self.runtime.open_stream::<T>(peer_id, request).await
     }
 
-    /// Construct a [`ParticipantInfo`] with the cluster-aware fields
-    /// (`is_manager`, `manager_peer_id`, `peer_id`) populated by the
-    /// SDK. The daemon supplies the rest of the fields via the
-    /// [`DaemonInfo`] arg. Daemons serve this verbatim on their
-    /// Control API's `GET /api/info`.
-    pub fn participant_info(&self, daemon: DaemonInfo) -> ParticipantInfo {
+    /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
+    /// stored daemon-side identity fields (passed at construction
+    /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
+    /// (`session_now_ns` computed from
+    /// `session_started.elapsed()`, `cluster_joined_at_ns` set
+    /// lazily on first non-self peer observation), `is_manager` /
+    /// `manager_peer_id` from cluster state, and the local
+    /// `peer_id`.
+    ///
+    /// Daemons serve this verbatim on their Control API's
+    /// `GET /api/info`; cluster peers fetch each other's copies
+    /// over `/auki/info/0.0.1`.
+    pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
+        let session_now_ns = self.session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+
+        // Lazy `cluster_joined_at_ns`: set on first observation of
+        // any peer other than ourselves (per ansuz D3 the local peer
+        // sets its own value, not the SDK on join_cluster's behalf —
+        // a one-peer cluster shouldn't tick `cluster_joined_at_ns`).
+        let cluster_joined_at_ns = {
+            let mut guard = self
+                .cluster_joined_at_ns
+                .lock()
+                .expect("cluster_joined_at_ns mutex poisoned");
+            if guard.is_none() {
+                let has_other = self
+                    .membership
+                    .lock()
+                    .expect("membership lock")
+                    .peers
+                    .iter()
+                    .any(|p| p.peer_id != self.local_peer_id);
+                if has_other {
+                    *guard = Some(session_now_ns);
+                }
+            }
+            *guard
+        };
+
         ParticipantInfo {
-            app: daemon.app,
-            name: daemon.name,
-            session_id: daemon.session_id,
-            session_clock_id: daemon.session_clock_id,
-            session_clock_hash: daemon.session_clock_hash,
-            session_now_ns: daemon.session_now_ns,
-            cluster_joined_at_ns: daemon.cluster_joined_at_ns,
+            app: self.daemon_info.app.clone(),
+            name: self.daemon_info.name.clone(),
+            session_id: self.daemon_info.session_id.clone(),
+            session_clock_id: self.daemon_info.session_clock_id.clone(),
+            session_clock_hash: self.daemon_info.session_clock_hash.clone(),
+            session_now_ns,
+            cluster_joined_at_ns,
             peer_id: self.local_peer_id,
-            app_instance: daemon.app_instance,
+            app_instance: self.daemon_info.app_instance.clone(),
             is_manager: manager_peer_id == self.local_peer_id,
             manager_peer_id: manager_peer_id.to_string(),
         }
+    }
+
+    /// Fetch a cluster peer's [`ParticipantInfo`] over the
+    /// `/auki/info/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` builds its own `ParticipantInfo` from its
+    /// stored state and serializes it over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the
+    /// parsed `ParticipantInfo` ready for HTTP serialization.
+    pub async fn fetch_participant_info(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
+        let response = self.runtime.request_participant_info(peer_id).await?;
+        let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
+        Ok(info)
     }
 
     /// Join an existing cluster by talking to its Manager. Lists
@@ -480,9 +574,12 @@ impl ClusterManager {
         discovery: DiscoveryClient,
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
     ) -> Result<Self, JoinClusterError> {
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
+        let session_started = Instant::now();
+        let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
         // 1. Look up the cluster in Discovery's directory.
         let clusters = discovery.list_clusters().await?;
@@ -497,14 +594,15 @@ impl ClusterManager {
         //    can dial it for the join handshake). The allow-list
         //    expands once the Manager gossips back the full
         //    membership.
-        let (runtime, join_events_rx, liveness_rx, membership_events_rx) = NetworkRuntime::spawn(
-            swarm,
-            vec![AllowedPeer {
-                peer_id: manager_peer,
-                multiaddrs: manager_multiaddrs.clone(),
-            }],
-            stream_provider,
-        )?;
+        let (runtime, join_events_rx, liveness_rx, membership_events_rx, info_events_rx) =
+            NetworkRuntime::spawn(
+                swarm,
+                vec![AllowedPeer {
+                    peer_id: manager_peer,
+                    multiaddrs: manager_multiaddrs.clone(),
+                }],
+                stream_provider,
+            )?;
 
         // 3. Wait until the runtime has dialed the Manager and the
         //    libp2p connection is established. The runtime's
@@ -608,6 +706,19 @@ impl ClusterManager {
             runtime.handle(),
         ));
 
+        // 9. Drain inbound /auki/info/0.0.1 requests. Build a fresh
+        //    `ParticipantInfo` from stored daemon_info + dynamic SDK
+        //    state on each request and reply.
+        let info_handler_task = Some(spawn_info_handler(
+            info_events_rx,
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            daemon_info.clone(),
+            session_started,
+            cluster_joined_at_ns.clone(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -616,10 +727,14 @@ impl ClusterManager {
             runtime,
             discovery,
             local_multiaddrs,
+            daemon_info,
+            session_started,
+            cluster_joined_at_ns,
             heartbeat_task,
             join_handler_task,
             liveness_handler_task,
             membership_handler_task,
+            info_handler_task,
         })
     }
 
@@ -639,6 +754,9 @@ impl ClusterManager {
             task.abort();
         }
         if let Some(task) = self.membership_handler_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.info_handler_task.take() {
             task.abort();
         }
 
@@ -934,6 +1052,109 @@ fn broadcast_current_membership(
     }
 }
 
+/// Spawn a task that drains inbound `/auki/info/0.0.1` requests
+/// from `rx` and replies on each `ack` with a freshly-built
+/// [`ParticipantInfo`] (serialized to JSON). Combines the stored
+/// `daemon_info` with SDK-tracked dynamic fields (`session_now_ns`,
+/// `cluster_joined_at_ns`, `is_manager`, `manager_peer_id`,
+/// `peer_id`) to build the response.
+///
+/// Lives for the lifetime of the `ClusterManager`; cancelled on
+/// `shutdown`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_info_handler(
+    mut rx: mpsc::Receiver<InfoRequestEvent>,
+    local_peer_id: PeerId,
+    manager_peer_id: Arc<Mutex<PeerId>>,
+    membership: Arc<Mutex<ClusterMembership>>,
+    daemon_info: DaemonInfo,
+    session_started: Instant,
+    cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(InfoRequestEvent { peer, ack, .. }) = rx.recv().await {
+            let info = build_participant_info(
+                &daemon_info,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                session_started,
+                &cluster_joined_at_ns,
+            );
+            let json = match serde_json::to_string(&info) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain: info handler for {peer}: serialize failed: {e}"
+                    );
+                    continue;
+                }
+            };
+            let _ = ack.send(InfoResponse {
+                participant_info_json: json,
+            });
+        }
+    })
+}
+
+/// Shared `ParticipantInfo` builder used by both
+/// [`ClusterManager::participant_info`] (the local accessor) and
+/// [`spawn_info_handler`] (the inbound `/auki/info/0.0.1` reply
+/// path). Reading the dynamic fields once on each build keeps both
+/// surfaces consistent.
+fn build_participant_info(
+    daemon: &DaemonInfo,
+    local_peer_id: PeerId,
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    session_started: Instant,
+    cluster_joined_at_ns: &Arc<Mutex<Option<u64>>>,
+) -> ParticipantInfo {
+    let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+    let session_now_ns = session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let cj = {
+        let mut guard = cluster_joined_at_ns
+            .lock()
+            .expect("cluster_joined_at_ns mutex poisoned");
+        if guard.is_none() {
+            let has_other = membership
+                .lock()
+                .expect("membership lock")
+                .peers
+                .iter()
+                .any(|p| p.peer_id != local_peer_id);
+            if has_other {
+                *guard = Some(session_now_ns);
+            }
+        }
+        *guard
+    };
+    ParticipantInfo {
+        app: daemon.app.clone(),
+        name: daemon.name.clone(),
+        session_id: daemon.session_id.clone(),
+        session_clock_id: daemon.session_clock_id.clone(),
+        session_clock_hash: daemon.session_clock_hash.clone(),
+        session_now_ns,
+        cluster_joined_at_ns: cj,
+        peer_id: local_peer_id,
+        app_instance: daemon.app_instance.clone(),
+        is_manager: manager == local_peer_id,
+        manager_peer_id: manager.to_string(),
+    }
+}
+
+/// Errors from [`ClusterManager::fetch_participant_info`].
+#[derive(Debug, Error)]
+pub enum FetchParticipantInfoError {
+    /// libp2p / wire / timeout failure during the request.
+    #[error("request_participant_info: {0}")]
+    Request(#[from] RequestInfoError),
+    /// Responder's payload was not parseable as `ParticipantInfo`.
+    #[error("invalid ParticipantInfo JSON from peer: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+}
+
 /// Cluster-internal election (SDK-T6). Deterministic: sort
 /// membership by `(join_ts_ns, peer_id)` ascending; return the
 /// earliest-joined peer that's "reachable" (in `connected` or equal
@@ -1104,8 +1325,6 @@ mod tests {
             session_id: "z".into(),
             session_clock_id: "c".into(),
             session_clock_hash: "h".into(),
-            session_now_ns: 0,
-            cluster_joined_at_ns: None,
             app_instance: "abc".into(),
         };
         let _ = d.clone();

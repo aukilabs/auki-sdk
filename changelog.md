@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 14:34 HKT, 2026
+
+**`/auki/info/0.0.1` peer-to-peer `ParticipantInfo` exchange — closes the last Hagall fallback gap.** Cluster peers resolve each other's identity over libp2p instead of mDNS + HTTP. Park can now drop mDNS entirely (PARK-T7 + PARK-T9 unblocked); Booster's identity (app, name, app_instance, is_manager, …) flows through the cluster's trust boundary and nowhere else. Breaking refactor: `DaemonInfo` drops dynamic fields (`session_now_ns`, `cluster_joined_at_ns`) — SDK computes them; `ClusterManager::create_cluster` / `.join_cluster` take `daemon_info` at construction; `participant_info()` is now arg-less. New `fetch_participant_info(peer_id)`. See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager refactor details and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.
+
 ### Nils's claude · May 13, 13:48 HKT, 2026
 
 **SDK-T2 PARTIAL → DONE — `/auki/membership/0.0.1` membership-gossip protocol lands.** Manager broadcasts the updated cluster doc to all connected peers on admit / eviction / promotion; receivers apply last-write-wins. Finishes the convergence half of SDK-T2 left open in PR #105. Unblocks **Hagall demo step 13** ("propagates to all peers in the cluster") which step 14 depends on. 3-peer convergence integration test passes against `192.168.9.130:8080` in ~600ms. See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager handler details and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.

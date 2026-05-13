@@ -51,10 +51,13 @@ pub mod heartbeat_protocol;
 pub mod membership_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod info_protocol;
+
+#[cfg(feature = "swarm")]
 pub use network_runtime::{
-    AllowedPeer, BroadcastMembershipError, JoinEvent, MembershipEvent, NetworkRuntime,
-    NetworkRuntimeHandle, PeerLivenessEvent, SendJoinRequestError, SpawnError, UpdateError,
-    UpdateReport,
+    AllowedPeer, BroadcastMembershipError, InfoRequestEvent, JoinEvent, MembershipEvent,
+    NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent, RequestInfoError,
+    SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

@@ -337,38 +337,16 @@ Four pre-implementation decisions filed before the implementing PR per the [auki
 
 ---
 
-## `/auki/stream/0.1.0` — cluster trust boundary on the accept path _(filed by Nils, 2026-05-12)_
-
-`stream_runtime::handle_inbound_substream` reads the first envelope (a `StreamRequest` with `sensor_id`) and invokes the consumer's `StreamProvider` closure. The requesting peer's `PeerId` arrives as the function's first argument but is currently `_peer` — discarded. The provider closure only sees `sensor_id`, not who's asking. Net effect: any libp2p-reachable peer can open a substream and pull frames, regardless of cluster membership.
-
-The control plane (`cluster_runtime`) already enforces a ClusterDoc trust boundary — outsiders' `ParticipantInfo` exchanges are dropped silently and they don't surface in `peers()` (see `cluster_runtime::tests::participant_from_outsider_is_dropped`). **The stream plane bypasses that boundary entirely.**
-
-**Surfaced when** Nils observed Park subscribing to K1 #1's `/auki/stream/0.1.0` frames without being in K1's cluster: Park's libp2p mDNS auto-discovered K1's peer-id + addresses on the LAN; `runtime.open_stream(...)` happily dialed any libp2p-reachable peer; K1's accept-handler took the substream because the substream layer doesn't check membership. QUIC over UDP made the connection invisible to TCP-style probes. `cluster.json` declared the cluster but `/auki/stream/0.1.0` accepted from anywhere libp2p could reach.
-
-**Sub-options.**
-
-- **A — Server-side gate on cluster membership.** Before invoking the provider closure, `handle_inbound_substream` checks whether the requesting `peer` is in the local `ClusterRuntime`'s `peers()`. If not, write `StreamMessage::Decline { reason: NotInCluster }` (new variant) and close. Symmetric with the control plane — the cluster doc is the source of truth; consumer apps don't get a say. Cleanest from a security standpoint, one fewer thing for consumer apps to think about, no API surface change for `StreamProvider`. Cost: removes the option for a node to deliberately stream to non-members (e.g. a public broadcaster, an audit sidecar, a debug tool).
-- **B — Expose requesting `PeerId` to `StreamProvider`.** Widen the provider signature from `Arc<dyn Fn(StreamRequest) -> StreamDispatch>` to `Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch>`. Consumer apps decide their own access policy (cluster membership, wallet whitelist, app-instance allow-list, public). Trade-off: every consumer reimplements the cluster-membership check, easy to forget, and the SDK ships an insecure default.
-- **A + B coexist.** Default server-side gate to cluster membership; pass the requesting `PeerId` to providers anyway so apps can layer stricter checks (e.g. only specific peers in the cluster) on top. Belt-and-braces. Largest API change; cleanest long-term semantic boundary.
-
-**Lean.** TBD — leaning A is conservative (matches control-plane behavior, fewer footguns), leaning A+B is the cleanest long-term shape but largest surface change. B-only is rejected — leaves the trust boundary porous by default, ships an insecure SDK. Resolving this is on the path to closing the [subscription-as-materialization keystone](../parking_lot.md) because Log subscribe-and-materialize over the wire will inherit the same accept-handler shape.
-
-**Hagall raises the priority (2026-05-13):** with SDK-Q4 resolved (use `stream_provider` for demo step 14), Charlie-Park is the first cross-peer subscriber in Hagall that has to be cluster-gated. The Hagall stream demo can't ship until this question is pinned. Hagall makes A or A+B not-optional.
-
-Tangent worth flagging: the same gap likely applies to `/auki/message/0.0.1` once it lands (per the pre-implementation calls above). Worth resolving the stream case first and applying the same shape to messages so the trust-boundary policy is consistent across protocols.
-
----
-
 ## `/auki/stream/0.1.0` — operator visibility into stream subscribers _(filed by Nils, 2026-05-12)_
 
-`ClusterRuntime` doesn't surface who's currently subscribed to streams from this node. Operators inspecting BoosterApp's `/api/cluster` see the cluster's peer list but not which of those peers (or peers outside the cluster — see the trust-boundary entry above) are actively pulling frames. Made the trust-boundary issue invisible until Nils noticed Park rendering K1 #1's RGB while K1 #1 wasn't in Park's cluster.
+`ClusterRuntime` doesn't surface who's currently subscribed to streams from this node. Operators inspecting BoosterApp's `/api/cluster` see the cluster's peer list but not which of those peers are actively pulling frames.
 
 Two halves:
 
 - **SDK side (this crate).** Add a `runtime.stream_subscribers() -> Vec<(PeerId, StreamRequest)>` accessor for currently-open inbound substreams. Lifecycle: an entry appears when `handle_inbound_substream` calls the provider with a non-`Decline` dispatch, disappears when the pump task ends (substream dropped, peer disconnected, source ended, shutdown). Bookkeeping: a `tokio::sync::RwLock<HashMap<...>>` (or actor-pattern `RuntimeCmd::ListSubscribers`) on the runtime; the pump task inserts on accept, removes on drop via a `Drop`-guard wrapper. Read-side only — no behavior change.
 - **Daemon side (out of crate).** Expose the SDK accessor via a new HTTP endpoint (e.g. `GET /api/streams/subscribers` returning JSON `[{peer_id, sensor_id}]`) in BoosterApp / Park / Sentinel control APIs. Out of scope for `auki-network`; file in each daemon repo once the SDK accessor ships.
 
-**Lean.** Ship the SDK accessor first, non-invasive. Pairs naturally with the trust-boundary resolution above — the same `(PeerId, StreamRequest)` data that enables the cluster-membership gate is what surfaces here. Daemons add their HTTP shims afterward.
+**Lean.** Ship the SDK accessor first, non-invasive. The `(PeerId, StreamRequest)` data this accessor needs is the same data that drives the server-side cluster-membership gate on accept (resolved 2026-05-13 — see [changelog](changelog.md)). Daemons add their HTTP shims afterward.
 
 ---
 

@@ -180,6 +180,7 @@ dependencies = [
  "libp2p",
  "libp2p-identity",
  "multiaddr",
+ "prost",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -193,10 +194,12 @@ dependencies = [
  "auki-domain",
  "auki-identity",
  "auki-network",
+ "auki-network-py",
  "futures",
  "libp2p",
  "libp2p-identity",
  "multiaddr",
+ "prost",
  "pyo3",
  "serde_json",
  "tokio",
@@ -327,10 +330,13 @@ name = "auki-network-py"
 version = "0.0.0"
 dependencies = [
  "auki-network",
+ "futures",
  "libp2p-identity",
  "multiaddr",
  "pyo3",
+ "pyo3-async-runtimes",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2721,6 +2727,19 @@ dependencies = [
  "pyo3-ffi",
  "pyo3-macros",
  "unindent",
+]
+
+[[package]]
+name = "pyo3-async-runtimes"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2529f0be73ffd2be0cc43c013a640796558aa12d7ca0aab5cc14f375b4733031"
+dependencies = [
+ "futures",
+ "once_cell",
+ "pin-project-lite",
+ "pyo3",
+ "tokio",
 ]
 
 [[package]]

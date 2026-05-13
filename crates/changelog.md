@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:25 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — `/auki/stream/0.1.0` cluster trust boundary resolved: server-side gate (option A), silent-drop non-members.** Filed 2026-05-12 (Park rendered K1 #1's frames without being in K1's cluster); decided 2026-05-13. `handle_inbound_substream` consults the runtime's allow-list before invoking the consumer's `StreamProvider`; non-members get silently dropped (symmetric with the prior outsider-`ParticipantInfo`-drop pattern). No `StreamProvider` signature change, no typed `Decline` variant. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). Same shape will apply to `/auki/message/0.0.1` when it lands.
+
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T5/T6/T7: Manager failover lands.** New `/auki/heartbeat/0.0.1` peer-side heartbeat protocol (500ms cadence, 1500ms timeout); `NetworkRuntime` surfaces `PeerLivenessEvent::{Connected, Lost}`; `ClusterManager` runs the cluster-internal election (`elect_successor`: earliest-joined reachable wins, lower peer-id tie-break) on Manager death and orchestrates the handoff (rotate Discovery directory + start Manager heartbeat tick). Failover demo verified end-to-end against `192.168.9.130:8080`: A creates cluster, B joins, A dies, B detects within ~1.5s and becomes Manager.

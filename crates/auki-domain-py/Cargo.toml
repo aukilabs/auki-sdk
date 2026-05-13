@@ -31,6 +31,14 @@ auki-domain-rs = { package = "auki-domain", path = "../auki-domain" }
 # Required for `create_cluster`'s daemon-friendly façade: builds the
 # swarm + DiscoveryClient internally from the Python kwargs.
 auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+# Cross-crate dep on auki-network-py's rlib so this crate can build
+# Python `stream_provider` callables and return `PyStreamSubscription`
+# from `open_*_stream` methods. The cargo lib-name split
+# (`auki_network_py` vs `auki_network`) keeps both directly dep-able
+# in one workspace.
+auki-network-py = { path = "../auki-network-py" }
+# `prost::Message` bound on `ClusterManager::open_stream<T>`.
+prost = "0.13"
 # `Wallet::from_seed` — the Python wrapper takes 32-byte seeds.
 auki-identity = { path = "../auki-identity" }
 # `PeerId` parsing on the Python ↔ Rust seam.

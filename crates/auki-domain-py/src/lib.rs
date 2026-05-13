@@ -24,8 +24,15 @@ use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryClient;
-use auki_network::stream_runtime::decline_all_streams;
+use auki_network::stream_protocol::{
+    JointEncodersFrame as RustJointEncodersFrame, JpegFrame as RustJpegFrame,
+    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
+};
+use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
+use auki_network_py::stream_types::{
+    PyStreamSubscription, build_stream_provider, open_stream_error_to_pyerr,
+};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
@@ -346,6 +353,7 @@ impl PyClusterManager {
         discovery_url,
         listen_addresses,
         agent_version,
+        stream_provider = None,
     ))]
     fn create_cluster(
         py: Python<'_>,
@@ -354,6 +362,7 @@ impl PyClusterManager {
         discovery_url: &str,
         listen_addresses: Vec<String>,
         agent_version: &str,
+        stream_provider: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
             .try_into()
@@ -362,6 +371,10 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let provider: StreamProvider = match stream_provider {
+            Some(callable) => build_stream_provider(callable),
+            None => decline_all_streams(),
+        };
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
@@ -375,7 +388,7 @@ impl PyClusterManager {
                     vec![listen_addr],
                     discovery,
                     swarm,
-                    decline_all_streams(),
+                    provider,
                 )
                 .await
                 .map_err(map_create_cluster_error)?;
@@ -402,6 +415,7 @@ impl PyClusterManager {
         discovery_url,
         listen_addresses,
         agent_version,
+        stream_provider = None,
     ))]
     fn join_cluster(
         py: Python<'_>,
@@ -410,6 +424,7 @@ impl PyClusterManager {
         discovery_url: &str,
         listen_addresses: Vec<String>,
         agent_version: &str,
+        stream_provider: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
             .try_into()
@@ -418,6 +433,10 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let provider: StreamProvider = match stream_provider {
+            Some(callable) => build_stream_provider(callable),
+            None => decline_all_streams(),
+        };
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
@@ -431,7 +450,7 @@ impl PyClusterManager {
                     vec![listen_addr],
                     discovery,
                     swarm,
-                    decline_all_streams(),
+                    provider,
                 )
                 .await
                 .map_err(map_join_cluster_error)?;
@@ -504,6 +523,51 @@ impl PyClusterManager {
         })
     }
 
+    /// Open a JPEG stream subscription on `peer_id` for `sensor_id`.
+    /// Returns a `StreamSubscription` whose `.frames()` iterator
+    /// yields `ConsumerFrame(payload=JpegFrame(bytes=...))` values.
+    /// Raises `auki_network.cluster.StreamDeclined` /
+    /// `StreamUnreachable` / `StreamProtocolError` on failure.
+    fn open_jpeg_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustJpegFrame>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_jpeg(sub)
+        })
+    }
+
+    /// Open a PointCloud stream subscription on `peer_id` for
+    /// `sensor_id`. Returns a `StreamSubscription` whose `.frames()`
+    /// iterator yields `ConsumerFrame(payload=PointCloudFrame(...))`.
+    fn open_pointcloud_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustPointCloudFrame>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_pointcloud(sub)
+        })
+    }
+
+    /// Open a JointEncoders stream subscription on `peer_id` for
+    /// `sensor_id`. Returns a `StreamSubscription` whose `.frames()`
+    /// iterator yields
+    /// `ConsumerFrame(payload=JointEncodersFrame(angles_rad=...))`.
+    fn open_joint_encoders_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustJointEncodersFrame>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_joint_encoders(sub)
+        })
+    }
+
     /// Build a `ParticipantInfo` with the cluster-aware fields
     /// populated. The daemon supplies the rest via `DaemonInfo`.
     fn participant_info(&self, daemon: &PyDaemonInfo) -> PyResult<PyParticipantInfo> {
@@ -543,6 +607,51 @@ impl PyClusterManager {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
         f(manager)
+    }
+
+    /// Internal helper shared by `open_jpeg_stream` /
+    /// `open_pointcloud_stream` / `open_joint_encoders_stream`.
+    /// Each typed wrapper supplies the matching `T` plus a closure
+    /// that builds a `PyStreamSubscription` from the corresponding
+    /// Rust `StreamSubscription<T>`.
+    ///
+    /// Holds the `ClusterManager` Mutex for the full open round-trip
+    /// (up to `OPEN_STREAM_TIMEOUT` = 30s). Same pattern as
+    /// `admit_peer`. Concurrent ClusterManager calls block during
+    /// this window — acceptable because `open_stream` is per-tile-
+    /// mount, not on a hot path.
+    fn open_typed_stream<T>(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+        to_py_sub: impl FnOnce(
+            auki_network::stream_runtime::StreamSubscription<T>,
+        ) -> PyStreamSubscription
+            + Send
+            + 'static,
+    ) -> PyResult<PyStreamSubscription>
+    where
+        T: prost::Message + Default + Send + 'static,
+    {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let request = RustStreamRequest {
+            sensor_id: sensor_id.to_string(),
+        };
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let rust_sub = manager
+                    .open_stream::<T>(peer_id_parsed, request)
+                    .await
+                    .map_err(|e| Python::with_gil(|py| open_stream_error_to_pyerr(py, e)))?;
+                Ok(to_py_sub(rust_sub))
+            })
+        })
     }
 }
 

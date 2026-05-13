@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 18:13 HKT, 2026
+
+**Bug fix: graceful Manager shutdown no longer deregisters the cluster when other peers exist.** Surfaced by Nils: "manager leaving cluster causes cluster to close, no new manager is elected." Root cause: `ClusterManager::shutdown` unconditionally called `discovery.deregister(...)` when `was_manager`. With multiple peers, the surviving peer's libp2p ConnectionClosed → election → `discovery.rotate_manager(...)` round-trip 404'd because A's shutdown had already nuked the cluster from Discovery's directory. The cluster ended up dead instead of handing off.
+
+Per Hagall design (quest doc): "Graceful and ungraceful Manager exits are the same code path — peers detect the loss + run the election + rotate." Fix: `shutdown()` only deregisters when the local peer is the LAST member (`membership.peers.len() <= 1`). With other peers around, the surviving members run their election + `rotate_manager`, which keeps the cluster name alive in Discovery and rotates the Manager hint to the new winner.
+
+New regression test `manager_graceful_shutdown_passes_cluster_to_surviving_peer`: A creates, B joins, A calls `shutdown()` gracefully (NOT `drop`), B must take over + Discovery's directory must still hold the cluster with `manager_peer_id = pid_b`.
+
+Two existing tests adjusted for the new shutdown semantics:
+- `cluster_manager_full_lifecycle_against_live_discovery` — admits a fake peer (no real libp2p connection means no Lost event ever fires, so the fake peer stays in membership). `shutdown` now correctly skips deregister; added explicit `deregister` for test cleanup.
+- `two_managers_create_then_join_against_live_discovery` — added 500ms sleep between B.shutdown and A.shutdown so A's liveness handler has time to evict B from membership before A's own shutdown checks `peers.len()`.
+
+All 8 live integration tests pass against `192.168.9.130:8080`.
+
 ### Nils's claude · May 13, 17:21 HKT, 2026
 
 **Fix: `ClusterManager::shutdown` is now `&self`; closes the "ghost cluster on Discovery" leak.** The Park bug Nils caught in today's demo — `nils` cluster left in Discovery heartbeating with `peer_count=1` for 10+ minutes after Park visibly created `nils2` and switched contexts — traced to `shutdown(mut self)` consuming the handle. Park's stream consumers hold `Arc<ClusterManager>` clones (the boosterapp-clone-fan-out + tile-consumer pattern), so Park could not call shutdown without first reaching unique ownership of the Arc. The "leave cluster" path was just dropping its own Arc reference, letting the Manager-side Discovery heartbeat tick keep running from whichever cloned Arc was still alive in a stream-provider closure — Discovery's 10s sweep never fired because the cluster kept getting refreshed.

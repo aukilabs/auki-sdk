@@ -2,6 +2,21 @@
 
 ---
 
+## Stream-runtime integration tests deleted in the network_runtime PR _(filed by Nils's claude, 2026-05-13)_
+
+When `ClusterRuntime` was replaced by `NetworkRuntime` (Greenland → demo-spec rewrite), the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved (`ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)` → `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)`). The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:
+
+- `producer_accepts_and_streams_jpeg_frames`
+- `producer_declines_unknown_sensor`
+- `producer_error_signals_consumer_with_detail`
+- `producer_shutdown_signals_consumer_with_typed_end_of_stream`
+- `open_stream_against_unreachable_peer_surfaces_typed_error`
+- `producer_accepts_and_streams_pointcloud_frames`
+
+**Port plan when SDK-T11 lands** (stream consumption wiring): adapt the fixture to construct `NetworkRuntime` pairs via `spawn` with mutual `AllowedPeer`s and replace `consumer.peers().iter().any(...)` checks with `consumer.connected_peers().contains(&...)`. Mechanical port; ~200 LOC of fixture rewiring. These tests are the stream-protocol coverage we lean on; restore before any stream-touching change.
+
+---
+
 ## `/auki/message/0.0.1` — inbound message log ownership
 
 Does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch to a registered handler), or does the consumer write it inside their handler (mirroring how sensor logs work — caller owns the log lifecycle)?

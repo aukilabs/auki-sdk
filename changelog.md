@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:00 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** ~3300 LOC of dead Greenland code removed; ~500 LOC of focused replacement. The new runtime drives the swarm + allow-list from a `Vec<AllowedPeer>` instead of a `ClusterDoc`, stripping the Greenland-era participant-info exchange, heartbeat, and registry-broadcast protocols. Stream protocol logic survives intact. The full Greenland surface is gone from the SDK; live Discovery integration test still passes end-to-end against `192.168.9.130:8080`.
+
 ### Nils's claude · May 13, 10:30 HKT, 2026
 
 **Discovery client rebuilt against the Hagall v1 wire; Python crates collapsed to the new surface; auki-domain stripped to the cluster-membership type.** Verified end-to-end against the live Discovery at `192.168.9.130:8080` (full lifecycle roundtrip). 6 files changed: ~5000 LOC removed (init_domain family, Greenland Python bindings, signed Greenland integration test), ~750 LOC added (new Discovery client + minimal Python bindings + Hagall v1 integration test). Greenland-era Rust modules in `auki-network` survive as orphan dead code in this commit — runtime rebuild + their deletion is the next PR.

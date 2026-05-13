@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:00 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** Five files removed: `cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant` (~3300 LOC). New `network_runtime` module with a focused minimal driver: `spawn(swarm, allowed_peers, stream_provider)` + `set_allowed_peers` + `connected_peers` + `shutdown`. `swarm::Behaviour` stripped of `cluster` + `heartbeat` fields. `stream_runtime`'s method block moved to `impl NetworkRuntime`; 6 integration tests deleted with a port plan filed in [`auki-network/parking_lot.md`](auki-network/parking_lot.md) for SDK-T11.
+
 ### Nils's claude · May 13, 10:30 HKT, 2026
 
 **Discovery client rebuilt against the Hagall v1 wire; `auki-domain` / `auki-network-py` / `auki-domain-py` collapsed to their Hagall surfaces.** [`auki-network`](auki-network/changelog.md) — new `DiscoveryClient` (~280 LOC of client + 100 LOC of integration test against a live Discovery at `$DISCOVERY_URL`); verified end-to-end against the running deployment at `192.168.9.130:8080` (list / create / 409-dup / heartbeat / rotate / deregister). [`auki-domain`](auki-domain/changelog.md) — `init_domain` / `init_or_join_domain` / `DomainHandle` / `DomainIdentity` / `SINGLETON_DOMAIN_NAME` / `InitDomainError` deleted; `lib.rs` collapses to just the `ClusterMembership` re-exports. [`auki-network-py`](auki-network-py/changelog.md) — 3424 LOC → 280 LOC, just the `DiscoveryClient` / `ClusterEntry` / `CreateClusterOutcome` pyclasses. [`auki-domain-py`](auki-domain-py/changelog.md) — 1046 LOC → 210 LOC, just `ClusterMembership` / `ClusterMember` pyclasses. Greenland-era Rust modules (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant`) survive as orphan dead code in this commit — deletion lands in the runtime-rebuild PR alongside the new network runtime driven by `ClusterMembership` instead of `ClusterDoc`. Workspace builds clean; all unit tests green.

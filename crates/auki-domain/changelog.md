@@ -6,6 +6,19 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:30 HKT, 2026
+
+**SDK-T3 — `ClusterManager::join_cluster` ships; Manager-side join handler task admits + gossips membership.** Two new pieces wire `auki-network`'s `/auki/join/0.0.1` protocol into a usable end-to-end flow:
+
+- **`ClusterManager::join_cluster(name, identity, multiaddrs, discovery, swarm, stream_provider)`** — looks the cluster up in Discovery, spawns the runtime with the Manager pre-allowed for dial, waits for the libp2p connection to establish (up to 10s), opens a `/auki/join/0.0.1` substream, sends the `JoinRequest`, parses the Manager's `JoinResponse::Accept { membership_json, successor_token }`, expands the runtime's allow-list to cover every peer in the Manager-gossiped membership, returns a `ClusterManager` with `is_manager = false` and `manager_peer_id` pointing at the Manager. On `Reject` returns `JoinClusterError::Rejected(reason)`.
+- **Manager-side join handler task** (`spawn_join_handler`) — drains the `JoinEvent` channel returned by `NetworkRuntime::spawn`, decides admit-or-reject. As Manager: appends the new peer to the membership, builds the updated allow-list, pushes it via `NetworkRuntimeHandle::set_allowed_peers`, replies with `Accept { membership_json, successor_token }`. As non-Manager: always replies with `Reject { reason: "not the manager" }`. Duplicate admits return `Reject { reason: "already a member" }`. The task is spawned by both `create_cluster` and `join_cluster`; cancelled on `shutdown`.
+
+Live integration test (2-peer): peer A `create_cluster`s; peer B `join_cluster`s the same cluster; both verify identical membership (Manager + joiner); peer B sees A as its Manager; both shutdown cleanly and Discovery's entry is gone. Passes against the running deployment at `192.168.9.130:8080`.
+
+Python: `auki_domain.ClusterManager.join_cluster(wallet_seed, cluster_name, discovery_url, listen_addresses, agent_version)` mirrors the Rust API. Same daemon-friendly façade as `create_cluster`. Booster / Park can now `import auki_domain; mgr = auki_domain.ClusterManager.join_cluster(...)` and get a fully-populated handle ready for `/api/info`.
+
+Deps: `serde_json` promoted from dev-dep to runtime dep (the Manager-side handler serializes the membership; the join-side parses the Manager-gossiped membership). New error type `JoinClusterError` with 6 variants: `Discovery`, `NotFound(name)`, `SendJoin(SendJoinRequestError)`, `Rejected(reason)`, `InvalidMembership(serde_json::Error)`, `Runtime(SpawnError)`.
+
 ### Nils's claude · May 13, 11:45 HKT, 2026
 
 **SDK-T2 lands — `ClusterManager` ships with `create_cluster` + `admit_peer` + `participant_info` + Manager-side Discovery heartbeat.** New `cluster_manager` module. `ClusterManager` owns the cluster's `ClusterMembership`, the libp2p `NetworkRuntime` (from `auki-network`), the `DiscoveryClient`, and a Manager-side Discovery heartbeat tick (3s cadence — matches the v1 contract's 10s sweep). Surface:

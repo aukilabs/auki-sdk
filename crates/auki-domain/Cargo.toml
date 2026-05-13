@@ -19,6 +19,10 @@ auki-network = { path = "../auki-network", features = ["discovery_client", "swar
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
+# Cluster Manager's join handler serializes the membership document
+# into the wire response; cluster_manager's join_cluster parses the
+# Manager's gossiped membership_json. Promoted from dev-dep.
+serde_json = "1"
 thiserror = "2"
 # `tokio::spawn` + `tokio::time::interval` drive the Manager-side
 # Discovery heartbeat tick.

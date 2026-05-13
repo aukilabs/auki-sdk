@@ -25,7 +25,7 @@
 //! 6. `shutdown()` deregisters from Discovery; a follow-up
 //!    `list_clusters` confirms it's gone.
 
-use auki_domain::{ClusterManager, DaemonInfo};
+use auki_domain::ClusterManager;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryClient;
 use auki_network::stream_runtime::decline_all_streams;

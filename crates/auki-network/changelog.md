@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:30 HKT, 2026
+
+**SDK-T3 — `/auki/join/0.0.1` libp2p protocol + NetworkRuntime join plumbing + connection-level trust boundary flipped to block-list.**
+
+New `join_protocol` module: `pub const JOIN_PROTOCOL: &str = "/auki/join/0.0.1"`, `JoinRequest { multiaddrs: Vec<Multiaddr> }`, `JoinResponse::{Accept { membership_json, successor_token }, Reject { reason }}`. Length-prefixed JSON framing (4-byte BE length, then UTF-8 JSON), 1 MiB frame cap, `JoinProtocolError` for the I/O + decode error variants. The joiner's `PeerId` isn't in the wire body — libp2p's noise handshake already authenticated it at the connection layer, and the protocol picks it up from the `libp2p::Stream` metadata.
+
+`NetworkRuntime::spawn` now returns `(Self, mpsc::Receiver<JoinEvent>)`. Inbound `/auki/join/0.0.1` substreams get plumbed through this channel — each `JoinEvent` carries the requester's peer-id, the request body, and a `oneshot::Sender<JoinResponse>` for the owner to reply on. The runtime's per-substream task awaits the reply for up to 10s before timing out with a generic Reject. Outbound: new `NetworkRuntime::send_join_request(peer_id, request) -> Result<JoinResponse, SendJoinRequestError>` opens an outbound substream, writes the request, reads the response, returns. New cloneable `NetworkRuntimeHandle` lets background tasks (notably `auki-domain`'s join handler) call back into the runtime's `set_allowed_peers` without holding the runtime itself.
+
+**Connection-level trust boundary changed: `AllowedPeers` → `BlockedPeers`.** The previous design (per PR #99) refused inbound handshakes from peers off the allow-list; that's incompatible with Hagall's join handshake (a non-member's first contact IS the join request, so they can't pre-allow-list themselves). Connection-level is now open by default; cluster membership enforcement moves to per-protocol gates inside the runtime (`/auki/stream/0.1.0` already gates on `known_peers`; `/auki/join/0.0.1` intentionally does NOT gate, since the protocol IS the gate). The `block_list` field is reserved for evicting misbehaving peers, not routine membership.
+
+`swarm::Behaviour.allow_list` type changed accordingly; the test `outsider_dial_is_refused_when_allow_list_does_not_include_peer` (which asserted the old connection-level deny) was deleted with a comment explaining the move.
+
+Net deltas: +1 module (`join_protocol`, ~370 LOC including 6 wire-format tests), `network_runtime` gains ~150 LOC for the join plumbing, `swarm.rs` flips ~10 LOC for `BlockedPeers` + test cleanup.
+
 ### Nils's claude · May 13, 11:15 HKT, 2026
 
 **`ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** The previous commit deleted `participant.rs` along with the Greenland `/auki/cluster/0.0.1` protocol that used it. Per the [SDK plan's BA-Q3 resolution](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) (Nils, 2026-05-13), `ParticipantInfo` is the canonical SDK-provided shape every daemon (BoosterApp, Park, Sentinel) serializes verbatim on its Control API `GET /api/info` — daemons don't define their own handler logic. The libp2p protocol coupling is gone (no more `/auki/cluster/0.0.1`); the HTTP-wire role survives. Fields restored verbatim: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`. New Hagall-aware fields: `is_manager: bool` + `manager_peer_id: String` (canonical libp2p peer-id string), populated from the cluster runtime by the Manager state machine (SDK-T2). 5 unit tests including a wire-shape-locked field-name pin (cross-daemon tooling reads `/api/info` by these JSON keys; a rename breaks every consumer).

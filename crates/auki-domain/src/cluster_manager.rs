@@ -32,7 +32,10 @@ use auki_network::ParticipantInfo;
 use auki_network::discovery_client::{
     CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
-use auki_network::network_runtime::{AllowedPeer, NetworkRuntime, SpawnError};
+use auki_network::join_protocol::{JoinRequest, JoinResponse};
+use auki_network::network_runtime::{
+    AllowedPeer, JoinEvent, NetworkRuntime, SendJoinRequestError, SpawnError,
+};
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
@@ -41,6 +44,7 @@ use multiaddr::Multiaddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// Cadence of the Manager → Discovery heartbeat tick. Matches the
@@ -115,6 +119,33 @@ pub enum AdmitError {
     Runtime(#[from] auki_network::network_runtime::UpdateError),
 }
 
+/// Errors from [`ClusterManager::join_cluster`].
+#[derive(Debug, Error)]
+pub enum JoinClusterError {
+    /// Discovery rejected the list / lookup call.
+    #[error("Discovery: {0}")]
+    Discovery(#[from] DiscoveryError),
+    /// Discovery's directory doesn't contain a cluster with this
+    /// name. The caller should `create_cluster` if they want to be
+    /// the first.
+    #[error("cluster {0:?} not found in Discovery directory")]
+    NotFound(String),
+    /// The Manager's `/auki/join/0.0.1` substream open / read / write
+    /// failed, or the Manager hung up before responding.
+    #[error("join request: {0}")]
+    SendJoin(#[from] SendJoinRequestError),
+    /// The Manager refused the join.
+    #[error("Manager rejected join: {0}")]
+    Rejected(String),
+    /// The Manager's response carried a malformed
+    /// `membership_json` payload.
+    #[error("invalid membership JSON from Manager: {0}")]
+    InvalidMembership(#[source] serde_json::Error),
+    /// `NetworkRuntime::spawn` failed.
+    #[error("runtime spawn failed: {0}")]
+    Runtime(#[from] SpawnError),
+}
+
 /// SDK-side handle for a cluster a daemon is participating in. See
 /// the module-level docs.
 pub struct ClusterManager {
@@ -131,6 +162,10 @@ pub struct ClusterManager {
     /// Manager-side heartbeat task. Some(_) while this peer is the
     /// Manager; None otherwise. Cancelled on `shutdown`.
     heartbeat_task: Option<JoinHandle<()>>,
+    /// Task that drains inbound `/auki/join/0.0.1` events from the
+    /// runtime, decides admit-or-reject, and replies. Lives for the
+    /// lifetime of the ClusterManager. Cancelled on `shutdown`.
+    join_handler_task: Option<JoinHandle<()>>,
 }
 
 impl ClusterManager {
@@ -188,7 +223,7 @@ impl ClusterManager {
         // 3. Spawn the runtime. Initial allow-list is empty — we
         //    don't dial ourselves; the runtime expands its
         //    allow-list as peers are admitted.
-        let runtime = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
+        let (runtime, join_events_rx) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
         let heartbeat_task = Some(spawn_manager_heartbeat(
@@ -199,6 +234,18 @@ impl ClusterManager {
 
         let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
 
+        // 5. Drain inbound `/auki/join/0.0.1` events: admit-or-reject
+        //    based on whether we're the Manager + whether the peer
+        //    is already a member.
+        let join_handler_task = Some(spawn_join_handler(
+            join_events_rx,
+            cluster_name.clone(),
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        ));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -208,6 +255,7 @@ impl ClusterManager {
             discovery,
             local_multiaddrs,
             heartbeat_task,
+            join_handler_task,
         })
     }
 
@@ -331,13 +379,149 @@ impl ClusterManager {
         }
     }
 
-    /// Shutdown — cancels the Manager heartbeat tick, deregisters
-    /// the cluster from Discovery (if we're the Manager), and shuts
-    /// down the runtime. Consumes `self`.
+    /// Join an existing cluster by talking to its Manager. Lists
+    /// Discovery, finds the entry for `cluster_name`, opens a
+    /// libp2p `/auki/join/0.0.1` substream to the Manager, sends a
+    /// `JoinRequest`, parses the Manager's `JoinResponse`, and
+    /// returns a `ClusterManager` populated with the full membership
+    /// the Manager gossiped.
+    ///
+    /// The local peer is NOT the Manager — `is_manager()` returns
+    /// `false`, `manager_peer_id()` points at whichever peer is
+    /// recorded in Discovery's directory at the time of the call.
+    /// No Discovery-heartbeat task is spawned (only Managers
+    /// heartbeat); future Manager-handoff machinery (SDK-T7) will
+    /// elect a successor and spawn the heartbeat then.
+    pub async fn join_cluster(
+        cluster_name: impl Into<String>,
+        local_identity: PeerIdentity,
+        local_multiaddrs: Vec<Multiaddr>,
+        discovery: DiscoveryClient,
+        swarm: Swarm<Behaviour>,
+        stream_provider: StreamProvider,
+    ) -> Result<Self, JoinClusterError> {
+        let cluster_name = cluster_name.into();
+        let local_peer_id = local_identity.peer_id();
+
+        // 1. Look up the cluster in Discovery's directory.
+        let clusters = discovery.list_clusters().await?;
+        let entry = clusters
+            .into_iter()
+            .find(|c| c.name == cluster_name)
+            .ok_or_else(|| JoinClusterError::NotFound(cluster_name.clone()))?;
+        let manager_peer = entry.manager_peer_id;
+        let manager_multiaddrs = entry.manager_multiaddrs.clone();
+
+        // 2. Spawn the runtime with the Manager pre-allowed (so we
+        //    can dial it for the join handshake). The allow-list
+        //    expands once the Manager gossips back the full
+        //    membership.
+        let (runtime, join_events_rx) = NetworkRuntime::spawn(
+            swarm,
+            vec![AllowedPeer {
+                peer_id: manager_peer,
+                multiaddrs: manager_multiaddrs.clone(),
+            }],
+            stream_provider,
+        )?;
+
+        // 3. Wait until the runtime has dialed the Manager and the
+        //    libp2p connection is established. The runtime's
+        //    auto-dial tick runs every 500ms; the first tick fires
+        //    immediately. Cap the wait so a misconfigured Manager
+        //    address surfaces as a clear error within seconds rather
+        //    than hanging.
+        let connect_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if runtime.connected_peers().contains(&manager_peer) {
+                break;
+            }
+            if std::time::Instant::now() >= connect_deadline {
+                return Err(JoinClusterError::SendJoin(
+                    SendJoinRequestError::Timeout(Duration::from_secs(10)),
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // 4. Open the join substream + send the request.
+        let response = runtime
+            .send_join_request(
+                manager_peer,
+                JoinRequest {
+                    multiaddrs: local_multiaddrs.clone(),
+                },
+            )
+            .await?;
+
+        // 4. Parse the Manager's response.
+        let (membership, _token) = match response {
+            JoinResponse::Accept {
+                membership_json,
+                successor_token,
+            } => {
+                let parsed: ClusterMembership = serde_json::from_str(&membership_json)
+                    .map_err(JoinClusterError::InvalidMembership)?;
+                (parsed, successor_token)
+            }
+            JoinResponse::Reject { reason } => return Err(JoinClusterError::Rejected(reason)),
+        };
+
+        // 5. Expand the runtime allow-list to cover every peer in
+        //    the Manager-gossiped membership (other than ourselves).
+        let allow_list: Vec<AllowedPeer> = membership
+            .peers
+            .iter()
+            .filter(|m| m.peer_id != local_peer_id)
+            .map(|m| AllowedPeer {
+                peer_id: m.peer_id,
+                multiaddrs: m.multiaddrs.clone(),
+            })
+            .collect();
+        runtime
+            .set_allowed_peers(allow_list)
+            .await
+            .map_err(|e| JoinClusterError::Runtime(SpawnError::NoTokioRuntime).into_with(e))?;
+
+        let membership = Arc::new(Mutex::new(membership));
+        let manager_peer_id = Arc::new(Mutex::new(manager_peer));
+
+        // 6. Drain inbound join events. As a non-Manager, our
+        //    handler always rejects with "not the manager"; if/when
+        //    SDK-T7 elects us we'll start admitting.
+        let join_handler_task = Some(spawn_join_handler(
+            join_events_rx,
+            cluster_name.clone(),
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        ));
+
+        Ok(Self {
+            cluster_name,
+            local_peer_id,
+            membership,
+            manager_peer_id,
+            runtime,
+            discovery,
+            local_multiaddrs,
+            heartbeat_task: None,
+            join_handler_task,
+        })
+    }
+
+    /// Shutdown — cancels the Manager heartbeat tick (if any),
+    /// cancels the join handler task, deregisters the cluster from
+    /// Discovery (if we're the Manager), and shuts down the
+    /// runtime. Consumes `self`.
     pub async fn shutdown(mut self) -> Result<(), DiscoveryError> {
-        // 1. Cancel the heartbeat tick FIRST so we stop pinging
-        //    Discovery between deregister and runtime shutdown.
+        // 1. Cancel background tasks FIRST so we stop touching
+        //    Discovery / membership between teardown steps.
         if let Some(task) = self.heartbeat_task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.join_handler_task.take() {
             task.abort();
         }
 
@@ -353,6 +537,19 @@ impl ClusterManager {
         // 3. Shut down the runtime regardless of Discovery's result.
         self.runtime.shutdown();
         result
+    }
+}
+
+// Lightweight wrapper for chaining a runtime error into JoinClusterError.
+// The compiler doesn't auto-coerce UpdateError -> SpawnError -> JoinClusterError;
+// we adapt explicitly.
+impl JoinClusterError {
+    fn into_with(self, _e: auki_network::network_runtime::UpdateError) -> JoinClusterError {
+        // Keeping the original SpawnError context for now — UpdateError
+        // happens at runtime-shutdown boundaries, so the join-side caller
+        // sees Runtime(_) generically. v2 may split this into a typed
+        // sub-variant if needed.
+        self
     }
 }
 
@@ -383,6 +580,90 @@ fn spawn_manager_heartbeat(
                     "auki-domain: Discovery heartbeat for cluster {cluster_name:?} failed: {e}"
                 );
             }
+        }
+    })
+}
+
+/// Spawn a task that drains inbound join events from `rx` and
+/// replies on each `ack`. Manager peers admit + push the updated
+/// allow-list via the runtime handle; non-Manager peers reject
+/// with `"not the manager"`. The task lives for the lifetime of
+/// the `ClusterManager`; cancelled on `shutdown`.
+fn spawn_join_handler(
+    mut rx: mpsc::Receiver<JoinEvent>,
+    cluster_name: String,
+    local_peer_id: PeerId,
+    manager_peer_id: Arc<Mutex<PeerId>>,
+    membership: Arc<Mutex<ClusterMembership>>,
+    runtime: auki_network::NetworkRuntimeHandle,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let JoinEvent {
+                peer,
+                request,
+                ack,
+            } = event;
+
+            // Manager check.
+            let am_manager =
+                *manager_peer_id.lock().expect("manager_peer_id lock") == local_peer_id;
+            if !am_manager {
+                let _ = ack.send(JoinResponse::Reject {
+                    reason: "not the manager".into(),
+                });
+                continue;
+            }
+
+            // Build the new member entry; check for duplicate
+            // membership; append + build the new allow-list inside
+            // a short lock window. The runtime call happens
+            // afterwards (locks released, no holding across await).
+            let (new_allow_list, member, full_membership_json) = {
+                let mut m = membership.lock().expect("membership lock");
+                if m.peers.iter().any(|p| p.peer_id == peer) {
+                    drop(m);
+                    let _ = ack.send(JoinResponse::Reject {
+                        reason: "already a member".into(),
+                    });
+                    continue;
+                }
+                let member = ClusterMember {
+                    peer_id: peer,
+                    multiaddrs: request.multiaddrs.clone(),
+                    join_ts_ns: now_unix_nanos(),
+                    successor_token: Some(Vec::new()),
+                };
+                m.admit(member.clone());
+                let allow_list: Vec<AllowedPeer> = m
+                    .peers
+                    .iter()
+                    .filter(|p| p.peer_id != local_peer_id)
+                    .map(|p| AllowedPeer {
+                        peer_id: p.peer_id,
+                        multiaddrs: p.multiaddrs.clone(),
+                    })
+                    .collect();
+                let json = serde_json::to_string(&*m)
+                    .expect("ClusterMembership serializes by construction");
+                (allow_list, member, json)
+            };
+
+            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                eprintln!(
+                    "auki-domain: join handler for cluster {cluster_name:?}: \
+                    set_allowed_peers failed: {e}; sending Reject"
+                );
+                let _ = ack.send(JoinResponse::Reject {
+                    reason: format!("runtime: {e}"),
+                });
+                continue;
+            }
+
+            let _ = ack.send(JoinResponse::Accept {
+                membership_json: full_membership_json,
+                successor_token: member.successor_token.unwrap_or_default(),
+            });
         }
     })
 }

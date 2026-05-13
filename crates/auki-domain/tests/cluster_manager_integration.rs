@@ -156,3 +156,109 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
 
     eprintln!("ClusterManager full lifecycle OK against {}", discovery_url());
 }
+
+/// Two-peer end-to-end: Manager `create_cluster`s a fresh cluster;
+/// a second peer `join_cluster`s it; both peers see the same
+/// `ClusterMembership` (Manager + joiner) at the end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn two_managers_create_then_join_against_live_discovery() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-join-it");
+
+    // --- Manager side (peer A: creates the cluster) ---
+    let id_a = PeerIdentity::from_seed(&[71u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-join-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+    )
+    .await
+    .expect("create_cluster A");
+
+    assert!(manager_a.is_manager());
+    assert_eq!(manager_a.peer_count(), 1);
+
+    // --- Joiner side (peer B: joins A's cluster) ---
+    let id_b = PeerIdentity::from_seed(&[72u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-join-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b.clone()],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+    )
+    .await
+    .expect("join_cluster B");
+
+    // B is not the Manager; A is.
+    assert!(!manager_b.is_manager(), "joiner is not the Manager");
+    assert_eq!(
+        manager_b.manager_peer_id(),
+        pid_a,
+        "joiner sees A as the Manager"
+    );
+
+    // Membership convergence: both peers see the same 2-member set.
+    // Give A's handler a moment to push the updated allow-list back
+    // through the runtime before checking peer_count on A's side
+    // (the membership update is synchronous; the runtime
+    // set_allowed_peers is fire-and-await but the join handler runs
+    // concurrent with the assertion).
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(manager_a.peer_count(), 2, "Manager A sees the joiner");
+    assert_eq!(manager_b.peer_count(), 2, "Joiner B sees the membership");
+
+    // Verify membership shape — peer-ids match on both sides.
+    let m_a = manager_a.membership();
+    let m_b = manager_b.membership();
+    let mut peers_a: Vec<libp2p_identity::PeerId> = m_a.peers.iter().map(|p| p.peer_id).collect();
+    let mut peers_b: Vec<libp2p_identity::PeerId> = m_b.peers.iter().map(|p| p.peer_id).collect();
+    peers_a.sort();
+    peers_b.sort();
+    assert_eq!(peers_a, peers_b, "both peers see the same peer-id set");
+    assert!(peers_a.contains(&pid_a) && peers_a.contains(&pid_b));
+
+    // --- Cleanup ---
+    manager_b.shutdown().await.expect("B shutdown");
+    manager_a.shutdown().await.expect("A shutdown");
+
+    let after = discovery.list_clusters().await.expect("list after");
+    assert!(
+        !after.iter().any(|c| c.name == cluster_name),
+        "cluster {cluster_name} still in directory after both shutdowns"
+    );
+
+    eprintln!(
+        "Two-manager create + join OK against {}: A={pid_a} B={pid_b}",
+        discovery_url()
+    );
+}

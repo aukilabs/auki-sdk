@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:48 HKT, 2026
+
+**SDK-T2 PARTIAL → DONE — `/auki/membership/0.0.1` membership-gossip protocol lands.** Manager broadcasts the updated cluster doc to all connected peers on admit / eviction / promotion; receivers apply last-write-wins. Finishes the convergence half of SDK-T2 left open in PR #105. Unblocks **Hagall demo step 13** ("propagates to all peers in the cluster") which step 14 depends on. 3-peer convergence integration test passes against `192.168.9.130:8080` in ~600ms. See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager handler details and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.
+
 ### Nils's claude · May 13, 12:25 HKT, 2026
 
 **`/auki/stream/0.1.0` cluster trust boundary resolved: server-side gate on accept (option A), silent-drop non-members.** Filed by Nils 2026-05-12 after observing Park render K1 #1's frames without being in K1's cluster; decided 2026-05-13. `handle_inbound_substream` will consult the runtime's allow-list before invoking the `StreamProvider`; non-members get silently dropped. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). See [`auki-network` changelog](crates/auki-network/changelog.md) for details.

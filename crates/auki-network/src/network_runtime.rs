@@ -39,6 +39,9 @@ use crate::join_protocol::{
     JOIN_PROTOCOL, JoinProtocolError, JoinRequest, JoinResponse, read_join_request,
     read_join_response, write_join_request, write_join_response,
 };
+use crate::membership_protocol::{
+    MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
+};
 use crate::{
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
@@ -177,6 +180,36 @@ pub enum SendJoinRequestError {
     Timeout(Duration),
 }
 
+/// Inbound `/auki/membership/0.0.1` event surfaced by the runtime to
+/// its owner via the channel returned from [`NetworkRuntime::spawn`].
+///
+/// The owner (typically `auki-domain`'s `ClusterManager`) parses the
+/// `membership_json`, swaps its local membership document, and pushes
+/// the updated allow-list to the runtime via
+/// [`NetworkRuntime::set_allowed_peers`]. Fire-and-forget — no `ack`
+/// channel; receivers apply the gossip silently.
+#[derive(Debug)]
+pub struct MembershipEvent {
+    /// The peer-id of the sender. Authenticated by libp2p's noise
+    /// handshake; should be the cluster's current Manager.
+    pub peer: PeerId,
+    /// The body of the membership update — a serialized
+    /// `auki_domain::ClusterMembership` JSON string.
+    pub update: MembershipUpdate,
+}
+
+/// Errors from [`NetworkRuntime::broadcast_membership`] /
+/// [`NetworkRuntimeHandle::broadcast_membership`]. Per-peer write
+/// failures are logged (not collected into this error) since gossip
+/// is fire-and-forget — the next gossip will reconverge.
+#[derive(Debug, thiserror::Error)]
+pub enum BroadcastMembershipError {
+    /// `membership_json` exceeded the protocol's frame cap. Indicates
+    /// an unreasonably large membership document.
+    #[error("membership_json is too large for the gossip frame")]
+    PayloadTooLarge,
+}
+
 /// Diff applied by [`NetworkRuntime::set_allowed_peers`].
 ///
 /// `added` lists peer-ids in the new list but not the old — the runtime
@@ -240,13 +273,18 @@ pub struct NetworkRuntime {
 }
 
 /// Cloneable handle to a [`NetworkRuntime`] for command-style
-/// operations (`set_allowed_peers`, `connected_peers`). Lets
-/// `auki-domain`'s background tasks call back into the runtime
-/// without holding the `NetworkRuntime` itself.
+/// operations (`set_allowed_peers`, `connected_peers`,
+/// `broadcast_membership`). Lets `auki-domain`'s background tasks
+/// call back into the runtime without holding the `NetworkRuntime`
+/// itself.
 #[derive(Clone)]
 pub struct NetworkRuntimeHandle {
     command_tx: mpsc::Sender<RuntimeCmd>,
     connected: Arc<Mutex<HashSet<PeerId>>>,
+    /// Cloneable libp2p-stream `Control`. The handle holds this so
+    /// outbound substream opens (`broadcast_membership`) work without
+    /// reaching back into the owning `NetworkRuntime`.
+    stream_control: Control,
 }
 
 impl NetworkRuntimeHandle {
@@ -275,6 +313,14 @@ impl NetworkRuntimeHandle {
             .copied()
             .collect()
     }
+
+    /// Same semantics as [`NetworkRuntime::broadcast_membership`].
+    pub fn broadcast_membership(
+        &self,
+        membership_json: String,
+    ) -> Result<(), BroadcastMembershipError> {
+        broadcast_membership_impl(&self.stream_control, &self.connected, membership_json)
+    }
 }
 
 impl NetworkRuntime {
@@ -300,9 +346,10 @@ impl NetworkRuntime {
     ///
     /// Returns the runtime + a receiver for inbound
     /// `/auki/join/0.0.1` events + a receiver for peer-liveness
-    /// events. Owners that don't care about either (e.g. tests) can
-    /// drop the receivers; the runtime drops events with no
-    /// receiver.
+    /// events + a receiver for inbound `/auki/membership/0.0.1`
+    /// gossip events. Owners that don't care about any of them
+    /// (e.g. tests) can drop the receivers; the runtime drops events
+    /// with no receiver.
     pub fn spawn(
         swarm: Swarm<Behaviour>,
         allowed_peers: Vec<AllowedPeer>,
@@ -312,6 +359,7 @@ impl NetworkRuntime {
             Self,
             mpsc::Receiver<JoinEvent>,
             mpsc::Receiver<PeerLivenessEvent>,
+            mpsc::Receiver<MembershipEvent>,
         ),
         SpawnError,
     > {
@@ -326,6 +374,7 @@ impl NetworkRuntime {
         let (command_tx, command_rx) = mpsc::channel::<RuntimeCmd>(16);
         let (join_events_tx, join_events_rx) = mpsc::channel::<JoinEvent>(16);
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
+        let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -337,6 +386,7 @@ impl NetworkRuntime {
             command_rx,
             join_events_tx,
             liveness_tx,
+            membership_events_tx,
         ));
         Ok((
             Self {
@@ -350,6 +400,7 @@ impl NetworkRuntime {
             },
             join_events_rx,
             liveness_rx,
+            membership_events_rx,
         ))
     }
 
@@ -403,14 +454,39 @@ impl NetworkRuntime {
 
     /// Cloneable handle for command-style operations
     /// ([`set_allowed_peers`](NetworkRuntimeHandle::set_allowed_peers),
-    /// [`connected_peers`](NetworkRuntimeHandle::connected_peers)).
+    /// [`connected_peers`](NetworkRuntimeHandle::connected_peers),
+    /// [`broadcast_membership`](NetworkRuntimeHandle::broadcast_membership)).
     /// Background tasks call back into the runtime through this
     /// handle without holding the [`NetworkRuntime`] itself.
     pub fn handle(&self) -> NetworkRuntimeHandle {
         NetworkRuntimeHandle {
             command_tx: self.command_tx.clone(),
             connected: self.connected.clone(),
+            stream_control: self.stream_control.clone(),
         }
+    }
+
+    /// Broadcast a membership update to every currently-connected
+    /// allow-listed peer over `/auki/membership/0.0.1`. Fire-and-
+    /// forget — spawns one tokio task per peer that opens a
+    /// substream, writes the [`MembershipUpdate`], and closes. Errors
+    /// per peer are logged at warn level and dropped; the next
+    /// broadcast will re-converge.
+    ///
+    /// `membership_json` is the serialized
+    /// `auki_domain::ClusterMembership` (typically built via
+    /// `ClusterMembership::to_json`). The runtime doesn't interpret
+    /// the JSON — that's the receiver's `ClusterManager` job.
+    ///
+    /// Returns an error only if `membership_json` exceeds the
+    /// protocol frame cap (defense against pathological payloads);
+    /// otherwise returns `Ok(())` once the per-peer tasks are
+    /// spawned. The broadcast continues asynchronously.
+    pub fn broadcast_membership(
+        &self,
+        membership_json: String,
+    ) -> Result<(), BroadcastMembershipError> {
+        broadcast_membership_impl(&self.stream_control, &self.connected, membership_json)
     }
 
     /// Snapshot of currently-connected peers.
@@ -477,6 +553,7 @@ impl Drop for NetworkRuntime {
 
 // ─── Driver task ───────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn run_task(
     swarm: Swarm<Behaviour>,
     initial_peers: Vec<AllowedPeer>,
@@ -488,6 +565,7 @@ async fn run_task(
     mut command_rx: mpsc::Receiver<RuntimeCmd>,
     join_events_tx: mpsc::Sender<JoinEvent>,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
+    membership_events_tx: mpsc::Sender<MembershipEvent>,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -565,6 +643,16 @@ async fn run_task(
     let mut incoming_heartbeats: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(heartbeat_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/membership/0.0.1` substream acceptance.
+    let membership_proto = StreamProtocol::try_from_owned(MEMBERSHIP_PROTOCOL.to_string())
+        .expect("MEMBERSHIP_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_memberships: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(membership_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -648,6 +736,21 @@ async fn run_task(
                     liveness_tx.clone(),
                 ));
                 heartbeat_tasks.insert(peer, task);
+            }
+
+            membership = incoming_memberships.next() => {
+                let Some((peer, substream)) = membership else { return; };
+                // Cluster-trust gate identical to `/auki/stream/0.1.0` —
+                // non-allow-list peers silently dropped (no `Decline`
+                // shape on this protocol, no probe signal). The libp2p
+                // connection-level gate is open by default in Hagall;
+                // per-protocol enforcement lives here.
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = membership_events_tx.clone();
+                tokio::spawn(handle_inbound_membership_substream(peer, substream, tx));
             }
 
             _ = tick.tick() => {
@@ -802,12 +905,27 @@ fn apply_peer_update(
                     },
                 );
             }
+            // The peer may already have an active libp2p connection
+            // — this happens when a non-cluster peer dials us, the
+            // connection-level allow-list (open by default in
+            // Hagall) lets the noise handshake complete, but
+            // `handle_event`'s ConnectionEstablished branch ignored
+            // the `connected` insertion because `known_peers` didn't
+            // contain them yet. Now that we're adding them to
+            // `known_peers`, retroactively recognise the connection
+            // so outbound flows (membership gossip, stream opens)
+            // see them as reachable.
+            if swarm.is_connected(&ap.peer_id) {
+                connected
+                    .lock()
+                    .expect("connected set mutex poisoned")
+                    .insert(ap.peer_id);
+            }
         } else {
             // Refresh addresses for existing peers.
             known_peers.insert(ap.peer_id, ap.multiaddrs.clone());
         }
     }
-    let _ = &swarm;
 
     UpdateReport { added, removed }
 }
@@ -1035,6 +1153,81 @@ fn unix_now_ns() -> i64 {
         .unwrap_or(0)
 }
 
+/// Per-substream task for an inbound `/auki/membership/0.0.1` push.
+/// Reads exactly one [`MembershipUpdate`] and forwards it to the
+/// runtime's owner via [`MembershipEvent`]. Errors are logged and
+/// the substream is dropped silently — gossip is fire-and-forget.
+async fn handle_inbound_membership_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    membership_events_tx: mpsc::Sender<MembershipEvent>,
+) {
+    match read_membership_update(&mut substream).await {
+        Ok(update) => {
+            if membership_events_tx
+                .send(MembershipEvent { peer, update })
+                .await
+                .is_err()
+            {
+                // Receiver dropped — owner is gone. Nothing to do.
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "auki-network: membership substream from {peer}: read failed: {e}"
+            );
+        }
+    }
+}
+
+/// Shared implementation of `broadcast_membership` reachable from both
+/// [`NetworkRuntime::broadcast_membership`] and
+/// [`NetworkRuntimeHandle::broadcast_membership`]. Spawns one fire-
+/// and-forget task per currently-connected peer that opens an outbound
+/// `/auki/membership/0.0.1` substream and writes the update.
+fn broadcast_membership_impl(
+    stream_control: &Control,
+    connected: &Arc<Mutex<HashSet<PeerId>>>,
+    membership_json: String,
+) -> Result<(), BroadcastMembershipError> {
+    if membership_json.len() as u64 > crate::membership_protocol::MAX_MEMBERSHIP_FRAME_BYTES as u64
+    {
+        return Err(BroadcastMembershipError::PayloadTooLarge);
+    }
+    let peers: Vec<PeerId> = connected
+        .lock()
+        .expect("connected set mutex poisoned")
+        .iter()
+        .copied()
+        .collect();
+    for peer in peers {
+        let mut control = stream_control.clone();
+        let json = membership_json.clone();
+        tokio::spawn(async move {
+            let proto = StreamProtocol::try_from_owned(MEMBERSHIP_PROTOCOL.to_string())
+                .expect("MEMBERSHIP_PROTOCOL is a valid libp2p stream protocol id");
+            match control.open_stream(peer, proto).await {
+                Ok(mut substream) => {
+                    let msg = MembershipUpdate {
+                        membership_json: json,
+                    };
+                    if let Err(e) = write_membership_update(&mut substream, &msg).await {
+                        eprintln!(
+                            "auki-network: membership broadcast to {peer}: write failed: {e}"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "auki-network: membership broadcast to {peer}: open_stream failed: {e}"
+                    );
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {
     let sched = schedules.entry(peer_id).or_insert(PeerSchedule {
         next_dial_at: None,
@@ -1065,8 +1258,9 @@ mod tests {
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
-        let (rt, _join_events, _liveness) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-            .expect("spawn succeeds");
+        let (rt, _join_events, _liveness, _membership_events) =
+            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
+                .expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
         rt.shutdown();
     }
@@ -1080,8 +1274,9 @@ mod tests {
         };
         let swarm = build_swarm(&identity, cfg).expect("build_swarm succeeds");
         let expected = identity.peer_id();
-        let (rt, _join_events, _liveness) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-            .expect("spawn succeeds");
+        let (rt, _join_events, _liveness, _membership_events) =
+            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
+                .expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
     }
@@ -1093,7 +1288,7 @@ mod tests {
         let pid_b = PeerIdentity::from_seed(&[2u8; 32]).peer_id();
         let pid_c = PeerIdentity::from_seed(&[3u8; 32]).peer_id();
 
-        let (rt, _join_events, _liveness) = NetworkRuntime::spawn(
+        let (rt, _join_events, _liveness, _membership_events) = NetworkRuntime::spawn(
             swarm,
             vec![
                 AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:48 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T2 PARTIAL → DONE: `/auki/membership/0.0.1` gossip protocol + ClusterManager handler.** Manager broadcasts the updated `ClusterMembership` JSON to all connected allow-listed peers on admit / eviction / Manager-promotion; receivers apply last-write-wins (membership + allow-list, NOT `manager_peer_id` — election owns that). Fire-and-forget framing mirrors `/auki/join/0.0.1`; cluster-trust-gated like `/auki/stream/0.1.0`. New 3-peer integration test passes against `192.168.9.130:8080` in ~600ms (4 live tests total now pass in ~12s). Unblocks Hagall demo step 13's "propagates to all peers" requirement — step 14's stream consumption depends on it (without gossip, Booster #2's allow-list never updates to include Charlie-Park, and Charlie's stream substream gets silently dropped at the trust-boundary gate).
+
 ### Nils's claude · May 13, 12:25 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) — `/auki/stream/0.1.0` cluster trust boundary resolved: server-side gate (option A), silent-drop non-members.** Filed 2026-05-12 (Park rendered K1 #1's frames without being in K1's cluster); decided 2026-05-13. `handle_inbound_substream` consults the runtime's allow-list before invoking the consumer's `StreamProvider`; non-members get silently dropped (symmetric with the prior outsider-`ParticipantInfo`-drop pattern). No `StreamProvider` signature change, no typed `Decline` variant. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). Same shape will apply to `/auki/message/0.0.1` when it lands.

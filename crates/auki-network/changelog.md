@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:48 HKT, 2026
+
+**SDK-T2 PARTIAL → DONE — `/auki/membership/0.0.1` gossip protocol lands.** Finishes the convergence half of SDK-T2 that was left open in PR #105 ("PARTIAL: convergence guarantees — anti-entropy / reconciliation / last-writer-wins — land alongside SDK-T5/T6/T7"). New `membership_protocol` module: `MEMBERSHIP_PROTOCOL = "/auki/membership/0.0.1"`, `MembershipUpdate { membership_json: String }`, length-prefixed JSON framing (mirrors `join_protocol.rs`), 1 MiB frame cap. Fire-and-forget — Manager opens substream, writes one update, closes. Cluster-trust gated like `/auki/stream/0.1.0` (silent-drop non-allow-list peers). Five wire-format unit tests including locked field-name shape.
+
+`NetworkRuntime::spawn` now returns a fourth channel: `mpsc::Receiver<MembershipEvent>`. Inbound `/auki/membership/0.0.1` substreams surface here; receivers (the daemon's `ClusterManager`) apply last-write-wins. `NetworkRuntime::broadcast_membership(json) -> Result<(), BroadcastMembershipError>` opens an outbound substream to every currently-connected allow-listed peer (one fire-and-forget tokio task per peer). Available on both `NetworkRuntime` and the cloneable `NetworkRuntimeHandle` so background tasks can broadcast without holding the runtime.
+
+`apply_peer_update` retroactively inserts a newly-allow-listed peer into the `connected` set if libp2p already has an active connection to them — fixes the gossip case where a joiner's connection to the Manager exists pre-allow-list (open by default per PR #106) but the Manager's `connected` set never registered it because `handle_event`'s ConnectionEstablished branch only adds known peers.
+
 ### Nils's claude · May 13, 12:25 HKT, 2026
 
 **`/auki/stream/0.1.0` cluster trust boundary on the accept path resolved — server-side gate (option A) + silent-drop on non-members.** Decision (Nils, 2026-05-13): before invoking the consumer's `StreamProvider`, `stream_runtime::handle_inbound_substream` checks whether the requesting peer is in the runtime's allow-list (the same allow-list `NetworkRuntime` already maintains via `set_allowed_peers` from `ClusterManager`'s membership updates). If not a cluster member, the substream is silently dropped — symmetric with the prior `cluster_runtime` pattern of dropping outsider `ParticipantInfo` exchanges (cf. the deleted `participant_from_outsider_is_dropped` test). No `StreamProvider` signature change. No typed `Decline { reason: NotInCluster }` variant — silent-drop denies a hostile peer a probe signal.

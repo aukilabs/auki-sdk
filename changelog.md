@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 09:30 HKT, 2026
+
+**[CLAUDE.md](CLAUDE.md) parking-lot workflow simplified: resolved questions are deleted from the parking lot and propagated immediately, instead of leaving "Propagate: …" placeholder items.** Audit history lives in `changelog.md` + git + downstream docs, not in the parking lot. The parking lot is now strictly for live open questions. Applied retroactively: Hagall SDK-Q1/Q2/Q4/Q5 resolved (decisions captured in [crates changelog](crates/changelog.md)), 4 Propagate placeholders removed, parent summaries trimmed to only SDK-Q3.
+
+### Nils's claude · May 13, 09:00 HKT, 2026
+
+**Hagall (Networking) SDK plan drafted as Notion subpage; 5 cross-crate open questions filed across `auki-network` + `auki-domain` parking lots, summarized at [`crates/parking_lot.md`](crates/parking_lot.md) and root.** Planning-only propagation, no code touched. SDK-Q1 (replace vs evolve Greenland's `DomainManager`) is the keystone — pin before the first Hagall PR. [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) under the [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0).
+
 ### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
 
 **[`crates/auki-domain-py`](crates/auki-domain-py) Phase 2 — `stream_provider` Python kwarg wired + race-loss collapsed into the happy path.** Three coordinated changes: (1) `auki_domain::init_or_join_domain` added to `auki-domain` Rust crate (sibling to `init_domain`; same args, collapses `Outcome::AlreadyExists` into a normal `register` + `from_swarm` instead of bailing — producer-only daemons no longer need to handle a typed exception in the happy path); (2) `auki-network-py`'s `[lib] name` renamed `auki_network` → `auki_network_py` to break the cargo lib-name collision that blocked cross-PyO3-crate Rust deps (Python module name preserved via maturin's `module-name = "auki_network"`); (3) `build_stream_provider` in `auki-network-py` promoted `pub(crate)` → `pub` (and `mod stream_types` → `pub mod stream_types`) so `auki-domain-py` can reuse the ~500-line Python-callable→Rust-`StreamProvider` adapter. With this, `auki_domain.init_domain` accepts a `stream_provider` kwarg the daemon's accept-side callback returns `auki_network.cluster.StreamDecision.accept(...)` against — same shape as pre-v0.0.33 `auki_network.cluster.spawn`. Closes the `auki-domain-py/parking_lot.md` #1 and #4 follow-ups. Python daemons (BoosterApp, Sentinel) now have a complete v0.0.33+ producer-side migration target.

@@ -6,6 +6,12 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 ---
 
+## Hagall (Networking) — SDK-side open questions _(filed by Nils's claude, 2026-05-13)_
+
+The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) is a clean rewrite of Auki peer-to-peer cluster networking — Vinland and Greenland are reference, not foundation. The [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) maps the SDK's responsibilities into 12 SDK tasks and 5 design questions; 4 questions resolved 2026-05-13. **Only SDK-Q3 remains open.** Decision trail lives in [`changelog.md`](changelog.md) and the SDK plan's status log.
+
+- [**SDK-Q3**](crates/auki-domain/parking_lot.md#sdk-q3--hagall-successor-token-format-bare-signed-json-jwt-or-prost-in-auki-datatypes-_filed-by-nilss-claude-2026-05-13_) — Successor-token encoding (prost / JWT / bare signed JSON). Lean: prost, ~60%. **Not gating implementation** — v1 Discovery contract skips signature verification entirely, so this defers to v2.
+
 ## README casing convention
 
 Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation status is in `src/readme.md` (lowercase). [CONTRIBUTING.md](CONTRIBUTING.md) shows uppercase for both. Should the inner files be renamed for consistency, or is the casing intentional (e.g. "outer is the public spec, inner is the working notes")?

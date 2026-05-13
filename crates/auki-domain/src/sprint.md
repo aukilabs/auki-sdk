@@ -2,6 +2,8 @@
 
 Current work and next steps. This crate is being scaffolded as the home for the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2)'s SDK-side work.
 
+> **Hagall supersedes this sequence (2026-05-13).** The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) is a clean rewrite — Vinland and Greenland are reference, not foundation (SDK-Q1 resolved 2026-05-13: replace). When the Hagall PR sequence is locked, `init_domain` / `init_or_join_domain` / `DomainManager` get deleted in a dedicated breaking PR. The SDK design is mapped in the [SDK plan](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) (Notion subpage of Hagall); 12 decomposed tasks (SDK-T1..T12) wait on PR sequencing. Greenland PR 2+ work below is on hold pending Hagall's takeover.
+
 ## Now (PR 1 — Greenland T1: shipped)
 
 Greenland T1 entry point. Landed:

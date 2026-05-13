@@ -338,6 +338,8 @@ The control plane (`cluster_runtime`) already enforces a ClusterDoc trust bounda
 
 **Lean.** TBD — leaning A is conservative (matches control-plane behavior, fewer footguns), leaning A+B is the cleanest long-term shape but largest surface change. B-only is rejected — leaves the trust boundary porous by default, ships an insecure SDK. Resolving this is on the path to closing the [subscription-as-materialization keystone](../parking_lot.md) because Log subscribe-and-materialize over the wire will inherit the same accept-handler shape.
 
+**Hagall raises the priority (2026-05-13):** with SDK-Q4 resolved (use `stream_provider` for demo step 14), Charlie-Park is the first cross-peer subscriber in Hagall that has to be cluster-gated. The Hagall stream demo can't ship until this question is pinned. Hagall makes A or A+B not-optional.
+
 Tangent worth flagging: the same gap likely applies to `/auki/message/0.0.1` once it lands (per the pre-implementation calls above). Worth resolving the stream case first and applying the same shape to messages so the trust-boundary policy is consistent across protocols.
 
 ---

@@ -2,7 +2,34 @@
 
 Open questions for the auki-domain crate. Cross-cutting questions that involve other crates live in the [root `parking_lot.md`](../../parking_lot.md) or [`crates/parking_lot.md`](../parking_lot.md).
 
-When a question is answered inline, an agent will replace the item with a "Propagate: …" task — see [CLAUDE.md](../../CLAUDE.md) for the workflow.
+When a question is answered inline, an agent removes the item and propagates the answer everywhere it's relevant — see [CLAUDE.md](../../CLAUDE.md) for the workflow.
+
+---
+
+## SDK-Q3 — Hagall successor-token format: bare signed JSON, JWT, or prost in `auki-datatypes`? _(filed by Nils's claude, 2026-05-13)_
+
+The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) defines the successor token as `{cluster, eligible_successor: <joiner_peer_id>, issued_at: <ts>}` signed by the current Manager's libp2p private key. The [SDK plan](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) (SDK-Q3) flags the encoding question. Three options:
+
+1. **Prost message in `auki-datatypes`.** Consistent with the v0.0.24 migration putting all on-wire payloads in `auki-datatypes`. Compact wire; deterministic encoding (good for signatures); typed boundary.
+2. **JWT-flavored.** Familiar ecosystem; but the JWT signature stack doesn't natively speak libp2p keypair (ed25519 / secp256k1 / RSA — libp2p's `Keypair` enum), so we'd be reimplementing the bit JWT is supposed to give us.
+3. **Bare signed JSON.** Quickest to ship. No prost schema bump, no dep on `auki-datatypes`. Risks the canonicalization rabbit hole (whose JSON ordering wins?) the moment a second language signs or verifies — `auki-jcs` exists for exactly that, so the cost is real.
+
+**Lean: prost in `auki-datatypes`,** ~60%. Matches the v0.0.24 convention and gives a deterministic encoding for free. But the v1 Discovery contract (locked 2026-05-13 by Nils + Discovery claude) **skips signature verification entirely** — so this question can defer until the v2 hardening pass. For v1, even bare JSON unsigned is fine; the answer only matters at v2.
+
+---
+
+## Hagall — DHT-backed cluster doc as long-term direction _(forward-looking, filed by Nils's claude, 2026-05-13)_
+
+When SDK-Q5 was resolved (yes, surface Manager-role + converge on identical records cluster-wide), Nils flagged a long-term direction: replace the Manager-authoritative-RAM cluster doc with a DHT, so authoritativeness isn't bound to a single Manager.
+
+**Out of scope for Hagall v1.** v1 keeps the Manager-authoritative model with peer-side gossip + convergence guarantees (anti-entropy, reconciliation-on-reconnect, last-writer-wins on disagreement). The DHT direction is the v2+ shape.
+
+**Why this matters now:** the trust model shifts when there's no single Manager. Byzantine resilience, signature chains, and the eventual-consistency model all reshape what "successor token" and "cluster identity" mean. Worth keeping on the radar so v1 design choices don't paint v2 into a corner. Open angles to think through when the time comes:
+- Is the DHT scoped per-cluster (cluster members participate in their own DHT) or workspace-wide (cross-cluster, with cluster identity as a key)?
+- How do successor tokens map onto a Manager-less model? They probably become signed handoff certs that any peer can verify against the DHT-stored peer history.
+- libp2p has Kademlia DHT built in; the integration question is whether the cluster doc fields fit cleanly into Kademlia's key-value model or need a CRDT layer on top.
+
+No action required now; revisit when Hagall v1 is shipped and stable.
 
 ---
 

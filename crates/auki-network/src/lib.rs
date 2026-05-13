@@ -45,9 +45,12 @@ pub mod stream_runtime;
 pub mod join_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod heartbeat_protocol;
+
+#[cfg(feature = "swarm")]
 pub use network_runtime::{
-    AllowedPeer, JoinEvent, NetworkRuntime, NetworkRuntimeHandle, SendJoinRequestError,
-    SpawnError, UpdateError, UpdateReport,
+    AllowedPeer, JoinEvent, NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent,
+    SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

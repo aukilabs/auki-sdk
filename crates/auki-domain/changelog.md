@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 13:00 HKT, 2026
+
+**SDK-T6 + SDK-T7 — cluster-internal election + Manager-handoff orchestration. Failover works end-to-end.** Three new pieces:
+
+- **`elect_successor(membership, local_peer_id, connected) -> Option<PeerId>`** — pure function. Sorts membership by `(join_ts_ns, peer_id)` ascending; returns the earliest-joined peer that's "reachable" (in `connected` or equal to `local_peer_id`). 5 unit tests pin the rule (earliest-joined wins, unreachable earlier peers skipped, peer-id tie-break, local-alone-wins, empty-membership-returns-None).
+- **`spawn_liveness_handler`** — task that drains `PeerLivenessEvent`s from the network runtime. On `Lost { peer_id: lost }`: if `lost` is the Manager and we're not, run the election; if we win, become Manager (update local state, call `discovery.rotate_manager`, spawn the Manager-side Discovery heartbeat tick, evict the dead Manager from membership + push the updated allow-list). If we're the Manager and a peer was lost, evict + push allow-list. Dedupe per disconnection.
+- **`ClusterManager::heartbeat_task`** is now `Arc<Mutex<Option<JoinHandle<()>>>>` so the liveness handler can spawn it on Manager-promotion. `join_cluster` initializes it to `None` (joiner isn't Manager yet); `create_cluster` initializes it `Some` (creator is the initial Manager).
+
+End-to-end live integration test (3rd in the file): A creates cluster `foo`; B `join_cluster`s it; A is `drop`'d without `shutdown` (unclean exit, simulates a process kill); within 5s, B detects loss via the heartbeat-timeout monitor, runs the election (B is the only reachable peer, so B wins), promotes itself, calls `discovery.rotate_manager`, and starts the Manager heartbeat tick. The test verifies B's `is_manager == true`, `manager_peer_id == B`, AND that Discovery's directory snapshot has rotated to B. All three live integration tests pass against `192.168.9.130:8080`: full-lifecycle, two-managers-join, and the new failover scenario.
+
+`elect_successor` re-exported from `auki-domain`'s public surface for downstream testing.
+
+### Nils's claude · May 13, 12:30 HKT, 2026
+
 ### Nils's claude · May 13, 12:30 HKT, 2026
 
 **SDK-T3 — `ClusterManager::join_cluster` ships; Manager-side join handler task admits + gossips membership.** Two new pieces wire `auki-network`'s `/auki/join/0.0.1` protocol into a usable end-to-end flow:

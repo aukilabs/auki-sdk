@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 17:21 HKT, 2026
+
+**Fix: `ClusterManager::shutdown` (and `NetworkRuntime::shutdown`) take `&self` — closes the "ghost cluster on Discovery" leak.** Park's stream-consumer fan-out holds `Arc<ClusterManager>` clones, so the prior `shutdown(mut self)` signature was unreachable from Park's leave-cluster path — the Manager-side heartbeat tick kept Discovery's entry alive indefinitely. Option B chosen (over keeping a sibling `stop(&self)` method): single idempotent `&self` shutdown, gated by an `AtomicBool stopped` flag, with new `AdmitError::Stopped` + `FetchParticipantInfoError::Stopped` variants for stale-Arc-clone fast-fail. Park follow-up needed: call `.shutdown()` on the leave path instead of relying on Arc Drop. 6 live integration tests pass against `192.168.9.130:8080`, including the new `shutdown_via_arc_clone_deregisters_and_remains_idempotent` regression test. See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager refactor details and [`auki-network` changelog](crates/auki-network/changelog.md) for the parallel `NetworkRuntime::shutdown` change.
+
 ### Nils's claude · May 13, 15:30 HKT, 2026
 
 **`/auki/sensors/0.0.1` peer-to-peer sensor catalog exchange — unblocks Park's sensor-chip row.** Cluster peers ask each other "what sensors are you currently publishing?" over libp2p. Complements `/auki/info/0.0.1` (identity → catalog). Producer daemons (Booster) install a `SensorCatalogProvider` once at construction; consumers (Park) call `ClusterManager::fetch_sensors_catalog(peer_id)`. Empty catalog is valid — "I have one and it's empty" — NOT an error. Cluster-trust gated identically to existing protocols (silent-drop non-members). See [`auki-domain` changelog](crates/auki-domain/changelog.md) for the ClusterManager handler + provider trait and [`auki-network` changelog](crates/auki-network/changelog.md) for the protocol + runtime wiring.

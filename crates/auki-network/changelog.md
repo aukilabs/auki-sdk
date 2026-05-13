@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 17:21 HKT, 2026
+
+**`NetworkRuntime::shutdown` takes `&self`; idempotent + safe to call under `Arc`.** Paired with the auki-domain `ClusterManager::shutdown` refactor that closes the "ghost cluster on Discovery" leak — `auki-domain` callers wrap the runtime via `ClusterManager`, but the `mut self → &self` shape change has to happen in the runtime crate too, otherwise `ClusterManager::shutdown(&self)` can't call through.
+
+`shutdown_tx: Option<oneshot::Sender<()>>` → `Mutex<Option<oneshot::Sender<()>>>`; `task: Option<JoinHandle<()>>` → `Mutex<Option<JoinHandle<()>>>`. `shutdown(&self)` (no longer consumes) sends the inbound `EndOfStream` grace signal once via `inbound_shutdown_tx` (a `watch::Sender` — idempotent at the `watch` layer), then `.take()`s under the mutexes to fire the driver-task teardown signal and abort the join-handle. Second caller observes both `None`s and no-ops; first caller wins exclusively.
+
+`Drop` impl unchanged in spirit — calls the same private `cleanup` path. Drop never broadcasts the grace signal (that's still explicit-only); on dirty drop, inbound substream tasks see `ConnectionLost` instead of the typed `EndOfStream { reason: ProducerShuttingDown }`, same as before.
+
+No external surface-area break outside `auki-domain` — the only in-tree caller of `NetworkRuntime::shutdown` was `ClusterManager`'s, and `mut self → &self` compiles unchanged at the call site (auto-ref).
+
 ### Nils's claude · May 13, 15:30 HKT, 2026
 
 **`/auki/sensors/0.0.1` peer-to-peer sensor-catalog exchange lands — unblocks Park's sensor-chip row.** Cluster peers can now ask each other "what sensors are you currently publishing?" over libp2p. `/auki/info/0.0.1` (PR #110) covered identity; this is the complementary surface for the catalog the operator picks tiles from. Park's session viewer currently renders "awaiting SDK /auki/sensors/0.0.1" — this protocol delivers on that promise.

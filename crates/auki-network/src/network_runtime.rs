@@ -369,8 +369,13 @@ struct PeerSchedule {
 pub struct NetworkRuntime {
     local_peer_id: PeerId,
     connected: Arc<Mutex<HashSet<PeerId>>>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    task: Option<JoinHandle<()>>,
+    /// Driver-task teardown channel. Wrapped in `Mutex<Option<_>>`
+    /// so [`Self::shutdown`] can `.take()` from `&self` and remain
+    /// idempotent — second caller observes `None` and no-ops.
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// Handle to the driver task. Same `Mutex<Option<_>>` shape as
+    /// `shutdown_tx`: `.take()` aborts under a shared reference.
+    task: Mutex<Option<JoinHandle<()>>>,
     /// Cloneable handle to the swarm's [`libp2p_stream::Behaviour`].
     /// Used by [`crate::stream_runtime`]'s `open_stream` (consumer
     /// side) to open outbound substreams on `/auki/stream/0.1.0`.
@@ -514,8 +519,8 @@ impl NetworkRuntime {
             Self {
                 local_peer_id,
                 connected,
-                shutdown_tx: Some(shutdown_tx),
-                task: Some(task),
+                shutdown_tx: Mutex::new(Some(shutdown_tx)),
+                task: Mutex::new(Some(task)),
                 stream_control: outbound_control,
                 inbound_shutdown_tx,
                 command_tx,
@@ -740,18 +745,34 @@ impl NetworkRuntime {
     /// Signal the driver task to shut down and abort it. Inbound
     /// substream tasks have [`SHUTDOWN_GRACE`] to flush their final
     /// typed `EndOfStream` before the swarm tears down. Unclean exit
-    /// (`Drop` without `shutdown(self)`, panic) skips the grace —
-    /// consumers see `ConnectionLost` instead of the typed reason.
-    pub fn shutdown(mut self) {
+    /// (`Drop` without an explicit `shutdown` call, panic) skips the
+    /// grace — consumers see `ConnectionLost` instead of the typed
+    /// reason.
+    ///
+    /// Idempotent: the first call broadcasts the grace signal and
+    /// aborts the driver task; subsequent calls find `shutdown_tx` /
+    /// `task` already taken and no-op. Safe to call from multiple
+    /// threads concurrently.
+    pub fn shutdown(&self) {
         let _ = self.inbound_shutdown_tx.send(true);
         self.cleanup();
     }
 
-    fn cleanup(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
+    fn cleanup(&self) {
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
             let _ = tx.send(());
         }
-        if let Some(task) = self.task.take() {
+        if let Some(task) = self
+            .task
+            .lock()
+            .expect("NetworkRuntime task lock poisoned")
+            .take()
+        {
             task.abort();
         }
     }
@@ -759,6 +780,10 @@ impl NetworkRuntime {
 
 impl Drop for NetworkRuntime {
     fn drop(&mut self) {
+        // Drop never fires the inbound grace signal — only explicit
+        // `shutdown()` does. Calling `cleanup()` here is idempotent
+        // against prior `shutdown()` and tears the driver task down
+        // without the EndOfStream flush window.
         self.cleanup();
     }
 }

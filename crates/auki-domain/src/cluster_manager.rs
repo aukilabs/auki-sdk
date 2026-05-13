@@ -148,6 +148,11 @@ pub enum AdmitError {
     /// because the runtime is shutting down).
     #[error("runtime: {0}")]
     Runtime(#[from] auki_network::network_runtime::UpdateError),
+    /// [`ClusterManager::shutdown`] has been called. Callers
+    /// holding a stale `Arc<ClusterManager>` clone see this
+    /// rather than a cascading channel-closed error.
+    #[error("ClusterManager has been shut down")]
+    Stopped,
 }
 
 /// Errors from [`ClusterManager::join_cluster`].
@@ -214,27 +219,30 @@ pub struct ClusterManager {
     heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     /// Task that drains inbound `/auki/join/0.0.1` events from the
     /// runtime, decides admit-or-reject, and replies. Lives for the
-    /// lifetime of the ClusterManager. Cancelled on `shutdown`.
-    join_handler_task: Option<JoinHandle<()>>,
+    /// lifetime of the ClusterManager. Cancelled on `shutdown` via
+    /// the `Mutex<Option<_>>::take()` pattern (idempotent against
+    /// concurrent / repeated `shutdown` calls).
+    join_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains `PeerLivenessEvent`s from the runtime,
     /// runs the cluster-internal election on Manager death, and
     /// orchestrates Manager-handoff when the local peer wins.
     /// Cancelled on `shutdown`.
-    liveness_handler_task: Option<JoinHandle<()>>,
+    liveness_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/membership/0.0.1` gossip
     /// events from the runtime, parses the membership JSON, swaps
     /// the local membership document, and pushes the updated
     /// allow-list to the runtime. Cancelled on `shutdown`.
-    membership_handler_task: Option<JoinHandle<()>>,
+    membership_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/info/0.0.1` requests from
     /// the runtime, builds a [`ParticipantInfo`] from current
     /// state, and replies. Cancelled on `shutdown`.
-    info_handler_task: Option<JoinHandle<()>>,
+    info_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/sensors/0.0.1` requests
     /// from the runtime, snapshots the application-supplied
     /// [`SensorCatalogProvider`], and replies. Cancelled on
-    /// `shutdown`.
-    sensors_handler_task: Option<JoinHandle<()>>,
+    /// `shutdown` via the same `Mutex<Option<_>>::take()` pattern
+    /// as the other handler tasks.
+    sensors_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
     /// [`Self::set_sensor_catalog_provider`]; the inbound handler
@@ -242,6 +250,17 @@ pub struct ClusterManager {
     /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
     /// and the handler task can read concurrently.
     sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    /// Set to `true` by [`Self::shutdown`] before any teardown
+    /// begins. Pub I/O methods (`admit_peer`,
+    /// `fetch_participant_info`) check this and fast-fail with a
+    /// typed `Stopped` error so callers holding stale `Arc<Self>`
+    /// clones after shutdown see a clean signal rather than the
+    /// cascading runtime-channel-closed / libp2p-substream-failed
+    /// errors. Snapshot accessors (`membership`, `peer_count`,
+    /// `is_manager`, …) are not gated — returning the
+    /// last-observed state is harmless and lets consumers drain
+    /// their final view.
+    stopped: AtomicBool,
 }
 
 impl ClusterManager {
@@ -322,20 +341,20 @@ impl ClusterManager {
         let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
 
         // 5. Drain inbound `/auki/join/0.0.1` events.
-        let join_handler_task = Some(spawn_join_handler(
+        let join_handler_task = Mutex::new(Some(spawn_join_handler(
             join_events_rx,
             cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
-        ));
+        )));
 
         // 6. Drain peer-liveness events: on Manager death, run the
         //    cluster-internal election; if we win, become the new
         //    Manager (update state, rotate Discovery, start the
         //    heartbeat tick).
-        let liveness_handler_task = Some(spawn_liveness_handler(
+        let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
             cluster_name.clone(),
             local_peer_id,
@@ -345,25 +364,25 @@ impl ClusterManager {
             runtime.handle(),
             discovery.clone(),
             heartbeat_task.clone(),
-        ));
+        )));
 
         // 7. Drain inbound /auki/membership/0.0.1 gossip events. As
         //    the freshly-minted Manager we don't expect to receive
         //    any (nobody else is gossiping yet), but if a stale peer
         //    sends one we apply it last-write-wins — the next
         //    Manager broadcast supersedes.
-        let membership_handler_task = Some(spawn_membership_handler(
+        let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
-        ));
+        )));
 
         // 8. Drain inbound /auki/info/0.0.1 requests. Build a fresh
         //    `ParticipantInfo` from stored daemon_info + dynamic SDK
         //    state on each request and reply.
-        let info_handler_task = Some(spawn_info_handler(
+        let info_handler_task = Mutex::new(Some(spawn_info_handler(
             info_events_rx,
             local_peer_id,
             manager_peer_id.clone(),
@@ -371,17 +390,17 @@ impl ClusterManager {
             daemon_info.clone(),
             session_started,
             cluster_joined_at_ns.clone(),
-        ));
+        )));
 
         // 9. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //    the application-supplied provider (or return an empty
         //    catalog if none is registered yet) and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
-        let sensors_handler_task = Some(spawn_sensors_handler(
+        let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
-        ));
+        )));
 
         Ok(Self {
             cluster_name,
@@ -401,6 +420,7 @@ impl ClusterManager {
             info_handler_task,
             sensors_handler_task,
             sensor_catalog_provider,
+            stopped: AtomicBool::new(false),
         })
     }
 
@@ -458,6 +478,9 @@ impl ClusterManager {
         peer_id: PeerId,
         multiaddrs: Vec<Multiaddr>,
     ) -> Result<ClusterMember, AdmitError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(AdmitError::Stopped);
+        }
         // Manager check.
         let manager = self.manager_peer_id();
         if manager != self.local_peer_id {
@@ -604,6 +627,9 @@ impl ClusterManager {
         &self,
         peer_id: PeerId,
     ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FetchParticipantInfoError::Stopped);
+        }
         let response = self.runtime.request_participant_info(peer_id).await?;
         let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
         Ok(info)
@@ -765,21 +791,21 @@ impl ClusterManager {
         //    always rejects with "not the manager"; once an election
         //    promotes us the same handler starts admitting (it reads
         //    `manager_peer_id` per call).
-        let join_handler_task = Some(spawn_join_handler(
+        let join_handler_task = Mutex::new(Some(spawn_join_handler(
             join_events_rx,
             cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
-        ));
+        )));
 
         // 7. Drain peer-liveness events: on Manager death, run the
         //    cluster-internal election; if we win, become the new
         //    Manager (update state, rotate Discovery, start the
         //    heartbeat tick).
         let heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
-        let liveness_handler_task = Some(spawn_liveness_handler(
+        let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
             cluster_name.clone(),
             local_peer_id,
@@ -789,23 +815,23 @@ impl ClusterManager {
             runtime.handle(),
             discovery.clone(),
             heartbeat_task.clone(),
-        ));
+        )));
 
         // 8. Drain inbound /auki/membership/0.0.1 gossip events.
         //    The Manager pushes updates here when peers join / leave
         //    after our own join; we apply them last-write-wins.
-        let membership_handler_task = Some(spawn_membership_handler(
+        let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
-        ));
+        )));
 
         // 9. Drain inbound /auki/info/0.0.1 requests. Build a fresh
         //    `ParticipantInfo` from stored daemon_info + dynamic SDK
         //    state on each request and reply.
-        let info_handler_task = Some(spawn_info_handler(
+        let info_handler_task = Mutex::new(Some(spawn_info_handler(
             info_events_rx,
             local_peer_id,
             manager_peer_id.clone(),
@@ -813,17 +839,17 @@ impl ClusterManager {
             daemon_info.clone(),
             session_started,
             cluster_joined_at_ns.clone(),
-        ));
+        )));
 
         // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //     the application-supplied provider (or return an empty
         //     catalog if none is registered yet) and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
-        let sensors_handler_task = Some(spawn_sensors_handler(
+        let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
-        ));
+        )));
 
         Ok(Self {
             cluster_name,
@@ -843,31 +869,77 @@ impl ClusterManager {
             info_handler_task,
             sensors_handler_task,
             sensor_catalog_provider,
+            stopped: AtomicBool::new(false),
         })
     }
 
     /// Shutdown — cancels all background tasks, deregisters the
     /// cluster from Discovery (if we're the Manager), and shuts
-    /// down the runtime. Consumes `self`.
-    pub async fn shutdown(mut self) -> Result<(), DiscoveryError> {
+    /// down the runtime.
+    ///
+    /// Callable from `&self` so daemon callers holding the manager
+    /// behind an `Arc` (Park's stream-consumer pattern, Boosterapp's
+    /// stream-provider closure) can shut down without first uniquely
+    /// owning the handle. Idempotent: subsequent calls find the
+    /// `stopped` flag set, observe the empty `Mutex<Option<_>>`s,
+    /// and return `Ok(())` without re-issuing the Discovery
+    /// DELETE.
+    ///
+    /// After this returns, pub I/O methods on this handle
+    /// (`admit_peer`, `fetch_participant_info`) fast-fail with a
+    /// `Stopped` error variant. Snapshot accessors continue to
+    /// return their last-observed state.
+    pub async fn shutdown(&self) -> Result<(), DiscoveryError> {
+        // 0. Claim the shutdown — the AtomicBool exchange picks one
+        //    caller as the deregistration owner; concurrent / repeat
+        //    callers observe `true` and short-circuit.
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+
         // 1. Cancel background tasks FIRST so we stop touching
         //    Discovery / membership between teardown steps.
         if let Some(task) = self.heartbeat_task.lock().expect("heartbeat lock").take() {
             task.abort();
         }
-        if let Some(task) = self.join_handler_task.take() {
+        if let Some(task) = self
+            .join_handler_task
+            .lock()
+            .expect("join_handler_task lock")
+            .take()
+        {
             task.abort();
         }
-        if let Some(task) = self.liveness_handler_task.take() {
+        if let Some(task) = self
+            .liveness_handler_task
+            .lock()
+            .expect("liveness_handler_task lock")
+            .take()
+        {
             task.abort();
         }
-        if let Some(task) = self.membership_handler_task.take() {
+        if let Some(task) = self
+            .membership_handler_task
+            .lock()
+            .expect("membership_handler_task lock")
+            .take()
+        {
             task.abort();
         }
-        if let Some(task) = self.info_handler_task.take() {
+        if let Some(task) = self
+            .info_handler_task
+            .lock()
+            .expect("info_handler_task lock")
+            .take()
+        {
             task.abort();
         }
-        if let Some(task) = self.sensors_handler_task.take() {
+        if let Some(task) = self
+            .sensors_handler_task
+            .lock()
+            .expect("sensors_handler_task lock")
+            .take()
+        {
             task.abort();
         }
 
@@ -881,6 +953,7 @@ impl ClusterManager {
         };
 
         // 3. Shut down the runtime regardless of Discovery's result.
+        //    `NetworkRuntime::shutdown` is `&self` + idempotent.
         self.runtime.shutdown();
         result
     }
@@ -1264,6 +1337,11 @@ pub enum FetchParticipantInfoError {
     /// Responder's payload was not parseable as `ParticipantInfo`.
     #[error("invalid ParticipantInfo JSON from peer: {0}")]
     InvalidJson(#[from] serde_json::Error),
+    /// [`ClusterManager::shutdown`] has been called. Callers
+    /// holding a stale `Arc<ClusterManager>` clone see this
+    /// rather than a cascading libp2p substream error.
+    #[error("ClusterManager has been shut down")]
+    Stopped,
 }
 
 /// Errors from [`ClusterManager::fetch_sensors_catalog`].

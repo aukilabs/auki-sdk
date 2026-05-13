@@ -33,6 +33,7 @@ use auki_network::swarm::{SwarmConfig, build_swarm};
 use libp2p::Swarm;
 use libp2p::swarm::SwarmEvent;
 use multiaddr::Multiaddr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn discovery_url() -> String {
@@ -667,7 +668,6 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
 #[ignore]
 async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
     use auki_domain::{SensorCatalogProvider, SensorEntry};
-    use std::sync::Arc;
 
     /// Test fixture provider — returns a fixed one-entry catalog.
     struct FixedCatalog(Vec<SensorEntry>);
@@ -764,6 +764,124 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
 
     eprintln!(
         "Cross-fetch sensor catalog OK against {}: B={pid_b} published 1 camera; A={pid_a} empty",
+        discovery_url()
+    );
+}
+
+/// Park-side ergonomics: a daemon's stream consumers may hold
+/// `Arc<ClusterManager>` clones (per Park's stream-provider closure
+/// shape, see boosterapp-clone-fan-out + Park's tile consumers).
+/// Shutdown has to work when ANY of those clones calls it — the
+/// daemon shouldn't have to first drain every clone to recover
+/// unique ownership before the heartbeat tick + Discovery DELETE
+/// can run.
+///
+/// Pins the SDK-T2/T7 daemon-lifecycle fix that closed the "ghost
+/// cluster on Discovery" leak: a `.shutdown()` from any Arc clone
+/// (1) aborts every background task (heartbeat + handler tasks),
+/// (2) DELETEs the cluster on Discovery, (3) flips `stopped` so
+/// concurrent / repeat callers fast-fail rather than re-issuing
+/// the Discovery DELETE, (4) leaves other live clones drop-safe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-arc-shutdown-it");
+
+    let identity = PeerIdentity::from_seed(&[55u8; 32]);
+    let mut swarm = build_swarm(
+        &identity,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-arc-shutdown-it/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let local_addr = wait_for_listen_addr(&mut swarm).await;
+
+    let manager = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        identity.clone(),
+        vec![local_addr],
+        discovery.clone(),
+        swarm,
+        decline_all_streams(),
+        sample_daemon_info("arc-shutdown"),
+    )
+    .await
+    .expect("create_cluster succeeds");
+
+    // Stand in for Park's tile-consumer fan-out: hold multiple
+    // Arc clones, drop the "original" handle, then call shutdown
+    // through a clone.
+    let manager = Arc::new(manager);
+    let consumer_clone = manager.clone();
+    let leftover_clone = manager.clone();
+    drop(manager);
+
+    // Sanity: pre-shutdown, Discovery sees the cluster.
+    let pre = discovery.list_clusters().await.expect("list_clusters pre");
+    assert!(
+        pre.iter().any(|c| c.name == cluster_name),
+        "pre-shutdown cluster {cluster_name} should be in Discovery"
+    );
+
+    // Shutdown through a stream-consumer Arc clone — the Park bug
+    // scenario in reverse.
+    consumer_clone
+        .shutdown()
+        .await
+        .expect("shutdown via Arc clone succeeds");
+
+    // Discovery DELETE landed: cluster is gone within the same
+    // call (shutdown awaits the DELETE before returning).
+    let post = discovery.list_clusters().await.expect("list_clusters post");
+    assert!(
+        !post.iter().any(|c| c.name == cluster_name),
+        "cluster {cluster_name} still in Discovery after shutdown via Arc clone"
+    );
+
+    // The second clone is still live and drop-safe; calling
+    // shutdown on it is idempotent (Discovery isn't DELETEd
+    // twice, no panic).
+    leftover_clone
+        .shutdown()
+        .await
+        .expect("second shutdown via leftover Arc clone is idempotent");
+
+    // Post-shutdown I/O calls fast-fail with `Stopped` — Park's
+    // stream consumers holding a stale clone get a clean signal
+    // rather than a cascading runtime-channel-closed error.
+    let other_peer_id = PeerIdentity::from_seed(&[56u8; 32]).peer_id();
+    let dummy_multiaddrs: Vec<Multiaddr> = vec!["/ip4/127.0.0.1/tcp/40099".parse().unwrap()];
+    let admit_err = leftover_clone
+        .admit_peer(other_peer_id, dummy_multiaddrs)
+        .await
+        .expect_err("admit_peer after shutdown must error");
+    assert!(
+        matches!(admit_err, auki_domain::AdmitError::Stopped),
+        "admit_peer after shutdown should return AdmitError::Stopped; got {admit_err:?}"
+    );
+
+    let fetch_err = leftover_clone
+        .fetch_participant_info(other_peer_id)
+        .await
+        .expect_err("fetch_participant_info after shutdown must error");
+    assert!(
+        matches!(
+            fetch_err,
+            auki_domain::FetchParticipantInfoError::Stopped
+        ),
+        "fetch_participant_info after shutdown should return Stopped; got {fetch_err:?}"
+    );
+
+    // Drop the last Arc — runtime + tasks already torn down by
+    // shutdown, so Drop is a no-op (no panic, no hang).
+    drop(leftover_clone);
+
+    eprintln!(
+        "Arc-clone shutdown ergonomics OK against {}",
         discovery_url()
     );
 }

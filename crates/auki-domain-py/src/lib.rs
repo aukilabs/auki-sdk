@@ -896,6 +896,9 @@ fn map_admit_error(e: RustAdmitError) -> PyErr {
             PyValueError::new_err(format!("peer {pid} is already a cluster member"))
         }
         RustAdmitError::Runtime(err) => PyRuntimeError::new_err(format!("runtime: {err}")),
+        RustAdmitError::Stopped => {
+            PyRuntimeError::new_err("ClusterManager has been shut down")
+        }
     }
 }
 
@@ -906,6 +909,9 @@ fn map_fetch_participant_info_error(e: auki_domain_rs::FetchParticipantInfoError
         }
         auki_domain_rs::FetchParticipantInfoError::InvalidJson(err) => {
             PyValueError::new_err(format!("invalid ParticipantInfo JSON from peer: {err}"))
+        }
+        auki_domain_rs::FetchParticipantInfoError::Stopped => {
+            PyRuntimeError::new_err("ClusterManager has been shut down")
         }
     }
 }

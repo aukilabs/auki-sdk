@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**Stripped to a minimal `DiscoveryClient` binding against the Hagall v1 wire.** The previous surface (`ParticipantInfo`, `PeerSnapshot`, `ClusterDoc`, `ClusterRuntime`, `cluster.spawn`, `cluster.load_doc`, plus the `stream_provider` / `stream_types` plumbing) bound Greenland-era Rust APIs that no longer match the v1 contract; deleted. New surface: `DiscoveryClient(base_url)` + `ClusterEntry` + `CreateClusterOutcome` pyclasses, sync-shaped (each method `block_on`s on a process-wide multi-thread tokio runtime). Methods mirror the Rust API one-to-one: `list_clusters` / `create_cluster` / `heartbeat` / `rotate_manager` / `deregister`. `CreateClusterOutcome` exposes `is_already_exists: bool` + `entry: Optional[ClusterEntry]` so Python callers branch with a plain `if`. ~3424 LOC → ~280 LOC; deleted `discovery.rs`, `stream_bridge.rs`, `stream_types.rs`. Dep stack simplified: dropped `auki-identity`, `tracing`, `tracing-subscriber`, `pyo3-async-runtimes`, `futures` — the v1 client doesn't sign, log structured events, or pump streams. The Python surface re-grows when the new network runtime + stream bindings land in the runtime-rebuild PR.
+
+---
+
 ### broodsugar's claude · May 12, 16:30 HKT, 2026
 
 **`DiscoveryClient.create_cluster` + `CreateClusterOutcome` ship — Greenland T8's atomic POST exposed to Python (boosterapp T12 unblock).** Wraps the v0.0.30 Rust addition `DiscoveryClient::create_cluster(&Wallet, &str) -> Result<CreateClusterOutcome, DiscoveryError>` ([PR #95](https://github.com/aukilabs/auki-sdk/pull/95)) so headless Python daemons can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm without going through the full `auki-domain::init_domain` convenience layer (a future `auki-domain-py` crate per the auki-domain README's "PyO3 binding — separate follow-up" line).

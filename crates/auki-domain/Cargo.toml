@@ -5,18 +5,31 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Domain lifecycle for the Auki SDK — Domain identity (wallet-scoped), creation (`init_domain`), joining (`join_domain`), Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Greenland quest implementation; T1 lands in PR 1."
+description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
-# `swarm` brings the libp2p Swarm + Behaviour and the ClusterRuntime
-# constructor that `init_domain` calls into; `discovery_client` brings
-# the HTTP client `init_domain` drives. Both required — `init_domain`
-# is the sole sanctioned constructor for a `ClusterRuntime`, and it
-# can only build one by going through Discovery.
+# `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
+# the cluster manager drives; `discovery_client` brings the HTTP
+# client. Both required for `ClusterManager::create_cluster`.
 auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+# `ClusterMembership` carries libp2p `PeerId`s on the wire; the
+# `serde` feature pins their canonical string form so the JSON
+# document is interoperable across languages.
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+# `tokio::spawn` + `tokio::time::interval` drive the Manager-side
+# Discovery heartbeat tick.
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+# Integration tests need to drive a Swarm + listen for events directly
+# (waiting for the OS-chosen TCP port to materialize before calling
+# `ClusterManager::create_cluster`). Matches `auki-network`'s libp2p
+# feature set.
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
+futures = "0.3"

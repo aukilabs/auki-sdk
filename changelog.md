@@ -6,6 +6,34 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:45 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) + [`crates/auki-domain-py`](crates/auki-domain-py) — SDK-T2 lands: `ClusterManager` (Rust + Python).** Daemon-side cluster handle that owns the membership document, the libp2p `NetworkRuntime`, the `DiscoveryClient`, and a 3s Discovery heartbeat tick. `create_cluster` / `admit_peer` / `participant_info` / `shutdown` mirror across Rust and Python; daemons (BoosterApp, Park, Sentinel) now have a complete surface for "I'm the Manager of cluster `foo`" workflows including SDK-built `/api/info` shape (per BA-Q3). End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-survives-sweep. `join_cluster` is the next gap — needs SDK-T3 (libp2p join protocol).
+
+### Nils's claude · May 13, 11:15 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — `ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** Per BA-Q3 in the SDK plan: all daemons (BoosterApp, Park, Sentinel) serialize the same SDK-provided shape, no per-daemon handler logic. The libp2p protocol coupling deleted in the prior commit stays gone — `ParticipantInfo` lives purely as the daemon HTTP wire shape.
+
+### Nils's claude · May 13, 11:00 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** ~3300 LOC of dead Greenland code removed; ~500 LOC of focused replacement. The new runtime drives the swarm + allow-list from a `Vec<AllowedPeer>` instead of a `ClusterDoc`, stripping the Greenland-era participant-info exchange, heartbeat, and registry-broadcast protocols. Stream protocol logic survives intact. The full Greenland surface is gone from the SDK; live Discovery integration test still passes end-to-end against `192.168.9.130:8080`.
+
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**Discovery client rebuilt against the Hagall v1 wire; Python crates collapsed to the new surface; auki-domain stripped to the cluster-membership type.** Verified end-to-end against the live Discovery at `192.168.9.130:8080` (full lifecycle roundtrip). 6 files changed: ~5000 LOC removed (init_domain family, Greenland Python bindings, signed Greenland integration test), ~750 LOC added (new Discovery client + minimal Python bindings + Hagall v1 integration test). Greenland-era Rust modules in `auki-network` survive as orphan dead code in this commit — runtime rebuild + their deletion is the next PR.
+
+### Nils's claude · May 13, 09:45 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) — Hagall SDK-T1: `ClusterMembership` type + serde lands.** First Hagall implementation crumb. Cluster-neutral type with per-cluster filename `<cluster_name>.json`; opaque `Vec<u8>` successor_token pending SDK-Q3's resolution. Greenland's `ClusterDoc` untouched — deletion PR follows once Hagall is functional.
+
+### Nils's claude · May 13, 09:30 HKT, 2026
+
+**[CLAUDE.md](CLAUDE.md) parking-lot workflow simplified: resolved questions are deleted from the parking lot and propagated immediately, instead of leaving "Propagate: …" placeholder items.** Audit history lives in `changelog.md` + git + downstream docs, not in the parking lot. The parking lot is now strictly for live open questions. Applied retroactively: Hagall SDK-Q1/Q2/Q4/Q5 resolved (decisions captured in [crates changelog](crates/changelog.md)), 4 Propagate placeholders removed, parent summaries trimmed to only SDK-Q3.
+
+### Nils's claude · May 13, 09:00 HKT, 2026
+
+**Hagall (Networking) SDK plan drafted as Notion subpage; 5 cross-crate open questions filed across `auki-network` + `auki-domain` parking lots, summarized at [`crates/parking_lot.md`](crates/parking_lot.md) and root.** Planning-only propagation, no code touched. SDK-Q1 (replace vs evolve Greenland's `DomainManager`) is the keystone — pin before the first Hagall PR. [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) under the [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0).
+
 ### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
 
 **[`crates/auki-domain-py`](crates/auki-domain-py) Phase 2 — `stream_provider` Python kwarg wired + race-loss collapsed into the happy path.** Three coordinated changes: (1) `auki_domain::init_or_join_domain` added to `auki-domain` Rust crate (sibling to `init_domain`; same args, collapses `Outcome::AlreadyExists` into a normal `register` + `from_swarm` instead of bailing — producer-only daemons no longer need to handle a typed exception in the happy path); (2) `auki-network-py`'s `[lib] name` renamed `auki_network` → `auki_network_py` to break the cargo lib-name collision that blocked cross-PyO3-crate Rust deps (Python module name preserved via maturin's `module-name = "auki_network"`); (3) `build_stream_provider` in `auki-network-py` promoted `pub(crate)` → `pub` (and `mod stream_types` → `pub mod stream_types`) so `auki-domain-py` can reuse the ~500-line Python-callable→Rust-`StreamProvider` adapter. With this, `auki_domain.init_domain` accepts a `stream_provider` kwarg the daemon's accept-side callback returns `auki_network.cluster.StreamDecision.accept(...)` against — same shape as pre-v0.0.33 `auki_network.cluster.spawn`. Closes the `auki-domain-py/parking_lot.md` #1 and #4 follow-ups. Python daemons (BoosterApp, Sentinel) now have a complete v0.0.33+ producer-side migration target.

@@ -68,7 +68,7 @@
 //! }).expect("build swarm");
 //! ```
 
-use crate::{PeerIdentity, cluster_protocol, heartbeat_protocol};
+use crate::PeerIdentity;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping, relay,
     swarm::{
@@ -99,17 +99,16 @@ pub struct Behaviour {
     /// peers NOT in this allow-list are denied at the libp2p
     /// `NetworkBehaviour` layer — the noise handshake never completes,
     /// no protocol handler fires, no `identify` exchange leaks our
-    /// peer-id. Populated by [`crate::cluster_runtime`] from
-    /// `ClusterDoc.peers` on spawn and on every Discovery-SSE update;
-    /// empty at swarm-build time. See the module-level docs for the
-    /// "peers only visible within their cluster" rationale.
+    /// peer-id. Populated by [`crate::network_runtime::NetworkRuntime`]
+    /// from its `allowed_peers` list on spawn and on every
+    /// `set_allowed_peers` call; empty at swarm-build time.
     pub allow_list: allow_block_list::Behaviour<allow_block_list::AllowedPeers>,
     /// Always present: lets this node act as a relay-*client* (use
     /// another peer's relay-server to traverse NAT). Wiring is automatic
     /// — dial a circuit-relay multiaddr and the relay-client behaviour
     /// handles the routing. The dial target must still be in the
-    /// [`allow_list`](Self::allow_list) (i.e. in the local cluster doc)
-    /// or the outbound dial is refused before the relay-client handshake.
+    /// [`allow_list`](Self::allow_list) or the outbound dial is refused
+    /// before the relay-client handshake.
     pub relay_client: relay::client::Behaviour,
     /// Optional: lets this node act as a relay-*server* (forward
     /// circuit-relay traffic on behalf of other peers). Toggleable via
@@ -117,28 +116,13 @@ pub struct Behaviour {
     /// consumer daemons (BoosterApp, Sentinel); on for the dedicated
     /// `aukilabs/relay` infrastructure node.
     pub relay: Toggle<relay::Behaviour>,
-    /// `/auki/cluster/0.0.1` participant exchange. Always present — the
-    /// protocol sits idle for swarms that don't participate in a cluster
-    /// (the dedicated `aukilabs/relay` infrastructure node), so a knob
-    /// would just be ceremony. The behaviour does not auto-respond:
-    /// receivers handle `Request` events themselves and call
-    /// [`cluster_protocol::Behaviour::send_response`]. See
-    /// [`crate::cluster_protocol`].
-    pub cluster: cluster_protocol::Behaviour,
-    /// `/auki/heartbeat/0.0.1` Manager↔member liveness exchange.
-    /// Always present — the protocol sits idle until the Manager-side
-    /// state machine in [`auki-domain`](../../../auki-domain) starts
-    /// ticking. Same shape as [`cluster_protocol`]: the behaviour
-    /// does not auto-respond; receivers handle `Request` events and
-    /// call `send_response`. See [`crate::heartbeat_protocol`].
-    pub heartbeat: heartbeat_protocol::Behaviour,
-    /// libp2p raw-substream multiplexer used by grimsby's
+    /// libp2p raw-substream multiplexer used by the
     /// `/auki/stream/0.1.0` typed-byte-stream protocol. Always present —
     /// the behaviour sits idle for swarms that don't open or accept any
-    /// streams; a knob would just be ceremony. Bind to a specific
-    /// protocol id (typically [`crate::stream_protocol::STREAM_PROTOCOL`])
-    /// on the receiving side via `libp2p_stream::Control::accept`, or open
-    /// outbound via `libp2p_stream::Control::open_stream`. See
+    /// streams. Bind to a specific protocol id (typically
+    /// [`crate::stream_protocol::STREAM_PROTOCOL`]) on the receiving
+    /// side via `libp2p_stream::Control::accept`, or open outbound via
+    /// `libp2p_stream::Control::open_stream`. See
     /// [`crate::stream_protocol`].
     pub stream: libp2p_stream::Behaviour,
 }
@@ -219,19 +203,19 @@ pub fn build_swarm(
                     .with_agent_version(agent_version),
             ),
             ping: ping::Behaviour::default(),
-            // Empty at build time. `cluster_runtime` populates from
-            // `ClusterDoc.peers` on spawn and on every Discovery-SSE
-            // update via `swarm.behaviour_mut().allow_list.allow_peer(p)`
-            // / `disallow_peer(p)`. With an empty list, the swarm refuses
+            // Empty at build time. `NetworkRuntime` populates from its
+            // `allowed_peers` list on spawn and on every
+            // `set_allowed_peers` call via
+            // `swarm.behaviour_mut().allow_list.allow_peer(p)` /
+            // `disallow_peer(p)`. With an empty list, the swarm refuses
             // every inbound and outbound libp2p handshake — a
-            // freshly-built swarm with no doc is invisible by design.
+            // freshly-built swarm with no allow-list is invisible by
+            // design.
             allow_list: allow_block_list::Behaviour::<allow_block_list::AllowedPeers>::default(),
             relay_client,
             relay: Toggle::from(enable_relay_server.then(|| {
                 relay::Behaviour::new(local_pid, relay::Config::default())
             })),
-            cluster: cluster_protocol::behaviour(),
-            heartbeat: heartbeat_protocol::behaviour(),
             stream: libp2p_stream::Behaviour::new(),
         })
         .expect("behaviour construction is infallible")

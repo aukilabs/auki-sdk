@@ -63,13 +63,16 @@ Do this immediately after every change. Do not batch.
 
 ### Resolving parking lot items
 
-When a human answers a parking lot question, they will write their answer inline beneath the item. The agent should then:
+When a human answers a parking lot question, they will write their answer inline beneath the item. The agent should then, **immediately and in the same turn:**
 
-1. **Remove the answered item** from the parking lot (this is the one exception to append-only).
-2. **Replace it with a new item:** "Propagate: [short summary of the answer]" — a task to update the relevant docs with the new knowledge.
-3. **Propagate upward** — update parent parking lot summaries to reflect the change.
+1. **Remove the answered item** from the parking lot (this is the one exception to append-only). Delete it entirely — do not tombstone, do not leave a "Resolved" marker. The parking lot is for live open questions only; audit history belongs in the changelog and in git.
+2. **Propagate the answer everywhere it touches** — Notion pages, repo READMEs, downstream parking-lot items, sprint files, code comments, any other doc where the open question was visible. Do not leave the propagation as a future task; stale "Propagate: …" placeholders defeat the purpose of the parking lot.
+3. **Update parent parking-lot summaries** so they no longer list the resolved item.
+4. **Add a changelog entry** at the appropriate level capturing the decision + propagation, per the changelog rules above.
 
-The agent does not update the docs until explicitly asked. The propagation item stays in the parking lot as a reminder until the human is ready.
+Engineering work that follows from the answer (e.g., a deletion PR, a consumer notification, a new question the resolution surfaced) belongs in `src/sprint.md` or as a fresh parking-lot entry — not as a propagation placeholder.
+
+**Caveat:** if propagation is genuinely large (touches more than ~5 documents, or requires judgment the agent shouldn't unilaterally make), flag scope to the human and confirm before continuing — but the default is propagate immediately.
 
 ### When in doubt, surface it
 

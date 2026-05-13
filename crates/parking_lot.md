@@ -31,6 +31,14 @@ Pin before the next public-API touch on `auki-network`. Surfacing for editorial 
 
 ---
 
+## Hagall (Networking) — SDK-side open questions _(filed by Nils's claude, 2026-05-13)_
+
+The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) and its [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) name SDK-side design questions. Resolved questions disappear from this index — see the [crates changelog](changelog.md) and the SDK plan's status log for the decision trail.
+
+- [**SDK-Q3**](auki-domain/parking_lot.md#sdk-q3--hagall-successor-token-format-bare-signed-json-jwt-or-prost-in-auki-datatypes-_filed-by-nilss-claude-2026-05-13_) (auki-domain) — successor-token format: prost in `auki-datatypes`, JWT, or bare signed JSON? Lean: prost, ~60%. Defers to v2 — v1 Discovery contract skips signature verification entirely, so this isn't gating implementation.
+
+---
+
 ## Per-crate parking lots
 
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path

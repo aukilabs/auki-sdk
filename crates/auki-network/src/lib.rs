@@ -1,60 +1,50 @@
 //! Networking substrate for the Auki SDK.
 //!
-//! M0: the data types — [`PeerIdentity`] derived from a [`Wallet`] via
+//! Data types: [`PeerIdentity`] derived from a [`Wallet`] via
 //! `derive_child("peer/v1")`, [`ReachabilityRecord`] describing how to
-//! dial a peer, [`Capability`] tagging what a peer offers, and
-//! [`ParticipantInfo`] (the wire shape every Auki participant exchanges to
-//! introduce itself; one schema, two transports — `GET /api/info` and the
-//! `/auki/cluster/0.0.1` libp2p protocol).
+//! dial a peer, and [`Capability`] tagging what a peer offers.
 //!
-//! M1 (behind the `swarm` feature): a libp2p `Swarm` with TCP + QUIC +
-//! Noise + Yamux. Behaviour: `identify` + `ping` always; `mdns` (on by
-//! default for daemons) for `_p2p._udp.local.` LAN discovery;
-//! `relay::client` always so any peer can be a relay-client; `relay`
-//! (the server side) optional, off by default for consumer daemons.
-//! Plus a [`swarm::dial_peer`] helper for Park-from-home circuit-relay
-//! dialing.
+//! `swarm` feature: a libp2p `Swarm` with TCP + QUIC + Noise + Yamux,
+//! a [`libp2p-allow-block-list`] gate that enforces the cluster trust
+//! boundary at the handshake layer, and a [`NetworkRuntime`] that
+//! drives the swarm against a configurable allow-list. The runtime
+//! accepts inbound substreams on `/auki/stream/0.1.0` (delegating to
+//! the consumer's `stream_provider`) and exposes outbound
+//! [`open_stream`].
 //!
-//! ansuz milestone deliverable #1 — see [`cluster_doc`] for the
-//! `cluster.json` discovery-doc spec and loader. Always available
-//! (no feature gate); native-only because the loader uses `std::fs`.
+//! `discovery_client` feature: an HTTP client for the Discovery
+//! bootstrap-rendezvous service.
 
 use auki_identity::Wallet;
 use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
-pub mod cluster_doc;
 pub mod participant;
 pub use participant::ParticipantInfo;
 
 #[cfg(feature = "swarm")]
 pub mod swarm;
 
-/// Re-export of `libp2p::Swarm` so downstream crates (notably
-/// `auki-domain`) can name `auki_network::Swarm<Behaviour>` in their
-/// `init_domain` / `join_domain` signatures without taking a direct
-/// `libp2p` dep.
+/// Re-export of `libp2p::Swarm` so downstream crates can name
+/// `auki_network::Swarm<Behaviour>` without taking a direct `libp2p`
+/// dep.
 #[cfg(feature = "swarm")]
 pub use libp2p::Swarm;
 
 #[cfg(feature = "swarm")]
-pub mod cluster_protocol;
-
-#[cfg(feature = "swarm")]
-pub mod cluster_runtime;
-
-#[cfg(feature = "swarm")]
-pub mod heartbeat_protocol;
-
-#[cfg(feature = "swarm")]
-pub mod registry_protocol;
+pub mod network_runtime;
 
 #[cfg(feature = "swarm")]
 pub mod stream_protocol;
 
 #[cfg(feature = "swarm")]
 pub mod stream_runtime;
+
+#[cfg(feature = "swarm")]
+pub use network_runtime::{
+    AllowedPeer, NetworkRuntime, SpawnError, UpdateError, UpdateReport,
+};
 
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
@@ -184,7 +174,7 @@ mod multiaddr_vec_serde {
 pub struct Capability(pub String);
 
 impl Capability {
-    /// Hagall-`rosrelay` parity — small frequent control-plane messages.
+    /// `rosrelay` parity — small frequent control-plane messages.
     pub const MESSAGE_FORWARDING: &str = "networking:message-forwarding";
     /// Large non-real-time binary transfer.
     pub const BULK_DATA_CHANNEL: &str = "networking:bulk-data-channel";

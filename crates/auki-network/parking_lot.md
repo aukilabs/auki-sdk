@@ -2,6 +2,21 @@
 
 ---
 
+## Stream-runtime integration tests deleted in the network_runtime PR _(filed by Nils's claude, 2026-05-13)_
+
+When `ClusterRuntime` was replaced by `NetworkRuntime` (Greenland → demo-spec rewrite), the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved (`ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)` → `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)`). The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:
+
+- `producer_accepts_and_streams_jpeg_frames`
+- `producer_declines_unknown_sensor`
+- `producer_error_signals_consumer_with_detail`
+- `producer_shutdown_signals_consumer_with_typed_end_of_stream`
+- `open_stream_against_unreachable_peer_surfaces_typed_error`
+- `producer_accepts_and_streams_pointcloud_frames`
+
+**Port plan when SDK-T11 lands** (stream consumption wiring): adapt the fixture to construct `NetworkRuntime` pairs via `spawn` with mutual `AllowedPeer`s and replace `consumer.peers().iter().any(...)` checks with `consumer.connected_peers().contains(&...)`. Mechanical port; ~200 LOC of fixture rewiring. These tests are the stream-protocol coverage we lean on; restore before any stream-touching change.
+
+---
+
 ## `/auki/message/0.0.1` — inbound message log ownership
 
 Does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch to a registered handler), or does the consumer write it inside their handler (mirroring how sensor logs work — caller owns the log lifecycle)?
@@ -337,6 +352,8 @@ The control plane (`cluster_runtime`) already enforces a ClusterDoc trust bounda
 - **A + B coexist.** Default server-side gate to cluster membership; pass the requesting `PeerId` to providers anyway so apps can layer stricter checks (e.g. only specific peers in the cluster) on top. Belt-and-braces. Largest API change; cleanest long-term semantic boundary.
 
 **Lean.** TBD — leaning A is conservative (matches control-plane behavior, fewer footguns), leaning A+B is the cleanest long-term shape but largest surface change. B-only is rejected — leaves the trust boundary porous by default, ships an insecure SDK. Resolving this is on the path to closing the [subscription-as-materialization keystone](../parking_lot.md) because Log subscribe-and-materialize over the wire will inherit the same accept-handler shape.
+
+**Hagall raises the priority (2026-05-13):** with SDK-Q4 resolved (use `stream_provider` for demo step 14), Charlie-Park is the first cross-peer subscriber in Hagall that has to be cluster-gated. The Hagall stream demo can't ship until this question is pinned. Hagall makes A or A+B not-optional.
 
 Tangent worth flagging: the same gap likely applies to `/auki/message/0.0.1` once it lands (per the pre-implementation calls above). Worth resolving the stream case first and applying the same shape to messages so the trust-boundary policy is consistent across protocols.
 

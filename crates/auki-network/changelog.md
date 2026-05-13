@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:25 HKT, 2026
+
+**`/auki/stream/0.1.0` cluster trust boundary on the accept path resolved — server-side gate (option A) + silent-drop on non-members.** Decision (Nils, 2026-05-13): before invoking the consumer's `StreamProvider`, `stream_runtime::handle_inbound_substream` checks whether the requesting peer is in the runtime's allow-list (the same allow-list `NetworkRuntime` already maintains via `set_allowed_peers` from `ClusterManager`'s membership updates). If not a cluster member, the substream is silently dropped — symmetric with the prior `cluster_runtime` pattern of dropping outsider `ParticipantInfo` exchanges (cf. the deleted `participant_from_outsider_is_dropped` test). No `StreamProvider` signature change. No typed `Decline { reason: NotInCluster }` variant — silent-drop denies a hostile peer a probe signal.
+
+Rationale: matches Hagall constraint #6 ("NO FALLBACKS — we have to be able to test exactly what we are building"); the cluster IS the trust boundary, no per-consumer policy hooks to forget. Cost: a node cannot deliberately stream to non-members (no audit sidecar, no public broadcaster) without a separate, deliberate API expansion. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). The same shape applies to `/auki/message/0.0.1` once it lands (per the message-protocol pre-implementation calls in [parking_lot.md](parking_lot.md)).
+
+Implementation surface: `stream_runtime::handle_inbound_substream`'s `_peer: PeerId` argument becomes `peer: PeerId`; the function consults shared allow-list state (likely via `NetworkRuntimeHandle::connected_peers` or a sibling accessor over the same `Arc<RwLock<HashSet<PeerId>>>`) before invoking the provider closure. Non-members: the function returns early without writing a response. Lands as a sub-task of SDK-T11.
+
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **SDK-T5 — `/auki/heartbeat/0.0.1` peer-side heartbeat protocol + `PeerLivenessEvent` plumbing.** New `heartbeat_protocol` module: `pub const HEARTBEAT_PROTOCOL = "/auki/heartbeat/0.0.1"`, `Heartbeat { sent_at_unix_ns: i64 }`, 500ms cadence, 1500ms timeout (3 missed). Length-prefixed JSON framing (1 KiB cap). 5 wire-format unit tests including locked field names.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:15 HKT, 2026
+
+**[`crates/auki-network`](crates/auki-network) — `ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** Per BA-Q3 in the SDK plan: all daemons (BoosterApp, Park, Sentinel) serialize the same SDK-provided shape, no per-daemon handler logic. The libp2p protocol coupling deleted in the prior commit stays gone — `ParticipantInfo` lives purely as the daemon HTTP wire shape.
+
 ### Nils's claude · May 13, 11:00 HKT, 2026
 
 **[`crates/auki-network`](crates/auki-network) — Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** ~3300 LOC of dead Greenland code removed; ~500 LOC of focused replacement. The new runtime drives the swarm + allow-list from a `Vec<AllowedPeer>` instead of a `ClusterDoc`, stripping the Greenland-era participant-info exchange, heartbeat, and registry-broadcast protocols. Stream protocol logic survives intact. The full Greenland surface is gone from the SDK; live Discovery integration test still passes end-to-end against `192.168.9.130:8080`.

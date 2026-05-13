@@ -20,6 +20,9 @@ use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
+pub mod participant;
+pub use participant::ParticipantInfo;
+
 #[cfg(feature = "swarm")]
 pub mod swarm;
 

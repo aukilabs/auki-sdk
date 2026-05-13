@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 11:15 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — `ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String` per the SDK plan's BA-Q3 resolution.** Daemons serialize the SDK-provided shape verbatim; no per-daemon handler logic. The libp2p protocol coupling deleted in the prior commit stays gone — `ParticipantInfo` now lives purely as the daemon HTTP wire shape.
+
 ### Nils's claude · May 13, 11:00 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) — Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** Five files removed: `cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant` (~3300 LOC). New `network_runtime` module with a focused minimal driver: `spawn(swarm, allowed_peers, stream_provider)` + `set_allowed_peers` + `connected_peers` + `shutdown`. `swarm::Behaviour` stripped of `cluster` + `heartbeat` fields. `stream_runtime`'s method block moved to `impl NetworkRuntime`; 6 integration tests deleted with a port plan filed in [`auki-network/parking_lot.md`](auki-network/parking_lot.md) for SDK-T11.

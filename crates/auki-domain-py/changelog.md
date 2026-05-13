@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**Rewritten end-to-end: now binds `ClusterMembership` + `ClusterMember`, full stop.** The previous surface (`init_domain` / `init_or_join_domain` / `DomainHandle` plus 5 typed Python exceptions) bound `auki-domain` Greenland entry points that no longer exist; deleted. New surface mirrors the Rust API one-to-one — `ClusterMembership(cluster_name)` + `.peers`, `.cluster_name`, `.filename`, `.admit(member)`, `.to_json()`, `ClusterMembership.from_json(s)`; `ClusterMember(peer_id, multiaddrs, join_ts_ns, successor_token=None)` value type. Strings on the boundary: `peer_id` is the canonical libp2p peer-id string, `multiaddrs` are the canonical `/ip4/.../tcp/...` text form, parsed at construction and re-stringified on read. ~1046 LOC → ~210 LOC. Dep stack simplified: dropped `auki-network`, `auki-identity`, `auki-network-py`, `tokio`, `tracing`, `tracing-subscriber` — the new surface is a pure-data binding, no async, no swarm, no Discovery client (consumers use `auki_network.DiscoveryClient` directly).
+
+---
+
 ### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
 
 **`stream_provider` kwarg wired + `init_or_join_domain` becomes the underlying call.** Closes [`parking_lot.md`](parking_lot.md) #1 (stream_provider blocker). Three coordinated changes lift the entire Phase 2 surface in one cut:

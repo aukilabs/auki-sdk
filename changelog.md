@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**Discovery client rebuilt against the Hagall v1 wire; Python crates collapsed to the new surface; auki-domain stripped to the cluster-membership type.** Verified end-to-end against the live Discovery at `192.168.9.130:8080` (full lifecycle roundtrip). 6 files changed: ~5000 LOC removed (init_domain family, Greenland Python bindings, signed Greenland integration test), ~750 LOC added (new Discovery client + minimal Python bindings + Hagall v1 integration test). Greenland-era Rust modules in `auki-network` survive as orphan dead code in this commit — runtime rebuild + their deletion is the next PR.
+
 ### Nils's claude · May 13, 09:45 HKT, 2026
 
 **[`crates/auki-domain`](crates/auki-domain) — Hagall SDK-T1: `ClusterMembership` type + serde lands.** First Hagall implementation crumb. Cluster-neutral type with per-cluster filename `<cluster_name>.json`; opaque `Vec<u8>` successor_token pending SDK-Q3's resolution. Greenland's `ClusterDoc` untouched — deletion PR follows once Hagall is functional.

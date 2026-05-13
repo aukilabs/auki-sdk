@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**`discovery_client` rewritten against Hagall v1 — wire to a live Discovery now works end-to-end.** [aukilabs/discovery#5](https://github.com/aukilabs/discovery/pull/5) shipped the v1 directory service 2026-05-13; the SDK's old `DiscoveryClient` targeted endpoints that no longer exist (`POST /clusters/{name}/peers`, signed mutations) and compiled-but-couldn't-function. This rewrite replaces it. Surface: `DiscoveryClient::new(base_url)` + `list_clusters` / `create_cluster` / `heartbeat` / `rotate_manager` / `deregister`. Wire shape: `ClusterEntry { name, manager_peer_id: PeerId, manager_multiaddrs: Vec<Multiaddr>, peer_count: u32, created_ns: i64, last_heartbeat_ns: i64 }` (parsed at the boundary; consumers see typed values). `CreateClusterOutcome::{Created(ClusterEntry), AlreadyExists}` collapses the 201/409 race-loss into typed return. No crypto in v1 — endpoints accept by shape, per the locked Hagall v1 contract. Stripped from the crate's `discovery_client` dep stack: `auki-jcs`, `base64`, `eventsource-stream`, `percent-encoding` (no signing, no SSE in v1, cluster names are simple `[A-Za-z0-9_-]{1,64}` so no path encoding). Old `tests/discovery_integration.rs` (450 LOC of signed-Greenland wire roundtrips) replaced with a 100-line `#[ignore]` test that roundtrips against a live Discovery at `$DISCOVERY_URL` (default `http://192.168.9.130:8080`); verified the full lifecycle (list → create → 409 dup → heartbeat → rotate → deregister → list) against the running deployment. 6 new unit tests pin the wire shape (field-name locks against both directions). 1375 LOC discovery_client.rs → 384 LOC.
+
+**Greenland code (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant`) survives as dead modules in this commit.** Nothing in the SDK's Hagall path reaches them; they're orphaned compile-only. Deletion lands in the next PR alongside the new network runtime that drives the swarm + allow-list from `ClusterMembership` (the type that landed in SDK-T1) instead of `ClusterDoc`.
+
 ### broodsugar's claude · May 13, 11:21 HKT, 2026
 
 **Kill `cluster.json` static-config loader + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** PR A landed the libp2p-allow-list enforcement; this PR closes the bypass paths that let callers obtain a runtime without going through Discovery. Combined: peers only visible within their cluster, no exceptions, no fallbacks.

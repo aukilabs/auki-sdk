@@ -1,816 +1,293 @@
-//! PyO3 bindings for `auki-network`'s cluster layer.
+//! Python bindings for `auki-network`.
 //!
-//! Lets a Python process participate in an ansuz cluster as a libp2p
-//! peer:
+//! Surface (under the `auki_network` Python module):
 //!
-//! - [`cluster.load_doc`](load_doc) — read and parse a `cluster.json`,
-//!   return an opaque [`ClusterDoc`] handle.
-//! - [`cluster.ParticipantInfo`](ParticipantInfo) — typed wire-shape
-//!   class the consumer constructs and returns from the
-//!   `participant_provider` callable.
-//! - [`cluster.PeerSnapshot`](PeerSnapshot) — typed read-only view of
-//!   one connected peer; produced by `runtime.peers()`.
-//! - `cluster.spawn(seed, doc, participant_provider, **kwargs)` — boot
-//!   a process-wide tokio runtime (lazily, in a `std::thread`) and
-//!   drive a [`auki_network::cluster_runtime::ClusterRuntime`] against
-//!   `doc`. Returns an opaque [`ClusterRuntime`] handle.
-//! - `runtime.peers()` / `runtime.shutdown()` — see [`ClusterRuntime`].
-//!
-//! The `participant_provider` callable runs **on the cluster runtime's
-//! single tokio worker** (one task polls the swarm and invokes the
-//! provider). Keep it cheap: build the [`ParticipantInfo`] from cached
-//! state, no I/O, no contended locks. Sustained GIL contention on this
-//! callable measurably impacts the cluster's responsiveness.
-//!
-//! See [`crates/auki-network-py/README.md`](../README.md) for the
-//! Python-side surface and install instructions.
+//! - `DiscoveryClient(base_url)` — HTTP client for the Discovery
+//!   service. Sync-shaped: each method `block_on`s on a process-wide
+//!   tokio runtime. Methods mirror the Rust API: `list_clusters()`,
+//!   `create_cluster(name, manager_peer_id, manager_multiaddrs)`,
+//!   `heartbeat(name, peer_count)`,
+//!   `rotate_manager(name, manager_peer_id, manager_multiaddrs)`,
+//!   `deregister(name)`.
+//! - `ClusterEntry` — value-type pyclass; one row of Discovery's
+//!   directory snapshot. Produced by `list_clusters` /
+//!   `create_cluster` / `heartbeat` / `rotate_manager`.
+//! - `CreateClusterOutcome` — enum-like pyclass with two states
+//!   (`Created(entry)` and `AlreadyExists`); inspect via
+//!   `.is_already_exists` / `.entry`.
 
-// Path 1 (locked) for grimsby's `stream_provider` Python binding —
-// bridges Python `async def` generators onto Rust `futures::Stream`.
-// `stream_bridge` stays crate-private — it's an internal pyo3-async
-// runtime helper. `stream_types` was promoted to `pub` 2026-05-13 so
-// sibling PyO3 wrapper crates (notably `auki-domain-py`) can reach
-// `build_stream_provider` and reuse the Python-callable→Rust-
-// `StreamProvider` adapter instead of re-implementing the ~500-line
-// PyStream* pyclass plumbing it owns. Python consumers continue to
-// call through `cluster.*` / `discovery.*` / future `auki_domain.*`
-// submodules; the `pub mod` exposure is a Rust-side seam only.
-mod stream_bridge;
-pub mod stream_types;
-
-// Vinland Batch 2 — the `auki_network.discovery` Python submodule
-// wrapping `auki_network::discovery_client::DiscoveryClient`.
-// Sync-shaped per Pattern A; each method `block_on`s on the shared
-// `cluster_tokio_runtime()`.
-mod discovery;
-
-use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyModule};
-
-// `auki_network_rs` is the upstream Rust crate, renamed via `package =`
-// in Cargo.toml so it doesn't collide with this crate's own lib name
-// (`auki_network` — also the Python module name).
-use auki_network_rs::{
-    ParticipantInfo as RustParticipantInfo,
-    cluster_doc::ClusterDoc as RustClusterDoc,
-    cluster_runtime::{
-        ClusterRuntime as RustClusterRuntime, ParticipantInfoProvider, SpawnError,
-    },
-    stream_protocol::StreamRequest as RustStreamRequest,
-    stream_runtime::decline_all_streams,
-    swarm::SwarmConfig,
+use auki_network_rs::discovery_client::{
+    ClusterEntry as RustClusterEntry, CreateClusterOutcome as RustCreateClusterOutcome,
+    DiscoveryClient as RustDiscoveryClient, DiscoveryError as RustDiscoveryError,
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use std::path::PathBuf;
+use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
-use crate::stream_types::{
-    PyStreamSubscription, build_stream_provider, open_stream_error_to_pyerr,
-};
+// ─── Process-wide tokio runtime ────────────────────────────────────
 
-// ─── ParticipantInfo ─────────────────────────────────────────────────────────
-
-/// Identity card a participant exchanges over `/auki/cluster/0.0.1` and
-/// serves on `GET /api/info`. One schema, two transports — see
-/// `auki_network::participant::ParticipantInfo` for the field
-/// semantics.
-///
-/// Construct via the `#[new]`-backed constructor; the consumer's
-/// `participant_provider` callable returns one of these on each
-/// inbound cluster request, so the runtime can reply with fresh
-/// `session_now_ns` per call rather than stale at spawn time.
-#[pyclass(name = "ParticipantInfo")]
-#[derive(Clone, Debug)]
-pub struct ParticipantInfo {
-    inner: RustParticipantInfo,
+/// Multi-threaded tokio runtime shared across all Discovery calls.
+/// Reqwest needs a runtime; we own one lazily on first use so the
+/// caller doesn't need an `async` Python.
+fn shared_runtime() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        Runtime::new().expect("tokio runtime starts")
+    })
 }
 
-#[pymethods]
-impl ParticipantInfo {
-    /// Construct a `ParticipantInfo`. Every field is required;
-    /// `cluster_joined_at_ns` may be `None` (the participant hasn't
-    /// connected to anyone yet).
-    ///
-    /// Raises `ValueError` if `peer_id` does not parse as a libp2p
-    /// PeerId (canonical form: `"12D3KooW..."`).
-    #[new]
-    #[pyo3(signature = (
-        *,
-        app,
-        name,
-        session_id,
-        session_clock_id,
-        session_clock_hash,
-        session_now_ns,
-        cluster_joined_at_ns,
-        peer_id,
-        app_instance,
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        app: String,
-        name: String,
-        session_id: String,
-        session_clock_id: String,
-        session_clock_hash: String,
-        session_now_ns: u64,
-        cluster_joined_at_ns: Option<u64>,
-        peer_id: &str,
-        app_instance: String,
-    ) -> PyResult<Self> {
-        let peer_id = PeerId::from_str(peer_id)
-            .map_err(|e| PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}")))?;
-        Ok(Self {
-            inner: RustParticipantInfo {
-                app,
-                name,
-                session_id,
-                session_clock_id,
-                session_clock_hash,
-                session_now_ns,
-                cluster_joined_at_ns,
-                peer_id,
-                app_instance,
-            },
-        })
-    }
+// ─── Error mapping ─────────────────────────────────────────────────
 
-    #[getter]
-    fn app(&self) -> &str {
-        &self.inner.app
-    }
-
-    #[getter]
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    #[getter]
-    fn session_id(&self) -> &str {
-        &self.inner.session_id
-    }
-
-    #[getter]
-    fn session_clock_id(&self) -> &str {
-        &self.inner.session_clock_id
-    }
-
-    #[getter]
-    fn session_clock_hash(&self) -> &str {
-        &self.inner.session_clock_hash
-    }
-
-    #[getter]
-    fn session_now_ns(&self) -> u64 {
-        self.inner.session_now_ns
-    }
-
-    #[getter]
-    fn cluster_joined_at_ns(&self) -> Option<u64> {
-        self.inner.cluster_joined_at_ns
-    }
-
-    /// Canonical libp2p PeerId string (`"12D3KooW..."`).
-    #[getter]
-    fn peer_id(&self) -> String {
-        self.inner.peer_id.to_string()
-    }
-
-    #[getter]
-    fn app_instance(&self) -> &str {
-        &self.inner.app_instance
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "ParticipantInfo(app={:?}, name={:?}, session_id={:?}, session_now_ns={}, peer_id={:?}, app_instance={:?})",
-            self.inner.app,
-            self.inner.name,
-            self.inner.session_id,
-            self.inner.session_now_ns,
-            self.inner.peer_id.to_string(),
-            self.inner.app_instance,
-        )
-    }
-
-    /// Field-wise equality on every field of the wire shape. Note that
-    /// `session_now_ns` is by design refreshed on each provider call,
-    /// so two `ParticipantInfo` objects taken from the same peer at
-    /// different moments will compare unequal — this is correct for
-    /// "are these the exact same payload?" but `__hash__` is left
-    /// undefined to avoid the implication that instances are stable
-    /// dict keys.
-    fn __eq__(&self, other: &Self) -> bool {
-        self.inner == other.inner
+fn map_discovery_error(e: RustDiscoveryError) -> PyErr {
+    match e {
+        RustDiscoveryError::Transport(err) => {
+            PyOSError::new_err(format!("Discovery transport: {err}"))
+        }
+        RustDiscoveryError::Status { status, body } => {
+            PyRuntimeError::new_err(format!("Discovery HTTP {status}: {body}"))
+        }
+        RustDiscoveryError::InvalidPeerId(s) => {
+            PyValueError::new_err(format!("invalid peer-id in Discovery response: {s}"))
+        }
+        RustDiscoveryError::InvalidMultiaddr(s) => {
+            PyValueError::new_err(format!("invalid multiaddr in Discovery response: {s}"))
+        }
     }
 }
 
-impl ParticipantInfo {
-    /// Internal: clone out the Rust `ParticipantInfo` for handing to
-    /// the auki-network layer. Used by the `cluster.spawn` provider
-    /// plumbing once it lands (Phase 2 of the wrapper rollout).
-    #[allow(dead_code)]
-    pub(crate) fn to_rust(&self) -> RustParticipantInfo {
-        self.inner.clone()
-    }
+// ─── ClusterEntry pyclass ──────────────────────────────────────────
 
-    #[allow(dead_code)]
-    pub(crate) fn from_rust(inner: RustParticipantInfo) -> Self {
+/// One cluster's entry in Discovery's directory.
+#[pyclass(name = "ClusterEntry")]
+#[derive(Clone)]
+pub struct PyClusterEntry {
+    inner: RustClusterEntry,
+}
+
+impl PyClusterEntry {
+    fn from_rust(inner: RustClusterEntry) -> Self {
         Self { inner }
     }
 }
 
-// ─── PeerSnapshot ────────────────────────────────────────────────────────────
-
-/// Read-only view of one connected peer, returned by `runtime.peers()`.
-///
-/// The runtime owns the live state internally; instances of this class
-/// are copies taken at snapshot time. Constructed only by the runtime
-/// (no Python `__new__`) — Python code reads, doesn't build.
-#[pyclass(name = "PeerSnapshot")]
-#[derive(Clone, Debug)]
-pub struct PeerSnapshot {
-    peer_id: String,
-    info: ParticipantInfo,
-    first_seen_ns: u64,
-}
-
 #[pymethods]
-impl PeerSnapshot {
-    /// Canonical libp2p PeerId string of this peer.
+impl PyClusterEntry {
     #[getter]
-    fn peer_id(&self) -> &str {
-        &self.peer_id
+    fn name(&self) -> String {
+        self.inner.name.clone()
     }
 
-    /// Most recent `ParticipantInfo` received from this peer. Refreshed
-    /// on every response.
     #[getter]
-    fn info(&self) -> ParticipantInfo {
-        self.info.clone()
+    fn manager_peer_id(&self) -> String {
+        self.inner.manager_peer_id.to_string()
     }
 
-    /// Peer's `session_now_ns` value at the moment of the **first**
-    /// response received from this peer's current session. Sticky
-    /// across reconnects within the same peer-session; reset if the
-    /// peer's `session_id` changes (peer restarted with a fresh
-    /// session).
     #[getter]
-    fn first_seen_ns(&self) -> u64 {
-        self.first_seen_ns
+    fn manager_multiaddrs(&self) -> Vec<String> {
+        self.inner
+            .manager_multiaddrs
+            .iter()
+            .map(|m| m.to_string())
+            .collect()
+    }
+
+    #[getter]
+    fn peer_count(&self) -> u32 {
+        self.inner.peer_count
+    }
+
+    #[getter]
+    fn created_ns(&self) -> i64 {
+        self.inner.created_ns
+    }
+
+    #[getter]
+    fn last_heartbeat_ns(&self) -> i64 {
+        self.inner.last_heartbeat_ns
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "PeerSnapshot(peer_id={:?}, app={:?}, name={:?}, first_seen_ns={})",
-            self.peer_id, self.info.inner.app, self.info.inner.name, self.first_seen_ns,
+            "ClusterEntry(name={:?}, manager_peer_id={:?}, peer_count={}, created_ns={}, last_heartbeat_ns={})",
+            self.inner.name,
+            self.inner.manager_peer_id.to_string(),
+            self.inner.peer_count,
+            self.inner.created_ns,
+            self.inner.last_heartbeat_ns,
         )
     }
 }
 
-impl PeerSnapshot {
-    /// Internal: build a `PeerSnapshot` from the auki-network type.
-    /// Used by `runtime.peers()` once the cluster.spawn plumbing lands.
-    #[allow(dead_code)]
-    pub(crate) fn from_rust(snapshot: auki_network_rs::cluster_runtime::PeerSnapshot) -> Self {
+// ─── CreateClusterOutcome pyclass ──────────────────────────────────
+
+/// Outcome of `DiscoveryClient.create_cluster`. Inspect via
+/// `.is_already_exists` (bool) and `.entry` (the `ClusterEntry` when
+/// the caller won the race; `None` otherwise).
+#[pyclass(name = "CreateClusterOutcome")]
+pub struct PyCreateClusterOutcome {
+    /// True if the cluster name was already taken (409). The caller
+    /// should list and join the existing cluster.
+    #[pyo3(get)]
+    is_already_exists: bool,
+    /// The new cluster entry; populated only when the caller won the
+    /// race (`is_already_exists = False`).
+    #[pyo3(get)]
+    entry: Option<PyClusterEntry>,
+}
+
+#[pymethods]
+impl PyCreateClusterOutcome {
+    fn __repr__(&self) -> String {
+        if self.is_already_exists {
+            "CreateClusterOutcome(AlreadyExists)".to_string()
+        } else {
+            format!(
+                "CreateClusterOutcome(Created({}))",
+                self.entry
+                    .as_ref()
+                    .map(|e| e.inner.name.clone())
+                    .unwrap_or_default()
+            )
+        }
+    }
+}
+
+// ─── DiscoveryClient pyclass ───────────────────────────────────────
+
+/// HTTP client for a Discovery service instance.
+#[pyclass(name = "DiscoveryClient")]
+pub struct PyDiscoveryClient {
+    inner: RustDiscoveryClient,
+}
+
+#[pymethods]
+impl PyDiscoveryClient {
+    /// Construct against `base_url`, e.g. `"http://192.168.9.130:8080"`.
+    /// Trailing `/` is stripped.
+    #[new]
+    fn new(base_url: String) -> Self {
         Self {
-            peer_id: snapshot.peer_id.to_string(),
-            info: ParticipantInfo::from_rust(snapshot.info),
-            first_seen_ns: snapshot.first_seen_ns,
+            inner: RustDiscoveryClient::new(base_url),
         }
     }
-}
 
-// ─── ClusterDoc + load_doc ───────────────────────────────────────────────────
-
-/// Opaque handle around a parsed `cluster.json`. Construct via
-/// `cluster.load_doc(path)`; consume by passing to `cluster.spawn`.
-///
-/// Python sees this as an opaque token — no field access. The Rust
-/// side validates everything at parse time (peer-id strings, multiaddr
-/// strings, schema version), so a `ClusterDoc` instance is by
-/// construction valid.
-#[pyclass(name = "ClusterDoc")]
-#[derive(Clone, Debug)]
-pub struct ClusterDoc {
-    pub(crate) inner: RustClusterDoc,
-}
-
-#[pymethods]
-impl ClusterDoc {
-    /// Number of peers pinned in the doc. Useful for sanity-checking a
-    /// hand-edited file from Python without exposing the full peer
-    /// list.
     #[getter]
-    fn peer_count(&self) -> usize {
-        self.inner.peers.len()
+    fn base_url(&self) -> &str {
+        self.inner.base_url()
     }
 
-    /// Cluster name from the doc's `cluster_name` field. Operator
-    /// label only — no semantic role.
-    #[getter]
-    fn cluster_name(&self) -> &str {
-        &self.inner.cluster_name
+    /// Snapshot of Discovery's directory, sorted by `created_ns` desc.
+    fn list_clusters(&self, py: Python<'_>) -> PyResult<Vec<PyClusterEntry>> {
+        let client = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime()
+                .block_on(client.list_clusters())
+                .map(|entries| entries.into_iter().map(PyClusterEntry::from_rust).collect())
+                .map_err(map_discovery_error)
+        })
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "ClusterDoc(cluster_name={:?}, peer_count={})",
-            self.inner.cluster_name,
-            self.inner.peers.len(),
-        )
-    }
-}
-
-// `cluster.load_doc(path)` removed — `cluster.json` static-config mode
-// is gone from the SDK. Discovery is the only peer-info source.
-// `ClusterDoc` Python objects are produced by `discovery_client`
-// methods (`register`, `fetch`, `subscribe`); Python consumers no
-// longer construct one from a file. See the `auki-network` changelog
-// entry for 2026-05-12 (the cluster-trust-boundary resolution).
-
-// ─── Tokio runtime singleton ─────────────────────────────────────────────────
-
-/// Process-wide tokio multi-thread runtime. Created lazily on the first
-/// `cluster.spawn`, lives for the rest of the process. Multi-thread is
-/// the simplest path that makes `tokio::runtime::Handle::try_current()`
-/// succeed inside `ClusterRuntime::spawn`; a single `auki-network-py`
-/// process typically holds at most one or two `ClusterRuntime`s, so the
-/// runtime is heavily under-utilized — that's fine.
-///
-/// `pub(crate)` so [`crate::stream_types`] (the source-Stream Drop guard
-/// and the consumer-side blocking iterator) can spawn / `block_on`
-/// against the same runtime instead of building a sibling.
-pub(crate) fn cluster_tokio_runtime() -> &'static Runtime {
-    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        // Best-effort tracing init so `tracing::warn!` from the
-        // participant-provider plumbing reaches stderr (and via systemd
-        // → journald). `try_init` is idempotent: a host process that
-        // already installed a subscriber wins. Default filter is `warn`
-        // so a healthy cluster runs quiet; raise via `RUST_LOG=info` /
-        // `RUST_LOG=auki_network=debug` when debugging.
-        let _ = tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-            )
-            .try_init();
-        Runtime::new().expect("create tokio runtime")
-    })
-}
-
-// ─── ClusterRuntime ──────────────────────────────────────────────────────────
-
-/// Opaque handle to a running cluster runtime — drives a libp2p swarm
-/// against a [`ClusterDoc`], auto-dialing peers, exchanging
-/// [`ParticipantInfo`] over `/auki/cluster/0.0.1`, and maintaining a
-/// live peer state map.
-///
-/// Construct via [`spawn`]; consume via [`shutdown`][ClusterRuntime::shutdown].
-/// After `shutdown()`, all methods raise `RuntimeError`.
-#[pyclass(name = "ClusterRuntime")]
-pub struct ClusterRuntime {
-    /// `Mutex<Option<...>>` so `shutdown()` can `take()` the inner
-    /// runtime (whose Rust `shutdown` consumes `self`) while still
-    /// holding the wrapper as `&self` — Python instances live on the
-    /// heap and don't have an "owned" form. After `take()`, subsequent
-    /// `peers()` / `shutdown()` calls find `None` and raise.
-    inner: Mutex<Option<RustClusterRuntime>>,
-}
-
-#[pymethods]
-impl ClusterRuntime {
-    /// Snapshot of currently-connected peers. Lock-light — copies entries
-    /// out from under a brief mutex hold. Safe to call from any Python
-    /// thread, including the HTTP request handler thread (no async, no
-    /// tokio runtime context required on the caller's side).
-    ///
-    /// Raises `RuntimeError` if the runtime has been shut down.
-    fn peers(&self) -> PyResult<Vec<PeerSnapshot>> {
-        let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-        let rt = inner.as_ref().ok_or_else(shutdown_error)?;
-        Ok(rt.peers().into_iter().map(PeerSnapshot::from_rust).collect())
-    }
-
-    /// Open an outbound `/auki/stream/0.1.0` subscription on `peer_id`
-    /// for the named sensor with `T = JpegFrame` (grimsby deliverable
-    /// #4). The producer must accept with [`PyStreamDecision.accept(...)`];
-    /// for `T = PointCloudFrame` (Dagaz Batch 2) call
-    /// [`open_pointcloud_stream`][ClusterRuntime::open_pointcloud_stream]
-    /// instead.
-    ///
-    /// **Synchronous-blocking**: returns once the producer has Accepted
-    /// or Declined the request, or the SDK's 30s timeout fires. The
-    /// caller's thread is blocked while the wrapper's tokio runtime
-    /// drives the libp2p substream open + wire-handshake. Pattern A
-    /// (per the BoosterApp Claude flag): asyncio plumbing stays
-    /// internal to the SDK; the caller stays sync-shaped.
-    ///
-    /// Returns a [`StreamSubscription`]; iterate frames via
-    /// `subscription.frames()` (also sync-blocking — see
-    /// [`StreamSubscription`] for end-of-stream signalling). Each frame's
-    /// `payload` is a [`JpegFrame`].
-    ///
-    /// Raises:
-    /// - `ValueError` if `peer_id` does not parse as a libp2p PeerId.
-    /// - `auki_network.cluster.StreamDeclined(reason)` — producer accepted
-    ///   the substream open but declined the request.
-    ///   `args[0]` is a `DeclineReason`.
-    /// - `auki_network.cluster.StreamUnreachable(detail)` — libp2p
-    ///   couldn't open the substream (peer not reachable, peer doesn't
-    ///   speak `/auki/stream/0.1.0`, or the open timed out).
-    /// - `auki_network.cluster.StreamProtocolError(detail)` — peer
-    ///   wrote malformed bytes during the request/reply exchange.
-    /// - `RuntimeError` if the runtime has been shut down.
-    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
-    fn open_stream(
+    /// Atomically create a cluster. The caller becomes its initial
+    /// Manager. On 409 returns `CreateClusterOutcome` with
+    /// `is_already_exists = True`.
+    fn create_cluster(
         &self,
         py: Python<'_>,
-        peer_id: &str,
-        sensor_id: String,
-    ) -> PyResult<PyStreamSubscription> {
-        let peer = PeerId::from_str(peer_id).map_err(|e| {
-            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
-        })?;
-
-        // Hold a clone of the inner runtime across the await — the
-        // mutex guard cannot cross `.await` (not Send for Mutex), and
-        // the underlying RustClusterRuntime is Send + Sync, so a quick
-        // copy-out works. The runtime is dropped via `shutdown()`
-        // which `take()`s the inner; we only need it alive long enough
-        // to drive the open_stream call.
-        //
-        // We can't `Clone` RustClusterRuntime — it isn't Clone — so
-        // call `open_stream` on a borrow that lives for the duration of
-        // the block_on call. That means holding the guard the whole
-        // time. Easiest: do the work in a closure that borrows the
-        // guard, releasing it after block_on completes.
-        let request = RustStreamRequest { sensor_id };
-        let result = py.allow_threads(|| {
-            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-            let rt = inner.as_ref().ok_or(())?;
-            let tokio_rt = cluster_tokio_runtime();
-            Ok(tokio_rt.block_on(async {
-                rt.open_stream::<auki_network_rs::stream_protocol::JpegFrame>(peer, request)
-                    .await
-            }))
-        });
-
-        let rust_sub = match result {
-            Err(()) => return Err(shutdown_error()),
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
-        };
-
-        Ok(PyStreamSubscription::from_rust_jpeg(rust_sub))
+        name: &str,
+        manager_peer_id: &str,
+        manager_multiaddrs: Vec<String>,
+    ) -> PyResult<PyCreateClusterOutcome> {
+        let peer_id = parse_peer_id(manager_peer_id)?;
+        let multiaddrs = parse_multiaddrs(&manager_multiaddrs)?;
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            let outcome = shared_runtime()
+                .block_on(client.create_cluster(&name, &peer_id, &multiaddrs))
+                .map_err(map_discovery_error)?;
+            Ok(match outcome {
+                RustCreateClusterOutcome::Created(e) => PyCreateClusterOutcome {
+                    is_already_exists: false,
+                    entry: Some(PyClusterEntry::from_rust(e)),
+                },
+                RustCreateClusterOutcome::AlreadyExists => PyCreateClusterOutcome {
+                    is_already_exists: true,
+                    entry: None,
+                },
+            })
+        })
     }
 
-    /// Open an outbound `/auki/stream/0.1.0` subscription on `peer_id`
-    /// for the named sensor with `T = PointCloudFrame` (Dagaz Batch 2).
-    /// The producer must accept with
-    /// [`PyStreamDecision.accept_pointcloud(...)`].
-    ///
-    /// Same blocking shape as [`open_stream`][ClusterRuntime::open_stream]:
-    /// returns once the producer has Accepted, Declined, or the 30s
-    /// timeout fires. Returns a [`StreamSubscription`] whose frames
-    /// carry [`PointCloudFrame`] payloads — raw CDR-encoded
-    /// `PointCloud2` ROS message bytes that the consumer parses on its
-    /// side. Same exception surface as `open_stream`.
-    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
-    fn open_pointcloud_stream(
+    /// Manager push: report aggregate `peer_count`.
+    fn heartbeat(&self, py: Python<'_>, name: &str, peer_count: u32) -> PyResult<PyClusterEntry> {
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            shared_runtime()
+                .block_on(client.heartbeat(&name, peer_count))
+                .map(PyClusterEntry::from_rust)
+                .map_err(map_discovery_error)
+        })
+    }
+
+    /// Rotate the Manager hint. Called by a newly-elected Manager
+    /// after a successor election.
+    fn rotate_manager(
         &self,
         py: Python<'_>,
-        peer_id: &str,
-        sensor_id: String,
-    ) -> PyResult<PyStreamSubscription> {
-        let peer = PeerId::from_str(peer_id).map_err(|e| {
-            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
-        })?;
-
-        let request = RustStreamRequest { sensor_id };
-        let result = py.allow_threads(|| {
-            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-            let rt = inner.as_ref().ok_or(())?;
-            let tokio_rt = cluster_tokio_runtime();
-            Ok(tokio_rt.block_on(async {
-                rt.open_stream::<auki_network_rs::stream_protocol::PointCloudFrame>(
-                    peer, request,
-                )
-                .await
-            }))
-        });
-
-        let rust_sub = match result {
-            Err(()) => return Err(shutdown_error()),
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
-        };
-
-        Ok(PyStreamSubscription::from_rust_pointcloud(rust_sub))
+        name: &str,
+        manager_peer_id: &str,
+        manager_multiaddrs: Vec<String>,
+    ) -> PyResult<PyClusterEntry> {
+        let peer_id = parse_peer_id(manager_peer_id)?;
+        let multiaddrs = parse_multiaddrs(&manager_multiaddrs)?;
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            shared_runtime()
+                .block_on(client.rotate_manager(&name, &peer_id, &multiaddrs))
+                .map(PyClusterEntry::from_rust)
+                .map_err(map_discovery_error)
+        })
     }
 
-    /// Open an outbound `/auki/stream/0.1.0` JointEncoders subscription
-    /// on `peer_id` for the named sensor (sawslin Phase B).
-    ///
-    /// Same blocking shape as [`open_stream`][ClusterRuntime::open_stream]:
-    /// returns once the producer has Accepted, Declined, or the 30s
-    /// timeout fires. Returns a [`StreamSubscription`] whose frames
-    /// carry [`JointEncodersFrame`] payloads (joint angles in radians;
-    /// length pinned by the sensor registry entry's `joint_count`).
-    /// Same exception surface as `open_stream`.
-    #[pyo3(text_signature = "($self, peer_id, sensor_id)")]
-    fn open_joint_encoders_stream(
-        &self,
-        py: Python<'_>,
-        peer_id: &str,
-        sensor_id: String,
-    ) -> PyResult<PyStreamSubscription> {
-        let peer = PeerId::from_str(peer_id).map_err(|e| {
-            PyValueError::new_err(format!("invalid peer_id {peer_id:?}: {e}"))
-        })?;
-
-        let request = RustStreamRequest { sensor_id };
-        let result = py.allow_threads(|| {
-            let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-            let rt = inner.as_ref().ok_or(())?;
-            let tokio_rt = cluster_tokio_runtime();
-            Ok(tokio_rt.block_on(async {
-                rt.open_stream::<auki_network_rs::stream_protocol::JointEncodersFrame>(
-                    peer, request,
-                )
-                .await
-            }))
-        });
-
-        let rust_sub = match result {
-            Err(()) => return Err(shutdown_error()),
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => return Err(open_stream_error_to_pyerr(py, e)),
-        };
-
-        Ok(PyStreamSubscription::from_rust_joint_encoders(rust_sub))
-    }
-
-    /// Signal the driver task to shut down and abort it. Idempotent in
-    /// the sense that a second call raises rather than silently no-ops
-    /// — use-after-shutdown is almost always a bug, and a noisy raise
-    /// is the right signal.
-    ///
-    /// Raises `RuntimeError` if already shut down.
-    fn shutdown(&self) -> PyResult<()> {
-        let mut inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-        let rt = inner.take().ok_or_else(shutdown_error)?;
-        rt.shutdown();
-        Ok(())
-    }
-
-    fn __repr__(&self) -> String {
-        let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-        match inner.as_ref() {
-            Some(rt) => format!("ClusterRuntime(connected_peers={})", rt.peers().len()),
-            None => "ClusterRuntime(shut_down=True)".to_string(),
-        }
+    /// Graceful deregistration.
+    fn deregister(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            shared_runtime()
+                .block_on(client.deregister(&name))
+                .map_err(map_discovery_error)
+        })
     }
 }
 
-fn shutdown_error() -> PyErr {
-    PyRuntimeError::new_err("ClusterRuntime has been shut down")
+fn parse_peer_id(s: &str) -> PyResult<PeerId> {
+    PeerId::from_str(s)
+        .map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
 }
 
-// Manual `Debug` so test helpers like `Result::expect_err` can format the
-// runtime; the underlying `auki_network::cluster_runtime::ClusterRuntime`
-// doesn't derive `Debug`. Don't reach into the inner runtime — just
-// report whether it's still alive.
-impl std::fmt::Debug for ClusterRuntime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock().expect("ClusterRuntime mutex poisoned");
-        f.debug_struct("ClusterRuntime")
-            .field("state", &if inner.is_some() { "running" } else { "shut_down" })
-            .finish()
-    }
+fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
+    ss.iter()
+        .map(|s| {
+            Multiaddr::from_str(s)
+                .map_err(|e| PyValueError::new_err(format!("invalid multiaddr {s:?}: {e}")))
+        })
+        .collect()
 }
 
+// ─── Module entry point ────────────────────────────────────────────
 
-// ─── Module entry point ──────────────────────────────────────────────────────
-
-/// Populate the module — exposed as a free function so tests can drive
-/// it directly. The `#[pymodule]` entry point below is a thin wrapper.
-fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = m.py();
-
-    // Submodule: auki_network.cluster
-    let cluster = PyModule::new_bound(py, "cluster")?;
-    cluster.add_class::<ParticipantInfo>()?;
-    cluster.add_class::<PeerSnapshot>()?;
-    cluster.add_class::<ClusterDoc>()?;
-    cluster.add_class::<ClusterRuntime>()?;
-    // `cluster.load_doc` and `cluster.spawn` removed — Discovery is
-    // the only peer-info source and the only path to a runtime.
-    // `ClusterDoc` Python objects are returned by `discovery_client`
-    // methods; Python runtime construction follows `auki-domain-py`
-    // (not yet shipped).
-
-    // Grimsby Stream<T> surface (deliverable #4).
-    stream_types::register(py, &cluster)?;
-
-    // Register the submodule in `sys.modules` so
-    // `from auki_network import cluster` works the same as
-    // `import auki_network.cluster`. Without this, only attribute
-    // access through the parent module finds it.
-    py.import_bound("sys")?
-        .getattr("modules")?
-        .set_item("auki_network.cluster", &cluster)?;
-    m.add_submodule(&cluster)?;
-
-    // Submodule: auki_network.discovery (Vinland Batch 2).
-    let discovery_mod = PyModule::new_bound(py, "discovery")?;
-    discovery::register_module(py, &discovery_mod)?;
-    py.import_bound("sys")?
-        .getattr("modules")?
-        .set_item("auki_network.discovery", &discovery_mod)?;
-    m.add_submodule(&discovery_mod)?;
-
-    Ok(())
-}
-
-/// `auki_network` module. The `#[pymodule]` macro generates the
-/// `PyInit_auki_network` C entry point Python imports.
+/// `auki_network` Python module.
 #[pymodule]
-fn auki_network(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    populate_module(m)
-}
-
-// ─── Rust-side smoke tests ────────────────────────────────────────────────────
-//
-// `cargo test` builds with the default features off (no
-// `extension-module`) and the `auto-initialize` dev-dep enabled — that
-// combination links a real Python interpreter into the test binary so
-// `Python::with_gil` works without a host process.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Compute a real PeerId from a fixed ed25519 seed, mirroring the
-    /// recipe used by `auki_network::participant`'s test fixture. Done
-    /// on the fly so we don't bake a literal that could drift if the
-    /// libp2p protobuf-multihash-base58 encoding changes — if the
-    /// string is wrong, the test does the wrong thing silently.
-    fn fixture_peer_id() -> String {
-        use libp2p_identity::{Keypair, ed25519};
-        let mut seed = [7u8; 32];
-        let secret =
-            ed25519::SecretKey::try_from_bytes(&mut seed).expect("32 bytes is a valid secret");
-        let kp = Keypair::from(ed25519::Keypair::from(secret));
-        kp.public().to_peer_id().to_string()
-    }
-
-    fn make_participant_info() -> ParticipantInfo {
-        let peer_id = fixture_peer_id();
-        ParticipantInfo::new(
-            "boosterapp".into(),
-            "k1-walker".into(),
-            "11111111-2222-4333-8444-555555555555".into(),
-            "K1-AABBCCDDEEFF/session-monotonic".into(),
-            "abc123".into(),
-            12_345_678_900,
-            Some(1_745_000_000),
-            &peer_id,
-            "aabbccddeeff".into(),
-        )
-        .expect("construct fixture ParticipantInfo")
-    }
-
-    #[test]
-    fn module_exposes_cluster_submodule_with_documented_surface() {
-        Python::with_gil(|py| {
-            let module = PyModule::new_bound(py, "auki_network").unwrap();
-            populate_module(&module).unwrap();
-
-            let cluster = module.getattr("cluster").unwrap();
-            // Ansuz surface (v0.0.14). Note: `load_doc` and `spawn`
-            // were removed in v0.0.33's PR B (cluster trust boundary)
-            // — Python runtime construction lives in `auki-domain-py`
-            // now (`auki_domain.init_domain`). The pyclasses below
-            // are still returned by Discovery and threaded through
-            // `init_domain`'s internals; this test pins the surface
-            // post-PR-B.
-            assert!(cluster.getattr("ParticipantInfo").is_ok());
-            assert!(cluster.getattr("PeerSnapshot").is_ok());
-            assert!(cluster.getattr("ClusterDoc").is_ok());
-            assert!(cluster.getattr("ClusterRuntime").is_ok());
-            assert!(
-                cluster.getattr("load_doc").is_err(),
-                "load_doc was removed in v0.0.33; if it's back, the cluster trust boundary regressed"
-            );
-            assert!(
-                cluster.getattr("spawn").is_err(),
-                "spawn was removed in v0.0.33; if it's back, the cluster trust boundary regressed — Python runtime construction must go through auki_domain.init_domain"
-            );
-            // Grimsby Stream<T> surface (deliverable #4 / v0.0.17) +
-            // Dagaz Batch 2 PointCloudFrame (v0.0.21).
-            assert!(cluster.getattr("StreamRequest").is_ok());
-            assert!(cluster.getattr("AcceptInfo").is_ok());
-            assert!(cluster.getattr("JpegFrame").is_ok());
-            assert!(cluster.getattr("PointCloudFrame").is_ok());
-            assert!(cluster.getattr("DeclineReason").is_ok());
-            assert!(cluster.getattr("EndReason").is_ok());
-            assert!(cluster.getattr("ProducerFrame").is_ok());
-            assert!(cluster.getattr("ConsumerFrame").is_ok());
-            assert!(cluster.getattr("StreamDecision").is_ok());
-            assert!(cluster.getattr("StreamSubscription").is_ok());
-            assert!(cluster.getattr("FrameIterator").is_ok());
-            assert!(cluster.getattr("StreamEndOfStream").is_ok());
-            assert!(cluster.getattr("StreamConnectionLost").is_ok());
-            assert!(cluster.getattr("StreamProtocolError").is_ok());
-            assert!(cluster.getattr("StreamDeclined").is_ok());
-            assert!(cluster.getattr("StreamUnreachable").is_ok());
-        });
-    }
-
-    /// Pin the `auki_network.discovery` submodule surface (Vinland
-    /// Batch 2 / v0.0.19). Anything new requires a deliberate decision
-    /// and a changelog bump.
-    #[test]
-    fn module_exposes_discovery_submodule_with_documented_surface() {
-        Python::with_gil(|py| {
-            let module = PyModule::new_bound(py, "auki_network").unwrap();
-            populate_module(&module).unwrap();
-
-            let discovery = module.getattr("discovery").unwrap();
-            assert!(discovery.getattr("DiscoveryClient").is_ok());
-            assert!(discovery.getattr("DiscoveryUnreachable").is_ok());
-            assert!(discovery.getattr("DiscoveryRejected").is_ok());
-            assert!(discovery.getattr("DiscoveryClockError").is_ok());
-
-            // `from auki_network import discovery` works because the
-            // wrapper registered the submodule in `sys.modules`.
-            let sys = py.import_bound("sys").unwrap();
-            let modules = sys.getattr("modules").unwrap();
-            assert!(modules.contains("auki_network.discovery").unwrap());
-        });
-    }
-
-    #[test]
-    fn participant_info_round_trips_through_constructor_and_getters() {
-        Python::with_gil(|_py| {
-            let p = make_participant_info();
-            assert_eq!(p.app(), "boosterapp");
-            assert_eq!(p.name(), "k1-walker");
-            assert_eq!(p.session_now_ns(), 12_345_678_900);
-            assert_eq!(p.cluster_joined_at_ns(), Some(1_745_000_000));
-            assert_eq!(p.peer_id(), fixture_peer_id());
-            assert_eq!(p.app_instance(), "aabbccddeeff");
-        });
-    }
-
-    #[test]
-    fn participant_info_rejects_invalid_peer_id() {
-        Python::with_gil(|_py| {
-            let result = ParticipantInfo::new(
-                "boosterapp".into(),
-                "k1-walker".into(),
-                "session".into(),
-                "clock".into(),
-                "hash".into(),
-                0,
-                None,
-                "not-a-peer-id",
-                "aabbccddeeff".into(),
-            );
-            assert!(result.is_err(), "invalid peer_id must fail to parse");
-        });
-    }
-
-    #[test]
-    fn participant_info_eq_compares_all_fields() {
-        Python::with_gil(|_py| {
-            let a = make_participant_info();
-            let b = make_participant_info();
-            assert!(a.__eq__(&b));
-
-            // Mutate one field via re-construction; equality breaks.
-            let peer_id = fixture_peer_id();
-            let c = ParticipantInfo::new(
-                "sentinel".into(), // different app
-                "k1-walker".into(),
-                "11111111-2222-4333-8444-555555555555".into(),
-                "K1-AABBCCDDEEFF/session-monotonic".into(),
-                "abc123".into(),
-                12_345_678_900,
-                Some(1_745_000_000),
-                &peer_id,
-                "aabbccddeeff".into(),
-            )
-            .unwrap();
-            assert!(!a.__eq__(&c));
-        });
-    }
-
+fn auki_network(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyClusterEntry>()?;
+    m.add_class::<PyCreateClusterOutcome>()?;
+    m.add_class::<PyDiscoveryClient>()?;
+    Ok(())
 }

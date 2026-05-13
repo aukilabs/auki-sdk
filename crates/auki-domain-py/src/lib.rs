@@ -18,6 +18,7 @@ use auki_domain_rs::{
     AdmitError as RustAdmitError, ClusterManager as RustClusterManager,
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     CreateClusterError as RustCreateClusterError, DaemonInfo as RustDaemonInfo,
+    JoinClusterError as RustJoinClusterError,
 };
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
@@ -364,21 +365,8 @@ impl PyClusterManager {
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let wallet = Wallet::from_seed(&seed);
-                let identity = PeerIdentity::from_wallet(&wallet);
-                let cfg = SwarmConfig {
-                    listen_addresses: listen_multiaddrs,
-                    agent_version,
-                    enable_relay_server: false,
-                };
-                let mut swarm = build_swarm(&identity, cfg)
-                    .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;
-
-                // Wait for at least one listen address to materialize
-                // so we can advertise it to Discovery on create.
-                let listen_addr = wait_for_listen_addr(&mut swarm)
-                    .await
-                    .map_err(|e| PyOSError::new_err(e))?;
+                let (identity, swarm, listen_addr) =
+                    build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
 
                 let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::create_cluster(
@@ -391,6 +379,62 @@ impl PyClusterManager {
                 )
                 .await
                 .map_err(map_create_cluster_error)?;
+
+                Ok::<_, PyErr>(Self {
+                    inner: Arc::new(Mutex::new(Some(manager))),
+                })
+            })
+        })
+    }
+
+    /// Join an existing cluster by talking to its Manager. Looks
+    /// the cluster up in Discovery, opens a libp2p
+    /// `/auki/join/0.0.1` substream to the Manager, sends a join
+    /// request, parses the Manager's gossiped membership, and
+    /// returns a `ClusterManager` with `is_manager = False`.
+    ///
+    /// Same kwargs as `create_cluster`. The cluster MUST already
+    /// exist on Discovery; otherwise raises `RuntimeError`.
+    #[staticmethod]
+    #[pyo3(signature = (
+        wallet_seed,
+        cluster_name,
+        discovery_url,
+        listen_addresses,
+        agent_version,
+    ))]
+    fn join_cluster(
+        py: Python<'_>,
+        wallet_seed: Vec<u8>,
+        cluster_name: &str,
+        discovery_url: &str,
+        listen_addresses: Vec<String>,
+        agent_version: &str,
+    ) -> PyResult<Self> {
+        let seed: [u8; 32] = wallet_seed
+            .try_into()
+            .map_err(|_| PyValueError::new_err("wallet_seed must be 32 bytes"))?;
+        let cluster_name = cluster_name.to_string();
+        let discovery_url = discovery_url.to_string();
+        let agent_version = agent_version.to_string();
+        let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let (identity, swarm, listen_addr) =
+                    build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
+
+                let discovery = DiscoveryClient::new(discovery_url);
+                let manager = RustClusterManager::join_cluster(
+                    cluster_name,
+                    identity,
+                    vec![listen_addr],
+                    discovery,
+                    swarm,
+                    decline_all_streams(),
+                )
+                .await
+                .map_err(map_join_cluster_error)?;
 
                 Ok::<_, PyErr>(Self {
                     inner: Arc::new(Mutex::new(Some(manager))),
@@ -516,6 +560,48 @@ fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
                 .map_err(|e| PyValueError::new_err(format!("invalid multiaddr {s:?}: {e}")))
         })
         .collect()
+}
+
+async fn build_identity_and_swarm(
+    seed: &[u8; 32],
+    listen_multiaddrs: Vec<Multiaddr>,
+    agent_version: String,
+) -> PyResult<(PeerIdentity, auki_network::Swarm<auki_network::swarm::Behaviour>, Multiaddr)>
+{
+    let wallet = Wallet::from_seed(seed);
+    let identity = PeerIdentity::from_wallet(&wallet);
+    let cfg = SwarmConfig {
+        listen_addresses: listen_multiaddrs,
+        agent_version,
+        enable_relay_server: false,
+    };
+    let mut swarm = build_swarm(&identity, cfg)
+        .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;
+    let listen_addr = wait_for_listen_addr(&mut swarm)
+        .await
+        .map_err(PyOSError::new_err)?;
+    Ok((identity, swarm, listen_addr))
+}
+
+fn map_join_cluster_error(e: RustJoinClusterError) -> PyErr {
+    match e {
+        RustJoinClusterError::Discovery(err) => PyOSError::new_err(format!("Discovery: {err}")),
+        RustJoinClusterError::NotFound(name) => PyRuntimeError::new_err(format!(
+            "cluster {name:?} not found in Discovery directory"
+        )),
+        RustJoinClusterError::SendJoin(err) => {
+            PyOSError::new_err(format!("join request: {err}"))
+        }
+        RustJoinClusterError::Rejected(reason) => {
+            PyRuntimeError::new_err(format!("Manager rejected join: {reason}"))
+        }
+        RustJoinClusterError::InvalidMembership(err) => PyValueError::new_err(format!(
+            "invalid membership JSON from Manager: {err}"
+        )),
+        RustJoinClusterError::Runtime(err) => {
+            PyRuntimeError::new_err(format!("runtime: {err}"))
+        }
+    }
 }
 
 fn map_create_cluster_error(e: RustCreateClusterError) -> PyErr {

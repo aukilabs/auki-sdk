@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:30 HKT, 2026
+
+**Python binding for SDK-T3: `ClusterManager.join_cluster` static constructor.** Same kwarg shape as `create_cluster` (`wallet_seed`, `cluster_name`, `discovery_url`, `listen_addresses`, `agent_version`); looks the cluster up in Discovery, dials the Manager over libp2p, sends a join handshake, returns a `ClusterManager` with `is_manager = False`. Errors map to typed Python exceptions: `RuntimeError` for "cluster not found" / "Manager rejected", `OSError` for transport / Discovery failures, `ValueError` for malformed responses. The `build_identity_and_swarm` helper factored out of `create_cluster` is shared between both constructors. New `RustJoinClusterError` import + `map_join_cluster_error` mapper.
+
 ### Nils's claude · May 13, 11:45 HKT, 2026
 
 **Python binding for SDK-T2: `ClusterManager`, `DaemonInfo`, `ParticipantInfo` pyclasses.** Wraps the SDK-T2 Rust surface. `ClusterManager.create_cluster(wallet_seed, cluster_name, discovery_url, listen_addresses, agent_version)` is a daemon-friendly façade — takes the 32-byte wallet seed, builds the swarm + DiscoveryClient internally (waiting for the OS-chosen listen port to materialize before calling `ClusterManager::create_cluster`), and returns a sync-shaped pyclass. Methods (`cluster_name`, `local_peer_id`, `is_manager`, `manager_peer_id`, `peer_count`, `membership()`, `admit_peer(peer_id, multiaddrs)`, `participant_info(daemon_info)`, `shutdown()`) mirror the Rust API; each async method `block_on`s on a process-wide multi-thread tokio runtime. Daemons serialize `ClusterManager.participant_info(daemon).to_json()` verbatim onto their HTTP `/api/info` handler — per BA-Q3, no per-daemon handler logic. Deps added: `auki-network` (for `build_swarm` + `DiscoveryClient`), `auki-identity` (for `Wallet::from_seed`), `tokio` (multi-thread runtime), `libp2p` + `futures` (driving the swarm to first listen-addr event before construction).

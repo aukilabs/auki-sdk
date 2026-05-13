@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:30 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — SDK-T3 lands: `/auki/join/0.0.1` protocol + `ClusterManager::join_cluster` (Rust + Python).** Joiner dials Manager, sends join request, receives gossiped membership; Manager-side handler task admits + pushes the updated allow-list to the runtime. Connection-level trust boundary flipped from `AllowedPeers` (deny inbound by default) to `BlockedPeers` (open by default) — membership enforcement moves to per-protocol gates inside the runtime, because Hagall's join handshake requires accepting inbound from peers we've never seen. End-to-end live integration test (2 peers): A creates cluster `foo`, B joins, both see identical 2-member membership, both shutdown cleanly. Passes against `192.168.9.130:8080`. **Booster / Park can now `join_cluster` an existing cluster, not just create.**
+
 ### Nils's claude · May 13, 11:45 HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — SDK-T2 lands: `ClusterManager` ships with `create_cluster` + `admit_peer` + `participant_info` + 3s Discovery heartbeat tick + `shutdown`.** End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-keeps-cluster-alive past Discovery's 10s sweep. [`auki-domain-py`](auki-domain-py/changelog.md) — daemon-friendly Python façade `ClusterManager.create_cluster(wallet_seed, ...)` + accessor methods + `participant_info(daemon_info).to_json()` for `/api/info`. Booster / Park / Sentinel can now construct a cluster, claim Manager role, expose `is_manager` + `manager_peer_id` via `/api/info`, and admit peers (admit only locally — the libp2p join protocol is SDK-T3, separate commit). Not in this commit: `join_cluster` end-to-end (needs SDK-T3), peer-side heartbeat (SDK-T5), election (SDK-T6), Manager-handoff (SDK-T7), signed successor tokens (SDK-T4 / SDK-Q3).

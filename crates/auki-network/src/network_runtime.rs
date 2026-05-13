@@ -1,23 +1,26 @@
-//! Runtime that drives a libp2p swarm against a list of allowed peers.
+//! Runtime that drives a libp2p swarm against a list of known peers.
 //!
 //! [`NetworkRuntime`] owns a [`Swarm`]`<`[`Behaviour`]`>` and a tokio
-//! task internally. It maintains the libp2p allow-list (the cluster
-//! trust boundary — only peers on the list complete handshakes),
-//! auto-dials peers whose multiaddrs we know, reconnects on disconnect
-//! with exponential backoff, and accepts inbound substreams on the
-//! `/auki/stream/0.1.0` protocol (handed off to per-substream tasks
-//! that invoke the consumer's `stream_provider`). Consumers interact
-//! through the small set of public methods; they don't drive the swarm
-//! event loop themselves.
+//! task internally. It tracks "known peers" (an in-process membership
+//! list), auto-dials peers whose multiaddrs are known, reconnects on
+//! disconnect with exponential backoff, accepts inbound substreams on
+//! `/auki/stream/0.1.0` (handed off to the consumer's
+//! `stream_provider`), and accepts inbound `/auki/join/0.0.1`
+//! substreams (handed off to the owner via the `JoinEvent` channel
+//! returned by [`Self::spawn`]). Consumers interact through the small
+//! set of public methods; they don't drive the swarm event loop
+//! themselves.
 //!
 //! ## Cluster trust boundary
 //!
-//! `allow_list` is populated from `allowed_peers` on spawn and rewritten
-//! by every [`set_allowed_peers`] call. Peers off the list are refused
-//! at the libp2p `NetworkBehaviour` layer — inbound and outbound
-//! connections from non-listed peer-ids never complete the noise
-//! handshake. This is the SDK's primary cluster-trust-boundary
-//! enforcement; nothing else in the SDK relaxes it.
+//! Connection-level: open by default — libp2p completes handshakes
+//! with anyone. Per-protocol gates enforce cluster membership inside
+//! their own handlers (the `/auki/stream/0.1.0` accept path filters
+//! by `known_peers`; the `/auki/join/0.0.1` path intentionally does
+//! NOT gate, since a non-member peer's first contact with a cluster
+//! IS the join handshake). The libp2p `block_list` is reserved for
+//! evicting misbehaving peers, not for routine membership
+//! enforcement.
 //!
 //! ## Not the home for
 //!
@@ -28,6 +31,10 @@
 //! - Successor tokens, election rules, gossip. Same — those are
 //!   `auki-domain` concerns.
 
+use crate::join_protocol::{
+    JOIN_PROTOCOL, JoinProtocolError, JoinRequest, JoinResponse, read_join_request,
+    read_join_response, write_join_request, write_join_response,
+};
 use crate::{
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
@@ -88,6 +95,53 @@ pub enum SpawnError {
     /// runtime needs a tokio handle to spawn its driver task.
     #[error("no current tokio runtime — call from within a tokio runtime context")]
     NoTokioRuntime,
+}
+
+/// Inbound `/auki/join/0.0.1` event surfaced by the runtime to its
+/// owner via the channel returned from [`NetworkRuntime::spawn`].
+///
+/// The owner (typically `auki-domain`'s `ClusterManager`) reads the
+/// request, decides admit-or-reject, and replies via `ack`. The
+/// runtime's per-substream task awaits the reply for up to
+/// [`JOIN_RESPONSE_TIMEOUT`] before giving up.
+#[derive(Debug)]
+pub struct JoinEvent {
+    /// The peer-id of the requester. Authenticated by libp2p's noise
+    /// handshake at connection-establishment time.
+    pub peer: PeerId,
+    /// The body of the request.
+    pub request: JoinRequest,
+    /// One-shot channel to reply on. Dropping it without sending is
+    /// equivalent to a timeout from the requester's perspective.
+    pub ack: oneshot::Sender<JoinResponse>,
+}
+
+/// How long the runtime's per-substream join task waits for the
+/// owner to reply via the `JoinEvent::ack` channel before closing
+/// the substream. Generous because the owner may need to do I/O
+/// (e.g. write to disk in a future Manager-state-machine variant).
+const JOIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the consumer-side [`NetworkRuntime::send_join_request`]
+/// waits for the producer's response before returning a timeout
+/// error.
+pub const JOIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Errors from [`NetworkRuntime::send_join_request`].
+#[derive(Debug, thiserror::Error)]
+pub enum SendJoinRequestError {
+    /// `libp2p_stream::Control::open_stream` failed (peer not
+    /// reachable, no allow-list entry, etc.).
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    /// I/O or wire-format error reading/writing the framed request
+    /// or response.
+    #[error("protocol: {0}")]
+    Protocol(#[source] JoinProtocolError),
+    /// The full request/response round-trip didn't complete within
+    /// [`JOIN_REQUEST_TIMEOUT`].
+    #[error("join request timed out after {0:?}")]
+    Timeout(Duration),
 }
 
 /// Diff applied by [`NetworkRuntime::set_allowed_peers`].
@@ -152,6 +206,33 @@ pub struct NetworkRuntime {
     command_tx: mpsc::Sender<RuntimeCmd>,
 }
 
+/// Cloneable handle to a [`NetworkRuntime`] for command-style
+/// operations (`set_allowed_peers`). Lets `auki-domain`'s join
+/// handler task call back into the runtime without holding the
+/// `NetworkRuntime` itself.
+#[derive(Clone)]
+pub struct NetworkRuntimeHandle {
+    command_tx: mpsc::Sender<RuntimeCmd>,
+}
+
+impl NetworkRuntimeHandle {
+    /// Same semantics as [`NetworkRuntime::set_allowed_peers`].
+    pub async fn set_allowed_peers(
+        &self,
+        new_peers: Vec<AllowedPeer>,
+    ) -> Result<UpdateReport, UpdateError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.command_tx
+            .send(RuntimeCmd::SetAllowedPeers {
+                new_peers,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| UpdateError::RuntimeUnavailable)?;
+        ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
+    }
+}
+
 impl NetworkRuntime {
     /// Cloneable [`Control`] handle for outbound stream opens.
     /// Internal — `stream_runtime::open_stream` uses it; external
@@ -172,11 +253,16 @@ impl NetworkRuntime {
     /// outbound. Peers with at least one multiaddr are scheduled for
     /// an immediate dial; address-less entries are accepted as trusted
     /// (the runtime will respond if they dial us) but not auto-dialed.
+    ///
+    /// Returns the runtime + a receiver for inbound
+    /// `/auki/join/0.0.1` events. Owners that don't accept join
+    /// requests (typical for non-Manager peers) can drop the
+    /// receiver; the runtime drops events with no receiver.
     pub fn spawn(
         swarm: Swarm<Behaviour>,
         allowed_peers: Vec<AllowedPeer>,
         stream_provider: StreamProvider,
-    ) -> Result<Self, SpawnError> {
+    ) -> Result<(Self, mpsc::Receiver<JoinEvent>), SpawnError> {
         let handle = tokio::runtime::Handle::try_current()
             .map_err(|_| SpawnError::NoTokioRuntime)?;
         let local_peer_id = *swarm.local_peer_id();
@@ -186,6 +272,7 @@ impl NetworkRuntime {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (inbound_shutdown_tx, inbound_shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel::<RuntimeCmd>(16);
+        let (join_events_tx, join_events_rx) = mpsc::channel::<JoinEvent>(16);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -195,22 +282,79 @@ impl NetworkRuntime {
             inbound_shutdown_rx,
             shutdown_rx,
             command_rx,
+            join_events_tx,
         ));
-        Ok(Self {
-            local_peer_id,
-            connected,
-            shutdown_tx: Some(shutdown_tx),
-            task: Some(task),
-            stream_control: outbound_control,
-            inbound_shutdown_tx,
-            command_tx,
-        })
+        Ok((
+            Self {
+                local_peer_id,
+                connected,
+                shutdown_tx: Some(shutdown_tx),
+                task: Some(task),
+                stream_control: outbound_control,
+                inbound_shutdown_tx,
+                command_tx,
+            },
+            join_events_rx,
+        ))
+    }
+
+    /// Open an outbound `/auki/join/0.0.1` substream to `peer_id`,
+    /// write the request, read the response. Returns once the
+    /// full round-trip completes (or fails).
+    ///
+    /// The peer must be on the local allow-list (`set_allowed_peers`
+    /// or the initial `allowed_peers` argument to `spawn`) — libp2p
+    /// refuses the noise handshake otherwise. Bootstrap case (first
+    /// peer of a cluster joining the Manager): the caller pre-allows
+    /// the Manager's peer-id before calling this.
+    pub async fn send_join_request(
+        &self,
+        peer_id: PeerId,
+        request: JoinRequest,
+    ) -> Result<JoinResponse, SendJoinRequestError> {
+        let mut control = self.stream_control.clone();
+        let proto = StreamProtocol::try_from_owned(JOIN_PROTOCOL.to_string())
+            .expect("JOIN_PROTOCOL is a valid libp2p protocol id");
+
+        let open_fut = control.open_stream(peer_id, proto);
+        let mut substream = match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(SendJoinRequestError::OpenStream(e)),
+            Ok(Ok(s)) => s,
+        };
+
+        write_join_request(&mut substream, &request)
+            .await
+            .map_err(SendJoinRequestError::Protocol)?;
+
+        let response = match tokio::time::timeout(
+            JOIN_REQUEST_TIMEOUT,
+            read_join_response(&mut substream),
+        )
+        .await
+        {
+            Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
+            Ok(Ok(r)) => r,
+        };
+        Ok(response)
     }
 
     /// The runtime's local libp2p peer-id (derived from the swarm's
     /// keypair).
     pub fn local_peer_id(&self) -> PeerId {
         self.local_peer_id
+    }
+
+    /// Cloneable handle for command-style operations
+    /// ([`set_allowed_peers`](NetworkRuntimeHandle::set_allowed_peers)).
+    /// The handle lets background tasks (typically `auki-domain`'s
+    /// join-event handler) call back into the runtime without holding
+    /// the [`NetworkRuntime`] itself.
+    pub fn handle(&self) -> NetworkRuntimeHandle {
+        NetworkRuntimeHandle {
+            command_tx: self.command_tx.clone(),
+        }
     }
 
     /// Snapshot of currently-connected peers.
@@ -286,6 +430,7 @@ async fn run_task(
     inbound_shutdown_rx: watch::Receiver<bool>,
     mut shutdown_rx: oneshot::Receiver<()>,
     mut command_rx: mpsc::Receiver<RuntimeCmd>,
+    join_events_tx: mpsc::Sender<JoinEvent>,
 ) {
     let mut swarm = swarm;
     let mut known_peers: HashMap<PeerId, Vec<Multiaddr>> = initial_peers
@@ -297,7 +442,6 @@ async fn run_task(
     // complete its noise handshake. Empty allow-list = swarm refuses
     // every handshake; an unpopulated runtime is invisible by design.
     for pid in known_peers.keys() {
-        swarm.behaviour_mut().allow_list.allow_peer(*pid);
     }
 
     // Initial dial schedule. Peers with at least one address are
@@ -326,6 +470,16 @@ async fn run_task(
     let mut incoming_streams: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(stream_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/join/0.0.1` substream acceptance.
+    let join_proto = StreamProtocol::try_from_owned(JOIN_PROTOCOL.to_string())
+        .expect("JOIN_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_joins: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(join_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -363,6 +517,17 @@ async fn run_task(
                     provider,
                     task_shutdown,
                 ));
+            }
+
+            join = incoming_joins.next() => {
+                let Some((peer, substream)) = join else { return; };
+                // Inbound join substreams come from peers on the
+                // allow-list (libp2p enforces). The Manager-side
+                // owner decides whether to admit; the runtime just
+                // plumbs the request through and ferries the response
+                // back.
+                let tx = join_events_tx.clone();
+                tokio::spawn(handle_inbound_join_substream(peer, substream, tx));
             }
 
             _ = tick.tick() => {
@@ -450,7 +615,6 @@ fn apply_peer_update(
         .collect();
     for pid in &removed {
         let _ = swarm.disconnect_peer_id(*pid);
-        swarm.behaviour_mut().allow_list.disallow_peer(*pid);
         schedules.remove(pid);
         known_peers.remove(pid);
         connected
@@ -468,7 +632,6 @@ fn apply_peer_update(
         .collect();
     for ap in &new_peers {
         if added.contains(&ap.peer_id) {
-            swarm.behaviour_mut().allow_list.allow_peer(ap.peer_id);
             let has_addrs = !ap.multiaddrs.is_empty();
             known_peers.insert(ap.peer_id, ap.multiaddrs.clone());
             if has_addrs {
@@ -513,6 +676,67 @@ fn drive_pending_dials(
     }
 }
 
+/// Per-substream task for an inbound `/auki/join/0.0.1` request.
+///
+/// Reads the framed [`JoinRequest`], forwards it to the runtime's
+/// owner via a [`JoinEvent`] on the channel, awaits the owner's
+/// reply (up to [`JOIN_RESPONSE_TIMEOUT`]), writes the framed
+/// [`JoinResponse`] back, closes the substream.
+///
+/// Errors at any stage are logged to stderr and drop the substream
+/// silently — peers retry by opening a fresh substream. (The
+/// alternative — surfacing per-substream errors back through the
+/// channel — would require the owner to track every in-flight
+/// request and provide its own timeout; not worth it.)
+async fn handle_inbound_join_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    join_events_tx: mpsc::Sender<JoinEvent>,
+) {
+    let request = match read_join_request(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: join substream from {peer}: read request failed: {e}");
+            return;
+        }
+    };
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if join_events_tx
+        .send(JoinEvent {
+            peer,
+            request,
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        // Owner has dropped the receiver — no one's listening. Drop
+        // the substream silently; the requester sees a closed
+        // connection.
+        return;
+    }
+
+    let response = match tokio::time::timeout(JOIN_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => {
+            // Sender dropped without sending — treat as a reject
+            // with a generic reason so the requester gets some
+            // signal rather than a silent connection drop.
+            JoinResponse::Reject {
+                reason: "join handler dropped without replying".into(),
+            }
+        }
+        Err(_) => JoinResponse::Reject {
+            reason: format!("join handler timed out after {JOIN_RESPONSE_TIMEOUT:?}"),
+        },
+    };
+
+    if let Err(e) = write_join_response(&mut substream, &response).await {
+        eprintln!("auki-network: join substream to {peer}: write response failed: {e}");
+    }
+}
+
 fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {
     let sched = schedules.entry(peer_id).or_insert(PeerSchedule {
         next_dial_at: None,
@@ -543,7 +767,7 @@ mod tests {
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
-        let rt = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
+        let (rt, _join_events) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
             .expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
         rt.shutdown();
@@ -558,7 +782,7 @@ mod tests {
         };
         let swarm = build_swarm(&identity, cfg).expect("build_swarm succeeds");
         let expected = identity.peer_id();
-        let rt = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
+        let (rt, _join_events) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
             .expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
@@ -571,7 +795,7 @@ mod tests {
         let pid_b = PeerIdentity::from_seed(&[2u8; 32]).peer_id();
         let pid_c = PeerIdentity::from_seed(&[3u8; 32]).peer_id();
 
-        let rt = NetworkRuntime::spawn(
+        let (rt, _join_events) = NetworkRuntime::spawn(
             swarm,
             vec![
                 AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },

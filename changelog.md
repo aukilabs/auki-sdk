@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 12:30 HKT, 2026
+
+**SDK-T3 lands: `ClusterManager::join_cluster` (Rust + Python) over a new `/auki/join/0.0.1` libp2p protocol.** Joiner dials Manager, sends a request, receives the gossiped membership; Manager admits + pushes the updated allow-list to the runtime. Connection-level trust boundary flipped from allow-list-deny to block-list-allow — membership enforcement moves to per-protocol gates, because Hagall's join handshake fundamentally requires accepting inbound from peers we've never seen. End-to-end live test verifies A.create + B.join converges on identical membership against the running Discovery at `192.168.9.130:8080`. Booster / Park unblocked for the joiner-side flow.
+
 ### Nils's claude · May 13, 11:45 HKT, 2026
 
 **[`crates/auki-domain`](crates/auki-domain) + [`crates/auki-domain-py`](crates/auki-domain-py) — SDK-T2 lands: `ClusterManager` (Rust + Python).** Daemon-side cluster handle that owns the membership document, the libp2p `NetworkRuntime`, the `DiscoveryClient`, and a 3s Discovery heartbeat tick. `create_cluster` / `admit_peer` / `participant_info` / `shutdown` mirror across Rust and Python; daemons (BoosterApp, Park, Sentinel) now have a complete surface for "I'm the Manager of cluster `foo`" workflows including SDK-built `/api/info` shape (per BA-Q3). End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-survives-sweep. `join_cluster` is the next gap — needs SDK-T3 (libp2p join protocol).

@@ -95,14 +95,16 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct Behaviour {
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
-    /// Cluster trust boundary. Inbound and outbound connections from
-    /// peers NOT in this allow-list are denied at the libp2p
-    /// `NetworkBehaviour` layer — the noise handshake never completes,
-    /// no protocol handler fires, no `identify` exchange leaks our
-    /// peer-id. Populated by [`crate::network_runtime::NetworkRuntime`]
-    /// from its `allowed_peers` list on spawn and on every
-    /// `set_allowed_peers` call; empty at swarm-build time.
-    pub allow_list: allow_block_list::Behaviour<allow_block_list::AllowedPeers>,
+    /// Per-peer block-list. Inbound and outbound connections from
+    /// peers in the block-list are denied at the libp2p
+    /// `NetworkBehaviour` layer. Empty by default — anyone can dial
+    /// in, which the Manager needs to accept inbound join requests
+    /// from peers it has never seen. Per-protocol handlers enforce
+    /// cluster membership inside their own gate logic (see
+    /// `stream_runtime`'s `known_peers` check); the block-list is
+    /// reserved for evicting misbehaving peers, not for trust
+    /// boundary enforcement.
+    pub allow_list: allow_block_list::Behaviour<allow_block_list::BlockedPeers>,
     /// Always present: lets this node act as a relay-*client* (use
     /// another peer's relay-server to traverse NAT). Wiring is automatic
     /// — dial a circuit-relay multiaddr and the relay-client behaviour
@@ -211,7 +213,7 @@ pub fn build_swarm(
             // every inbound and outbound libp2p handshake — a
             // freshly-built swarm with no allow-list is invisible by
             // design.
-            allow_list: allow_block_list::Behaviour::<allow_block_list::AllowedPeers>::default(),
+            allow_list: allow_block_list::Behaviour::<allow_block_list::BlockedPeers>::default(),
             relay_client,
             relay: Toggle::from(enable_relay_server.then(|| {
                 relay::Behaviour::new(local_pid, relay::Config::default())
@@ -272,15 +274,12 @@ mod tests {
         }
     }
 
-    /// Mutually allow-list two test swarms so they can complete a
-    /// libp2p handshake. Mirrors what `cluster_runtime` would do in
-    /// production on every `ClusterDoc.peers` update — production
-    /// callers don't poke `allow_list` directly.
-    fn allow_pair(a: &mut Swarm<Behaviour>, b: &mut Swarm<Behaviour>) {
-        let a_pid = *a.local_peer_id();
-        let b_pid = *b.local_peer_id();
-        a.behaviour_mut().allow_list.allow_peer(b_pid);
-        b.behaviour_mut().allow_list.allow_peer(a_pid);
+    /// No-op since the `block_list` change — swarms accept inbound
+    /// handshakes from anyone by default. Kept as a callsite for
+    /// readability (mirrors the old `allow_pair` shape).
+    fn allow_pair(_a: &mut Swarm<Behaviour>, _b: &mut Swarm<Behaviour>) {
+        // Connection-level trust boundary moved to per-protocol gates
+        // (see network_runtime.rs). Inbound handshakes are open.
     }
 
     /// Wait for a swarm's first `NewListenAddr` event and return the
@@ -434,57 +433,12 @@ mod tests {
         assert_eq!(*swarm.local_peer_id(), identity.peer_id());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn outsider_dial_is_refused_when_allow_list_does_not_include_peer() {
-        // The headline trust-boundary guarantee. A built two-swarm
-        // pair where neither side has the other in its allow-list:
-        // the dial completes the transport handshake but the libp2p
-        // behaviour layer refuses the connection before any
-        // protocol-level event (identify, our cluster protocols) can
-        // fire. Asserted by NOT observing an Identify::Received in a
-        // bounded window.
-        let id_a = PeerIdentity::from_seed(&[20u8; 32]);
-        let id_b = PeerIdentity::from_seed(&[21u8; 32]);
-
-        let mut a = build_swarm(&id_a, test_tcp_config("test-a/0")).unwrap();
-        let mut b = build_swarm(&id_b, test_tcp_config("test-b/0")).unwrap();
-        // Deliberately NO `allow_pair` call — both allow-lists empty.
-
-        let addr_a = wait_for_listen_addr(&mut a).await;
-        let _ = b.dial(addr_a);
-
-        let identified = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                tokio::select! {
-                    Some(event) = a.next() => {
-                        if matches!(
-                            event,
-                            SwarmEvent::Behaviour(BehaviourEvent::Identify(
-                                identify::Event::Received { .. }
-                            ))
-                        ) {
-                            return true;
-                        }
-                    }
-                    Some(event) = b.next() => {
-                        if matches!(
-                            event,
-                            SwarmEvent::Behaviour(BehaviourEvent::Identify(
-                                identify::Event::Received { .. }
-                            ))
-                        ) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        })
-        .await;
-        assert!(
-            identified.is_err(),
-            "identify exchange completed despite allow-list refusing the connection",
-        );
-    }
+    // The previous `outsider_dial_is_refused_when_allow_list_does_not_include_peer`
+    // test was deleted with the 2026-05-13 block_list change: connection-
+    // level handshakes are open by default, and the cluster trust boundary
+    // moved to per-protocol gates (see `network_runtime`'s `known_peers`
+    // check for `/auki/stream/0.1.0`). The block_list is reserved for
+    // evicting misbehaving peers, not for routine membership enforcement.
 
     #[tokio::test]
     async fn build_with_relay_server_enabled_succeeds() {

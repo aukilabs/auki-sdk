@@ -42,8 +42,12 @@ pub mod stream_protocol;
 pub mod stream_runtime;
 
 #[cfg(feature = "swarm")]
+pub mod join_protocol;
+
+#[cfg(feature = "swarm")]
 pub use network_runtime::{
-    AllowedPeer, NetworkRuntime, SpawnError, UpdateError, UpdateReport,
+    AllowedPeer, JoinEvent, NetworkRuntime, NetworkRuntimeHandle, SendJoinRequestError,
+    SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

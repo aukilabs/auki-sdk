@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 13, 09:45 HKT, 2026
+
+**[`crates/auki-domain`](crates/auki-domain) — Hagall SDK-T1: `ClusterMembership` type + serde lands.** First Hagall implementation crumb. Cluster-neutral type with per-cluster filename `<cluster_name>.json`; opaque `Vec<u8>` successor_token pending SDK-Q3's resolution. Greenland's `ClusterDoc` untouched — deletion PR follows once Hagall is functional.
+
 ### Nils's claude · May 13, 09:30 HKT, 2026
 
 **[CLAUDE.md](CLAUDE.md) parking-lot workflow simplified: resolved questions are deleted from the parking lot and propagated immediately, instead of leaving "Propagate: …" placeholder items.** Audit history lives in `changelog.md` + git + downstream docs, not in the parking lot. The parking lot is now strictly for live open questions. Applied retroactively: Hagall SDK-Q1/Q2/Q4/Q5 resolved (decisions captured in [crates changelog](crates/changelog.md)), 4 Propagate placeholders removed, parent summaries trimmed to only SDK-Q3.

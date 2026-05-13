@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Domain lifecycle for the Auki SDK — Domain identity (wallet-scoped), creation (`init_domain`), joining (`join_domain`), Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Greenland quest implementation; T1 lands in PR 1."
+description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -15,8 +15,14 @@ auki-identity = { path = "../auki-identity" }
 # is the sole sanctioned constructor for a `ClusterRuntime`, and it
 # can only build one by going through Discovery.
 auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+# `ClusterMembership` carries libp2p `PeerId`s on the wire; the
+# `serde` feature pins their canonical string form so the JSON
+# document is interoperable across languages.
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }

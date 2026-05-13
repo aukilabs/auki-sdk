@@ -176,7 +176,10 @@ version = "0.0.0"
 dependencies = [
  "auki-identity",
  "auki-network",
+ "libp2p-identity",
  "multiaddr",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
 ]

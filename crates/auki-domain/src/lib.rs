@@ -45,6 +45,10 @@
 
 #![warn(missing_docs)]
 
+pub mod cluster_membership;
+
+pub use cluster_membership::{ClusterMember, ClusterMembership};
+
 use auki_identity::{Wallet, WalletId};
 use auki_network::cluster_runtime::{ClusterRuntime, ParticipantInfoProvider, SpawnError};
 use auki_network::discovery_client::{

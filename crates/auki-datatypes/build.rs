@@ -15,6 +15,7 @@ fn main() -> std::io::Result<()> {
         .compile_protos(
             &[
                 "proto/audio.proto",
+                "proto/audio_stream.proto",
                 "proto/camera.proto",
                 "proto/detection.proto",
                 "proto/frame_stream.proto",

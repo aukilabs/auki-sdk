@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 12:54 HKT, 2026
+
+**Dialogue Batch 1 (SDK Rust core, half 1) — new `auki.audio_stream` proto package + `AudioFrame { bytes data = 1; }` wire payload.** Mirror of `auki.joint_encoders` / `auki.joint_encoders_stream` Step 5 precedent: separate proto package so the wire and log code paths dispatch on distinct Rust types, byte-identical wire/disk locked by a dedicated symmetry test. Companion to [`auki-network` changelog 2026-05-14 12:54](../auki-network/changelog.md) which adds the `StreamDispatch::AcceptAudio` arm + dispatch site.
+
+**Opaque-bytes-only**, matching the Step 4 stance for `AudioLogEntry`. `sample_format` / `channels` / `sample_rate_hz` / `channel_layout` resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio` at handshake; the wire payload carries no per-frame metadata. Sample count is derivable as `data.len() / (sample_byte_width × channels)`; chunk duration is derivable as `sample_count × 1e9 / sample_rate_hz`. Carrying either on the per-frame payload would denormalize derivable metadata into the bytes for marginal reader convenience and risk inconsistency between the field and the bytes — same trade Step 3 / 4 declined.
+
+**Why a separate `auki.audio_stream` proto package** (rather than reusing `auki.audio.AudioLogEntry` on the wire): the wire and log code paths need distinct Rust types so the runtime can dispatch on them (the `StreamDispatch` enum has one arm per `T`); a shared proto package would force every consumer to disambiguate at the call site instead of at the type level. Step 2/3 (point_cloud) and Step 5 (joint_encoders) already established this precedent; this is the fourth paired package and the second one (after joint_encoders) where the symmetry is non-trivially asserted at byte level via a dedicated test.
+
+**Tests**: 46 → 51 (+5 — `audio_frame_serializes_to_locked_wire_bytes`, `audio_frame_hash_is_locked`, `audio_frame_round_trips`, `audio_frame_empty_data_round_trips`, `audio_disk_wire_byte_identical`). Locked wire bytes for the example 16-byte chunk `[0x00, 0x11, …, 0xff]`: `0a1000112233445566778899aabbccddeeff` — **byte-identical to the existing `AudioLogEntry` locked vector** (same field number, same field type, same fixture data). XXH3-128 hash: `a5864ae7018f28a5c094a714af1db62e` — also identical, locking the symmetry property at the hash level too. New test `audio_disk_wire_byte_identical` asserts `entry.encode_to_vec() == frame.encode_to_vec()` directly.
+
+**Touched**: new [`proto/audio_stream.proto`](proto/audio_stream.proto); [`build.rs`](build.rs) gains the file in the compile list; [`src/lib.rs`](src/lib.rs) gets the `pub mod audio_stream` module include next to the other `_stream` modules plus the five new tests.
+
+**Out of scope for this PR** (each lives in a sibling PR or future task — see the [Dialogue quest](https://www.notion.so/3595c8e965928022bb8ecb9a1b0fa46c) on Notion): the Python binding extension on `auki-network-py` (Dialogue T2); Park's producer infrastructure (Dialogue T3); Boosterapp's consumer + K1 player driver (Dialogue T4 + T5).
+
 ### Nils's claude · May 14, 11:00 HKT, 2026
 
 **Doc-comment + proto-comment touch-ups for upstream `SensorBody::Microphone` → `SensorBody::Audio` rename.** Companion to [`auki-registry` changelog 2026-05-14 11:00](../auki-registry/changelog.md). No prost wire change (the `auki.audio` package + `AudioLogEntry { bytes data = 1; }` message are unchanged); only the cross-references that named the *registry* body type flip. Touched: [`README.md`](README.md) Step 4 bullet, [`src/readme.md`](src/readme.md) audio entry, [`src/lib.rs`](src/lib.rs) `auki.audio` module doc-comment, [`proto/audio.proto`](proto/audio.proto) header comment, [`proto/detection.proto`](proto/detection.proto) analog reference, [`parking_lot.md`](parking_lot.md) three structured-vs-opaque-bytes references.

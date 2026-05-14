@@ -82,6 +82,7 @@ fn _phantom() -> Option<Wallet> {
 // Wire-type re-exports — single source of truth lives in
 // `auki-datatypes`'s `auki.stream` package; this module owns the
 // protocol id, framing helpers, and error type.
+pub use auki_datatypes::audio_stream::AudioFrame;
 pub use auki_datatypes::frame_stream::JpegFrame;
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
@@ -495,6 +496,44 @@ mod tests {
         assert!(bytes.is_empty());
         let back = JointEncodersFrame::decode(&*bytes).unwrap();
         assert_eq!(back.angles_rad, Vec::<f32>::new());
+    }
+
+    /// `AudioFrame` prost wire bytes (Dialogue Batch 1). Same `bytes`
+    /// shape as `JpegFrame` / `PointCloudFrame` but a separate `.proto`
+    /// package so the stream dispatch on a distinct Rust type. Byte-
+    /// identical wire/disk with `AudioLogEntry` is locked by
+    /// `audio_disk_wire_byte_identical` in `auki-datatypes`.
+    #[test]
+    fn audio_frame_serializes_to_locked_wire_bytes() {
+        let frame = AudioFrame {
+            data: vec![0x00, 0x80, 0xff, 0x7f, 0x40, 0x40, 0xc0, 0xbf],
+        };
+        let bytes = frame.encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        // Field 1 length-delimited: tag 0x0a, len 0x08, then 8 bytes.
+        assert_eq!(hex, "0a080080ff7f4040c0bf");
+    }
+
+    #[test]
+    fn audio_frame_round_trips() {
+        let frame = AudioFrame {
+            data: vec![0, 1, 2, 3, 4, 5],
+        };
+        let bytes = frame.encode_to_vec();
+        let back = AudioFrame::decode(&*bytes).unwrap();
+        assert_eq!(back, frame);
+    }
+
+    /// 20 ms of 48 kHz mono int16-LE PCM — the canonical Dialogue
+    /// fixture (960 samples × 2 bytes = 1920 bytes payload). Pins the
+    /// wire-size envelope expected on the actual demo path: 1 byte tag
+    /// + 2 bytes varint length (1920) + 1920 payload = 1923 bytes.
+    #[test]
+    fn audio_frame_wire_size_is_native_binary() {
+        let data = vec![0xAB; 1920];
+        let frame = AudioFrame { data };
+        let encoded = frame.encode_to_vec();
+        assert_eq!(encoded.len(), 1923);
     }
 
     /// Locked conformance vector for a `StreamMessage::Frame` carrying

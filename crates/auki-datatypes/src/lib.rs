@@ -147,6 +147,17 @@ pub mod joint_encoders_stream {
     include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders_stream.rs"));
 }
 
+/// `auki.audio_stream` — `AudioFrame` substream payload (libp2p
+/// `/auki/stream/0.1.0`). Dialogue Batch 1. Same `bytes data = 1`
+/// shape as [`audio::AudioLogEntry`] — wire and disk payloads are
+/// byte-identical by design (Step 2/3 + joint-encoders precedent),
+/// locked by `audio_disk_wire_byte_identical` in the test module
+/// below. Separate proto package so the wire and log code paths
+/// dispatch on distinct Rust types.
+pub mod audio_stream {
+    include!(concat!(env!("OUT_DIR"), "/auki.audio_stream.rs"));
+}
+
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
 /// `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. The libp2p
 /// substream wire shape; mono-`T` per substream, with `Frame.payload`
@@ -244,6 +255,7 @@ pub mod stream {
 #[cfg(test)]
 mod tests {
     use super::audio::AudioLogEntry;
+    use super::audio_stream::AudioFrame;
     use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
     use super::detection::DetectionLogEntry;
     use super::joint_encoders::JointEncodersLogEntry;
@@ -554,6 +566,77 @@ mod tests {
         assert_eq!(entries[0].payload, step4_audio_log_entry());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
+    }
+
+    // ─── auki.audio_stream locked vectors ────────────────────────────────────
+
+    /// Same fixture data as `step4_audio_log_entry` — the disk and wire
+    /// payloads are content-identical by design (Step 2/3 + joint-
+    /// encoders precedent). The `audio_disk_wire_byte_identical` test
+    /// below locks that equality at byte level.
+    fn step_audio_frame() -> AudioFrame {
+        AudioFrame {
+            data: (0..16u8).map(|i| i.wrapping_mul(17)).collect(),
+        }
+    }
+
+    /// Locks the prost wire bytes for the example audio substream
+    /// frame. The locked hex MUST equal the hex from
+    /// `audio_log_entry_serializes_to_locked_wire_bytes` above (same
+    /// field shape, same field numbers, same fixture data) — that
+    /// equality is the symmetry assertion below. Cross-language
+    /// readers (boosterapp's libp2p stream path) pinned to these
+    /// bytes.
+    #[test]
+    fn audio_frame_serializes_to_locked_wire_bytes() {
+        let bytes = step_audio_frame().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        // Identical to disk-side hex — wire/disk symmetry.
+        assert_eq!(hex, "0a1000112233445566778899aabbccddeeff");
+    }
+
+    /// XXH3-128 of those wire bytes — joins the workspace's locked
+    /// conformance set so future drift in either prost-build or
+    /// auki-hash trips the test.
+    #[test]
+    fn audio_frame_hash_is_locked() {
+        let bytes = step_audio_frame().encode_to_vec();
+        assert_eq!(
+            auki_hash::hash_jcs_bytes(&bytes),
+            "a5864ae7018f28a5c094a714af1db62e"
+        );
+    }
+
+    #[test]
+    fn audio_frame_round_trips() {
+        let frame = step_audio_frame();
+        let bytes = frame.encode_to_vec();
+        let decoded = AudioFrame::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, frame);
+    }
+
+    /// Empty chunk — proto3 default-elision: zero-byte payload encodes
+    /// to zero output bytes and decodes back to the empty form.
+    #[test]
+    fn audio_frame_empty_data_round_trips() {
+        let frame = AudioFrame { data: vec![] };
+        let bytes = frame.encode_to_vec();
+        assert_eq!(bytes.len(), 0);
+        let decoded = AudioFrame::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, frame);
+    }
+
+    /// **Symmetry assertion** — the disk-side `AudioLogEntry` and the
+    /// wire-side `AudioFrame` encode to byte-identical output for the
+    /// same input bytes. If this ever diverges, one of the protos
+    /// drifted and the wire/disk pact is broken. Mirrors
+    /// `joint_encoders_disk_wire_byte_identical`. See
+    /// `auki-labs-repos/references/wire-disk-proto-symmetry.md`.
+    #[test]
+    fn audio_disk_wire_byte_identical() {
+        let entry = step4_audio_log_entry();
+        let frame = step_audio_frame();
+        assert_eq!(entry.encode_to_vec(), frame.encode_to_vec());
     }
 
     // ─── auki.pose locked vectors ────────────────────────────────────────────

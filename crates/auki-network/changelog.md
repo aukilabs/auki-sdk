@@ -6,7 +6,30 @@ Latest entry on top.
 
 ---
 
-### Nils's claude · May 14, 11:05 HKT, 2026
+### Nils's claude · May 14, 12:15 HKT, 2026
+
+**Fix: Manager-handoff path was broken over QUIC — the peer-side `/auki/heartbeat/0.0.1` substream silently survived `NetworkRuntime` drop and kept faking liveness on a transport whose remote had already exited.** Reproduction Nils ran on K1 + Park 2026-05-14 against v0.0.37: Park as Manager, Booster joins, Park leaves — Booster's view frozen indefinitely (peer_count=2, is_manager=false, manager_peer_id=Park, Park's dead multiaddrs still in membership). Step 9 of the Hagall demo script never fires.
+
+**Two coupled root causes, both load-bearing:**
+
+1. **`apply_peer_update` never spawned the heartbeat opener when a peer was retroactively added** to `known_peers` post-join. The Manager-side `ConnectionEstablished` for an inbound joiner fires BEFORE the join handshake admits them — at that moment `known_peers.contains_key(joiner)` is false, so the existing heartbeat-spawn branch in `handle_event` skipped. After admit, `apply_peer_update` retroactively inserts the joiner into `connected` but pre-fix did NOT spawn the heartbeat opener. When Manager's pid < Joiner's pid (the K1 Park-as-Manager scenario), no side ever opened the heartbeat substream: the Manager (lower pid, the opener-side) missed its chance at ConnectionEstablished, and the Joiner (higher pid) only accepts. Peer-side Manager-death detection then fell through to libp2p `ConnectionClosed` — fast on TCP (RST/FIN on socket close, ms latency) but minutes on QUIC (the libp2p_quic transport doesn't emit a `CONNECTION_CLOSE` frame on synchronous swarm drop, so the remote has to wait for QUIC's idle timer).
+
+2. **Heartbeat tasks were detached from `NetworkRuntime`'s lifetime.** Even with fix #1 — heartbeat substream opens, both sides flow frames at 500 ms — when one side's `NetworkRuntime` is dropped or `shutdown()` is called, `task.abort()` kills the driver task BUT not the per-peer heartbeat tasks (they were spawned via independent `tokio::spawn` inside `run_task` and their `JoinHandle`s stayed in a local map that gets dropped without aborting). The detached tasks hold Arc-wrapped `libp2p::Stream` substream handles; on QUIC those handles stay write-functional past the local swarm drop (because libp2p_quic's connection state outlives the swarm reference), so the dropped peer keeps writing heartbeat frames against a transport its local runtime has supposedly torn down. The remote receives the frames, updates `last_heartbeat_at`, and the monitor never fires `Lost`.
+
+**The fix:**
+
+- **`try_spawn_heartbeat_opener` helper** extracted from `handle_event::ConnectionEstablished` and now also called from `handle_command::SetAllowedPeers` for each newly-added peer that's already libp2p-connected. Pid-ordering check (`local < peer`) unchanged — only the lower side opens; the higher side accepts via `incoming_heartbeats`. Closes root cause #1.
+
+- **Lifeline `watch::Sender<()>` owned by `NetworkRuntime`.** Helper tasks (heartbeat opener, heartbeat pair runner, monitor) hold subscribed `Receiver<()>`s and `tokio::select!` on `Receiver::changed()`. When `NetworkRuntime` drops, the Sender drops, every receiver sees the channel closed (`Err` from `changed()`), helper tasks exit immediately. The receivers thread through `run_task` → `handle_event` → `handle_command` → `try_spawn_heartbeat_opener` → `open_and_run_heartbeat_pair` → `run_heartbeat_pair` and the monitor task. No `abort_handle` tracking, no shared mutable state — just the watch channel's drop-propagation. Closes root cause #2.
+
+**Test plan + regression coverage.** Four `#[tokio::test]` integration tests against live Discovery `192.168.9.130:8080` now pass:
+
+- `manager_failover_when_a_dies_b_takes_over` (TCP, joiner-pid-lower) — pre-existing, passes pre-fix (ConnectionClosed fires fast on TCP).
+- `manager_graceful_shutdown_passes_cluster_to_surviving_peer` (TCP, manager-pid-lower) — pre-existing, passes pre-fix for the same reason.
+- **`manager_failover_over_quic_when_joiner_pid_lower`** — new, QUIC loopback, joiner has lower pid. Heartbeat substream opens via `handle_event` (joiner-side ConnectionEstablished). Without the lifeline channel, detached heartbeat tasks survive the drop; pre-fix this test failed.
+- **`manager_failover_over_quic_when_manager_pid_lower`** — new, QUIC loopback, manager has lower pid (the EXACT scenario Nils hit on K1 + Park). Pre-fix: heartbeat substream never opens (the BUG-1 missing spawn site) AND detached tasks (BUG-2) — fails twice. Post-fix: both root causes addressed, B takes over within 0.8 s.
+
+Without `--features swarm`, the rest of the workspace stays clean: `cargo test --workspace --lib` passes. With `--features swarm`, `auki-network` test count goes from 104 → 104 (no test renames; the new integration tests live in `auki-domain/tests`).
 
 **`swarm::resolve_advertise_multiaddrs(swarm, operator_override, window)` ships — one SDK helper subsuming both auto-detection and operator-override resolution.** Daemons (Park, Booster, future Sentinel) now take the same code path for "what multiaddrs do I advertise to Discovery?", per Hagall constraint #5. Today each daemon does this themselves with subtly different bugs (Park's `wait_for_listen_addr` grabs only the first `NewListenAddr` and advertises `127.0.0.1`; Boosterapp's `--external-addresses` flag has no path through the SDK on the Hagall code path). This helper unifies them.
 

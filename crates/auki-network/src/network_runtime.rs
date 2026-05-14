@@ -385,6 +385,20 @@ pub struct NetworkRuntime {
     /// exit. Sent to by [`Self::shutdown`] before the swarm teardown
     /// signal.
     inbound_shutdown_tx: watch::Sender<bool>,
+    /// Lifeline channel tied to this runtime's lifetime. Helper tasks
+    /// (heartbeat opener / pair, monitor) hold `subscribe()`d
+    /// `Receiver`s and `select!` on `Receiver::changed()`. When this
+    /// `Sender` drops with the `NetworkRuntime`, every receiver sees
+    /// the channel closed and the helper tasks exit. Closes the
+    /// "QUIC-detached-heartbeat" leak — without the lifeline, those
+    /// tasks keep their Arc-wrapped substream handles alive across the
+    /// runtime's `task.abort()`, so they continue writing heartbeat
+    /// frames against a transport that hasn't actually closed at the
+    /// QUIC layer (the swarm drop on the local side doesn't translate
+    /// to a `CONNECTION_CLOSE` frame on the remote until the QUIC
+    /// idle timer fires, tens of seconds later). The lifeline binds
+    /// helper-task lifetime to the runtime's lifetime explicitly.
+    _lifeline_tx: watch::Sender<()>,
     /// Command channel from public methods to the driver task.
     command_tx: mpsc::Sender<RuntimeCmd>,
 }
@@ -493,6 +507,7 @@ impl NetworkRuntime {
         let inbound_control = outbound_control.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (inbound_shutdown_tx, inbound_shutdown_rx) = watch::channel(false);
+        let (lifeline_tx, lifeline_rx) = watch::channel(());
         let (command_tx, command_rx) = mpsc::channel::<RuntimeCmd>(16);
         let (join_events_tx, join_events_rx) = mpsc::channel::<JoinEvent>(16);
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
@@ -507,6 +522,7 @@ impl NetworkRuntime {
             stream_provider,
             inbound_control,
             inbound_shutdown_rx,
+            lifeline_rx,
             shutdown_rx,
             command_rx,
             join_events_tx,
@@ -523,6 +539,7 @@ impl NetworkRuntime {
                 task: Mutex::new(Some(task)),
                 stream_control: outbound_control,
                 inbound_shutdown_tx,
+                _lifeline_tx: lifeline_tx,
                 command_tx,
             },
             join_events_rx,
@@ -798,6 +815,7 @@ async fn run_task(
     stream_provider: StreamProvider,
     mut inbound_control: Control,
     inbound_shutdown_rx: watch::Receiver<bool>,
+    lifeline_rx: watch::Receiver<()>,
     mut shutdown_rx: oneshot::Receiver<()>,
     mut command_rx: mpsc::Receiver<RuntimeCmd>,
     join_events_tx: mpsc::Sender<JoinEvent>,
@@ -854,6 +872,7 @@ async fn run_task(
     let _monitor_task = tokio::spawn(monitor_peer_liveness(
         last_heartbeat_at.clone(),
         liveness_tx.clone(),
+        lifeline_rx.clone(),
     ));
 
     // Register inbound `/auki/stream/0.1.0` substream acceptance.
@@ -934,6 +953,7 @@ async fn run_task(
                     &mut schedules,
                     &connected,
                     &inbound_control,
+                    &lifeline_rx,
                     &last_heartbeat_at,
                     &mut heartbeat_tasks,
                     &liveness_tx,
@@ -992,6 +1012,7 @@ async fn run_task(
                     substream,
                     last_heartbeat_at.clone(),
                     liveness_tx.clone(),
+                    lifeline_rx.clone(),
                 ));
                 heartbeat_tasks.insert(peer, task);
             }
@@ -1043,12 +1064,25 @@ async fn run_task(
 
             cmd = command_rx.recv() => {
                 let Some(cmd) = cmd else { continue; };
-                handle_command(cmd, &mut swarm, &mut known_peers, &mut schedules, &connected);
+                handle_command(
+                    cmd,
+                    local_peer_id,
+                    &mut swarm,
+                    &mut known_peers,
+                    &mut schedules,
+                    &connected,
+                    &inbound_control,
+                    &last_heartbeat_at,
+                    &mut heartbeat_tasks,
+                    &liveness_tx,
+                    &lifeline_rx,
+                );
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_event(
     event: SwarmEvent<BehaviourEvent>,
     local_peer_id: PeerId,
@@ -1057,6 +1091,7 @@ fn handle_event(
     schedules: &mut HashMap<PeerId, PeerSchedule>,
     connected: &Arc<Mutex<HashSet<PeerId>>>,
     stream_control: &Control,
+    lifeline_rx: &watch::Receiver<()>,
     last_heartbeat_at: &Arc<Mutex<HashMap<PeerId, Instant>>>,
     heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
@@ -1073,31 +1108,18 @@ fn handle_event(
                     .expect("connected set mutex poisoned")
                     .insert(peer_id);
 
-                // Initialise last-heartbeat-at so the monitor task
-                // gives this peer the full timeout window before
-                // declaring them lost.
-                last_heartbeat_at
-                    .lock()
-                    .expect("last_heartbeat_at lock")
-                    .insert(peer_id, Instant::now());
-
                 // Surface the Connected event to the owner.
                 let _ = liveness_tx.try_send(PeerLivenessEvent::Connected { peer_id });
 
-                // Lower peer-id initiates the heartbeat substream.
-                // The other side accepts via `incoming_heartbeats`.
-                if local_peer_id < peer_id {
-                    if let Some(prev) = heartbeat_tasks.remove(&peer_id) {
-                        prev.abort();
-                    }
-                    let control = stream_control.clone();
-                    let last = last_heartbeat_at.clone();
-                    let liveness = liveness_tx.clone();
-                    let task = tokio::spawn(async move {
-                        open_and_run_heartbeat_pair(peer_id, control, last, liveness).await;
-                    });
-                    heartbeat_tasks.insert(peer_id, task);
-                }
+                try_spawn_heartbeat_opener(
+                    local_peer_id,
+                    peer_id,
+                    stream_control,
+                    last_heartbeat_at,
+                    heartbeat_tasks,
+                    liveness_tx,
+                    lifeline_rx,
+                );
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -1129,19 +1151,102 @@ fn handle_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_command(
     cmd: RuntimeCmd,
+    local_peer_id: PeerId,
     swarm: &mut Swarm<Behaviour>,
     known_peers: &mut HashMap<PeerId, Vec<Multiaddr>>,
     schedules: &mut HashMap<PeerId, PeerSchedule>,
     connected: &Arc<Mutex<HashSet<PeerId>>>,
+    stream_control: &Control,
+    last_heartbeat_at: &Arc<Mutex<HashMap<PeerId, Instant>>>,
+    heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
+    liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
+    lifeline_rx: &watch::Receiver<()>,
 ) {
     match cmd {
         RuntimeCmd::SetAllowedPeers { new_peers, ack } => {
             let report = apply_peer_update(swarm, known_peers, schedules, connected, new_peers);
+            // For peers newly added AND already libp2p-connected,
+            // retroactively spawn the heartbeat opener if we're the
+            // lower peer-id (opener) side. This closes the join-protocol
+            // race: an inbound joiner's `ConnectionEstablished` fires
+            // BEFORE the join handshake admits them, so
+            // `handle_event`'s heartbeat-spawn branch — gated on
+            // `known_peers.contains_key(peer)` — skipped. Without this
+            // catch-up, no side ever opens `/auki/heartbeat/0.0.1` for
+            // the pair: the opener (lower-pid Manager) missed its
+            // chance at ConnectionEstablished; the accepter (higher-pid
+            // joiner) doesn't open. Manager-death detection then falls
+            // through to libp2p `ConnectionClosed` — fast over TCP but
+            // multi-second over QUIC (idle timeout). With this fix the
+            // peer-side `heartbeat` substream is present in both
+            // pid-orderings.
+            for pid in &report.added {
+                if swarm.is_connected(pid) {
+                    try_spawn_heartbeat_opener(
+                        local_peer_id,
+                        *pid,
+                        stream_control,
+                        last_heartbeat_at,
+                        heartbeat_tasks,
+                        liveness_tx,
+                        lifeline_rx,
+                    );
+                }
+            }
             let _ = ack.send(Ok(report));
         }
     }
+}
+
+/// Spawn the lower-side opener for `/auki/heartbeat/0.0.1` to `peer`
+/// if the local peer is the opener (lower peer-id). Idempotent
+/// against a pre-existing task for the same peer (aborted first).
+/// Initialises `last_heartbeat_at` so the monitor task gives the
+/// peer the full timeout window before declaring them lost.
+///
+/// Called from two sites in the driver task:
+/// 1. `handle_event::ConnectionEstablished` for a peer already on the
+///    allow-list at handshake time (the normal path).
+/// 2. `handle_command::SetAllowedPeers` after `apply_peer_update`
+///    retroactively recognises a connection that predates the peer's
+///    addition to the allow-list (the join-protocol race — an inbound
+///    joiner whose connection completes before they're admitted into
+///    `known_peers`). Without this site, no side ever opens the
+///    heartbeat substream when `local < peer` and the peer arrived via
+///    inbound dial.
+#[allow(clippy::too_many_arguments)]
+fn try_spawn_heartbeat_opener(
+    local_peer_id: PeerId,
+    peer_id: PeerId,
+    stream_control: &Control,
+    last_heartbeat_at: &Arc<Mutex<HashMap<PeerId, Instant>>>,
+    heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
+    liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
+    lifeline_rx: &watch::Receiver<()>,
+) {
+    // Convention: lower peer-id opens; the other side accepts via
+    // `incoming_heartbeats`. Higher-pid side returns immediately.
+    if local_peer_id >= peer_id {
+        return;
+    }
+    if let Some(prev) = heartbeat_tasks.remove(&peer_id) {
+        prev.abort();
+    }
+    last_heartbeat_at
+        .lock()
+        .expect("last_heartbeat_at lock")
+        .insert(peer_id, Instant::now());
+    let control = stream_control.clone();
+    let last = last_heartbeat_at.clone();
+    let liveness = liveness_tx.clone();
+    let lifeline = lifeline_rx.clone();
+    let task = tokio::spawn(async move {
+        open_and_run_heartbeat_pair(peer_id, control, last, liveness, lifeline).await;
+    });
+    heartbeat_tasks.insert(peer_id, task);
 }
 
 fn apply_peer_update(
@@ -1313,21 +1418,22 @@ async fn open_and_run_heartbeat_pair(
     mut control: Control,
     last_heartbeat_at: Arc<Mutex<HashMap<PeerId, Instant>>>,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
+    mut lifeline_rx: watch::Receiver<()>,
 ) {
     let proto = StreamProtocol::try_from_owned(HEARTBEAT_PROTOCOL.to_string())
         .expect("HEARTBEAT_PROTOCOL is a valid libp2p protocol id");
-    // Retry the open a few times — the peer may not have completed
-    // their inbound `accept` registration in the moment between
-    // ConnectionEstablished firing and this task starting.
     let mut substream = None;
     for _ in 0..5 {
-        match control.open_stream(peer, proto.clone()).await {
-            Ok(s) => {
-                substream = Some(s);
-                break;
-            }
-            Err(_) => {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+        let open_fut = control.open_stream(peer, proto.clone());
+        tokio::pin!(open_fut);
+        tokio::select! {
+            biased;
+            _ = lifeline_rx.changed() => return,
+            r = &mut open_fut => match r {
+                Ok(s) => { substream = Some(s); break; }
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
             }
         }
     }
@@ -1337,7 +1443,7 @@ async fn open_and_run_heartbeat_pair(
         let _ = liveness_tx.try_send(PeerLivenessEvent::Lost { peer_id: peer });
         return;
     };
-    run_heartbeat_pair(peer, substream, last_heartbeat_at, liveness_tx).await;
+    run_heartbeat_pair(peer, substream, last_heartbeat_at, liveness_tx, lifeline_rx).await;
 }
 
 /// Run the bidirectional heartbeat loop on `substream`. Writes a
@@ -1349,6 +1455,7 @@ async fn run_heartbeat_pair(
     substream: libp2p::Stream,
     last_heartbeat_at: Arc<Mutex<HashMap<PeerId, Instant>>>,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
+    mut lifeline_rx: watch::Receiver<()>,
 ) {
     use futures::AsyncReadExt as _;
     // The substream is bidirectional; split it so we can read on
@@ -1361,6 +1468,12 @@ async fn run_heartbeat_pair(
     loop {
         tokio::select! {
             biased;
+
+            // Runtime is being torn down (NetworkRuntime dropped, or
+            // shutdown called). Exit promptly so we stop writing
+            // frames against a substream whose connection state is
+            // about to vanish at the QUIC / TCP layer regardless.
+            _ = lifeline_rx.changed() => break,
 
             _ = write_tick.tick() => {
                 let now_ns = unix_now_ns();
@@ -1393,6 +1506,7 @@ async fn run_heartbeat_pair(
 async fn monitor_peer_liveness(
     last_heartbeat_at: Arc<Mutex<HashMap<PeerId, Instant>>>,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
+    mut lifeline_rx: watch::Receiver<()>,
 ) {
     let mut tick = tokio::time::interval(HEARTBEAT_TIMEOUT / 2);
     // Dedupe: only emit Lost once per peer per disconnection. A
@@ -1400,7 +1514,11 @@ async fn monitor_peer_liveness(
     // the peer from `lost_already`.
     let mut lost_already: HashSet<PeerId> = HashSet::new();
     loop {
-        tick.tick().await;
+        tokio::select! {
+            biased;
+            _ = lifeline_rx.changed() => return,
+            _ = tick.tick() => {}
+        }
         let now = Instant::now();
         let mut to_emit: Vec<PeerId> = Vec::new();
         let mut still_known: HashSet<PeerId> = HashSet::new();

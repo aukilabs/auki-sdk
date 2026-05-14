@@ -73,7 +73,7 @@ impl_log_payload!(joint_encoders::JointEncodersLogEntry);
 /// `auki.audio` — opaque-bytes audio log payload (Sensor Log family).
 /// Migration Step 4. `sample_format`, `channels`, `sample_rate_hz`,
 /// `channel_layout`, `frame_id` live on the SensorRegistryEntry's
-/// `Microphone` body — interpretation comes from `(sensor_id,
+/// `Audio` body — interpretation comes from `(sensor_id,
 /// sensor_hash)`, not from the per-chunk log entry. Sample count and
 /// chunk duration are derivable from the bytes plus the registry; the
 /// chunk start timestamp rides in the auki-logs framing's

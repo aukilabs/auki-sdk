@@ -28,7 +28,7 @@ This crate has split precedent for log payload shapes. Pinning the principle wou
 
 **Opaque-bytes-only (`bytes data = 1`):**
 - `PointCloudLogEntry` (Step 3, 2026-05-08) — interpretation via `SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.
-- `AudioLogEntry` (Step 4, 2026-05-08) — interpretation via `SensorBody::Microphone { sample_format, channels, sample_rate_hz, ... }`.
+- `AudioLogEntry` (Step 4, 2026-05-08) — interpretation via `SensorBody::Audio { sample_format, channels, sample_rate_hz, ... }` (renamed from `Microphone` 2026-05-14).
 - `DetectionLogEntry` (Step 8, 2026-05-08) — per-Detector schema; the SDK does not interpret detector-specific fields.
 
 **Structured prost fields:**
@@ -40,7 +40,7 @@ This crate has split precedent for log payload shapes. Pinning the principle wou
 **Working principle (lean):**
 
 - **Structured if** the bytes have a SINGLE canonical interpretation that holds across all instances of the sensor type. Examples: every pose has a translation and orientation; every time-transform sample is `(offset_ns, uncertainty_ns)`; every joint-encoder reading is `f32[joint_count]`; every pinhole camera intrinsics block is `(fx, fy, cx, cy, distortion[])`. The schema is universal; structured prost gives free language portability and field-level forward/backward compat.
-- **Opaque-bytes-only if** the bytes have MULTIPLE possible layouts a producer must specify, OR the schema is owned by a downstream consumer outside the SDK. Examples: point cloud's variable `fields` (XYZ vs XYZRGB vs XYZRGBL...) requires per-stream metadata in `SensorBody::PointCloud`; audio's `sample_format` knob requires `SensorBody::Microphone`; detection schemas are per-Detector and the SDK explicitly doesn't interpret them. Layout knowledge lives in the registry-side body type (or, for detection, with the Detector); the segment payload is just bytes.
+- **Opaque-bytes-only if** the bytes have MULTIPLE possible layouts a producer must specify, OR the schema is owned by a downstream consumer outside the SDK. Examples: point cloud's variable `fields` (XYZ vs XYZRGB vs XYZRGBL...) requires per-stream metadata in `SensorBody::PointCloud`; audio's `sample_format` knob requires `SensorBody::Audio`; detection schemas are per-Detector and the SDK explicitly doesn't interpret them. Layout knowledge lives in the registry-side body type (or, for detection, with the Detector); the segment payload is just bytes.
 
 **Edge case — mixed (structured envelope + opaque bytes):** `PinholeCameraLogEntry`. The intrinsics block is structured (universal across pinhole cameras) but the frame is opaque JPEG bytes (multiple possible image-format choices). Both halves follow the principle independently.
 
@@ -60,7 +60,7 @@ Adjudicated in favour of opaque-bytes-only: `auki.point_cloud.PointCloudLogEntry
 
 ### ✓ Resolved 2026-05-08 — `AudioLogEntry` is opaque-bytes-only (Step 4)
 
-Adjudicated in favour of opaque-bytes-only — `auki.audio.AudioLogEntry { bytes data = 1; }`. Same stance as Step 3 for point clouds; declines the pre-Step-3 sprint lean toward adding `sample_count`. Sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body. Reader needs the registry to interpret bytes anyway; denormalizing either field would risk inconsistency for marginal convenience. Resolved + propagated in the same step's PR — no Propagate task carries over.
+Adjudicated in favour of opaque-bytes-only — `auki.audio.AudioLogEntry { bytes data = 1; }`. Same stance as Step 3 for point clouds; declines the pre-Step-3 sprint lean toward adding `sample_count`. Sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Audio { sample_format, channels, sample_rate_hz }` body (renamed from `Microphone` 2026-05-14). Reader needs the registry to interpret bytes anyway; denormalizing either field would risk inconsistency for marginal convenience. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
 ### ✓ Resolved 2026-05-08 — `TimeTransformEntry` slop points (Step 6)
 

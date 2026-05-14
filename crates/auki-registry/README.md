@@ -60,7 +60,7 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 ```
 SensorRegistryEntry {
   sensor_id: string,
-  type:      string,        // tagged-enum discriminant: "rgb_camera" | "point_cloud" | "microphone"; future: "depth", "imu", "lidar"
+  type:      string,        // tagged-enum discriminant: "rgb_camera" | "point_cloud" | "audio" | "joint_encoders"; future: "depth", "imu", "lidar"
   ...body fields per type...
 }
 ```
@@ -97,10 +97,10 @@ PointField {
 }
 ```
 
-When `type = "microphone"`:
+When `type = "audio"`:
 
 ```
-Microphone {
+Audio {
   sample_rate_hz: u32,           // e.g. 48000
   channels:       u32,           // 1 mono, 2 stereo, N for arrays
   sample_format:  string,        // "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_f32le" | "pcm_f64le"
@@ -108,6 +108,8 @@ Microphone {
   channel_layout: string,        // "mono" | "stereo" | "5.1" | "7.1" | "ambisonic_b" | "n_channel"
 }
 ```
+
+Renamed from `Microphone` 2026-05-14 — signal-type naming for consistency with `PointCloud` / `JointEncoders`.
 
 **Multi-microphone arrays are modelled as one sensor with `channels = N`,** not as N independent sensors. The right shape for physically-synchronized arrays where all channels share a clock and a beam-forming origin (K1 head array, MacBook beamformer). Use separate `SensorRegistryEntry` records only when mics are physically independent capture devices.
 
@@ -155,7 +157,7 @@ The bytes in the segment are the repacked layout; a `SensorBody::PointCloud` reg
 
 ## Audio Log payload — moved to `auki-datatypes` (Step 4, 2026-05-08)
 
-`AudioLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.audio` `.proto` package, encoded as protobuf via prost. The Step 4 decision was **opaque-bytes-only** — `AudioLogEntry { bytes data = 1; }` — same stance as Step 3 for point clouds. The pre-Step-3 sprint lean toward adding a typed `sample_count: u32` was declined: sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Microphone { sample_format, channels, sample_rate_hz }` body, and denormalizing a derivable field would risk inconsistency for marginal reader convenience. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+`AudioLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.audio` `.proto` package, encoded as protobuf via prost. The Step 4 decision was **opaque-bytes-only** — `AudioLogEntry { bytes data = 1; }` — same stance as Step 3 for point clouds. The pre-Step-3 sprint lean toward adding a typed `sample_count: u32` was declined: sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Audio { sample_format, channels, sample_rate_hz }` body (renamed from `Microphone` 2026-05-14), and denormalizing a derivable field would risk inconsistency for marginal reader convenience. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
 
 The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `AudioLogEntry`. Sample-layout semantics (interleaved per channel; encoding per the registry's `sample_format`; compressed formats drop in cleanly via new `sample_format` values without changing the wrapper) carried over verbatim.
 
@@ -179,4 +181,4 @@ Each `from_frame_id` / `to_frame_id` in a Pose Log manifest references an entry 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Microphone`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

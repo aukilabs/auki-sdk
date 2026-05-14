@@ -36,4 +36,4 @@ Decided: not on the registry entry. URDF lives with the consumer (Park, future a
 
 ### Decided 2026-05-09 — `SensorBody::JointEncoders` minimalism (`joint_count` only)
 
-Decided: no `joint_name_hash`, no `urdf_id`, no per-joint metadata. `joint_count` is the deserialization invariant (matches `Microphone::channels`); anything richer is interpretation, not deserialization. Revisit when a real cross-robot mismatch shows up that `joint_count` alone doesn't catch.
+Decided: no `joint_name_hash`, no `urdf_id`, no per-joint metadata. `joint_count` is the deserialization invariant (matches `Audio::channels`); anything richer is interpretation, not deserialization. Revisit when a real cross-robot mismatch shows up that `joint_count` alone doesn't catch.

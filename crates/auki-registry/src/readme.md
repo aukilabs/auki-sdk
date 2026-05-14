@@ -155,10 +155,10 @@ FrameRegistryEntry::unity(frame_id)        // left,  x=right y=up z=forward,   m
 
 The on-disk JSON is fully spelled-out either way — presets are pure ergonomics, not shorthand on the wire.
 
-### `SensorBody::Microphone`
+### `SensorBody::Audio`
 
 ```rust
-pub struct Microphone {
+pub struct Audio {
     pub sample_rate_hz: u32,        // e.g. 48000
     pub channels: u32,              // 1 mono, 2 stereo, N for arrays
     pub sample_format: String,      // "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_f32le" | "pcm_f64le"
@@ -166,7 +166,7 @@ pub struct Microphone {
 }
 ```
 
-Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
+Renamed from `Microphone` 2026-05-14 — signal-type naming for consistency with `PointCloud` / `JointEncoders` and the `SensorEntry.kind` open-string contract. Multi-mic arrays are one sensor with `channels = N` (not N independent sensors). Compressed `sample_format` values (`flac`, `opus`, ...) get added when those are needed; the struct shape doesn't change.
 
 ### `SensorBody::JointEncoders`
 
@@ -181,7 +181,7 @@ Per-frame data lives in [`auki_datatypes::joint_encoders::JointEncodersLogEntry`
 
 Joint angles are encoder readings — measurements of joint positions, before any kinematic interpretation. The URDF that drives forward kinematics (joint space → cartesian TF) lives with the consumer (Park, future analyses), not the producer; mapping joint indices to URDF links is a consumer-side concern. Joint ordering is producer-defined and immutable per log; consumers and producers coordinate the order at integration time.
 
-Deliberately minimal — `joint_count` is the deserialization invariant (matches `Microphone::channels`); `joint_names`, `urdf_id`, and per-joint metadata are not on this body. See [`parking_lot.md`](../parking_lot.md#jointencoders-sensor-body--decisions-filed-at-landing) for the rationale and revisit triggers.
+Deliberately minimal — `joint_count` is the deserialization invariant (matches `Audio::channels`); `joint_names`, `urdf_id`, and per-joint metadata are not on this body. See [`parking_lot.md`](../parking_lot.md#jointencoders-sensor-body--decisions-filed-at-landing) for the rationale and revisit triggers.
 
 ### `PoseSource` — moved to `auki-manifests` (Step 0, 2026-05-08)
 

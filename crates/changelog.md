@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:00 HKT, 2026
+
+**[`auki-registry`](auki-registry/changelog.md) + [`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) — `SensorBody::Microphone` → `SensorBody::Audio` rename.** Signal-type naming for consistency with `PointCloud` / `JointEncoders` and the `SensorEntry.kind` open-string contract (pinned a few hours earlier). Variant + struct + serde tag (`"microphone"` → `"audio"`) flip; body fields unchanged. **First exercise of the "coordinated `SensorBody` rename = wire break by design" path** the open-string contract pinned. Locked canonical-bytes vector + hash recomputed (`6e0a1953…` → `bc4a0e69…`); 36 auki-registry tests pass; workspace-wide `cargo test --workspace --lib` clean. Pre-rename on-disk `SensorRegistryEntry`s with `"type":"microphone"` fail to deserialize against the renamed enum — acceptable per the Hagall principle (wire formats may break). Doc propagation: registry README + src/readme, datatypes README + src/readme + lib.rs + 2 proto comments + parking_lot, network sensors_protocol doc-comment.
+
+### Nils's claude · May 14, 10:15 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — `SensorEntry.kind` open-string contract pinned to `SensorBody` serde tag.** Closed-set kind vocab (`"camera"` / `"pointcloud"` / `"pose"` / `"audio"` / `"other"`) dropped; `kind` now carries `auki_registry::SensorBody`'s `#[serde(tag = "type")]` value verbatim — currently `"rgb_camera"` / `"point_cloud"` / `"joint_encoders"` / `"microphone"`. SensorBody becomes the single source of truth; the open-string contract removes the redundant `"other"` sentinel; `"pose"` correctly drops (poses are computed downstream, not sensors). Rust type unchanged (still `String`); doc-comment + test fixtures updated. No wire-byte change, no protocol-id bump.
+
 ### Nils's claude · May 13, 19:07 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — `swarm::is_routable_multiaddr` + `swarm::collect_routable_listen_addrs` helpers.** Closes the daemon-side bug where binding to `/ip4/0.0.0.0/...` and taking only the first `NewListenAddr` caused the daemon to advertise `127.0.0.1` to Discovery — the LAN had no way to dial back. The classifier rejects loopback / unspecified / link-local / IPv4 broadcast and accepts both IP-bearing and IP-free (dns/relay-mediated) addresses. The collector drives the swarm for a configurable window and dedupes routable `NewListenAddr` events. `auki-domain-py::build_identity_and_swarm` adopts both — Boosterapp now advertises every routable interface to Discovery instead of just the first one libp2p emitted. 11 unit tests + 2 swarm-driven `#[tokio::test]`s. Park adoption is a downstream PR (different repo).

@@ -34,7 +34,7 @@ pub struct SensorRegistryEntry {
 pub enum SensorBody {
     RgbCamera(RgbCamera),
     PointCloud(PointCloud),
-    Microphone(Microphone),
+    Audio(Audio),
     JointEncoders(JointEncoders),
 }
 
@@ -109,17 +109,22 @@ impl PointFieldDataType {
     }
 }
 
-/// Static identity of a microphone (or microphone array) — the bits that
-/// describe how to interpret the bytes downstream consumers will see in
-/// [`auki_datatypes::audio::AudioLogEntry`].
+/// Static identity of an audio sensor (microphone or microphone array) — the
+/// bits that describe how to interpret the bytes downstream consumers will
+/// see in [`auki_datatypes::audio::AudioLogEntry`].
 ///
 /// **Multi-microphone arrays are modelled as one sensor with `channels = N`,
 /// not as N independent sensors.** This is right for physically-synchronized
 /// arrays where the channels share a clock and a beam-forming origin. Use
 /// separate `SensorRegistryEntry` records only when mics are physically
 /// independent capture devices on different chips.
+///
+/// Named `Audio` (signal-type) rather than `Microphone` (instrument) for
+/// consistency with the other sensor bodies (`PointCloud`, `JointEncoders`)
+/// and the `SensorEntry.kind` open-string contract in
+/// [`auki-network::sensors_protocol`](../../../auki-network/src/sensors_protocol.rs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Microphone {
+pub struct Audio {
     /// Samples per channel per second (e.g. 48000).
     pub sample_rate_hz: u32,
     /// Number of channels per sample (1 mono, 2 stereo, N for arrays).
@@ -151,7 +156,7 @@ pub struct Microphone {
 /// future analyses), not the producer. The producer ships angle floats
 /// and just enough deserialization metadata (`joint_count`) for the
 /// consumer to read the bytes correctly. Mirrors the layering of
-/// [`RgbCamera`] / [`PointCloud`] / [`Microphone`]: producer ships
+/// [`RgbCamera`] / [`PointCloud`] / [`Audio`]: producer ships
 /// raw measurements, consumer holds the schema-for-interpretation.
 ///
 /// Joint ordering is producer-defined and immutable per log; mapping
@@ -172,7 +177,7 @@ pub struct JointEncoders {
     /// Number of joints in each per-frame angle vector. Sanity-check
     /// invariant for deserialization — the per-frame payload's
     /// `angles_rad` length MUST equal this. Equivalent in spirit to
-    /// [`Microphone::channels`].
+    /// [`Audio::channels`].
     pub joint_count: u32,
     /// Expected publish rate in Hz, observed at sensor bootstrap.
     /// Sizing hint for segment duration / consumer buffers; not part
@@ -810,7 +815,7 @@ mod tests {
                 cam.height = 1080;
             }
             SensorBody::PointCloud(_)
-            | SensorBody::Microphone(_)
+            | SensorBody::Audio(_)
             | SensorBody::JointEncoders(_) => {
                 panic!("test was set up for RgbCamera")
             }
@@ -996,12 +1001,12 @@ mod tests {
         assert_eq!(PointFieldDataType::Float64.byte_width(), 8);
     }
 
-    // ─── Microphone tests ──────────────────────────────────────────────────
+    // ─── Audio tests ───────────────────────────────────────────────────────
 
-    fn m1_microphone_entry() -> SensorRegistryEntry {
+    fn m1_audio_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
             sensor_id: "K1-AABBCCDDEEFF/head_array_4mic".into(),
-            body: SensorBody::Microphone(Microphone {
+            body: SensorBody::Audio(Audio {
                 sample_rate_hz: 48_000,
                 channels: 4,
                 sample_format: "pcm_s16le".into(),
@@ -1011,28 +1016,32 @@ mod tests {
     }
 
     #[test]
-    fn microphone_entry_serializes_to_canonical_bytes() {
-        let bytes = m1_microphone_entry().canonical_bytes();
+    fn audio_entry_serializes_to_canonical_bytes() {
+        let bytes = m1_audio_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"microphone"}"#
+            r#"{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"audio"}"#
         );
     }
 
     #[test]
-    fn microphone_entry_hash_is_locked() {
-        // Pin the XXH3-128 of the M1 example microphone entry.
+    fn audio_entry_hash_is_locked() {
+        // Pin the XXH3-128 of the M1 example audio entry.
         // Updates to this must be coordinated with any cross-language reader.
+        // Recomputed 2026-05-14 when `Microphone` renamed to `Audio` (serde
+        // tag flipped `"microphone"` → `"audio"`, body bytes unchanged
+        // otherwise). Pre-rename locked hash was
+        // `6e0a195364866f18834d2db8e2a0699f`.
         assert_eq!(
-            m1_microphone_entry().hash(),
-            "6e0a195364866f18834d2db8e2a0699f"
+            m1_audio_entry().hash(),
+            "bc4a0e690f1149c4927ea98c96ead65a"
         );
     }
 
     #[test]
-    fn write_then_read_microphone_round_trip() {
+    fn write_then_read_audio_round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = m1_microphone_entry();
+        let entry = m1_audio_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
         let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();

@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:00 HKT, 2026
+
+**`SensorEntry.kind` four-tags doc-comment follows the upstream `SensorBody::Microphone` → `SensorBody::Audio` rename.** Companion to [`auki-registry` changelog 2026-05-14 11:00](../auki-registry/changelog.md) — the four canonical tags listed in `SensorEntry.kind`'s doc-comment flip from `"rgb_camera"` / `"point_cloud"` / `"joint_encoders"` / `"microphone"` to `"rgb_camera"` / `"point_cloud"` / `"joint_encoders"` / `"audio"`. Doc-only change in this crate; wire shape unchanged (still an open `String` field). First exercise of the "coordinated `SensorBody`-variant rename = wire break" path the prior entry pinned — the wire-tag flows verbatim through `kind`, so this is a sensors-protocol wire break in the open-enum sense (consumers reading `"microphone"` from a pre-rename peer will surface "unknown" under the open-string contract, which is the by-design behaviour).
+
+### Nils's claude · May 14, 10:15 HKT, 2026
+
+**`SensorEntry.kind` is the `SensorBody` serde tag verbatim — closed-set vocab dropped.** Pre-change doc said `kind ∈ {"camera", "pointcloud", "pose", "audio", "other"}` with new kinds treated as `"other"`. Post-change `kind` carries `auki_registry::SensorBody`'s `#[serde(tag = "type", rename_all = "snake_case")]` value verbatim — currently `"rgb_camera"`, `"point_cloud"`, `"joint_encoders"`, `"microphone"` for the four shipped SensorBody variants. Two wins: SensorBody becomes the single source of truth (no parallel `kind` enum to drift), and the open-string contract makes `"other"` structurally redundant — consumers without a renderer for a future kind (`"lidar"`, `"imu"`, …) surface "unknown" without a wire bump or sentinel. `"pose"` correctly dropped — poses are downstream computed outputs, not catalog entries.
+
+Rust type unchanged (`String`); the change is the *contract*, not the shape. Open-string stance was already in the doc in spirit ("new kinds may appear over time; consumers should treat unrecognised as `\"other\"`"); this just removes the parallel vocab and pins the canonical tags. The four current tags are listed in the `SensorEntry.kind` doc-comment to keep a future SensorBody-variant rename loud — renaming a SensorBody variant is now a coordinated registry + sensors-protocol wire break by design.
+
+Test fixtures retuned (`"camera"` → `"rgb_camera"`, `"pointcloud"` → `"point_cloud"`) across `sensors_protocol::tests` and `auki-domain/tests/cluster_manager_integration.rs`. Python bindings (`auki-domain-py::PySensorEntry`) take `kind` as a Python `str` — no signature change. **No new wire bytes, no protocol-id bump** — `kind` was already a `String` field on the wire; the closed-set was a doc-level contract only.
+
 ### Nils's claude · May 13, 19:07 HKT, 2026
 
 **`swarm::is_routable_multiaddr` + `swarm::collect_routable_listen_addrs` ship — closes the loopback-advertise bug daemons that bind to `/ip4/0.0.0.0/...` were hitting.** Park bound its swarm to `0.0.0.0`, took only the first `NewListenAddr` event (which libp2p emits for loopback first), and advertised `/ip4/127.0.0.1/tcp/<port>` to Discovery — Boosters on the LAN had no dialable address to reach Park with. Both Park and `auki-domain-py::build_identity_and_swarm` had near-identical buggy `wait_for_listen_addr` helpers; the right place for the fix is the SDK, not each daemon (Hagall constraint #5).

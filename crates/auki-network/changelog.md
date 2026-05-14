@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 12:54 HKT, 2026
+
+**Dialogue Batch 1 (SDK Rust core, half 2) — `StreamDispatch::AcceptAudio` arm + `AudioFrame` re-export + dispatch site.** Companion to [`auki-datatypes` changelog 2026-05-14 12:54](../auki-datatypes/changelog.md) which adds the underlying `auki.audio_stream.AudioFrame` proto. This crate consumes that wire type and gives producers a fifth `StreamDispatch` arm to return, alongside `Decline` / `AcceptJpeg` / `AcceptPointCloud` / `AcceptJointEncoders`.
+
+**Closed-enum extension, not trait-object refactor.** The Dagaz Batch 1 design picked a closed `StreamDispatch::{AcceptJpeg, AcceptPointCloud, ...}` enum to make each new `T` a one-line PR shape on the dispatch site. Three variants → four when sawslin added `AcceptJointEncoders` → five now with `AcceptAudio`. The runtime's `pump_typed::<T>` monomorphization handles each `T` independently, so the dispatch branch cost stays flat. Trait-object dispatch is a refactor that can be earned when (a) the variant count crosses ~6, or (b) an out-of-tree consumer wants to ship a `T` variant without an SDK release; neither is true today. Adding `AcceptAudio` was the natural one-line extension the Dagaz pattern was designed for.
+
+**Substream wire surface unchanged.** `/auki/stream/0.1.0` still carries `StreamMessage { Request | Accept | Decline | Frame | EndOfStream }`; the new arm only affects the producer-side dispatch on `request.sensor_id` and the runtime-internal `pump_typed::<AudioFrame>` monomorphization. The wire-level `Frame.payload` bytes for an audio substream are a prost-encoded `AudioFrame { bytes data = 1 }` — byte-identical to a hypothetical wire-encoded `AudioLogEntry` (locked in `auki-datatypes` by `audio_disk_wire_byte_identical`).
+
+**Touched**: [`src/stream_protocol.rs`](src/stream_protocol.rs) gains `pub use auki_datatypes::audio_stream::AudioFrame` next to the existing JPEG / PointCloud / JointEncoders re-exports + three new locked-vector tests for the wire payload (round-trip, wire-size pin, locked hex for an 8-byte fixture). [`src/stream_runtime.rs`](src/stream_runtime.rs) gains `AudioFrame` in the use-list, the new `AcceptAudio { info, source: SourceStream<AudioFrame> }` variant on `StreamDispatch` with a doc-comment that cross-references the disk-wire symmetry test, the dispatch arm in `handle_inbound_substream` (`pump_typed::<AudioFrame>`), a `audio_provider_yielding_three_frames` test helper, and a new `producer_accepts_and_streams_audio_frames` e2e integration test that mirrors `producer_accepts_and_streams_pointcloud_frames`. Doc comment at the top of `stream_runtime.rs` updated to list `AudioFrame` alongside the other `T`s.
+
+**Tests**: 104 → 108 (+4 — three `stream_protocol::tests::audio_frame_*` unit tests + one `stream_runtime::tests::producer_accepts_and_streams_audio_frames` integration test). All 108 pass; workspace-wide `cargo test --workspace --lib` clean (no regressions in any other crate).
+
+**Out of scope for this PR** (each in a sibling PR or future task — see the [Dialogue quest](https://www.notion.so/3595c8e965928022bb8ecb9a1b0fa46c) on Notion): the `auki-network-py` Python binding extension that exposes an `AcceptAudio` variant on `PyStreamDecision` + an `open_audio_stream` consumer entry point (Dialogue T2 — rides this PR's wire-side changes once it lands); Park's producer side (Dialogue T3); Boosterapp's consumer + K1 audio-player driver (Dialogue T4 + T5).
+
 ### Nils's claude · May 14, 12:15 HKT, 2026
 
 **Fix: Manager-handoff path was broken over QUIC — the peer-side `/auki/heartbeat/0.0.1` substream silently survived `NetworkRuntime` drop and kept faking liveness on a transport whose remote had already exited.** Reproduction Nils ran on K1 + Park 2026-05-14 against v0.0.37: Park as Manager, Booster joins, Park leaves — Booster's view frozen indefinitely (peer_count=2, is_manager=false, manager_peer_id=Park, Park's dead multiaddrs still in membership). Step 9 of the Hagall demo script never fires.

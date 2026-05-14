@@ -43,8 +43,8 @@
 
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
-    AcceptInfo, DeclineReason, EndReason, Frame, JointEncodersFrame, JpegFrame, PointCloudFrame,
-    STREAM_PROTOCOL,
+    AcceptInfo, AudioFrame, DeclineReason, EndReason, Frame, JointEncodersFrame, JpegFrame,
+    PointCloudFrame, STREAM_PROTOCOL,
     StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message,
     write_message,
 };
@@ -87,10 +87,12 @@ pub type SourceStream<T> =
 
 /// Producer's accept/decline decision for a single inbound request.
 /// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
-/// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2), and
+/// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2),
 /// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
-/// byte-identical to the on-disk `JointEncodersLogEntry`). Adding a new
-/// `T` is a coordinated SDK + consumer release — bump the runtime, add
+/// byte-identical to the on-disk `JointEncodersLogEntry`), and
+/// `AudioFrame` (Dialogue Batch 1 — opaque interleaved PCM bytes,
+/// byte-identical to the on-disk `AudioLogEntry`). Adding a new `T`
+/// is a coordinated SDK + consumer release — bump the runtime, add
 /// the variant, every consumer that wants the new sensor type opts in.
 ///
 /// On `Accept*`, the SDK writes [`StreamMessage::Accept(info)`] for the
@@ -123,6 +125,19 @@ pub enum StreamDispatch {
     AcceptJointEncoders {
         info: AcceptInfo,
         source: SourceStream<JointEncodersFrame>,
+    },
+    /// Accept the request with an Audio source-Stream — Dialogue Batch
+    /// 1. Each [`AudioFrame`] carries interleaved PCM bytes; the
+    /// consumer pushes them into a player session (e.g. the K1's
+    /// `AudioPlayer` in `PCM_STREAM` mode). Sample format, channels,
+    /// sample rate, and channel layout are resolved out-of-band via
+    /// `(sensor_id, sensor_hash) → SensorBody::Audio` — the wire
+    /// payload is opaque-bytes-only. Wire bytes are byte-identical to
+    /// the on-disk `AudioLogEntry` payload by design (locked in
+    /// `auki-datatypes` by `audio_disk_wire_byte_identical`).
+    AcceptAudio {
+        info: AcceptInfo,
+        source: SourceStream<AudioFrame>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -396,6 +411,9 @@ pub(crate) async fn handle_inbound_substream(
         }
         StreamDispatch::AcceptJointEncoders { info, source } => {
             pump_typed::<JointEncodersFrame>(substream, info, source, shutdown_rx).await;
+        }
+        StreamDispatch::AcceptAudio { info, source } => {
+            pump_typed::<AudioFrame>(substream, info, source, shutdown_rx).await;
         }
     }
 }
@@ -701,6 +719,42 @@ mod tests {
                     sensor_hash: "pc-sensor-hash-3".into(),
                     clock_id: "pc/test/session-monotonic".into(),
                     clock_hash: "pc-clock-hash-3".into(),
+                },
+                source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    fn audio_provider_yielding_three_frames() -> StreamProvider {
+        Arc::new(|_req| {
+            // 20 ms × 3 of 48 kHz mono int16-LE — the canonical Dialogue
+            // fixture shape. Contents are arbitrary deterministic bytes;
+            // the SDK treats them as opaque per the `bytes data` proto.
+            let frames = vec![
+                Ok(ProducerFrame {
+                    timestamp_ns: 10_000,
+                    payload: AudioFrame {
+                        data: vec![0x00, 0x10, 0x20, 0x30, 0x40, 0x50],
+                    },
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 30_000,
+                    payload: AudioFrame {
+                        data: vec![0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0],
+                    },
+                }),
+                Ok(ProducerFrame {
+                    timestamp_ns: 50_000,
+                    payload: AudioFrame {
+                        data: vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02],
+                    },
+                }),
+            ];
+            StreamDispatch::AcceptAudio {
+                info: AcceptInfo {
+                    sensor_hash: "audio-sensor-hash-3".into(),
+                    clock_id: "audio/test/session-monotonic".into(),
+                    clock_hash: "audio-clock-hash-3".into(),
                 },
                 source: Box::pin(stream::iter(frames)),
             }
@@ -1181,6 +1235,70 @@ mod tests {
         let f2 = frames.next().await.unwrap().expect("frame 2");
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
+
+        let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
+        match end {
+            StreamError::EndOfStream { reason }
+                if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
+            other => panic!("expected SourceEnded, got {other:?}"),
+        }
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// Same happy-path as `producer_accepts_and_streams_pointcloud_frames`
+    /// but with `T = AudioFrame` — Dialogue Batch 1 end-to-end.
+    /// Exercises the `AcceptAudio` arm + `pump_typed::<AudioFrame>`
+    /// dispatch through a real libp2p substream.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_audio_frames() {
+        let id_p = PeerIdentity::from_seed(&[141u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[142u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-audio-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-audio-consumer/0").await;
+
+        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            audio_provider_yielding_three_frames(),
+        )
+        .expect("producer spawn");
+        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            decline_all_streams(),
+        )
+        .expect("consumer spawn");
+
+        let connected = poll_until(
+            || consumer.connected_peers().contains(&id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected);
+
+        let sub: StreamSubscription<AudioFrame> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest { sensor_id: "test/audio".into() },
+            )
+            .await
+            .expect("open_stream<AudioFrame>");
+
+        assert_eq!(sub.info.sensor_hash, "audio-sensor-hash-3");
+        assert_eq!(sub.info.clock_id, "audio/test/session-monotonic");
+
+        let mut frames = sub.frames;
+        let f0 = frames.next().await.unwrap().expect("frame 0");
+        assert_eq!(f0.seq, 0);
+        assert_eq!(f0.payload.data, vec![0x00, 0x10, 0x20, 0x30, 0x40, 0x50]);
+        let f1 = frames.next().await.unwrap().expect("frame 1");
+        assert_eq!(f1.seq, 1);
+        let f2 = frames.next().await.unwrap().expect("frame 2");
+        assert_eq!(f2.seq, 2);
+        assert_eq!(f2.payload.data, vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02]);
 
         let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
         match end {

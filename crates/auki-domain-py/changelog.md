@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 12:15 HKT, 2026
+
+**Consumer half of the cross-`.so` bridge for `StreamProvider`.** `ClusterManager.{create,join}_cluster`'s internal handling of the `stream_provider=` kwarg now routes through `auki_network.cluster._build_stream_provider` (producer side, registered in `auki_network.so`) and unboxes the resulting `Arc<StreamProvider>` from a named `PyCapsule`. The direct `build_stream_provider(callable)` call inside `auki_domain.so` is gone.
+
+**Why.** The direct call compiled `build_stream_provider`'s closure body into `auki_domain.so`, baking that cdylib's per-cdylib `PyStreamDecision` type-id into the closure's `PyRef::extract` call. User code constructs `StreamDecision` via `auki_network.cluster.StreamDecision.accept(...)` — registered in `auki_network.so` with a *different* type-id. At runtime the extract compared mismatched type-ids and rejected the value with the surreal `'StreamDecision' object cannot be converted to 'StreamDecision'`. Every stream subscription declined; demo blocked.
+
+**Fix.** New `stream_provider_from_python` helper imports `auki_network.cluster._build_stream_provider`, calls it with the user's callable (so the closure body is compiled into `auki_network.so`, where its `PyRef::extract` uses the matching type-id), and reads back an `Arc<StreamProvider>` from the returned `PyCapsule`. Validates the capsule's name against the canonical `STREAM_PROVIDER_CAPSULE_NAME` constant before unboxing; mismatched names (or missing names) raise `PyRuntimeError` rather than silently mis-route. Clones the Arc out; PyCapsule retains its own reference until Python GC drops it.
+
+**SAFETY.** The `unsafe { capsule.reference::<StreamProvider>() }` is sound by contract: (a) we just verified the capsule's name, so the payload type is fixed; (b) `StreamProvider` is `Arc<dyn Fn>` — memory-layout-stable across cdylib boundaries within a single process; (c) both cdylibs link the same `auki-network-py` rlib version, so the trait object's vtable is consistent. Producer-side sibling lives in [`auki-network-py` changelog 2026-05-14 12:15](../auki-network-py/changelog.md); see there for the test that pins the capsule name.
+
+**Validated live** on the K1 demo at v0.0.37 + this WIP — Park's RGB / pointcloud / joint_encoders subscriptions all flow end-to-end.
+
 ### Nils's claude · May 14, 11:05 HKT, 2026
 
 **`ClusterManager.create_cluster` + `.join_cluster` gain an `external_addresses: Optional[list[str]] = None` kwarg** — operator override for which multiaddrs the daemon advertises to Discovery. Replace-semantics: if `external_addresses` is provided and non-empty, the SDK passes those verbatim to Discovery and skips auto-detection; if `None` or `[]`, falls through to today's `collect_routable_listen_addrs` swarm-driven detection. Threaded through `build_identity_and_swarm`, which now calls the new SDK helper `auki_network::swarm::resolve_advertise_multiaddrs` (one function for both paths — see [`auki-network` changelog 2026-05-14 11:05](../auki-network/changelog.md)).

@@ -146,6 +146,53 @@ def test_stream_decision_factory_tags() -> None:
     assert dec.kind == "decline"
 
 
+# ─── Cross-`.so` bridge for sibling PyO3 wrapper crates ─────────────────────
+
+
+def test_build_stream_provider_helper_returns_named_capsule() -> None:
+    """`auki_network.cluster._build_stream_provider(callable)` returns a
+    `PyCapsule` whose name pins the bridge contract with sibling wrapper
+    crates (`auki-domain-py` consumes it via `PyCapsule::reference`).
+
+    The bridge exists because each PyO3 `#[pyclass]` gets a distinct
+    type-id per cdylib that registers it — so a `PyStreamDecision`
+    constructed in `auki_network.so` cannot be `PyRef::extract`'d in
+    `auki_domain.so`. Routing the closure construction through this
+    helper keeps the extract local to `auki_network.so`; the capsule
+    payload is type-id-free.
+
+    Regression catch: rename / delete the helper or rev the capsule
+    name without coordinating with `auki-domain-py`'s consumer and this
+    test fails loudly before the runtime mismatch can ship.
+    """
+    import ctypes
+
+    def _cb(_req):
+        # Never invoked — the bridge construction doesn't run the
+        # callable, it just wraps it in a Rust closure that becomes
+        # the capsule payload.
+        raise AssertionError("callback unexpectedly invoked")
+
+    capsule = cluster._build_stream_provider(_cb)
+
+    # PyCapsule is a built-in type with no public Python class; the
+    # cleanest cross-version check is the type name.
+    assert type(capsule).__name__ == "PyCapsule", (
+        f"expected PyCapsule, got {type(capsule).__name__}"
+    )
+
+    # Pin the capsule's name to the canonical bridge string. Renaming
+    # this string is a wire break with `auki-domain-py`'s consumer
+    # (the `stream_provider_from_python` helper there validates this
+    # exact name before unboxing the Arc).
+    ctypes.pythonapi.PyCapsule_GetName.restype = ctypes.c_char_p
+    ctypes.pythonapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
+    name = ctypes.pythonapi.PyCapsule_GetName(capsule)
+    assert name == b"auki_network_py::stream_provider::v1", (
+        f"capsule name drifted: {name!r}"
+    )
+
+
 # ─── Cross-language conformance ─────────────────────────────────────────────
 
 

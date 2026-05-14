@@ -37,7 +37,8 @@ use futures::{Stream, StreamExt};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyModule};
+use pyo3::types::{PyBytes, PyCapsule, PyModule};
+use std::ffi::CString;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -1292,6 +1293,33 @@ pub fn open_stream_error_to_pyerr(py: Python<'_>, err: RustOpenStreamError) -> P
     }
 }
 
+// ─── PyCapsule bridge for cross-.so consumers ────────────────────────────────
+
+/// Capsule name for `StreamProvider` payloads exchanged with sibling
+/// PyO3 wrapper crates. Includes a version suffix so future ABI changes
+/// can rev the name and fail loudly on mismatch.
+pub const STREAM_PROVIDER_CAPSULE_NAME: &str = "auki_network_py::stream_provider::v1";
+
+/// Build a Rust `StreamProvider` from a Python callable and return it
+/// wrapped in a `PyCapsule`. Used by `auki-domain-py` to cross the
+/// `.so` boundary without dual-PyClass-identity errors — the
+/// `PyStreamDecision` extract inside `build_stream_provider` executes
+/// in this `.so` where the class is registered.
+///
+/// The capsule owns a `Box<StreamProvider>`. Consumers clone the `Arc`
+/// out via `PyCapsule::reference::<StreamProvider>()`; PyO3's
+/// destructor drops the box when the capsule is GC'd.
+///
+/// Underscore-prefixed in the Python namespace — this is an
+/// SDK-internal bridge, not a public API for daemon authors.
+#[pyfunction]
+fn _build_stream_provider(py: Python<'_>, callable: Py<PyAny>) -> PyResult<Py<PyCapsule>> {
+    let provider: StreamProvider = build_stream_provider(callable);
+    let name = CString::new(STREAM_PROVIDER_CAPSULE_NAME).expect("static literal contains no nul");
+    let capsule = PyCapsule::new_bound::<StreamProvider>(py, provider, Some(name))?;
+    Ok(capsule.unbind())
+}
+
 // ─── Module registration ─────────────────────────────────────────────────────
 
 pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1307,6 +1335,8 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyStreamDecision>()?;
     cluster.add_class::<PyStreamSubscription>()?;
     cluster.add_class::<PyFrameIterator>()?;
+
+    cluster.add_function(wrap_pyfunction!(_build_stream_provider, cluster)?)?;
 
     cluster.add("StreamEndOfStream", py.get_type_bound::<StreamEndOfStream>())?;
     cluster.add(

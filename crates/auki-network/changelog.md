@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:05 HKT, 2026
+
+**`swarm::resolve_advertise_multiaddrs(swarm, operator_override, window)` ships — one SDK helper subsuming both auto-detection and operator-override resolution.** Daemons (Park, Booster, future Sentinel) now take the same code path for "what multiaddrs do I advertise to Discovery?", per Hagall constraint #5. Today each daemon does this themselves with subtly different bugs (Park's `wait_for_listen_addr` grabs only the first `NewListenAddr` and advertises `127.0.0.1`; Boosterapp's `--external-addresses` flag has no path through the SDK on the Hagall code path). This helper unifies them.
+
+**Resolution semantics — replace, not append:**
+1. `operator_override` is `Some` and non-empty → use it verbatim, skip swarm-event collection. Loopback / unspecified / link-local pass through unchecked: operators may have a legitimate reason (local-only dev, hand-curated set).
+2. `None` OR `Some(&[])` → drive the swarm via `collect_routable_listen_addrs` for `window`, collect routable `NewListenAddr` events.
+
+Replace was chosen over append (the other named option) because (a) it matches Boosterapp's `--external-addresses` intent ("if you pass this, you know what you're doing"); (b) it's the simpler mental model for operators; (c) operators who want both their auto-detected LAN address and a relay-mediated multiaddr can list both in the override.
+
+4 new `#[tokio::test]`s cover the resolution paths (override-verbatim, None-falls-through, empty-override-falls-through, DNS/relay-multiaddr-passes-through). auki-network now at 104 tests with `--features swarm`.
+
+**Out of scope (parking-lot for v2):** SDK relay-reservation helper. The dual-firewalled / dual-NAT case where neither peer has a public IP needs libp2p Circuit Relay v2 — dial relay → reserve slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (the helper passes it through verbatim). v2 should provide `reserve_relay_listen(swarm, relay_peer_id, relay_multiaddrs, timeout)` that owns the dance. Six sub-decisions to land before the v2 helper ships are filed in [`parking_lot.md`](parking_lot.md): helper shape, default relay address, Discovery as relay directory, multi-relay redundancy, DCUtR sequencing, operator UX shape. Triggers when v1 Hagall demo is end-to-end and Park-from-home earns the engineering.
+
+Companion: [`auki-domain-py`](../auki-domain-py/changelog.md) gains an `external_addresses: Optional[list[str]] = None` kwarg on both `ClusterManager.create_cluster` + `.join_cluster`, threaded through to the helper. Boosterapp's `--external-addresses` flag becomes a one-line pass-through to the SDK once it migrates to Hagall.
+
 ### Nils's claude · May 14, 11:00 HKT, 2026
 
 **`SensorEntry.kind` four-tags doc-comment follows the upstream `SensorBody::Microphone` → `SensorBody::Audio` rename.** Companion to [`auki-registry` changelog 2026-05-14 11:00](../auki-registry/changelog.md) — the four canonical tags listed in `SensorEntry.kind`'s doc-comment flip from `"rgb_camera"` / `"point_cloud"` / `"joint_encoders"` / `"microphone"` to `"rgb_camera"` / `"point_cloud"` / `"joint_encoders"` / `"audio"`. Doc-only change in this crate; wire shape unchanged (still an open `String` field). First exercise of the "coordinated `SensorBody`-variant rename = wire break" path the prior entry pinned — the wire-tag flows verbatim through `kind`, so this is a sensors-protocol wire break in the open-enum sense (consumers reading `"microphone"` from a pre-rename peer will surface "unknown" under the open-string contract, which is the by-design behaviour).

@@ -6,6 +6,20 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 12:15 HKT, 2026
+
+**Producer half of the cross-`.so` bridge for `StreamProvider`.** Adds `auki_network.cluster._build_stream_provider(callable) -> PyCapsule` and `STREAM_PROVIDER_CAPSULE_NAME` (`"auki_network_py::stream_provider::v1"`). Underscore-prefixed: SDK-internal bridge, not part of the public daemon-author surface.
+
+**Why.** Each PyO3 `#[pyclass]` registered in a cdylib gets a fresh per-cdylib type-id (PyO3 doesn't share registrations across `.so` files). When `auki-domain-py`'s `ClusterManager.{create,join}_cluster(stream_provider=cb)` invoked the user's callback from inside `auki_domain.so` and the callback returned a `StreamDecision` constructed via `auki_network.cluster.StreamDecision.accept(...)` (registered in `auki_network.so`), `PyRef::<PyStreamDecision>::extract` inside the `auki_domain.so`-compiled closure compared against the *wrong* type-id and rejected the value with the surreal error `'StreamDecision' object cannot be converted to 'StreamDecision'`. Every stream subscription declined; demo blocked at step 14.
+
+**Fix.** `_build_stream_provider` wraps the callable in a Rust closure (`build_stream_provider(callable)`) inside *this* cdylib, then ships the resulting `Arc<dyn Fn>` to consumers via a named `PyCapsule`. Because the closure body is compiled into `auki_network.so`, the `PyStreamDecision::extract` inside it uses *this* cdylib's type-id, which is the one `auki_network.cluster.StreamDecision.accept(...)` registers against. The capsule payload is type-id-free (just a named bag of bytes Python GC owns), so it crosses the cdylib boundary cleanly. Sibling crates (today `auki-domain-py`) consume the capsule via `PyCapsule::reference::<StreamProvider>()` and clone the Arc.
+
+**Versioned name.** `STREAM_PROVIDER_CAPSULE_NAME` is suffixed `::v1` so a future ABI bump can rev the suffix and fail loudly on mismatch rather than silently corrupt memory across an SDK upgrade. The consumer validates this exact name before unboxing.
+
+**Test.** `test_build_stream_provider_helper_returns_named_capsule` in `python_tests/test_streams.py` pins (a) the helper is exposed in `auki_network.cluster`, (b) it returns a `PyCapsule`, (c) the capsule name is the canonical bridge string. Regression catch: renaming or deleting the helper without coordinating with `auki-domain-py`'s consumer fails this test before the runtime mismatch can ship.
+
+**Validated live on the K1 demo (192.168.9.74) at v0.0.37 + this WIP.** Park's three stream subscriptions (RGB, pointcloud, joint_encoders) — previously all declined with the cross-`.so` TypeError — now flow end-to-end.
+
 ### Nils's claude · May 13, 10:30 HKT, 2026
 
 **Stripped to a minimal `DiscoveryClient` binding against the Hagall v1 wire.** The previous surface (`ParticipantInfo`, `PeerSnapshot`, `ClusterDoc`, `ClusterRuntime`, `cluster.spawn`, `cluster.load_doc`, plus the `stream_provider` / `stream_types` plumbing) bound Greenland-era Rust APIs that no longer match the v1 contract; deleted. New surface: `DiscoveryClient(base_url)` + `ClusterEntry` + `CreateClusterOutcome` pyclasses, sync-shaped (each method `block_on`s on a process-wide multi-thread tokio runtime). Methods mirror the Rust API one-to-one: `list_clusters` / `create_cluster` / `heartbeat` / `rotate_manager` / `deregister`. `CreateClusterOutcome` exposes `is_already_exists: bool` + `entry: Optional[ClusterEntry]` so Python callers branch with a plain `if`. ~3424 LOC → ~280 LOC; deleted `discovery.rs`, `stream_bridge.rs`, `stream_types.rs`. Dep stack simplified: dropped `auki-identity`, `tracing`, `tracing-subscriber`, `pyo3-async-runtimes`, `futures` — the v1 client doesn't sign, log structured events, or pump streams. The Python surface re-grows when the new network runtime + stream bindings land in the runtime-rebuild PR.

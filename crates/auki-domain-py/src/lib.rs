@@ -32,15 +32,71 @@ use auki_network::stream_protocol::{
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
 use auki_network_py::stream_types::{
-    PyStreamSubscription, build_stream_provider, open_stream_error_to_pyerr,
+    PyStreamSubscription, STREAM_PROVIDER_CAPSULE_NAME, open_stream_error_to_pyerr,
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyCapsule;
+use std::ffi::CString;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::Runtime;
+
+// ─── Stream provider bridge ────────────────────────────────────────────
+//
+// `auki-network-py` and `auki-domain-py` are separate Python extension
+// modules. Although both link the `auki-network-py` rlib, each `.so`
+// gets its own copy of every `#[pyclass]`'s PyType registration with a
+// distinct type-id. A `PyStreamDecision` created by user code (via
+// `auki_network.cluster.StreamDecision.accept(...)` → registered in
+// `auki_network.so`) is therefore NOT extractable as
+// `PyRef<PyStreamDecision>` from inside `auki_domain.so` — the
+// type-ids mismatch with the misleading error
+// `'StreamDecision' object cannot be converted to 'StreamDecision'`.
+//
+// To dodge that, `auki_domain.so` doesn't call the rlib's
+// `build_stream_provider` directly. It imports the public Python
+// helper `auki_network.cluster._build_stream_provider`, which runs
+// inside `auki_network.so` (where the type-ids match), and ships back
+// the resulting `Arc<StreamProvider>` via a `PyCapsule`. We unbox the
+// Arc here, clone it, and hand it to the cluster runtime as before.
+
+fn stream_provider_from_python(py: Python<'_>, callable: Py<PyAny>) -> PyResult<StreamProvider> {
+    let cluster = py.import_bound("auki_network")?.getattr("cluster")?;
+    let builder = cluster.getattr("_build_stream_provider")?;
+    let result = builder.call1((callable,))?;
+    let capsule = result.downcast::<PyCapsule>().map_err(|e| {
+        PyRuntimeError::new_err(format!(
+            "auki_network.cluster._build_stream_provider returned non-PyCapsule: {e}"
+        ))
+    })?;
+    let expected_name = CString::new(STREAM_PROVIDER_CAPSULE_NAME)
+        .expect("static literal contains no nul");
+    match capsule.name()? {
+        Some(name) if name == expected_name.as_c_str() => {}
+        Some(other) => {
+            return Err(PyRuntimeError::new_err(format!(
+                "stream-provider capsule has unexpected name {other:?} (want {STREAM_PROVIDER_CAPSULE_NAME:?})"
+            )));
+        }
+        None => {
+            return Err(PyRuntimeError::new_err(
+                "stream-provider capsule has no name; rejecting (defense against misrouted capsules)",
+            ));
+        }
+    }
+    // SAFETY: we just verified the capsule's name; by contract the
+    // payload is a `StreamProvider` (which is `Arc<dyn Fn>` and so
+    // memory-layout-stable across crate boundaries within this
+    // process). Both crates share the same `auki_network` rlib
+    // version, so the trait object's vtable is consistent. Cloning
+    // the Arc bumps its refcount; the capsule retains its own
+    // reference until Python GC drops it.
+    let provider_ref: &StreamProvider = unsafe { capsule.reference::<StreamProvider>() };
+    Ok(Arc::clone(provider_ref))
+}
 
 // ─── Process-wide tokio runtime ────────────────────────────────────
 
@@ -466,7 +522,7 @@ impl PyClusterManager {
         };
         let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
-            Some(callable) => build_stream_provider(callable),
+            Some(callable) => stream_provider_from_python(py, callable)?,
             None => decline_all_streams(),
         };
 
@@ -544,7 +600,7 @@ impl PyClusterManager {
         };
         let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
-            Some(callable) => build_stream_provider(callable),
+            Some(callable) => stream_provider_from_python(py, callable)?,
             None => decline_all_streams(),
         };
 

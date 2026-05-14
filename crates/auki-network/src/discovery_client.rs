@@ -71,6 +71,26 @@ pub struct ClusterEntry {
     pub last_heartbeat_ns: i64,
 }
 
+/// An infrastructure node registered with Discovery.
+///
+/// Unlike clusters (which have a Manager + membership doc), nodes are
+/// stateless advertisements — peer_id + type + multiaddrs. Used by
+/// relay servers, reconstruction servers, domain servers. Discovery
+/// sweeps nodes that haven't heartbeated in 10s, same as clusters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeEntry {
+    /// The node's libp2p peer-id (canonical string form).
+    pub peer_id: String,
+    /// Node role: `"relay"`, `"reconstruction"`, `"domain"`, etc.
+    pub node_type: String,
+    /// The node's dialable multiaddrs (canonical text form).
+    pub multiaddrs: Vec<String>,
+    /// Unix nanoseconds, Discovery's server clock at registration.
+    pub created_ns: i64,
+    /// Unix nanoseconds, last heartbeat received.
+    pub last_heartbeat_ns: i64,
+}
+
 /// Outcome of [`DiscoveryClient::create_cluster`].
 #[derive(Debug)]
 pub enum CreateClusterOutcome {
@@ -235,6 +255,97 @@ impl DiscoveryClient {
             })
         }
     }
+
+    // ── Node endpoints ───────────────────────────────────────────
+
+    /// List all infrastructure nodes registered with Discovery.
+    ///
+    /// Pass `node_type = Some("relay")` (or `"reconstruction"`,
+    /// `"domain"`, …) to filter by type; `None` returns every node.
+    pub async fn list_nodes(
+        &self,
+        node_type: Option<&str>,
+    ) -> Result<Vec<NodeEntry>, DiscoveryError> {
+        let mut url = format!("{}/nodes", self.base_url);
+        if let Some(t) = node_type {
+            url.push_str(&format!("?type={}", t));
+        }
+        let resp = self.http.get(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let list: WireListNodesResponse = resp.json().await?;
+        Ok(list.nodes)
+    }
+
+    /// Register an infrastructure node with Discovery (called at
+    /// daemon boot). Returns the newly-created [`NodeEntry`] with
+    /// server-stamped timestamps.
+    pub async fn register_node(
+        &self,
+        peer_id: &PeerId,
+        node_type: &str,
+        multiaddrs: &[Multiaddr],
+    ) -> Result<NodeEntry, DiscoveryError> {
+        let url = format!("{}/nodes", self.base_url);
+        let body = WireRegisterNodeRequest {
+            peer_id: peer_id.to_string(),
+            node_type: node_type.to_string(),
+            multiaddrs: multiaddrs.iter().map(|m| m.to_string()).collect(),
+        };
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let entry: NodeEntry = resp.json().await?;
+        Ok(entry)
+    }
+
+    /// Keep-alive ping for an infrastructure node. Call every ~3s;
+    /// Discovery sweeps nodes that haven't heartbeated in 10s.
+    pub async fn heartbeat_node(
+        &self,
+        peer_id: &PeerId,
+    ) -> Result<(), DiscoveryError> {
+        let url = format!("{}/nodes/{}/heartbeat", self.base_url, peer_id);
+        let resp = self.http.post(&url).json(&()).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            })
+        }
+    }
+
+    /// Graceful deregistration of an infrastructure node (call on
+    /// shutdown).
+    pub async fn deregister_node(
+        &self,
+        peer_id: &PeerId,
+    ) -> Result<(), DiscoveryError> {
+        let url = format!("{}/nodes/{}", self.base_url, peer_id);
+        let resp = self.http.delete(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            })
+        }
+    }
 }
 
 // ─── Wire shapes (internal) ────────────────────────────────────────
@@ -263,6 +374,18 @@ struct WireManagerRequest {
 #[derive(Debug, Serialize)]
 struct WireHeartbeatRequest {
     peer_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireListNodesResponse {
+    nodes: Vec<NodeEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireRegisterNodeRequest {
+    peer_id: String,
+    node_type: String,
+    multiaddrs: Vec<String>,
 }
 
 fn parse_wire_entry(w: WireClusterEntry) -> Result<ClusterEntry, DiscoveryError> {
@@ -402,5 +525,58 @@ mod tests {
         let req = WireHeartbeatRequest { peer_count: 7 };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"peer_count":7}"#);
+    }
+
+    fn sample_node_entry() -> NodeEntry {
+        NodeEntry {
+            peer_id: "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw".to_string(),
+            node_type: "relay".to_string(),
+            multiaddrs: vec!["/ip4/192.168.9.10/tcp/4001".to_string()],
+            created_ns: 1_715_423_400_000_000_000,
+            last_heartbeat_ns: 1_715_423_500_000_000_000,
+        }
+    }
+
+    /// Pins the wire shape for `NodeEntry`. A field rename on either
+    /// side trips this test.
+    #[test]
+    fn wire_node_entry_field_names_are_locked() {
+        let json = serde_json::to_string(&sample_node_entry()).unwrap();
+        for key in [
+            "\"peer_id\":",
+            "\"node_type\":",
+            "\"multiaddrs\":",
+            "\"created_ns\":",
+            "\"last_heartbeat_ns\":",
+        ] {
+            assert!(json.contains(key), "missing wire key {key:?} in {json}");
+        }
+    }
+
+    /// Pins the wire shape the client SENDS on `register_node`.
+    #[test]
+    fn wire_register_node_request_field_names_are_locked() {
+        let req = WireRegisterNodeRequest {
+            peer_id: "12D3KooW…".to_string(),
+            node_type: "relay".to_string(),
+            multiaddrs: vec!["/ip4/1.2.3.4/tcp/1".to_string()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"peer_id\":"), "{json}");
+        assert!(json.contains("\"node_type\":"), "{json}");
+        assert!(json.contains("\"multiaddrs\":"), "{json}");
+    }
+
+    /// `NodeEntry` round-trips through serde_json.
+    #[test]
+    fn node_entry_serde_round_trip() {
+        let entry = sample_node_entry();
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: NodeEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.peer_id, entry.peer_id);
+        assert_eq!(back.node_type, entry.node_type);
+        assert_eq!(back.multiaddrs, entry.multiaddrs);
+        assert_eq!(back.created_ns, entry.created_ns);
+        assert_eq!(back.last_heartbeat_ns, entry.last_heartbeat_ns);
     }
 }

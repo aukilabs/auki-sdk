@@ -294,6 +294,19 @@ impl ClusterManager {
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
+        // TODO(Y-T4): relay acquisition
+        // Before registering with Discovery, query list_nodes(Some("relay")).
+        // For each relay node in the list:
+        //   1. Parse relay's peer_id + multiaddrs from NodeEntry.
+        //   2. Add relay to swarm allow-list.
+        //   3. swarm.dial(relay_addr).
+        //   4. swarm.listen_on(relay_addr.with(Protocol::P2pCircuit)).
+        //   5. Wait for relay::client::Event::ReservationReqAccepted.
+        //   6. Append the circuit listen address to local_multiaddrs.
+        // This lets NAT-ed peers (Park, Booster) include a publicly-dialable
+        // circuit address in their cluster registration so peers on other
+        // networks can reach them through the relay.
+
         // 1. Atomic create on Discovery.
         match discovery
             .create_cluster(&cluster_name, &local_peer_id, &local_multiaddrs)
@@ -696,6 +709,19 @@ impl ClusterManager {
         let local_peer_id = local_identity.peer_id();
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+
+        // TODO(Y-T4): relay acquisition
+        // Before registering with Discovery, query list_nodes(Some("relay")).
+        // For each relay node in the list:
+        //   1. Parse relay's peer_id + multiaddrs from NodeEntry.
+        //   2. Add relay to swarm allow-list.
+        //   3. swarm.dial(relay_addr).
+        //   4. swarm.listen_on(relay_addr.with(Protocol::P2pCircuit)).
+        //   5. Wait for relay::client::Event::ReservationReqAccepted.
+        //   6. Append the circuit listen address to local_multiaddrs.
+        // This lets NAT-ed peers (Park, Booster) include a publicly-dialable
+        // circuit address in their cluster registration so peers on other
+        // networks can reach them through the relay.
 
         // 1. Look up the cluster in Discovery's directory.
         let clusters = discovery.list_clusters().await?;

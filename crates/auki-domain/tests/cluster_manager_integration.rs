@@ -1015,3 +1015,216 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         discovery_url()
     );
 }
+
+/// **Regression test for the QUIC-transport handoff bug** Nils reported
+/// on K1 + Park on 2026-05-14 against SDK v0.0.37 (commit `b6fab53`):
+/// Park as Manager, Booster joins, Park leaves — Booster's view freezes
+/// indefinitely because libp2p `ConnectionClosed` doesn't fire for
+/// minutes on QUIC (peer-side detection has to wait for QUIC's idle
+/// timeout when the Manager exits without a close frame).
+///
+/// Root cause: the peer-side `/auki/heartbeat/0.0.1` substream — which
+/// should detect Manager death in 1500 ms regardless of transport —
+/// never opened. When the Manager admits a peer via the join protocol,
+/// the Manager-side `ConnectionEstablished` for the joiner has ALREADY
+/// fired (the joiner dialed in to send the join handshake); at that
+/// moment the joiner wasn't in `known_peers`, so the heartbeat-spawn
+/// branch skipped. After the admit, `apply_peer_update` retroactively
+/// recognises the connection but — pre-fix — didn't catch the missed
+/// heartbeat spawn. The bug was masked over TCP (fast RST on swarm
+/// drop) but exposed over QUIC.
+///
+/// Test shape: bind A + B to QUIC loopback (not TCP — the previous
+/// integration tests use TCP and pass even pre-fix because
+/// ConnectionClosed fires within ms). With QUIC + the
+/// pre-fix-missing-heartbeat substream, drop(A) would leave B waiting
+/// for QUIC's multi-second idle timeout. Post-fix, B's election fires
+/// in <2 s via the heartbeat-timeout monitor.
+///
+/// Seeds `[81]` (Manager) and `[82]` (Joiner) reuse the existing
+/// failover-test peer-ids; we know pid_a > pid_b (Joiner is lower),
+/// which is the OPPOSITE pid ordering — exercises the path where
+/// Joiner opens the heartbeat. Sibling test below covers the other
+/// ordering (Manager lower).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_failover_over_quic_when_joiner_pid_lower() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-quic-jpidlow-it");
+
+    let id_a = PeerIdentity::from_seed(&[81u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-quic-jpidlow-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let id_b = PeerIdentity::from_seed(&[82u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-quic-jpidlow-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+
+    // Drop A (simulates Park's process exit without a clean libp2p
+    // close — QUIC peer has to detect via idle timeout OR heartbeat
+    // timeout).
+    eprintln!("A=({pid_a}) dropping over QUIC…");
+    drop(manager_a);
+
+    // Post-fix: heartbeat-timeout fires ~1.5 s; election + rotate
+    // should finish within 5 s. Pre-fix on QUIC: idle timeout is
+    // tens of seconds.
+    eprintln!("waiting up to 5s for B to take over via heartbeat-timeout…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not take over within 5s after A dropped over QUIC — \
+         heartbeat substream probably didn't open (the BUG this test pins)"
+    );
+
+    manager_b.shutdown().await.expect("B shutdown");
+    eprintln!(
+        "QUIC failover OK against {}: A={pid_a} → B={pid_b}",
+        discovery_url()
+    );
+}
+
+/// Sibling of `manager_failover_over_quic_when_joiner_pid_lower` with
+/// the OPPOSITE peer-id ordering: Manager (lower-pid) admits a Joiner
+/// with higher pid. Seeds `[91]` / `[92]` (the same pair the graceful-
+/// shutdown TCP test uses; confirmed pid_a < pid_b).
+///
+/// This is the exact peer-id ordering Nils hit on K1: Park (lower) +
+/// Booster (higher), Park leaves, Booster should take over via the
+/// heartbeat-timeout monitor regardless of QUIC's slow connection-
+/// close detection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_failover_over_quic_when_manager_pid_lower() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-quic-mpidlow-it");
+
+    let id_a = PeerIdentity::from_seed(&[91u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-quic-mpidlow-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery.clone(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let id_b = PeerIdentity::from_seed(&[92u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-quic-mpidlow-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery.clone(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+
+    // Drop A (simulates Park's process exit without a clean libp2p
+    // close).
+    eprintln!("A=({pid_a}) dropping over QUIC (Manager-pid-lower)…");
+    drop(manager_a);
+
+    eprintln!("waiting up to 5s for B to take over via heartbeat-timeout…");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not take over within 5s after A dropped over QUIC \
+         (Manager-pid-lower path — the exact scenario Nils hit on K1)"
+    );
+
+    manager_b.shutdown().await.expect("B shutdown");
+    eprintln!(
+        "QUIC failover OK against {}: A={pid_a} → B={pid_b}",
+        discovery_url()
+    );
+}

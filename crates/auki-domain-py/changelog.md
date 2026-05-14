@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 14:30 HKT, 2026
+
+**Dialogue Batch 2 (Python binding) — `ClusterManager.open_audio_stream` lands; consumers can now subscribe to audio substreams over `/auki/stream/0.1.0`.** Tracks the producer-side `cluster.AudioFrame` + `StreamDecision.accept_audio` work in the [sibling `auki-network-py` changelog](../auki-network-py/changelog.md); this entry covers the consumer-side runtime hook in `auki-domain-py`.
+
+**New `ClusterManager.open_audio_stream(peer_id, sensor_id) -> StreamSubscription` method** (in [`lib.rs`](src/lib.rs)). Same shape as the existing `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` — routes through the shared `open_typed_stream::<T>` helper with `T = RustAudioFrame`, monomorphizing the `ClusterManager::open_stream::<T>` round-trip per accepted payload type. Returns a `StreamSubscription` whose `.frames()` iterator yields `ConsumerFrame(payload=AudioFrame(bytes=...))`. Raises the same typed exception surface (`StreamDeclined`, `StreamUnreachable`, `StreamProtocolError`) as the other three open methods.
+
+**Field decoding contract.** The wire payload is opaque interleaved PCM bytes per `AudioFrame`. Sample-rate / channels / sample-format / channel-layout resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio` at handshake — the per-frame payload carries no format metadata. Consumers read `AudioFrame.bytes` and interpret with the catalog-side `SensorBody::Audio { sample_rate_hz, channels, sample_format, channel_layout }` that the producer published via `/auki/sensors/0.0.1`. Mirrors the same out-of-band-metadata pattern Steps 3 (point cloud) / 4 (audio log) of the auki-datatypes migration locked.
+
+**Internal helper docstring updated.** `open_typed_stream`'s "shared by `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream`" comment grows the fourth name. No new infrastructure; the helper is generic over `T: prost::Message + Default + Send + 'static`, which `RustAudioFrame` satisfies.
+
+**Tests.** No new Rust unit tests in `auki-domain-py` — the typed-stream surface is exercised by `auki-network-py`'s `build_stream_provider_accept_audio_maps_to_dispatch_acceptaudio` (covers the dispatch mapping) and the `auki-network` workspace `producer_accepts_and_streams_audio_frames` e2e (covers the underlying wire round-trip from [#119](https://github.com/aukilabs/auki-sdk/pull/119)). `cargo check -p auki-domain-py --tests` clean.
+
 ### Nils's claude · May 14, 12:15 HKT, 2026
 
 **Consumer half of the cross-`.so` bridge for `StreamProvider`.** `ClusterManager.{create,join}_cluster`'s internal handling of the `stream_provider=` kwarg now routes through `auki_network.cluster._build_stream_provider` (producer side, registered in `auki_network.so`) and unboxes the resulting `Arc<StreamProvider>` from a named `PyCapsule`. The direct `build_stream_provider(callable)` call inside `auki_domain.so` is gone.

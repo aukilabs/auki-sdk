@@ -19,13 +19,15 @@
 //! - `AcceptInfo(sensor_hash=..., clock_id=..., clock_hash=...)` —
 //!   accept-time metadata the producer commits to.
 //! - `JpegFrame(bytes)` / `PointCloudFrame(bytes)` /
-//!   `JointEncodersFrame(angles_rad)` — payload `T` types.
+//!   `JointEncodersFrame(angles_rad)` / `AudioFrame(bytes)` —
+//!   payload `T` types.
 //! - `ProducerFrame(timestamp_ns=..., payload=...)` — what the
 //!   source async iterator yields.
 //! - `DeclineReason.*` / `EndReason.*` — typed reason factories.
 //! - `StreamDecision.accept(info, source)` /
 //!   `accept_pointcloud(info, source)` /
 //!   `accept_joint_encoders(info, source)` /
+//!   `accept_audio(info, source)` /
 //!   `decline(reason)` — the value the provider callable returns.
 //!
 //! Consumer-side types — returned by `ClusterManager.open_*_stream`
@@ -320,9 +322,9 @@ fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
 /// - Root-level: `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`.
 /// - `cluster` submodule: every stream type (`StreamRequest`,
 ///   `AcceptInfo`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`,
-///   `ProducerFrame`, `ConsumerFrame`, `DeclineReason`, `EndReason`,
-///   `StreamDecision`, `StreamSubscription`, `FrameIterator`, plus the
-///   five `Stream*` exception classes).
+///   `AudioFrame`, `ProducerFrame`, `ConsumerFrame`, `DeclineReason`,
+///   `EndReason`, `StreamDecision`, `StreamSubscription`,
+///   `FrameIterator`, plus the five `Stream*` exception classes).
 ///
 /// Exposed as `pub` so cross-crate consumers in the workspace
 /// (notably `auki-domain-py`'s test helpers) can build a populated

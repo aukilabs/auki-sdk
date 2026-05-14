@@ -26,8 +26,9 @@ use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryClient;
 use auki_network::stream_protocol::{
-    JointEncodersFrame as RustJointEncodersFrame, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
+    AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
+    JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
+    StreamRequest as RustStreamRequest,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
@@ -740,6 +741,25 @@ impl PyClusterManager {
         })
     }
 
+    /// Open an Audio stream subscription on `peer_id` for `sensor_id`
+    /// (Dialogue Batch 1). Returns a `StreamSubscription` whose
+    /// `.frames()` iterator yields
+    /// `ConsumerFrame(payload=AudioFrame(bytes=...))` values. Sample
+    /// rate / channels / sample format / channel layout resolution
+    /// comes from `(sensor_id, sensor_hash) → SensorBody::Audio` at
+    /// handshake; the per-frame payload is opaque interleaved PCM
+    /// bytes.
+    fn open_audio_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustAudioFrame>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_audio(sub)
+        })
+    }
+
     /// Build a fresh `ParticipantInfo` snapshot. Combines the
     /// stored daemon-side identity (passed at construction via
     /// `DaemonInfo`) with SDK-tracked dynamic fields. Daemons serve
@@ -857,7 +877,8 @@ impl PyClusterManager {
     }
 
     /// Internal helper shared by `open_jpeg_stream` /
-    /// `open_pointcloud_stream` / `open_joint_encoders_stream`.
+    /// `open_pointcloud_stream` / `open_joint_encoders_stream` /
+    /// `open_audio_stream`.
     /// Each typed wrapper supplies the matching `T` plus a closure
     /// that builds a `PyStreamSubscription` from the corresponding
     /// Rust `StreamSubscription<T>`.

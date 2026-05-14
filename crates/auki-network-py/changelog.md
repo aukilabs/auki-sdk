@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 14:30 HKT, 2026
+
+**Dialogue Batch 2 (Python binding) — `cluster.AudioFrame` + `StreamDecision.accept_audio` ship; closes the Python producer-side surface for opaque-PCM substreams over `/auki/stream/0.1.0`.** Tracks the `auki-network` Rust addition of `StreamDispatch::AcceptAudio` from earlier today's [#119](https://github.com/aukilabs/auki-sdk/pull/119) (Dialogue T1). Python callers (Park's headless sidecar producer per Q2's Python-sidecar resolution, future BoosterApp consumer via `auki-domain-py`) can now build audio substreams from the same closed-set dispatch surface as JPEG / pointcloud / joint encoders.
+
+**New `cluster.AudioFrame` PyClass** (in [`stream_types.rs`](src/stream_types.rs)). Opaque-bytes payload with a `.bytes` accessor — same shape as `JpegFrame` / `PointCloudFrame`. The underlying `RustAudioFrame` field is `data` (the proto declares `bytes data = 1`, mirroring `AudioLogEntry`); the Python accessor stays `.bytes` for ergonomic symmetry with the other three payload types. `__len__`, `__repr__`, `__eq__` mirror the existing payload types.
+
+**`FramePayload`, `PyProducerFrame`, `PyConsumerFrame` extended** to carry the fourth variant. `FramePayload::from_py` accepts `AudioFrame` alongside the existing three; the rejection-path error message updates to name all four supported types. `PyProducerFrame::to_rust_audio` mirrors `to_rust_jpeg` / `to_rust_pointcloud` / `to_rust_joint_encoders`; cross-T mismatch surfaces the symmetric "AcceptAudio source yielded a ProducerFrame with X payload; the substream is mono-T — yield AudioFrame" detail.
+
+**Producer-side dispatch** (`build_stream_provider` + `DecisionInner`): new `DecisionInner::AcceptAudio { info, source }` variant; new `PyStreamDecision::accept_audio(*, info, source)` static factory; new `"accept_audio"` string discriminator on `.kind`. `python_iter_into_source_stream::<RustAudioFrame>` reuses the same async-iter bridge as the other three — no new infrastructure needed; the bridge is generic over the convert callback.
+
+**Consumer-side plumbing** (`PyStreamSubscription` + `PyFrameIterator`): new `from_rust_audio` constructor on `PyStreamSubscription`, `FrameStreamKind::Audio` variant, `FrameNext::Audio` variant + dispatch arm in `PyFrameIterator::__next__`. The runtime-side `runtime.open_audio_stream(peer_id, sensor_id)` entry point lives in `auki-domain-py` (see [its changelog](../auki-domain-py/changelog.md)) because `PyClusterManager` owns the `open_stream::<T>` round-trip.
+
+**Module registration:** `cluster.add_class::<PyAudioFrame>()` added next to the existing three. `lib.rs` module-shape docstring updated to list the fourth payload `T` and the `accept_audio` factory.
+
+**Tests.** 4 new Rust unit tests in `stream_types::tests` — `audio_frame_round_trips_through_pybytes`, `producer_frame_extracts_to_rust_audio`, `consumer_frame_constructs_from_rust_audio`, `build_stream_provider_accept_audio_maps_to_dispatch_acceptaudio`. Existing `producer_frame_rejects_unknown_payload_type` updated to assert the error message names all four supported `T`s; `stream_decision_factories_tag_correctly` extended to exercise the new factory. 3 new Python surface tests in `python_tests/test_streams.py` — `test_audio_frame_carries_bytes`, `test_producer_frame_accepts_audio_payload`; `test_stream_decision_factory_tags` extended with `accept_audio`. `cargo test -p auki-network-py`: 21 → 25 pass. `pytest python_tests/test_streams.py`: 14 → 17 surface tests pass (the 8 pre-existing `cluster.spawn` / `cluster.load_doc` round-trip tests fail with `AttributeError` against the Hagall-era surface — see the 2026-05-13 entry below: "The Python surface re-grows when the new network runtime + stream bindings land in the runtime-rebuild PR"; that rebuild is a separate follow-up, not in Dialogue T2's wire-side scope).
+
 ### Nils's claude · May 14, 12:15 HKT, 2026
 
 **Producer half of the cross-`.so` bridge for `StreamProvider`.** Adds `auki_network.cluster._build_stream_provider(callable) -> PyCapsule` and `STREAM_PROVIDER_CAPSULE_NAME` (`"auki_network_py::stream_provider::v1"`). Underscore-prefixed: SDK-internal bridge, not part of the public daemon-author surface.

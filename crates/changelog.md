@@ -6,9 +6,17 @@ Latest entry on top.
 
 ---
 
-### Nils's claude · May 14, 12:54 HKT, 2026
+### Nils's claude · May 14, 13:15 HKT, 2026
 
-**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) — Dialogue Batch 1 (SDK Rust core): new `auki.audio_stream.AudioFrame` wire type + `StreamDispatch::AcceptAudio` arm.** Fifth `StreamDispatch` variant (after `Decline` / `AcceptJpeg` / `AcceptPointCloud` / `AcceptJointEncoders`), `pump_typed::<AudioFrame>` monomorphizes automatically. New paired proto package `auki.audio_stream` mirrors the joint-encoders Step 5 precedent (separate package, byte-identical wire/disk locked by a dedicated symmetry test). Opaque-bytes-only — `sample_format` / `channels` / `sample_rate_hz` / `channel_layout` resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio` at handshake. Wire-byte identical to the on-disk `AudioLogEntry`; the new `audio_disk_wire_byte_identical` test asserts `entry.encode_to_vec() == frame.encode_to_vec()` directly. Tests: auki-datatypes 46 → 51, auki-network 104 → 108 (+9 total, including a `producer_accepts_and_streams_audio_frames` e2e integration test). Workspace-wide `cargo test --workspace --lib` clean. Tag v0.0.39 candidate.
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — Dialogue Batch 1 (SDK Rust core + Python binding) bundled: new `AudioFrame` wire type all the way through `ClusterManager.open_audio_stream`.** End-to-end SDK plumbing so Park can produce + Boosterapp can consume audio over `/auki/stream/0.1.0`, bundled into one tag because the Python half is what Boosterapp (Python sidecar) sees of this work — a Rust-only release would have stranded Boosterapp until a follow-up tag.
+
+**Rust core** (`auki-datatypes` + `auki-network`): new `auki.audio_stream` proto package paired with the existing `auki.audio` log package, byte-identical wire/disk locked by `audio_disk_wire_byte_identical`. New `StreamDispatch::AcceptAudio { info, source: SourceStream<AudioFrame> }` fifth arm; `pump_typed::<AudioFrame>` monomorphizes automatically.
+
+**Python binding** (`auki-network-py` + `auki-domain-py`): new `cluster.AudioFrame(data: bytes)` pyclass (getter is `.data` to match the proto field name), `StreamDecision.accept_audio(info, source)` producer factory, audio variants on `FramePayload` / `DecisionInner` / `FrameStreamKind` / `FrameNext`, and `ClusterManager.open_audio_stream(peer_id, sensor_id)` consumer entry point. Rides the existing PyCapsule cross-`.so` bridge from #118 unchanged.
+
+Opaque-bytes-only — `sample_format` / `channels` / `sample_rate_hz` / `channel_layout` resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio` at handshake; the wire payload itself is opaque-bytes by design.
+
+Tests: auki-datatypes 46 → 51, auki-network 104 → 108, auki-network-py 20 → 24 (+13 total Rust unit/integration tests across all crates, plus 3 new Python surface tests in `auki-network-py/python_tests/test_streams.py`). Workspace-wide `cargo test --workspace --lib` clean. **Tag v0.0.39** ships both halves so Park (Rust backend, consumes `auki-network` directly) and Boosterapp (Python sidecar, consumes via PyO3) can pin in lockstep.
 
 ### Nils's claude · May 14, 12:20 HKT, 2026
 

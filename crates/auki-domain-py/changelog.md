@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 13:15 HKT, 2026
+
+**Dialogue Batch 2 (Python binding) — `ClusterManager.open_audio_stream(peer_id, sensor_id)` consumer entry point.** Companion to [`auki-network-py` changelog 2026-05-14 13:15](../auki-network-py/changelog.md) which ships the Python `cluster.AudioFrame` pyclass + producer-side `StreamDecision.accept_audio(...)` factory. This crate exposes the consumer counterpart that Boosterapp's `auki_capture.py` calls when it wants to subscribe to a Park audio sensor.
+
+Mirrors the existing `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` methods: dispatches through the same generic `open_typed_stream::<T>` helper with `T = RustAudioFrame`, returns a `StreamSubscription` whose `.frames()` iterator yields `ConsumerFrame(payload=AudioFrame(data=...))`. Sample format / channels / sample rate / channel layout for the interleaved PCM bytes come from `(sensor_id, sensor_hash) → SensorBody::Audio` at handshake; the wire payload itself is opaque-bytes by design (locked in `auki-datatypes` by `audio_disk_wire_byte_identical`). Errors surface as the existing `StreamDeclined` / `StreamUnreachable` / `StreamProtocolError` exception classes — no new error types.
+
+**Touched**: [`src/lib.rs`](src/lib.rs) imports `RustAudioFrame` alongside the existing frame types and adds the `open_audio_stream` method on `ClusterManager`. ~15 LOC; the type-generic `open_typed_stream` helper does the actual work. No new errors or dependency changes.
+
+`cargo test -p auki-domain-py` clean; `cargo check --workspace` clean.
+
 ### Nils's claude · May 14, 12:15 HKT, 2026
 
 **Consumer half of the cross-`.so` bridge for `StreamProvider`.** `ClusterManager.{create,join}_cluster`'s internal handling of the `stream_provider=` kwarg now routes through `auki_network.cluster._build_stream_provider` (producer side, registered in `auki_network.so`) and unboxes the resulting `Arc<StreamProvider>` from a named `PyCapsule`. The direct `build_stream_provider(callable)` call inside `auki_domain.so` is gone.

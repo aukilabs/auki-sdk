@@ -594,6 +594,7 @@ mod tests {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         }
     }
 

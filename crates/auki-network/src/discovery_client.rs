@@ -236,6 +236,101 @@ impl DiscoveryClient {
             })
         }
     }
+
+    // ── Infrastructure nodes (/nodes) ─────────────────────────────────────────
+
+    /// List infrastructure nodes registered with Discovery.
+    ///
+    /// Pass `node_type = Some("relay")` to filter by type. `None` returns all
+    /// node types. Results are sorted by `created_ns` descending.
+    ///
+    /// Nodes (relay servers, reconstruction servers, domain servers, ...) differ
+    /// from clusters: they have no Manager, no membership document, and no join
+    /// protocol — they are simply stable advertisements of a peer's public
+    /// multiaddrs so ad-hoc peers can find and use them.
+    pub async fn list_nodes(
+        &self,
+        node_type: Option<&str>,
+    ) -> Result<Vec<NodeEntry>, DiscoveryError> {
+        let url = match node_type {
+            Some(t) => format!("{}/nodes?type={}", self.base_url, t),
+            None => format!("{}/nodes", self.base_url),
+        };
+        let resp = self.http.get(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let wire: WireListNodesResponse = resp.json().await?;
+        Ok(wire.nodes)
+    }
+
+    /// Register this peer as an infrastructure node with Discovery.
+    ///
+    /// Called at daemon boot. Returns 409 (mapped to `DiscoveryError::Status`)
+    /// if the same `peer_id` is already registered — callers should
+    /// `deregister_node` then retry, or log a warning and continue.
+    pub async fn register_node(
+        &self,
+        peer_id: &PeerId,
+        node_type: &str,
+        multiaddrs: &[Multiaddr],
+    ) -> Result<NodeEntry, DiscoveryError> {
+        let url = format!("{}/nodes", self.base_url);
+        let body = WireRegisterNodeRequest {
+            peer_id: peer_id.to_string(),
+            node_type: node_type.to_string(),
+            multiaddrs: multiaddrs.iter().map(|a| a.to_string()).collect(),
+        };
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        Ok(resp.json::<NodeEntry>().await?)
+    }
+
+    /// Send a keep-alive heartbeat for an infrastructure node.
+    ///
+    /// Call every ~3 seconds. Discovery sweeps entries that have not
+    /// heartbeated in 10 seconds.
+    pub async fn heartbeat_node(&self, peer_id: &PeerId) -> Result<(), DiscoveryError> {
+        let url = format!("{}/nodes/{}/heartbeat", self.base_url, peer_id);
+        let resp = self.http.post(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            })
+        }
+    }
+
+    /// Deregister an infrastructure node from Discovery.
+    ///
+    /// Call on clean shutdown. Discovery will sweep the entry after ~10 seconds
+    /// of missed heartbeats regardless, but calling this accelerates cleanup.
+    pub async fn deregister_node(&self, peer_id: &PeerId) -> Result<(), DiscoveryError> {
+        let url = format!("{}/nodes/{}", self.base_url, peer_id);
+        let resp = self.http.delete(&url).send().await?;
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            })
+        }
+    }
 }
 
 // ─── Wire shapes (internal) ────────────────────────────────────────
@@ -264,6 +359,35 @@ struct WireManagerRequest {
 #[derive(Debug, Serialize)]
 struct WireLivenessCheckRequest {
     peer_count: u32,
+}
+
+// ── /nodes wire shapes ────────────────────────────────────────────────────────
+
+/// An infrastructure node registered with Discovery.
+///
+/// Unlike clusters (which have a Manager + membership document), nodes are
+/// stateless advertisements — `peer_id + node_type + multiaddrs`. Used by
+/// relay servers, reconstruction servers, domain servers, and any other
+/// stable infrastructure that ad-hoc peers need to find at boot time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeEntry {
+    pub peer_id: String,
+    pub node_type: String,
+    pub multiaddrs: Vec<String>,
+    pub created_ns: i64,
+    pub last_heartbeat_ns: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireListNodesResponse {
+    nodes: Vec<NodeEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireRegisterNodeRequest {
+    peer_id: String,
+    node_type: String,
+    multiaddrs: Vec<String>,
 }
 
 fn parse_wire_entry(w: WireClusterEntry) -> Result<ClusterEntry, DiscoveryError> {

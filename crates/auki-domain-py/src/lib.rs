@@ -1146,6 +1146,7 @@ async fn build_identity_and_swarm(
         listen_addresses: listen_multiaddrs,
         agent_version,
         enable_relay_server: false,
+                enable_autonat_server: false,
     };
     let mut swarm = build_swarm(&identity, cfg)
         .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;

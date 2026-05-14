@@ -92,6 +92,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-mgr-it/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -199,6 +200,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-join-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -228,6 +230,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-join-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -320,6 +323,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-failover-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -346,6 +350,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-failover-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -439,6 +444,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -465,6 +471,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -496,6 +503,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-C/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -579,6 +587,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-info-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -612,6 +621,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-info-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -704,6 +714,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-sensors-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -730,6 +741,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-sensors-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -810,6 +822,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-arc-shutdown-it/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -930,6 +943,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-graceful-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -954,6 +968,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-graceful-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1060,6 +1075,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-jpidlow-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1085,6 +1101,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-jpidlow-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1158,6 +1175,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-mpidlow-it-A/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1183,6 +1201,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-mpidlow-it-B/0".into(),
             enable_relay_server: false,
+                enable_autonat_server: false,
         },
     )
     .unwrap();

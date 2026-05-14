@@ -74,7 +74,7 @@ use libp2p::{
     swarm::{
         DialError, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts,
     },
-    tcp, yamux,
+    tcp, yamux, autonat,
 };
 use libp2p_allow_block_list as allow_block_list;
 use std::time::Duration;
@@ -127,6 +127,14 @@ pub struct Behaviour {
     /// `libp2p_stream::Control::open_stream`. See
     /// [`crate::stream_protocol`].
     pub stream: libp2p_stream::Behaviour,
+    /// AutoNAT v2 client — probes whether our listen addresses are publicly
+    /// reachable. Enabled on all consumer daemons (Park, Booster, etc.).
+    /// The relay node disables the client and enables the server instead.
+    pub autonat_client: Toggle<autonat::v2::client::Behaviour>,
+    /// AutoNAT v2 server — answers reachability probes from other peers.
+    /// Only enabled when `enable_autonat_server` is true (i.e. on the dedicated
+    /// relay node, which has a public IP and can confirm reachability).
+    pub autonat_server: Toggle<autonat::v2::server::Behaviour>,
 }
 
 /// Per-swarm configuration.
@@ -147,6 +155,11 @@ pub struct SwarmConfig {
     /// strings advertised in a `ReachabilityRecord` are independent —
     /// both must line up for the peer to actually serve the capability.
     pub enable_relay_server: bool,
+    /// Enable AutoNAT v2 server behaviour (answers probe requests from other
+    /// peers). Should be true on nodes with public IPs (relay, reconstruction
+    /// server). Consumer daemons (Park, Booster) leave this false and use the
+    /// client to probe their own reachability.
+    pub enable_autonat_server: bool,
 }
 
 impl Default for SwarmConfig {
@@ -155,6 +168,7 @@ impl Default for SwarmConfig {
             listen_addresses: vec![],
             agent_version: format!("auki-sdk/{}", env!("CARGO_PKG_VERSION")),
             enable_relay_server: false,
+            enable_autonat_server: false,
         }
     }
 }
@@ -186,6 +200,7 @@ pub fn build_swarm(
 ) -> Result<Swarm<Behaviour>, BuildError> {
     let agent_version = config.agent_version;
     let enable_relay_server = config.enable_relay_server;
+    let enable_autonat_server = config.enable_autonat_server;
     let local_pid = identity.peer_id();
 
     let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
@@ -219,6 +234,15 @@ pub fn build_swarm(
                 relay::Behaviour::new(local_pid, relay::Config::default())
             })),
             stream: libp2p_stream::Behaviour::new(),
+            autonat_client: Toggle::from((!enable_relay_server).then(|| {
+                autonat::v2::client::Behaviour::new(
+                    rand::rngs::OsRng,
+                    autonat::v2::client::Config::default(),
+                )
+            })),
+            autonat_server: Toggle::from(enable_autonat_server.then(|| {
+                autonat::v2::server::Behaviour::new(rand::rngs::OsRng)
+            })),
         })
         .expect("behaviour construction is infallible")
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_TIMEOUT))
@@ -399,6 +423,7 @@ mod tests {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: agent_version.into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         }
     }
 
@@ -579,6 +604,7 @@ mod tests {
                 listen_addresses: vec![],
                 agent_version: "relay/0".into(),
                 enable_relay_server: true,
+                enable_autonat_server: true,
             },
         )
         .expect("build with relay server enabled");
@@ -595,6 +621,7 @@ mod tests {
                 listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
                 agent_version: "relay/0".into(),
                 enable_relay_server: true,
+                enable_autonat_server: true,
             },
         )
         .unwrap();
@@ -605,6 +632,7 @@ mod tests {
                 listen_addresses: vec![],
                 agent_version: "client/0".into(),
                 enable_relay_server: false,
+                enable_autonat_server: false,
             },
         )
         .unwrap();

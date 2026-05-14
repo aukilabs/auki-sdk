@@ -6,6 +6,24 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 13:15 HKT, 2026
+
+**Dialogue Batch 2 (Python binding) — `cluster.AudioFrame` pyclass + `StreamDecision.accept_audio(info, source)` factory + producer/consumer dispatch arms.** Sibling to [auki-sdk#119](https://github.com/aukilabs/auki-sdk/pull/119) (Dialogue Batch 1, merged 2026-05-14 12:54 HKT) which shipped the wire-side `auki.audio_stream.AudioFrame` + `StreamDispatch::AcceptAudio`. Lands right behind it as a Python-only follow-up — see [`auki-network` changelog 2026-05-14 12:54](../auki-network/changelog.md) for the Rust core's rationale. Closes the Python-side half of the [Dialogue quest](https://www.notion.so/3595c8e965928022bb8ecb9a1b0fa46c)'s SDK work so Boosterapp's `auki_capture.py` can subscribe to / serve audio over `/auki/stream/0.1.0`.
+
+**New surface, mirroring the existing `JpegFrame` / `PointCloudFrame` / `JointEncodersFrame` pattern across:**
+
+- `cluster.AudioFrame(data: bytes)` pyclass — opaque-`bytes`-property shape; getter is `.data` (not `.bytes`) to match the underlying `auki.audio_stream.AudioFrame { bytes data = 1 }` proto field name. Same `__len__` / `__repr__` / `__eq__` shape as siblings.
+- `StreamDecision.accept_audio(*, info, source)` static factory — fourth Accept variant on `PyStreamDecision`. Source iterator must yield `ProducerFrame(payload=AudioFrame(data))`.
+- `ProducerFrame(payload=…)` accepts `AudioFrame` alongside the existing three. Mismatched payload on `to_rust_audio` surfaces a "AcceptAudio source yielded ProducerFrame with X payload" error mirroring the existing arms — the source-stream pump turns it into `EndReason::ProducerError` on the wire rather than ending silently.
+- `ConsumerFrame.payload` surfaces an `AudioFrame` when the producer accepted with `accept_audio(...)`. Each substream stays mono-`T` end-to-end.
+- New `FrameStreamKind::Audio` + `FrameNext::Audio` enum arms inside the consumer-side `FrameIterator` — the `__next__` blocking dispatch now monomorphizes over four `T`s.
+- The `build_stream_provider` bridge gains a fifth dispatch arm mapping `DecisionInner::AcceptAudio` → `RustStreamDispatch::AcceptAudio`. Existing PyCapsule cross-`.so` plumbing (#118, 2026-05-14 12:15) is unchanged — the new variant rides through it.
+- `cluster.add_class::<PyAudioFrame>` added to the module-registration block so `auki_network.cluster.AudioFrame` is importable.
+
+**Tests**: auki-network-py 20 → 24 (+4 — `audio_frame_round_trips_through_pybytes`, `producer_frame_extracts_to_rust_audio`, `consumer_frame_constructs_from_rust_audio`, plus `stream_decision_factories_tag_correctly` extended with the `accept_audio` arm + post-take `consumed` check; `producer_frame_to_rust_errors_on_mismatched_payload` + `producer_frame_rejects_unknown_payload_type` also extended with AudioFrame cases). Three new Python surface tests in [`python_tests/test_streams.py`](python_tests/test_streams.py): `test_audio_frame_carries_bytes`, `test_producer_frame_accepts_audio_payload`, and `test_stream_decision_factory_tags` extended with the `accept_audio` factory. `cargo test -p auki-network-py` clean (24 pass). Python tests covered by maturin + pytest at PR review time.
+
+**Cross-referenced entries** in this sibling PR: the wire-side `AudioFrame` proto + `StreamDispatch::AcceptAudio` variant shipped in [#119](https://github.com/aukilabs/auki-sdk/pull/119) (see [`auki-network`](../auki-network/changelog.md) + [`auki-datatypes`](../auki-datatypes/changelog.md) changelogs). The consumer entry point `ClusterManager.open_audio_stream` lives in [`auki-domain-py`](../auki-domain-py/changelog.md) and lands in this PR.
+
 ### Nils's claude · May 14, 12:15 HKT, 2026
 
 **Producer half of the cross-`.so` bridge for `StreamProvider`.** Adds `auki_network.cluster._build_stream_provider(callable) -> PyCapsule` and `STREAM_PROVIDER_CAPSULE_NAME` (`"auki_network_py::stream_provider::v1"`). Underscore-prefixed: SDK-internal bridge, not part of the public daemon-author surface.

@@ -26,8 +26,9 @@ use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryClient;
 use auki_network::stream_protocol::{
-    JointEncodersFrame as RustJointEncodersFrame, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamRequest as RustStreamRequest,
+    AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
+    JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
+    StreamRequest as RustStreamRequest,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
@@ -737,6 +738,25 @@ impl PyClusterManager {
     ) -> PyResult<PyStreamSubscription> {
         self.open_typed_stream::<RustJointEncodersFrame>(py, peer_id, sensor_id, |sub| {
             PyStreamSubscription::from_rust_joint_encoders(sub)
+        })
+    }
+
+    /// Open an Audio stream subscription on `peer_id` for `sensor_id`
+    /// (Dialogue Batch 1). Returns a `StreamSubscription` whose
+    /// `.frames()` iterator yields
+    /// `ConsumerFrame(payload=AudioFrame(data=...))`. Sample format,
+    /// channels, sample rate, and channel layout for the PCM bytes are
+    /// resolved out-of-band via `(sensor_id, sensor_hash) →
+    /// SensorBody::Audio` at handshake; the wire payload is
+    /// opaque-bytes.
+    fn open_audio_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustAudioFrame>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_audio(sub)
         })
     }
 

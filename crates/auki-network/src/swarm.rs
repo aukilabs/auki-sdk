@@ -336,6 +336,49 @@ pub async fn collect_routable_listen_addrs(
     collected
 }
 
+/// Resolve the set of multiaddrs a daemon should advertise to Discovery
+/// as its dialable surface. Single resolution path for both auto-detection
+/// and operator-override, so Park, Boosterapp, and any future SDK
+/// consumer take the same path (Hagall constraint #5).
+///
+/// Resolution:
+/// 1. If `operator_override` is `Some` and non-empty → use it verbatim,
+///    skip swarm-event collection entirely. Replace-semantics: the SDK
+///    does NOT mix operator addresses with auto-detected ones — if the
+///    operator passed `--external-addresses`, they know what they're
+///    doing. Loopback / unspecified / link-local addresses in the
+///    override pass through unchecked: operators may have a legitimate
+///    reason (local-only dev session, hand-curated address set).
+/// 2. Else → drive the swarm via [`collect_routable_listen_addrs`] for
+///    `window`, collect every routable `NewListenAddr` event.
+///
+/// Both `None` and `Some(&[])` route to auto-detection: an empty
+/// override is treated as "no override" rather than "advertise nothing,"
+/// matching the CLI convention where `--external-addresses` with no
+/// values is the same as omitting the flag.
+///
+/// Returns whatever resolution produced — possibly empty (auto-detection
+/// found nothing routable on this host, or the operator's override
+/// resolution was somehow empty by the time it landed here). Caller
+/// decides whether to error, retry, or fall back.
+///
+/// **Out of scope (parking-lot for v2, see `parking_lot.md`):** SDK-side
+/// relay reservation. Today, operators behind NAT/firewall who need
+/// libp2p Circuit Relay v2 hand-assemble the relay multiaddr and pass
+/// it as `operator_override` themselves; the SDK doesn't yet provide a
+/// `reserve_relay_listen` helper to walk the dial + reserve + listen
+/// dance. v1 Hagall demo is LAN-only — this helper is sufficient.
+pub async fn resolve_advertise_multiaddrs(
+    swarm: &mut Swarm<Behaviour>,
+    operator_override: Option<&[Multiaddr]>,
+    window: std::time::Duration,
+) -> Vec<Multiaddr> {
+    match operator_override {
+        Some(addrs) if !addrs.is_empty() => addrs.to_vec(),
+        _ => collect_routable_listen_addrs(swarm, window).await,
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -769,5 +812,115 @@ mod tests {
                 "collect surfaced an un-routable address: {addr}"
             );
         }
+    }
+
+    // ─── resolve_advertise_multiaddrs ─────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_uses_operator_override_verbatim() {
+        // Operator passed an explicit set — the helper returns those
+        // verbatim and does NOT drive the swarm. Override contains a
+        // loopback address on purpose: the operator may have a reason
+        // (local dev, hand-curated set), and the SDK does not second-
+        // guess them.
+        let identity = PeerIdentity::from_seed(&[51u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse().unwrap()],
+                ..test_tcp_config("resolve-override/0")
+            },
+        )
+        .unwrap();
+        let lan: Multiaddr = "/ip4/192.168.9.5/tcp/4001".parse().unwrap();
+        let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let override_addrs = vec![lan.clone(), loopback.clone()];
+        let got = resolve_advertise_multiaddrs(
+            &mut swarm,
+            Some(&override_addrs),
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(
+            got,
+            vec![lan, loopback],
+            "override is replace-semantics and passes loopback through unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_with_none_falls_through_to_auto_detection() {
+        // No override — helper drives the swarm and applies the routable
+        // classifier. Anything returned must pass `is_routable_multiaddr`.
+        let identity = PeerIdentity::from_seed(&[52u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse().unwrap()],
+                ..test_tcp_config("resolve-none/0")
+            },
+        )
+        .unwrap();
+        let got =
+            resolve_advertise_multiaddrs(&mut swarm, None, Duration::from_secs(1)).await;
+        for addr in &got {
+            assert!(
+                is_routable_multiaddr(addr),
+                "auto-detection surfaced an un-routable address: {addr}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_with_empty_override_falls_through_to_auto_detection() {
+        // `Some(&[])` is treated as "no override" — matches the CLI
+        // convention where `--external-addresses` with no values is the
+        // same as omitting the flag. Same shape as the None case.
+        let identity = PeerIdentity::from_seed(&[53u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..test_tcp_config("resolve-empty-override/0")
+            },
+        )
+        .unwrap();
+        let got = resolve_advertise_multiaddrs(
+            &mut swarm,
+            Some(&[]),
+            Duration::from_millis(500),
+        )
+        .await;
+        // Loopback-only bind → auto-detection returns empty.
+        assert!(
+            got.is_empty(),
+            "empty override + loopback-only bind → empty result; got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_override_includes_dns_relay_multiaddr() {
+        // Operator-supplied relay-mediated multiaddr (the v1 escape
+        // hatch for NAT-traversal until the SDK ships a v2 relay
+        // helper). The helper passes it through verbatim — no validation,
+        // no rewriting.
+        let identity = PeerIdentity::from_seed(&[54u8; 32]);
+        let mut swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..test_tcp_config("resolve-relay/0")
+            },
+        )
+        .unwrap();
+        let relay: Multiaddr = "/dns4/relay.example.com/tcp/4001".parse().unwrap();
+        let override_addrs = vec![relay.clone()];
+        let got = resolve_advertise_multiaddrs(
+            &mut swarm,
+            Some(&override_addrs),
+            Duration::from_millis(500),
+        )
+        .await;
+        assert_eq!(got, vec![relay]);
     }
 }

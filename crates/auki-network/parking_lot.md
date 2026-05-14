@@ -2,6 +2,28 @@
 
 ---
 
+## SDK relay-reservation helper — v2 story for NAT/firewalled daemons _(filed by Nils's claude, 2026-05-14)_
+
+`auki_network::swarm::resolve_advertise_multiaddrs` shipped 2026-05-14 for v1 (LAN-only Hagall demo, plus operator-override for multi-NIC / VPN / container-host ambiguity). It does NOT solve the dual-firewalled case where neither peer has a public IP — those daemons need libp2p Circuit Relay v2: dial a relay → reserve a slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (replace-semantics override). v2 should provide an SDK helper that owns the dial + reserve + listen dance and surfaces the resolved circuit address back to the caller, so daemons don't reimplement it.
+
+Open design questions to land BEFORE the v2 helper ships:
+
+1. **Helper shape.** Narrow `reserve_relay_listen(swarm, relay_peer_id, relay_multiaddrs, timeout) -> Result<Multiaddr, RelayReservationError>` that returns just the resolved circuit multiaddr — caller threads it into `resolve_advertise_multiaddrs` as the override? Or a wider helper that owns the whole "relay-mode swarm setup" (build_swarm + reserve + listen + advertise) so the daemon flow stays a single call? Narrow leans cleaner; wider is more operator-friendly. Lean narrow ~60%, revisit when Park / Boosterapp adoption surfaces the actual ergonomics.
+
+2. **Default relay address.** Does the SDK ship a baked-in default (Auki-operated relay at a well-known address), or is the relay address always operator-supplied? If baked in: who runs the relay, where (LAN-internal `aukilabs/relay`? cloud-hosted?), with what SLA? Note an `aukilabs/relay` infrastructure-node design already exists per the swarm module's `enable_relay_server` toggle — pairs with this question.
+
+3. **Discovery as relay directory.** Does Discovery distribute the relay list (extending today's "clusters + manager addresses" surface), or is relay discovery strictly out-of-band (CLI flag / env / config file)? Upside: one bootstrap channel + one configuration knob for operators. Downside: Discovery now owns a second resource type (relays alongside clusters), which adds API surface and shifts Discovery from "stateless directory of clusters" toward "general bootstrap service." Lean out-of-band for now (matches how `--discovery-url` itself is operator-supplied today); revisit if operator-UX friction surfaces it.
+
+4. **Multi-relay redundancy.** If a daemon is configured with multiple relays for failover, does the SDK manage the reservation across all of them (try-each-on-disconnect), or is the operator responsible (pass N circuit multiaddrs as `external_addresses`, libp2p's transport picks one at dial time)? Lean operator-managed for v2; SDK-managed failover is a separate v3 task with its own state-machine complexity.
+
+5. **DCUtR coupling.** Existing parking-lot item "DCUtR / hole-punching — when?" below names DCUtR as not-in-M1. The relay-reservation helper and DCUtR are mutually orthogonal (you can ship reservation without DCUtR — traffic just stays on the relay) but they're often deployed together. Land them as one v2 milestone or sequence them? Lean sequence: ship relay-reservation first because it's the load-bearing primitive (without it, dual-NAT daemons can't communicate at all); DCUtR is an optimization that earns its weight when relay traffic volume hurts.
+
+6. **Operator UX shape.** Boosterapp (headless): another CLI flag (`--relay-multiaddrs <addr>...`)? Park (GUI): an "Advanced settings" panel where the operator pastes a relay multiaddr? Or `external_addresses` continues to subsume both (operator pastes a fully-assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` for v1, and v2 adds dedicated flags when the dial-reserve-listen happens inside the SDK)? Lean `external_addresses`-as-escape-hatch for v1 (matches what's shipped today); dedicated `--relay-multiaddrs` for v2 when the SDK helper lands and the operator no longer needs to assemble the circuit address by hand.
+
+Scope landing trigger for the v2 work: when (a) the v1 Hagall demo is end-to-end, and (b) Park-from-home or a similar two-network scenario earns the engineering. Reid parking-lot 3c ("Manual peer-id paste for Park-from-home") already names that scenario; this is its SDK-side counterpart.
+
+---
+
 ## Stream-runtime integration tests deleted in the network_runtime PR _(filed by Nils's claude, 2026-05-13)_
 
 When `ClusterRuntime` was replaced by `NetworkRuntime` (Greenland → demo-spec rewrite), the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved (`ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)` → `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)`). The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:

@@ -420,9 +420,17 @@ impl PyClusterManager {
     ///   `http://192.168.9.130:8080`).
     /// - `listen_addresses`: libp2p multiaddrs the swarm will listen
     ///   on (e.g. `["/ip4/0.0.0.0/tcp/0"]`). The runtime listens
-    ///   here; the daemon advertises these to Discovery.
+    ///   here; unless `external_addresses` is set, the daemon
+    ///   advertises the auto-detected routable subset to Discovery.
     /// - `agent_version`: `agent_version` string in libp2p
     ///   `identify` exchanges. Convention `"<app>/<version>"`.
+    /// - `external_addresses`: optional operator override. If
+    ///   provided and non-empty, the daemon advertises EXACTLY these
+    ///   addresses to Discovery, skipping auto-detection. Use to
+    ///   resolve multi-NIC ambiguity, container / VM host mappings,
+    ///   or to advertise a relay-mediated multiaddr in v1 (until the
+    ///   SDK ships a v2 relay-reservation helper). Replace-semantics:
+    ///   the SDK does NOT mix these with auto-detected addresses.
     #[staticmethod]
     #[pyo3(signature = (
         wallet_seed,
@@ -432,6 +440,7 @@ impl PyClusterManager {
         agent_version,
         daemon_info,
         stream_provider = None,
+        external_addresses = None,
     ))]
     fn create_cluster(
         py: Python<'_>,
@@ -442,6 +451,7 @@ impl PyClusterManager {
         agent_version: &str,
         daemon_info: &PyDaemonInfo,
         stream_provider: Option<Py<PyAny>>,
+        external_addresses: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
             .try_into()
@@ -450,6 +460,10 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let external_multiaddrs = match external_addresses {
+            Some(addrs) => Some(parse_multiaddrs(&addrs)?),
+            None => None,
+        };
         let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
             Some(callable) => build_stream_provider(callable),
@@ -458,8 +472,13 @@ impl PyClusterManager {
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let (identity, swarm, advertise_multiaddrs) =
-                    build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
+                let (identity, swarm, advertise_multiaddrs) = build_identity_and_swarm(
+                    &seed,
+                    listen_multiaddrs,
+                    agent_version,
+                    external_multiaddrs.as_deref(),
+                )
+                .await?;
 
                 let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::create_cluster(
@@ -487,8 +506,9 @@ impl PyClusterManager {
     /// request, parses the Manager's gossiped membership, and
     /// returns a `ClusterManager` with `is_manager = False`.
     ///
-    /// Same kwargs as `create_cluster`. The cluster MUST already
-    /// exist on Discovery; otherwise raises `RuntimeError`.
+    /// Same kwargs as `create_cluster` (including the
+    /// `external_addresses` operator override). The cluster MUST
+    /// already exist on Discovery; otherwise raises `RuntimeError`.
     #[staticmethod]
     #[pyo3(signature = (
         wallet_seed,
@@ -498,6 +518,7 @@ impl PyClusterManager {
         agent_version,
         daemon_info,
         stream_provider = None,
+        external_addresses = None,
     ))]
     fn join_cluster(
         py: Python<'_>,
@@ -508,6 +529,7 @@ impl PyClusterManager {
         agent_version: &str,
         daemon_info: &PyDaemonInfo,
         stream_provider: Option<Py<PyAny>>,
+        external_addresses: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let seed: [u8; 32] = wallet_seed
             .try_into()
@@ -516,6 +538,10 @@ impl PyClusterManager {
         let discovery_url = discovery_url.to_string();
         let agent_version = agent_version.to_string();
         let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let external_multiaddrs = match external_addresses {
+            Some(addrs) => Some(parse_multiaddrs(&addrs)?),
+            None => None,
+        };
         let daemon = daemon_info.inner.clone();
         let provider: StreamProvider = match stream_provider {
             Some(callable) => build_stream_provider(callable),
@@ -524,8 +550,13 @@ impl PyClusterManager {
 
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let (identity, swarm, advertise_multiaddrs) =
-                    build_identity_and_swarm(&seed, listen_multiaddrs, agent_version).await?;
+                let (identity, swarm, advertise_multiaddrs) = build_identity_and_swarm(
+                    &seed,
+                    listen_multiaddrs,
+                    agent_version,
+                    external_multiaddrs.as_deref(),
+                )
+                .await?;
 
                 let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::join_cluster(
@@ -835,12 +866,13 @@ async fn build_identity_and_swarm(
     seed: &[u8; 32],
     listen_multiaddrs: Vec<Multiaddr>,
     agent_version: String,
+    operator_override: Option<&[Multiaddr]>,
 ) -> PyResult<(
     PeerIdentity,
     auki_network::Swarm<auki_network::swarm::Behaviour>,
     Vec<Multiaddr>,
 )> {
-    use auki_network::swarm::collect_routable_listen_addrs;
+    use auki_network::swarm::resolve_advertise_multiaddrs;
     use std::time::Duration;
     let wallet = Wallet::from_seed(seed);
     let identity = PeerIdentity::from_wallet(&wallet);
@@ -851,17 +883,19 @@ async fn build_identity_and_swarm(
     };
     let mut swarm = build_swarm(&identity, cfg)
         .map_err(|e| PyOSError::new_err(format!("build_swarm failed: {e}")))?;
-    // Drive the swarm for ~2 s to collect every NewListenAddr libp2p
-    // emits for the bind. When the daemon binds to /ip4/0.0.0.0/...,
-    // libp2p enumerates every interface in non-deterministic order;
-    // the helper drops loopback / link-local / unspecified per
-    // `is_routable_multiaddr`. Anything left is what the daemon
-    // advertises to Discovery as its dialable multiaddrs.
-    let advertise = collect_routable_listen_addrs(&mut swarm, Duration::from_secs(2)).await;
+    // Single SDK helper that subsumes both auto-detection and
+    // operator-override resolution. If the caller passed
+    // `external_addresses`, those go to Discovery verbatim and the swarm
+    // event loop is skipped. Otherwise, drive the swarm for ~2 s to
+    // collect every routable NewListenAddr libp2p emits (loopback /
+    // link-local / unspecified filtered).
+    let advertise =
+        resolve_advertise_multiaddrs(&mut swarm, operator_override, Duration::from_secs(2)).await;
     if advertise.is_empty() {
         return Err(PyOSError::new_err(
-            "swarm produced no routable listen addresses within 2s — bind to \
-             /ip4/0.0.0.0/... and ensure the host has a non-loopback interface",
+            "no advertise multiaddrs resolved — pass `external_addresses=[...]` \
+             explicitly, or bind to /ip4/0.0.0.0/... on a host with at least one \
+             non-loopback interface",
         ));
     }
     Ok((identity, swarm, advertise))

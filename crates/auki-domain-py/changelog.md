@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:05 HKT, 2026
+
+**`ClusterManager.create_cluster` + `.join_cluster` gain an `external_addresses: Optional[list[str]] = None` kwarg** — operator override for which multiaddrs the daemon advertises to Discovery. Replace-semantics: if `external_addresses` is provided and non-empty, the SDK passes those verbatim to Discovery and skips auto-detection; if `None` or `[]`, falls through to today's `collect_routable_listen_addrs` swarm-driven detection. Threaded through `build_identity_and_swarm`, which now calls the new SDK helper `auki_network::swarm::resolve_advertise_multiaddrs` (one function for both paths — see [`auki-network` changelog 2026-05-14 11:05](../auki-network/changelog.md)).
+
+**Boosterapp impact:** the headless Python sidecar's `--external-addresses` CLI flag — previously a Greenland-era kwarg with no path through the Hagall code — becomes a one-line pass-through to `external_addresses=...` once Boosterapp's BA-T1 migrates. Resolves the multi-NIC / VPN / container-host ambiguity that the SDK couldn't address with auto-detection alone (host has a LAN interface AND a VPN tunnel interface, both pass `is_routable_multiaddr`, only one is reachable from the demo network — operator picks).
+
+Empty-result error message updated to surface the override as the recommended fix: "no advertise multiaddrs resolved — pass `external_addresses=[...]` explicitly, or bind to `/ip4/0.0.0.0/...` on a host with at least one non-loopback interface." Cleaner than the prior "swarm did not produce a listen address" line.
+
+No new Python pyclasses. Pure kwarg addition; existing callers continue to work unchanged. Boosterapp + Park rebuild against the resulting SDK release to pick up the kwarg.
+
 ### Nils's claude · May 13, 19:07 HKT, 2026
 
 **`build_identity_and_swarm` adopts `auki_network::swarm::collect_routable_listen_addrs` — Boosterapp's headless Python path stops advertising loopback to Discovery.** Old shape grabbed the first `NewListenAddr` event libp2p emitted and passed `vec![that_one]` as the daemon's `manager_multiaddrs` to `ClusterManager::create_cluster` / `.join_cluster`. When the daemon bound to `/ip4/0.0.0.0/...` (which is how Boosterapp's K1 systemd unit runs), libp2p emits one event per interface — loopback first, then every host NIC, in non-deterministic order — so the daemon registered `/ip4/127.0.0.1/tcp/<port>` with Discovery and a Booster on another K1 had no dialable path. New shape calls the SDK helper with a 2 s window, collects every routable listen address libp2p emits, and passes all of them through. Empty-result surfaces as a typed `PyOSError` with an actionable message ("bind to /ip4/0.0.0.0/... and ensure the host has a non-loopback interface") — replaces the misleading "swarm did not produce a listen address within 5s" line, which fired even when the bind succeeded but only loopback existed. Private `wait_for_listen_addr` helper deleted (~16 LOC; the SDK now owns this).

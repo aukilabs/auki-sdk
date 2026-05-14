@@ -750,7 +750,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
     let b_catalog = vec![SensorEntry {
         sensor_id: "K1-FAKE/head_cam".into(),
         sensor_hash: "abc".into(),
-        kind: "camera".into(),
+        kind: "rgb_camera".into(),
     }];
     manager_b.set_sensor_catalog_provider(Arc::new(FixedCatalog(b_catalog.clone())));
 

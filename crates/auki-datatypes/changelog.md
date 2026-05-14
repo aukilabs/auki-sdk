@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:00 HKT, 2026
+
+**Doc-comment + proto-comment touch-ups for upstream `SensorBody::Microphone` → `SensorBody::Audio` rename.** Companion to [`auki-registry` changelog 2026-05-14 11:00](../auki-registry/changelog.md). No prost wire change (the `auki.audio` package + `AudioLogEntry { bytes data = 1; }` message are unchanged); only the cross-references that named the *registry* body type flip. Touched: [`README.md`](README.md) Step 4 bullet, [`src/readme.md`](src/readme.md) audio entry, [`src/lib.rs`](src/lib.rs) `auki.audio` module doc-comment, [`proto/audio.proto`](proto/audio.proto) header comment, [`proto/detection.proto`](proto/detection.proto) analog reference, [`parking_lot.md`](parking_lot.md) three structured-vs-opaque-bytes references.
+
 ### broodsugar's claude · May 9, 13:05 HKT, 2026
 
 **[`parking_lot.md`](parking_lot.md): structured prost fields vs opaque bytes — when does each apply?** Filed after [#77](https://github.com/aukilabs/auki-sdk/pull/77) (JointEncoders) made the split precedent visible. Lists the seven on-disk types in two buckets — opaque-bytes (`PointCloudLogEntry`, `AudioLogEntry`, `DetectionLogEntry`) and structured (`PinholeCameraLogEntry`, `SpatialTransform`, `TimeTransformEntry`, `JointEncodersLogEntry`) — and proposes a working principle: **structured if** the bytes have a single canonical interpretation across all instances of the sensor type; **opaque-bytes if** the bytes have multiple possible layouts the producer must specify or the schema is owned downstream. Forward path: pin in [`src/readme.md`](src/readme.md) when a future payload-type design needs to reference it. Doc-only.

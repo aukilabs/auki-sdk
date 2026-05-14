@@ -95,11 +95,21 @@ pub struct SensorEntry {
     /// consumer) to fetch the full `SensorRegistryEntry` from
     /// `auki-registry` separately.
     pub sensor_hash: String,
-    /// One of `"camera"`, `"pointcloud"`, `"pose"`, `"audio"`,
-    /// `"other"`. Lets consumers pick a tile kind (image renderer
-    /// vs. point-cloud renderer vs. text readout) without parsing
-    /// the sensor_id. New kinds may appear over time; consumers
-    /// should treat unrecognised kinds as `"other"`.
+    /// Sensor kind — the `#[serde(tag = "type")]` value from
+    /// `auki_registry::SensorBody` flowed through verbatim. Current
+    /// SensorBody variants emit `"rgb_camera"`, `"point_cloud"`,
+    /// `"joint_encoders"`, `"audio"`. Open string by contract:
+    /// new SensorBody variants flow through without a wire bump, and
+    /// consumers MUST handle unrecognised kinds gracefully (e.g. a
+    /// generic-tile fallback) rather than reject. For tile-renderer
+    /// dispatch in operator UIs — Park's session viewer uses it to
+    /// pick a JPEG renderer vs. point-cloud renderer vs.
+    /// joint-encoder gauge.
+    ///
+    /// Renaming a `SensorBody` variant is a coordinated registry +
+    /// sensors-protocol wire break (the tag flows verbatim through
+    /// this field); the four current tags above are pinned to keep
+    /// such a rename loud.
     pub kind: String,
 }
 
@@ -239,12 +249,12 @@ mod tests {
                 SensorEntry {
                     sensor_id: "K1-LIVE01/head_left_cam".into(),
                     sensor_hash: "abc123".into(),
-                    kind: "camera".into(),
+                    kind: "rgb_camera".into(),
                 },
                 SensorEntry {
                     sensor_id: "K1-LIVE01/lidar_top".into(),
                     sensor_hash: "".into(),
-                    kind: "pointcloud".into(),
+                    kind: "point_cloud".into(),
                 },
             ],
         };

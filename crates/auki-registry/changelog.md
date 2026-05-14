@@ -6,6 +6,23 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 14, 11:00 HKT, 2026
+
+**`SensorBody::Microphone` renamed to `SensorBody::Audio`** — signal-type naming for consistency with `PointCloud` / `JointEncoders` (and the `SensorEntry.kind` open-string contract pinned 2026-05-14 in `auki-network`). Variant tag flips `"microphone"` → `"audio"`; the struct rename is total (`pub struct Microphone` → `pub struct Audio`); body fields unchanged (`sample_rate_hz`, `channels`, `sample_format`, `channel_layout`). All in-crate call sites and tests updated.
+
+**This is the first exercise of the "coordinated `SensorBody` rename = wire break" path** that `auki-network::sensors_protocol`'s `SensorEntry.kind` doc-comment warns about. The wire-tag is `"audio"` everywhere now — on-disk `SensorRegistryEntry`s written before this rename will fail to deserialize against the renamed enum (`"type":"microphone"` no longer matches any variant). v1 demo land is fine (no persistent audio registry on K1s yet); future archaeologists with pre-rename logs can either replay through a one-off renamer or recognize that pre-2026-05-14 logs predate the Hagall principle ("wire formats may break").
+
+**Locked-vector recompute.** `m1_audio_entry()` (was `m1_microphone_entry()`) — locked canonical JSON flips one field:
+
+- Pre-rename: `{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"microphone"}`
+- Post-rename: `{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"audio"}`
+
+XXH3-128: `6e0a195364866f18834d2db8e2a0699f` → **`bc4a0e690f1149c4927ea98c96ead65a`**. Locked in `audio_entry_hash_is_locked` test. Any cross-language reader (Park's browser decoder, future Sentinel) needs the new hash.
+
+**Doc propagation:** [`README.md`](README.md) type listing + Audio section; [`src/readme.md`](src/readme.md) renamed `### SensorBody::Microphone` to `### SensorBody::Audio`; [`parking_lot.md`](parking_lot.md) JointEncoders-minimalism entry's "`Microphone::channels`" analog → "`Audio::channels`"; sibling [`auki-datatypes`](../auki-datatypes) ([README](../auki-datatypes/README.md) Step 4 line, [src/readme.md](../auki-datatypes/src/readme.md) audio bullet, [src/lib.rs](../auki-datatypes/src/lib.rs) `auki.audio` module doc-comment, [proto/audio.proto](../auki-datatypes/proto/audio.proto) header, [proto/detection.proto](../auki-datatypes/proto/detection.proto) analog reference, [parking_lot.md](../auki-datatypes/parking_lot.md) three entries); sibling [`auki-network`](../auki-network) ([sensors_protocol.rs](../auki-network/src/sensors_protocol.rs) `SensorEntry.kind` four-tags list). Notion canonical doc ([Hagall main page](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0)'s **Sensor catalog shape** subsection + status log; [SDK plan](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) SDK-T12 surface) updated separately.
+
+36 auki-registry tests pass; workspace-wide `cargo test --workspace --lib` clean.
+
 ### broodsugar's claude · May 9, 12:46 HKT, 2026
 
 **`SensorBody::JointEncoders { joint_count, frame_rate_hz }` variant added.** Fourth sensor-body kind alongside `RgbCamera` / `PointCloud` / `Microphone`. Per-frame data lives in [`auki_datatypes::joint_encoders::JointEncodersLogEntry`](../auki-datatypes/src/lib.rs) (on-disk) and [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`](../auki-datatypes/src/lib.rs) (libp2p stream wire) — same `repeated float angles_rad = 1` shape on both sides. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Joint angles are encoder readings — measurements before any kinematic interpretation; pose (cartesian TF) is what you compute via FK, downstream.

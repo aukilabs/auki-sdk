@@ -14,7 +14,7 @@ package auki.detection;
 // Step 8 decision (2026-05-08): opaque-bytes-only, matching the Step 3
 // stance for `auki.point_cloud` and the Step 4 stance for `auki.audio`.
 // The Detector is the single source of truth for its detection schema
-// (the analog of the SensorRegistryEntry's `Microphone` body for audio
+// (the analog of the SensorRegistryEntry's `Audio` body for audio
 // or `PointCloud` body for point clouds — pinned by the Detection Log's
 // manifest via a `(detector_id, ...)` shape; the exact registry shape
 // for Detectors is TBD). Carrying detector-specific fields on this prost

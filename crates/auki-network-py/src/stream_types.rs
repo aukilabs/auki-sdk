@@ -23,6 +23,7 @@
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
 use auki_network_rs::stream_protocol::{
+    AudioFrame as RustAudioFrame,
     AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
     EndReason as RustEndReason, JointEncodersFrame as RustJointEncodersFrame,
     JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
@@ -270,6 +271,58 @@ impl PyJointEncodersFrame {
     }
 }
 
+// ─── AudioFrame ──────────────────────────────────────────────────────────────
+
+/// Dialogue Batch 1 payload `T` — interleaved PCM audio bytes. Per-chunk
+/// payload mirroring `auki.audio.AudioLogEntry` (same `bytes data = 1`
+/// proto field, byte-identical wire/disk by design — locked in
+/// `auki-datatypes` by `audio_disk_wire_byte_identical`). Opaque-bytes:
+/// `sample_format` / `channels` / `sample_rate_hz` / `channel_layout`
+/// resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio`
+/// at handshake. Same opaque-`bytes`-property shape as [`PyJpegFrame`] /
+/// [`PyPointCloudFrame`], but the Python getter is named `.data` to
+/// match the proto field name (the proto says `bytes data`, not
+/// `bytes bytes`).
+#[pyclass(name = "AudioFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyAudioFrame {
+    pub(crate) inner: RustAudioFrame,
+}
+
+#[pymethods]
+impl PyAudioFrame {
+    #[new]
+    #[pyo3(signature = (data, /))]
+    fn new(data: Bound<'_, PyBytes>) -> Self {
+        Self {
+            inner: RustAudioFrame {
+                data: data.as_bytes().to_vec(),
+            },
+        }
+    }
+
+    /// Raw interleaved PCM bytes. Returns a fresh `bytes` copy each
+    /// call. Layout (sample format, channel count, sample rate) comes
+    /// from the registry entry pinned by `sensor_hash` at handshake;
+    /// the wire payload is opaque.
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.data)
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.data.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("AudioFrame(<{} bytes>)", self.inner.data.len())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── DeclineReason ───────────────────────────────────────────────────────────
 
 /// Tagged union mirroring [`RustDeclineReason`]. Construct via the
@@ -449,6 +502,7 @@ pub(crate) enum FramePayload {
     Jpeg(PyJpegFrame),
     PointCloud(PyPointCloudFrame),
     JointEncoders(PyJointEncodersFrame),
+    Audio(PyAudioFrame),
 }
 
 impl FramePayload {
@@ -462,8 +516,11 @@ impl FramePayload {
         if let Ok(je) = payload.extract::<PyJointEncodersFrame>() {
             return Ok(Self::JointEncoders(je));
         }
+        if let Ok(a) = payload.extract::<PyAudioFrame>() {
+            return Ok(Self::Audio(a));
+        }
         Err(PyValueError::new_err(format!(
-            "frame payload must be a JpegFrame, PointCloudFrame, or JointEncodersFrame; got {}",
+            "frame payload must be a JpegFrame, PointCloudFrame, JointEncodersFrame, or AudioFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -478,6 +535,7 @@ impl FramePayload {
             Self::JointEncoders(f) => Py::new(py, f)
                 .expect("alloc JointEncodersFrame")
                 .into_py(py),
+            Self::Audio(f) => Py::new(py, f).expect("alloc AudioFrame").into_py(py),
         }
     }
 
@@ -486,6 +544,7 @@ impl FramePayload {
             Self::Jpeg(f) => f.__repr__(),
             Self::PointCloud(f) => f.__repr__(),
             Self::JointEncoders(f) => f.__repr__(),
+            Self::Audio(f) => f.__repr__(),
         }
     }
 }
@@ -593,6 +652,24 @@ impl PyProducerFrame {
             )),
         }
     }
+
+    /// Convert to a `RustProducerFrame<RustAudioFrame>`. Errors with a
+    /// human-readable detail if the payload is the wrong variant. Used
+    /// by the producer-side source-stream pump for an `AcceptAudio`
+    /// dispatch (Dialogue Batch 1).
+    pub(crate) fn to_rust_audio(&self) -> Result<RustProducerFrame<RustAudioFrame>, String> {
+        match &self.payload {
+            FramePayload::Audio(f) => Ok(RustProducerFrame {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            other => Err(format!(
+                "AcceptAudio source yielded a ProducerFrame with {} payload; \
+                 the substream is mono-T — yield AudioFrame or use the matching factory",
+                other.kind_name(),
+            )),
+        }
+    }
 }
 
 impl FramePayload {
@@ -601,6 +678,7 @@ impl FramePayload {
             Self::Jpeg(_) => "JpegFrame",
             Self::PointCloud(_) => "PointCloudFrame",
             Self::JointEncoders(_) => "JointEncodersFrame",
+            Self::Audio(_) => "AudioFrame",
         }
     }
 }
@@ -681,6 +759,16 @@ impl PyConsumerFrame {
             }),
         }
     }
+
+    fn from_rust_audio(frame: RustConsumerFrame<RustAudioFrame>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: FramePayload::Audio(PyAudioFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
@@ -715,6 +803,10 @@ pub(crate) enum DecisionInner {
         source: Py<PyAny>,
     },
     AcceptJointEncoders {
+        info: PyAcceptInfo,
+        source: Py<PyAny>,
+    },
+    AcceptAudio {
         info: PyAcceptInfo,
         source: Py<PyAny>,
     },
@@ -762,6 +854,21 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with an Audio source (Dialogue Batch 1). The
+    /// async iterator must yield
+    /// `ProducerFrame(payload=AudioFrame(data))` values carrying
+    /// interleaved PCM bytes; sample format / channels / sample rate /
+    /// channel layout are resolved out-of-band via
+    /// `(sensor_id, sensor_hash) → SensorBody::Audio`, so the wire
+    /// payload itself is opaque-bytes.
+    #[staticmethod]
+    #[pyo3(signature = (*, info, source))]
+    fn accept_audio(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptAudio { info, source })),
+        }
+    }
+
     #[staticmethod]
     #[pyo3(signature = (reason, /))]
     fn decline(reason: PyDeclineReason) -> Self {
@@ -771,10 +878,10 @@ impl PyStreamDecision {
     }
 
     /// Discriminator: `"accept"` (JPEG), `"accept_pointcloud"`,
-    /// `"accept_joint_encoders"`, `"decline"`, or `"consumed"`
-    /// (post-`take`). Read-only inspection; the actual fields aren't
-    /// exposed because the source iterator is consumed by the SDK
-    /// exactly once.
+    /// `"accept_joint_encoders"`, `"accept_audio"`, `"decline"`, or
+    /// `"consumed"` (post-`take`). Read-only inspection; the actual
+    /// fields aren't exposed because the source iterator is consumed
+    /// by the SDK exactly once.
     #[getter]
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
@@ -782,6 +889,7 @@ impl PyStreamDecision {
             Some(DecisionInner::AcceptJpeg { .. }) => "accept",
             Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
             Some(DecisionInner::AcceptJointEncoders { .. }) => "accept_joint_encoders",
+            Some(DecisionInner::AcceptAudio { .. }) => "accept_audio",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -895,6 +1003,16 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         pf.to_rust_joint_encoders()
                     });
                 RustStreamDispatch::AcceptJointEncoders {
+                    info: info.inner,
+                    source: source_stream,
+                }
+            }
+            Ok(DecisionInner::AcceptAudio { info, source }) => {
+                let source_stream =
+                    python_iter_into_source_stream::<RustAudioFrame>(source, |pf| {
+                        pf.to_rust_audio()
+                    });
+                RustStreamDispatch::AcceptAudio {
                     info: info.inner,
                     source: source_stream,
                 }
@@ -1032,6 +1150,9 @@ type RustJointEncodersFrameStream = Pin<
             > + Send,
     >,
 >;
+type RustAudioFrameStream = Pin<
+    Box<dyn Stream<Item = Result<RustConsumerFrame<RustAudioFrame>, RustStreamError>> + Send>,
+>;
 
 /// Tagged union over the underlying typed frame-stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -1041,6 +1162,7 @@ enum FrameStreamKind {
     Jpeg(RustJpegFrameStream),
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
+    Audio(RustAudioFrameStream),
 }
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
@@ -1120,6 +1242,15 @@ impl PyStreamSubscription {
             frames: Mutex::new(Some(FrameStreamKind::JointEncoders(rust_sub.frames))),
         }
     }
+
+    pub fn from_rust_audio(rust_sub: RustStreamSubscription<RustAudioFrame>) -> Self {
+        Self {
+            info: PyAcceptInfo {
+                inner: rust_sub.info,
+            },
+            frames: Mutex::new(Some(FrameStreamKind::Audio(rust_sub.frames))),
+        }
+    }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s frames. Each
@@ -1140,6 +1271,7 @@ enum FrameNext {
     Jpeg(Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>),
     PointCloud(Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustConsumerFrame<RustJointEncodersFrame>, RustStreamError>),
+    Audio(Result<RustConsumerFrame<RustAudioFrame>, RustStreamError>),
     Done,
 }
 
@@ -1186,6 +1318,10 @@ impl PyFrameIterator {
                         Some(item) => FrameNext::JointEncoders(item),
                         None => FrameNext::Done,
                     },
+                    FrameStreamKind::Audio(s) => match s.next().await {
+                        Some(item) => FrameNext::Audio(item),
+                        None => FrameNext::Done,
+                    },
                 }
             })
         });
@@ -1206,9 +1342,15 @@ impl PyFrameIterator {
                 *guard = Some(stream);
                 Ok(PyConsumerFrame::from_rust_joint_encoders(frame))
             }
+            FrameNext::Audio(Ok(frame)) => {
+                let mut guard = self.frames.lock().expect("FrameIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyConsumerFrame::from_rust_audio(frame))
+            }
             FrameNext::Jpeg(Err(stream_err))
             | FrameNext::PointCloud(Err(stream_err))
-            | FrameNext::JointEncoders(Err(stream_err)) => {
+            | FrameNext::JointEncoders(Err(stream_err))
+            | FrameNext::Audio(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
@@ -1328,6 +1470,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyJpegFrame>()?;
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
+    cluster.add_class::<PyAudioFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyProducerFrame>()?;
@@ -1467,6 +1610,18 @@ mod tests {
             .into_any()
     }
 
+    /// Helper: wrap a [`PyAudioFrame`] as a `Bound<'_, PyAny>` for the
+    /// typed-payload `PyProducerFrame::new` constructor (Dialogue
+    /// Batch 1).
+    fn audio_frame_as_any<'py>(py: Python<'py>, data: &[u8]) -> Bound<'py, PyAny> {
+        let frame = PyAudioFrame::new(PyBytes::new_bound(py, data));
+        Py::new(py, frame)
+            .expect("alloc PyAudioFrame")
+            .bind(py)
+            .clone()
+            .into_any()
+    }
+
     #[test]
     fn point_cloud_frame_round_trips_through_pybytes() {
         Python::with_gil(|py| {
@@ -1475,6 +1630,22 @@ mod tests {
             assert_eq!(f.__len__(), 3);
             assert_eq!(f.bytes(py).as_bytes(), &[0x10, 0x20, 0x30]);
             assert_eq!(f.__repr__(), "PointCloudFrame(<3 bytes>)");
+        });
+    }
+
+    /// Dialogue Batch 1 — `PyAudioFrame` is the audio analog of
+    /// `PyJpegFrame` / `PyPointCloudFrame`. Same opaque-bytes shape on
+    /// the Python surface, but the getter is named `.data` to match
+    /// the underlying `bytes data = 1` proto field (not `bytes bytes
+    /// = 1`).
+    #[test]
+    fn audio_frame_round_trips_through_pybytes() {
+        Python::with_gil(|py| {
+            let payload = PyBytes::new_bound(py, &[0x00, 0x80, 0xff, 0x7f]);
+            let f = PyAudioFrame::new(payload);
+            assert_eq!(f.__len__(), 4);
+            assert_eq!(f.data(py).as_bytes(), &[0x00, 0x80, 0xff, 0x7f]);
+            assert_eq!(f.__repr__(), "AudioFrame(<4 bytes>)");
         });
     }
 
@@ -1500,6 +1671,17 @@ mod tests {
         });
     }
 
+    #[test]
+    fn producer_frame_extracts_to_rust_audio() {
+        Python::with_gil(|py| {
+            let payload_any = audio_frame_as_any(py, &[0x01, 0x02, 0x03]);
+            let pf = PyProducerFrame::new(987_654, payload_any).unwrap();
+            let rust = pf.to_rust_audio().expect("payload is Audio");
+            assert_eq!(rust.timestamp_ns, 987_654);
+            assert_eq!(rust.payload.data, vec![0x01, 0x02, 0x03]);
+        });
+    }
+
     /// Mismatched payload variant on `to_rust_*` must surface a
     /// human-readable error — the source-stream pump turns this into an
     /// `EndReason::ProducerError` on the wire rather than ending the
@@ -1517,6 +1699,12 @@ mod tests {
             let err = pf_pc.to_rust_jpeg().expect_err("pointcloud ≠ jpeg");
             assert!(err.contains("AcceptJpeg"), "{err}");
             assert!(err.contains("JpegFrame"), "{err}");
+
+            // Audio ≠ Jpeg: same mismatch shape for the Dialogue arm.
+            let pf_audio = PyProducerFrame::new(0, audio_frame_as_any(py, &[3])).unwrap();
+            let err = pf_audio.to_rust_jpeg().expect_err("audio ≠ jpeg");
+            assert!(err.contains("AcceptJpeg"), "{err}");
+            assert!(err.contains("AudioFrame"), "{err}");
         });
     }
 
@@ -1535,6 +1723,7 @@ mod tests {
             assert!(err.is_instance_of::<PyValueError>(py));
             assert!(err.to_string().contains("JpegFrame"), "{err}");
             assert!(err.to_string().contains("PointCloudFrame"), "{err}");
+            assert!(err.to_string().contains("AudioFrame"), "{err}");
         });
     }
 
@@ -1582,6 +1771,26 @@ mod tests {
     }
 
     #[test]
+    fn consumer_frame_constructs_from_rust_audio() {
+        Python::with_gil(|_py| {
+            let rust_frame = RustConsumerFrame {
+                timestamp_ns: 5_555,
+                seq: 99,
+                payload: RustAudioFrame {
+                    data: vec![0xab, 0xcd, 0xef],
+                },
+            };
+            let pf = PyConsumerFrame::from_rust_audio(rust_frame);
+            assert_eq!(pf.timestamp_ns(), 5_555);
+            assert_eq!(pf.seq(), 99);
+            match &pf.payload {
+                FramePayload::Audio(a) => assert_eq!(a.inner.data.len(), 3),
+                _ => panic!("expected Audio payload variant"),
+            }
+        });
+    }
+
+    #[test]
     fn stream_decision_factories_tag_correctly() {
         Python::with_gil(|py| {
             // Construct a Python object to stand in for the source iterator
@@ -1590,8 +1799,11 @@ mod tests {
             let acc = PyStreamDecision::accept(info.clone(), py.None());
             assert_eq!(acc.kind(), "accept");
 
-            let acc_pc = PyStreamDecision::accept_pointcloud(info, py.None());
+            let acc_pc = PyStreamDecision::accept_pointcloud(info.clone(), py.None());
             assert_eq!(acc_pc.kind(), "accept_pointcloud");
+
+            let acc_audio = PyStreamDecision::accept_audio(info, py.None());
+            assert_eq!(acc_audio.kind(), "accept_audio");
 
             let dec = PyStreamDecision::decline(PyDeclineReason::sensor_not_found());
             assert_eq!(dec.kind(), "decline");
@@ -1601,6 +1813,8 @@ mod tests {
             assert_eq!(acc.kind(), "consumed");
             let _taken = acc_pc.take();
             assert_eq!(acc_pc.kind(), "consumed");
+            let _taken = acc_audio.take();
+            assert_eq!(acc_audio.kind(), "consumed");
         });
     }
 

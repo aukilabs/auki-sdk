@@ -81,6 +81,19 @@ def test_pointcloud_frame_carries_bytes() -> None:
     assert "PointCloudFrame" in repr(f)
 
 
+def test_audio_frame_carries_bytes() -> None:
+    """Dialogue Batch 1 — `cluster.AudioFrame` is the audio analog of
+    `JpegFrame` / `PointCloudFrame` for interleaved PCM bytes. Same
+    opaque-bytes pattern, but the getter is named `.data` to match
+    the underlying `bytes data = 1` proto field (not `bytes bytes
+    = 1`)."""
+    payload = b"\x00\x80\xff\x7f\x40\x40\xc0\xbf"
+    f = cluster.AudioFrame(payload)
+    assert f.data == payload
+    assert len(f) == len(payload)
+    assert "AudioFrame" in repr(f)
+
+
 def test_decline_reason_factories() -> None:
     nf = cluster.DeclineReason.sensor_not_found()
     assert nf.kind == "sensor_not_found"
@@ -122,10 +135,24 @@ def test_producer_frame_accepts_pointcloud_payload() -> None:
     assert pf.payload.bytes == b"\x01\x02"
 
 
+def test_producer_frame_accepts_audio_payload() -> None:
+    """Dialogue Batch 1 — `ProducerFrame.payload` accepts `AudioFrame`
+    alongside `JpegFrame` / `PointCloudFrame` / `JointEncodersFrame`.
+    The substream-typed dispatch happens later, when the source
+    iterator is paired with a `StreamDecision.accept_audio(...)`
+    Accept variant."""
+    pf = cluster.ProducerFrame(
+        timestamp_ns=20_000, payload=cluster.AudioFrame(b"\xab\xcd")
+    )
+    assert pf.timestamp_ns == 20_000
+    assert isinstance(pf.payload, cluster.AudioFrame)
+    assert pf.payload.data == b"\xab\xcd"
+
+
 def test_producer_frame_rejects_unknown_payload_type() -> None:
-    """Anything other than JpegFrame / PointCloudFrame is a
-    `ValueError` at construction time."""
-    with pytest.raises(ValueError, match="JpegFrame"):
+    """Anything other than the supported frame types is a `ValueError`
+    at construction time."""
+    with pytest.raises(ValueError, match="AudioFrame"):
         cluster.ProducerFrame(timestamp_ns=0, payload="not-a-frame")
 
 
@@ -141,6 +168,9 @@ def test_stream_decision_factory_tags() -> None:
 
     acc_pc = cluster.StreamDecision.accept_pointcloud(info=info, source=_empty())
     assert acc_pc.kind == "accept_pointcloud"
+
+    acc_audio = cluster.StreamDecision.accept_audio(info=info, source=_empty())
+    assert acc_audio.kind == "accept_audio"
 
     dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
     assert dec.kind == "decline"

@@ -470,7 +470,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, BootstrapError> {
@@ -601,7 +601,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
@@ -611,45 +611,14 @@ impl ClusterManager {
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
-        // Y-T4: relay acquisition
-        //
-        // Before registering with Discovery, check if any relay nodes are
-        // available and acquire circuit-relay reservations so NAT-ed peers
-        // include a publicly-dialable circuit address in their registration.
-        //
-        // Decision logic (mirrors posemesh's AutoNAT v2 pattern):
-        //   1. Check swarm.external_addresses() — if any public (non-private,
-        //      non-loopback) address is already confirmed by AutoNAT v2
-        //      (BehaviourEvent::AutonatClient { result: Ok(..) } adds it via
-        //      swarm.add_external_address), skip relay acquisition entirely.
-        //   2. Otherwise query Discovery for relay nodes:
-        //        let relays = discovery.list_nodes(Some("relay")).await?;
-        //   3. For each relay node:
-        //        a. Parse relay.peer_id (String → PeerId) and relay.multiaddrs.
-        //        b. swarm.dial(relay_multiaddr) — outbound; NAT allows this.
-        //        c. swarm.listen_on(relay_multiaddr.with(P2pCircuit))
-        //             → triggers a ReservationReqAccepted event once the relay
-        //               accepts. The swarm emits NewListenAddr with the circuit
-        //               address at that point.
-        //        d. Collect the circuit address from NewListenAddr events
-        //           (poll swarm briefly with a timeout, e.g. 5s).
-        //        e. Append confirmed circuit addresses to local_multiaddrs so
-        //           they are included in the Discovery registration and gossiped
-        //           to cluster peers via ClusterMembership.
-        //   4. If no relays are available or all reservations fail, log a warning
-        //      and proceed — the peer will only be reachable via direct addresses.
-        //
-        // NOTE: The swarm is consumed by NetworkRuntime::spawn later in this
-        // function. Relay acquisition must happen BEFORE that call. The allow-list
-        // does NOT need to include relay peers — the relay is not a cluster member;
-        // the libp2p relay-client transport handles circuit routing below the
-        // allow-block-list behaviour layer.
-        //
-        // AutoNAT v2 server is enabled on the relay node (enable_autonat_server:
-        // true in its SwarmConfig) so it can answer probes from Park/Booster.
-        // Park/Booster have autonat_client enabled (when enable_relay_server: false)
-        // and learn their NAT status from BehaviourEvent::AutonatClient events in
-        // the NetworkRuntime event loop.
+        let local_multiaddrs =
+            auki_network::relay_prepare::maybe_enrich_local_multiaddrs_for_discovery_registration(
+                &mut swarm,
+                &discovery,
+                &local_peer_id,
+                local_multiaddrs,
+            )
+            .await;
 
         // 1. Atomic create on Discovery.
         match discovery
@@ -1050,7 +1019,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, JoinClusterError> {
@@ -1060,45 +1029,14 @@ impl ClusterManager {
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
-        // Y-T4: relay acquisition
-        //
-        // Before registering with Discovery, check if any relay nodes are
-        // available and acquire circuit-relay reservations so NAT-ed peers
-        // include a publicly-dialable circuit address in their registration.
-        //
-        // Decision logic (mirrors posemesh's AutoNAT v2 pattern):
-        //   1. Check swarm.external_addresses() — if any public (non-private,
-        //      non-loopback) address is already confirmed by AutoNAT v2
-        //      (BehaviourEvent::AutonatClient { result: Ok(..) } adds it via
-        //      swarm.add_external_address), skip relay acquisition entirely.
-        //   2. Otherwise query Discovery for relay nodes:
-        //        let relays = discovery.list_nodes(Some("relay")).await?;
-        //   3. For each relay node:
-        //        a. Parse relay.peer_id (String → PeerId) and relay.multiaddrs.
-        //        b. swarm.dial(relay_multiaddr) — outbound; NAT allows this.
-        //        c. swarm.listen_on(relay_multiaddr.with(P2pCircuit))
-        //             → triggers a ReservationReqAccepted event once the relay
-        //               accepts. The swarm emits NewListenAddr with the circuit
-        //               address at that point.
-        //        d. Collect the circuit address from NewListenAddr events
-        //           (poll swarm briefly with a timeout, e.g. 5s).
-        //        e. Append confirmed circuit addresses to local_multiaddrs so
-        //           they are included in the Discovery registration and gossiped
-        //           to cluster peers via ClusterMembership.
-        //   4. If no relays are available or all reservations fail, log a warning
-        //      and proceed — the peer will only be reachable via direct addresses.
-        //
-        // NOTE: The swarm is consumed by NetworkRuntime::spawn later in this
-        // function. Relay acquisition must happen BEFORE that call. The allow-list
-        // does NOT need to include relay peers — the relay is not a cluster member;
-        // the libp2p relay-client transport handles circuit routing below the
-        // allow-block-list behaviour layer.
-        //
-        // AutoNAT v2 server is enabled on the relay node (enable_autonat_server:
-        // true in its SwarmConfig) so it can answer probes from Park/Booster.
-        // Park/Booster have autonat_client enabled (when enable_relay_server: false)
-        // and learn their NAT status from BehaviourEvent::AutonatClient events in
-        // the NetworkRuntime event loop.
+        let local_multiaddrs =
+            auki_network::relay_prepare::maybe_enrich_local_multiaddrs_for_discovery_registration(
+                &mut swarm,
+                &discovery,
+                &local_peer_id,
+                local_multiaddrs,
+            )
+            .await;
 
         // 1. Look up the cluster in Discovery's directory.
         let clusters = discovery.list_clusters().await?;

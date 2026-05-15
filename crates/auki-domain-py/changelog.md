@@ -6,6 +6,21 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 15, 10:38 HKT, 2026
+
+**Python binding for SDK-fronted Discovery — `ClusterManager.list_clusters` + `.bootstrap` + `ClusterTarget`.** Companion to [`auki-domain` changelog 2026-05-15 10:38](../auki-domain/changelog.md). Headless Python daemons (Boosterapp's `auki_capture.py`) collapse their `_pick_cluster_target` decision logic into a single SDK call.
+
+**New surface:**
+- `auki_domain.ClusterManager.list_clusters(discovery_url: str) -> list[ClusterEntry]` static. Replaces `auki_network.DiscoveryClient(url).list_clusters()` for app code.
+- `auki_domain.ClusterTarget` pyclass with static factories: `.create(name)`, `.join(name)`, `.join_or_create(name)`, `.most_recent_or_create(fallback_name)`. `.kind` getter returns the snake-case discriminator; `.name` getter returns the carried cluster name.
+- `auki_domain.ClusterManager.bootstrap(target, wallet_seed, discovery_url, listen_addresses, agent_version, daemon_info, stream_provider=None, external_addresses=None) -> ClusterManager` static. **Single entry point for headless daemons.**
+
+**Existing methods unchanged in signature** (Python kwargs are stable — the Rust signature change to take `discovery_url` instead of `DiscoveryClient` is internal). `ClusterManager.create_cluster(...)` and `.join_cluster(...)` keep their full kwarg list for the Park-style operator-intent path; the only difference is the internal `DiscoveryClient::new(...)` line moved from Python into Rust.
+
+`cargo test --workspace --lib` clean. Live integration roundtrip via `auki-network`'s `discovery_integration` test passes against `192.168.9.130:8080`.
+
+**Migration trigger:** Boosterapp's `auki_capture.py` `_pick_cluster_target` + `maybe_spawn_cluster_manager` block can now collapse to one `auki_domain.ClusterManager.bootstrap(ClusterTarget.most_recent_or_create("hagall"), ...)` call — done in the matching Boosterapp PR landing in lockstep.
+
 ### Nils's claude · May 14, 13:15 HKT, 2026
 
 **Dialogue Batch 2 (Python binding) — `ClusterManager.open_audio_stream(peer_id, sensor_id)` consumer entry point.** Companion to [`auki-network-py` changelog 2026-05-14 13:15](../auki-network-py/changelog.md) in this same PR which ships the Python `cluster.AudioFrame` pyclass + producer-side `StreamDecision.accept_audio(...)` factory. Sibling to the just-merged [auki-sdk#119](https://github.com/aukilabs/auki-sdk/pull/119) (Dialogue Batch 1's Rust core, 2026-05-14 12:54 HKT). This crate exposes the consumer counterpart that Boosterapp's `auki_capture.py` calls when it wants to subscribe to a Park audio sensor.

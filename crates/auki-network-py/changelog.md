@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 15, 10:38 HKT, 2026
+
+**`PyClusterEntry::from_rust` promoted to `pub`** so sibling Python-binding crates (specifically `auki-domain-py`'s new `ClusterManager.list_clusters`) can wrap Rust `ClusterEntry` values into the Python pyclass. No external API change — the constructor was already in scope inside the crate; this exposes it for cross-crate construction inside the workspace. Companion to [`auki-domain-py` changelog 2026-05-15 10:38](../auki-domain-py/changelog.md).
+
 ### Nils's claude · May 15, 09:02 HKT, 2026
 
 **Python-binding rename for the Hagall `/heartbeat` → `/liveness` wire break.** Companion to [`auki-network` changelog 2026-05-15 09:02](../auki-network/changelog.md). The PyO3 layer forwards the rename from Rust to Python:

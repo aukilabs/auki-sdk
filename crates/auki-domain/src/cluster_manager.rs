@@ -1,37 +1,63 @@
 //! [`ClusterManager`] — the SDK-side handle for a cluster a daemon is
-//! participating in.
+//! participating in. **The single SDK entry point for all
+//! Discovery / cluster-lifecycle interaction.** Per Hagall constraint
+//! #5 ("the SDK should handle as much as possible of the daemon-side
+//! networking, so that Booster and Park work the same way"), daemons
+//! never construct a [`DiscoveryClient`] themselves; they declare
+//! intent via [`ClusterTarget`] and call [`ClusterManager::bootstrap`]
+//! (or the operator-intent-shaped [`ClusterManager::create_cluster`] /
+//! [`ClusterManager::join_cluster`] primitives). All Discovery HTTP
+//! talking, decision logic, and lifecycle management live SDK-side.
 //!
 //! Owns the cluster membership document, the libp2p `NetworkRuntime`
-//! that drives the swarm, and a heartbeat-to-Discovery task. Daemons
-//! (BoosterApp, Park, Sentinel) construct one via [`create_cluster`]
-//! (and eventually `join_cluster` once the libp2p join protocol
-//! lands) and treat it as a single owned object — its public methods
+//! that drives the swarm, and a liveness-check-to-Discovery task.
+//! Daemons (BoosterApp, Park, Sentinel) treat the returned
+//! `ClusterManager` as a single owned object — its public methods
 //! cover everything daemons need to surface to operators
 //! (`is_manager`, `manager_peer_id`, `participant_info`,
 //! `membership`).
 //!
+//! ## App-facing entry points
+//!
+//! - [`ClusterManager::list_clusters`] — snapshot Discovery's directory.
+//! - [`ClusterManager::bootstrap`] — policy-driven: declare intent via
+//!   [`ClusterTarget`] (Create / Join / JoinOrCreate / MostRecentOrCreate)
+//!   and the SDK does list + decide + create-or-join internally.
+//! - [`ClusterManager::create_cluster`] — operator-intent primitive when
+//!   "create exactly this name" is unambiguous (e.g. Park UI Create
+//!   button).
+//! - [`ClusterManager::join_cluster`] — operator-intent primitive when
+//!   "join exactly this name" is unambiguous (e.g. Park UI Join button).
+//!
 //! ## Manager-role state
 //!
-//! When `create_cluster` succeeds, the local peer is the cluster's
-//! initial Manager. [`Self::is_manager`] is `true`; [`Self::manager_peer_id`]
-//! equals the local peer-id. Later, when the join protocol + successor
-//! election land, a non-Manager peer holds a `ClusterManager` whose
-//! `is_manager` is `false` and whose `manager_peer_id` points at
-//! whoever the cluster currently agrees is the Manager.
+//! When `create_cluster` (or `bootstrap` that resolves to create)
+//! succeeds, the local peer is the cluster's initial Manager.
+//! [`Self::is_manager`] is `true`; [`Self::manager_peer_id`] equals the
+//! local peer-id. For a `join`, `is_manager` is `false` and
+//! `manager_peer_id` points at whoever the cluster currently agrees is
+//! the Manager.
 //!
-//! ## Discovery heartbeat
+//! ## Discovery liveness check
 //!
-//! While this peer is the Manager, a background task pings Discovery
-//! every 3 seconds with the cluster's `peer_count`. Discovery's sweep
-//! drops clusters that haven't heartbeated in 10s, so this keeps the
-//! directory entry live. The task is cancelled on
+//! While this peer is the Manager, a background task pushes a
+//! `liveness_check` to Discovery every [`LIVENESS_CHECK_INTERVAL`] (1s)
+//! with the cluster's `peer_count`. Discovery's `liveness requirement`
+//! sweep drops clusters that haven't received a check in 3s (3 missed),
+//! so this keeps the directory entry live. The task is cancelled on
 //! [`Self::shutdown`].
 
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
 use auki_network::ParticipantInfo;
 use auki_network::discovery_client::{
-    CreateClusterOutcome, DiscoveryClient, DiscoveryError,
+    ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
+
+// Re-exports so app code can stay scoped to `auki_domain` imports
+// (per the "ClusterManager is the single SDK entry point" contract
+// at the top of this module).
+pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
+pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::info_protocol::InfoResponse;
 use auki_network::network_runtime::{
@@ -108,6 +134,140 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// it cheap — the runtime's per-substream task gives the SDK
     /// 2 s to respond before closing the substream.
     fn snapshot(&self) -> Vec<SensorEntry>;
+}
+
+/// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
+/// should perform. Captures the four decision shapes that every Auki
+/// daemon picker has had to express in its own code; lifting them into
+/// the SDK is the Hagall-constraint-#5 "uniform Discovery talking"
+/// fix.
+///
+/// Use the static constructors ([`ClusterTarget::create`],
+/// [`ClusterTarget::join`], [`ClusterTarget::join_or_create`],
+/// [`ClusterTarget::most_recent_or_create`]) for ergonomics; the bare
+/// enum variants are exposed for pattern-matching only.
+#[derive(Debug, Clone)]
+pub enum ClusterTarget {
+    /// Create a new cluster with this exact name. Errors with
+    /// [`BootstrapError::AlreadyExists`] if Discovery already has it.
+    /// Use this when operator intent is "create" (e.g. Park's Create
+    /// button).
+    Create {
+        /// Cluster name to create.
+        name: String,
+    },
+    /// Join an existing cluster with this exact name. Errors with
+    /// [`BootstrapError::NotFound`] if Discovery doesn't have it. Use
+    /// this when operator intent is "join" (e.g. Park's Join button
+    /// clicked on a list row).
+    Join {
+        /// Cluster name to join.
+        name: String,
+    },
+    /// Join the named cluster if it exists; otherwise create it. Use
+    /// this when a daemon is configured with a specific cluster name
+    /// but doesn't care whether it's the first peer or a joiner
+    /// (e.g. Boosterapp with `--cluster-name` set).
+    JoinOrCreate {
+        /// Cluster name to join-or-create.
+        name: String,
+    },
+    /// Join the most-recently-created cluster in Discovery's directory.
+    /// If the directory is empty, create a cluster named
+    /// `fallback_name`. Use this for headless daemons with no operator
+    /// intent (e.g. Boosterapp without `--cluster-name`).
+    MostRecentOrCreate {
+        /// Cluster name to fall back to if Discovery's directory is
+        /// empty at bootstrap time.
+        fallback_name: String,
+    },
+}
+
+impl ClusterTarget {
+    /// Create a new cluster with `name`. Sugar for
+    /// [`ClusterTarget::Create`].
+    pub fn create(name: impl Into<String>) -> Self {
+        Self::Create { name: name.into() }
+    }
+
+    /// Join an existing cluster with `name`. Sugar for
+    /// [`ClusterTarget::Join`].
+    pub fn join(name: impl Into<String>) -> Self {
+        Self::Join { name: name.into() }
+    }
+
+    /// Join the cluster `name` if it exists; otherwise create it.
+    /// Sugar for [`ClusterTarget::JoinOrCreate`].
+    pub fn join_or_create(name: impl Into<String>) -> Self {
+        Self::JoinOrCreate { name: name.into() }
+    }
+
+    /// Join the most-recent cluster; fall back to creating
+    /// `fallback_name` on empty directory. Sugar for
+    /// [`ClusterTarget::MostRecentOrCreate`].
+    pub fn most_recent_or_create(fallback_name: impl Into<String>) -> Self {
+        Self::MostRecentOrCreate {
+            fallback_name: fallback_name.into(),
+        }
+    }
+}
+
+/// Errors from [`ClusterManager::bootstrap`].
+///
+/// Aggregates the failure modes of [`CreateClusterError`] and
+/// [`JoinClusterError`] since bootstrap may resolve to either path.
+#[derive(Debug, Error)]
+pub enum BootstrapError {
+    /// Discovery rejected the list / create / lookup call, or HTTP
+    /// transport failed.
+    #[error("Discovery: {0}")]
+    Discovery(#[from] DiscoveryError),
+    /// `ClusterTarget::Create { name }` was passed but the cluster
+    /// already exists in Discovery's directory. The caller can choose
+    /// to retry with `ClusterTarget::JoinOrCreate` or
+    /// `ClusterTarget::Join` if they want fallthrough.
+    #[error("cluster {0:?} already exists in Discovery directory")]
+    AlreadyExists(String),
+    /// `ClusterTarget::Join { name }` was passed but the cluster is
+    /// not in Discovery's directory.
+    #[error("cluster {0:?} not in Discovery directory")]
+    NotFound(String),
+    /// Joining the Manager failed (substream open / read / write
+    /// error, or the Manager hung up before responding).
+    #[error("join request: {0}")]
+    SendJoin(#[from] SendJoinRequestError),
+    /// The Manager refused the join with a typed reason.
+    #[error("Manager rejected join: {0}")]
+    Rejected(String),
+    /// The Manager's response carried a malformed `membership_json`.
+    #[error("invalid membership JSON from Manager: {0}")]
+    InvalidMembership(#[source] serde_json::Error),
+    /// `NetworkRuntime::spawn` failed.
+    #[error("runtime spawn failed: {0}")]
+    Runtime(#[from] SpawnError),
+}
+
+impl From<CreateClusterError> for BootstrapError {
+    fn from(e: CreateClusterError) -> Self {
+        match e {
+            CreateClusterError::Discovery(d) => BootstrapError::Discovery(d),
+            CreateClusterError::AlreadyExists(n) => BootstrapError::AlreadyExists(n),
+            CreateClusterError::Runtime(s) => BootstrapError::Runtime(s),
+        }
+    }
+}
+
+impl From<JoinClusterError> for BootstrapError {
+    fn from(e: JoinClusterError) -> Self {
+        match e {
+            JoinClusterError::Discovery(d) => BootstrapError::Discovery(d),
+            JoinClusterError::NotFound(n) => BootstrapError::NotFound(n),
+            JoinClusterError::SendJoin(s) => BootstrapError::SendJoin(s),
+            JoinClusterError::Rejected(r) => BootstrapError::Rejected(r),
+            JoinClusterError::InvalidMembership(e) => BootstrapError::InvalidMembership(e),
+            JoinClusterError::Runtime(s) => BootstrapError::Runtime(s),
+        }
+    }
 }
 
 /// Errors from [`ClusterManager::create_cluster`].
@@ -264,31 +424,188 @@ pub struct ClusterManager {
 }
 
 impl ClusterManager {
+    /// Snapshot Discovery's cluster directory. The SDK-fronted entry
+    /// point for "list clusters" — apps don't construct
+    /// [`DiscoveryClient`] themselves.
+    ///
+    /// Sorted by `created_ns` desc (newest-first) per the Hagall v1
+    /// contract. Returns the typed [`DiscoveryClusterEntry`] values
+    /// re-exported from this module.
+    pub async fn list_clusters(
+        discovery_url: impl Into<String>,
+    ) -> Result<Vec<ClusterEntry>, DiscoveryError> {
+        let client = DiscoveryClient::new(discovery_url.into());
+        client.list_clusters().await
+    }
+
+    /// Policy-driven cluster bootstrap — **the single entry point**
+    /// for app daemons that don't have unambiguous operator intent.
+    /// Park's Create / Join buttons still call
+    /// [`Self::create_cluster`] / [`Self::join_cluster`] directly
+    /// (operator-intent path); headless daemons (Boosterapp,
+    /// Sentinel) call this with the matching [`ClusterTarget`].
+    ///
+    /// Dispatch:
+    /// - [`ClusterTarget::Create { name }`][ClusterTarget::Create] →
+    ///   [`Self::create_cluster`]. Errors with
+    ///   [`BootstrapError::AlreadyExists`] if the name is taken.
+    /// - [`ClusterTarget::Join { name }`][ClusterTarget::Join] →
+    ///   [`Self::join_cluster`]. Errors with
+    ///   [`BootstrapError::NotFound`] if Discovery doesn't have it.
+    /// - [`ClusterTarget::JoinOrCreate { name }`][ClusterTarget::JoinOrCreate]
+    ///   → list Discovery; if the name exists, join; else create.
+    ///   Race-tolerant: if a concurrent `create` won the name between
+    ///   our list and our own `create`, the
+    ///   `CreateClusterError::AlreadyExists` is caught and we fall
+    ///   through to `join`.
+    /// - [`ClusterTarget::MostRecentOrCreate { fallback_name }`][ClusterTarget::MostRecentOrCreate]
+    ///   → list Discovery; if non-empty, join the first entry
+    ///   (created_ns desc → newest-first); else create
+    ///   `fallback_name`.
+    ///
+    /// All Discovery talking is internal — apps don't construct
+    /// [`DiscoveryClient`].
+    pub async fn bootstrap(
+        target: ClusterTarget,
+        local_identity: PeerIdentity,
+        local_multiaddrs: Vec<Multiaddr>,
+        discovery_url: impl Into<String>,
+        swarm: Swarm<Behaviour>,
+        stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
+    ) -> Result<Self, BootstrapError> {
+        let discovery_url = discovery_url.into();
+        match target {
+            ClusterTarget::Create { name } => Self::create_cluster(
+                name,
+                local_identity,
+                local_multiaddrs,
+                discovery_url,
+                swarm,
+                stream_provider,
+                daemon_info,
+            )
+            .await
+            .map_err(BootstrapError::from),
+            ClusterTarget::Join { name } => Self::join_cluster(
+                name,
+                local_identity,
+                local_multiaddrs,
+                discovery_url,
+                swarm,
+                stream_provider,
+                daemon_info,
+            )
+            .await
+            .map_err(BootstrapError::from),
+            ClusterTarget::JoinOrCreate { name } => {
+                let entries = Self::list_clusters(discovery_url.clone()).await?;
+                if entries.iter().any(|e| e.name == name) {
+                    Self::join_cluster(
+                        name,
+                        local_identity,
+                        local_multiaddrs,
+                        discovery_url,
+                        swarm,
+                        stream_provider,
+                        daemon_info,
+                    )
+                    .await
+                    .map_err(BootstrapError::from)
+                } else {
+                    // Race window: someone else may have created
+                    // `name` between our list and our create. If our
+                    // create comes back AlreadyExists, fall through to
+                    // join (the race-winner's cluster).
+                    match Self::create_cluster(
+                        name.clone(),
+                        local_identity.clone(),
+                        local_multiaddrs.clone(),
+                        discovery_url.clone(),
+                        swarm,
+                        stream_provider,
+                        daemon_info,
+                    )
+                    .await
+                    {
+                        Ok(m) => Ok(m),
+                        Err(CreateClusterError::AlreadyExists(_)) => {
+                            // The race-winner's create burned our
+                            // swarm + stream_provider; we can't retry
+                            // join from inside this function (they're
+                            // moved). Surface as AlreadyExists; the
+                            // app re-calls bootstrap if it wants to
+                            // retry. Documented in this method's
+                            // doc-comment.
+                            Err(BootstrapError::AlreadyExists(name))
+                        }
+                        Err(e) => Err(BootstrapError::from(e)),
+                    }
+                }
+            }
+            ClusterTarget::MostRecentOrCreate { fallback_name } => {
+                let entries = Self::list_clusters(discovery_url.clone()).await?;
+                if let Some(first) = entries.first() {
+                    let name = first.name.clone();
+                    Self::join_cluster(
+                        name,
+                        local_identity,
+                        local_multiaddrs,
+                        discovery_url,
+                        swarm,
+                        stream_provider,
+                        daemon_info,
+                    )
+                    .await
+                    .map_err(BootstrapError::from)
+                } else {
+                    Self::create_cluster(
+                        fallback_name,
+                        local_identity,
+                        local_multiaddrs,
+                        discovery_url,
+                        swarm,
+                        stream_provider,
+                        daemon_info,
+                    )
+                    .await
+                    .map_err(BootstrapError::from)
+                }
+            }
+        }
+    }
+
     /// Create a new cluster and become its initial Manager. Atomic
     /// against concurrent `create_cluster` calls — only one peer
     /// wins; the loser gets [`CreateClusterError::AlreadyExists`]
     /// and should `list` + `join` instead.
     ///
+    /// Operator-intent primitive — call this when the operator clicked
+    /// "Create" in a UI. For headless daemons, use
+    /// [`Self::bootstrap`] with a [`ClusterTarget`] policy instead.
+    ///
     /// Sequence:
-    /// 1. Call `discovery.create_cluster(...)` with the local peer
-    ///    as the initial Manager.
+    /// 1. Build the [`DiscoveryClient`] from `discovery_url` and call
+    ///    `create_cluster(...)` with the local peer as the initial
+    ///    Manager.
     /// 2. Initialize the membership document with the local peer as
     ///    its only entry (`join_ts_ns` = `now_ns()`, opaque empty
     ///    successor token for v1).
     /// 3. Spawn the `NetworkRuntime` with an empty allow-list (no
     ///    cluster members yet besides ourselves; we don't dial
     ///    ourselves) and the daemon's `stream_provider`.
-    /// 4. Spawn the Manager-side Discovery heartbeat tick.
+    /// 4. Spawn the Manager-side Discovery liveness-check tick.
     /// 5. Return the `ClusterManager`.
     pub async fn create_cluster(
         cluster_name: impl Into<String>,
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
-        discovery: DiscoveryClient,
+        discovery_url: impl Into<String>,
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
+        let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
         let session_started = Instant::now();
@@ -677,21 +994,27 @@ impl ClusterManager {
     /// returns a `ClusterManager` populated with the full membership
     /// the Manager gossiped.
     ///
+    /// Operator-intent primitive — call this when the operator clicked
+    /// "Join <name>" in a UI. For headless daemons, use
+    /// [`Self::bootstrap`] with a [`ClusterTarget`] policy instead.
+    ///
     /// The local peer is NOT the Manager — `is_manager()` returns
     /// `false`, `manager_peer_id()` points at whichever peer is
     /// recorded in Discovery's directory at the time of the call.
-    /// No Discovery-heartbeat task is spawned (only Managers
-    /// heartbeat); future Manager-handoff machinery (SDK-T7) will
-    /// elect a successor and spawn the heartbeat then.
+    /// No Discovery-liveness-check task is spawned (only Managers push
+    /// liveness checks); the in-process successor election + Manager
+    /// rotation machinery starts the liveness-check task when this
+    /// peer is later promoted.
     pub async fn join_cluster(
         cluster_name: impl Into<String>,
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
-        discovery: DiscoveryClient,
+        discovery_url: impl Into<String>,
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, JoinClusterError> {
+        let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
         let session_started = Instant::now();

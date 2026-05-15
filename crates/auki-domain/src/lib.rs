@@ -19,7 +19,8 @@ pub mod cluster_manager;
 pub mod cluster_membership;
 
 pub use cluster_manager::{
-    AdmitError, ClusterManager, CreateClusterError, DaemonInfo, FetchParticipantInfoError,
+    AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
+    DiscoveryClientError, DiscoveryClusterEntry, FetchParticipantInfoError,
     FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL, SensorCatalogProvider,
     SensorEntry, SensorsResponse, elect_successor,
 };

@@ -301,7 +301,7 @@ impl DiscoveryClient {
     /// Call every ~3 seconds. Discovery sweeps entries that have not
     /// heartbeated in 10 seconds.
     pub async fn heartbeat_node(&self, peer_id: &PeerId) -> Result<(), DiscoveryError> {
-        let url = format!("{}/nodes/{}/heartbeat", self.base_url, peer_id);
+        let url = format!("{}/nodes/{}/liveness", self.base_url, peer_id);
         let resp = self.http.post(&url).send().await?;
         let status = resp.status();
         if status.is_success() {
@@ -375,6 +375,9 @@ pub struct NodeEntry {
     pub node_type: String,
     pub multiaddrs: Vec<String>,
     pub created_ns: i64,
+    /// Discovery JSON field is `last_liveness_check_ns`; older servers used
+    /// `last_heartbeat_ns`. Both deserialize into this field.
+    #[serde(rename = "last_liveness_check_ns", alias = "last_heartbeat_ns")]
     pub last_heartbeat_ns: i64,
 }
 

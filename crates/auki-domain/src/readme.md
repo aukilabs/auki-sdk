@@ -1,24 +1,55 @@
-# auki-domain — implementation status
+# auki-domain - implementation status
 
-What is implemented today, in honest detail. See [`../README.md`](../README.md) for the aspirational spec.
+What is implemented today. See [`../README.md`](../README.md) for the crate-level spec.
 
-## Today (PR 1 — Greenland T1)
+## Files
 
-- **`DomainIdentity`** — wallet-scoped `{wallet_id}/{name}` value type with the reserved `"Vinland"` singleton exception. Constructors: `user_named(&Wallet, &str)` and `singleton()`. `canonical_string()` produces the string Discovery indexes on. Implements `Display`, `PartialEq`, `Eq`, `Hash`, `Clone`, `Debug`.
-- **`init_domain`** — async entry point. Constructs a `DomainIdentity` from `wallet` + `name`, atomically creates the cluster via `DiscoveryClient::create_cluster` (Greenland T8), registers the local daemon as the first peer via `DiscoveryClient::register`, returns a `DomainHandle`. The signing peer is recorded by Discovery as the initial Manager (`ClusterDoc.current_manager_peer_id`). If `name == "Vinland"` the constructor builds the singleton identity instead of a user-named one. On Vinland-race conflict, returns `InitDomainError::AlreadyExists { identity, existing }` carrying the winner's `ClusterDoc` so callers can route to the fall-back-to-join branch of Greenland T12.
-- **`DomainHandle`** — minimum viable handle. Exposes `identity() -> &DomainIdentity`. Manager-role state (heartbeat tick, registry write authority, JoinRequest admission) lands in PR 2.
-- **Glossary update** — `Glossary.md` gains a `Domain Identity` entry. `Domain ID` keeps its existing definition (`hash(domain_owner_pubkey)`) for TagClaim purposes; the network-topic role moves to `Domain Identity` (`{Domain ID}/{name}` or `Vinland` for the singleton).
+- [`lib.rs`](lib.rs) - module exports and public re-exports.
+- [`cluster_membership.rs`](cluster_membership.rs) - `ClusterMembership`, `ClusterMember`, membership JSON shape, filename helper, admission ordering.
+- [`cluster_manager.rs`](cluster_manager.rs) - `ClusterManager`, `ClusterTarget`, daemon info, sensor catalog provider trait, Discovery bootstrap logic, Manager/member state, join/liveness/membership/info/sensors tasks, stream opener, shutdown, and election helper.
 
-12 unit tests + 2 doctests + 2 locked cross-language conformance vectors (user-named string structure, singleton string).
+## Implemented
 
-## Not yet implemented (deferred)
+- `ClusterMembership::new`, `filename`, and `admit`.
+- `ClusterManager::list_clusters`, `bootstrap`, `create_cluster`, and `join_cluster`.
+- `ClusterTarget::{create, join, join_or_create, most_recent_or_create}`.
+- Manager admission through `/auki/join/0.0.1`.
+- Membership gossip through `/auki/membership/0.0.1`.
+- Peer-side heartbeat/liveness detection through `/auki/heartbeat/0.0.1`.
+- Manager election and Discovery `rotate_manager` handoff.
+- Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
+- SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
+- Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches.
+- Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
+- Shared-reference, idempotent `shutdown`.
 
-- Manager role (heartbeat sender, JoinRequest admission, registry write authority, broadcast) — PR 2.
-- Member role (heartbeat responder, registry subscriber) — PR 2.
-- Failover (election, sole-survivor handling, graceful + crash triggers) — PR 3.
-- `join_domain` / `JoinRequest` — PR 4.
-- PyO3 binding (`auki-domain-py`) — separate follow-up when downstream Python consumers need it.
+## Public Re-exports
 
-## What lands next
+`lib.rs` re-exports:
 
-See [`sprint.md`](sprint.md) for the four-PR Greenland sequence.
+- `ClusterManager`
+- `ClusterTarget`
+- `ClusterMembership`
+- `ClusterMember`
+- `DaemonInfo`
+- `SensorCatalogProvider`
+- `SensorEntry`
+- `SensorsResponse`
+- `LIVENESS_CHECK_INTERVAL`
+- Error types for bootstrap/create/join/admit/fetch paths
+- `elect_successor`
+
+## Deferred
+
+- Typed successor-token format and Discovery-side verification.
+- SDK-managed relay reservation helper for non-LAN clusters.
+- Possible demotion of direct `DiscoveryClient` usage after app migrations prove the SDK-fronted `ClusterManager` path.
+
+## Verification
+
+For implementation changes:
+
+```bash
+cargo test -p auki-domain
+DISCOVERY_URL=http://127.0.0.1:8080 cargo test -p auki-domain --test cluster_manager_integration -- --ignored
+```

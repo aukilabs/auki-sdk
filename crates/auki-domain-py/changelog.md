@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**Documentation refresh: `auki-domain-py` now documents the current `ClusterManager` binding.** The README, `src/README.md`, and sprint file now show the Python daemon entry point as `ClusterTarget` + `ClusterManager.bootstrap/create_cluster/join_cluster`, with current stream, sensor catalog, participant-info, and shutdown methods. The old `init_domain` / `DomainHandle` binding shape is left only as stale-history context. No Python binding behavior changed.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **Python binding for SDK-fronted Discovery — `ClusterManager.list_clusters` + `.bootstrap` + `ClusterTarget`.** Companion to [`auki-domain` changelog 2026-05-15 10:38](../auki-domain/changelog.md). Headless Python daemons (Boosterapp's `auki_capture.py`) collapse their `_pick_cluster_target` decision logic into a single SDK call.

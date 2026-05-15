@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**Documentation refresh: `auki-network-py` now describes the current Python surface instead of the removed cluster-runtime binding.** The README, `src/readme.md`, and sprint file now frame the crate as root-level Discovery bindings plus the shared `auki_network.cluster` stream pyclasses / PyCapsule stream-provider bridge used by `auki-domain-py`. Old runtime construction docs were removed; Python cluster lifecycle now points to `auki_domain.ClusterManager`. No runtime behavior changed.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **`PyClusterEntry::from_rust` promoted to `pub`** so sibling Python-binding crates (specifically `auki-domain-py`'s new `ClusterManager.list_clusters`) can wrap Rust `ClusterEntry` values into the Python pyclass. No external API change — the constructor was already in scope inside the crate; this exposes it for cross-crate construction inside the workspace. Companion to [`auki-domain-py` changelog 2026-05-15 10:38](../auki-domain-py/changelog.md).

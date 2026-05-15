@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**Documentation refresh: stable peer-key prose now points at the current `PeerIdentity` / `ClusterManager` path.** The README no longer describes static cluster-doc peer pinning as the consumer of `load_or_mint_seed`; it now explains that a persisted wallet seed lets `auki-network::PeerIdentity::from_wallet` regenerate the same peer id, which `auki-domain::ClusterManager` advertises to Discovery and cluster members across daemon restarts. No code changed in this crate.
+
 ### broodsugar's dobby · May 8, 07:56 HKT, 2026
 
 [`parking_lot.md`](parking_lot.md) gains an item flagging the crate's missing `Result<T>` alias for ergonomics. Sister crates [`auki-logs`](../auki-logs/src/lib.rs) and [`auki-registry`](../auki-registry/src/lib.rs) ship `pub type Result<T> = std::result::Result<T, Error>` at crate root; this one does not, so downstream consumers spell out `Result<T, VerifyError>` longhand. The crate has two distinct error types (`VerifyError` for signature verification, `SeedError` for seed I/O), so a single crate-level `Result<T>` would mismatch — three forward paths sketched, lean toward (1) two aliases (`VerifyResult<T>` + `SeedResult<T>`) mirroring the two-axis nature of the crate. No urgency; pin while still pre-1.0.

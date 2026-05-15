@@ -915,8 +915,15 @@ impl PyStreamDecision {
 // ─── PyStreamProvider ────────────────────────────────────────────────────────
 
 /// Build a Rust [`StreamProvider`] from a Python callable matching
-/// `Callable[[StreamRequest], StreamDecision]`. Used by `cluster.spawn`
-/// when the consumer passes `stream_provider=...`.
+/// `Callable[[str, StreamRequest], StreamDecision]`. Used by
+/// `cluster.spawn` when the consumer passes `stream_provider=...`.
+///
+/// The first argument is the requester's libp2p PeerId rendered as a
+/// Python `str` (matching every other peer-id surface in the Python
+/// API). Producers can use it for per-requester policy — Park's
+/// Dialogue audio is the load-bearing example: with N robots in one
+/// cluster the operator's mic must only stream to the one robot
+/// they are currently inspecting.
 ///
 /// Maps the Python [`PyStreamDecision`]'s [`DecisionInner`] variants
 /// (`AcceptJpeg`, `AcceptPointCloud`, `Decline`) onto the matching
@@ -937,13 +944,14 @@ impl PyStreamDecision {
 /// `PyStreamDecision` / `PyAcceptInfo` / `PyDeclineReason` pyclass
 /// plumbing. Promoted 2026-05-13.
 pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
-    Arc::new(move |request: RustStreamRequest| {
+    Arc::new(move |peer: libp2p_identity::PeerId, request: RustStreamRequest| {
         let py_request = PyStreamRequest { inner: request };
+        let peer_str = peer.to_string();
 
         // Step 1 (under GIL): call the Python provider, extract a
         // PyStreamDecision (or normalize errors to a Decline).
         let decision_or_err: Result<DecisionInner, String> = Python::with_gil(|py| {
-            let result = match callable.call1(py, (py_request.clone(),)) {
+            let result = match callable.call1(py, (peer_str.clone(), py_request.clone())) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!(error = %e, "stream_provider raised; declining");

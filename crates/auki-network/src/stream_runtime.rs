@@ -153,15 +153,24 @@ pub enum StreamDispatch {
 /// [`StreamDispatch`] variant to return — each substream is mono-`T`
 /// end-to-end (per grimsby D1: substream lifetime IS the subscription).
 ///
+/// The first argument is the libp2p [`PeerId`] of the requester. The
+/// SDK has known the requester since the inbound substream landed on
+/// the swarm; passing it through lets the producer enforce
+/// per-requester policy (Park's Dialogue audio is the load-bearing
+/// example: with N robots in one cluster, the operator's mic must
+/// only stream to the one robot they are currently inspecting, so
+/// the provider declines opens from any other peer).
+///
 /// `Send + Sync` because the runtime task holds the callable in an
 /// `Arc` shared across spawned per-substream tasks.
-pub type StreamProvider = Arc<dyn Fn(StreamRequest) -> StreamDispatch + Send + Sync>;
+pub type StreamProvider =
+    Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>;
 
 /// Convenience constructor for consumer-only nodes (Park, analytics
 /// tools, future Sentinel-as-consumer) that don't expose any sensors.
 /// Declines every inbound request with [`DeclineReason::SensorNotFound`].
 pub fn decline_all_streams() -> StreamProvider {
-    Arc::new(|_req| StreamDispatch::Decline {
+    Arc::new(|_peer, _req| StreamDispatch::Decline {
         reason: DeclineReason::sensor_not_found(),
     })
 }
@@ -372,7 +381,7 @@ impl NetworkRuntime {
 /// substream) terminate the task silently — the substream is dead
 /// already.
 pub(crate) async fn handle_inbound_substream(
-    _peer: PeerId,
+    peer: PeerId,
     mut substream: libp2p::Stream,
     provider: StreamProvider,
     shutdown_rx: watch::Receiver<bool>,
@@ -395,8 +404,9 @@ pub(crate) async fn handle_inbound_substream(
     };
 
     // 2. Invoke the provider — non-generic; closed enum tells us which
-    //    `T` to pump.
-    let dispatch = (provider)(request);
+    //    `T` to pump. Pass the requester's PeerId through so producers
+    //    can apply per-requester policy.
+    let dispatch = (provider)(peer, request);
 
     match dispatch {
         StreamDispatch::Decline { reason } => {
@@ -624,7 +634,7 @@ mod tests {
     // ─── Provider fixtures ───────────────────────────────────────────────
 
     fn jpeg_provider_yielding_three_frames() -> StreamProvider {
-        Arc::new(|_req| {
+        Arc::new(|_peer, _req| {
             let frames = vec![
                 Ok(ProducerFrame {
                     timestamp_ns: 1_000,
@@ -651,7 +661,7 @@ mod tests {
     }
 
     fn jpeg_provider_declines_unknown() -> StreamProvider {
-        Arc::new(|req| {
+        Arc::new(|_peer, req| {
             if req.sensor_id == "exists" {
                 StreamDispatch::AcceptJpeg {
                     info: AcceptInfo {
@@ -673,7 +683,7 @@ mod tests {
     }
 
     fn jpeg_provider_yields_then_errors() -> StreamProvider {
-        Arc::new(|_req| {
+        Arc::new(|_peer, _req| {
             let items = vec![
                 Ok(ProducerFrame {
                     timestamp_ns: 1,
@@ -693,7 +703,7 @@ mod tests {
     }
 
     fn pointcloud_provider_yielding_three_frames() -> StreamProvider {
-        Arc::new(|_req| {
+        Arc::new(|_peer, _req| {
             let frames = vec![
                 Ok(ProducerFrame {
                     timestamp_ns: 10_000,
@@ -726,7 +736,7 @@ mod tests {
     }
 
     fn audio_provider_yielding_three_frames() -> StreamProvider {
-        Arc::new(|_req| {
+        Arc::new(|_peer, _req| {
             // 20 ms × 3 of 48 kHz mono int16-LE — the canonical Dialogue
             // fixture shape. Contents are arbitrary deterministic bytes;
             // the SDK treats them as opaque per the `bytes data` proto.
@@ -762,7 +772,7 @@ mod tests {
     }
 
     fn multi_t_provider() -> StreamProvider {
-        Arc::new(|req| match req.sensor_id.as_str() {
+        Arc::new(|_peer, req| match req.sensor_id.as_str() {
             "camera" => StreamDispatch::AcceptJpeg {
                 info: AcceptInfo {
                     sensor_hash: "cam-hash".into(),
@@ -815,7 +825,7 @@ mod tests {
 
         // Provider that PANICS if invoked — proves the substream never
         // reached the per-substream handler.
-        let panicking_provider: StreamProvider = Arc::new(|_req| {
+        let panicking_provider: StreamProvider = Arc::new(|_peer, _req| {
             panic!(
                 "StreamProvider must not be invoked for non-cluster peer — gate failed"
             )
@@ -1078,7 +1088,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let provider: StreamProvider = Arc::new(|_req| {
+        let provider: StreamProvider = Arc::new(|_peer, _req| {
             let first = stream::iter(vec![Ok(ProducerFrame {
                 timestamp_ns: 1_000,
                 payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x99] },
@@ -1391,7 +1401,8 @@ mod tests {
     fn decline_all_streams_returns_sensor_not_found() {
         let provider: StreamProvider = decline_all_streams();
         let req = StreamRequest { sensor_id: "anything".into() };
-        match provider(req) {
+        let any_peer = libp2p_identity::Keypair::generate_ed25519().public().to_peer_id();
+        match provider(any_peer, req) {
             StreamDispatch::Decline { reason }
                 if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
             _ => panic!("decline_all_streams should always decline with SensorNotFound"),

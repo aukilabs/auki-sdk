@@ -48,16 +48,17 @@ async fn roundtrip_against_live_discovery() {
     let client = DiscoveryClient::new(discovery_url());
 
     // 1. List — works (any result OK, snapshot can be anything).
-    let before = client.list_clusters().await.expect("list_clusters succeeds");
+    let before = client
+        .list_clusters()
+        .await
+        .expect("list_clusters succeeds");
     eprintln!("Before: {} cluster(s) in directory", before.len());
 
     // 2. Create.
     let name = unique_cluster_name("sdk-it");
     let identity = PeerIdentity::from_seed(&[42u8; 32]);
     let manager_peer_id = identity.peer_id();
-    let manager_multiaddrs: Vec<Multiaddr> = vec![
-        "/ip4/127.0.0.1/tcp/40010".parse().unwrap(),
-    ];
+    let manager_multiaddrs: Vec<Multiaddr> = vec!["/ip4/127.0.0.1/tcp/40010".parse().unwrap()];
 
     let outcome = client
         .create_cluster(&name, &manager_peer_id, &manager_multiaddrs)

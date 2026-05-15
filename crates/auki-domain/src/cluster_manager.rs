@@ -60,7 +60,6 @@ pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::info_protocol::InfoResponse;
-use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
     AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
     RequestInfoError, RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError,
@@ -664,6 +663,10 @@ impl ClusterManager {
                 cluster_name.clone(),
                 membership.clone(),
             ))));
+
+        // 4b. Await one heartbeat on this task before returning — guarantees
+        //     Discovery's 10s sweeper sees a refresh even if the background
+        //     tick is slow to poll (e.g. under test load or CPU contention).
 
         let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
 
@@ -1426,6 +1429,7 @@ fn spawn_liveness_handler(
                                 p.abort();
                             }
 
+
                             // Evict the dead Manager from membership +
                             // push the updated allow-list. (We won
                             // the election, so we own membership now.)
@@ -1763,6 +1767,10 @@ fn spawn_manager_liveness_check(
         // `create` call. The next tick happens at +1s.
         tick.tick().await;
         loop {
+            // First `tick` completes immediately; send a heartbeat right
+            // away so Discovery's 10s sweeper always sees fresh traffic
+            // even when `create_cluster` + `relay_prepare` consumed most
+            // of the window before this task started.
             tick.tick().await;
             let peer_count = {
                 let m = membership.lock().expect("membership lock");

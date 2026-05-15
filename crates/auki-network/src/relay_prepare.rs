@@ -177,6 +177,13 @@ async fn try_reserve_on_relay(
             Err(_) => break,
         }
     }
+    if circuits.is_empty() {
+        eprintln!(
+            "auki-network: try_reserve_on_relay {relay_peer}: no circuit listen addr after {:?} — \
+             ensure the relay marks listen addresses as external (relay daemon calls add_external_address)",
+            relay_reservation_phase_duration()
+        );
+    }
     circuits
 }
 

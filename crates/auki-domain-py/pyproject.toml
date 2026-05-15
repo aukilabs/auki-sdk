@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "auki-domain-py"
 version = "0.0.0"
-description = "PyO3 bindings for auki-domain's init_domain — the post-v0.0.33 entry point Python daemons use to construct a ClusterRuntime through Discovery."
+description = "PyO3 bindings for auki-domain's ClusterManager — the Python daemon entry point for Discovery and cluster lifecycle."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Auki Labs Limited" }]

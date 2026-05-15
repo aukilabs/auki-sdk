@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) + identity docs — stale README refresh for the current Hagall surface.** Root and crate docs now point app daemons at `ClusterManager`, describe `NetworkRuntime` / current libp2p protocols / Discovery liveness methods accurately, and remove old static-cluster/runtime-constructor guidance from the Python packages. Identity docs now describe derived peer seeds through the current `PeerIdentity` path. Doc-only; no behavior change.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — `ClusterManager` becomes the single SDK entry point for Discovery + cluster lifecycle.** Hagall constraint #5 enforcement: Park and Boosterapp had divergent app-level Discovery-talking; this PR pulls the decision logic into the SDK so both apps converge. New surface: `ClusterManager::list_clusters(url)`, `ClusterTarget` enum with four variants (`Create` / `Join` / `JoinOrCreate` / `MostRecentOrCreate`), and `ClusterManager::bootstrap(target, ...)` static that does list + decide + create-or-join internally. Python mirrors with `auki_domain.ClusterTarget` pyclass + `ClusterManager.bootstrap` / `.list_clusters` statics. Breaking signature change: `create_cluster` / `join_cluster` take `discovery_url: impl Into<String>` instead of a pre-built `DiscoveryClient`. Park PR + Boosterapp PR must merge atomically. Tests clean; live integration roundtrip against `192.168.9.130:8080` passes. v0.0.41 candidate.

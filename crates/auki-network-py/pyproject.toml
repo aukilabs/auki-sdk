@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "auki-network-py"
 version = "0.0.0"
-description = "PyO3 bindings for auki-network's ClusterRuntime — lets a Python process participate in an ansuz cluster as a libp2p peer."
+description = "PyO3 bindings for auki-network's Discovery client and shared stream pyclasses."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Auki Labs Limited" }]

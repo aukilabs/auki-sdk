@@ -916,7 +916,8 @@ impl PyStreamDecision {
 
 /// Build a Rust [`StreamProvider`] from a Python callable matching
 /// `Callable[[str, StreamRequest], StreamDecision]`. Used by
-/// `cluster.spawn` when the consumer passes `stream_provider=...`.
+/// `auki-domain-py`'s `ClusterManager` bindings when the consumer
+/// passes `stream_provider=...`.
 ///
 /// The first argument is the requester's libp2p PeerId rendered as a
 /// Python `str` (matching every other peer-id surface in the Python
@@ -926,10 +927,10 @@ impl PyStreamDecision {
 /// they are currently inspecting.
 ///
 /// Maps the Python [`PyStreamDecision`]'s [`DecisionInner`] variants
-/// (`AcceptJpeg`, `AcceptPointCloud`, `Decline`) onto the matching
-/// Rust [`RustStreamDispatch`] variant. Each substream is mono-`T`;
-/// the `T` is decided here by which factory the Python provider used
-/// (`accept` → `AcceptJpeg`, `accept_pointcloud` → `AcceptPointCloud`).
+/// onto the matching Rust [`RustStreamDispatch`] variant. Each substream
+/// is mono-`T`; the `T` is decided here by which factory the Python
+/// provider used (`accept`, `accept_pointcloud`, `accept_joint_encoders`,
+/// or `accept_audio`).
 ///
 /// Behaviour on Python exception / non-`StreamDecision` return:
 /// the wrapper logs the offence via `tracing::warn!` and synthesizes a
@@ -939,10 +940,10 @@ impl PyStreamDecision {
 /// Visibility: `pub` (was `pub(crate)`) so other in-workspace PyO3
 /// wrapper crates can reuse it. Notably [`auki-domain-py`](../../auki-domain-py)
 /// wires its Python `stream_provider` kwarg through this function in
-/// its `init_domain` / `init_or_join_domain` entry points; without
-/// reaching this adapter it would have to re-implement ~500 lines of
+/// its `ClusterManager` constructors; without reaching this adapter it
+/// would have to re-implement the
 /// `PyStreamDecision` / `PyAcceptInfo` / `PyDeclineReason` pyclass
-/// plumbing. Promoted 2026-05-13.
+/// plumbing.
 pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
     Arc::new(move |peer: libp2p_identity::PeerId, request: RustStreamRequest| {
         let py_request = PyStreamRequest { inner: request };

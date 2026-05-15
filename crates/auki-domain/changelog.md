@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**Documentation refresh: `auki-domain` READMEs and sprint now match `ClusterManager` as shipped.** The crate docs now present `ClusterManager` as the single app-facing owner for Discovery, cluster bootstrap, membership, Manager state, liveness checks, handoff, peer info, sensor catalogs, and typed stream access. The obsolete Greenland `DomainIdentity` / `init_domain` framing is demoted to stale-history context in the sprint, while the README and implementation map describe the current `ClusterTarget`, `ClusterMembership`, `DaemonInfo`, and public methods. No Rust behavior changed.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **SDK-fronted Discovery: `ClusterManager` becomes the single entry point for cluster lifecycle.** Hagall constraint #5 enforcement — "the SDK should handle as much as possible of the daemon-side networking, so that Booster and Park work the same way." Park and Boosterapp had divergent app-level Discovery-talking (Park wrapped `DiscoveryClient` in `Park::list_clusters`; Boosterapp's `_pick_cluster_target` ran `discovery.list_clusters()` then decided create-vs-join in Python). This PR pulls the decision logic into the SDK so both apps converge on one surface.

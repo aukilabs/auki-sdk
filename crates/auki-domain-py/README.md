@@ -1,70 +1,92 @@
-# `auki-domain-py`
+# auki-domain-py
 
-PyO3 bindings for [`auki-domain`](../auki-domain).
+PyO3 bindings for [`auki-domain`](../auki-domain). This is the Python daemon entry point for cluster lifecycle.
 
-## What this crate is
+Python applications should construct `ClusterManager` here rather than assembling `auki_network.DiscoveryClient`, swarms, and protocol handlers themselves. The wrapper is sync-shaped; it owns a process-wide tokio runtime internally.
 
-The post-v0.0.33 entry point Python daemons (BoosterApp, Sentinel) use to construct a `ClusterRuntime` through Discovery. `auki-network-py`'s `cluster.spawn` Python function was removed in [auki-sdk v0.0.33](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.33) — see the [PR B changelog entry](../auki-network/changelog.md). This crate is the replacement.
+## Example
+
+```python
+import auki_domain
+from auki_network import cluster
+
+daemon = auki_domain.DaemonInfo(
+    app="boosterapp",
+    name="k1-walker",
+    session_id=session_id,
+    session_clock_id=clock_id,
+    session_clock_hash=clock_hash,
+    app_instance=app_instance,
+)
+
+target = auki_domain.ClusterTarget.most_recent_or_create("hagall")
+
+manager = auki_domain.ClusterManager.bootstrap(
+    target=target,
+    wallet_seed=wallet_seed,
+    discovery_url="http://discovery.lan:8080",
+    listen_addresses=["/ip4/0.0.0.0/tcp/0", "/ip4/0.0.0.0/udp/0/quic-v1"],
+    agent_version="boosterapp/0.1",
+    daemon_info=daemon,
+    stream_provider=stream_provider,       # optional
+    external_addresses=None,               # optional operator override
+)
+
+print(manager.cluster_name, manager.local_peer_id, manager.is_manager)
+print(manager.participant_info().to_json())
+manager.shutdown()
+```
 
 ## Surface
 
-```python
-from auki_domain import init_domain, DomainAlreadyExists, DiscoveryUnreachable
+Value types:
 
-handle = init_domain(
-    wallet_seed=wallet_seed,          # 32 bytes — parent wallet seed
-    peer_seed=peer_seed,              # 32 bytes — peer/v1 derived seed
-    discovery_url="http://discovery.lan:8080",
-    domain_name="Vinland",            # reserved singleton; or "my-team-domain"
-    addresses=["/ip4/192.168.9.72/tcp/4001"],
-    participant_provider=lambda: my_participant_info,
-    listen_addresses=["/ip4/0.0.0.0/tcp/4001"],  # optional
-    expected_app_id="boosterapp",                # optional
-    note="k1-walker",                             # optional
-)
+- `ClusterMember(peer_id, multiaddrs, join_ts_ns, successor_token=None)`
+- `ClusterMembership(cluster_name)` plus `.from_json(...)`, `.admit(...)`, `.to_json()`
+- `DaemonInfo(app, name, session_id, session_clock_id, session_clock_hash, app_instance)`
+- `ParticipantInfo` returned by `manager.participant_info()` / `fetch_participant_info(...)`
+- `SensorEntry(sensor_id, sensor_hash, kind)`
+- `ClusterTarget.create(name)`, `.join(name)`, `.join_or_create(name)`, `.most_recent_or_create(fallback_name)`
 
-print(handle.identity)             # "Vinland" or "<wallet_id>/my-team-domain"
-for peer in handle.peers():
-    print(peer["peer_id"], peer["info"]["name"])
-handle.shutdown()
-```
+Static manager entry points:
 
-## Architecture
+- `ClusterManager.list_clusters(discovery_url) -> list[auki_network.ClusterEntry]`
+- `ClusterManager.bootstrap(target, wallet_seed, discovery_url, listen_addresses, agent_version, daemon_info, stream_provider=None, external_addresses=None)`
+- `ClusterManager.create_cluster(...)`
+- `ClusterManager.join_cluster(...)`
 
-Discovery is **mandatory**. There's no static-`cluster.json` fallback path in v0.0.33+ — the libp2p allow-list is populated from `ClusterDoc.peers` returned by Discovery's `register` call, and that's the only sanctioned way to obtain a `ClusterRuntime`. The Rust SDK enforces this through `ClusterRuntime::from_swarm` being `#[doc(hidden)] pub` and `init_domain` being the public path.
+Manager instance methods/properties:
 
-`init_domain` is async on the Rust side; this wrapper `block_on`s on a process-wide tokio runtime so the Python caller stays sync-shaped. Same pattern as `auki-network-py`'s `DiscoveryClient`.
+- `.cluster_name`, `.local_peer_id`, `.is_manager`, `.manager_peer_id`, `.peer_count`
+- `.membership()`
+- `.admit_peer(peer_id, multiaddrs)`
+- `.participant_info()`
+- `.fetch_participant_info(peer_id)`
+- `.set_sensor_catalog_provider(callable)`
+- `.fetch_sensors_catalog(peer_id)`
+- `.open_jpeg_stream(peer_id, sensor_id)`
+- `.open_pointcloud_stream(peer_id, sensor_id)`
+- `.open_joint_encoders_stream(peer_id, sensor_id)`
+- `.open_audio_stream(peer_id, sensor_id)`
+- `.shutdown()`
 
-The `participant_provider` callable is invoked on every inbound `/auki/cluster/0.0.1` request. It returns a Python object whose attributes are duck-typed to a `ParticipantInfo` shape (`app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`). Daemons that already return an `auki_network.cluster.ParticipantInfo(...)` instance can keep doing so — the duck-typing reads attributes that pyclass exposes via `#[getter]`s.
+`stream_provider` uses the `auki_network.cluster` stream types. Its callable signature is `(requester_peer_id: str, request: StreamRequest) -> StreamDecision`.
 
-## What's NOT in this PR
+`external_addresses` has replace semantics: if provided and non-empty, those exact multiaddrs are advertised to Discovery instead of auto-detected listen addresses.
 
-- **`stream_provider` Python callable.** The wrapper passes `auki_network::stream_runtime::decline_all_streams()` so producer-side stream support is degraded vs. the pre-v0.0.33 `cluster.spawn` surface. Wiring a Python callable through requires reusing `auki-network-py`'s `build_stream_provider` (currently `pub(crate)`) or duplicating ~500 lines of `PyStreamDecision` / `PyAcceptInfo` / `PyDeclineReason` pyclass plumbing across the two PyO3 crates (the lib-name collision between `auki-network`'s `auki_network` lib and `auki-network-py`'s `auki_network` lib blocks a direct dep). Filed in [`parking_lot.md`](parking_lot.md) as the immediate follow-up. BoosterApp + Sentinel can `init_domain` and run peer-list logic today, but can't accept inbound stream subscriptions until the follow-up lands.
+## Notes
 
-- **`handle.open_stream(...)` consumer-side methods.** Park (the consumer) is Rust-side and uses `auki-network`'s Rust API directly. No Python daemon consumes streams today. Filed in the same follow-up.
+- Discovery is mandatory for cluster bootstrap.
+- `ClusterManager` computes dynamic `ParticipantInfo` fields; daemons pass only static `DaemonInfo` at construction.
+- `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
+- Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.
 
-- **`handle.update_cluster_doc(new_doc)` for SSE-driven membership refresh.** `init_domain` only performs the initial create-and-register; the daemon should subscribe to Discovery's SSE stream and feed fresh `ClusterDoc`s in so the libp2p allow-list stays in sync. The `ClusterDoc` Python pyclass would need to be reachable from this crate — same lib-name-collision blocker as `stream_provider`. Filed as a follow-up. In the meantime, the local allow-list reflects cluster membership at `init_domain`-time; peers that join after won't be dialable until the daemon restarts. Parking-lot item ["ClusterRuntime owns its SSE subscription internally"](../auki-network/parking_lot.md) (filed at the time PR B landed) is the SDK-side tightening that resolves this.
-
-## Building
-
-This is a maturin-built crate; standard `maturin develop` / `maturin build` workflow per `pyproject.toml`. Tests run via `cargo test -p auki-domain-py` (Rust unit tests with `pyo3 = auto-initialize`) and via `pytest python_tests/` once the wheel is installed.
+## Build And Test
 
 ```bash
-# Rust-only test sweep:
 cargo test -p auki-domain-py
-
-# Python smoke test (requires the wheel installed):
-pip install maturin
 maturin develop -m crates/auki-domain-py/Cargo.toml
 pytest crates/auki-domain-py/python_tests/
 ```
 
-## Daemon-side cascade
-
-Per the [v0.0.33 root changelog](../../changelog.md):
-
-> Daemon-side cascade (handled in each daemon repo as follow-ups):
-> - **BoosterApp** — drop `--cluster-doc` CLI flag and `AUKI_CLUSTER_DOC` env var; route boot through `init_domain` (or T12's algorithm once `fetch_latest` + `join_domain` land).
-> - **Sentinel** — same as BoosterApp.
-
-BoosterApp's [scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) is the daemon-side T12 task. Sentinel has the parallel one in its own repo.
+See [`src/README.md`](src/README.md) for the implementation map.

@@ -6,6 +6,25 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 15, 10:38 HKT, 2026
+
+**SDK-fronted Discovery: `ClusterManager` becomes the single entry point for cluster lifecycle.** Hagall constraint #5 enforcement — "the SDK should handle as much as possible of the daemon-side networking, so that Booster and Park work the same way." Park and Boosterapp had divergent app-level Discovery-talking (Park wrapped `DiscoveryClient` in `Park::list_clusters`; Boosterapp's `_pick_cluster_target` ran `discovery.list_clusters()` then decided create-vs-join in Python). This PR pulls the decision logic into the SDK so both apps converge on one surface.
+
+**New API:**
+- [`ClusterManager::list_clusters(discovery_url) -> Vec<ClusterEntry>`](src/cluster_manager.rs) static. Apps no longer construct `DiscoveryClient` to read the directory.
+- [`ClusterTarget`](src/cluster_manager.rs) enum: `Create { name }`, `Join { name }`, `JoinOrCreate { name }`, `MostRecentOrCreate { fallback_name }` — captures every cluster-bootstrap decision shape app daemons have historically needed. Static constructors (`ClusterTarget::create("foo")`, etc.) for ergonomics.
+- [`ClusterManager::bootstrap(target, ...) -> Result<Self, BootstrapError>`](src/cluster_manager.rs) static. **Single entry point for headless daemons.** Internally lists Discovery, decides, dispatches to `create_cluster` / `join_cluster`. Race-tolerant for `JoinOrCreate` (surfaces `AlreadyExists` on lost race; app re-bootstraps if it wants to retry).
+- [`BootstrapError`](src/cluster_manager.rs) aggregates `CreateClusterError` + `JoinClusterError` failure modes.
+
+**Signature change** (breaking; consumers must update in lockstep — the matching Park + Boosterapp PRs are the migration):
+- `ClusterManager::create_cluster` and `::join_cluster` now take `discovery_url: impl Into<String>` instead of a pre-built `DiscoveryClient`. The SDK constructs the client internally. Apps don't need to import or instantiate `DiscoveryClient` at all in the happy path. (`DiscoveryClient` stays `pub` in `auki-network` for now — demotion to `pub(crate)` is a follow-up after live confirms the migration.)
+
+**Re-exports** for app-import ergonomics: `auki_domain::{ClusterTarget, BootstrapError, DiscoveryClusterEntry, DiscoveryClientError}`. Apps stay scoped to `auki_domain::*` imports.
+
+**Tests**: `cargo test --workspace --lib` clean (no behaviour change in existing paths — only signature changes + new methods). `auki-domain` 31 unit tests pass. Live integration roundtrip verified against deployed Discovery at `192.168.9.130:8080` (`DISCOVERY_URL=... cargo test -p auki-network --features discovery_client --test discovery_integration -- --ignored` passes).
+
+**Atomic merge:** Park PR (`Park::list_clusters` rewires through `ClusterManager::list_clusters`; `create_cluster` / `join_cluster` callers pass `discovery_url` strings) + Boosterapp PR (`_pick_cluster_target` deleted; `maybe_spawn_cluster_manager` collapses to one `auki_domain.ClusterManager.bootstrap(ClusterTarget.most_recent_or_create("hagall"), ...)` call) must merge in lockstep. Boosterapp K1 daemons + Park redeploy against v0.0.41 candidate.
+
 ### Nils's claude · May 15, 09:02 HKT, 2026
 
 **Consumer-side rename for the Hagall `/heartbeat` → `/liveness` wire break.** Companion to [`auki-network` changelog 2026-05-15 09:02](../auki-network/changelog.md) which renames `DiscoveryClient::heartbeat` → `liveness_check`. This crate owns the cadence + the spawned background task that pushes the liveness check; both get renamed in lockstep.

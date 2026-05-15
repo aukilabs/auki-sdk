@@ -15,16 +15,18 @@
 //!   on a process-wide multi-thread tokio runtime.
 
 use auki_domain_rs::{
-    AdmitError as RustAdmitError, ClusterManager as RustClusterManager,
-    ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
+    AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
+    ClusterManager as RustClusterManager, ClusterMember as RustClusterMember,
+    ClusterMembership as RustClusterMembership, ClusterTarget as RustClusterTarget,
     CreateClusterError as RustCreateClusterError, DaemonInfo as RustDaemonInfo,
     JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
     SensorEntry as RustSensorEntry,
 };
+use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
+use auki_network_py::PyClusterEntry;
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
-use auki_network::discovery_client::DiscoveryClient;
 use auki_network::stream_protocol::{
     AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
     JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
@@ -454,6 +456,93 @@ impl RustSensorCatalogProvider for PySensorCatalogProvider {
 /// Construct with `create_cluster(...)` (you become the initial
 /// Manager). Join-existing-cluster lands in a follow-up commit once
 /// the libp2p join protocol ships.
+// ─── ClusterTarget ──────────────────────────────────────────────────
+//
+// Tagged-union mirror of `auki_domain::ClusterTarget`. Static factory
+// methods so Python construction reads like the Rust constructors:
+// `ClusterTarget.most_recent_or_create("hagall")` etc.
+
+/// Policy declaration for [`ClusterManager.bootstrap`]. Construct via
+/// the static factories; the bare variant is opaque to Python.
+#[pyclass(name = "ClusterTarget", frozen)]
+#[derive(Clone)]
+pub struct PyClusterTarget {
+    pub(crate) inner: RustClusterTarget,
+}
+
+#[pymethods]
+impl PyClusterTarget {
+    /// Create a new cluster named `name`. Errors with
+    /// `RuntimeError("cluster '...' already exists ...")` if the name
+    /// is taken in Discovery's directory.
+    #[staticmethod]
+    fn create(name: &str) -> Self {
+        Self {
+            inner: RustClusterTarget::create(name),
+        }
+    }
+
+    /// Join an existing cluster named `name`. Errors with
+    /// `RuntimeError("cluster '...' not in Discovery directory")` if
+    /// the cluster is missing.
+    #[staticmethod]
+    fn join(name: &str) -> Self {
+        Self {
+            inner: RustClusterTarget::join(name),
+        }
+    }
+
+    /// Join `name` if it exists in Discovery's directory; otherwise
+    /// create it. Headless daemons with a specific name configured
+    /// (e.g. `--cluster-name foo`) use this.
+    #[staticmethod]
+    fn join_or_create(name: &str) -> Self {
+        Self {
+            inner: RustClusterTarget::join_or_create(name),
+        }
+    }
+
+    /// Join the most-recently-created cluster from Discovery's
+    /// directory; if the directory is empty, create with
+    /// `fallback_name`. Headless daemons with no specific name
+    /// configured (e.g. Boosterapp without `--cluster-name`) use this.
+    #[staticmethod]
+    fn most_recent_or_create(fallback_name: &str) -> Self {
+        Self {
+            inner: RustClusterTarget::most_recent_or_create(fallback_name),
+        }
+    }
+
+    /// Discriminator: `"create"`, `"join"`, `"join_or_create"`, or
+    /// `"most_recent_or_create"`. Read-only inspection.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match &self.inner {
+            RustClusterTarget::Create { .. } => "create",
+            RustClusterTarget::Join { .. } => "join",
+            RustClusterTarget::JoinOrCreate { .. } => "join_or_create",
+            RustClusterTarget::MostRecentOrCreate { .. } => "most_recent_or_create",
+        }
+    }
+
+    /// The cluster name carried by the variant: the cluster to act
+    /// on for `create` / `join` / `join_or_create`; the fallback name
+    /// for `most_recent_or_create`.
+    #[getter]
+    fn name(&self) -> &str {
+        match &self.inner {
+            RustClusterTarget::Create { name } => name,
+            RustClusterTarget::Join { name } => name,
+            RustClusterTarget::JoinOrCreate { name } => name,
+            RustClusterTarget::MostRecentOrCreate { fallback_name } => fallback_name,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ClusterTarget.{}({:?})", self.kind(), self.name())
+    }
+}
+
 #[pyclass(name = "ClusterManager")]
 pub struct PyClusterManager {
     // Wrapped in Option<Mutex<...>> so `shutdown()` can take the
@@ -465,6 +554,109 @@ pub struct PyClusterManager {
 
 #[pymethods]
 impl PyClusterManager {
+    /// Snapshot Discovery's cluster directory. **The SDK-fronted way
+    /// for app daemons to read Discovery state** — apps should not
+    /// construct their own `DiscoveryClient` (per Hagall constraint
+    /// #5, the SDK owns Discovery-talking).
+    ///
+    /// Returns the list sorted by `created_ns` desc (newest first).
+    #[staticmethod]
+    fn list_clusters(py: Python<'_>, discovery_url: &str) -> PyResult<Vec<PyClusterEntry>> {
+        let url = discovery_url.to_string();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                RustClusterManager::list_clusters(url)
+                    .await
+                    .map(|entries| entries.into_iter().map(PyClusterEntry::from_rust).collect())
+                    .map_err(map_discovery_error)
+            })
+        })
+    }
+
+    /// Policy-driven cluster bootstrap. **The single entry point for
+    /// headless daemons** (Boosterapp, Sentinel) — declares intent via
+    /// `target` and the SDK does list + decide + create-or-join
+    /// internally.
+    ///
+    /// Park-style UIs with explicit Create / Join buttons can still
+    /// call `create_cluster(...)` / `join_cluster(...)` directly when
+    /// operator intent is unambiguous.
+    ///
+    /// `target`: a `ClusterTarget` constructed via
+    /// `ClusterTarget.create(name)` / `.join(name)` /
+    /// `.join_or_create(name)` / `.most_recent_or_create(fallback_name)`.
+    /// See the [Rust `ClusterTarget` docs](https://docs.rs/auki-domain)
+    /// for the dispatch semantics.
+    ///
+    /// All other kwargs match `create_cluster` / `join_cluster`.
+    #[staticmethod]
+    #[pyo3(signature = (
+        target,
+        wallet_seed,
+        discovery_url,
+        listen_addresses,
+        agent_version,
+        daemon_info,
+        stream_provider = None,
+        external_addresses = None,
+    ))]
+    fn bootstrap(
+        py: Python<'_>,
+        target: PyClusterTarget,
+        wallet_seed: Vec<u8>,
+        discovery_url: &str,
+        listen_addresses: Vec<String>,
+        agent_version: &str,
+        daemon_info: &PyDaemonInfo,
+        stream_provider: Option<Py<PyAny>>,
+        external_addresses: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        let seed: [u8; 32] = wallet_seed
+            .try_into()
+            .map_err(|_| PyValueError::new_err("wallet_seed must be 32 bytes"))?;
+        let discovery_url = discovery_url.to_string();
+        let agent_version = agent_version.to_string();
+        let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let external_multiaddrs = match external_addresses {
+            Some(addrs) => Some(parse_multiaddrs(&addrs)?),
+            None => None,
+        };
+        let daemon = daemon_info.inner.clone();
+        let provider: StreamProvider = match stream_provider {
+            Some(callable) => stream_provider_from_python(py, callable)?,
+            None => decline_all_streams(),
+        };
+        let rust_target = target.inner;
+
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let (identity, swarm, advertise_multiaddrs) = build_identity_and_swarm(
+                    &seed,
+                    listen_multiaddrs,
+                    agent_version,
+                    external_multiaddrs.as_deref(),
+                )
+                .await?;
+
+                let manager = RustClusterManager::bootstrap(
+                    rust_target,
+                    identity,
+                    advertise_multiaddrs,
+                    discovery_url,
+                    swarm,
+                    provider,
+                    daemon,
+                )
+                .await
+                .map_err(map_bootstrap_error)?;
+
+                Ok::<_, PyErr>(Self {
+                    inner: Arc::new(Mutex::new(Some(manager))),
+                })
+            })
+        })
+    }
+
     /// Create a new cluster, becoming its initial Manager. Returns a
     /// `ClusterManager` you can read membership / role state from
     /// and feed into `participant_info` for `/api/info`.
@@ -537,12 +729,11 @@ impl PyClusterManager {
                 )
                 .await?;
 
-                let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::create_cluster(
                     cluster_name,
                     identity,
                     advertise_multiaddrs,
-                    discovery,
+                    discovery_url,
                     swarm,
                     provider,
                     daemon,
@@ -615,12 +806,11 @@ impl PyClusterManager {
                 )
                 .await?;
 
-                let discovery = DiscoveryClient::new(discovery_url);
                 let manager = RustClusterManager::join_cluster(
                     cluster_name,
                     identity,
                     advertise_multiaddrs,
-                    discovery,
+                    discovery_url,
                     swarm,
                     provider,
                     daemon,
@@ -998,6 +1188,47 @@ fn map_join_cluster_error(e: RustJoinClusterError) -> PyErr {
     }
 }
 
+fn map_discovery_error(e: RustDiscoveryError) -> PyErr {
+    match e {
+        RustDiscoveryError::Transport(err) => {
+            PyOSError::new_err(format!("Discovery transport: {err}"))
+        }
+        RustDiscoveryError::Status { status, body } => {
+            PyRuntimeError::new_err(format!("Discovery HTTP {status}: {body}"))
+        }
+        RustDiscoveryError::InvalidPeerId(s) => {
+            PyValueError::new_err(format!("invalid peer-id in Discovery response: {s}"))
+        }
+        RustDiscoveryError::InvalidMultiaddr(s) => {
+            PyValueError::new_err(format!("invalid multiaddr in Discovery response: {s}"))
+        }
+    }
+}
+
+fn map_bootstrap_error(e: RustBootstrapError) -> PyErr {
+    match e {
+        RustBootstrapError::Discovery(err) => map_discovery_error(err),
+        RustBootstrapError::AlreadyExists(name) => PyRuntimeError::new_err(format!(
+            "cluster {name:?} already exists in Discovery directory"
+        )),
+        RustBootstrapError::NotFound(name) => PyRuntimeError::new_err(format!(
+            "cluster {name:?} not in Discovery directory"
+        )),
+        RustBootstrapError::SendJoin(err) => {
+            PyOSError::new_err(format!("join request: {err}"))
+        }
+        RustBootstrapError::Rejected(reason) => {
+            PyRuntimeError::new_err(format!("Manager rejected join: {reason}"))
+        }
+        RustBootstrapError::InvalidMembership(err) => PyValueError::new_err(format!(
+            "invalid membership JSON from Manager: {err}"
+        )),
+        RustBootstrapError::Runtime(err) => {
+            PyRuntimeError::new_err(format!("runtime spawn failed: {err}"))
+        }
+    }
+}
+
 fn map_create_cluster_error(e: RustCreateClusterError) -> PyErr {
     match e {
         RustCreateClusterError::Discovery(err) => {
@@ -1059,6 +1290,7 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PySensorEntry>()?;
+    m.add_class::<PyClusterTarget>()?;
     m.add_class::<PyClusterManager>()?;
     Ok(())
 }

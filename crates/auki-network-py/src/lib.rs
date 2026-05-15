@@ -101,7 +101,10 @@ pub struct PyClusterEntry {
 }
 
 impl PyClusterEntry {
-    fn from_rust(inner: RustClusterEntry) -> Self {
+    /// Public for cross-crate construction (e.g. `auki-domain-py`'s
+    /// `ClusterManager.list_clusters` wraps Rust entries into Python
+    /// ones).
+    pub fn from_rust(inner: RustClusterEntry) -> Self {
         Self { inner }
     }
 }

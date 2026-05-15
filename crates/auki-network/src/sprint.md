@@ -2,41 +2,52 @@
 
 Current work and next steps to close the gap between [`src/readme.md`](readme.md) (what's implemented) and [the outer README](../README.md) (the spec).
 
-## Now (M0 + M1 + all ansuz + grimsby Batch 1 + Vinland Batch 1 piece #2 + Dagaz Batch 1 — landed)
+## Now
 
-- **M0** — `PeerIdentity`, `ReachabilityRecord`, `Capability`. WASM-friendly. 11 tests.
-- **M1a** — libp2p `Swarm` builder behind the `swarm` feature. Transport: TCP + QUIC, Noise, Yamux. Behaviour: `identify` + `ping`. 4 tests + 1 doctest.
-- **M1b** — Circuit Relay v2 client (always) + relay-server (gated on `SwarmConfig.enable_relay_server`, `Toggle`-wrapped, off by default for consumer daemons). mDNS (`Toggle`-wrapped on `SwarmConfig.enable_mdns`, on by default for daemons — dual-channel coexistence with the existing `_auki._tcp.local.` advertisement). `dial_peer` helper for Park-from-home circuit-relay dialing. 4 new tests; 19 unit tests + 1 doctest total.
-- **ansuz #1** — `cluster.json` discovery-doc spec + loader. `cluster_doc` module (always-on; native-only via `std::fs`); `ClusterDoc` / `ClusterPeer` types; `load`, `default_path`, `resolve_path`; `LoadError` with five variants. 16 new unit + 3 integration tests.
-- **ansuz #2b** — `ParticipantInfo` wire shape (the `participant` module). One schema, two transports — same JSON over `GET /api/info` (HTTP) and `/auki/cluster/0.0.1` (libp2p). M0 path; no `swarm` feature required. 8 new tests including locked golden bytes.
-- **ansuz #3** — `/auki/cluster/0.0.1` request-response protocol. New `cluster_protocol` module (`swarm`-gated) wraps `libp2p::request_response::json::Behaviour<ClusterRequest, ParticipantInfo>` with the protocol id pin and a 30s timeout; wired into the swarm `Behaviour` as an always-on field. The behaviour does **not** auto-respond — receivers handle `Request` events themselves and call `send_response`, which is the libp2p-idiomatic way to plug in a fresh-`session_now_ns` provider (`auki-py`'s `participant_provider` lands here). 3 new tests.
-- **ansuz #4** — `ClusterRuntime` (`cluster_runtime` module, `swarm`-gated). Opaque runtime owning its own `Swarm<Behaviour>` + tokio task; auto-dials peers from `cluster.json`, exchanges `ParticipantInfo` on connect, exposes `peers() -> Vec<PeerSnapshot>` for any-thread reads, reconnects on disconnect with per-peer exponential backoff (1 s → cap 60 s). Trust boundary is the cluster doc — inbound from peers not in the doc is dropped. `participant_provider` invoked per inbound request so `session_now_ns` is fresh. **Closes ansuz Batch 2.** 7 new tests; 54 unit + 3 integration + 2 doctest with `--features swarm`.
-- **ansuz #5** — `app_instance::derive()` behind the default-off `app_instance` feature. First non-loopback IEEE-administered MAC, lowercased hex without separators (`aabbccddeeff`); deterministic across reboots on a fixed hardware set. 9 new tests including the locked cross-language vector.
-- **grimsby Batch 1** — `/auki/stream/0.1.0` typed-byte-stream protocol primitives + `Stream<T>` Rust API + `ClusterRuntime` stream extension. New `stream_protocol` and `stream_runtime` modules (both `swarm`-gated). 13 + 6 new tests respectively.
-- **Vinland Batch 1 piece #2** — `discovery_client` module behind the new `discovery_client` feature. REST client for `aukilabs/discovery`: `DiscoveryClient::new(url)` + async `register` / `fetch` / `deregister`. Wire shape locked end-to-end against Discovery's verifier — JCS-canonical signing payload (with `cluster_name` in the bytes for cross-cluster replay protection), base64-32 pubkey + base64-64 signature, ±60s replay window. Identity: callers pass the parent `Wallet`; the client derives the `peer/v1` child internally and signs with that. New deps gated on the feature: `reqwest 0.12` (rustls-tls + json), `base64 0.22`, `auki-jcs` (path-dep), `thiserror`. 9 new unit tests + 2 ignored integration tests against a real Discovery binary. Locked cross-language conformance vector pins the canonical bytes + signature for parent seed `[3u8; 32]` + fixed Vinland-shaped payload. Built independently of Lane A (`auki-identity`'s `Wallet::sign_canonical_json`) using `auki_jcs::canonicalize` + `wallet.sign` directly, byte-identical.
-- **Dagaz Batch 1** — producer-side `T` lift + new `PointCloudFrame` payload type. `stream_runtime` drops generic `StreamProvider<T>` / `StreamDecision<T>` and ships a closed `StreamDispatch` enum (`AcceptJpeg` / `AcceptPointCloud` / `Decline`) returned by a non-generic `StreamProvider`; producer dispatches by `request.sensor_id` to pick which `T` per call (Dagaz D1). `handle_inbound_substream` non-generic outer + a generic `pump_typed::<T>` helper monomorphized per variant. New `PointCloudFrame { bytes: Vec<u8> }` for raw-CDR `PointCloud2` (Dagaz D2 = A); `bytes` rides through a `#[serde(with = "base64_bytes")]` adapter so the JSON envelope carries a base64 string instead of `serde_json`'s 4×-overhead array-of-integers form (Dagaz D3 wire-side). Bandwidth: 22 MB/s raw → ~30 MB/s on the wire vs ~80 MB/s without. `JpegFrame` unchanged for grimsby v1 wire compat. New dep on `swarm` feature: `base64 = "0.22"`. 5 new `stream_protocol::tests` (round-trip + wire-size assertion + locked cross-language conformance vector + framing-helpers round-trip) + 2 new e2e in `stream_runtime::tests` (full two-runtime PointCloudFrame happy path + multi-`T` dispatch on one runtime serving JPEG + PointCloud + Decline over distinct substreams).
+The crate is the low-level networking substrate. The current implementation has three layers:
 
-The three Reid milestone-2 parking-lot questions are resolved and encoded in code: dual-channel mDNS (1a), both-gates relay-server (2c), manual peer-id paste for Park-from-home (3c). The six ansuz decisions (D1–D6) are resolved on Notion; this crate has implemented D1 (strict — `peer_id` required in `cluster.json`), D2 (libp2p `/auki/cluster/0.0.1`, no HTTP fallback), D4 (MAC-derived `app_instance`). The five Vinland decisions (D1–D5) are resolved on Notion; this crate honors D1 (no liveness loop in v1), D2 (pull-only, no SDK-side poll), D3 (no fallback when Discovery is unreachable), and keeps `cluster_name` as a parameter to support D5's "daemons hardcode `vinland` at the call site" decision. The four Dagaz SDK-side decisions (D1, D2, D3 wire-side, D5) are resolved on Notion; D4 (Park renderer) remains open and is Charlie's call.
+- **Identity and reachability, default feature path.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies.
+- **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, typed stream opening, and shutdown.
+- **Discovery client, `discovery_client` feature.** `DiscoveryClient` wraps Discovery's cluster directory endpoints: list, atomic create, liveness check, Manager rotation, and deregistration.
+
+Current libp2p protocol modules:
+
+| Protocol | Module | Current role |
+|---|---|---|
+| `/auki/join/0.0.1` | `join_protocol` | Non-member asks the Manager for admission |
+| `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Pairwise liveness used for Manager-death detection |
+| `/auki/membership/0.0.1` | `membership_protocol` | Manager broadcasts fresh membership JSON |
+| `/auki/info/0.0.1` | `info_protocol` | Fetch another peer's `ParticipantInfo` |
+| `/auki/sensors/0.0.1` | `sensors_protocol` | Fetch another peer's current sensor catalog |
+| `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
+
+The typed stream runtime is multi-payload on both sides. Producer callbacks have the requester peer id in their signature:
+
+```rust
+type StreamProvider =
+    Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>;
+```
+
+`StreamDispatch` supports JPEG, PointCloud, JointEncoders, Audio, and decline paths. Each accepted substream is still mono-`T`; the consumer chooses the expected payload type when opening the stream.
+
+Cluster lifecycle policy is intentionally one layer up in [`auki-domain`](../../auki-domain). App daemons should normally use `ClusterManager`; this crate remains the transport/protocol toolbox.
 
 ## Next
 
-The crate's ansuz scope is fully shipped. Forward-looking work, not blocking:
+In priority order:
 
-- **PyO3 wrapper** lives in [`auki-network-py`](../../auki-network-py) — a sibling crate (per the per-component naming decision). Boosterapp's Python sidecar consumes it; this crate exports `pub` types so the wrapper can re-export them.
-- **Daemon integration** — Boosterapp / Sentinel / Park consume this crate as a path or git dep; daemon-side work is not done in this crate. Vinland Batch 3 daemon integrations have landed for Boosterapp + Park; Sentinel is queued.
-- **Layer 2 — capability advertisement / topic discovery.** Per the Reid architecture: capability identifiers are the namespaced strings already in `Capability`; what's missing is the libp2p protocol that advertises a peer's capability list + sensor topic list at runtime and lets others query it. Likely a `libp2p::request_response` behaviour with a stable protocol id (`/auki/capabilities/1.0.0`); the `cluster_protocol` codec pattern is the template (request empty, response carries `Vec<{topic, sensor_id, sensor_hash}>` plus `ReachabilityRecord`). This is the natural next networking deliverable now that ansuz + grimsby + Vinland + Dagaz have shipped — flagged in [State of SDK](https://www.notion.so/3565c8e9659281d4a477db09729cbe1f) as "the biggest single gap on the networking side."
+1. **Capability and topic discovery.** The architecture still needs a peer-to-peer way to advertise current capabilities and available sensor topics. The likely shape is a request/response protocol sibling to the current info and sensors protocols, owned by `NetworkRuntime` and surfaced through `auki-domain`.
 
-## Smaller follow-ups
+2. **Protocol hardening.** Successor-token verification, challenge/response, and tighter Discovery trust checks belong with the next security pass. Discovery v1 is shape-checked, not signature-verified.
 
-- **DCUtR (hole-punching).** Optional; upgrades a relayed connection to a direct one. Add `libp2p::dcutr::Behaviour` to the composition. Small, additive; not load-bearing for the M2 demo.
-- **AutoNAT.** Lets a peer determine whether it's directly reachable. Useful for daemons to decide whether to register reachability via a relay. `libp2p::autonat::Behaviour`.
-- **Persistent peer-id**. Documented end-to-end: `auki-identity::load_or_mint_seed` ships, `cluster_runtime::spawn` accepts a 32-byte seed; the integrator persists the seed (`~/.auki/<app>/identity.seed` is the convention).
+3. **Transport reachability upgrades.** DCUtR / hole-punching and AutoNAT are additive improvements once real deployments need better direct-connect behavior.
 
-## Open items
+## Smaller Follow-Ups
 
-See [`parking_lot.md`](../parking_lot.md). Remaining items are forward-looking, not M1-blocking:
+- Expose only the `SwarmConfig` knobs that real daemons need; keep idle/ping/connection-limit tuning private until there is pressure.
+- Decide whether transport build errors should stay stringly typed or preserve structured sources.
+- Keep the Python stream-provider bridge aligned when new `StreamDispatch` payload variants land.
 
-- Wallet → peer-key derivation label evolution (`peer/v1` shipped; future BIP32-style migration).
-- `ReachabilityRecord` extensibility / versioning before any consumer relies on the shape being stable.
-- `SwarmConfig` knob minimalism — when to expose idle/ping/connection-limit knobs.
-- `BuildError::Transport(String)` structure — String vs boxed source vs enumerated variants.
+## Open Items
+
+See [`parking_lot.md`](../parking_lot.md). Remaining items are forward-looking; none block the current `ClusterManager` path.

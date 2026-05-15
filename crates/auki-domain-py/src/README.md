@@ -1,20 +1,37 @@
-# `auki-domain-py/src` — what's implemented
+# `auki-domain-py/src` - implementation status
 
 ## Files
 
-- [`lib.rs`](lib.rs) — single-file crate. PyO3 module entry point + `init_domain` Python function + `DomainHandle` pyclass + five typed Python exception classes + the duck-typed `build_participant_provider` adapter + Rust unit tests. ~600 lines including tests.
+- [`lib.rs`](lib.rs) - single-file PyO3 binding for `auki-domain`.
+- [`sprint.md`](sprint.md) - current follow-ups.
 
-## Status
+## Implemented
 
 | Feature | Status |
-|---------|--------|
-| `init_domain` Python function | ✅ shipped |
-| `DomainHandle` pyclass (`.identity`, `.peers()`, `.shutdown()`) | ✅ shipped |
-| Typed Python exceptions (5 classes) | ✅ shipped |
-| `participant_provider` duck-typed callable | ✅ shipped |
-| `stream_provider` Python callable | ❌ parking_lot #1 |
-| `handle.open_*_stream()` consumer methods | ❌ parking_lot #2 |
-| `handle.update_cluster_doc()` SSE feed | ❌ parking_lot #3 |
-| `DomainAlreadyExists.existing` ClusterDoc | ❌ parking_lot #4 |
+|---|---|
+| `ClusterMember` / `ClusterMembership` pyclasses | shipped |
+| `DaemonInfo` / `ParticipantInfo` pyclasses | shipped |
+| `SensorEntry` pyclass | shipped |
+| `ClusterTarget` pyclass | shipped |
+| `ClusterManager.list_clusters` | shipped |
+| `ClusterManager.bootstrap` | shipped |
+| `ClusterManager.create_cluster` / `join_cluster` | shipped |
+| `ClusterManager` role/membership accessors | shipped |
+| `participant_info` / `fetch_participant_info` | shipped |
+| `set_sensor_catalog_provider` / `fetch_sensors_catalog` | shipped |
+| `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` / `open_audio_stream` | shipped |
+| `stream_provider` kwarg via `auki_network.cluster._build_stream_provider` PyCapsule | shipped |
+| `external_addresses` advertise override | shipped |
 
-See [`sprint.md`](sprint.md) for what's next.
+## Shape
+
+The wrapper accepts Python-friendly inputs (seed bytes, multiaddr strings, peer-id strings), builds the Rust `PeerIdentity` + swarm internally, resolves advertised multiaddrs, then calls `auki_domain::ClusterManager`.
+
+All async Rust calls are `block_on`ed on a process-wide multi-thread tokio runtime so Python callers keep a synchronous API.
+
+## Deferred
+
+- Typed Python exception hierarchy for every Rust error variant. Current mapping uses `ValueError`, `RuntimeError`, and `OSError`.
+- Dedicated relay-reservation helper once the Rust SDK has one.
+
+See [`sprint.md`](sprint.md) for current follow-ups.

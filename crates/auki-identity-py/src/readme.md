@@ -64,8 +64,8 @@ The two feature modes are mutually exclusive — `extension-module` skips linkin
 | `wallet_from_seed_rejects_wrong_length` | Non-32-byte seed → `ValueError` |
 | `load_or_mint_seed_round_trip_via_pyo3_layer` | The `#[pyfunction]` entry point round-trips bytes correctly through tempdir |
 | `wallet_seed_round_trips_for_root_wallet` | `Wallet.from_seed(seed).seed() == seed` |
-| `wallet_seed_round_trips_for_derived_child` | `Wallet.from_seed(parent.derive_child(label).seed()).peer_id() == parent.derive_child(label).peer_id()` — the property `auki_network.cluster.spawn` relies on |
-| `wallet_seed_returns_32_bytes` | Length pin (the `cluster.spawn` FFI seam strictly requires 32 bytes) |
+| `wallet_seed_round_trips_for_derived_child` | `Wallet.from_seed(parent.derive_child(label).seed()).peer_id() == parent.derive_child(label).peer_id()` — the property lower-level `PeerIdentity::from_seed` consumers rely on |
+| `wallet_seed_returns_32_bytes` | Length pin for the peer seed format consumed by `PeerIdentity::from_seed` |
 | `locked_peer_id_vector` | Shape pin for `Wallet.from_seed(&[3u8; 32]).derive_child("peer/v1").peer_id()` — the cross-language locked vector |
 
 ### Python-side (`python_tests/test_basic.py`)
@@ -85,7 +85,7 @@ The two feature modes are mutually exclusive — `extension-module` skips linkin
 | `test_wallet_from_seed_rejects_wrong_length` | Non-32-byte seed → `ValueError` |
 | `test_wallet_seed_round_trips_for_root_wallet` | `Wallet.from_seed(seed).seed() == seed` |
 | `test_wallet_seed_round_trips_for_derived_child` | `Wallet.from_seed(parent.derive_child(label).seed()).peer_id() == parent.derive_child(label).peer_id()` — the property the BoosterApp ansuz path depends on |
-| `test_wallet_seed_returns_bytes_of_length_32` | Returns 32-byte `bytes` (the `cluster.spawn` FFI seam strictly requires 32 bytes) |
+| `test_wallet_seed_returns_bytes_of_length_32` | Returns 32-byte `bytes`, matching the peer seed format consumed by `PeerIdentity::from_seed` |
 | `test_wallet_seed_differs_across_derivations` | Different labels produce different child seeds (derivation is non-trivial) |
 | `test_app_instance_derive_returns_12_lowercase_hex_or_runtime_error` | Returns 12 lowercase hex chars on hardware, or accepts `RuntimeError` for container / private-Wi-Fi-only environments |
 | `test_locked_peer_id_vector` | Shape pin + optional exact match against the cross-language locked literal |

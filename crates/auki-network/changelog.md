@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 11:40 HKT, 2026
+
+**Documentation refresh: `auki-network` READMEs and sprint now match the Hagall-era network surface.** The stale ansuz/Greenland prose that described static cluster-doc loading and a public runtime constructor has been replaced with the current split: default-feature identity/reachability/`ParticipantInfo`, `swarm`-gated `NetworkRuntime`, the live protocol set (`/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/sensors`, `/auki/stream`), and the `discovery_client` methods that talk to Discovery's v1 directory. The docs now point app daemons at `auki-domain::ClusterManager` as the lifecycle owner and keep this crate framed as the transport/protocol toolbox. No Rust behavior changed.
+
 ### Nils's claude · May 15, 09:02 HKT, 2026
 
 **Cluster `/heartbeat` → `/liveness` rename + cadence retune — SDK half of the coordinated wire break with [aukilabs/discovery](https://github.com/aukilabs/discovery).** Implements the [Hagall doc](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0)'s 2026-05-14 status-log entry "wire-surface rename + sweep tightening locked," which had been planned-but-never-shipped (the original 2026-05-14 entry claimed it rode v0.0.37 — it didn't). Symptom that surfaced today: Nils observed cluster `test` got swept ~6 min after creation when the Manager process likely died, prompting a re-read of the Notion contract vs the code; the rename had drifted out of compliance.

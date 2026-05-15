@@ -51,11 +51,11 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-/// Cadence of the Manager → Discovery heartbeat tick. Matches the
-/// Hagall v1 contract — Discovery's sweep timer is 10s, so a 3s
-/// cadence leaves ~3 consecutive misses' tolerance before the
-/// cluster is dropped.
-pub const MANAGER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+/// Cadence of the Manager → Discovery liveness-check tick. Matches the
+/// Hagall v1 contract (2026-05-14 rename) — Discovery's `liveness
+/// requirement` sweep window is 3s, so a 1s cadence leaves 3
+/// consecutive misses' tolerance before the cluster is swept.
+pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Daemon-side identity fields the SDK doesn't own. The daemon
 /// hands one of these to [`ClusterManager::create_cluster`] /
@@ -216,7 +216,7 @@ pub struct ClusterManager {
     /// `Arc<Mutex<Option<_>>>` so the liveness handler can spawn it
     /// on Manager-promotion (SDK-T7 handoff). `Some` while this peer
     /// is the Manager; `None` otherwise. Cancelled on `shutdown`.
-    heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     /// Task that drains inbound `/auki/join/0.0.1` events from the
     /// runtime, decides admit-or-reject, and replies. Lives for the
     /// lifetime of the ClusterManager. Cancelled on `shutdown` via
@@ -331,8 +331,8 @@ impl ClusterManager {
         ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
-        let heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>> =
-            Arc::new(Mutex::new(Some(spawn_manager_heartbeat(
+        let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> =
+            Arc::new(Mutex::new(Some(spawn_manager_liveness_check(
                 discovery.clone(),
                 cluster_name.clone(),
                 membership.clone(),
@@ -363,7 +363,7 @@ impl ClusterManager {
             membership.clone(),
             runtime.handle(),
             discovery.clone(),
-            heartbeat_task.clone(),
+            liveness_check_task.clone(),
         )));
 
         // 7. Drain inbound /auki/membership/0.0.1 gossip events. As
@@ -413,7 +413,7 @@ impl ClusterManager {
             daemon_info,
             session_started,
             cluster_joined_at_ns,
-            heartbeat_task,
+            liveness_check_task,
             join_handler_task,
             liveness_handler_task,
             membership_handler_task,
@@ -804,7 +804,7 @@ impl ClusterManager {
         //    cluster-internal election; if we win, become the new
         //    Manager (update state, rotate Discovery, start the
         //    heartbeat tick).
-        let heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+        let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
         let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
             cluster_name.clone(),
@@ -814,7 +814,7 @@ impl ClusterManager {
             membership.clone(),
             runtime.handle(),
             discovery.clone(),
-            heartbeat_task.clone(),
+            liveness_check_task.clone(),
         )));
 
         // 8. Drain inbound /auki/membership/0.0.1 gossip events.
@@ -862,7 +862,7 @@ impl ClusterManager {
             daemon_info,
             session_started,
             cluster_joined_at_ns,
-            heartbeat_task,
+            liveness_check_task,
             join_handler_task,
             liveness_handler_task,
             membership_handler_task,
@@ -911,7 +911,7 @@ impl ClusterManager {
 
         // 1. Cancel background tasks FIRST so we stop touching
         //    Discovery / membership between teardown steps.
-        if let Some(task) = self.heartbeat_task.lock().expect("heartbeat lock").take() {
+        if let Some(task) = self.liveness_check_task.lock().expect("liveness_check_task lock").take() {
             task.abort();
         }
         if let Some(task) = self
@@ -1025,7 +1025,7 @@ fn spawn_liveness_handler(
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
     discovery: DiscoveryClient,
-    heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 ) -> JoinHandle<()> {
     // Dedupe: don't run election twice for the same Lost event
     // (the runtime emits Lost from both `ConnectionClosed` and the
@@ -1079,14 +1079,14 @@ fn spawn_liveness_handler(
                             }
 
                             // Start the Manager-side heartbeat tick.
-                            let new_tick = spawn_manager_heartbeat(
+                            let new_tick = spawn_manager_liveness_check(
                                 discovery.clone(),
                                 cluster_name.clone(),
                                 membership.clone(),
                             );
-                            let prev = heartbeat_task
+                            let prev = liveness_check_task
                                 .lock()
-                                .expect("heartbeat_task lock")
+                                .expect("liveness_check_task lock")
                                 .replace(new_tick);
                             if let Some(p) = prev {
                                 p.abort();
@@ -1425,16 +1425,16 @@ pub fn elect_successor(
     None
 }
 
-fn spawn_manager_heartbeat(
+fn spawn_manager_liveness_check(
     discovery: DiscoveryClient,
     cluster_name: String,
     membership: Arc<Mutex<ClusterMembership>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(MANAGER_HEARTBEAT_INTERVAL);
+        let mut tick = tokio::time::interval(LIVENESS_CHECK_INTERVAL);
         // First tick fires immediately; skip it because Discovery
         // already has our state from `create_cluster`'s synchronous
-        // `create` call. The next tick happens at +3s.
+        // `create` call. The next tick happens at +1s.
         tick.tick().await;
         loop {
             tick.tick().await;
@@ -1445,11 +1445,11 @@ fn spawn_manager_heartbeat(
             // Errors are logged to stderr (via the default
             // tracing-or-print path) and tolerated — a transient
             // Discovery hiccup shouldn't kill the cluster. Discovery
-            // sweeps after 10s of no heartbeat anyway, so persistent
-            // failures self-resolve.
-            if let Err(e) = discovery.heartbeat(&cluster_name, peer_count).await {
+            // sweeps after 3s of no liveness check (3 missed at 1s
+            // cadence), so persistent failures self-resolve.
+            if let Err(e) = discovery.liveness_check(&cluster_name, peer_count).await {
                 eprintln!(
-                    "auki-domain: Discovery heartbeat for cluster {cluster_name:?} failed: {e}"
+                    "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
                 );
             }
         }
@@ -1575,9 +1575,11 @@ mod tests {
     }
 
     #[test]
-    fn manager_heartbeat_interval_matches_v1_contract() {
-        // 3s heartbeat / 10s sweep — matches aukilabs/discovery#5.
-        assert_eq!(MANAGER_HEARTBEAT_INTERVAL, Duration::from_secs(3));
+    fn liveness_check_interval_matches_v1_contract() {
+        // 1s liveness check / 3s sweep — matches the 2026-05-14
+        // Hagall rename (was 3s / 10s under the original
+        // aukilabs/discovery#5 contract).
+        assert_eq!(LIVENESS_CHECK_INTERVAL, Duration::from_secs(1));
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

@@ -20,7 +20,7 @@ pub mod cluster_membership;
 
 pub use cluster_manager::{
     AdmitError, ClusterManager, CreateClusterError, DaemonInfo, FetchParticipantInfoError,
-    FetchSensorsCatalogError, JoinClusterError, MANAGER_HEARTBEAT_INTERVAL, SensorCatalogProvider,
+    FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL, SensorCatalogProvider,
     SensorEntry, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};

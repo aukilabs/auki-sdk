@@ -138,18 +138,18 @@ impl PyClusterEntry {
     }
 
     #[getter]
-    fn last_heartbeat_ns(&self) -> i64 {
-        self.inner.last_heartbeat_ns
+    fn last_liveness_check_ns(&self) -> i64 {
+        self.inner.last_liveness_check_ns
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "ClusterEntry(name={:?}, manager_peer_id={:?}, peer_count={}, created_ns={}, last_heartbeat_ns={})",
+            "ClusterEntry(name={:?}, manager_peer_id={:?}, peer_count={}, created_ns={}, last_liveness_check_ns={})",
             self.inner.name,
             self.inner.manager_peer_id.to_string(),
             self.inner.peer_count,
             self.inner.created_ns,
-            self.inner.last_heartbeat_ns,
+            self.inner.last_liveness_check_ns,
         )
     }
 }
@@ -254,13 +254,19 @@ impl PyDiscoveryClient {
         })
     }
 
-    /// Manager push: report aggregate `peer_count`.
-    fn heartbeat(&self, py: Python<'_>, name: &str, peer_count: u32) -> PyResult<PyClusterEntry> {
+    /// Manager push: report aggregate `peer_count` as a liveness check.
+    /// Resets Discovery's 3s sweep window for this cluster.
+    fn liveness_check(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        peer_count: u32,
+    ) -> PyResult<PyClusterEntry> {
         let client = self.inner.clone();
         let name = name.to_string();
         py.allow_threads(|| {
             cluster_tokio_runtime()
-                .block_on(client.heartbeat(&name, peer_count))
+                .block_on(client.liveness_check(&name, peer_count))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
         })

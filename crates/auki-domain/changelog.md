@@ -6,6 +6,21 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 15, 09:02 HKT, 2026
+
+**Consumer-side rename for the Hagall `/heartbeat` → `/liveness` wire break.** Companion to [`auki-network` changelog 2026-05-15 09:02](../auki-network/changelog.md) which renames `DiscoveryClient::heartbeat` → `liveness_check`. This crate owns the cadence + the spawned background task that pushes the liveness check; both get renamed in lockstep.
+
+**Symbol renames** (no behavioural change beyond cadence):
+- Public const: `MANAGER_HEARTBEAT_INTERVAL: Duration = 3s` → `LIVENESS_CHECK_INTERVAL: Duration = 1s`. Retune from 3s to 1s matches the Hagall doc's "1s cadence + 3s sweep + 3 missed checks" convention; Discovery's sweep tightens 10s → 3s in the sibling Discovery PR.
+- Function: `spawn_manager_heartbeat` → `spawn_manager_liveness_check`. Body unchanged beyond the inner `discovery.heartbeat()` call site (now `discovery.liveness_check()`) and the doc-comment retune.
+- Struct field on `ClusterManager`: `heartbeat_task: Arc<Mutex<Option<JoinHandle<()>>>>` → `liveness_check_task` (internal, but renaming for symbol-consistency with the public surface — a future reader scanning the SDK shouldn't see a stale `heartbeat_task` name pointing at a liveness-check loop).
+- Test: `manager_heartbeat_interval_matches_v1_contract` → `liveness_check_interval_matches_v1_contract`; assertion flips from `Duration::from_secs(3)` to `Duration::from_secs(1)`.
+- Public re-export in [`lib.rs`](src/lib.rs): `MANAGER_HEARTBEAT_INTERVAL` → `LIVENESS_CHECK_INTERVAL`.
+
+**Wire break by design** — no compatibility shim. Consumers pinning this crate must move atomically with the [aukilabs/discovery](https://github.com/aukilabs/discovery) sibling PR + the deployment redeploy.
+
+**Tests**: workspace `cargo test --workspace --lib` clean (auki-domain 31 unit tests pass). Live integration roundtrip verified against a local Discovery built from the sibling branch — see the [`auki-network`](../auki-network/changelog.md) entry for the e2e roundtrip details.
+
 ### Nils's claude · May 13, 18:13 HKT, 2026
 
 **Bug fix: graceful Manager shutdown no longer deregisters the cluster when other peers exist.** Surfaced by Nils: "manager leaving cluster causes cluster to close, no new manager is elected." Root cause: `ClusterManager::shutdown` unconditionally called `discovery.deregister(...)` when `was_manager`. With multiple peers, the surviving peer's libp2p ConnectionClosed → election → `discovery.rotate_manager(...)` round-trip 404'd because A's shutdown had already nuked the cluster from Discovery's directory. The cluster ended up dead instead of handing off.

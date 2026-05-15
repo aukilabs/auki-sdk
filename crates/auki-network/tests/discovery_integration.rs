@@ -16,7 +16,7 @@
 //! 2. `create_cluster` with a uniquely-named cluster returns `Created`.
 //! 3. A second `create_cluster` with the same name returns
 //!    `AlreadyExists`.
-//! 4. `heartbeat` updates `peer_count` + bumps `last_heartbeat_ns`.
+//! 4. `liveness_check` updates `peer_count` + bumps `last_liveness_check_ns`.
 //! 5. `rotate_manager` swaps the Manager hint.
 //! 6. `deregister` removes the cluster; a follow-up `list_clusters`
 //!    confirms it's gone.
@@ -77,8 +77,8 @@ async fn roundtrip_against_live_discovery() {
     );
     assert!(entry.created_ns > 0, "Discovery stamps created_ns");
     assert!(
-        entry.last_heartbeat_ns >= entry.created_ns,
-        "Discovery stamps last_heartbeat_ns at create time"
+        entry.last_liveness_check_ns >= entry.created_ns,
+        "Discovery stamps last_liveness_check_ns at create time"
     );
     eprintln!("Created cluster {name}, created_ns={}", entry.created_ns);
 
@@ -92,15 +92,15 @@ async fn roundtrip_against_live_discovery() {
         "second create on same name returns AlreadyExists"
     );
 
-    // 4. Heartbeat — bumps peer_count + last_heartbeat_ns.
+    // 4. Liveness check — bumps peer_count + last_liveness_check_ns.
     let beat = client
-        .heartbeat(&name, 3)
+        .liveness_check(&name, 3)
         .await
-        .expect("heartbeat succeeds");
-    assert_eq!(beat.peer_count, 3, "heartbeat updates peer_count");
+        .expect("liveness_check succeeds");
+    assert_eq!(beat.peer_count, 3, "liveness_check updates peer_count");
     assert!(
-        beat.last_heartbeat_ns > 0,
-        "heartbeat stamps last_heartbeat_ns"
+        beat.last_liveness_check_ns > 0,
+        "liveness_check stamps last_liveness_check_ns"
     );
 
     // 5. Rotate Manager — swap to a different peer.

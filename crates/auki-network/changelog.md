@@ -6,6 +6,27 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 15, 09:02 HKT, 2026
+
+**Cluster `/heartbeat` → `/liveness` rename + cadence retune — SDK half of the coordinated wire break with [aukilabs/discovery](https://github.com/aukilabs/discovery).** Implements the [Hagall doc](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0)'s 2026-05-14 status-log entry "wire-surface rename + sweep tightening locked," which had been planned-but-never-shipped (the original 2026-05-14 entry claimed it rode v0.0.37 — it didn't). Symptom that surfaced today: Nils observed cluster `test` got swept ~6 min after creation when the Manager process likely died, prompting a re-read of the Notion contract vs the code; the rename had drifted out of compliance.
+
+**Disambiguates two distinct signals previously both called "heartbeat":**
+- **Liveness check** = Manager → Discovery push, HTTP POST. Owns Discovery's directory-entry expiry. **This entry.**
+- **Heartbeat** = Manager ↔ each peer, pairwise-bidirectional libp2p substream on `/auki/heartbeat/0.0.1`. Owns peer-side Manager-death detection + (forward-compat) NTP peer-clock agreement. Out of scope — the libp2p substream protocol id keeps the word "heartbeat" because it serves dual purposes.
+
+**Wire surface (lockstep with `aukilabs/discovery` PR for the same rename):**
+- URL: `POST /clusters/{name}/heartbeat` → `POST /clusters/{name}/liveness`
+- JSON field: `last_heartbeat_ns` → `last_liveness_check_ns`
+- SDK method: `DiscoveryClient::heartbeat()` → `DiscoveryClient::liveness_check()`
+- SDK internal wire struct: `WireHeartbeatRequest` → `WireLivenessCheckRequest`
+- Cadence: ~3s → 1s (was a 3s `MANAGER_HEARTBEAT_INTERVAL` const at the consumer level; now 1s `LIVENESS_CHECK_INTERVAL`). Discovery's sweep tightened 10s → 3s in the sibling Discovery PR. Both sides retain the "3 missed checks" tolerance.
+
+**Wire break by design** — no backward-compat shim, per the Hagall principle "wire formats may break." Two PRs must merge in lockstep; live deployment at `192.168.9.130:8080` needs a redeploy + SDK consumer (Boosterapp K1 daemons, Park) restart against the new SDK release.
+
+**Tests**: `cargo test -p auki-network --features swarm,discovery_client` clean (108 unit tests + 1 live-integration test). Live integration roundtrip verified locally: brought up `aukilabs/discovery` on `127.0.0.1:8081` from the matching branch + ran `DISCOVERY_URL=http://127.0.0.1:8081 cargo test --features discovery_client --test discovery_integration -- --ignored` — full list → create → 409 → liveness_check → rotate_manager → deregister loop succeeds end-to-end.
+
+**Touched** in this crate: [`src/discovery_client.rs`](src/discovery_client.rs) (module doc-comment, `ClusterEntry.last_liveness_check_ns` field rename, `DiscoveryClient::liveness_check` method, `WireLivenessCheckRequest` struct, internal wire entry parser, 6 unit-test fixtures + locked-field-name assertions). [`tests/discovery_integration.rs`](tests/discovery_integration.rs) (live-against-Discovery roundtrip). Companion [`auki-domain`](../auki-domain/changelog.md) entry covers the consumer-side `LIVENESS_CHECK_INTERVAL` const + `spawn_manager_liveness_check` rename + `liveness_check_task` field.
+
 ### Nils's claude · May 14, 12:54 HKT, 2026
 
 **Dialogue Batch 1 (SDK Rust core, half 2) — `StreamDispatch::AcceptAudio` arm + `AudioFrame` re-export + dispatch site.** Companion to [`auki-datatypes` changelog 2026-05-14 12:54](../auki-datatypes/changelog.md) which adds the underlying `auki.audio_stream.AudioFrame` proto. This crate consumes that wire type and gives producers a fifth `StreamDispatch` arm to return, alongside `Decline` / `AcceptJpeg` / `AcceptPointCloud` / `AcceptJointEncoders`.

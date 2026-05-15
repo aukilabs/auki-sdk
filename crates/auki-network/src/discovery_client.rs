@@ -15,8 +15,9 @@
 //!   by `created_ns` desc (newest-created first).
 //! - `POST   /clusters/{name}`           — create. Trust-on-first-claim;
 //!   409 if the name is taken.
-//! - `POST   /clusters/{name}/heartbeat` — Manager push every ~3s,
-//!   body `{ peer_count }`.
+//! - `POST   /clusters/{name}/liveness`  — Manager liveness check,
+//!   pushed every 1s. Body `{ peer_count }`. Resets Discovery's 3s
+//!   sweep window for the cluster.
 //! - `POST   /clusters/{name}/manager`   — rotate Manager hint (no
 //!   crypto in v1).
 //! - `DELETE /clusters/{name}`           — graceful deregistration.
@@ -48,9 +49,9 @@ use thiserror::Error;
 /// Manager's most-recent self-reported size (aggregate; no
 /// identities). `created_ns` is Discovery's server-stamped creation
 /// timestamp and the sort key for `list_clusters`.
-/// `last_heartbeat_ns` is the unix-ns of the Manager's most recent
-/// heartbeat (`0` if the cluster was just created and the Manager
-/// hasn't heartbeat'd yet).
+/// `last_liveness_check_ns` is the unix-ns of the Manager's most recent
+/// liveness check (`0` if the cluster was just created and the Manager
+/// hasn't pushed one yet).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterEntry {
     /// The cluster's name. Discovery enforces `^[A-Za-z0-9_-]{1,64}$`.
@@ -64,11 +65,11 @@ pub struct ClusterEntry {
     /// Unix nanoseconds, Discovery's server clock at cluster creation.
     /// Sort key for [`DiscoveryClient::list_clusters`] (desc).
     pub created_ns: i64,
-    /// Unix nanoseconds, last heartbeat received. Discovery stamps it
-    /// at create time as well, so on a fresh cluster
-    /// `last_heartbeat_ns == created_ns`; subsequent heartbeats
-    /// advance it.
-    pub last_heartbeat_ns: i64,
+    /// Unix nanoseconds, last liveness check received. Discovery stamps
+    /// it at create time as well, so on a fresh cluster
+    /// `last_liveness_check_ns == created_ns`; subsequent liveness
+    /// checks advance it.
+    pub last_liveness_check_ns: i64,
 }
 
 /// Outcome of [`DiscoveryClient::create_cluster`].
@@ -189,15 +190,15 @@ impl DiscoveryClient {
     }
 
     /// Manager push: report aggregate `peer_count`. Discovery refreshes
-    /// `last_heartbeat_ns` and resets the 10s sweep window. Returns
-    /// the updated `ClusterEntry`.
-    pub async fn heartbeat(
+    /// `last_liveness_check_ns` and resets the 3s sweep window
+    /// (`LIVENESS_REQUIREMENT_NS`). Returns the updated `ClusterEntry`.
+    pub async fn liveness_check(
         &self,
         name: &str,
         peer_count: u32,
     ) -> Result<ClusterEntry, DiscoveryError> {
-        let url = format!("{}/clusters/{}/heartbeat", self.base_url, name);
-        let body = WireHeartbeatRequest { peer_count };
+        let url = format!("{}/clusters/{}/liveness", self.base_url, name);
+        let body = WireLivenessCheckRequest { peer_count };
         let resp = self.http.post(&url).json(&body).send().await?;
         ok_or_status(resp).await
     }
@@ -246,7 +247,7 @@ struct WireClusterEntry {
     manager_multiaddrs: Vec<String>,
     peer_count: u32,
     created_ns: i64,
-    last_heartbeat_ns: i64,
+    last_liveness_check_ns: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,7 +262,7 @@ struct WireManagerRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct WireHeartbeatRequest {
+struct WireLivenessCheckRequest {
     peer_count: u32,
 }
 
@@ -282,7 +283,7 @@ fn parse_wire_entry(w: WireClusterEntry) -> Result<ClusterEntry, DiscoveryError>
         manager_multiaddrs,
         peer_count: w.peer_count,
         created_ns: w.created_ns,
-        last_heartbeat_ns: w.last_heartbeat_ns,
+        last_liveness_check_ns: w.last_liveness_check_ns,
     })
 }
 
@@ -311,7 +312,7 @@ mod tests {
             manager_multiaddrs: vec!["/ip4/192.168.9.10/tcp/4001".to_string()],
             peer_count: 3,
             created_ns: 1_715_423_400_000_000_000,
-            last_heartbeat_ns: 1_715_423_500_000_000_000,
+            last_liveness_check_ns: 1_715_423_500_000_000_000,
         }
     }
 
@@ -331,7 +332,7 @@ mod tests {
         );
         assert_eq!(entry.peer_count, w.peer_count);
         assert_eq!(entry.created_ns, w.created_ns);
-        assert_eq!(entry.last_heartbeat_ns, w.last_heartbeat_ns);
+        assert_eq!(entry.last_liveness_check_ns, w.last_liveness_check_ns);
     }
 
     #[test]
@@ -375,7 +376,7 @@ mod tests {
             "\"manager_multiaddrs\":",
             "\"peer_count\":",
             "\"created_ns\":",
-            "\"last_heartbeat_ns\":",
+            "\"last_liveness_check_ns\":",
         ] {
             assert!(json.contains(key), "missing wire key {key:?} in {json}");
         }
@@ -396,10 +397,10 @@ mod tests {
         assert!(json.contains("\"manager_multiaddrs\":"), "{json}");
     }
 
-    /// Same for the heartbeat body.
+    /// Same for the liveness-check body.
     #[test]
-    fn wire_heartbeat_request_field_name_is_locked() {
-        let req = WireHeartbeatRequest { peer_count: 7 };
+    fn wire_liveness_check_request_field_name_is_locked() {
+        let req = WireLivenessCheckRequest { peer_count: 7 };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"peer_count":7}"#);
     }

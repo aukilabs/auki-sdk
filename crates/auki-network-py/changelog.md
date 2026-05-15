@@ -6,7 +6,17 @@ Latest entry on top.
 
 ---
 
-### Nils's claude · May 14, 13:15 HKT, 2026
+### Nils's claude · May 15, 09:02 HKT, 2026
+
+**Python-binding rename for the Hagall `/heartbeat` → `/liveness` wire break.** Companion to [`auki-network` changelog 2026-05-15 09:02](../auki-network/changelog.md). The PyO3 layer forwards the rename from Rust to Python:
+
+- `DiscoveryClient.heartbeat(name, peer_count)` → `DiscoveryClient.liveness_check(name, peer_count)`
+- `ClusterEntry.last_heartbeat_ns` getter → `ClusterEntry.last_liveness_check_ns` getter
+- `ClusterEntry.__repr__` updated to emit `last_liveness_check_ns=...` instead of `last_heartbeat_ns=...`
+
+**Python-consumer breakage** by design — `auki_capture.py` (Boosterapp) and any other Python consumer calling `discovery.heartbeat(...)` must rename to `discovery.liveness_check(...)` to compile against the new release. Same wire-break rationale as the Rust side (Hagall principle: "wire formats may break"; no shim).
+
+`cargo build --workspace` clean.
 
 **Dialogue Batch 2 (Python binding) — `cluster.AudioFrame` pyclass + `StreamDecision.accept_audio(info, source)` factory + producer/consumer dispatch arms.** Sibling to [auki-sdk#119](https://github.com/aukilabs/auki-sdk/pull/119) (Dialogue Batch 1, merged 2026-05-14 12:54 HKT) which shipped the wire-side `auki.audio_stream.AudioFrame` + `StreamDispatch::AcceptAudio`. Lands right behind it as a Python-only follow-up — see [`auki-network` changelog 2026-05-14 12:54](../auki-network/changelog.md) for the Rust core's rationale. Closes the Python-side half of the [Dialogue quest](https://www.notion.so/3595c8e965928022bb8ecb9a1b0fa46c)'s SDK work so Boosterapp's `auki_capture.py` can subscribe to / serve audio over `/auki/stream/0.1.0`.
 

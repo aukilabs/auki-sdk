@@ -70,11 +70,9 @@
 
 use crate::PeerIdentity;
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping, relay,
-    swarm::{
-        DialError, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts,
-    },
-    tcp, yamux, autonat,
+    Multiaddr, PeerId, Swarm, SwarmBuilder, autonat, identify, noise, ping, relay,
+    swarm::{DialError, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts},
+    tcp, yamux,
 };
 use libp2p_allow_block_list as allow_block_list;
 use std::time::Duration;
@@ -230,9 +228,10 @@ pub fn build_swarm(
             // design.
             allow_list: allow_block_list::Behaviour::<allow_block_list::BlockedPeers>::default(),
             relay_client,
-            relay: Toggle::from(enable_relay_server.then(|| {
-                relay::Behaviour::new(local_pid, relay::Config::default())
-            })),
+            relay: Toggle::from(
+                enable_relay_server
+                    .then(|| relay::Behaviour::new(local_pid, relay::Config::default())),
+            ),
             stream: libp2p_stream::Behaviour::new(),
             autonat_client: Toggle::from((!enable_relay_server).then(|| {
                 autonat::v2::client::Behaviour::new(
@@ -240,9 +239,10 @@ pub fn build_swarm(
                     autonat::v2::client::Config::default(),
                 )
             })),
-            autonat_server: Toggle::from(enable_autonat_server.then(|| {
-                autonat::v2::server::Behaviour::new(rand::rngs::OsRng)
-            })),
+            autonat_server: Toggle::from(
+                enable_autonat_server
+                    .then(|| autonat::v2::server::Behaviour::new(rand::rngs::OsRng)),
+            ),
         })
         .expect("behaviour construction is infallible")
         .with_swarm_config(|c| c.with_idle_connection_timeout(IDLE_TIMEOUT))
@@ -576,6 +576,7 @@ mod tests {
                 listen_addresses: vec![],
                 agent_version: "test/0".into(),
                 enable_relay_server: false,
+                enable_autonat_server: false,
             },
         )
         .expect("build");
@@ -648,8 +649,9 @@ mod tests {
         // identify (the client tells the relay what address it dialed)
         // or AutoNAT.
         relay_swarm.add_external_address(relay_addr.clone());
-        let relay_addr_with_pid =
-            relay_addr.with(libp2p::multiaddr::Protocol::P2p(*relay_swarm.local_peer_id()));
+        let relay_addr_with_pid = relay_addr.with(libp2p::multiaddr::Protocol::P2p(
+            *relay_swarm.local_peer_id(),
+        ));
 
         // Establish a regular connection to the relay first; the relay
         // only accepts reservations from peers that have identified
@@ -685,8 +687,7 @@ mod tests {
 
         // Now listening on the circuit address triggers a reservation
         // request via the existing connection.
-        let circuit_listen_addr =
-            relay_addr_with_pid.with(libp2p::multiaddr::Protocol::P2pCircuit);
+        let circuit_listen_addr = relay_addr_with_pid.with(libp2p::multiaddr::Protocol::P2pCircuit);
         client
             .listen_on(circuit_listen_addr)
             .expect("listen on circuit");
@@ -863,12 +864,9 @@ mod tests {
         let lan: Multiaddr = "/ip4/192.168.9.5/tcp/4001".parse().unwrap();
         let loopback: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
         let override_addrs = vec![lan.clone(), loopback.clone()];
-        let got = resolve_advertise_multiaddrs(
-            &mut swarm,
-            Some(&override_addrs),
-            Duration::from_secs(1),
-        )
-        .await;
+        let got =
+            resolve_advertise_multiaddrs(&mut swarm, Some(&override_addrs), Duration::from_secs(1))
+                .await;
         assert_eq!(
             got,
             vec![lan, loopback],
@@ -889,8 +887,7 @@ mod tests {
             },
         )
         .unwrap();
-        let got =
-            resolve_advertise_multiaddrs(&mut swarm, None, Duration::from_secs(1)).await;
+        let got = resolve_advertise_multiaddrs(&mut swarm, None, Duration::from_secs(1)).await;
         for addr in &got {
             assert!(
                 is_routable_multiaddr(addr),
@@ -913,12 +910,8 @@ mod tests {
             },
         )
         .unwrap();
-        let got = resolve_advertise_multiaddrs(
-            &mut swarm,
-            Some(&[]),
-            Duration::from_millis(500),
-        )
-        .await;
+        let got =
+            resolve_advertise_multiaddrs(&mut swarm, Some(&[]), Duration::from_millis(500)).await;
         // Loopback-only bind → auto-detection returns empty.
         assert!(
             got.is_empty(),

@@ -111,7 +111,10 @@ async fn roundtrip_against_live_discovery() {
         .rotate_manager(&name, &new_peer_id, &new_multiaddrs)
         .await
         .expect("rotate_manager succeeds");
-    assert_eq!(rotated.manager_peer_id, new_peer_id, "Manager peer-id rotated");
+    assert_eq!(
+        rotated.manager_peer_id, new_peer_id,
+        "Manager peer-id rotated"
+    );
     assert_eq!(
         rotated.manager_multiaddrs, new_multiaddrs,
         "Manager multiaddrs rotated"

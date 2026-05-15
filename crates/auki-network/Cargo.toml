@@ -103,3 +103,5 @@ tempfile = "3"
 # For the swarm tests (require `--features swarm`).
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
+# `relay_prepare` tests mock Discovery `GET /nodes?type=relay`.
+wiremock = "0.6"

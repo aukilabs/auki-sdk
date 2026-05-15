@@ -60,6 +60,7 @@ pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::info_protocol::InfoResponse;
+use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
     AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
     RequestInfoError, RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError,
@@ -879,7 +880,10 @@ impl ClusterManager {
         &self,
         peer_id: PeerId,
         request: auki_network::stream_protocol::StreamRequest,
-    ) -> Result<auki_network::stream_runtime::StreamSubscription<T>, auki_network::stream_runtime::OpenStreamError>
+    ) -> Result<
+        auki_network::stream_runtime::StreamSubscription<T>,
+        auki_network::stream_runtime::OpenStreamError,
+    >
     where
         T: prost::Message + Default + Send + 'static,
     {
@@ -900,7 +904,11 @@ impl ClusterManager {
     /// over `/auki/info/0.0.1`.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self.session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let session_now_ns = self
+            .session_started
+            .elapsed()
+            .as_nanos()
+            .min(u64::MAX as u128) as u64;
 
         // Lazy `cluster_joined_at_ns`: set on first observation of
         // any peer other than ourselves (per ansuz D3 the local peer
@@ -1079,9 +1087,9 @@ impl ClusterManager {
                 break;
             }
             if std::time::Instant::now() >= connect_deadline {
-                return Err(JoinClusterError::SendJoin(
-                    SendJoinRequestError::Timeout(Duration::from_secs(10)),
-                ));
+                return Err(JoinClusterError::SendJoin(SendJoinRequestError::Timeout(
+                    Duration::from_secs(10),
+                )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1301,13 +1309,7 @@ impl ClusterManager {
         //    survivors' election + handoff (see fn doc).
         let was_manager =
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let am_last = self
-            .membership
-            .lock()
-            .expect("membership lock")
-            .peers
-            .len()
-            <= 1;
+        let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
         let result = if was_manager && am_last {
             self.discovery.deregister(&self.cluster_name).await
         } else {
@@ -1377,8 +1379,7 @@ fn spawn_liveness_handler(
             match evt {
                 PeerLivenessEvent::Connected { .. } => { /* informational */ }
                 PeerLivenessEvent::Lost { peer_id: lost_pid } => {
-                    let current_manager =
-                        *manager_peer_id.lock().expect("manager_peer_id lock");
+                    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
                     let am_manager = current_manager == local_peer_id;
 
                     if !am_manager && lost_pid == current_manager {
@@ -1394,23 +1395,15 @@ fn spawn_liveness_handler(
                         let connected = runtime.connected_peers();
                         let membership_snapshot =
                             membership.lock().expect("membership lock").clone();
-                        let winner = elect_successor(
-                            &membership_snapshot,
-                            local_peer_id,
-                            &connected,
-                        );
+                        let winner =
+                            elect_successor(&membership_snapshot, local_peer_id, &connected);
                         if winner == Some(local_peer_id) {
                             // Become Manager.
-                            *manager_peer_id.lock().expect("manager_peer_id lock") =
-                                local_peer_id;
+                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
 
                             // Tell Discovery about the rotation.
                             if let Err(e) = discovery
-                                .rotate_manager(
-                                    &cluster_name,
-                                    &local_peer_id,
-                                    &local_multiaddrs,
-                                )
+                                .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
                                 .await
                             {
                                 eprintln!(
@@ -1437,8 +1430,7 @@ fn spawn_liveness_handler(
                             // push the updated allow-list. (We won
                             // the election, so we own membership now.)
                             let new_allow_list = {
-                                let mut m =
-                                    membership.lock().expect("membership lock");
+                                let mut m = membership.lock().expect("membership lock");
                                 m.peers.retain(|p| p.peer_id != lost_pid);
                                 m.peers
                                     .iter()
@@ -1449,8 +1441,7 @@ fn spawn_liveness_handler(
                                     })
                                     .collect::<Vec<_>>()
                             };
-                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await
-                            {
+                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
                                 eprintln!(
                                     "auki-domain: post-election set_allowed_peers \
                                     failed for {cluster_name:?}: {e}"
@@ -1538,9 +1529,7 @@ fn spawn_membership_handler(
             let parsed: ClusterMembership = match serde_json::from_str(&update.membership_json) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: membership gossip from {peer}: invalid JSON: {e}"
-                    );
+                    eprintln!("auki-domain: membership gossip from {peer}: invalid JSON: {e}");
                     continue;
                 }
             };
@@ -1586,9 +1575,7 @@ fn broadcast_current_membership(
         match serde_json::to_string(&*m) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "auki-domain: serializing membership for gossip failed: {e}"
-                );
+                eprintln!("auki-domain: serializing membership for gossip failed: {e}");
                 return;
             }
         }
@@ -1630,9 +1617,7 @@ fn spawn_info_handler(
             let json = match serde_json::to_string(&info) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: info handler for {peer}: serialize failed: {e}"
-                    );
+                    eprintln!("auki-domain: info handler for {peer}: serialize failed: {e}");
                     continue;
                 }
             };
@@ -1812,11 +1797,7 @@ fn spawn_join_handler(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            let JoinEvent {
-                peer,
-                request,
-                ack,
-            } = event;
+            let JoinEvent { peer, request, ack } = event;
 
             // Manager check.
             let am_manager =

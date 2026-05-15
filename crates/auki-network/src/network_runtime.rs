@@ -35,6 +35,10 @@ use crate::heartbeat_protocol::{
     HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, HEARTBEAT_TIMEOUT, Heartbeat, read_heartbeat,
     write_heartbeat,
 };
+use crate::info_protocol::{
+    INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
+    read_info_response, write_info_request, write_info_response,
+};
 use crate::join_protocol::{
     JOIN_PROTOCOL, JoinProtocolError, JoinRequest, JoinResponse, read_join_request,
     read_join_response, write_join_request, write_join_response,
@@ -42,26 +46,22 @@ use crate::join_protocol::{
 use crate::membership_protocol::{
     MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
 };
-use crate::info_protocol::{
-    INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
-    read_info_response, write_info_request, write_info_response,
-};
 use crate::sensors_protocol::{
     SENSORS_PROTOCOL, SensorsProtocolError, SensorsRequest, SensorsResponse, read_sensors_request,
     read_sensors_response, write_sensors_request, write_sensors_response,
+};
+#[cfg(test)]
+use crate::{
+    PeerIdentity,
+    swarm::{SwarmConfig, build_swarm},
 };
 use crate::{
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
     swarm::{self, Behaviour, BehaviourEvent},
 };
-#[cfg(test)]
-use crate::{PeerIdentity, swarm::{SwarmConfig, build_swarm}};
 use futures::StreamExt;
-use libp2p::{
-    Multiaddr, PeerId, StreamProtocol, Swarm,
-    swarm::SwarmEvent,
-};
+use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, swarm::SwarmEvent};
 use libp2p_stream::Control;
 use std::{
     collections::{HashMap, HashSet},
@@ -499,8 +499,8 @@ impl NetworkRuntime {
         ),
         SpawnError,
     > {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| SpawnError::NoTokioRuntime)?;
+        let handle =
+            tokio::runtime::Handle::try_current().map_err(|_| SpawnError::NoTokioRuntime)?;
         let local_peer_id = *swarm.local_peer_id();
         let connected = Arc::new(Mutex::new(HashSet::new()));
         let outbound_control = swarm.behaviour().stream.new_control();
@@ -513,8 +513,7 @@ impl NetworkRuntime {
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
         let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
         let (info_events_tx, info_events_rx) = mpsc::channel::<InfoRequestEvent>(16);
-        let (sensors_events_tx, sensors_events_rx) =
-            mpsc::channel::<SensorsRequestEvent>(16);
+        let (sensors_events_tx, sensors_events_rx) = mpsc::channel::<SensorsRequestEvent>(16);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -579,16 +578,14 @@ impl NetworkRuntime {
             .await
             .map_err(SendJoinRequestError::Protocol)?;
 
-        let response = match tokio::time::timeout(
-            JOIN_REQUEST_TIMEOUT,
-            read_join_response(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
-            Ok(Ok(r)) => r,
-        };
+        let response =
+            match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, read_join_response(&mut substream))
+                .await
+            {
+                Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+                Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
+                Ok(Ok(r)) => r,
+            };
         Ok(response)
     }
 
@@ -624,16 +621,14 @@ impl NetworkRuntime {
             .await
             .map_err(RequestInfoError::Protocol)?;
 
-        let response = match tokio::time::timeout(
-            INFO_REQUEST_TIMEOUT,
-            read_info_response(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(RequestInfoError::Protocol(e)),
-            Ok(Ok(r)) => r,
-        };
+        let response =
+            match tokio::time::timeout(INFO_REQUEST_TIMEOUT, read_info_response(&mut substream))
+                .await
+            {
+                Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
+                Ok(Err(e)) => return Err(RequestInfoError::Protocol(e)),
+                Ok(Ok(r)) => r,
+            };
         Ok(response)
     }
 
@@ -1575,9 +1570,7 @@ async fn handle_inbound_membership_substream(
             }
         }
         Err(e) => {
-            eprintln!(
-                "auki-network: membership substream from {peer}: read failed: {e}"
-            );
+            eprintln!("auki-network: membership substream from {peer}: read failed: {e}");
         }
     }
 }
@@ -1621,9 +1614,7 @@ async fn handle_inbound_info_substream(
     let response = match tokio::time::timeout(INFO_RESPONSE_TIMEOUT, ack_rx).await {
         Ok(Ok(r)) => r,
         Ok(Err(_)) => {
-            eprintln!(
-                "auki-network: info handler dropped without replying for peer {peer}"
-            );
+            eprintln!("auki-network: info handler dropped without replying for peer {peer}");
             return;
         }
         Err(_) => {
@@ -1678,9 +1669,7 @@ async fn handle_inbound_sensors_substream(
     let response = match tokio::time::timeout(SENSORS_RESPONSE_TIMEOUT, ack_rx).await {
         Ok(Ok(r)) => r,
         Ok(Err(_)) => {
-            eprintln!(
-                "auki-network: sensors handler dropped without replying for peer {peer}"
-            );
+            eprintln!("auki-network: sensors handler dropped without replying for peer {peer}");
             return;
         }
         Err(_) => {
@@ -1763,9 +1752,7 @@ mod tests {
     async fn build_test_swarm() -> Swarm<Behaviour> {
         let identity = PeerIdentity::from_seed(&[7u8; 32]);
         let cfg = SwarmConfig {
-            listen_addresses: vec![
-                "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
-            ],
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             ..SwarmConfig::default()
         };
         build_swarm(&identity, cfg).expect("build_swarm succeeds")
@@ -1775,8 +1762,7 @@ mod tests {
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
         let (rt, _join_events, _liveness, _membership_events, _info_events, _sensors_events) =
-            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-                .expect("spawn succeeds");
+            NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
         rt.shutdown();
     }
@@ -1791,8 +1777,7 @@ mod tests {
         let swarm = build_swarm(&identity, cfg).expect("build_swarm succeeds");
         let expected = identity.peer_id();
         let (rt, _join_events, _liveness, _membership_events, _info_events, _sensors_events) =
-            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-                .expect("spawn succeeds");
+            NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
     }
@@ -1808,8 +1793,14 @@ mod tests {
             NetworkRuntime::spawn(
                 swarm,
                 vec![
-                    AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },
-                    AllowedPeer { peer_id: pid_b, multiaddrs: vec![] },
+                    AllowedPeer {
+                        peer_id: pid_a,
+                        multiaddrs: vec![],
+                    },
+                    AllowedPeer {
+                        peer_id: pid_b,
+                        multiaddrs: vec![],
+                    },
                 ],
                 decline_all_streams(),
             )
@@ -1818,8 +1809,14 @@ mod tests {
         // Swap b → c, keep a.
         let report = rt
             .set_allowed_peers(vec![
-                AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },
-                AllowedPeer { peer_id: pid_c, multiaddrs: vec![] },
+                AllowedPeer {
+                    peer_id: pid_a,
+                    multiaddrs: vec![],
+                },
+                AllowedPeer {
+                    peer_id: pid_c,
+                    multiaddrs: vec![],
+                },
             ])
             .await
             .expect("set_allowed_peers succeeds");

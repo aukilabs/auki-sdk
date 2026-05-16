@@ -66,7 +66,7 @@ Public types are serde-serializable. Bytes fields use `serde_bytes` so JSON and 
 
 ## load_or_mint_seed
 
-Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind ansuz's "stable peer key across restarts" guarantee: clusters that pin peer ids in `cluster.json` rely on each daemon's wallet being deterministic across reboots, which means the seed must be persisted somewhere.
+Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind the SDK's stable peer-key guarantee: `auki-network::PeerIdentity::from_wallet(&wallet)` derives the same peer id every time, and `auki-domain::ClusterManager` can safely advertise that peer id to Discovery and other cluster members across daemon restarts as long as the wallet seed is persisted somewhere.
 
 ```rust
 pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>;

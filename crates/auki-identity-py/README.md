@@ -46,7 +46,7 @@ assert len(seed) == 32
 w = auki_identity.Wallet.from_seed(seed)
 peer = w.derive_child("peer/v1")          # canonical "peer/v1" label
 peer_id = peer.peer_id()                   # "12D3KooW…"
-peer_seed = peer.seed()                    # 32-byte derived seed; hand to auki_network.cluster.spawn
+peer_seed = peer.seed()                    # 32-byte derived seed; useful when constructing lower-level peer identity
 
 # 3. Per-machine identifier for /api/info.app_instance.
 try:

@@ -1,24 +1,24 @@
-# Sprint — `auki-domain-py`
+# Sprint - auki-domain-py
 
 ## Current
 
-Phase 1 (this PR) — initial crate ship with `init_domain` + `DomainHandle` + typed exceptions. Lib-name-collision blocker on cross-py-crate type sharing dictates the surface scope.
+The Python binding tracks the Hagall `ClusterManager` surface:
+
+- `ClusterTarget` + `ClusterManager.bootstrap` for SDK-fronted cluster selection.
+- `create_cluster` / `join_cluster` explicit operator-intent paths.
+- Stream producer support through `stream_provider`.
+- Stream consumer methods for JPEG, point cloud, joint encoders, and audio.
+- Info and sensor catalog exchange helpers.
+- `external_addresses` override for Discovery advertisement.
+
+The old `init_domain` / `DomainHandle` shape is gone. Any README or consumer code still referring to it is stale.
 
 ## Next
 
-In order:
-
-1. **Resolve the lib-name collision** ([`parking_lot.md`](../parking_lot.md) #1, recommended path B). Verify that renaming `auki-network-py`'s `[lib] name` to `auki_network_py` keeps maturin's wheel build clean (cdylib → Python module rename works via `[tool.maturin] module-name = "auki_network"`). If it does, every cross-py-crate dep follow-up unblocks at once.
-2. **Wire `stream_provider`** ([`parking_lot.md`](../parking_lot.md) #1). Once #1 above lands: add `stream_provider: Option<Py<PyAny>>` kwarg to `init_domain`, route through `auki-network-py`'s `build_stream_provider` (promote `pub(crate)` → `pub` in that crate), pass result instead of `decline_all_streams()`. Producer daemons (BoosterApp, Sentinel) become fully functional on v0.0.33.
-3. **Wire `handle.update_cluster_doc(new_doc)`** ([`parking_lot.md`](../parking_lot.md) #3). OR wait for the SDK-side "ClusterRuntime owns its SSE subscription internally" tightening to collapse this entirely (filed in [`auki-network/parking_lot.md`](../../auki-network/parking_lot.md)). Whichever lands first wins.
-4. **Surface `DomainAlreadyExists.existing` as a Python `ClusterDoc`** ([`parking_lot.md`](../parking_lot.md) #4). Same lib-name-collision blocker as #2; piggybacks on the resolution there.
+- Improve Python exception specificity if downstream apps need typed catches beyond the current built-in exception mapping.
+- Mirror any future Rust relay-reservation helper once `auki-network` ships it.
+- Keep surface pins updated as Park and Boosterapp complete the `ClusterManager.bootstrap` migration.
 
 ## Long-term
 
-When `auki-domain` grows the Manager-role / heartbeat / failover state (Greenland T2–T7, T10–T13 — see [`auki-domain/src/sprint.md`](../../auki-domain/src/sprint.md)), this crate gains the corresponding Python surface:
-- `handle.is_manager()` / `handle.manager_peer_id()`.
-- `handle.send_heartbeat()` (or that becomes runtime-internal).
-- `handle.join_request_callback(...)` for Manager-side admission control.
-- `handle.failover_trigger()` for the operator-driven failover path.
-
-Wait until those land on the Rust side before designing the Python wrap.
+Stay thin: this crate should remain a Python-shaped facade over `auki-domain`, with stream pyclasses owned by `auki-network-py`.

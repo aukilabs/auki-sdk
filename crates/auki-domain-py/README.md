@@ -31,6 +31,7 @@ manager = auki_domain.ClusterManager.bootstrap(
     stream_provider=stream_provider,       # optional
     external_addresses=None,               # optional operator override
 )
+manager.set_registry_app_root(app_root)    # serve registry entries to peers
 
 print(manager.cluster_name, manager.local_peer_id, manager.is_manager)
 print(manager.participant_info().to_json())
@@ -63,6 +64,7 @@ Manager instance methods/properties:
 - `.participant_info()`
 - `.fetch_participant_info(peer_id)`
 - `.set_sensor_catalog_provider(callable)`
+- `.set_registry_app_root(app_root)`
 - `.fetch_sensors_catalog(peer_id)`
 - `.open_jpeg_stream(peer_id, sensor_id)`
 - `.open_pointcloud_stream(peer_id, sensor_id)`
@@ -78,6 +80,7 @@ Manager instance methods/properties:
 
 - Discovery is mandatory for cluster bootstrap.
 - `ClusterManager` computes dynamic `ParticipantInfo` fields; daemons pass only static `DaemonInfo` at construction.
+- Producer daemons should call `set_registry_app_root(app_root)` so peers can resolve hash-pinned Sensor / Clock / Frame registry entries over libp2p.
 - `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
 - Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.
 

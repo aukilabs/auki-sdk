@@ -18,7 +18,7 @@ Current libp2p protocol modules:
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Pairwise liveness used for Manager-death detection |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager broadcasts fresh membership JSON |
 | `/auki/info/0.0.1` | `info_protocol` | Fetch another peer's `ParticipantInfo` |
-| `/auki/sensors/0.0.1` | `sensors_protocol` | Fetch another peer's current sensor catalog |
+| `/auki/sensors/0.0.1` | `sensors_protocol` | Fetch another peer's current sensor catalog, optionally with Sensor / Frame Registry JSON embedded by value |
 | `/auki/registries/0.0.1` | `registries_protocol` | Fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
 

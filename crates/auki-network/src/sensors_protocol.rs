@@ -21,12 +21,11 @@
 //! ## Shape
 //!
 //! Request-response over one substream. Client opens, writes
-//! [`SensorsRequest`] (currently empty — reserved for future filter
-//! fields like `kind = Some("camera")`), reads [`SensorsResponse`],
-//! closes.
+//! [`SensorsRequest`] (optionally asking the producer to embed registry
+//! entries by value), reads [`SensorsResponse`], closes.
 //!
 //! ```text
-//! Initiator → Responder:  SensorsRequest {}
+//! Initiator → Responder:  SensorsRequest { include_registry_entries?, include_frame_entries? }
 //! Responder → Initiator:  SensorsResponse { sensors: [...] }
 //! ```
 //!
@@ -40,9 +39,10 @@
 //! ## Wire format
 //!
 //! Length-prefixed JSON, same framing as the other Hagall protocols.
-//! [`MAX_SENSORS_FRAME_BYTES`] caps each side at 64 KiB. A catalog of
-//! a few dozen sensors is well under that; the cap is defense against
-//! malformed senders.
+//! [`MAX_SENSORS_FRAME_BYTES`] caps each side at 512 KiB. A plain
+//! catalog of a few dozen sensors is much smaller; the larger cap
+//! leaves room for optional embedded Sensor / Frame Registry JSON while
+//! still defending against malformed senders.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::StreamProtocol;
@@ -54,18 +54,59 @@ use thiserror::Error;
 /// wire-shape change.
 pub const SENSORS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/sensors/0.0.1");
 
-/// Cap on a single framed message. 64 KiB — a `SensorsResponse` with
-/// a few dozen `SensorEntry` rows is well under that; the cap is
-/// defense against malformed senders.
-pub const MAX_SENSORS_FRAME_BYTES: u32 = 64 * 1024;
+/// Cap on a single framed message. 512 KiB — a plain
+/// `SensorsResponse` with a few dozen `SensorEntry` rows is tiny, and
+/// optional embedded Sensor / Frame Registry entries still fit
+/// comfortably under this cap. The limit is defense against malformed
+/// senders.
+pub const MAX_SENSORS_FRAME_BYTES: u32 = 512 * 1024;
 
-/// Body of the request the initiator sends. Currently empty —
-/// reserved for future filter fields (e.g.
-/// `kind: Option<String> = Some("camera")` to ask for only cameras).
-/// Receivers MUST tolerate unknown future fields (serde JSON is
-/// permissive by default).
+/// Body of the request the initiator sends.
+///
+/// Default `{}` preserves the original catalog-only request. Set
+/// `include_registry_entries` to ask the producer to attach the exact
+/// Sensor Registry JSON for each row when it has it locally. Set
+/// `include_frame_entries` to additionally attach the exact Frame
+/// Registry JSON referenced by spatial sensor bodies (`rgb_camera` and
+/// `point_cloud`). Receivers MUST tolerate unknown future fields
+/// (serde JSON is permissive by default).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SensorsRequest {}
+pub struct SensorsRequest {
+    /// Include canonical Sensor Registry JSON in
+    /// [`SensorEntry::sensor_entry_json`] when the producer can resolve
+    /// `sensor_id + sensor_hash` locally.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_registry_entries: bool,
+    /// Include canonical Frame Registry JSON in
+    /// [`SensorEntry::frame_entry_json`] for spatial sensors when the
+    /// producer can resolve the frame reference from the sensor entry.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_frame_entries: bool,
+}
+
+impl SensorsRequest {
+    /// Catalog-only request. Serializes as `{}` for v0 compatibility.
+    pub fn catalog() -> Self {
+        Self::default()
+    }
+
+    /// Ask for sensor registry entries embedded by value.
+    pub fn with_registry_entries() -> Self {
+        Self {
+            include_registry_entries: true,
+            include_frame_entries: false,
+        }
+    }
+
+    /// Ask for sensor registry entries and their referenced frame
+    /// registry entries embedded by value.
+    pub fn with_frame_entries() -> Self {
+        Self {
+            include_registry_entries: true,
+            include_frame_entries: true,
+        }
+    }
+}
 
 /// Body of the response the responder sends. Carries the snapshot of
 /// sensors the producer is currently publishing.
@@ -78,10 +119,14 @@ pub struct SensorsResponse {
     pub sensors: Vec<SensorEntry>,
 }
 
-/// One row in a [`SensorsResponse`]. Lightweight by design —
-/// consumers that need the full sensor-registry entry (intrinsics,
-/// extrinsics, calibration) fetch it separately via `auki-registry`
-/// using [`Self::sensor_hash`] as the lookup key.
+/// One row in a [`SensorsResponse`].
+///
+/// Lightweight by default: consumers that need the full
+/// sensor-registry entry can fetch it separately via
+/// `/auki/registries/0.0.1` using `sensor_id + sensor_hash`. Callers
+/// that want fewer round trips can request embedded registry JSON by
+/// value with [`SensorsRequest::with_registry_entries`] or
+/// [`SensorsRequest::with_frame_entries`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SensorEntry {
     /// Producer-scoped sensor identifier (e.g.
@@ -111,6 +156,22 @@ pub struct SensorEntry {
     /// this field); the four current tags above are pinned to keep
     /// such a rename loud.
     pub kind: String,
+    /// Optional canonical Sensor Registry JSON matching
+    /// `sensor_id + sensor_hash`. Present only when requested and
+    /// available from the producer's registered app root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_entry_json: Option<String>,
+    /// Optional canonical Frame Registry JSON matching the
+    /// `frame_id + frame_hash` referenced by the embedded or locally
+    /// resolved sensor registry entry. Present only for spatial
+    /// sensors when requested and available from the producer's
+    /// registered app root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_entry_json: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Failure modes for the framed read/write helpers below.
@@ -242,6 +303,21 @@ mod tests {
         assert_eq!(req, back);
     }
 
+    #[test]
+    fn default_request_serializes_as_empty_object() {
+        let json = serde_json::to_string(&SensorsRequest::catalog()).unwrap();
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn detail_request_serializes_requested_flags() {
+        let json = serde_json::to_string(&SensorsRequest::with_frame_entries()).unwrap();
+        assert_eq!(
+            json,
+            r#"{"include_registry_entries":true,"include_frame_entries":true}"#
+        );
+    }
+
     #[tokio::test]
     async fn response_round_trips() {
         let resp = SensorsResponse {
@@ -250,11 +326,15 @@ mod tests {
                     sensor_id: "K1-LIVE01/head_left_cam".into(),
                     sensor_hash: "abc123".into(),
                     kind: "rgb_camera".into(),
+                    sensor_entry_json: None,
+                    frame_entry_json: None,
                 },
                 SensorEntry {
                     sensor_id: "K1-LIVE01/lidar_top".into(),
                     sensor_hash: "".into(),
                     kind: "point_cloud".into(),
+                    sensor_entry_json: None,
+                    frame_entry_json: None,
                 },
             ],
         };
@@ -296,5 +376,23 @@ mod tests {
         let forward_json = r#"{"kind":"camera","since_session_now_ns":12345}"#;
         let back: SensorsRequest = serde_json::from_str(forward_json).unwrap();
         assert_eq!(back, SensorsRequest::default());
+    }
+
+    #[tokio::test]
+    async fn embedded_registry_json_round_trips() {
+        let resp = SensorsResponse {
+            sensors: vec![SensorEntry {
+                sensor_id: "K1-LIVE01/lidar_top".into(),
+                sensor_hash: "sensorhash".into(),
+                kind: "point_cloud".into(),
+                sensor_entry_json: Some(r#"{"sensor_id":"K1-LIVE01/lidar_top"}"#.into()),
+                frame_entry_json: Some(r#"{"frame_id":"K1-LIVE01/base_link"}"#.into()),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_sensors_response(&mut buf, &resp).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_sensors_response(&mut cursor).await.unwrap();
+        assert_eq!(resp, back);
     }
 }

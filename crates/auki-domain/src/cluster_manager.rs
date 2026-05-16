@@ -55,7 +55,7 @@ use auki_network::discovery_client::{
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
-use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry};
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
@@ -69,13 +69,13 @@ use auki_network::network_runtime::{
     RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestSensorsError,
     SendJoinRequestError, SensorsRequestEvent, SpawnError,
 };
-pub use auki_network::sensors_protocol::{SensorEntry, SensorsResponse};
+pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -140,6 +140,27 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// it cheap — the runtime's per-substream task gives the SDK
     /// 2 s to respond before closing the substream.
     fn snapshot(&self) -> Vec<SensorEntry>;
+
+    /// Snapshot the catalog for a concrete request. The default
+    /// implementation preserves the lightweight catalog path for
+    /// existing providers, and enriches rows from the producer's
+    /// registered app root only when the requester asks for embedded
+    /// registry entries.
+    fn snapshot_for_request(
+        &self,
+        request: &SensorsRequest,
+        registry_app_root: Option<&Path>,
+    ) -> Vec<SensorEntry> {
+        let mut sensors = self.snapshot();
+        if !request.include_registry_entries && !request.include_frame_entries {
+            return sensors;
+        }
+        let Some(app_root) = registry_app_root else {
+            return sensors;
+        };
+        enrich_sensor_entries(&mut sensors, request, app_root);
+        sensors
+    }
 }
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
@@ -725,20 +746,23 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         )));
 
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
         // 9. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //    the application-supplied provider (or return an empty
-        //    catalog if none is registered yet) and reply.
+        //    catalog if none is registered yet), optionally enrich
+        //    from the local registry app root, and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
+            registry_app_root.clone(),
         )));
 
         // 10. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
-        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
@@ -1036,6 +1060,22 @@ impl ClusterManager {
         Ok(response)
     }
 
+    /// Fetch a cluster peer's sensor catalog with explicit request
+    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
+    /// consumer wants the producer to embed Sensor / Frame Registry
+    /// JSON by value and avoid per-row registry fetch round trips.
+    pub async fn fetch_sensors_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: SensorsRequest,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self
+            .runtime
+            .request_sensors_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
     /// Fetch and verify a peer's `SensorRegistryEntry` by exact
     /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
     ///
@@ -1315,20 +1355,23 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         )));
 
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
         // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //     the application-supplied provider (or return an empty
-        //     catalog if none is registered yet) and reply.
+        //     catalog if none is registered yet), optionally enrich
+        //     from the local registry app root, and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
+            registry_app_root.clone(),
         )));
 
         // 11. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
-        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
@@ -1920,6 +1963,55 @@ fn verify_registry_envelope(
     Ok(())
 }
 
+fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, app_root: &Path) {
+    for sensor in sensors {
+        let needs_sensor = request.include_registry_entries || request.include_frame_entries;
+        let sensor_entry = if needs_sensor {
+            match auki_registry::read_sensor(app_root, &sensor.sensor_id, &sensor.sensor_hash) {
+                Ok(Some(entry)) if entry.hash() == sensor.sensor_hash => Some(entry),
+                Ok(Some(_)) | Ok(None) | Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        if request.include_registry_entries {
+            if let Some(entry) = sensor_entry.as_ref() {
+                sensor.sensor_entry_json = Some(canonical_json(entry.canonical_bytes()));
+            }
+        }
+
+        if request.include_frame_entries {
+            let Some(entry) = sensor_entry.as_ref() else {
+                continue;
+            };
+            let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+                continue;
+            };
+            match auki_registry::read_frame(app_root, frame_id, frame_hash) {
+                Ok(Some(frame)) if frame.hash() == frame_hash => {
+                    sensor.frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
+                }
+                Ok(Some(_)) | Ok(None) | Err(_) => {}
+            }
+        }
+    }
+}
+
+fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
+    match body {
+        SensorBody::RgbCamera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
+        SensorBody::PointCloud(point_cloud) => {
+            Some((&point_cloud.frame_id, &point_cloud.frame_hash))
+        }
+        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+    }
+}
+
+fn canonical_json(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("JCS output is UTF-8 JSON")
+}
+
 /// Spawn a task that drains inbound `/auki/sensors/0.0.1` requests
 /// from `rx` and replies on each `ack` with a freshly-snapshotted
 /// [`SensorsResponse`]. If no [`SensorCatalogProvider`] is
@@ -1931,13 +2023,18 @@ fn verify_registry_envelope(
 fn spawn_sensors_handler(
     mut rx: mpsc::Receiver<SensorsRequestEvent>,
     provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    registry_app_root: Arc<Mutex<Option<PathBuf>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        while let Some(SensorsRequestEvent { ack, .. }) = rx.recv().await {
+        while let Some(SensorsRequestEvent { request, ack, .. }) = rx.recv().await {
+            let root = registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
             let sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot(),
+                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
@@ -2254,6 +2351,71 @@ mod tests {
         let err = verify_registry_envelope(&envelope, RegistryKind::Frame, "frame", "deadbeef")
             .unwrap_err();
         assert!(matches!(err, FetchRegistryEntryError::HashMismatch { .. }));
+    }
+
+    #[test]
+    fn sensor_catalog_enrichment_embeds_sensor_and_frame_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = FrameRegistryEntry::opengl("K1-FAKE/lidar_points");
+        let frame_hash = auki_registry::write_frame(dir.path(), &frame)
+            .unwrap()
+            .hash()
+            .to_string();
+        let sensor = SensorRegistryEntry {
+            sensor_id: "K1-FAKE/lidar_top".into(),
+            body: SensorBody::PointCloud(auki_registry::PointCloud {
+                fields: vec![
+                    auki_registry::PointField {
+                        name: "x".into(),
+                        offset: 0,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    auki_registry::PointField {
+                        name: "y".into(),
+                        offset: 4,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    auki_registry::PointField {
+                        name: "z".into(),
+                        offset: 8,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                ],
+                point_step: 12,
+                is_bigendian: false,
+                frame_rate_hz: 10,
+                frame_id: frame.frame_id.clone(),
+                frame_hash: frame_hash.clone(),
+            }),
+        };
+        let sensor_hash = auki_registry::write_sensor(dir.path(), &sensor)
+            .unwrap()
+            .hash()
+            .to_string();
+        let mut sensors = vec![SensorEntry {
+            sensor_id: sensor.sensor_id.clone(),
+            sensor_hash,
+            kind: "point_cloud".into(),
+            sensor_entry_json: None,
+            frame_entry_json: None,
+        }];
+
+        enrich_sensor_entries(
+            &mut sensors,
+            &SensorsRequest::with_frame_entries(),
+            dir.path(),
+        );
+
+        let enriched = &sensors[0];
+        let decoded_sensor: SensorRegistryEntry =
+            serde_json::from_str(enriched.sensor_entry_json.as_deref().unwrap()).unwrap();
+        let decoded_frame: FrameRegistryEntry =
+            serde_json::from_str(enriched.frame_entry_json.as_deref().unwrap()).unwrap();
+        assert_eq!(decoded_sensor, sensor);
+        assert_eq!(decoded_frame, frame);
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

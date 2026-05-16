@@ -25,7 +25,7 @@ pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiscoveryClientError, DiscoveryClusterEntry, FetchParticipantInfoError,
     FetchRegistryEntryError, FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL,
-    SensorCatalogProvider, SensorEntry, SensorsResponse, elect_successor,
+    SensorCatalogProvider, SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

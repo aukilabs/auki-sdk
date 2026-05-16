@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**`/auki/sensors/0.0.1` gains an optional detail request.** `SensorsRequest` now preserves the catalog-only `{}` default while adding `include_registry_entries` and `include_frame_entries` flags. `SensorEntry` keeps the lightweight `sensor_id` / `sensor_hash` / `kind` row, and can now carry `sensor_entry_json` plus `frame_entry_json` when a requester asks for registry entries embedded by value. The frame cap rises to 512 KiB to leave room for embedded Sensor / Frame Registry JSON.
+
+`NetworkRuntime::request_sensors_catalog_with(peer_id, request)` is the explicit request path; existing `request_sensors_catalog(peer_id)` remains catalog-only. Tests pin default `{}` serialization, detail flag serialization, embedded JSON round-trips, unknown-field tolerance, and oversize-frame rejection.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.

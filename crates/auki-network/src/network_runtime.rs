@@ -706,6 +706,20 @@ impl NetworkRuntime {
         &self,
         peer_id: PeerId,
     ) -> Result<SensorsResponse, RequestSensorsError> {
+        self.request_sensors_catalog_with(peer_id, SensorsRequest::catalog())
+            .await
+    }
+
+    /// Fetch a cluster peer's current sensor catalog using an explicit
+    /// [`SensorsRequest`]. This is the detail path for consumers that
+    /// want Sensor / Frame Registry entries embedded by value in the
+    /// response instead of fetching each entry in a follow-up
+    /// `/auki/registries/0.0.1` round trip.
+    pub async fn request_sensors_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: SensorsRequest,
+    ) -> Result<SensorsResponse, RequestSensorsError> {
         let mut control = self.stream_control.clone();
         let proto = SENSORS_PROTOCOL.clone();
 
@@ -716,7 +730,7 @@ impl NetworkRuntime {
             Ok(Ok(s)) => s,
         };
 
-        write_sensors_request(&mut substream, &SensorsRequest::default())
+        write_sensors_request(&mut substream, &request)
             .await
             .map_err(RequestSensorsError::Protocol)?;
 

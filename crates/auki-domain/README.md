@@ -55,6 +55,7 @@ Useful methods:
 | `fetch_participant_info(peer_id)` | Fetch a peer's `ParticipantInfo` over `/auki/info/0.0.1` |
 | `set_sensor_catalog_provider(provider)` | Install the producer's current sensor catalog source |
 | `fetch_sensors_catalog(peer_id)` | Fetch a peer's sensor catalog over `/auki/sensors/0.0.1` |
+| `fetch_sensors_catalog_with(peer_id, request)` | Fetch a sensor catalog with optional embedded Sensor / Frame Registry JSON |
 | `set_registry_app_root(app_root)` | Install the producer's app root for serving registry entries |
 | `fetch_sensor_entry` / `fetch_clock_entry` / `fetch_frame_entry` | Fetch and verify hash-pinned registry entries over `/auki/registries/0.0.1` |
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |

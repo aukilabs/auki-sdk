@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**Python consumers get registry detail helpers.** `SensorEntry` now exposes optional `sensor_entry_json` and `frame_entry_json`, and `ClusterManager.fetch_sensors_catalog(peer_id, include_registry_entries=False, include_frame_entries=False)` mirrors Rust's opt-in detail request for embedding producer-local Sensor / Frame Registry JSON by value.
+
+The binding also exposes `fetch_sensor_entry(peer_id, sensor_id, sensor_hash)`, `fetch_clock_entry(peer_id, clock_id, clock_hash)`, and `fetch_frame_entry(peer_id, frame_id, frame_hash)`. Each delegates to Rust's hash-verified `/auki/registries/0.0.1` fetch helper and returns canonical JSON as a Python string; missing exact entries map to `FileNotFoundError`.
+
+Tests: `cargo check -p auki-domain-py` passes with the existing PyO3 Rust-2024 warnings.
+
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
 **`StreamManifestBuilder.from_registry(...)` exposed to Python producers.** The binding mirrors Rust `auki_domain::StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` and returns an `auki_network.cluster.StreamManifest` ready to pass to `StreamDecision.accept_*`. Spatial sensor manifests pick up `frame_id` + `frame_hash` from the local Sensor Registry entry and verify the exact Frame Registry entry exists; audio and joint encoders keep empty frame fields.

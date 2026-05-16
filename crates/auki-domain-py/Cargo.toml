@@ -63,4 +63,6 @@ futures = "0.3"
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 
 [dev-dependencies]
+auki-registry = { path = "../auki-registry" }
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+tempfile = "3"

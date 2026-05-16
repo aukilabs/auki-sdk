@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 18:33 HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — Python binding for registry-backed stream manifests.** `auki_domain.StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` now mirrors the Rust helper and returns an `auki_network.cluster.StreamManifest` ready for `StreamDecision.accept_*`. The binding preserves cross-`.so` PyO3 type identity by constructing the object through the imported `auki_network` module, with a Rust PyO3 test proving `accept_pointcloud` accepts the result. Tests: `cargo test -p auki-domain-py` passes; Python surface tests refreshed for the current ClusterManager API.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **[`auki-registry`](auki-registry/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-ros-adapter`](auki-ros-adapter/changelog.md) — stream manifests now derive frame metadata from hash-pinned sensor entries.** `RgbCamera` and `PointCloud` registry bodies require `frame_hash` alongside `frame_id`, and `write_sensor` refuses spatial sensors unless the exact frame entry is already on disk. `auki-domain::StreamManifestBuilder::from_registry` builds accept-time `StreamManifest` values from local registries with typed errors and no directory scanning; `Audio` / `JointEncoders` keep empty frame fields. ROS adapter builders now require/propagate frame hashes, with locked hashes recomputed. Focused tests: `cargo test -p auki-registry -p auki-domain -p auki-ros-adapter`.

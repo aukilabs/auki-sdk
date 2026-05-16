@@ -12,6 +12,7 @@
 | `ClusterMember` / `ClusterMembership` pyclasses | shipped |
 | `DaemonInfo` / `ParticipantInfo` pyclasses | shipped |
 | `SensorEntry` pyclass | shipped |
+| `StreamManifestBuilder.from_registry` | shipped |
 | `ClusterTarget` pyclass | shipped |
 | `ClusterManager.list_clusters` | shipped |
 | `ClusterManager.bootstrap` | shipped |
@@ -31,6 +32,8 @@ The wrapper accepts Python-friendly inputs (seed bytes, multiaddr strings, peer-
 All async Rust calls are `block_on`ed on a process-wide multi-thread tokio runtime so Python callers keep a synchronous API.
 
 Producer daemons can call `ClusterManager.set_registry_app_root(app_root)` with a string or `os.PathLike` so the Rust manager serves existing registry entries from `<app_root>/registries/{sensors,clocks,frames}/...` over `/auki/registries/0.0.1`.
+
+Producer stream providers can call `StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to get an `auki_network.cluster.StreamManifest` backed by the local registry. The binding deliberately instantiates the object through the imported `auki_network` module so the returned manifest has the same PyO3 type identity that `auki_network.cluster.StreamDecision.accept_*` expects.
 
 ## Deferred
 

@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 18:33 HKT, 2026
+
+**`StreamManifestBuilder.from_registry(...)` exposed to Python producers.** The binding mirrors Rust `auki_domain::StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` and returns an `auki_network.cluster.StreamManifest` ready to pass to `StreamDecision.accept_*`. Spatial sensor manifests pick up `frame_id` + `frame_hash` from the local Sensor Registry entry and verify the exact Frame Registry entry exists; audio and joint encoders keep empty frame fields.
+
+**Cross-`.so` type identity guarded.** The helper constructs the returned object by importing the real `auki_network.cluster.StreamManifest` Python class instead of returning the `auki-domain-py` rlib's duplicate PyO3 class. A Rust PyO3 test passes the result into `auki_network.cluster.StreamDecision.accept_pointcloud(...)` to pin the no-mismatched-type behavior.
+
+**Tests:** `cargo test -p auki-domain-py` passes (with the existing PyO3 Rust-2024 warnings). Python surface tests were refreshed from the retired `init_domain` shape and now cover the current class list plus the missing-sensor error path.
+
 ### Nils's codex · May 16, 14:04 HKT, 2026
 
 **`ClusterManager.set_registry_app_root(app_root)` exposed to Python producers.** Companion to the Rust registry-exchange surface from [SDK #131](https://github.com/aukilabs/auki-sdk/pull/131): Boosterapp and other Python daemons can now register the app root that contains `registries/{sensors,clocks,frames}` so their SDK-owned `/auki/registries/0.0.1` handler can serve hash-pinned entries to cluster peers. The method accepts `str` or `os.PathLike` via `os.fspath`, then delegates to Rust `ClusterManager::set_registry_app_root`.

@@ -1,123 +1,70 @@
-"""Smoke tests for the `auki_domain` Python module.
+"""Smoke tests for the current `auki_domain` Python module.
 
 Run after building the wheel:
 
     maturin develop -m crates/auki-domain-py/Cargo.toml
     pytest crates/auki-domain-py/python_tests/
-
-These tests don't need a live Discovery — they exercise the module
-surface, the input-validation paths, and the exception classes.
-End-to-end `init_domain` tests against a real Discovery would belong
-in a separate live-gated test file once Discovery has a Python test
-harness consumers can drive (mirroring `auki-network-py`'s
-`python_tests/test_discovery.py`).
 """
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 
-def test_module_imports() -> None:
-    """The `auki_domain` module imports and exposes the documented
-    public surface."""
+def test_module_imports_current_surface() -> None:
     import auki_domain
 
-    assert hasattr(auki_domain, "init_domain")
-    assert hasattr(auki_domain, "DomainHandle")
-    assert hasattr(auki_domain, "DomainAlreadyExists")
-    assert hasattr(auki_domain, "DiscoveryUnreachable")
-    assert hasattr(auki_domain, "DiscoveryRejected")
-    assert hasattr(auki_domain, "DiscoveryClockError")
-    assert hasattr(auki_domain, "RuntimeSpawnError")
+    assert hasattr(auki_domain, "ClusterMember")
+    assert hasattr(auki_domain, "ClusterMembership")
+    assert hasattr(auki_domain, "DaemonInfo")
+    assert hasattr(auki_domain, "ParticipantInfo")
+    assert hasattr(auki_domain, "SensorEntry")
+    assert hasattr(auki_domain, "StreamManifestBuilder")
+    assert hasattr(auki_domain, "ClusterTarget")
+    assert hasattr(auki_domain, "ClusterManager")
 
 
-def test_init_domain_rejects_wrong_seed_length() -> None:
-    """`init_domain` validates seed lengths synchronously, before
-    any tokio runtime / Discovery / swarm work."""
+def test_cluster_target_factories() -> None:
     import auki_domain
 
-    short = b"\x00" * 16
-    valid = b"\x00" * 32
-    with pytest.raises(ValueError, match="wallet_seed must be exactly 32 bytes"):
-        auki_domain.init_domain(
-            wallet_seed=short,
-            peer_seed=valid,
-            discovery_url="http://127.0.0.1:8080",
-            domain_name="Vinland",
-            addresses=["/ip4/127.0.0.1/tcp/4001"],
-            participant_provider=lambda: None,
-        )
-    with pytest.raises(ValueError, match="peer_seed must be exactly 32 bytes"):
-        auki_domain.init_domain(
-            wallet_seed=valid,
-            peer_seed=short,
-            discovery_url="http://127.0.0.1:8080",
-            domain_name="Vinland",
-            addresses=["/ip4/127.0.0.1/tcp/4001"],
-            participant_provider=lambda: None,
+    target = auki_domain.ClusterTarget.most_recent_or_create("hagall")
+
+    assert target.kind == "most_recent_or_create"
+    assert target.name == "hagall"
+    assert "hagall" in repr(target)
+
+
+def test_stream_manifest_builder_missing_sensor_is_file_not_found(
+    tmp_path: pathlib.Path,
+) -> None:
+    import auki_domain
+
+    with pytest.raises(FileNotFoundError, match="sensor registry entry missing"):
+        auki_domain.StreamManifestBuilder.from_registry(
+            tmp_path,
+            "missing/sensor",
+            "missing-hash",
+            "clock",
+            "clock-hash",
         )
 
 
-def test_init_domain_rejects_empty_domain_name() -> None:
-    """Empty `domain_name` rejects synchronously — would surface as a
-    confusing 4xx from Discovery otherwise."""
+def test_sensor_entry_value_type() -> None:
     import auki_domain
 
-    valid = b"\x00" * 32
-    with pytest.raises(ValueError, match="domain_name must not be empty"):
-        auki_domain.init_domain(
-            wallet_seed=valid,
-            peer_seed=valid,
-            discovery_url="http://127.0.0.1:8080",
-            domain_name="",
-            addresses=["/ip4/127.0.0.1/tcp/4001"],
-            participant_provider=lambda: None,
-        )
+    entry = auki_domain.SensorEntry(
+        "K1-AABBCCDDEEFF/head_depth_points",
+        "sensor-hash",
+        "point_cloud",
+    )
 
-
-def test_init_domain_rejects_empty_addresses() -> None:
-    """At least one dialable multiaddr is required — Discovery has
-    to publish *something* peers can reach us at."""
-    import auki_domain
-
-    valid = b"\x00" * 32
-    with pytest.raises(ValueError, match="addresses must contain at least one"):
-        auki_domain.init_domain(
-            wallet_seed=valid,
-            peer_seed=valid,
-            discovery_url="http://127.0.0.1:8080",
-            domain_name="Vinland",
-            addresses=[],
-            participant_provider=lambda: None,
-        )
-
-
-def test_init_domain_rejects_unparseable_multiaddr() -> None:
-    """Multiaddr parse errors surface with the offending string
-    quoted so operators can find their typo."""
-    import auki_domain
-
-    valid = b"\x00" * 32
-    with pytest.raises(ValueError, match="invalid address"):
-        auki_domain.init_domain(
-            wallet_seed=valid,
-            peer_seed=valid,
-            discovery_url="http://127.0.0.1:8080",
-            domain_name="Vinland",
-            addresses=["this-is-not-a-multiaddr"],
-            participant_provider=lambda: None,
-        )
-
-
-def test_exception_classes_have_expected_bases() -> None:
-    """Operator-friendly exception hierarchy: `DiscoveryUnreachable`
-    extends `ConnectionError` (catchable as a transport failure);
-    the others extend `RuntimeError`."""
-    import auki_domain
-
-    assert issubclass(auki_domain.DiscoveryUnreachable, ConnectionError)
-    assert issubclass(auki_domain.DiscoveryRejected, RuntimeError)
-    assert issubclass(auki_domain.DiscoveryClockError, RuntimeError)
-    assert issubclass(auki_domain.DomainAlreadyExists, RuntimeError)
-    assert issubclass(auki_domain.RuntimeSpawnError, RuntimeError)
+    assert entry.sensor_id == "K1-AABBCCDDEEFF/head_depth_points"
+    assert entry.sensor_hash == "sensor-hash"
+    assert entry.kind == "point_cloud"
+    assert entry == auki_domain.SensorEntry(
+        "K1-AABBCCDDEEFF/head_depth_points",
+        "sensor-hash",
+        "point_cloud",
+    )

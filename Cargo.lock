@@ -199,6 +199,7 @@ dependencies = [
  "auki-identity",
  "auki-network",
  "auki-network-py",
+ "auki-registry",
  "futures",
  "libp2p",
  "libp2p-identity",
@@ -206,6 +207,7 @@ dependencies = [
  "prost",
  "pyo3",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

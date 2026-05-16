@@ -33,6 +33,19 @@ manager = auki_domain.ClusterManager.bootstrap(
 )
 manager.set_registry_app_root(app_root)    # serve registry entries to peers
 
+def stream_provider(_requester_peer_id, request):
+    manifest = auki_domain.StreamManifestBuilder.from_registry(
+        app_root,
+        request.sensor_id,
+        sensor_hash_by_id[request.sensor_id],
+        clock_id,
+        clock_hash,
+    )
+    return cluster.StreamDecision.accept_pointcloud(
+        manifest=manifest,
+        source=pointcloud_source(),
+    )
+
 print(manager.cluster_name, manager.local_peer_id, manager.is_manager)
 print(manager.participant_info().to_json())
 manager.shutdown()
@@ -48,6 +61,7 @@ Value types:
 - `ParticipantInfo` returned by `manager.participant_info()` / `fetch_participant_info(...)`
 - `SensorEntry(sensor_id, sensor_hash, kind)`
 - `ClusterTarget.create(name)`, `.join(name)`, `.join_or_create(name)`, `.most_recent_or_create(fallback_name)`
+- `StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)`
 
 Static manager entry points:
 
@@ -74,6 +88,8 @@ Manager instance methods/properties:
 
 `stream_provider` uses the `auki_network.cluster` stream types. Its callable signature is `(requester_peer_id: str, request: StreamRequest) -> StreamDecision`.
 
+`StreamManifestBuilder.from_registry(...)` returns an `auki_network.cluster.StreamManifest` constructed by the `auki_network` module itself, so it can be passed directly to `cluster.StreamDecision.accept(...)`, `.accept_pointcloud(...)`, `.accept_joint_encoders(...)`, or `.accept_audio(...)`. Spatial sensors get `frame_id` + `frame_hash` from the local Sensor Registry entry and verify the exact Frame Registry entry exists; audio and joint encoders return empty frame fields.
+
 `external_addresses` has replace semantics: if provided and non-empty, those exact multiaddrs are advertised to Discovery instead of auto-detected listen addresses.
 
 ## Notes
@@ -81,6 +97,7 @@ Manager instance methods/properties:
 - Discovery is mandatory for cluster bootstrap.
 - `ClusterManager` computes dynamic `ParticipantInfo` fields; daemons pass only static `DaemonInfo` at construction.
 - Producer daemons should call `set_registry_app_root(app_root)` so peers can resolve hash-pinned Sensor / Clock / Frame registry entries over libp2p.
+- Producer stream providers should use `StreamManifestBuilder.from_registry(...)` instead of hand-filling stream manifests.
 - `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
 - Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.
 

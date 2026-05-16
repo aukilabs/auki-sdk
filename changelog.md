@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 18:33 HKT, 2026
+
+**Python producers get the registry-backed stream-manifest helper.** `auki-domain-py` now exposes `StreamManifestBuilder.from_registry(...)`, returning a real `auki_network.cluster.StreamManifest` so Boosterapp-style stream providers can feed `StreamDecision.accept_*` without hand-filling `frame_id` + `frame_hash`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Stream manifests now derive frame metadata from hash-pinned sensor entries.** Spatial sensor registry bodies (`RgbCamera`, `PointCloud`) require `frame_hash` alongside `frame_id`, and `write_sensor` validates the exact frame entry before writing. `auki-domain` adds `StreamManifestBuilder::from_registry` so producer accept handlers fill `frame_id` + `frame_hash` from the registry with typed failures and no silent disk scanning. `auki-ros-adapter` builders now propagate frame hashes. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

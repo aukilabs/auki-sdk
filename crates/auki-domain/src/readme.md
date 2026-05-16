@@ -20,7 +20,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Manager election and Discovery `rotate_manager` handoff.
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
-- Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches.
+- Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches, including the detail request that can embed local Sensor / Frame Registry JSON by value.
 - Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
 - `StreamManifestBuilder::from_registry`, which constructs stream accept manifests from a producer's local registry and verifies exact frame references for spatial sensors.
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
@@ -37,6 +37,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `DaemonInfo`
 - `SensorCatalogProvider`
 - `SensorEntry`
+- `SensorsRequest`
 - `SensorsResponse`
 - `SensorRegistryEntry`
 - `ClockRegistryEntry`

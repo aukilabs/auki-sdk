@@ -59,7 +59,7 @@ Value types:
 - `ClusterMembership(cluster_name)` plus `.from_json(...)`, `.admit(...)`, `.to_json()`
 - `DaemonInfo(app, name, session_id, session_clock_id, session_clock_hash, app_instance)`
 - `ParticipantInfo` returned by `manager.participant_info()` / `fetch_participant_info(...)`
-- `SensorEntry(sensor_id, sensor_hash, kind)`
+- `SensorEntry(sensor_id, sensor_hash, kind, sensor_entry_json=None, frame_entry_json=None)`
 - `ClusterTarget.create(name)`, `.join(name)`, `.join_or_create(name)`, `.most_recent_or_create(fallback_name)`
 - `StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)`
 
@@ -79,7 +79,10 @@ Manager instance methods/properties:
 - `.fetch_participant_info(peer_id)`
 - `.set_sensor_catalog_provider(callable)`
 - `.set_registry_app_root(app_root)`
-- `.fetch_sensors_catalog(peer_id)`
+- `.fetch_sensors_catalog(peer_id, include_registry_entries=False, include_frame_entries=False)`
+- `.fetch_sensor_entry(peer_id, sensor_id, sensor_hash) -> str`
+- `.fetch_clock_entry(peer_id, clock_id, clock_hash) -> str`
+- `.fetch_frame_entry(peer_id, frame_id, frame_hash) -> str`
 - `.open_jpeg_stream(peer_id, sensor_id)`
 - `.open_pointcloud_stream(peer_id, sensor_id)`
 - `.open_joint_encoders_stream(peer_id, sensor_id)`
@@ -97,6 +100,7 @@ Manager instance methods/properties:
 - Discovery is mandatory for cluster bootstrap.
 - `ClusterManager` computes dynamic `ParticipantInfo` fields; daemons pass only static `DaemonInfo` at construction.
 - Producer daemons should call `set_registry_app_root(app_root)` so peers can resolve hash-pinned Sensor / Clock / Frame registry entries over libp2p.
+- Consumers can either call the exact registry fetch helpers, or ask `fetch_sensors_catalog(..., include_registry_entries=True, include_frame_entries=True)` for embedded Sensor / Frame Registry JSON when reducing round trips matters.
 - Producer stream providers should use `StreamManifestBuilder.from_registry(...)` instead of hand-filling stream manifests.
 - `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
 - Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**Sensor catalogs can now carry registry details by value.** The SDK keeps `/auki/registries/0.0.1` as the clean hash-addressed registry fetch path, and adds an opt-in `/auki/sensors/0.0.1` detail request that embeds Sensor / Frame Registry JSON for Park-style consumers that want fewer round trips. Python mirrors both paths with catalog flags, optional `SensorEntry` JSON fields, and exact registry-entry JSON fetch helpers. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
 **Python producers get the registry-backed stream-manifest helper.** `auki-domain-py` now exposes `StreamManifestBuilder.from_registry(...)`, returning a real `auki_network.cluster.StreamManifest` so Boosterapp-style stream providers can feed `StreamDecision.accept_*` without hand-filling `frame_id` + `frame_hash`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

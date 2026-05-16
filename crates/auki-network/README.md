@@ -41,7 +41,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Pairwise peer liveness for Manager-death detection |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |
-| `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog |
+| `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog, optionally embedding Sensor / Frame Registry JSON |
 | `/auki/registries/0.0.1` | `registries_protocol` | Cluster peer fetches a hash-pinned Sensor / Clock / Frame Registry entry |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
 

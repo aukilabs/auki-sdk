@@ -12,7 +12,7 @@ Implementation status for [`auki-network`](../README.md).
 - [`heartbeat_protocol.rs`](heartbeat_protocol.rs) - `/auki/heartbeat/0.0.1` pairwise liveness frames.
 - [`membership_protocol.rs`](membership_protocol.rs) - `/auki/membership/0.0.1` membership-gossip frames.
 - [`info_protocol.rs`](info_protocol.rs) - `/auki/info/0.0.1` framed request/response for `ParticipantInfo` JSON.
-- [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs.
+- [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs, with optional embedded Sensor / Frame Registry JSON.
 - [`registries_protocol.rs`](registries_protocol.rs) - `/auki/registries/0.0.1` framed request/response for hash-pinned registry entries.
 - [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-datatypes`.
 - [`stream_runtime.rs`](stream_runtime.rs) - typed `Stream<T>` producer/consumer API on top of `stream_protocol`.
@@ -102,6 +102,8 @@ impl NetworkRuntime {
     pub async fn send_join_request(...);
     pub async fn request_participant_info(...);
     pub async fn request_sensors_catalog(...);
+    pub async fn request_sensors_catalog_with(...);
+    pub async fn request_registry_entry(...);
     pub fn broadcast_membership(...);
 }
 ```

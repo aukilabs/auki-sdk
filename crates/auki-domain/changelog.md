@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**Sensor catalogs can opt into embedded registry details.** `SensorCatalogProvider` keeps its existing `snapshot()` contract and gains a default `snapshot_for_request(...)` enrichment path. When the requester sends a detail `SensorsRequest` and the producer has called `set_registry_app_root(app_root)`, `ClusterManager` reads the exact local `SensorRegistryEntry` for each catalog row and optionally the referenced `FrameRegistryEntry` for spatial sensors, verifies each canonical hash against the advertised hash, and embeds the canonical JSON on the returned `SensorEntry`.
+
+Consumers get `ClusterManager::fetch_sensors_catalog_with(peer_id, request)` for the detail path while `fetch_sensors_catalog(peer_id)` remains catalog-only. The existing hash-addressed `/auki/registries/0.0.1` fetch helpers remain the authoritative exact-entry path; embedded details are an opt-in round-trip reduction for Park-style sensor mounting.
+
+Tests: unit coverage for sensor+frame enrichment from a local registry app root, plus the existing live catalog integration updated for the expanded `SensorEntry` shape.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Producer-side `StreamManifestBuilder` added.** `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` reads the exact local `SensorRegistryEntry`, builds the stream accept `StreamManifest`, and centralizes the producer-side frame metadata projection that Park surfaced during live point-cloud testing.

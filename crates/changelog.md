@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — sensor catalog detail requests and registry JSON helpers.** `/auki/sensors/0.0.1` keeps its lightweight default `{}` request and adds opt-in flags for embedding Sensor / Frame Registry JSON by value. `ClusterManager::fetch_sensors_catalog_with` serves those details from the registered app-root registry after hash checks, while the existing `/auki/registries/0.0.1` exact-entry fetch remains the authoritative path. Python mirrors the catalog flags, exposes optional `SensorEntry.sensor_entry_json` / `frame_entry_json`, and adds JSON-returning `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry` helpers.
+
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py/changelog.md) — Python binding for registry-backed stream manifests.** `auki_domain.StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` now mirrors the Rust helper and returns an `auki_network.cluster.StreamManifest` ready for `StreamDecision.accept_*`. The binding preserves cross-`.so` PyO3 type identity by constructing the object through the imported `auki_network` module, with a Rust PyO3 test proving `accept_pointcloud` accepts the result. Tests: `cargo test -p auki-domain-py` passes; Python surface tests refreshed for the current ClusterManager API.

@@ -19,8 +19,9 @@ use auki_domain_rs::{
     BuildStreamManifestError as RustBuildStreamManifestError, ClusterManager as RustClusterManager,
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
-    DaemonInfo as RustDaemonInfo, JoinClusterError as RustJoinClusterError,
-    SensorCatalogProvider as RustSensorCatalogProvider, SensorEntry as RustSensorEntry,
+    DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
+    JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
+    SensorEntry as RustSensorEntry, SensorsRequest as RustSensorsRequest,
     StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
@@ -412,13 +413,21 @@ pub struct PySensorEntry {
 #[pymethods]
 impl PySensorEntry {
     #[new]
-    #[pyo3(signature = (sensor_id, sensor_hash, kind))]
-    fn new(sensor_id: String, sensor_hash: String, kind: String) -> Self {
+    #[pyo3(signature = (sensor_id, sensor_hash, kind, sensor_entry_json = None, frame_entry_json = None))]
+    fn new(
+        sensor_id: String,
+        sensor_hash: String,
+        kind: String,
+        sensor_entry_json: Option<String>,
+        frame_entry_json: Option<String>,
+    ) -> Self {
         Self {
             inner: RustSensorEntry {
                 sensor_id,
                 sensor_hash,
                 kind,
+                sensor_entry_json,
+                frame_entry_json,
             },
         }
     }
@@ -438,10 +447,24 @@ impl PySensorEntry {
         self.inner.kind.clone()
     }
 
+    #[getter]
+    fn sensor_entry_json(&self) -> Option<String> {
+        self.inner.sensor_entry_json.clone()
+    }
+
+    #[getter]
+    fn frame_entry_json(&self) -> Option<String> {
+        self.inner.frame_entry_json.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "SensorEntry(sensor_id={:?}, sensor_hash={:?}, kind={:?})",
-            self.inner.sensor_id, self.inner.sensor_hash, self.inner.kind,
+            "SensorEntry(sensor_id={:?}, sensor_hash={:?}, kind={:?}, sensor_entry_json={}, frame_entry_json={})",
+            self.inner.sensor_id,
+            self.inner.sensor_hash,
+            self.inner.kind,
+            self.inner.sensor_entry_json.is_some(),
+            self.inner.frame_entry_json.is_some(),
         )
     }
 
@@ -1099,7 +1122,14 @@ impl PyClusterManager {
     /// refuses the substream). Returns a Python
     /// `list[SensorEntry]` — empty list if the target peer has not
     /// registered a catalog provider (NOT an error).
-    fn fetch_sensors_catalog(&self, py: Python<'_>, peer_id: &str) -> PyResult<Vec<PySensorEntry>> {
+    #[pyo3(signature = (peer_id, include_registry_entries = false, include_frame_entries = false))]
+    fn fetch_sensors_catalog(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        include_registry_entries: bool,
+        include_frame_entries: bool,
+    ) -> PyResult<Vec<PySensorEntry>> {
         let peer_id_parsed = parse_peer_id(peer_id)?;
         let inner = self.inner.clone();
         py.allow_threads(|| {
@@ -1109,7 +1139,13 @@ impl PyClusterManager {
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
                 let resp = manager
-                    .fetch_sensors_catalog(peer_id_parsed)
+                    .fetch_sensors_catalog_with(
+                        peer_id_parsed,
+                        RustSensorsRequest {
+                            include_registry_entries,
+                            include_frame_entries,
+                        },
+                    )
                     .await
                     .map_err(map_fetch_sensors_catalog_error)?;
                 Ok(resp
@@ -1117,6 +1153,87 @@ impl PyClusterManager {
                     .into_iter()
                     .map(|inner| PySensorEntry { inner })
                     .collect())
+            })
+        })
+    }
+
+    /// Fetch and verify a peer's Sensor Registry entry over
+    /// `/auki/registries/0.0.1`. Returns canonical JSON for the exact
+    /// `sensor_id + sensor_hash` entry.
+    fn fetch_sensor_entry(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: String,
+        sensor_hash: String,
+    ) -> PyResult<String> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let entry = manager
+                    .fetch_sensor_entry(peer_id_parsed, sensor_id, sensor_hash)
+                    .await
+                    .map_err(map_fetch_registry_entry_error)?;
+                Ok(canonical_json_to_py(entry.canonical_bytes()))
+            })
+        })
+    }
+
+    /// Fetch and verify a peer's Clock Registry entry over
+    /// `/auki/registries/0.0.1`. Returns canonical JSON for the exact
+    /// `clock_id + clock_hash` entry.
+    fn fetch_clock_entry(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        clock_id: String,
+        clock_hash: String,
+    ) -> PyResult<String> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let entry = manager
+                    .fetch_clock_entry(peer_id_parsed, clock_id, clock_hash)
+                    .await
+                    .map_err(map_fetch_registry_entry_error)?;
+                Ok(canonical_json_to_py(entry.canonical_bytes()))
+            })
+        })
+    }
+
+    /// Fetch and verify a peer's Frame Registry entry over
+    /// `/auki/registries/0.0.1`. Returns canonical JSON for the exact
+    /// `frame_id + frame_hash` entry.
+    fn fetch_frame_entry(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        frame_id: String,
+        frame_hash: String,
+    ) -> PyResult<String> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let entry = manager
+                    .fetch_frame_entry(peer_id_parsed, frame_id, frame_hash)
+                    .await
+                    .map_err(map_fetch_registry_entry_error)?;
+                Ok(canonical_json_to_py(entry.canonical_bytes()))
             })
         })
     }
@@ -1353,6 +1470,33 @@ fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) 
             PyOSError::new_err(format!("fetch_sensors_catalog: {err}"))
         }
     }
+}
+
+fn map_fetch_registry_entry_error(e: RustFetchRegistryEntryError) -> PyErr {
+    match e {
+        RustFetchRegistryEntryError::Request(err) => {
+            PyOSError::new_err(format!("fetch_registry_entry: {err}"))
+        }
+        RustFetchRegistryEntryError::NotFound { kind, id, hash } => PyFileNotFoundError::new_err(
+            format!("registry entry not found: kind={kind} id={id:?} hash={hash}"),
+        ),
+        RustFetchRegistryEntryError::InvalidEnvelope(err) => {
+            PyValueError::new_err(format!("invalid registry envelope: {err}"))
+        }
+        RustFetchRegistryEntryError::HashMismatch { expected, actual } => PyValueError::new_err(
+            format!("registry hash mismatch: expected {expected}, got {actual}"),
+        ),
+        RustFetchRegistryEntryError::InvalidJson(err) => {
+            PyValueError::new_err(format!("invalid registry JSON from peer: {err}"))
+        }
+        RustFetchRegistryEntryError::Stopped => {
+            PyRuntimeError::new_err("ClusterManager has been shut down")
+        }
+    }
+}
+
+fn canonical_json_to_py(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("JCS output is UTF-8 JSON")
 }
 
 fn map_build_stream_manifest_error(e: RustBuildStreamManifestError) -> PyErr {

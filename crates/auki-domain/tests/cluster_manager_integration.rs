@@ -763,6 +763,8 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
         sensor_id: "K1-FAKE/head_cam".into(),
         sensor_hash: "abc".into(),
         kind: "rgb_camera".into(),
+        sensor_entry_json: None,
+        frame_entry_json: None,
     }];
     manager_b.set_sensor_catalog_provider(Arc::new(FixedCatalog(b_catalog.clone())));
 

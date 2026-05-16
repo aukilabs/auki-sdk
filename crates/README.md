@@ -27,6 +27,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 |---|---|
 | [`auki-layout`](auki-layout) | Path helpers for the on-disk session shape — single source of truth for app/session/recording layout. |
 | [`auki-time-transforms`](auki-time-transforms) | Clock sampler primitives for the TimeTransform Log. The infrastructure underneath `convert_time`. |
+| [`auki-geometry`](auki-geometry) | Pure spatial math: convention conversion for points, vectors, directions, and `SpatialTransform` poses. The convention-only layer underneath future `convert_pose`. |
 | [`auki-domain`](auki-domain) | App-facing cluster lifecycle: Discovery bootstrap, membership, Manager election, liveness checks, peer info/catalog exchange, stream opening. |
 
 ## Networking

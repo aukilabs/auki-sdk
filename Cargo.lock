@@ -206,6 +206,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-geometry"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-registry",
+]
+
+[[package]]
 name = "auki-hash"
 version = "0.0.0"
 dependencies = [

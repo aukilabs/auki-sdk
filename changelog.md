@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 11:34 HKT, 2026
+
+**`auki-geometry` crate added for pure spatial math.** Phase 1 lands `convert_pose_convention` plus point/vector/direction convention helpers over `FrameRegistryEntry` and `SpatialTransform`: convention-agnostic declared A -> declared B conversion, with full pose-log graph/path `convert_pose` left as the next layer. See [`auki-geometry`](crates/auki-geometry/changelog.md) for details.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Stale README refresh for the current Hagall SDK surface.** Root README, crate index, and the network/domain/Python binding READMEs now align on the shipped `ClusterManager` path, current `NetworkRuntime` protocol set, Discovery liveness/check methods, and stream payload surface. Identity docs now explain stable peer seeds through `PeerIdentity` rather than removed cluster-runtime construction. Doc-only; no behavior change. See [`crates/changelog.md`](crates/changelog.md) for the propagated crate summaries.

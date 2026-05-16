@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 11:34 HKT, 2026
+
+**[`auki-geometry`](auki-geometry/changelog.md) — new pure spatial-math crate.** Phase 1 ships convention conversion over existing registry + datatype contracts: `meters_per_unit`, `axis_convention_matrix`, `convention_matrix`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, and `convert_pose_convention`. Public model is direct declared convention A -> declared convention B; no exposed canonical Auki frame. The crate rejects handedness/axis determinant mismatches and keeps full pose-log graph/path `convert_pose` as future work.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) + identity docs — stale README refresh for the current Hagall surface.** Root and crate docs now point app daemons at `ClusterManager`, describe `NetworkRuntime` / current libp2p protocols / Discovery liveness methods accurately, and remove old static-cluster/runtime-constructor guidance from the Python packages. Identity docs now describe derived peer seeds through the current `PeerIdentity` path. Doc-only; no behavior change.

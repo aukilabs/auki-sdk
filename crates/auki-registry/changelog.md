@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 17:53 HKT, 2026
+
+**Spatial sensor bodies now pin exact frame-entry versions.** `SensorBody::RgbCamera` and `SensorBody::PointCloud` gain required `frame_hash: String` alongside `frame_id`, so a sensor entry commits to a specific `FrameRegistryEntry` version instead of only naming a mutable frame directory. This is intentionally breaking for any existing on-disk spatial sensor entries without `frame_hash`; there is no compatibility shim, default, or lazy directory scan.
+
+**`write_sensor` validates frame references before touching disk.** For `RgbCamera` / `PointCloud`, `frame_id` and `frame_hash` must both be non-empty and `<app_root>/registries/frames/<frame_id>/<frame_hash>.json` must already exist. Missing or empty references return `Error::FrameReferenceMissing { sensor_id, frame_id, frame_hash }`. `Audio` and `JointEncoders` remain non-spatial and carry no frame fields.
+
+**Locked-vector recompute.** The M1 RGB camera canonical JSON now includes `"frame_hash":"e0d40e7b526e04f15f83f75897f53825"` and its sensor hash is **`69f37478490cf1c0b226dbb86d3454fc`**. The M1 point-cloud entry now includes the same optical-frame hash and its sensor hash is **`2c480838a9be0b14608a8a0d72ee319f`**. `auki-ros-adapter`'s locked builder tests track these same hashes.
+
+**Tests:** `auki-registry` 36 → 38 (+2 — `write_sensor_rejects_missing_frame_reference`, `write_sensor_rejects_empty_frame_hash`), plus existing spatial write tests now write the referenced frame entry first.
+
 ### Nils's claude · May 14, 11:00 HKT, 2026
 
 **`SensorBody::Microphone` renamed to `SensorBody::Audio`** — signal-type naming for consistency with `PointCloud` / `JointEncoders` (and the `SensorEntry.kind` open-string contract pinned 2026-05-14 in `auki-network`). Variant tag flips `"microphone"` → `"audio"`; the struct rename is total (`pub struct Microphone` → `pub struct Audio`); body fields unchanged (`sample_rate_hz`, `channels`, `sample_format`, `channel_layout`). All in-crate call sites and tests updated.

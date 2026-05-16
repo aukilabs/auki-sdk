@@ -76,6 +76,8 @@ RgbCamera {
   color_space:       string,    // e.g. "BT.709", "sRGB"
   intrinsics_model:  string,    // e.g. "pinhole"
   distortion_model:  string,    // e.g. "plumb_bob", "none"
+  frame_id:          string,    // Frame Registry id for the camera optical frame
+  frame_hash:        string,    // exact FrameRegistryEntry hash for that frame_id
 }
 ```
 
@@ -87,6 +89,8 @@ PointCloud {
   point_step:    u32,            // bytes per point
   is_bigendian:  bool,           // byte order of multi-byte fields in `data`
   frame_rate_hz: u32,
+  frame_id:      string,         // Frame Registry id for the point coordinates
+  frame_hash:    string,         // exact FrameRegistryEntry hash for that frame_id
 }
 
 PointField {
@@ -115,6 +119,13 @@ Renamed from `Microphone` 2026-05-14 — signal-type naming for consistency with
 
 The tagged-enum body is the extension point for future sensor types.
 
+Spatial sensor bodies (`RgbCamera` and `PointCloud`) must pin an exact frame
+convention with both `frame_id` and `frame_hash`. `write_sensor` validates that
+`<app_root>/registries/frames/<frame_id>/<frame_hash>.json` exists before
+writing the sensor entry. Editing a `FrameRegistryEntry` therefore produces a
+new frame hash, and producers that re-write against it get a new sensor hash as
+well; consumers do not silently reinterpret old sensor entries against new axes.
+
 ### `ClockRegistryEntry`
 
 ```
@@ -140,7 +151,7 @@ The Sensor Log payload (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics`
 
 ## Point Cloud Log payload — moved to `auki-datatypes` (Step 3, 2026-05-08)
 
-`PointCloudLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The Step 3 decision was **opaque-bytes-only** — `PointCloudLogEntry { bytes data = 1; }` — symmetric with the wire's `PointCloudFrame`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }` chain that already governs interpretation. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+`PointCloudLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The Step 3 decision was **opaque-bytes-only** — `PointCloudLogEntry { bytes data = 1; }` — symmetric with the wire's `PointCloudFrame`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id, frame_hash }` chain that already governs interpretation. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
 
 The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `PointCloudLogEntry`. Capturing camera + point cloud simultaneously is still two parallel sensor logs sharing a session.
 

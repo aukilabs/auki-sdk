@@ -7,6 +7,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - [`lib.rs`](lib.rs) - module exports and public re-exports.
 - [`cluster_membership.rs`](cluster_membership.rs) - `ClusterMembership`, `ClusterMember`, membership JSON shape, filename helper, admission ordering.
 - [`cluster_manager.rs`](cluster_manager.rs) - `ClusterManager`, `ClusterTarget`, daemon info, sensor catalog provider trait, Discovery bootstrap logic, Manager/member state, join/liveness/membership/info/sensors tasks, stream opener, shutdown, and election helper.
+- [`stream_manifest.rs`](stream_manifest.rs) - producer-side `StreamManifestBuilder` that derives accept metadata from local Sensor / Frame registries.
 
 ## Implemented
 
@@ -21,6 +22,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
 - Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches.
 - Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
+- `StreamManifestBuilder::from_registry`, which constructs stream accept manifests from a producer's local registry and verifies exact frame references for spatial sensors.
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
 - Shared-reference, idempotent `shutdown`.
 
@@ -40,6 +42,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `ClockRegistryEntry`
 - `FrameRegistryEntry`
 - `RegistryKind`
+- `StreamManifestBuilder`
 - `LIVENESS_CHECK_INTERVAL`
 - Error types for bootstrap/create/join/admit/fetch paths
 - `elect_successor`

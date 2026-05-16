@@ -19,7 +19,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Pin the v2 successor-token format and Discovery verification path. v1 keeps `successor_token` opaque and accepts trust-by-shape for the demo.
 - Add SDK-side relay-reservation support once LAN-only Hagall flows are stable and Park-from-home earns the work.
 - Keep `ClusterManager` and `auki-domain-py` APIs aligned as Python consumers adopt `ClusterTarget.bootstrap`.
-- Add catalog bundling only if the extra registry-fetch roundtrip becomes operationally annoying; v0 registry exchange already resolves exact entries by `(kind, id, hash)`.
+- Add catalog bundling only if the extra registry-fetch roundtrip becomes operationally annoying; v0 registry exchange already resolves exact entries by `(kind, id, hash)`, and stream providers now have `StreamManifestBuilder` for accept-time registry projection.
 
 ## Decisions To Honor
 
@@ -29,6 +29,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Graceful and ungraceful Manager exits use the same survivor election path. A Manager only deregisters the cluster when it is the last member.
 - Election chooses the earliest reachable member by `(join_ts_ns, peer_id)`.
 - App daemons should talk to `ClusterManager`, not manually compose Discovery + network runtime.
+- Stream providers should build accept manifests with `StreamManifestBuilder::from_registry` so spatial sensors commit to the exact `FrameRegistryEntry` hash declared by their sensor body.
 
 ## Open Items
 

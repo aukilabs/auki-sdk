@@ -17,6 +17,7 @@
 
 pub mod cluster_manager;
 pub mod cluster_membership;
+pub mod stream_manifest;
 
 pub use auki_network::registries_protocol::RegistryKind;
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
@@ -27,3 +28,4 @@ pub use cluster_manager::{
     SensorCatalogProvider, SensorEntry, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
+pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

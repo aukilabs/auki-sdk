@@ -60,6 +60,8 @@ Useful methods:
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |
 | `shutdown()` | Idempotent shared-reference shutdown |
 
+Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `RgbCamera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
+
 `shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, and rotate the Manager hint in Discovery.
 
 ## Membership

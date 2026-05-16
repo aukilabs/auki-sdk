@@ -16,11 +16,12 @@
 
 use auki_domain_rs::{
     AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
-    ClusterManager as RustClusterManager, ClusterMember as RustClusterMember,
-    ClusterMembership as RustClusterMembership, ClusterTarget as RustClusterTarget,
-    CreateClusterError as RustCreateClusterError, DaemonInfo as RustDaemonInfo,
-    JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
-    SensorEntry as RustSensorEntry,
+    BuildStreamManifestError as RustBuildStreamManifestError, ClusterManager as RustClusterManager,
+    ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
+    ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
+    DaemonInfo as RustDaemonInfo, JoinClusterError as RustJoinClusterError,
+    SensorCatalogProvider as RustSensorCatalogProvider, SensorEntry as RustSensorEntry,
+    StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
@@ -29,7 +30,7 @@ use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::stream_protocol::{
     AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
     JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
-    StreamRequest as RustStreamRequest,
+    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
@@ -39,10 +40,11 @@ use auki_network_py::stream_types::{
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyCapsule};
+use pyo3::types::{PyAny, PyCapsule, PyDict};
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::Runtime;
@@ -99,6 +101,33 @@ fn stream_provider_from_python(py: Python<'_>, callable: Py<PyAny>) -> PyResult<
     // reference until Python GC drops it.
     let provider_ref: &StreamProvider = unsafe { capsule.reference::<StreamProvider>() };
     Ok(Arc::clone(provider_ref))
+}
+
+fn stream_manifest_to_python(py: Python<'_>, manifest: RustStreamManifest) -> PyResult<Py<PyAny>> {
+    let cluster = py.import_bound("auki_network")?.getattr("cluster")?;
+    let cls = cluster.getattr("StreamManifest")?;
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("sensor_id", manifest.sensor_id)?;
+    kwargs.set_item("sensor_hash", manifest.sensor_hash)?;
+    kwargs.set_item("clock_id", manifest.clock_id)?;
+    kwargs.set_item("clock_hash", manifest.clock_hash)?;
+    kwargs.set_item("frame_id", manifest.frame_id)?;
+    kwargs.set_item("frame_hash", manifest.frame_hash)?;
+    Ok(cls.call((), Some(&kwargs))?.unbind())
+}
+
+fn pathlike_to_pathbuf(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &'static str,
+) -> PyResult<PathBuf> {
+    let path_obj = py.import_bound("os")?.call_method1("fspath", (value,))?;
+    let path: String = path_obj.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{name} must be str or os.PathLike resolving to str"
+        ))
+    })?;
+    Ok(PathBuf::from(path))
 }
 
 // ─── Process-wide tokio runtime ────────────────────────────────────
@@ -445,6 +474,54 @@ impl RustSensorCatalogProvider for PySensorCatalogProvider {
                 }
             }
         })
+    }
+}
+
+// ─── StreamManifestBuilder pyclass ─────────────────────────────────
+
+/// Producer-side helper for building accept-time stream manifests from
+/// the local registry.
+#[pyclass(name = "StreamManifestBuilder")]
+pub struct PyStreamManifestBuilder;
+
+#[pymethods]
+impl PyStreamManifestBuilder {
+    /// Build an `auki_network.cluster.StreamManifest` from local
+    /// Sensor / Frame registry entries.
+    ///
+    /// Spatial sensor bodies (`RgbCamera`, `PointCloud`) must carry a
+    /// non-empty `frame_id` + `frame_hash`, and the exact frame entry
+    /// must exist on disk. Non-spatial bodies (`Audio`,
+    /// `JointEncoders`) return empty frame fields.
+    #[staticmethod]
+    #[pyo3(signature = (app_root, sensor_id, sensor_hash, clock_id, clock_hash))]
+    fn from_registry(
+        py: Python<'_>,
+        app_root: &Bound<'_, PyAny>,
+        sensor_id: &str,
+        sensor_hash: &str,
+        clock_id: &str,
+        clock_hash: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let app_root = pathlike_to_pathbuf(py, app_root, "app_root")?;
+        let sensor_id = sensor_id.to_string();
+        let sensor_hash = sensor_hash.to_string();
+        let clock_id = clock_id.to_string();
+        let clock_hash = clock_hash.to_string();
+
+        let manifest = py
+            .allow_threads(|| {
+                RustStreamManifestBuilder::from_registry(
+                    &app_root,
+                    sensor_id,
+                    sensor_hash,
+                    clock_id,
+                    clock_hash,
+                )
+            })
+            .map_err(map_build_stream_manifest_error)?;
+
+        stream_manifest_to_python(py, manifest)
     }
 }
 
@@ -1009,10 +1086,7 @@ impl PyClusterManager {
     /// peers can fetch existing entries from
     /// `<app_root>/registries/{sensors,clocks,frames}/...`.
     fn set_registry_app_root(&self, py: Python<'_>, app_root: &Bound<'_, PyAny>) -> PyResult<()> {
-        let path_obj = py.import_bound("os")?.call_method1("fspath", (app_root,))?;
-        let path: String = path_obj.extract().map_err(|_| {
-            PyTypeError::new_err("app_root must be str or os.PathLike resolving to str")
-        })?;
+        let path = pathlike_to_pathbuf(py, app_root, "app_root")?;
         self.with_inner(|m| {
             m.set_registry_app_root(path);
             Ok(())
@@ -1281,6 +1355,19 @@ fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) 
     }
 }
 
+fn map_build_stream_manifest_error(e: RustBuildStreamManifestError) -> PyErr {
+    match e {
+        RustBuildStreamManifestError::SensorEntryMissing { .. }
+        | RustBuildStreamManifestError::FrameEntryMissing { .. } => {
+            PyFileNotFoundError::new_err(e.to_string())
+        }
+        RustBuildStreamManifestError::FrameIdMissing { .. }
+        | RustBuildStreamManifestError::FrameHashMissing { .. }
+        | RustBuildStreamManifestError::Registry(_) => PyValueError::new_err(e.to_string()),
+        RustBuildStreamManifestError::Io(err) => PyOSError::new_err(err.to_string()),
+    }
+}
+
 // ─── Module entry point ────────────────────────────────────────────
 
 /// `auki_domain` Python module.
@@ -1291,7 +1378,153 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PySensorEntry>()?;
+    m.add_class::<PyStreamManifestBuilder>()?;
     m.add_class::<PyClusterTarget>()?;
     m.add_class::<PyClusterManager>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use auki_registry::{
+        FrameRegistryEntry, PointCloud, PointField, PointFieldDataType, SensorBody,
+        SensorRegistryEntry, write_frame, write_sensor,
+    };
+    use pyo3::types::{PyModule, PyString};
+
+    const FRAME_ID: &str = "K1-AABBCCDDEEFF/head_left_cam_optical";
+
+    fn install_auki_network_module(py: Python<'_>) -> PyResult<()> {
+        let module = PyModule::new_bound(py, "auki_network")?;
+        auki_network_py::populate_module(&module)?;
+        py.import_bound("sys")?
+            .getattr("modules")?
+            .set_item("auki_network", &module)?;
+        Ok(())
+    }
+
+    fn write_spatial_registry_fixture(app_root: &std::path::Path) -> (String, String, String) {
+        let frame = FrameRegistryEntry::ros_optical(FRAME_ID);
+        let frame_hash = write_frame(app_root, &frame).unwrap().hash().to_string();
+        let entry = SensorRegistryEntry {
+            sensor_id: "K1-AABBCCDDEEFF/head_depth_points".into(),
+            body: SensorBody::PointCloud(PointCloud {
+                fields: vec![PointField {
+                    name: "x".into(),
+                    offset: 0,
+                    datatype: PointFieldDataType::Float32,
+                    count: 1,
+                }],
+                point_step: 4,
+                is_bigendian: false,
+                frame_rate_hz: 10,
+                frame_id: FRAME_ID.into(),
+                frame_hash: frame_hash.clone(),
+            }),
+        };
+        let sensor_hash = write_sensor(app_root, &entry).unwrap().hash().to_string();
+        (entry.sensor_id, sensor_hash, frame_hash)
+    }
+
+    #[test]
+    fn module_exposes_stream_manifest_builder() {
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "auki_domain").unwrap();
+            auki_domain(py, &module).unwrap();
+
+            assert!(module.getattr("StreamManifestBuilder").is_ok());
+        });
+    }
+
+    #[test]
+    fn stream_manifest_builder_returns_auki_network_manifest() {
+        Python::with_gil(|py| {
+            install_auki_network_module(py).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let (sensor_id, sensor_hash, frame_hash) = write_spatial_registry_fixture(dir.path());
+            let app_root = PyString::new_bound(py, dir.path().to_str().unwrap());
+
+            let manifest = PyStreamManifestBuilder::from_registry(
+                py,
+                app_root.as_any(),
+                &sensor_id,
+                &sensor_hash,
+                "K1-AABBCCDDEEFF/monotonic",
+                "clock-hash",
+            )
+            .unwrap();
+            let manifest = manifest.bind(py);
+
+            assert_eq!(
+                manifest
+                    .getattr("sensor_id")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                sensor_id
+            );
+            assert_eq!(
+                manifest
+                    .getattr("frame_id")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                FRAME_ID
+            );
+            assert_eq!(
+                manifest
+                    .getattr("frame_hash")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                frame_hash
+            );
+
+            // Proves we constructed the real `auki_network.cluster.StreamManifest`
+            // type, not a duplicate PyO3 class registered by auki_domain.
+            let cluster = py
+                .import_bound("auki_network")
+                .unwrap()
+                .getattr("cluster")
+                .unwrap();
+            let decision_cls = cluster.getattr("StreamDecision").unwrap();
+            let kwargs = PyDict::new_bound(py);
+            kwargs.set_item("manifest", manifest).unwrap();
+            kwargs.set_item("source", py.None()).unwrap();
+            let decision = decision_cls
+                .getattr("accept_pointcloud")
+                .unwrap()
+                .call((), Some(&kwargs))
+                .unwrap();
+            assert_eq!(
+                decision
+                    .getattr("kind")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "accept_pointcloud"
+            );
+        });
+    }
+
+    #[test]
+    fn stream_manifest_builder_missing_sensor_maps_to_file_not_found() {
+        Python::with_gil(|py| {
+            let dir = tempfile::tempdir().unwrap();
+            let app_root = PyString::new_bound(py, dir.path().to_str().unwrap());
+
+            let err = PyStreamManifestBuilder::from_registry(
+                py,
+                app_root.as_any(),
+                "missing/sensor",
+                "missing-hash",
+                "clock",
+                "clock-hash",
+            )
+            .unwrap_err();
+
+            assert!(err.is_instance_of::<PyFileNotFoundError>(py));
+        });
+    }
 }

@@ -20,7 +20,8 @@ mod tests {
     use super::*;
 
     fn is_lower_hex(s: &str) -> bool {
-        s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
     }
 
     #[test]
@@ -59,19 +60,13 @@ mod tests {
     /// guard against accidental seed/algorithm changes in our wrapper.
     #[test]
     fn known_vector_empty() {
-        assert_eq!(
-            hash_jcs_bytes(b""),
-            "99aa06d3014798d86001c324468d497f"
-        );
+        assert_eq!(hash_jcs_bytes(b""), "99aa06d3014798d86001c324468d497f");
     }
 
     /// Locked vector for `b"abc"` (XXH3-128, seed 0). Same regression-guard
     /// purpose as `known_vector_empty`.
     #[test]
     fn known_vector_abc() {
-        assert_eq!(
-            hash_jcs_bytes(b"abc"),
-            "06b05ab6733a618578af5f94892f3950"
-        );
+        assert_eq!(hash_jcs_bytes(b"abc"), "06b05ab6733a618578af5f94892f3950");
     }
 }

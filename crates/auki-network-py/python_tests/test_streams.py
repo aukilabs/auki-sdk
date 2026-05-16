@@ -52,12 +52,12 @@ def test_stream_request_round_trips() -> None:
     assert "head_left_cam" in repr(r)
 
 
-def test_stream_descriptor_round_trips_and_compares() -> None:
-    a = cluster.StreamDescriptor(
+def test_stream_manifest_round_trips_and_compares() -> None:
+    a = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="h", clock_id="c", clock_hash="ch",
         frame_id="frame", frame_hash="fh"
     )
-    b = cluster.StreamDescriptor(
+    b = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="h", clock_id="c", clock_hash="ch",
         frame_id="frame", frame_hash="fh"
     )
@@ -68,7 +68,7 @@ def test_stream_descriptor_round_trips_and_compares() -> None:
     assert a.clock_hash == "ch"
     assert a.frame_id == "frame"
     assert a.frame_hash == "fh"
-    c = cluster.StreamDescriptor(
+    c = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="other", clock_id="c", clock_hash="ch",
         frame_id="frame", frame_hash="fh"
     )
@@ -127,19 +127,19 @@ def test_end_reason_factories() -> None:
     assert perr.detail == "encoder died"
 
 
-def test_producer_frame_round_trips() -> None:
-    pf = cluster.ProducerFrame(timestamp_ns=12345, payload=cluster.JpegFrame(b"abc"))
+def test_stream_item_round_trips() -> None:
+    pf = cluster.StreamItem(timestamp_ns=12345, payload=cluster.JpegFrame(b"abc"))
     assert pf.timestamp_ns == 12345
     assert isinstance(pf.payload, cluster.JpegFrame)
     assert pf.payload.bytes == b"abc"
 
 
-def test_producer_frame_accepts_pointcloud_payload() -> None:
-    """Dagaz Batch 2 — `ProducerFrame.payload` accepts either
+def test_stream_item_accepts_pointcloud_payload() -> None:
+    """Dagaz Batch 2 — `StreamItem.payload` accepts either
     `JpegFrame` or `PointCloudFrame`. The substream-typed dispatch
     happens later, when the source iterator is paired with a
     `StreamDecision.accept_pointcloud(...)` Accept variant."""
-    pf = cluster.ProducerFrame(
+    pf = cluster.StreamItem(
         timestamp_ns=42_000, payload=cluster.PointCloudFrame(b"\x01\x02")
     )
     assert pf.timestamp_ns == 42_000
@@ -147,13 +147,13 @@ def test_producer_frame_accepts_pointcloud_payload() -> None:
     assert pf.payload.bytes == b"\x01\x02"
 
 
-def test_producer_frame_accepts_audio_payload() -> None:
-    """Dialogue Batch 1 — `ProducerFrame.payload` accepts `AudioFrame`
+def test_stream_item_accepts_audio_payload() -> None:
+    """Dialogue Batch 1 — `StreamItem.payload` accepts `AudioFrame`
     alongside `JpegFrame` / `PointCloudFrame` / `JointEncodersFrame`.
     The substream-typed dispatch happens later, when the source
     iterator is paired with a `StreamDecision.accept_audio(...)`
     Accept variant."""
-    pf = cluster.ProducerFrame(
+    pf = cluster.StreamItem(
         timestamp_ns=20_000, payload=cluster.AudioFrame(b"\xab\xcd")
     )
     assert pf.timestamp_ns == 20_000
@@ -161,15 +161,15 @@ def test_producer_frame_accepts_audio_payload() -> None:
     assert pf.payload.data == b"\xab\xcd"
 
 
-def test_producer_frame_rejects_unknown_payload_type() -> None:
+def test_stream_item_rejects_unknown_payload_type() -> None:
     """Anything other than the supported frame types is a `ValueError`
     at construction time."""
     with pytest.raises(ValueError, match="AudioFrame"):
-        cluster.ProducerFrame(timestamp_ns=0, payload="not-a-frame")
+        cluster.StreamItem(timestamp_ns=0, payload="not-a-frame")
 
 
 def test_stream_decision_factory_tags() -> None:
-    descriptor = cluster.StreamDescriptor(
+    manifest = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="h", clock_id="c", clock_hash="ch"
     )
 
@@ -177,13 +177,13 @@ def test_stream_decision_factory_tags() -> None:
         return
         yield  # unreachable; makes this an async generator function
 
-    acc = cluster.StreamDecision.accept(descriptor=descriptor, source=_empty())
+    acc = cluster.StreamDecision.accept(manifest=manifest, source=_empty())
     assert acc.kind == "accept"
 
-    acc_pc = cluster.StreamDecision.accept_pointcloud(descriptor=descriptor, source=_empty())
+    acc_pc = cluster.StreamDecision.accept_pointcloud(manifest=manifest, source=_empty())
     assert acc_pc.kind == "accept_pointcloud"
 
-    acc_audio = cluster.StreamDecision.accept_audio(descriptor=descriptor, source=_empty())
+    acc_audio = cluster.StreamDecision.accept_audio(manifest=manifest, source=_empty())
     assert acc_audio.kind == "accept_audio"
 
     dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
@@ -305,18 +305,18 @@ def test_python_producer_python_consumer_round_trip_jpeg(tmp_path: Path) -> None
         accepted_count += 1
 
         async def gen():
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=1_000, payload=cluster.JpegFrame(b"\xff\xd8\x01")
             )
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=2_000, payload=cluster.JpegFrame(b"\xff\xd8\x02")
             )
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=3_000, payload=cluster.JpegFrame(b"\xff\xd8\x03")
             )
 
         return cluster.StreamDecision.accept(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="sensor-hash-3",
                 clock_id="test/session-monotonic",
@@ -360,14 +360,14 @@ def test_python_producer_python_consumer_round_trip_jpeg(tmp_path: Path) -> None
             peer_id=PEER_ID_SEED_10,
             sensor_id="test/cam",
         )
-        assert sub.descriptor.sensor_id == "test/cam"
-        assert sub.descriptor.sensor_hash == "sensor-hash-3"
-        assert sub.descriptor.clock_id == "test/session-monotonic"
-        assert sub.descriptor.clock_hash == "clock-hash-3"
-        assert sub.descriptor.frame_id == "test/cam/frame"
-        assert sub.descriptor.frame_hash == "frame-hash-3"
+        assert sub.manifest.sensor_id == "test/cam"
+        assert sub.manifest.sensor_hash == "sensor-hash-3"
+        assert sub.manifest.clock_id == "test/session-monotonic"
+        assert sub.manifest.clock_hash == "clock-hash-3"
+        assert sub.manifest.frame_id == "test/cam/frame"
+        assert sub.manifest.frame_hash == "frame-hash-3"
 
-        frames = sub.frames()
+        frames = sub.entries()
 
         # Drain three frames — order, seq, timestamp, payload all locked.
         f0 = next(frames)
@@ -404,7 +404,7 @@ def test_python_producer_python_consumer_round_trip_jpeg(tmp_path: Path) -> None
 def test_open_stream_against_unknown_sensor_raises_declined(tmp_path: Path) -> None:
     """Producer's `stream_provider` declines the request → consumer's
     `open_stream` raises `StreamDeclined` carrying a typed
-    `DeclineReason`. No frames flow."""
+    `DeclineReason`. No entries flow."""
     port_a, port_b = _port_pair(1)
     doc = _two_peer_doc(tmp_path, port_a, port_b)
 
@@ -472,21 +472,21 @@ def test_python_producer_python_consumer_round_trip_pointcloud(
         accepted_count += 1
 
         async def gen():
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=10_000,
                 payload=cluster.PointCloudFrame(b"\x00\x01\x02"),
             )
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=20_000,
                 payload=cluster.PointCloudFrame(b"\x10\x11"),
             )
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=30_000,
                 payload=cluster.PointCloudFrame(b"\xa0\xa1\xa2\xa3"),
             )
 
         return cluster.StreamDecision.accept_pointcloud(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="pc-sensor",
                 clock_id="lidar/clock",
@@ -525,13 +525,13 @@ def test_python_producer_python_consumer_round_trip_pointcloud(
             peer_id=PEER_ID_SEED_10,
             sensor_id="lidar/points",
         )
-        assert sub.descriptor.sensor_id == "lidar/points"
-        assert sub.descriptor.sensor_hash == "pc-sensor"
-        assert sub.descriptor.clock_id == "lidar/clock"
-        assert sub.descriptor.frame_id == "lidar/points/frame"
-        assert sub.descriptor.frame_hash == "pc-frame-hash"
+        assert sub.manifest.sensor_id == "lidar/points"
+        assert sub.manifest.sensor_hash == "pc-sensor"
+        assert sub.manifest.clock_id == "lidar/clock"
+        assert sub.manifest.frame_id == "lidar/points/frame"
+        assert sub.manifest.frame_hash == "pc-frame-hash"
 
-        frames = sub.frames()
+        frames = sub.entries()
 
         f0 = next(frames)
         assert f0.seq == 0
@@ -570,12 +570,12 @@ def test_payload_mismatch_ends_stream_with_producer_error(tmp_path: Path) -> Non
     def producer_stream(peer_id: str, req: cluster.StreamRequest) -> cluster.StreamDecision:
         async def gen():
             # Wrong T — substream is PointCloud, but we yield a JPEG frame.
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=1, payload=cluster.JpegFrame(b"jpeg-bytes")
             )
 
         return cluster.StreamDecision.accept_pointcloud(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="pc",
                 clock_id="c",
@@ -613,7 +613,7 @@ def test_payload_mismatch_ends_stream_with_producer_error(tmp_path: Path) -> Non
         sub = rt_consumer.open_pointcloud_stream(
             peer_id=PEER_ID_SEED_10, sensor_id="any"
         )
-        frames = sub.frames()
+        frames = sub.entries()
 
         with pytest.raises(cluster.StreamEndOfStream) as excinfo:
             next(frames)
@@ -693,8 +693,8 @@ def test_joint_encoders_frame_empty_vector() -> None:
     assert len(f) == 0
 
 
-def test_producer_frame_accepts_joint_encoders_payload() -> None:
-    pf = cluster.ProducerFrame(
+def test_stream_item_accepts_joint_encoders_payload() -> None:
+    pf = cluster.StreamItem(
         timestamp_ns=99_000, payload=cluster.JointEncodersFrame([0.1, 0.2, 0.3])
     )
     assert pf.timestamp_ns == 99_000
@@ -707,7 +707,7 @@ def test_producer_frame_accepts_joint_encoders_payload() -> None:
 
 
 def test_stream_decision_accept_joint_encoders_factory() -> None:
-    descriptor = cluster.StreamDescriptor(
+    manifest = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="h", clock_id="c", clock_hash="ch"
     )
 
@@ -715,7 +715,7 @@ def test_stream_decision_accept_joint_encoders_factory() -> None:
         return
         yield  # unreachable; makes this an async generator function
 
-    acc_je = cluster.StreamDecision.accept_joint_encoders(descriptor=descriptor, source=_empty())
+    acc_je = cluster.StreamDecision.accept_joint_encoders(manifest=manifest, source=_empty())
     assert acc_je.kind == "accept_joint_encoders"
 
 
@@ -750,13 +750,13 @@ def test_python_producer_python_consumer_round_trip_joint_encoders(
 
         async def gen():
             for i, angles in enumerate(SAMPLES):
-                yield cluster.ProducerFrame(
+                yield cluster.StreamItem(
                     timestamp_ns=10_000 * (i + 1),
                     payload=cluster.JointEncodersFrame(angles),
                 )
 
         return cluster.StreamDecision.accept_joint_encoders(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="je-sensor",
                 clock_id="arm/clock",
@@ -793,13 +793,13 @@ def test_python_producer_python_consumer_round_trip_joint_encoders(
             peer_id=PEER_ID_SEED_10,
             sensor_id="arm/joints",
         )
-        assert sub.descriptor.sensor_id == "arm/joints"
-        assert sub.descriptor.sensor_hash == "je-sensor"
-        assert sub.descriptor.clock_id == "arm/clock"
-        assert sub.descriptor.frame_id == ""
-        assert sub.descriptor.frame_hash == ""
+        assert sub.manifest.sensor_id == "arm/joints"
+        assert sub.manifest.sensor_hash == "je-sensor"
+        assert sub.manifest.clock_id == "arm/clock"
+        assert sub.manifest.frame_id == ""
+        assert sub.manifest.frame_hash == ""
 
-        frames = sub.frames()
+        frames = sub.entries()
 
         for i, expected in enumerate(SAMPLES):
             f = next(frames)
@@ -831,12 +831,12 @@ def test_joint_encoders_payload_mismatch_ends_with_producer_error(
     def producer_stream(peer_id: str, req: cluster.StreamRequest) -> cluster.StreamDecision:
         async def gen():
             # Wrong T — substream is JointEncoders, but we yield a JPEG frame.
-            yield cluster.ProducerFrame(
+            yield cluster.StreamItem(
                 timestamp_ns=1, payload=cluster.JpegFrame(b"jpeg-bytes")
             )
 
         return cluster.StreamDecision.accept_joint_encoders(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="je",
                 clock_id="c",
@@ -872,7 +872,7 @@ def test_joint_encoders_payload_mismatch_ends_with_producer_error(
         sub = rt_consumer.open_joint_encoders_stream(
             peer_id=PEER_ID_SEED_10, sensor_id="any"
         )
-        frames = sub.frames()
+        frames = sub.entries()
 
         with pytest.raises(cluster.StreamEndOfStream) as excinfo:
             next(frames)

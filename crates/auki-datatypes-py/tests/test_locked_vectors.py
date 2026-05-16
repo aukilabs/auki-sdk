@@ -134,8 +134,8 @@ def test_spatial_transform_round_trips():
     assert st2.orientation.w == 0.7071
 
 
-def test_stream_descriptor_round_trips():
-    descriptor = adt.stream.StreamDescriptor(
+def test_stream_manifest_round_trips():
+    manifest = adt.stream.StreamManifest(
         sensor_id="robot/head_cam",
         sensor_hash="sensor-hash",
         clock_id="robot/clock",
@@ -143,8 +143,8 @@ def test_stream_descriptor_round_trips():
         frame_id="robot/head_cam/frame",
         frame_hash="frame-hash",
     )
-    parsed = adt.stream.StreamDescriptor().parse(bytes(descriptor))
-    assert parsed == descriptor
+    parsed = adt.stream.StreamManifest().parse(bytes(manifest))
+    assert parsed == manifest
 
 
 def test_module_re_exports_all_packages():

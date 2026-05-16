@@ -22,7 +22,6 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
 
-
 pub use auki_registry;
 
 // ─── ROS2 message mirror types ───────────────────────────────────────────────
@@ -278,7 +277,11 @@ fn ros_datatype_to_sdk(datatype: u8) -> auki_registry::PointFieldDataType {
 /// Per-source-field instruction for repacking the byte stream.
 enum NormalizationPlan {
     /// Field stays as-is (datatype/count unchanged); copy `size` bytes.
-    PassThrough { src_offset: u32, dst_offset: u32, size: u32 },
+    PassThrough {
+        src_offset: u32,
+        dst_offset: u32,
+        size: u32,
+    },
     /// `name="rgb"`, `float32` → three `uint8` fields. 4 src bytes (`B,G,R,pad`)
     /// become 3 dst bytes (`R,G,B`).
     ExpandRgb { src_offset: u32, dst_offset: u32 },
@@ -558,8 +561,8 @@ pub mod r2r_subscriber {
     //! thread without blocking.
 
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread::{self, JoinHandle};
 
     use futures::stream::StreamExt;
@@ -605,7 +608,10 @@ pub mod r2r_subscriber {
             // Match the K1 mipi_cam publisher: RELIABLE / VOLATILE.
             let qos = r2r::QosProfile::default();
             let info_sub = node
-                .subscribe::<r2r::sensor_msgs::msg::CameraInfo>(&topics.camera_info_topic, qos.clone())
+                .subscribe::<r2r::sensor_msgs::msg::CameraInfo>(
+                    &topics.camera_info_topic,
+                    qos.clone(),
+                )
                 .map_err(|e| {
                     BootstrapError::Transport(format!(
                         "subscribe {}: {e}",
@@ -667,7 +673,10 @@ pub mod r2r_subscriber {
                             if count <= 3 || count % 20 == 0 {
                                 eprintln!(
                                     "[auki-ros-adapter] image #{count}: {}x{} {} ({}B)",
-                                    msg.width, msg.height, msg.encoding, msg.data.len()
+                                    msg.width,
+                                    msg.height,
+                                    msg.encoding,
+                                    msg.data.len()
                                 );
                             }
                             image_q_inner
@@ -787,23 +796,25 @@ mod tests {
 
     fn k1_bootstrap_camera_info() -> CameraInfoMsg {
         CameraInfoMsg {
-            stamp: StampMsg { sec: 1_745_000_000, nanosec: 123_456_789 },
+            stamp: StampMsg {
+                sec: 1_745_000_000,
+                nanosec: 123_456_789,
+            },
             width: 544,
             height: 488,
             distortion_model: "plumb_bob".into(),
             // K = [fx, 0, cx, 0, fy, cy, 0, 0, 1]
-            k: [
-                400.0, 0.0, 272.5,
-                0.0, 401.0, 244.5,
-                0.0, 0.0, 1.0,
-            ],
+            k: [400.0, 0.0, 272.5, 0.0, 401.0, 244.5, 0.0, 0.0, 1.0],
             d: vec![-0.1, 0.05, 0.0, 0.0, 0.0],
         }
     }
 
     #[test]
     fn stamp_to_ns_combines_seconds_and_nanoseconds() {
-        let s = StampMsg { sec: 5, nanosec: 250_000_000 };
+        let s = StampMsg {
+            sec: 5,
+            nanosec: 250_000_000,
+        };
         assert_eq!(stamp_to_ns(s), 5_250_000_000);
     }
 
@@ -818,7 +829,10 @@ mod tests {
         // ROS2 header.stamp.sec is i32, so i32::MAX seconds (year 2038) is
         // the genuine ceiling. The conversion to i64 ns fits comfortably
         // (i64::MAX is ~292 years of nanoseconds).
-        let s = StampMsg { sec: i32::MAX, nanosec: 999_999_999 };
+        let s = StampMsg {
+            sec: i32::MAX,
+            nanosec: 999_999_999,
+        };
         assert_eq!(
             stamp_to_ns(s),
             i32::MAX as i64 * 1_000_000_000 + 999_999_999
@@ -886,7 +900,10 @@ mod tests {
     fn build_sensor_log_entry_combines_info_and_image() {
         let info = k1_bootstrap_camera_info();
         let image = ImageMsg {
-            stamp: StampMsg { sec: 100, nanosec: 500 },
+            stamp: StampMsg {
+                sec: 100,
+                nanosec: 500,
+            },
             width: 544,
             height: 488,
             encoding: "nv12".into(),
@@ -905,8 +922,7 @@ mod tests {
 
     #[test]
     fn mock_subscriber_returns_scripted_bootstrap_then_drains_events() {
-        let mut sub = MockCameraSubscriber::new()
-            .with_bootstrap_ok(k1_bootstrap_camera_info());
+        let mut sub = MockCameraSubscriber::new().with_bootstrap_ok(k1_bootstrap_camera_info());
         let info = sub.bootstrap(Duration::from_secs(5)).unwrap();
         assert_eq!(info.width, 544);
 
@@ -946,8 +962,7 @@ mod tests {
 
     #[test]
     fn end_to_end_translation_from_subscription_to_log_entry() {
-        let mut sub = MockCameraSubscriber::new()
-            .with_bootstrap_ok(k1_bootstrap_camera_info());
+        let mut sub = MockCameraSubscriber::new().with_bootstrap_ok(k1_bootstrap_camera_info());
         let info = sub.bootstrap(Duration::from_secs(5)).unwrap();
         let registry_entry = build_rgb_camera_registry_entry(
             "K1-AABBCCDDEEFF/head_left_cam",
@@ -965,7 +980,10 @@ mod tests {
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {
-            stamp: StampMsg { sec: 200, nanosec: 0 },
+            stamp: StampMsg {
+                sec: 200,
+                nanosec: 0,
+            },
             width: 544,
             height: 488,
             encoding: "nv12".into(),
@@ -1004,13 +1022,31 @@ mod tests {
             data.extend_from_slice(&((i as f32) + 3.0).to_le_bytes()); // z
         }
         PointCloud2Msg {
-            stamp: StampMsg { sec: 100, nanosec: 500 },
+            stamp: StampMsg {
+                sec: 100,
+                nanosec: 500,
+            },
             height: 1,
             width: num_points,
             fields: vec![
-                PointFieldMsg { name: "x".into(), offset: 0, datatype: 7, count: 1 },
-                PointFieldMsg { name: "y".into(), offset: 4, datatype: 7, count: 1 },
-                PointFieldMsg { name: "z".into(), offset: 8, datatype: 7, count: 1 },
+                PointFieldMsg {
+                    name: "x".into(),
+                    offset: 0,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "y".into(),
+                    offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "z".into(),
+                    offset: 8,
+                    datatype: 7,
+                    count: 1,
+                },
             ],
             is_bigendian: false,
             point_step: 12,
@@ -1027,9 +1063,24 @@ mod tests {
             height: 1,
             width: 0, // unused for the registry side
             fields: vec![
-                PointFieldMsg { name: "x".into(), offset: 0, datatype: 7, count: 1 },
-                PointFieldMsg { name: "y".into(), offset: 4, datatype: 7, count: 1 },
-                PointFieldMsg { name: "z".into(), offset: 8, datatype: 7, count: 1 },
+                PointFieldMsg {
+                    name: "x".into(),
+                    offset: 0,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "y".into(),
+                    offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "z".into(),
+                    offset: 8,
+                    datatype: 7,
+                    count: 1,
+                },
             ],
             is_bigendian: false,
             point_step: 12,
@@ -1075,10 +1126,30 @@ mod tests {
             height: 1,
             width: 1,
             fields: vec![
-                PointFieldMsg { name: "x".into(), offset: 0, datatype: 7, count: 1 },
-                PointFieldMsg { name: "y".into(), offset: 4, datatype: 7, count: 1 },
-                PointFieldMsg { name: "z".into(), offset: 8, datatype: 7, count: 1 },
-                PointFieldMsg { name: "rgb".into(), offset: 12, datatype: 7, count: 1 },
+                PointFieldMsg {
+                    name: "x".into(),
+                    offset: 0,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "y".into(),
+                    offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "z".into(),
+                    offset: 8,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "rgb".into(),
+                    offset: 12,
+                    datatype: 7,
+                    count: 1,
+                },
             ],
             is_bigendian: false,
             point_step: 16,
@@ -1132,8 +1203,18 @@ mod tests {
             height: 1,
             width: 1,
             fields: vec![
-                PointFieldMsg { name: "x".into(), offset: 0, datatype: 7, count: 1 },
-                PointFieldMsg { name: "rgba".into(), offset: 4, datatype: 7, count: 1 },
+                PointFieldMsg {
+                    name: "x".into(),
+                    offset: 0,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "rgba".into(),
+                    offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
             ],
             is_bigendian: false,
             point_step: 8,
@@ -1173,8 +1254,18 @@ mod tests {
             height: 1,
             width: 1,
             fields: vec![
-                PointFieldMsg { name: "intensity".into(), offset: 0, datatype: 7, count: 1 },
-                PointFieldMsg { name: "ring".into(), offset: 4, datatype: 4, count: 1 },
+                PointFieldMsg {
+                    name: "intensity".into(),
+                    offset: 0,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "ring".into(),
+                    offset: 4,
+                    datatype: 4,
+                    count: 1,
+                },
             ],
             is_bigendian: false,
             point_step: 6,
@@ -1189,9 +1280,15 @@ mod tests {
         };
         assert_eq!(pc.fields.len(), 2);
         assert_eq!(pc.fields[0].name, "intensity");
-        assert_eq!(pc.fields[0].datatype, auki_registry::PointFieldDataType::Float32);
+        assert_eq!(
+            pc.fields[0].datatype,
+            auki_registry::PointFieldDataType::Float32
+        );
         assert_eq!(pc.fields[1].name, "ring");
-        assert_eq!(pc.fields[1].datatype, auki_registry::PointFieldDataType::Uint16);
+        assert_eq!(
+            pc.fields[1].datatype,
+            auki_registry::PointFieldDataType::Uint16
+        );
         assert_eq!(pc.point_step, 6);
 
         let (_, log) = build_point_cloud_log_entry(&msg);

@@ -156,7 +156,9 @@ mod tests {
             peer_id: peer(seed),
             multiaddrs: vec![
                 format!("/ip4/192.168.1.{}/tcp/4001", seed).parse().unwrap(),
-                format!("/ip4/192.168.1.{}/udp/4001/quic-v1", seed).parse().unwrap(),
+                format!("/ip4/192.168.1.{}/udp/4001/quic-v1", seed)
+                    .parse()
+                    .unwrap(),
             ],
             join_ts_ns,
             successor_token: Some(vec![0xde, 0xad, 0xbe, 0xef]),

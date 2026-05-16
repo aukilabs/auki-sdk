@@ -5,9 +5,9 @@ package auki.joint_encoders_stream;
 // Joint-encoder substream payload `T` for `/auki/stream/0.1.0`. The
 // producer emits one `JointEncodersFrame` per encoder sample;
 // consumers (Park) decode and feed angles into FK against their URDF.
-// The frame's timestamp and sequence ride in
-// `auki.stream.Frame { timestamp_ns, seq, payload: bytes }` — this
-// message IS the bytes inside `Frame.payload`.
+// The stream entry's timestamp and sequence ride in
+// `auki.stream.StreamEntry { timestamp_ns, seq, payload: bytes }` — this
+// message IS the bytes inside `StreamEntry.payload`.
 //
 // Joint ordering is producer-defined and immutable per stream; the
 // `SensorRegistryEntry`'s `JointEncoders` body — pinned by

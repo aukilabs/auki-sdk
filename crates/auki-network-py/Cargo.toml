@@ -26,7 +26,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 # Renamed via `package =` so the upstream crate's name doesn't
 # collide with our own lib name. `swarm` is needed for the stream
-# pyclass surface (StreamRequest, StreamDescriptor, StreamDispatch,
+# pyclass surface (StreamRequest, StreamManifest, StreamDispatch,
 # StreamSubscription, ...); `discovery_client` for DiscoveryClient.
 auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
 # `PeerId` parsing on the Python ↔ Rust seam.
@@ -34,7 +34,7 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 # `Multiaddr` parsing for the Python multiaddr string kwargs.
 multiaddr = "0.18"
 # Process-wide tokio runtime — drives both the async Discovery client
-# calls and the consumer-side `FrameIterator` blocking-bridge.
+# calls and the consumer-side `StreamEntryIterator` blocking-bridge.
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # `tracing::warn!` for logged drops when the Python `stream_provider`
 # raises an exception (caught by `build_stream_provider`, surfaced as

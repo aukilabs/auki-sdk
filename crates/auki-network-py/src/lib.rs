@@ -16,30 +16,30 @@
 //!
 //! - `StreamRequest(sensor_id=...)` — the inbound request the SDK
 //!   delivers to the provider callable.
-//! - `StreamDescriptor(sensor_id=..., sensor_hash=..., clock_id=...,
+//! - `StreamManifest(sensor_id=..., sensor_hash=..., clock_id=...,
 //!   clock_hash=..., frame_id=..., frame_hash=...)` — accept-time
 //!   metadata the producer commits to.
 //! - `JpegFrame(bytes)` / `PointCloudFrame(bytes)` /
 //!   `JointEncodersFrame(angles_rad)` — payload `T` types.
-//! - `ProducerFrame(timestamp_ns=..., payload=...)` — what the
+//! - `StreamItem(timestamp_ns=..., payload=...)` — what the
 //!   source async iterator yields.
 //! - `DeclineReason.*` / `EndReason.*` — typed reason factories.
-//! - `StreamDecision.accept(descriptor, source)` /
-//!   `accept_pointcloud(descriptor, source)` /
-//!   `accept_joint_encoders(descriptor, source)` /
+//! - `StreamDecision.accept(manifest, source)` /
+//!   `accept_pointcloud(manifest, source)` /
+//!   `accept_joint_encoders(manifest, source)` /
 //!   `decline(reason)` — the value the provider callable returns.
 //!
 //! Consumer-side types — returned by `ClusterManager.open_*_stream`
 //! (which lives in `auki-domain-py`; the pyclasses live here so all
 //! stream types are in one place):
 //!
-//! - `StreamSubscription(descriptor=..., frames=...)` — accept-time
-//!   metadata + a single-use frame iterator.
-//! - `FrameIterator` — sync blocking iterator; `__next__` raises
+//! - `StreamSubscription(manifest=..., entries=...)` — accept-time
+//!   metadata + a single-use entry iterator.
+//! - `StreamEntryIterator` — sync blocking iterator; `__next__` raises
 //!   `StreamEndOfStream(reason)` / `StreamConnectionLost` /
 //!   `StreamProtocolError(detail)` as the terminator.
-//! - `ConsumerFrame(timestamp_ns, seq, payload)` — what
-//!   `FrameIterator.__next__` yields.
+//! - `StreamEntry(timestamp_ns, seq, payload)` — what
+//!   `StreamEntryIterator.__next__` yields.
 //! - Exception classes: `StreamEndOfStream`, `StreamConnectionLost`,
 //!   `StreamProtocolError`, `StreamDeclined`, `StreamUnreachable`.
 
@@ -61,7 +61,7 @@ pub mod stream_types;
 // ─── Process-wide tokio runtime ────────────────────────────────────
 
 /// Multi-threaded tokio runtime shared across all Discovery calls and
-/// the consumer-side `FrameIterator` blocking-bridge. Reqwest needs a
+/// the consumer-side `StreamEntryIterator` blocking-bridge. Reqwest needs a
 /// runtime; we own one lazily on first use so the caller doesn't need
 /// an `async` Python.
 ///
@@ -310,8 +310,7 @@ impl PyDiscoveryClient {
 }
 
 fn parse_peer_id(s: &str) -> PyResult<PeerId> {
-    PeerId::from_str(s)
-        .map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
+    PeerId::from_str(s).map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
 }
 
 fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
@@ -329,9 +328,9 @@ fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
 ///
 /// - Root-level: `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`.
 /// - `cluster` submodule: every stream type (`StreamRequest`,
-///   `StreamDescriptor`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`,
-///   `ProducerFrame`, `ConsumerFrame`, `DeclineReason`, `EndReason`,
-///   `StreamDecision`, `StreamSubscription`, `FrameIterator`, plus the
+///   `StreamManifest`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`,
+///   `StreamItem`, `StreamEntry`, `DeclineReason`, `EndReason`,
+///   `StreamDecision`, `StreamSubscription`, `StreamEntryIterator`, plus the
 ///   five `Stream*` exception classes).
 ///
 /// Exposed as `pub` so cross-crate consumers in the workspace

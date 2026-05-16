@@ -232,7 +232,12 @@ mod tests {
     #[test]
     fn parent_directory_is_created() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("a").join("b").join("c").join("identity.seed");
+        let path = dir
+            .path()
+            .join("a")
+            .join("b")
+            .join("c")
+            .join("identity.seed");
         assert!(!path.parent().unwrap().exists());
 
         let seed = load_or_mint_seed(&path).unwrap();

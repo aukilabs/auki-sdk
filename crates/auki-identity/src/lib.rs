@@ -590,8 +590,7 @@ mod tests {
         // without trailing zeros.
         let expected_canonical: &[u8] = br#"{"addresses":["/ip4/127.0.0.1/tcp/4001"],"cluster_name":"vinland","peer_id":"12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar","timestamp_ns":1700000000000000000}"#;
         assert_eq!(
-            canonical_bytes,
-            expected_canonical,
+            canonical_bytes, expected_canonical,
             "JCS canonical bytes drifted — see crate docs for the locked recipe"
         );
 
@@ -603,8 +602,7 @@ mod tests {
             0x4d, 0x47, 0xd5, 0xd8, 0x0e, 0x39, 0x22, 0x07,
         ];
         assert_eq!(
-            signature.0,
-            expected_signature,
+            signature.0, expected_signature,
             "ed25519 signature drifted — see crate docs for the locked recipe"
         );
     }

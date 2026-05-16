@@ -5,7 +5,7 @@
 //!
 //! Producer side: [`StreamProvider`] — a callable [`NetworkRuntime`]
 //! invokes per inbound substream. The callable returns a [`StreamDispatch`]
-//! variant that pairs the typed source-stream with the [`StreamDescriptor`],
+//! variant that pairs the typed source-stream with the [`StreamManifest`],
 //! or [`StreamDispatch::Decline`] with a typed reason. The
 //! dispatch enum is *closed* over the SDK-supported `T`s (`JpegFrame`,
 //! `PointCloudFrame` today; new variants added per coordinated
@@ -13,8 +13,8 @@
 //! callback decides which `T` based on `request.sensor_id`.
 //!
 //! Consumer side: [`NetworkRuntime::open_stream`] returns a typed
-//! [`StreamSubscription<T>`] containing the [`StreamDescriptor`] from the
-//! producer plus a [`futures::Stream`] of [`Result<ConsumerFrame<T>,
+//! [`StreamSubscription<T>`] containing the [`StreamManifest`] from the
+//! producer plus a [`futures::Stream`] of [`Result<StreamEntry<T>,
 //! StreamError>`] items. The iterator yields one [`Err`] as a final
 //! item describing how the stream ended (graceful end-of-stream,
 //! connection lost, protocol error) and then returns `None`. The
@@ -43,9 +43,9 @@
 
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
-    AudioFrame, DeclineReason, EndReason, Frame, JointEncodersFrame, JpegFrame, PointCloudFrame,
-    STREAM_PROTOCOL, StreamDescriptor, StreamMessage, StreamProtocolError, StreamRequest,
-    read_message, stream_message, write_message,
+    AudioFrame, DeclineReason, EndReason, JointEncodersFrame, JpegFrame, PointCloudFrame,
+    STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
+    StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
 };
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
@@ -60,14 +60,14 @@ use tokio::sync::watch;
 
 /// What the producer hands the SDK on accept. The SDK drains the
 /// app-supplied source [`Stream`] of these and writes each as a
-/// [`StreamMessage::Frame`] on the wire, stamping `seq` automatically.
+/// [`StreamMessage::Entry`] on the wire, stamping `seq` automatically.
 ///
 /// Producer-side timestamping: `timestamp_ns` lives on the producer's
 /// session clock — the same clock identified in the
-/// [`StreamDescriptor::clock_id`] the producer wrote at accept time.
+/// [`StreamManifest::clock_id`] the producer wrote at accept time.
 /// Monotonically nondecreasing on a healthy producer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProducerFrame<T> {
+pub struct StreamItem<T> {
     pub timestamp_ns: i64,
     pub payload: T,
 }
@@ -75,13 +75,13 @@ pub struct ProducerFrame<T> {
 /// Source-stream type the app returns inside an `Accept*` variant of
 /// [`StreamDispatch`].
 ///
-/// Item is `Result<ProducerFrame<T>, String>` so the producer can end
+/// Item is `Result<StreamItem<T>, String>` so the producer can end
 /// with an error reason — `Some(Err(detail))` is mapped to
 /// [`EndReason::ProducerError { detail }`][EndReason::ProducerError]
 /// on the wire. `None` (stream returns) is mapped to
 /// [`EndReason::SourceEnded`]. The SDK-level shutdown / session-change
 /// paths can override either with their own [`EndReason`].
-pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
+pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, String>> + Send>>;
 
 /// Producer's accept/decline decision for a single inbound request.
 /// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
@@ -93,24 +93,24 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, St
 /// is a coordinated SDK + consumer release — bump the runtime, add
 /// the variant, every consumer that wants the new sensor type opts in.
 ///
-/// On `Accept*`, the SDK writes [`StreamMessage::Accept(descriptor)`]
+/// On `Accept*`, the SDK writes [`StreamMessage::Accept(manifest)`]
 /// for the matching `T` and drains the source-Stream onto the substream as
-/// [`StreamMessage::Frame`] values until the source ends or the
+/// [`StreamMessage::Entry`] values until the source ends or the
 /// substream closes. On [`StreamDispatch::Decline`], the SDK writes
 /// `Decline { reason }` and closes the substream.
 pub enum StreamDispatch {
     /// Accept the request with a JPEG source-Stream — grimsby v1's
-    /// original stream path, now carrying the same descriptor metadata
+    /// original stream path, now carrying the same manifest metadata
     /// as every other `T`.
     AcceptJpeg {
-        descriptor: StreamDescriptor,
+        manifest: StreamManifest,
         source: SourceStream<JpegFrame>,
     },
     /// Accept the request with a PointCloud source-Stream — Dagaz's new
     /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
     /// `PointCloud2` ROS message; the consumer parses CDR on its side.
     AcceptPointCloud {
-        descriptor: StreamDescriptor,
+        manifest: StreamManifest,
         source: SourceStream<PointCloudFrame>,
     },
     /// Accept the request with a JointEncoders source-Stream — sawslin
@@ -121,7 +121,7 @@ pub enum StreamDispatch {
     /// on-disk `JointEncodersLogEntry` payload by design (locked in
     /// `auki-datatypes` by `joint_encoders_disk_wire_byte_identical`).
     AcceptJointEncoders {
-        descriptor: StreamDescriptor,
+        manifest: StreamManifest,
         source: SourceStream<JointEncodersFrame>,
     },
     /// Accept the request with an Audio source-Stream — Dialogue Batch
@@ -134,7 +134,7 @@ pub enum StreamDispatch {
     /// the on-disk `AudioLogEntry` payload by design (locked in
     /// `auki-datatypes` by `audio_disk_wire_byte_identical`).
     AcceptAudio {
-        descriptor: StreamDescriptor,
+        manifest: StreamManifest,
         source: SourceStream<AudioFrame>,
     },
     /// Decline the request with a typed reason. SDK writes
@@ -175,10 +175,10 @@ pub fn decline_all_streams() -> StreamProvider {
 // ─── Consumer-side types ─────────────────────────────────────────────────────
 
 /// What the consumer reads off the typed iterator. Same shape as
-/// [`ProducerFrame<T>`] but with the SDK-stamped `seq` exposed so the
+/// [`StreamItem<T>`] but with the SDK-stamped `seq` exposed so the
 /// consumer can detect drops via gaps in the sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConsumerFrame<T> {
+pub struct StreamEntry<T> {
     pub timestamp_ns: i64,
     pub seq: u64,
     pub payload: T,
@@ -186,17 +186,17 @@ pub struct ConsumerFrame<T> {
 
 /// Returned by [`NetworkRuntime::open_stream`] on success.
 ///
-/// Iterator semantics: yields `Ok(frame)` for each frame, then a
+/// Iterator semantics: yields `Ok(entry)` for each entry, then a
 /// **single final** `Err(StreamError)` describing how the stream ended,
 /// then `None`. After the `Err` is yielded the iterator is exhausted.
 pub struct StreamSubscription<T> {
-    /// Accept-time stream descriptor. Stable for the lifetime of the
+    /// Accept-time stream manifest. Stable for the lifetime of the
     /// subscription — the producer commits to this at accept time and
     /// any change requires opening a new substream.
-    pub descriptor: StreamDescriptor,
-    /// Typed frame iterator. See struct-level docs for the
+    pub manifest: StreamManifest,
+    /// Typed entry iterator. See struct-level docs for the
     /// terminator-then-`None` pattern.
-    pub frames: Pin<Box<dyn Stream<Item = Result<ConsumerFrame<T>, StreamError>> + Send>>,
+    pub entries: Pin<Box<dyn Stream<Item = Result<StreamEntry<T>, StreamError>> + Send>>,
 }
 
 /// Iterator yields one of these as a **single final item** before
@@ -225,7 +225,7 @@ pub enum StreamError {
 }
 
 /// [`NetworkRuntime::open_stream`] failure modes — i.e., the request
-/// never even got to "yielding frames."
+/// never even got to "yielding entries."
 #[derive(Debug, thiserror::Error)]
 pub enum OpenStreamError {
     /// Producer accepted the substream but declined the request with a
@@ -240,7 +240,7 @@ pub enum OpenStreamError {
     LibP2p(#[source] Libp2pOpenStreamError),
     /// Underlying I/O / framing failure during the request/reply
     /// exchange (after libp2p opened the substream but before any
-    /// frames flowed).
+    /// entries flowed).
     #[error("protocol error: {0}")]
     Protocol(#[source] StreamProtocolError),
     /// Substream open didn't complete inside [`OPEN_STREAM_TIMEOUT`].
@@ -263,12 +263,12 @@ impl NetworkRuntime {
     /// sensor (or other addressable thing per [`StreamRequest`]).
     ///
     /// Returns once the producer has either Accepted or Declined the
-    /// request. On accept, the returned [`StreamSubscription<T>::frames`]
+    /// request. On accept, the returned [`StreamSubscription<T>::entries`]
     /// is a typed async iterator the caller drives; on decline, returns
     /// [`OpenStreamError::Declined { reason }`].
     ///
     /// Stream lifetime: the substream stays open as long as the consumer
-    /// keeps polling `frames` AND the producer keeps yielding. Either
+    /// keeps polling `entries` AND the producer keeps yielding. Either
     /// side can end it — producer by yielding `None` (clean, surfaces as
     /// `Err(StreamError::EndOfStream)`) or by closing the substream
     /// (surfaces as `Err(StreamError::ConnectionLost)`); consumer by
@@ -319,8 +319,8 @@ impl NetworkRuntime {
                 Ok(Ok(m)) => m,
             };
 
-        let descriptor = match reply.variant {
-            Some(stream_message::Variant::Accept(descriptor)) => descriptor,
+        let manifest = match reply.variant {
+            Some(stream_message::Variant::Accept(manifest)) => manifest,
             Some(stream_message::Variant::Decline(reason)) => {
                 return Err(OpenStreamError::Declined { reason });
             }
@@ -334,19 +334,19 @@ impl NetworkRuntime {
             }
         };
 
-        // Spawn the consumer-side reader task. Frames flow through an
-        // mpsc channel; the returned `frames` iterator is the receiver
+        // Spawn the consumer-side reader task. Entries flow through an
+        // mpsc channel; the returned `entries` iterator is the receiver
         // side. When the consumer drops the StreamSubscription, the
         // receiver drops, the channel closes, the reader task's `send`
-        // fails on the next frame, and the task exits — substream drops,
+        // fails on the next entry, and the task exits — substream drops,
         // libp2p closes it cleanly on the wire, the producer's source
         // gets dropped on the producer side via the same chain.
-        let (tx, rx) = mpsc::channel::<Result<ConsumerFrame<T>, StreamError>>(8);
+        let (tx, rx) = mpsc::channel::<Result<StreamEntry<T>, StreamError>>(8);
         tokio::spawn(consumer_reader_task::<T>(substream, tx));
 
         Ok(StreamSubscription {
-            descriptor,
-            frames: Box::pin(rx),
+            manifest,
+            entries: Box::pin(rx),
         })
     }
 }
@@ -403,24 +403,24 @@ pub(crate) async fn handle_inbound_substream(
             let msg = StreamMessage::decline(reason);
             let _ = write_message(&mut substream, &msg).await;
         }
-        StreamDispatch::AcceptJpeg { descriptor, source } => {
-            pump_typed::<JpegFrame>(substream, descriptor, source, shutdown_rx).await;
+        StreamDispatch::AcceptJpeg { manifest, source } => {
+            pump_typed::<JpegFrame>(substream, manifest, source, shutdown_rx).await;
         }
-        StreamDispatch::AcceptPointCloud { descriptor, source } => {
-            pump_typed::<PointCloudFrame>(substream, descriptor, source, shutdown_rx).await;
+        StreamDispatch::AcceptPointCloud { manifest, source } => {
+            pump_typed::<PointCloudFrame>(substream, manifest, source, shutdown_rx).await;
         }
-        StreamDispatch::AcceptJointEncoders { descriptor, source } => {
-            pump_typed::<JointEncodersFrame>(substream, descriptor, source, shutdown_rx).await;
+        StreamDispatch::AcceptJointEncoders { manifest, source } => {
+            pump_typed::<JointEncodersFrame>(substream, manifest, source, shutdown_rx).await;
         }
-        StreamDispatch::AcceptAudio { descriptor, source } => {
-            pump_typed::<AudioFrame>(substream, descriptor, source, shutdown_rx).await;
+        StreamDispatch::AcceptAudio { manifest, source } => {
+            pump_typed::<AudioFrame>(substream, manifest, source, shutdown_rx).await;
         }
     }
 }
 
 /// Per-`T` source-Stream pump. Writes
-/// [`StreamMessage::Accept(descriptor)`]
-/// then drains `source` onto the substream as `StreamMessage::Frame`
+/// [`StreamMessage::Accept(manifest)`]
+/// then drains `source` onto the substream as `StreamMessage::Entry`
 /// values with auto-stamped `seq`. Honors the shutdown signal with an
 /// explicit `EndOfStream { reason: ProducerShuttingDown }` (grimsby
 /// D5b — best-effort explicit). Source returns `None` →
@@ -433,18 +433,18 @@ pub(crate) async fn handle_inbound_substream(
 /// [`StreamDispatch`].
 async fn pump_typed<T>(
     mut substream: libp2p::Stream,
-    descriptor: StreamDescriptor,
+    manifest: StreamManifest,
     mut source: SourceStream<T>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) where
     T: Message + Default + Send + 'static,
 {
     // Write accept.
-    let accept_msg = StreamMessage::accept(descriptor);
+    let accept_msg = StreamMessage::accept(manifest);
     if write_message(&mut substream, &accept_msg).await.is_err() {
         return;
     }
-    // Drain source into Frame messages until end-of-source, shutdown
+    // Drain source into StreamEntry messages until end-of-source, shutdown
     // signal, or send error.
     let mut seq: u64 = 0;
     let end_reason = loop {
@@ -461,7 +461,7 @@ async fn pump_typed<T>(
             item = source.next() => match item {
                 Some(Ok(frame)) => {
                     let payload = frame.payload.encode_to_vec();
-                    let msg = StreamMessage::frame(Frame {
+                    let msg = StreamMessage::entry(WireStreamEntry {
                         timestamp_ns: frame.timestamp_ns,
                         seq,
                         payload,
@@ -483,14 +483,14 @@ async fn pump_typed<T>(
 /// Consumer-side per-substream reader task. Spawned by
 /// [`NetworkRuntime::open_stream`] after the producer accepts.
 ///
-/// Reads [`StreamMessage::Frame`] values into an mpsc channel until the
+/// Reads [`StreamMessage::Entry`] values into an mpsc channel until the
 /// substream yields a terminal message (EndOfStream / unexpected variant)
 /// or an I/O error. Sends a single terminal `Err(StreamError)` to the
 /// channel before exiting; consumer's iterator surfaces it as the final
 /// `Err` item.
 async fn consumer_reader_task<T>(
     mut substream: libp2p::Stream,
-    mut tx: mpsc::Sender<Result<ConsumerFrame<T>, StreamError>>,
+    mut tx: mpsc::Sender<Result<StreamEntry<T>, StreamError>>,
 ) where
     T: Message + Default + Send + 'static,
 {
@@ -512,7 +512,7 @@ async fn consumer_reader_task<T>(
         };
 
         match msg.variant {
-            Some(stream_message::Variant::Frame(f)) => {
+            Some(stream_message::Variant::Entry(f)) => {
                 let payload = match T::decode(&*f.payload) {
                     Ok(p) => p,
                     Err(e) => {
@@ -522,7 +522,7 @@ async fn consumer_reader_task<T>(
                         return;
                     }
                 };
-                let frame = ConsumerFrame {
+                let frame = StreamEntry {
                     timestamp_ns: f.timestamp_ns,
                     seq: f.seq,
                     payload,
@@ -620,15 +620,15 @@ mod tests {
         }
     }
 
-    fn descriptor(
+    fn manifest(
         sensor_id: &str,
         sensor_hash: &str,
         clock_id: &str,
         clock_hash: &str,
         frame_id: &str,
         frame_hash: &str,
-    ) -> StreamDescriptor {
-        StreamDescriptor {
+    ) -> StreamManifest {
+        StreamManifest {
             sensor_id: sensor_id.into(),
             sensor_hash: sensor_hash.into(),
             clock_id: clock_id.into(),
@@ -643,19 +643,19 @@ mod tests {
     fn jpeg_provider_yielding_three_frames() -> StreamProvider {
         Arc::new(|_peer, _req| {
             let frames = vec![
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 1_000,
                     payload: JpegFrame {
                         bytes: vec![0xff, 0xd8, 0x01],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 2_000,
                     payload: JpegFrame {
                         bytes: vec![0xff, 0xd8, 0x02],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 3_000,
                     payload: JpegFrame {
                         bytes: vec![0xff, 0xd8, 0x03],
@@ -663,7 +663,7 @@ mod tests {
                 }),
             ];
             StreamDispatch::AcceptJpeg {
-                descriptor: descriptor(
+                manifest: manifest(
                     "test/cam",
                     "sensor-hash-3",
                     "test/session-monotonic",
@@ -680,8 +680,8 @@ mod tests {
         Arc::new(|_peer, req| {
             if req.sensor_id == "exists" {
                 StreamDispatch::AcceptJpeg {
-                    descriptor: descriptor("exists", "h", "c", "ch", "exists/frame", "fh"),
-                    source: Box::pin(stream::iter(vec![Ok(ProducerFrame {
+                    manifest: manifest("exists", "h", "c", "ch", "exists/frame", "fh"),
+                    source: Box::pin(stream::iter(vec![Ok(StreamItem {
                         timestamp_ns: 1,
                         payload: JpegFrame { bytes: vec![0xff] },
                     })])),
@@ -697,14 +697,14 @@ mod tests {
     fn jpeg_provider_yields_then_errors() -> StreamProvider {
         Arc::new(|_peer, _req| {
             let items = vec![
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 1,
                     payload: JpegFrame { bytes: vec![0xaa] },
                 }),
                 Err("encoder died".to_string()),
             ];
             StreamDispatch::AcceptJpeg {
-                descriptor: descriptor("test/cam", "h", "c", "ch", "test/cam/frame", "fh"),
+                manifest: manifest("test/cam", "h", "c", "ch", "test/cam/frame", "fh"),
                 source: Box::pin(stream::iter(items)),
             }
         })
@@ -713,19 +713,19 @@ mod tests {
     fn pointcloud_provider_yielding_three_frames() -> StreamProvider {
         Arc::new(|_peer, _req| {
             let frames = vec![
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 10_000,
                     payload: PointCloudFrame {
                         bytes: vec![0xCD, 0xAA, 0x01, 0x02, 0x03],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 20_000,
                     payload: PointCloudFrame {
                         bytes: vec![0xCD, 0xAA, 0x04, 0x05, 0x06],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 30_000,
                     payload: PointCloudFrame {
                         bytes: vec![0xCD, 0xAA, 0x07, 0x08, 0x09],
@@ -733,7 +733,7 @@ mod tests {
                 }),
             ];
             StreamDispatch::AcceptPointCloud {
-                descriptor: descriptor(
+                manifest: manifest(
                     "test/pc",
                     "pc-sensor-hash-3",
                     "pc/test/session-monotonic",
@@ -752,19 +752,19 @@ mod tests {
             // fixture shape. Contents are arbitrary deterministic bytes;
             // the SDK treats them as opaque per the `bytes data` proto.
             let frames = vec![
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 10_000,
                     payload: AudioFrame {
                         data: vec![0x00, 0x10, 0x20, 0x30, 0x40, 0x50],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 30_000,
                     payload: AudioFrame {
                         data: vec![0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0],
                     },
                 }),
-                Ok(ProducerFrame {
+                Ok(StreamItem {
                     timestamp_ns: 50_000,
                     payload: AudioFrame {
                         data: vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02],
@@ -772,7 +772,7 @@ mod tests {
                 }),
             ];
             StreamDispatch::AcceptAudio {
-                descriptor: descriptor(
+                manifest: manifest(
                     "test/audio",
                     "audio-sensor-hash-3",
                     "audio/test/session-monotonic",
@@ -788,7 +788,7 @@ mod tests {
     fn multi_t_provider() -> StreamProvider {
         Arc::new(|_peer, req| match req.sensor_id.as_str() {
             "camera" => StreamDispatch::AcceptJpeg {
-                descriptor: descriptor(
+                manifest: manifest(
                     "camera",
                     "cam-hash",
                     "shared/clock",
@@ -796,7 +796,7 @@ mod tests {
                     "camera/frame",
                     "cam-frame-hash",
                 ),
-                source: Box::pin(stream::iter(vec![Ok(ProducerFrame {
+                source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
                     payload: JpegFrame {
                         bytes: vec![0xff, 0xd8, 0xab],
@@ -804,7 +804,7 @@ mod tests {
                 })])),
             },
             "pointcloud" => StreamDispatch::AcceptPointCloud {
-                descriptor: descriptor(
+                manifest: manifest(
                     "pointcloud",
                     "pc-hash",
                     "shared/clock",
@@ -812,7 +812,7 @@ mod tests {
                     "pointcloud/frame",
                     "pc-frame-hash",
                 ),
-                source: Box::pin(stream::iter(vec![Ok(ProducerFrame {
+                source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
                     payload: PointCloudFrame {
                         bytes: vec![0xCD, 0xCD, 0xCD],
@@ -970,29 +970,29 @@ mod tests {
             .await
             .expect("open_stream should succeed");
 
-        assert_eq!(sub.descriptor.sensor_id, "test/cam");
-        assert_eq!(sub.descriptor.sensor_hash, "sensor-hash-3");
-        assert_eq!(sub.descriptor.clock_id, "test/session-monotonic");
-        assert_eq!(sub.descriptor.clock_hash, "clock-hash-3");
-        assert_eq!(sub.descriptor.frame_id, "test/cam/frame");
-        assert_eq!(sub.descriptor.frame_hash, "frame-hash-3");
+        assert_eq!(sub.manifest.sensor_id, "test/cam");
+        assert_eq!(sub.manifest.sensor_hash, "sensor-hash-3");
+        assert_eq!(sub.manifest.clock_id, "test/session-monotonic");
+        assert_eq!(sub.manifest.clock_hash, "clock-hash-3");
+        assert_eq!(sub.manifest.frame_id, "test/cam/frame");
+        assert_eq!(sub.manifest.frame_hash, "frame-hash-3");
 
-        let mut frames = sub.frames;
-        let f0 = frames.next().await.unwrap().expect("frame 0 ok");
+        let mut entries = sub.entries;
+        let f0 = entries.next().await.unwrap().expect("frame 0 ok");
         assert_eq!(f0.seq, 0);
         assert_eq!(f0.timestamp_ns, 1_000);
         assert_eq!(f0.payload.bytes, vec![0xff, 0xd8, 0x01]);
 
-        let f1 = frames.next().await.unwrap().expect("frame 1 ok");
+        let f1 = entries.next().await.unwrap().expect("frame 1 ok");
         assert_eq!(f1.seq, 1);
         assert_eq!(f1.timestamp_ns, 2_000);
 
-        let f2 = frames.next().await.unwrap().expect("frame 2 ok");
+        let f2 = entries.next().await.unwrap().expect("frame 2 ok");
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.timestamp_ns, 3_000);
         assert_eq!(f2.payload.bytes, vec![0xff, 0xd8, 0x03]);
 
-        let end = frames
+        let end = entries
             .next()
             .await
             .unwrap()
@@ -1002,7 +1002,7 @@ mod tests {
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
-        assert!(frames.next().await.is_none());
+        assert!(entries.next().await.is_none());
 
         producer.shutdown();
         consumer.shutdown();
@@ -1109,12 +1109,12 @@ mod tests {
             )
             .await
             .expect("open_stream");
-        let mut frames = sub.frames;
+        let mut entries = sub.entries;
 
-        let f0 = frames.next().await.unwrap().expect("first frame ok");
+        let f0 = entries.next().await.unwrap().expect("first frame ok");
         assert_eq!(f0.seq, 0);
 
-        let end = frames
+        let end = entries
             .next()
             .await
             .unwrap()
@@ -1128,7 +1128,7 @@ mod tests {
             },
             other => panic!("expected EndOfStream, got {other:?}"),
         }
-        assert!(frames.next().await.is_none());
+        assert!(entries.next().await.is_none());
 
         producer.shutdown();
         consumer.shutdown();
@@ -1148,15 +1148,15 @@ mod tests {
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
         let provider: StreamProvider = Arc::new(|_peer, _req| {
-            let first = stream::iter(vec![Ok(ProducerFrame {
+            let first = stream::iter(vec![Ok(StreamItem {
                 timestamp_ns: 1_000,
                 payload: JpegFrame {
                     bytes: vec![0xff, 0xd8, 0x99],
                 },
             })]);
-            let then_pending = stream::pending::<Result<ProducerFrame<JpegFrame>, String>>();
+            let then_pending = stream::pending::<Result<StreamItem<JpegFrame>, String>>();
             StreamDispatch::AcceptJpeg {
-                descriptor: descriptor(
+                manifest: manifest(
                     "shutdown/cam",
                     "shutdown-test",
                     "test/clock",
@@ -1203,17 +1203,17 @@ mod tests {
             )
             .await
             .expect("open_stream");
-        let mut frames = sub.frames;
+        let mut entries = sub.entries;
 
-        let f0 = frames.next().await.unwrap().expect("first frame ok");
+        let f0 = entries.next().await.unwrap().expect("first frame ok");
         assert_eq!(f0.seq, 0);
         assert_eq!(f0.payload.bytes, vec![0xff, 0xd8, 0x99]);
 
         producer.shutdown();
 
-        let next = tokio::time::timeout(Duration::from_secs(5), frames.next())
+        let next = tokio::time::timeout(Duration::from_secs(5), entries.next())
             .await
-            .expect("frame iterator hung after producer shutdown")
+            .expect("entry iterator hung after producer shutdown")
             .expect("iterator ended without terminator")
             .expect_err("expected typed end-of-stream");
 
@@ -1222,7 +1222,7 @@ mod tests {
                 if matches!(reason.kind, Some(end_reason::Kind::ProducerShuttingDown(_))) => {}
             other => panic!("expected EndOfStream(ProducerShuttingDown), got {other:?}"),
         }
-        assert!(frames.next().await.is_none());
+        assert!(entries.next().await.is_none());
 
         consumer.shutdown();
     }
@@ -1318,23 +1318,23 @@ mod tests {
             .await
             .expect("open_stream<PointCloudFrame>");
 
-        assert_eq!(sub.descriptor.sensor_id, "test/pc");
-        assert_eq!(sub.descriptor.sensor_hash, "pc-sensor-hash-3");
-        assert_eq!(sub.descriptor.clock_id, "pc/test/session-monotonic");
-        assert_eq!(sub.descriptor.frame_id, "test/pc/frame");
-        assert_eq!(sub.descriptor.frame_hash, "pc-frame-hash-3");
+        assert_eq!(sub.manifest.sensor_id, "test/pc");
+        assert_eq!(sub.manifest.sensor_hash, "pc-sensor-hash-3");
+        assert_eq!(sub.manifest.clock_id, "pc/test/session-monotonic");
+        assert_eq!(sub.manifest.frame_id, "test/pc/frame");
+        assert_eq!(sub.manifest.frame_hash, "pc-frame-hash-3");
 
-        let mut frames = sub.frames;
-        let f0 = frames.next().await.unwrap().expect("frame 0");
+        let mut entries = sub.entries;
+        let f0 = entries.next().await.unwrap().expect("frame 0");
         assert_eq!(f0.seq, 0);
         assert_eq!(f0.payload.bytes, vec![0xCD, 0xAA, 0x01, 0x02, 0x03]);
-        let f1 = frames.next().await.unwrap().expect("frame 1");
+        let f1 = entries.next().await.unwrap().expect("frame 1");
         assert_eq!(f1.seq, 1);
-        let f2 = frames.next().await.unwrap().expect("frame 2");
+        let f2 = entries.next().await.unwrap().expect("frame 2");
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
 
-        let end = frames
+        let end = entries
             .next()
             .await
             .unwrap()
@@ -1397,23 +1397,23 @@ mod tests {
             .await
             .expect("open_stream<AudioFrame>");
 
-        assert_eq!(sub.descriptor.sensor_id, "test/audio");
-        assert_eq!(sub.descriptor.sensor_hash, "audio-sensor-hash-3");
-        assert_eq!(sub.descriptor.clock_id, "audio/test/session-monotonic");
-        assert_eq!(sub.descriptor.frame_id, "");
-        assert_eq!(sub.descriptor.frame_hash, "");
+        assert_eq!(sub.manifest.sensor_id, "test/audio");
+        assert_eq!(sub.manifest.sensor_hash, "audio-sensor-hash-3");
+        assert_eq!(sub.manifest.clock_id, "audio/test/session-monotonic");
+        assert_eq!(sub.manifest.frame_id, "");
+        assert_eq!(sub.manifest.frame_hash, "");
 
-        let mut frames = sub.frames;
-        let f0 = frames.next().await.unwrap().expect("frame 0");
+        let mut entries = sub.entries;
+        let f0 = entries.next().await.unwrap().expect("frame 0");
         assert_eq!(f0.seq, 0);
         assert_eq!(f0.payload.data, vec![0x00, 0x10, 0x20, 0x30, 0x40, 0x50]);
-        let f1 = frames.next().await.unwrap().expect("frame 1");
+        let f1 = entries.next().await.unwrap().expect("frame 1");
         assert_eq!(f1.seq, 1);
-        let f2 = frames.next().await.unwrap().expect("frame 2");
+        let f2 = entries.next().await.unwrap().expect("frame 2");
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.payload.data, vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02]);
 
-        let end = frames
+        let end = entries
             .next()
             .await
             .unwrap()
@@ -1476,10 +1476,10 @@ mod tests {
             )
             .await
             .expect("open_stream<JpegFrame> camera");
-        assert_eq!(sub_jpeg.descriptor.sensor_id, "camera");
-        assert_eq!(sub_jpeg.descriptor.sensor_hash, "cam-hash");
-        let mut jpeg_frames = sub_jpeg.frames;
-        let jf = jpeg_frames.next().await.unwrap().expect("jpeg frame");
+        assert_eq!(sub_jpeg.manifest.sensor_id, "camera");
+        assert_eq!(sub_jpeg.manifest.sensor_hash, "cam-hash");
+        let mut jpeg_entries = sub_jpeg.entries;
+        let jf = jpeg_entries.next().await.unwrap().expect("jpeg frame");
         assert_eq!(jf.payload.bytes, vec![0xff, 0xd8, 0xab]);
 
         // Substream 2: PointCloud.
@@ -1492,10 +1492,10 @@ mod tests {
             )
             .await
             .expect("open_stream<PointCloudFrame> pointcloud");
-        assert_eq!(sub_pc.descriptor.sensor_id, "pointcloud");
-        assert_eq!(sub_pc.descriptor.sensor_hash, "pc-hash");
-        let mut pc_frames = sub_pc.frames;
-        let pcf = pc_frames.next().await.unwrap().expect("pc frame");
+        assert_eq!(sub_pc.manifest.sensor_id, "pointcloud");
+        assert_eq!(sub_pc.manifest.sensor_hash, "pc-hash");
+        let mut pc_entries = sub_pc.entries;
+        let pcf = pc_entries.next().await.unwrap().expect("pc frame");
         assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
 
         // Substream 3: unknown sensor → Decline.

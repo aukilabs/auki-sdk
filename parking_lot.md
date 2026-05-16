@@ -48,7 +48,7 @@ v0.0.23 spec has `started_after` / `started_before` query parameters compared pe
 
 ## TagClaim — `tags.md` ownership
 
-[`tags.md`](tags.md) sits at the repo root and defines the `TagClaim` schema and the `tags.jsonl` sidecar that lives next to every log's `manifest.json`. The spec is currently homeless — it references the auki-logs path layout but no crate owns it, which is why `tags.jsonl` was missing from the per-crate READMEs until just now. Possible homes: stay at root (cross-cutting like [`dataproducts.md`](dataproducts.md)), fold into `auki-logs` (the sidecar layout is its concern), or live in a future `auki-tags` crate (when actual TagClaim read/write lands). Decide before any SDK code starts producing or consuming TagClaims.
+[`tags.md`](tags.md) sits at the repo root and defines the `TagClaim` schema and the `tags.jsonl` sidecar that lives next to every log's `log_manifest.json`. The spec is currently homeless — it references the auki-logs path layout but no crate owns it, which is why `tags.jsonl` was missing from the per-crate READMEs until just now. Possible homes: stay at root (cross-cutting like [`dataproducts.md`](dataproducts.md)), fold into `auki-logs` (the sidecar layout is its concern), or live in a future `auki-tags` crate (when actual TagClaim read/write lands). Decide before any SDK code starts producing or consuming TagClaims.
 
 ## TagClaim — tag removal vs revocation semantics
 
@@ -170,7 +170,7 @@ The root [`README.md`](README.md) "On-disk format" section's `auki-logs` bullet 
 
 > `auki-logs` — segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
 
-That bullet has been stale since the Pose Log capture primitive landed. The on-disk layout diagram immediately above the bullet shows `poselogs/<pose_log_id>/manifest.json + segments/<padded-ns>.seg` — that's the same auki-logs shape, not a parallel primitive. `auki-manifests::build_pose_log_manifest` requires `segment_duration_ns` + `retention_ns` — the auki-logs base contract. Pose Log uses the same `Log<T>` generic; only the segment payload type differs.
+That bullet has been stale since the Pose Log capture primitive landed. The on-disk layout diagram immediately above the bullet shows `poselogs/<pose_log_id>/log_manifest.json + segments/<padded-ns>.seg` — that's the same auki-logs shape, not a parallel primitive. `auki-manifests::build_pose_log_manifest` requires `segment_duration_ns` + `retention_ns` — the auki-logs base contract. Pose Log uses the same `Log<T>` generic; only the segment payload type differs.
 
 Suggested fix: change "**both** Sensor and TimeTransform Logs" → "Sensor, TimeTransform, **and Pose** Logs". Or expand into a sentence making the architectural point explicit: *"All log types — Sensor (with the Point Cloud and Audio sibling payloads), TimeTransform, and Pose — sit on the auki-logs ring-buffer primitive; the manifest schema and segment payload shape vary per log type, the segment machinery is shared."*
 

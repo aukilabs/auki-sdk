@@ -62,7 +62,11 @@ fn session_root(app_root: PathBuf, session: &str) -> String {
 
 #[pyfunction]
 fn timetransform_log_path(session_root: PathBuf, from_id: &str, to_id: &str) -> String {
-    pathbuf_to_string(layout::timetransform_log_path(&session_root, from_id, to_id))
+    pathbuf_to_string(layout::timetransform_log_path(
+        &session_root,
+        from_id,
+        to_id,
+    ))
 }
 
 #[pyfunction]
@@ -72,7 +76,11 @@ fn sensorlog_path(session_root: PathBuf, sensor_log_id: &str) -> String {
 
 #[pyfunction]
 fn poselog_path(session_root: PathBuf, from_frame_id: &str, to_frame_id: &str) -> String {
-    pathbuf_to_string(layout::poselog_path(&session_root, from_frame_id, to_frame_id))
+    pathbuf_to_string(layout::poselog_path(
+        &session_root,
+        from_frame_id,
+        to_frame_id,
+    ))
 }
 
 #[pyfunction]
@@ -118,11 +126,7 @@ mod tests {
 
     #[test]
     fn detection_log_path_substitutes_slashes_in_detector_id() {
-        let s = detection_log_path(
-            PathBuf::from("/session"),
-            "aukilabs/qr/v1",
-            "rec-456",
-        );
+        let s = detection_log_path(PathBuf::from("/session"), "aukilabs/qr/v1", "rec-456");
         assert_eq!(s, "/session/detection_logs/aukilabs__qr__v1__rec-456");
     }
 

@@ -24,6 +24,7 @@ const VERSION: u16 = 1;
 const HEADER_SIZE: usize = 16;
 const SEGMENT_EXT: &str = "seg";
 const FILENAME_DIGITS: usize = 20;
+pub const LOG_MANIFEST_FILE: &str = "log_manifest.json";
 
 /// Encoder-agnostic payload contract. The log primitive handles framing and
 /// segment rollover; the consumer picks the payload encoding by implementing
@@ -159,7 +160,7 @@ impl<T> Log<T> {
 
     /// Update this log's retention window. Affects future appends —
     /// the next call to [`append`][Self::append] evicts any segment
-    /// fully outside the new window. Persists to `manifest.json`
+    /// fully outside the new window. Persists to [`LOG_MANIFEST_FILE`]
     /// atomically so the change survives daemon restart.
     ///
     /// Use case: an operator-driven endpoint like `PATCH /api/buffer`
@@ -193,14 +194,12 @@ impl<T> Log<T> {
                 );
             }
             _ => {
-                return Err(Error::Manifest(
-                    "manifest is not a JSON object".into(),
-                ));
+                return Err(Error::Manifest("manifest is not a JSON object".into()));
             }
         }
 
         let bytes = auki_jcs::canonicalize(&new_manifest);
-        atomic_write(&self.root.join("manifest.json"), &bytes)?;
+        atomic_write(&self.root.join(LOG_MANIFEST_FILE), &bytes)?;
 
         self.manifest = new_manifest;
         self.retention_ns = retention_ns;
@@ -212,14 +211,14 @@ impl<T> Log<T>
 where
     T: LogPayload,
 {
-    /// Open or create a log directory at `root`. If `manifest.json` is missing,
+    /// Open or create a log directory at `root`. If [`LOG_MANIFEST_FILE`] is missing,
     /// `manifest` is canonicalized (RFC 8785) and written. If present, the
     /// on-disk manifest is the source of truth and `manifest` is ignored.
     pub fn open(root: &Path, manifest: serde_json::Value) -> Result<Self> {
         fs::create_dir_all(root)?;
         fs::create_dir_all(root.join("segments"))?;
 
-        let manifest_path = root.join("manifest.json");
+        let manifest_path = root.join(LOG_MANIFEST_FILE);
         let manifest = if manifest_path.exists() {
             let bytes = fs::read(&manifest_path)?;
             serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -257,8 +256,7 @@ where
         };
         if needs_new {
             self.close_current()?;
-            let start_ns =
-                (timestamp_ns / self.segment_duration_ns) * self.segment_duration_ns;
+            let start_ns = (timestamp_ns / self.segment_duration_ns) * self.segment_duration_ns;
             self.start_segment(start_ns)?;
         }
 
@@ -281,12 +279,10 @@ where
 
     /// Read manifest + every entry across every segment in chronological order.
     pub fn read(root: &Path) -> Result<LogReader<T>> {
-        let manifest_bytes = fs::read(root.join("manifest.json"))?;
+        let manifest_bytes = fs::read(root.join(LOG_MANIFEST_FILE))?;
         let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| Error::Manifest(format!("parsing manifest: {e}")))?;
-        let segment_starts: Vec<i64> = list_segments(&root.join("segments"))?
-            .into_iter()
-            .collect();
+        let segment_starts: Vec<i64> = list_segments(&root.join("segments"))?.into_iter().collect();
         Ok(LogReader {
             root: root.to_path_buf(),
             manifest,
@@ -444,10 +440,7 @@ impl<T: LogPayload> TailIter<T> {
                     // Current segment exhausted (cleanly or truncated
                     // mid-write). Look for a newer segment.
                     let starts = list_segments(&self.root.join("segments"))?;
-                    let next = starts
-                        .iter()
-                        .copied()
-                        .find(|&s| s > segment_start);
+                    let next = starts.iter().copied().find(|&s| s > segment_start);
                     match next {
                         Some(next_start) => {
                             self.current_segment = Some(next_start);
@@ -464,10 +457,7 @@ impl<T: LogPayload> TailIter<T> {
                     // "find the next surviving segment" — bump
                     // forward, and if there isn't one, return None.
                     let starts = list_segments(&self.root.join("segments"))?;
-                    let next = starts
-                        .iter()
-                        .copied()
-                        .find(|&s| s > segment_start);
+                    let next = starts.iter().copied().find(|&s| s > segment_start);
                     match next {
                         Some(next_start) => {
                             self.current_segment = Some(next_start);
@@ -614,7 +604,12 @@ fn list_segments(dir: &Path) -> Result<BTreeSet<i64>> {
 
 fn segment_filename(start_ns: i64) -> String {
     // Spec requires start_ns ≥ 0 (filename is unsigned 20-digit zero-pad).
-    format!("{:0width$}.{ext}", start_ns, width = FILENAME_DIGITS, ext = SEGMENT_EXT)
+    format!(
+        "{:0width$}.{ext}",
+        start_ns,
+        width = FILENAME_DIGITS,
+        ext = SEGMENT_EXT
+    )
 }
 
 fn read_segment_entries<T: LogPayload>(path: &Path, out: &mut Vec<Entry<T>>) -> Result<()> {
@@ -726,10 +721,10 @@ mod tests {
             let _log: Log<Sample> =
                 Log::open(dir.path(), manifest(1_000_000_000, 5_000_000_000)).unwrap();
         }
-        assert!(dir.path().join("manifest.json").exists());
+        assert!(dir.path().join("log_manifest.json").exists());
         assert!(dir.path().join("segments").is_dir());
         // Manifest is JCS-canonical: keys sorted lexicographically.
-        let written = fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        let written = fs::read_to_string(dir.path().join("log_manifest.json")).unwrap();
         assert_eq!(
             written,
             r#"{"kind":"test","retention_ns":5000000000,"segment_duration_ns":1000000000}"#
@@ -918,7 +913,7 @@ mod tests {
             )
             .unwrap();
         }
-        let manifest_before = fs::read(dir.path().join("manifest.json")).unwrap();
+        let manifest_before = fs::read(dir.path().join("log_manifest.json")).unwrap();
         {
             // Re-open with a *different* manifest — on-disk should win.
             let mut log: Log<Sample> = Log::open(
@@ -939,7 +934,7 @@ mod tests {
             )
             .unwrap();
         }
-        let manifest_after = fs::read(dir.path().join("manifest.json")).unwrap();
+        let manifest_after = fs::read(dir.path().join("log_manifest.json")).unwrap();
         assert_eq!(manifest_before, manifest_after);
 
         let reader: LogReader<Sample> = Log::<Sample>::read(dir.path()).unwrap();
@@ -1044,7 +1039,7 @@ mod tests {
             );
         }
         // The on-disk manifest reflects the new value.
-        let written = fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        let written = fs::read_to_string(dir.path().join("log_manifest.json")).unwrap();
         assert!(
             written.contains(r#""retention_ns":3000000000"#),
             "manifest did not persist set_retention: {written}"
@@ -1054,8 +1049,7 @@ mod tests {
         // `manifest` argument we pass here is ignored per `open`'s
         // contract, so we use the same one to keep the test focused.
         {
-            let mut log: Log<Sample> =
-                Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+            let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
             // Append-driven eviction should use the persisted 3 s, not
             // the original 60 s the manifest argument carries.
             for i in 0..10 {
@@ -1139,8 +1133,22 @@ mod tests {
         // sensor driver, not a re-opening one.
         let mut log: Log<Sample> =
             Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
-        log.append(100, &Sample { n: 1, label: "skip-1".into() }).unwrap();
-        log.append(200, &Sample { n: 2, label: "skip-2".into() }).unwrap();
+        log.append(
+            100,
+            &Sample {
+                n: 1,
+                label: "skip-1".into(),
+            },
+        )
+        .unwrap();
+        log.append(
+            200,
+            &Sample {
+                n: 2,
+                label: "skip-2".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
@@ -1148,7 +1156,14 @@ mod tests {
         assert!(tail.try_next().unwrap().is_none());
 
         // Append a new entry; tail picks it up on the next try_next.
-        log.append(300, &Sample { n: 3, label: "after-tail".into() }).unwrap();
+        log.append(
+            300,
+            &Sample {
+                n: 3,
+                label: "after-tail".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let entry = tail.try_next().unwrap().expect("entry should be ready");
@@ -1168,7 +1183,14 @@ mod tests {
         assert!(tail.try_next().unwrap().is_none());
 
         // Append the first-ever entry; tail picks it up.
-        log.append(500, &Sample { n: 1, label: "first".into() }).unwrap();
+        log.append(
+            500,
+            &Sample {
+                n: 1,
+                label: "first".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let entry = tail.try_next().unwrap().expect("first entry");
@@ -1201,7 +1223,10 @@ mod tests {
                 let mut log = log_clone.lock().unwrap();
                 log.append(
                     (i as i64) * 100,
-                    &Sample { n: i, label: format!("e{i}") },
+                    &Sample {
+                        n: i,
+                        label: format!("e{i}"),
+                    },
                 )
                 .unwrap();
                 log.flush().unwrap();
@@ -1231,19 +1256,39 @@ mod tests {
     fn tail_jumps_to_next_segment_on_rollover() {
         let dir = tempfile::tempdir().unwrap();
         let seg = 1_000_000_000i64; // 1s segments
-        let mut log: Log<Sample> =
-            Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
+        let mut log: Log<Sample> = Log::open(dir.path(), manifest(seg, 60 * seg)).unwrap();
         // Seed with one entry in segment [0, 1s) so tail starts past it.
-        log.append(100, &Sample { n: 0, label: "seed".into() }).unwrap();
+        log.append(
+            100,
+            &Sample {
+                n: 0,
+                label: "seed".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
         assert!(tail.try_next().unwrap().is_none());
 
         // Append in the same segment first, then cross the rollover.
-        log.append(500, &Sample { n: 1, label: "same-seg".into() }).unwrap();
+        log.append(
+            500,
+            &Sample {
+                n: 1,
+                label: "same-seg".into(),
+            },
+        )
+        .unwrap();
         // Crossing 1s rolls over to segment [1s, 2s).
-        log.append(seg + 100, &Sample { n: 2, label: "next-seg".into() }).unwrap();
+        log.append(
+            seg + 100,
+            &Sample {
+                n: 2,
+                label: "next-seg".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let e1 = tail.try_next().unwrap().expect("same-seg entry");
@@ -1270,7 +1315,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut log: Log<Sample> =
             Log::open(dir.path(), manifest(1_000_000_000, 60_000_000_000)).unwrap();
-        log.append(100, &Sample { n: 1, label: "complete".into() }).unwrap();
+        log.append(
+            100,
+            &Sample {
+                n: 1,
+                label: "complete".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         let mut tail: TailIter<Sample> = Log::<Sample>::tail(dir.path()).unwrap();
@@ -1279,7 +1331,14 @@ mod tests {
 
         // Append a real entry the tailer should see, then add partial
         // bytes for the next entry to simulate a mid-write tail.
-        log.append(200, &Sample { n: 2, label: "ok".into() }).unwrap();
+        log.append(
+            200,
+            &Sample {
+                n: 2,
+                label: "ok".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
 
         // First try_next reads the complete entry.
@@ -1324,7 +1383,14 @@ mod tests {
         let manifest_2s = manifest(seg, 2 * seg);
         {
             let mut log: Log<Sample> = Log::open(dir.path(), manifest_2s.clone()).unwrap();
-            log.append(0, &Sample { n: 0, label: "seg0".into() }).unwrap();
+            log.append(
+                0,
+                &Sample {
+                    n: 0,
+                    label: "seg0".into(),
+                },
+            )
+            .unwrap();
             log.flush().unwrap();
         }
 
@@ -1335,8 +1401,22 @@ mod tests {
         // Write enough to evict segment [0, 1s): need to roll over
         // such that [0, 1s) ends ≤ retention threshold.
         let mut log: Log<Sample> = Log::open(dir.path(), manifest_2s.clone()).unwrap();
-        log.append(seg + 100, &Sample { n: 1, label: "seg1".into() }).unwrap();
-        log.append(3 * seg + 100, &Sample { n: 3, label: "seg3".into() }).unwrap();
+        log.append(
+            seg + 100,
+            &Sample {
+                n: 1,
+                label: "seg1".into(),
+            },
+        )
+        .unwrap();
+        log.append(
+            3 * seg + 100,
+            &Sample {
+                n: 3,
+                label: "seg3".into(),
+            },
+        )
+        .unwrap();
         log.flush().unwrap();
         drop(log);
 

@@ -12,6 +12,7 @@ A single source file: [`lib.rs`](lib.rs). Four `#[pyfunction]`s — one per buil
 def build_sensor_log_manifest(
     app_id, session_id, sensor_id, sensor_hash, clock_id, clock_hash,
     segment_duration_ns, retention_ns,
+    frame_id=None, frame_hash=None,
 ) -> dict
 
 def build_pose_log_manifest(

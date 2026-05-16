@@ -62,9 +62,13 @@ def test_build_sensor_log_manifest_round_trip():
         clock_hash="89f84f4c2e09bef81d385b2af1d17e6c",
         segment_duration_ns=1_000_000_000,
         retention_ns=30_000_000_000,
+        frame_id="K1-AABBCCDDEEFF/head_left_cam_optical",
+        frame_hash="fd0dc3789e898b71b5e16ee122a81a44",
     )
     assert m["sensor_id"] == "K1-AABBCCDDEEFF/head_left_cam"
     assert m["clock_id"] == "K1-AABBCCDDEEFF/utc"
+    assert m["frame_id"] == "K1-AABBCCDDEEFF/head_left_cam_optical"
+    assert m["frame_hash"] == "fd0dc3789e898b71b5e16ee122a81a44"
 
 
 # ─── Pose Log + PoseSource (dict seam) ───────────────────────────────────────

@@ -10,7 +10,7 @@ A single source file: [`lib.rs`](lib.rs).
 
 ```
 <root>/
-├── manifest.json    ← user-supplied JSON, written JCS-canonical via auki-jcs
+├── log_manifest.json    ← user-supplied JSON, written JCS-canonical via auki-jcs
 └── segments/
     ├── 00000000001234567890.seg
     ├── 00000000002000000000.seg
@@ -94,7 +94,7 @@ The user's manifest JSON **must** include two integer fields:
 
 Both must be > 0. Other fields are user-defined; the log preserves them verbatim.
 
-If `manifest.json` already exists at `root`, it is the source of truth and the `manifest` argument to `open()` is ignored. This means re-opening a log with a different manifest doesn't break the on-disk state.
+If `log_manifest.json` already exists at `root`, it is the source of truth and the `manifest` argument to `open()` is ignored. This means re-opening a log with a different manifest doesn't break the on-disk state.
 
 ## Behavior
 
@@ -108,7 +108,7 @@ If `manifest.json` already exists at `root`, it is the source of truth and the `
 
 **Tail.** Returns a `TailIter<T>` that yields newly-appended entries as they become readable. Starts at current EOF (existing entries are not replayed); polls the segments dir at a configurable cadence (default 10ms). `Iterator::next` blocks; `TailIter::try_next` is non-blocking. The iterator handles segment rollover (jumps to the next `.seg` file when the current one ends), torn reads from a writer mid-`append` (surfaces as `Ok(None)` and recovers on the next poll), and segment eviction (advances past evicted segments without erroring). Read side of the [subscription-as-materialization keystone](../../../parking_lot.md): the same call works whether the log is being written by a local sensor driver, materialized from a peer's stream, or opened from a recording on disk.
 
-**`set_retention`.** Updates the in-memory `retention_ns` and rewrites `manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart. Affects future appends only — eviction runs as part of `append`, not as part of `set_retention` itself, so a quiescent log retains its current segments until something appends. Disk-write-first ordering: the manifest is persisted before the in-memory field is updated, so a failed write leaves the log unchanged. Use case: operator-driven endpoints like Sentinel's `PATCH /api/buffer` that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window.
+**`set_retention`.** Updates the in-memory `retention_ns` and rewrites `log_manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart. Affects future appends only — eviction runs as part of `append`, not as part of `set_retention` itself, so a quiescent log retains its current segments until something appends. Disk-write-first ordering: the manifest is persisted before the in-memory field is updated, so a failed write leaves the log unchanged. Use case: operator-driven endpoints like Sentinel's `PATCH /api/buffer` that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window.
 
 **Drop.** `Log<T>::drop` best-effort-closes the current segment so the SDK doesn't depend on explicit `flush()` calls for crash safety.
 
@@ -131,7 +131,7 @@ This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migrat
 
 | Test | Asserts |
 |------|---------|
-| `open_creates_layout_and_writes_manifest` | First open produces `manifest.json` (JCS-canonical) + `segments/` dir |
+| `open_creates_layout_and_writes_manifest` | First open produces `log_manifest.json` (JCS-canonical) + `segments/` dir |
 | `round_trip_single_segment` | Two appends in the same segment round-trip cleanly through read |
 | `rolls_over_at_segment_boundary` | Crossing `segment_duration_ns` triggers a new segment file |
 | `evicts_segments_older_than_retention` | After 10s of appends with 3s retention, only the last 4 segments remain |

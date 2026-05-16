@@ -6,9 +6,9 @@ package auki.audio_stream;
 // Batch 1 (SDK Rust core). The producer emits one `AudioFrame` per
 // captured audio chunk; consumers (Boosterapp's K1 `AudioPlayer` driver,
 // future Sentinel) decode and push the bytes into a player session.
-// The frame's timestamp and sequence ride in
-// `auki.stream.Frame { timestamp_ns, seq, payload: bytes }` — this
-// message IS the bytes inside `Frame.payload`.
+// The stream entry's timestamp and sequence ride in
+// `auki.stream.StreamEntry { timestamp_ns, seq, payload: bytes }` — this
+// message IS the bytes inside `StreamEntry.payload`.
 //
 // Opaque-bytes-only, matching the Step 3 (point cloud) / Step 4 (audio
 // log) stance. The `SensorRegistryEntry`'s

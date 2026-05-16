@@ -5,7 +5,7 @@ Implementation status for [`auki-network-py`](../README.md).
 ## Files
 
 - [`lib.rs`](lib.rs) - module entry point, root Discovery pyclasses, shared tokio runtime, error mapping, and module population.
-- [`stream_types.rs`](stream_types.rs) - `auki_network.cluster` stream pyclasses, producer adapter, PyCapsule bridge, stream exceptions, and subscription/frame iterator wrappers.
+- [`stream_types.rs`](stream_types.rs) - `auki_network.cluster` stream pyclasses, producer adapter, PyCapsule bridge, stream exceptions, and subscription/entry iterator wrappers.
 - [`stream_bridge.rs`](stream_bridge.rs) - Python async-iterator to Rust `futures::Stream` bridge used by producer-side stream sources.
 
 ## Public Python Surface
@@ -32,13 +32,13 @@ client.deregister(name: str) -> None
 
 ```python
 StreamRequest(sensor_id=...)
-StreamDescriptor(sensor_id=..., sensor_hash=..., clock_id=..., clock_hash=..., frame_id=..., frame_hash=...)
+StreamManifest(sensor_id=..., sensor_hash=..., clock_id=..., clock_hash=..., frame_id=..., frame_hash=...)
 JpegFrame(bytes)
 PointCloudFrame(bytes)
 JointEncodersFrame(angles_rad)
 AudioFrame(data)
-ProducerFrame(timestamp_ns=..., payload=...)
-ConsumerFrame
+StreamItem(timestamp_ns=..., payload=...)
+StreamEntry
 DeclineReason.sensor_not_found()
 DeclineReason.sensor_unavailable()
 DeclineReason.producer_shutting_down()
@@ -47,14 +47,14 @@ EndReason.source_ended()
 EndReason.producer_shutting_down()
 EndReason.session_ended()
 EndReason.producer_error(detail=...)
-StreamDecision.accept(descriptor=..., source=...)
-StreamDecision.accept_pointcloud(descriptor=..., source=...)
-StreamDecision.accept_joint_encoders(descriptor=..., source=...)
-StreamDecision.accept_audio(descriptor=..., source=...)
+StreamDecision.accept(manifest=..., source=...)
+StreamDecision.accept_pointcloud(manifest=..., source=...)
+StreamDecision.accept_joint_encoders(manifest=..., source=...)
+StreamDecision.accept_audio(manifest=..., source=...)
 StreamDecision.decline(reason)
-StreamSubscription.descriptor
-StreamSubscription.frames()
-FrameIterator
+StreamSubscription.manifest
+StreamSubscription.entries()
+StreamEntryIterator
 StreamEndOfStream
 StreamConnectionLost
 StreamProtocolError

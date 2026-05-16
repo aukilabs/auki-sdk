@@ -18,6 +18,7 @@ pub fn build_sensor_log_manifest(
     app_id, session_id,
     sensor_id, sensor_hash,
     clock_id, clock_hash,
+    frame_id: Option<&str>, frame_hash: Option<&str>,
     segment_duration, retention,
 ) -> serde_json::Value;
 
@@ -83,8 +84,10 @@ Every manifest extends `auki-logs`'s required base (`segment_duration_ns`, `rete
 | `sensor_hash`         | string  | XXH3-128 hex of the sensor's registry entry                      |
 | `clock_id`            | string  | The Clock Registry ID for the framing's `timestamp_ns`           |
 | `clock_hash`          | string  | XXH3-128 hex of the clock's registry entry                       |
+| `frame_id`            | string? | Optional Frame Registry ID for spatial sensor samples            |
+| `frame_hash`          | string? | Optional XXH3-128 hex of the frame's registry entry              |
 
-The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`SensorLogEntry`, `PointCloudLogEntry`, `AudioLogEntry`).
+The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`PinholeCameraLogEntry`, `PointCloudLogEntry`, `JointEncodersLogEntry`, `AudioLogEntry`). Spatial sensors also pin their sample convention through the optional `(frame_id, frame_hash)` pair; both fields must be present together or omitted together.
 
 ### Pose Log
 

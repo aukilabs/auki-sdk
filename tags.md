@@ -32,13 +32,13 @@ TagClaim {
 
 ## Where it lives on disk
 
-Tags do **not** live inside `manifest.json`. The auki-logs manifest is written once and treated as immutable; mutating it to add tags would break that invariant and force readers to re-canonicalize / re-hash on every change.
+Tags do **not** live inside `log_manifest.json`. The auki-logs manifest is written once and treated as immutable; mutating it to add tags would break that invariant and force readers to re-canonicalize / re-hash on every change.
 
 Instead, claims accumulate in a sibling file:
 
 ```
 <log_root>/
-├── manifest.json           ← immutable, written once
+├── log_manifest.json           ← immutable, written once
 ├── tags.jsonl              ← append-only, one TagClaim per line
 └── segments/<padded-ns>.seg
 ```

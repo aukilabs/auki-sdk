@@ -3,7 +3,7 @@
 //!
 //! ## Why this exists
 //!
-//! Stream descriptors and catalogs carry `(id, hash)` references into
+//! Stream manifests and catalogs carry `(id, hash)` references into
 //! the Sensor / Clock / Frame registries. Consumers need the matching
 //! registry entry to interpret stream bytes: sensor body for payload
 //! shape, clock body for timestamps, frame body for coordinate

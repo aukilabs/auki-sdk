@@ -135,10 +135,7 @@ where
         .write_all(&bytes)
         .await
         .map_err(MembershipProtocolError::Io)?;
-    stream
-        .flush()
-        .await
-        .map_err(MembershipProtocolError::Io)?;
+    stream.flush().await.map_err(MembershipProtocolError::Io)?;
     Ok(())
 }
 

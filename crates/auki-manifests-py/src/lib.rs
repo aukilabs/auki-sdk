@@ -76,6 +76,7 @@ fn parse_pose_writer_mode(s: &str) -> PyResult<manifests::PoseWriterMode> {
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (*, app_id, session_id, sensor_id, sensor_hash, clock_id, clock_hash, segment_duration_ns, retention_ns, frame_id=None, frame_hash=None))]
 fn build_sensor_log_manifest(
     py: Python<'_>,
     app_id: &str,
@@ -86,6 +87,8 @@ fn build_sensor_log_manifest(
     clock_hash: &str,
     segment_duration_ns: u64,
     retention_ns: u64,
+    frame_id: Option<String>,
+    frame_hash: Option<String>,
 ) -> PyResult<PyObject> {
     let m = manifests::build_sensor_log_manifest(
         app_id,
@@ -94,6 +97,8 @@ fn build_sensor_log_manifest(
         sensor_hash,
         clock_id,
         clock_hash,
+        frame_id.as_deref(),
+        frame_hash.as_deref(),
         Duration::from_nanos(segment_duration_ns),
         Duration::from_nanos(retention_ns),
     );

@@ -115,11 +115,7 @@ impl PyAsyncIterStream {
             Ok(value) => Ok(Some(value)),
             Err(e) => {
                 let is_stop = Python::with_gil(|py| e.is_instance_of::<PyStopAsyncIteration>(py));
-                if is_stop {
-                    Ok(None)
-                } else {
-                    Err(e)
-                }
+                if is_stop { Ok(None) } else { Err(e) }
             }
         }
     }
@@ -236,7 +232,8 @@ async def _gen():
     yield 7
     raise RuntimeError('boom')
 ";
-                let module = PyModule::from_code_bound(py, code, "test_gen_err.py", "test_gen_err")?;
+                let module =
+                    PyModule::from_code_bound(py, code, "test_gen_err.py", "test_gen_err")?;
                 Ok(module.getattr("_gen")?.call0()?.unbind())
             })?;
             let stream = PyAsyncIterStream::new(aiter);
@@ -250,7 +247,10 @@ async def _gen():
                 .await
                 .expect_err("non-stop exception must surface as Err");
             let msg = err.to_string();
-            assert!(msg.contains("boom"), "error should carry the message: {msg}");
+            assert!(
+                msg.contains("boom"),
+                "error should carry the message: {msg}"
+            );
 
             Ok(())
         })
@@ -268,8 +268,9 @@ async def _gen():
         block_on_wrapper_loop(async {
             // Build a generator that sets a module-level flag in its
             // `finally`, so we can verify the block ran.
-            let (aiter, module): (Py<PyAny>, Py<PyModule>) = Python::with_gil(|py| -> PyResult<_> {
-                let code = "
+            let (aiter, module): (Py<PyAny>, Py<PyModule>) =
+                Python::with_gil(|py| -> PyResult<_> {
+                    let code = "
 finally_ran = False
 async def _gen():
     global finally_ran
@@ -279,10 +280,11 @@ async def _gen():
     finally:
         finally_ran = True
 ";
-                let module = PyModule::from_code_bound(py, code, "test_close.py", "test_close")?;
-                let aiter = module.getattr("_gen")?.call0()?.unbind();
-                Ok((aiter, module.unbind()))
-            })?;
+                    let module =
+                        PyModule::from_code_bound(py, code, "test_close.py", "test_close")?;
+                    let aiter = module.getattr("_gen")?.call0()?.unbind();
+                    Ok((aiter, module.unbind()))
+                })?;
 
             let stream = PyAsyncIterStream::new(aiter);
             // Pull one value to enter the generator's body.

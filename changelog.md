@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**Stream accept metadata becomes `StreamDescriptor`.** `/auki/stream/0.1.0` accept now carries `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`; Rust and Python APIs expose `descriptor` instead of the old `AcceptInfo` / `info` names. This gives Park the live stream metadata needed to resolve sensor, clock, and frame convention before applying geometry conversion. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 16, 11:34 HKT, 2026
 
 **`auki-geometry` crate added for pure spatial math.** Phase 1 lands `convert_pose_convention` plus point/vector/direction convention helpers over `FrameRegistryEntry` and `SpatialTransform`: convention-agnostic declared A -> declared B conversion, with full pose-log graph/path `convert_pose` left as the next layer. See [`auki-geometry`](crates/auki-geometry/changelog.md) for details.

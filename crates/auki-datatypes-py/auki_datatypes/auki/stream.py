@@ -12,10 +12,13 @@ class StreamRequest(betterproto.Message):
 
 
 @dataclass
-class AcceptInfo(betterproto.Message):
-    sensor_hash: str = betterproto.string_field(1)
-    clock_id: str = betterproto.string_field(2)
-    clock_hash: str = betterproto.string_field(3)
+class StreamDescriptor(betterproto.Message):
+    sensor_id: str = betterproto.string_field(1)
+    sensor_hash: str = betterproto.string_field(2)
+    clock_id: str = betterproto.string_field(3)
+    clock_hash: str = betterproto.string_field(4)
+    frame_id: str = betterproto.string_field(5)
+    frame_hash: str = betterproto.string_field(6)
 
 
 @dataclass
@@ -94,7 +97,7 @@ class Frame(betterproto.Message):
 @dataclass
 class StreamMessage(betterproto.Message):
     request: "StreamRequest" = betterproto.message_field(1, group="variant")
-    accept: "AcceptInfo" = betterproto.message_field(2, group="variant")
+    accept: "StreamDescriptor" = betterproto.message_field(2, group="variant")
     decline: "DeclineReason" = betterproto.message_field(3, group="variant")
     frame: "Frame" = betterproto.message_field(4, group="variant")
     end_of_stream: "EndReason" = betterproto.message_field(5, group="variant")

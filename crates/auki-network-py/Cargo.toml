@@ -26,7 +26,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 # Renamed via `package =` so the upstream crate's name doesn't
 # collide with our own lib name. `swarm` is needed for the stream
-# pyclass surface (StreamRequest, AcceptInfo, StreamDispatch,
+# pyclass surface (StreamRequest, StreamDescriptor, StreamDispatch,
 # StreamSubscription, ...); `discovery_client` for DiscoveryClient.
 auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
 # `PeerId` parsing on the Python ↔ Rust seam.

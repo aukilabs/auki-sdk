@@ -134,6 +134,19 @@ def test_spatial_transform_round_trips():
     assert st2.orientation.w == 0.7071
 
 
+def test_stream_descriptor_round_trips():
+    descriptor = adt.stream.StreamDescriptor(
+        sensor_id="robot/head_cam",
+        sensor_hash="sensor-hash",
+        clock_id="robot/clock",
+        clock_hash="clock-hash",
+        frame_id="robot/head_cam/frame",
+        frame_hash="frame-hash",
+    )
+    parsed = adt.stream.StreamDescriptor().parse(bytes(descriptor))
+    assert parsed == descriptor
+
+
 def test_module_re_exports_all_packages():
     # Smoke test — every proto package is re-exported from the top
     # level so consumers can `from auki_datatypes import detection`

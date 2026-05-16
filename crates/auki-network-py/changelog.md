@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**Python stream surface renames accept metadata to `StreamDescriptor`.** `cluster.StreamDescriptor` now requires `sensor_id`, `sensor_hash`, `clock_id`, and `clock_hash`, with optional `frame_id` / `frame_hash` defaulting to empty strings for non-spatial streams. Producer factories take `descriptor=...` (`accept`, `accept_pointcloud`, `accept_joint_encoders`, `accept_audio`) and `StreamSubscription` exposes `.descriptor` on the consumer side. The PyO3 bridge maps the descriptor through to `auki-network::StreamDispatch`, and Python stream tests assert sensor/frame metadata survives the round trip. `cargo test -p auki-network-py` passes.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: `auki-network-py` now describes the current Python surface instead of the removed cluster-runtime binding.** The README, `src/readme.md`, and sprint file now frame the crate as root-level Discovery bindings plus the shared `auki_network.cluster` stream pyclasses / PyCapsule stream-provider bridge used by `auki-domain-py`. Old runtime construction docs were removed; Python cluster lifecycle now points to `auki_domain.ClusterManager`. No runtime behavior changed.

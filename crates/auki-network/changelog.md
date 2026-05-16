@@ -14,6 +14,10 @@ Latest entry on top.
 
 Tests: registry protocol wire round-trips for present and missing entries, frame-size rejection, field-name pinning; existing network runtime tests updated for the new receiver.
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**Stream accept path now carries a full `StreamDescriptor`.** `/auki/stream/0.1.0` re-exports `StreamDescriptor` from `auki-datatypes`; producer dispatch variants now use `descriptor: StreamDescriptor` instead of `info: AcceptInfo`, and consumer `StreamSubscription<T>` exposes `descriptor`. The runtime writes `StreamMessage::Accept(descriptor)` before frames and tests now assert the accepted descriptor includes the requested `sensor_id` plus spatial `frame_id` / `frame_hash` when present. This makes the live stream handshake self-describing enough for Park to resolve the producer's sensor, clock, and coordinate convention without a separate manifest. `cargo test -p auki-network --features swarm` passes.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: `auki-network` READMEs and sprint now match the Hagall-era network surface.** The stale ansuz/Greenland prose that described static cluster-doc loading and a public runtime constructor has been replaced with the current split: default-feature identity/reachability/`ParticipantInfo`, `swarm`-gated `NetworkRuntime`, the live protocol set (`/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/sensors`, `/auki/stream`), and the `discovery_client` methods that talk to Discovery's v1 directory. The docs now point app daemons at `auki-domain::ClusterManager` as the lifecycle owner and keep this crate framed as the transport/protocol toolbox. No Rust behavior changed.

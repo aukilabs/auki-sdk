@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**`auki.stream` accept metadata is now `StreamDescriptor`.** The stream accept message now carries the live stream descriptor Park needs: `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`. This replaces the narrower `AcceptInfo { sensor_hash, clock_id, clock_hash }` shape and keeps `StreamMessage::Accept(...)` as the handshake variant. `frame_id` / `frame_hash` are empty for non-spatial streams; spatial streams publish the exact frame registry reference alongside the sensor and clock references. Breaking wire/source change by design while the SDK is pre-consumer-lock. `cargo test -p auki-datatypes` passes.
+
 ### Nils's claude · May 14, 12:54 HKT, 2026
 
 **Dialogue Batch 1 (SDK Rust core, half 1) — new `auki.audio_stream` proto package + `AudioFrame { bytes data = 1; }` wire payload.** Mirror of `auki.joint_encoders` / `auki.joint_encoders_stream` Step 5 precedent: separate proto package so the wire and log code paths dispatch on distinct Rust types, byte-identical wire/disk locked by a dedicated symmetry test. Companion to [`auki-network` changelog 2026-05-14 12:54](../auki-network/changelog.md) which adds the `StreamDispatch::AcceptAudio` arm + dispatch site.

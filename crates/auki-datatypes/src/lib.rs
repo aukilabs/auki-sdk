@@ -159,9 +159,9 @@ pub mod audio_stream {
 }
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
-/// `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. The libp2p
-/// substream wire shape; mono-`T` per substream, with `Frame.payload`
-/// carrying the prost-encoded `T` bytes. Migration Step 2.
+/// `StreamDescriptor`, `Frame`, `DeclineReason`, `EndReason`. The
+/// libp2p substream wire shape; mono-`T` per substream, with
+/// `Frame.payload` carrying the prost-encoded `T` bytes.
 pub mod stream {
     include!(concat!(env!("OUT_DIR"), "/auki.stream.rs"));
 
@@ -171,9 +171,9 @@ pub mod stream {
                 variant: Some(stream_message::Variant::Request(req)),
             }
         }
-        pub fn accept(info: AcceptInfo) -> Self {
+        pub fn accept(descriptor: StreamDescriptor) -> Self {
             Self {
-                variant: Some(stream_message::Variant::Accept(info)),
+                variant: Some(stream_message::Variant::Accept(descriptor)),
             }
         }
         pub fn decline(reason: DeclineReason) -> Self {

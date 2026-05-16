@@ -56,10 +56,13 @@ def stream_provider(requester_peer_id: str, req: cluster.StreamRequest):
                 )
 
         return cluster.StreamDecision.accept(
-            info=cluster.AcceptInfo(
+            descriptor=cluster.StreamDescriptor(
+                sensor_id=req.sensor_id,
                 sensor_hash="...",
                 clock_id="...",
                 clock_hash="...",
+                frame_id="...",
+                frame_hash="...",
             ),
             source=source(),
         )
@@ -78,10 +81,10 @@ Supported payload pyclasses:
 
 Factory methods:
 
-- `StreamDecision.accept(info=..., source=...)`
-- `StreamDecision.accept_pointcloud(info=..., source=...)`
-- `StreamDecision.accept_joint_encoders(info=..., source=...)`
-- `StreamDecision.accept_audio(info=..., source=...)`
+- `StreamDecision.accept(descriptor=..., source=...)`
+- `StreamDecision.accept_pointcloud(descriptor=..., source=...)`
+- `StreamDecision.accept_joint_encoders(descriptor=..., source=...)`
+- `StreamDecision.accept_audio(descriptor=..., source=...)`
 - `StreamDecision.decline(reason)`
 
 Consumer-side `StreamSubscription`, `FrameIterator`, and `ConsumerFrame` are returned by `auki_domain.ClusterManager.open_*_stream(...)`.

@@ -61,7 +61,7 @@ use auki_datatypes::detection::DetectionLogEntry;                          // St
 use auki_datatypes::frame_stream::JpegFrame;                               // Step 2 (live)
 use auki_datatypes::point_cloud_stream::PointCloudFrame;                   // Step 2 (live)
 use auki_datatypes::stream::{                                              // Step 2 (live)
-    AcceptInfo, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
+    StreamDescriptor, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
 };
 ```
 

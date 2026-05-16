@@ -46,7 +46,7 @@ def test_module_exposes_only_documented_apis() -> None:
         "spawn",
         # Grimsby Stream<T> surface (deliverable #4 / v0.0.17).
         "StreamRequest",
-        "AcceptInfo",
+        "StreamDescriptor",
         "JpegFrame",
         # Dagaz Batch 2 (v0.0.21) — pointcloud `T`.
         "PointCloudFrame",

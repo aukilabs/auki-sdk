@@ -16,7 +16,7 @@ A single source file: [`lib.rs`](lib.rs). It includes the prost-generated module
 - `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `joint_encoders_stream` (2026-05-09) — `JointEncodersFrame { repeated float angles_rad }`. libp2p `/auki/stream/0.1.0` payload. Same shape as `joint_encoders::JointEncodersLogEntry` (separate proto package so wire and disk dispatch on distinct Rust types — Step 2/3 precedent). Symmetry locked by an explicit `joint_encoders_disk_wire_byte_identical` test.
-- `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream`), `StreamRequest`, `AcceptInfo`, `Frame`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
+- `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Frame | EndOfStream`), `StreamRequest`, `StreamDescriptor`, `Frame`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/frame/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
 
 Plus the `impl_log_payload!` macro that wires every on-disk prost type into [`auki_logs::LogPayload`](../../auki-logs/src/lib.rs).
 
@@ -87,20 +87,23 @@ pub mod stream {
     pub mod stream_message {
         pub enum Variant {
             Request(super::StreamRequest),
-            Accept(super::AcceptInfo),
+            Accept(super::StreamDescriptor),
             Decline(super::DeclineReason),
             Frame(super::Frame),
             EndOfStream(super::EndReason),
         }
     }
     pub struct StreamRequest { pub sensor_id: String }
-    pub struct AcceptInfo {
+    pub struct StreamDescriptor {
+        pub sensor_id: String,
         pub sensor_hash: String,
         pub clock_id: String,
         pub clock_hash: String,
+        pub frame_id: String,
+        pub frame_hash: String,
     }
     /// `payload` carries prost-encoded `T` bytes; `T` is inferred from
-    /// the `AcceptInfo.sensor_hash` handshake (mono-T per substream).
+    /// the `StreamDescriptor.sensor_hash` handshake (mono-T per substream).
     pub struct Frame { pub timestamp_ns: i64, pub seq: u64, pub payload: Vec<u8> }
     pub struct DeclineReason { pub kind: Option<decline_reason::Kind> }
     pub mod decline_reason {

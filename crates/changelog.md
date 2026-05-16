@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 14:04 HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — Python producers can register the registry-serving app root.** `ClusterManager.set_registry_app_root(app_root)` now mirrors Rust `ClusterManager::set_registry_app_root`, accepting `str` / `os.PathLike` and enabling Python daemons such as Boosterapp to serve existing Sensor / Clock / Frame registry files over `/auki/registries/0.0.1`. Python registry-entry fetch helpers remain deferred until a return shape is pinned.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/registries/0.0.1` registry exchange v0.** Cluster peers can fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` over libp2p. Producers serve canonical JSON from existing app-root registries via `ClusterManager::set_registry_app_root`; consumers call `fetch_sensor_entry`, `fetch_clock_entry`, or `fetch_frame_entry`, with SDK-side hash verification before typed decode. Not-found is explicit and distinct from transport/protocol failure.

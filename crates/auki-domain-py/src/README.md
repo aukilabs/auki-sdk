@@ -19,6 +19,7 @@
 | `ClusterManager` role/membership accessors | shipped |
 | `participant_info` / `fetch_participant_info` | shipped |
 | `set_sensor_catalog_provider` / `fetch_sensors_catalog` | shipped |
+| `set_registry_app_root` | shipped |
 | `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` / `open_audio_stream` | shipped |
 | `stream_provider` kwarg via `auki_network.cluster._build_stream_provider` PyCapsule | shipped |
 | `external_addresses` advertise override | shipped |
@@ -29,9 +30,12 @@ The wrapper accepts Python-friendly inputs (seed bytes, multiaddr strings, peer-
 
 All async Rust calls are `block_on`ed on a process-wide multi-thread tokio runtime so Python callers keep a synchronous API.
 
+Producer daemons can call `ClusterManager.set_registry_app_root(app_root)` with a string or `os.PathLike` so the Rust manager serves existing registry entries from `<app_root>/registries/{sensors,clocks,frames}/...` over `/auki/registries/0.0.1`.
+
 ## Deferred
 
 - Typed Python exception hierarchy for every Rust error variant. Current mapping uses `ValueError`, `RuntimeError`, and `OSError`.
+- Python consumer helpers for `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry`; the Rust SDK surface exists, but this binding does not yet expose registry-entry value types.
 - Dedicated relay-reservation helper once the Rust SDK has one.
 
 See [`sprint.md`](sprint.md) for current follow-ups.

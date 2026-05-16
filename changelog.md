@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 14:04 HKT, 2026
+
+**Python producers can now serve registry entries through the SDK.** `auki-domain-py` exposes `ClusterManager.set_registry_app_root(app_root)`, mirroring the Rust registry-exchange root setter so Boosterapp-style daemons can point the SDK at `<app_root>/registries/{sensors,clocks,frames}` and answer `/auki/registries/0.0.1` requests from peers.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **Registry exchange v0 landed in the SDK.** New `/auki/registries/0.0.1` libp2p protocol lets cluster peers fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)`. Producers serve canonical JSON from existing app-root registries; consumers verify the returned bytes hash before typed decode via `ClusterManager::fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry`. This closes the metadata-resolution gap between stream descriptors/catalog refs and `auki-geometry` convention conversion.

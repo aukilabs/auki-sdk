@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 14:04 HKT, 2026
+
+**`ClusterManager.set_registry_app_root(app_root)` exposed to Python producers.** Companion to the Rust registry-exchange surface from [SDK #131](https://github.com/aukilabs/auki-sdk/pull/131): Boosterapp and other Python daemons can now register the app root that contains `registries/{sensors,clocks,frames}` so their SDK-owned `/auki/registries/0.0.1` handler can serve hash-pinned entries to cluster peers. The method accepts `str` or `os.PathLike` via `os.fspath`, then delegates to Rust `ClusterManager::set_registry_app_root`.
+
+Python consumer helpers for `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry` remain deferred: the Rust SDK surface exists, but this binding still needs a pinned return shape / registry-entry pyclasses before exposing them. Boosterapp's current role is producer-side, so the root setter is the demo-critical unblock.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: `auki-domain-py` now documents the current `ClusterManager` binding.** The README, `src/README.md`, and sprint file now show the Python daemon entry point as `ClusterTarget` + `ClusterManager.bootstrap/create_cluster/join_cluster`, with current stream, sensor catalog, participant-info, and shutdown methods. The old `init_domain` / `DomainHandle` binding shape is left only as stale-history context. No Python binding behavior changed.

@@ -22,11 +22,10 @@ use auki_domain_rs::{
     JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
     SensorEntry as RustSensorEntry,
 };
-use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
-use auki_network_py::PyClusterEntry;
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
+use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::stream_protocol::{
     AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
     JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
@@ -34,6 +33,7 @@ use auki_network::stream_protocol::{
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
+use auki_network_py::PyClusterEntry;
 use auki_network_py::stream_types::{
     PyStreamSubscription, STREAM_PROVIDER_CAPSULE_NAME, open_stream_error_to_pyerr,
 };
@@ -41,7 +41,7 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyCapsule;
+use pyo3::types::{PyAny, PyCapsule};
 use std::ffi::CString;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -75,8 +75,8 @@ fn stream_provider_from_python(py: Python<'_>, callable: Py<PyAny>) -> PyResult<
             "auki_network.cluster._build_stream_provider returned non-PyCapsule: {e}"
         ))
     })?;
-    let expected_name = CString::new(STREAM_PROVIDER_CAPSULE_NAME)
-        .expect("static literal contains no nul");
+    let expected_name =
+        CString::new(STREAM_PROVIDER_CAPSULE_NAME).expect("static literal contains no nul");
     match capsule.name()? {
         Some(name) if name == expected_name.as_c_str() => {}
         Some(other) => {
@@ -145,7 +145,11 @@ impl PyClusterMember {
 
     #[getter]
     fn multiaddrs(&self) -> Vec<String> {
-        self.inner.multiaddrs.iter().map(|m| m.to_string()).collect()
+        self.inner
+            .multiaddrs
+            .iter()
+            .map(|m| m.to_string())
+            .collect()
     }
 
     #[getter]
@@ -436,9 +440,7 @@ impl RustSensorCatalogProvider for PySensorCatalogProvider {
             match result {
                 Ok(entries) => entries.into_iter().map(|e| e.inner.clone()).collect(),
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain-py: sensor_catalog_provider callable failed: {e}"
-                    );
+                    eprintln!("auki-domain-py: sensor_catalog_provider callable failed: {e}");
                     Vec::new()
                 }
             }
@@ -968,19 +970,15 @@ impl PyClusterManager {
     /// refuses the substream). Returns a Python `ParticipantInfo`
     /// equivalent to what that peer's own `participant_info()`
     /// would return.
-    fn fetch_participant_info(
-        &self,
-        py: Python<'_>,
-        peer_id: &str,
-    ) -> PyResult<PyParticipantInfo> {
+    fn fetch_participant_info(&self, py: Python<'_>, peer_id: &str) -> PyResult<PyParticipantInfo> {
         let peer_id_parsed = parse_peer_id(peer_id)?;
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
                 let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("ClusterManager has been shut down")
-                })?;
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
                 let info = manager
                     .fetch_participant_info(peer_id_parsed)
                     .await
@@ -1003,25 +1001,39 @@ impl PyClusterManager {
         })
     }
 
+    /// Register (or replace) the app root used to serve hash-pinned
+    /// registry entries over `/auki/registries/0.0.1`.
+    ///
+    /// `app_root` accepts `str` or any `os.PathLike` resolving to a
+    /// string. Producer daemons should call this after construction so
+    /// peers can fetch existing entries from
+    /// `<app_root>/registries/{sensors,clocks,frames}/...`.
+    fn set_registry_app_root(&self, py: Python<'_>, app_root: &Bound<'_, PyAny>) -> PyResult<()> {
+        let path_obj = py.import_bound("os")?.call_method1("fspath", (app_root,))?;
+        let path: String = path_obj.extract().map_err(|_| {
+            PyTypeError::new_err("app_root must be str or os.PathLike resolving to str")
+        })?;
+        self.with_inner(|m| {
+            m.set_registry_app_root(path);
+            Ok(())
+        })
+    }
+
     /// Fetch a cluster peer's current sensor catalog over the
     /// `/auki/sensors/0.0.1` libp2p protocol. `peer_id` must be a
     /// current cluster member (otherwise the runtime's allow-list
     /// refuses the substream). Returns a Python
     /// `list[SensorEntry]` — empty list if the target peer has not
     /// registered a catalog provider (NOT an error).
-    fn fetch_sensors_catalog(
-        &self,
-        py: Python<'_>,
-        peer_id: &str,
-    ) -> PyResult<Vec<PySensorEntry>> {
+    fn fetch_sensors_catalog(&self, py: Python<'_>, peer_id: &str) -> PyResult<Vec<PySensorEntry>> {
         let peer_id_parsed = parse_peer_id(peer_id)?;
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
                 let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard.as_ref().ok_or_else(|| {
-                    PyRuntimeError::new_err("ClusterManager has been shut down")
-                })?;
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
                 let resp = manager
                     .fetch_sensors_catalog(peer_id_parsed)
                     .await
@@ -1085,8 +1097,8 @@ impl PyClusterManager {
         to_py_sub: impl FnOnce(
             auki_network::stream_runtime::StreamSubscription<T>,
         ) -> PyStreamSubscription
-            + Send
-            + 'static,
+        + Send
+        + 'static,
     ) -> PyResult<PyStreamSubscription>
     where
         T: prost::Message + Default + Send + 'static,
@@ -1115,8 +1127,7 @@ impl PyClusterManager {
 // ─── Helpers ───────────────────────────────────────────────────────
 
 fn parse_peer_id(s: &str) -> PyResult<PeerId> {
-    PeerId::from_str(s)
-        .map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
+    PeerId::from_str(s).map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
 }
 
 fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
@@ -1170,21 +1181,17 @@ async fn build_identity_and_swarm(
 fn map_join_cluster_error(e: RustJoinClusterError) -> PyErr {
     match e {
         RustJoinClusterError::Discovery(err) => PyOSError::new_err(format!("Discovery: {err}")),
-        RustJoinClusterError::NotFound(name) => PyRuntimeError::new_err(format!(
-            "cluster {name:?} not found in Discovery directory"
-        )),
-        RustJoinClusterError::SendJoin(err) => {
-            PyOSError::new_err(format!("join request: {err}"))
+        RustJoinClusterError::NotFound(name) => {
+            PyRuntimeError::new_err(format!("cluster {name:?} not found in Discovery directory"))
         }
+        RustJoinClusterError::SendJoin(err) => PyOSError::new_err(format!("join request: {err}")),
         RustJoinClusterError::Rejected(reason) => {
             PyRuntimeError::new_err(format!("Manager rejected join: {reason}"))
         }
-        RustJoinClusterError::InvalidMembership(err) => PyValueError::new_err(format!(
-            "invalid membership JSON from Manager: {err}"
-        )),
-        RustJoinClusterError::Runtime(err) => {
-            PyRuntimeError::new_err(format!("runtime: {err}"))
+        RustJoinClusterError::InvalidMembership(err) => {
+            PyValueError::new_err(format!("invalid membership JSON from Manager: {err}"))
         }
+        RustJoinClusterError::Runtime(err) => PyRuntimeError::new_err(format!("runtime: {err}")),
     }
 }
 
@@ -1211,18 +1218,16 @@ fn map_bootstrap_error(e: RustBootstrapError) -> PyErr {
         RustBootstrapError::AlreadyExists(name) => PyRuntimeError::new_err(format!(
             "cluster {name:?} already exists in Discovery directory"
         )),
-        RustBootstrapError::NotFound(name) => PyRuntimeError::new_err(format!(
-            "cluster {name:?} not in Discovery directory"
-        )),
-        RustBootstrapError::SendJoin(err) => {
-            PyOSError::new_err(format!("join request: {err}"))
+        RustBootstrapError::NotFound(name) => {
+            PyRuntimeError::new_err(format!("cluster {name:?} not in Discovery directory"))
         }
+        RustBootstrapError::SendJoin(err) => PyOSError::new_err(format!("join request: {err}")),
         RustBootstrapError::Rejected(reason) => {
             PyRuntimeError::new_err(format!("Manager rejected join: {reason}"))
         }
-        RustBootstrapError::InvalidMembership(err) => PyValueError::new_err(format!(
-            "invalid membership JSON from Manager: {err}"
-        )),
+        RustBootstrapError::InvalidMembership(err) => {
+            PyValueError::new_err(format!("invalid membership JSON from Manager: {err}"))
+        }
         RustBootstrapError::Runtime(err) => {
             PyRuntimeError::new_err(format!("runtime spawn failed: {err}"))
         }
@@ -1231,9 +1236,7 @@ fn map_bootstrap_error(e: RustBootstrapError) -> PyErr {
 
 fn map_create_cluster_error(e: RustCreateClusterError) -> PyErr {
     match e {
-        RustCreateClusterError::Discovery(err) => {
-            PyOSError::new_err(format!("Discovery: {err}"))
-        }
+        RustCreateClusterError::Discovery(err) => PyOSError::new_err(format!("Discovery: {err}")),
         RustCreateClusterError::AlreadyExists(name) => PyRuntimeError::new_err(format!(
             "cluster {name:?} already exists; list and join instead"
         )),
@@ -1252,9 +1255,7 @@ fn map_admit_error(e: RustAdmitError) -> PyErr {
             PyValueError::new_err(format!("peer {pid} is already a cluster member"))
         }
         RustAdmitError::Runtime(err) => PyRuntimeError::new_err(format!("runtime: {err}")),
-        RustAdmitError::Stopped => {
-            PyRuntimeError::new_err("ClusterManager has been shut down")
-        }
+        RustAdmitError::Stopped => PyRuntimeError::new_err("ClusterManager has been shut down"),
     }
 }
 

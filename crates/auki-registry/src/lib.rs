@@ -451,6 +451,71 @@ impl FrameRegistryEntry {
     }
 }
 
+// ─── Detector Registry ───────────────────────────────────────────────────────
+
+/// One Detector's identity in the Detector Registry. Closes Cuba **T4**.
+///
+/// Mirrors [`SensorRegistryEntry`]: stable `detector_id`, a typed
+/// `body` describing what the detector *is* (e.g. an ArUco detector
+/// configured for a specific dictionary), and — per Cuba **T16** — an
+/// `output_types` list declaring *what it emits*.
+///
+/// Two axes coexist:
+///
+/// * **`detector_id` + content-addressed hash** → provenance, stable
+///   identity, "I want exactly this configured detector."
+/// * **`output_types`** → capability discovery, "who on the cluster
+///   emits `aruco`?" The Notion Detector concept doc's directive —
+///   *advertise what you detect, not which implementation you're
+///   running* — lives on this field.
+///
+/// A detector that emits one logical detection type fills a single-
+/// element vector (`["aruco"]`). A detector that emits several (e.g.
+/// the QR_Reader that emits both `portal` and `portal_corner`) lists
+/// them all. Each `type` value should match what the detector sets on
+/// `DetectionLogEntry.type` (Cuba T12) for the entries it produces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectorRegistryEntry {
+    pub detector_id: String,
+    #[serde(flatten)]
+    pub body: DetectorBody,
+    /// Detection `type` strings this detector emits. Cuba T16. Order is
+    /// preserved on disk; consumers should treat the list as a set.
+    pub output_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DetectorBody {
+    Aruco(Aruco),
+    Qr(Qr),
+    Esl(Esl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aruco {
+    /// One of OpenCV's predefined ArUco dictionary names, lowercased
+    /// with an underscore between family and size — e.g. `"5x5_50"`,
+    /// `"apriltag_36h11"`. Matches the CLI vocabulary in
+    /// `detector-aruco`'s `--dict` flag.
+    pub dictionary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Qr {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Esl {}
+
+impl DetectorRegistryEntry {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        canonicalize(self)
+    }
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+}
+
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,9 +539,9 @@ pub enum Error {
     Io(io::Error),
     Json(String),
     /// On read, the deserialized entry's `sensor_id` / `clock_id` /
-    /// `frame_id` did not match the id in the requested path. Indicates
-    /// a misplaced or tampered file — content addressing is meant to
-    /// make this detectable.
+    /// `frame_id` / `detector_id` did not match the id in the requested
+    /// path. Indicates a misplaced or tampered file — content addressing
+    /// is meant to make this detectable.
     IdMismatch {
         expected: String,
         found: String,
@@ -616,6 +681,41 @@ pub fn read_frame(
         return Err(Error::IdMismatch {
             expected: frame_id.to_string(),
             found: entry.frame_id,
+        });
+    }
+    Ok(Some(entry))
+}
+
+/// Write a detector registry entry under `<app_root>/registries/detectors/...`.
+/// Idempotent on hash: writing identical content is a no-op. Cuba T4.
+pub fn write_detector(
+    app_root: &Path,
+    entry: &DetectorRegistryEntry,
+) -> Result<WriteOutcome> {
+    let bytes = entry.canonical_bytes();
+    let hash = auki_hash::hash_jcs_bytes(&bytes);
+    let path = auki_layout::detector_entry_path(app_root, &entry.detector_id, &hash);
+    write_entry_at(&path, hash, &bytes)
+}
+
+/// Read a detector registry entry by `(detector_id, hash)`. Returns
+/// `Ok(None)` when the file doesn't exist; `Err(IdMismatch)` if the
+/// on-disk entry's `detector_id` differs from the requested id. Cuba T4.
+pub fn read_detector(
+    app_root: &Path,
+    detector_id: &str,
+    hash: &str,
+) -> Result<Option<DetectorRegistryEntry>> {
+    let path = auki_layout::detector_entry_path(app_root, detector_id, hash);
+    let Some(bytes) = read_at(&path)? else {
+        return Ok(None);
+    };
+    let entry: DetectorRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.detector_id != detector_id {
+        return Err(Error::IdMismatch {
+            expected: detector_id.to_string(),
+            found: entry.detector_id,
         });
     }
     Ok(Some(entry))
@@ -1371,4 +1471,95 @@ mod tests {
     // in Step 0 of the auki-datatypes migration — `build_pose_log_manifest`
     // and `PoseSource` live there now. The PoseLogEntry CBOR round-trip
     // tests above cover this crate's payload-encoding contract.
+
+    // ─── Detector Registry tests (Cuba T4 + T16) ────────────────────────────
+
+    fn cuba_aruco_detector_entry() -> DetectorRegistryEntry {
+        DetectorRegistryEntry {
+            detector_id: "aukilabs/aruco/v1".into(),
+            body: DetectorBody::Aruco(Aruco {
+                dictionary: "5x5_50".into(),
+            }),
+            output_types: vec!["aruco".into()],
+        }
+    }
+
+    #[test]
+    fn detector_entry_canonical_bytes_lock_the_aruco_shape() {
+        let bytes = cuba_aruco_detector_entry().canonical_bytes();
+        let s = std::str::from_utf8(&bytes).unwrap();
+        // Keys sorted lexicographically per RFC 8785 §3.2.3.
+        assert_eq!(
+            s,
+            r#"{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","output_types":["aruco"],"type":"aruco"}"#
+        );
+    }
+
+    #[test]
+    fn detector_entry_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = cuba_aruco_detector_entry();
+        let outcome = write_detector(dir.path(), &entry).unwrap();
+        let hash = match outcome {
+            WriteOutcome::Created(h) => h,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let read = read_detector(dir.path(), &entry.detector_id, &hash)
+            .unwrap()
+            .expect("entry must read back");
+        assert_eq!(read, entry);
+    }
+
+    #[test]
+    fn detector_entry_write_is_idempotent_on_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = cuba_aruco_detector_entry();
+        let first = write_detector(dir.path(), &entry).unwrap();
+        let second = write_detector(dir.path(), &entry).unwrap();
+        assert!(matches!(first, WriteOutcome::Created(_)));
+        assert!(matches!(second, WriteOutcome::AlreadyExists(_)));
+        assert_eq!(first.hash(), second.hash());
+    }
+
+    #[test]
+    fn detector_entry_two_dictionaries_get_distinct_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let five = cuba_aruco_detector_entry();
+        let four = DetectorRegistryEntry {
+            body: DetectorBody::Aruco(Aruco {
+                dictionary: "4x4_50".into(),
+            }),
+            ..cuba_aruco_detector_entry()
+        };
+        let h1 = write_detector(dir.path(), &five).unwrap();
+        let h2 = write_detector(dir.path(), &four).unwrap();
+        assert_ne!(h1.hash(), h2.hash());
+    }
+
+    #[test]
+    fn detector_entry_slash_in_id_becomes_double_underscore() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = cuba_aruco_detector_entry();
+        write_detector(dir.path(), &entry).unwrap();
+        let expected_dir = dir
+            .path()
+            .join("registries")
+            .join("detectors")
+            .join("aukilabs__aruco__v1");
+        assert!(expected_dir.is_dir(), "expected {expected_dir:?} to exist");
+    }
+
+    #[test]
+    fn detector_entry_supports_multiple_output_types() {
+        let entry = DetectorRegistryEntry {
+            detector_id: "aukilabs/qr/v1".into(),
+            body: DetectorBody::Qr(Qr {}),
+            output_types: vec!["portal".into(), "portal_corner".into()],
+        };
+        let s = std::str::from_utf8(&entry.canonical_bytes())
+            .unwrap()
+            .to_string();
+        assert!(s.contains(r#""output_types":["portal","portal_corner"]"#));
+        assert!(s.contains(r#""type":"qr""#));
+    }
 }

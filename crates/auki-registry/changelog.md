@@ -6,6 +6,26 @@ Latest entry on top.
 
 ---
 
+### Arshak's claude · May 16, HKT, 2026
+
+**Detector Registry lands — `DetectorRegistryEntry { detector_id, body, output_types }`.** Closes Cuba **T4** + **T16** together. Mirrors `SensorRegistryEntry`: stable `detector_id` + typed `body` (`DetectorBody::{Aruco, Qr, Esl}`) + content-addressed hash via `canonicalize` → `auki_hash::hash_jcs_bytes`. The new `output_types: Vec<String>` field (T16) is the capability-discovery axis — *advertise what you detect, not which implementation you're running* — and its values must match `DetectionLogEntry.type` (Cuba T12) for the entries the detector emits.
+
+**`DetectorBody` is closed**, not open-string: the three concrete bodies cover the Cuba demo set (Aruco's `dictionary`, Qr's empty body, Esl's empty body). No `Other` escape hatch by design — premature variants become permanent. Adding a fourth detector is one tagged-enum variant + a struct + the on-disk migration of any existing entries.
+
+**`write_detector` / `read_detector` mirror `write_sensor` / `read_sensor`** at `<app_root>/registries/detectors/<detector_id>/<hash>.json`. Idempotent on hash; `Error::IdMismatch` on a misplaced or tampered file. No cross-reference validation (no frame_hash equivalent — a detector doesn't pin a frame, the detection log it writes pins its input sensor's hash via the Cuba T5 `sensor_hash` field on `DetectionLogEntry`).
+
+**Locked canonical bytes for the canonical Cuba ArUco entry**:
+
+```
+{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","output_types":["aruco"],"type":"aruco"}
+```
+
+Key order is RFC 8785 §3.2.3 lexicographic. The new test `detector_entry_canonical_bytes_lock_the_aruco_shape` is the cross-language canary.
+
+**Tests**: 38 → 44 (+6 — `detector_entry_canonical_bytes_lock_the_aruco_shape`, `_round_trips_through_disk`, `_write_is_idempotent_on_hash`, `_two_dictionaries_get_distinct_hashes`, `_slash_in_id_becomes_double_underscore`, `_supports_multiple_output_types`).
+
+**Context**: Commit 3/6 of the Cuba v0.0.45 SDK migration. Detector Registry consumed by `RegistryKind::Detector` on `/auki/registries/0.0.1` (Commit 4) and by detector-aruco's `register_detector` builder.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Spatial sensor bodies now pin exact frame-entry versions.** `SensorBody::RgbCamera` and `SensorBody::PointCloud` gain required `frame_hash: String` alongside `frame_id`, so a sensor entry commits to a specific `FrameRegistryEntry` version instead of only naming a mutable frame directory. This is intentionally breaking for any existing on-disk spatial sensor entries without `frame_hash`; there is no compatibility shim, default, or lazy directory scan.

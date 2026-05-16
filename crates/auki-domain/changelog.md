@@ -14,6 +14,16 @@ Consumers get `ClusterManager::fetch_sensors_catalog_with(peer_id, request)` for
 
 Tests: unit coverage for sensor+frame enrichment from a local registry app root, plus the existing live catalog integration updated for the expanded `SensorEntry` shape.
 
+### Arshak's claude · May 16, HKT, 2026
+
+**ClusterManager serves and fetches Detector Registry entries over `/auki/registries/0.0.1`.** `read_registry_envelope` gains the `RegistryKind::Detector` arm — `set_registry_app_root(app_root)`'s auto-serve handler now responds to `(kind=Detector, id, hash)` requests by reading `<app_root>/registries/detectors/<id>/<hash>.json`. New `envelope_for_detector` mirrors the sensor/clock/frame helpers; new `ClusterManager::fetch_detector_entry(peer_id, detector_id, detector_hash)` mirrors `fetch_sensor_entry` / `fetch_frame_entry`.
+
+**Why this matters for Cuba.** Park previously planned to enumerate detectors via an axum HTTP shim on each detector daemon (Cuba T6 / T7). With this commit the SDK's libp2p `/auki/registries/0.0.1` covers the same job — the daemon doesn't open a port, and Park doesn't speak HTTP to it. The HTTP shim is being deleted on the `detector-aruco-v0.0.45` rewrite.
+
+**Tests**: +1 — `registry_envelope_reads_canonical_detector_from_app_root`. The new test independently hashes the entry and asserts it matches the envelope hash, locking the symmetry with the per-entry `hash()` method in `auki-registry`.
+
+**Context**: Commit 4/6 of the Cuba v0.0.45 SDK migration. Sibling protocol-enum change lives in `auki-network`'s changelog on the same date.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Producer-side `StreamManifestBuilder` added.** `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` reads the exact local `SensorRegistryEntry`, builds the stream accept `StreamManifest`, and centralizes the producer-side frame metadata projection that Park surfaced during live point-cloud testing.

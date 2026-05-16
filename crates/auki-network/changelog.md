@@ -12,6 +12,12 @@ Latest entry on top.
 
 `NetworkRuntime::request_sensors_catalog_with(peer_id, request)` is the explicit request path; existing `request_sensors_catalog(peer_id)` remains catalog-only. Tests pin default `{}` serialization, detail flag serialization, embedded JSON round-trips, unknown-field tolerance, and oversize-frame rejection.
 
+### Arshak's claude · May 16, HKT, 2026
+
+**`RegistryKind::Detector` extends `/auki/registries/0.0.1`.** Fourth variant on the request enum alongside `Sensor` / `Clock` / `Frame`. Wire shape is the same `{ kind, id, hash }` request → `Option<RegistryEntryEnvelope>` response — Cuba's Detector Registry rides the existing protocol; no new substream or wire format. `as_str` returns `"detector"`. Closes Cuba T7 at the protocol level: Park enumerates a peer's detectors via the same libp2p path it already uses for sensors, no HTTP shim required (Cuba T6 dropped).
+
+**Context**: Commit 4/6 of the Cuba v0.0.45 SDK migration. ClusterManager-side dispatch (`read_registry_envelope`, `envelope_for_detector`, `fetch_detector_entry`) lands in `auki-domain` on the same date.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.

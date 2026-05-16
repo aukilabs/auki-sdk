@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 2026
+
+**`auki-geometry` crate added for pure spatial math.** Phase 1 lands `convert_pose_convention` plus point/vector/direction convention helpers over `FrameRegistryEntry` and `SpatialTransform`: convention-agnostic declared A -> declared B conversion, with full pose-log graph/path `convert_pose` left as the next layer. See [`auki-geometry`](crates/auki-geometry/changelog.md) for details.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **SDK-fronted Discovery: `ClusterManager` becomes the single app-facing entry point per Hagall constraint #5.** Surfaced by Nils after Park + Bracketbot diverged on cluster bootstrap — Park's UI bypassed the decision logic by giving operators explicit Create/Join buttons; Boosterapp's `_pick_cluster_target` ran `discovery.list_clusters()` then decided create-vs-join in Python. The decision logic moves into the SDK as `ClusterTarget` (`Create` / `Join` / `JoinOrCreate` / `MostRecentOrCreate`) + `ClusterManager::bootstrap(target, ...)` static. App daemons declare intent; the SDK does list + decide + create-or-join. `ClusterManager::list_clusters(discovery_url)` static replaces app-level `DiscoveryClient::new(url).list_clusters()`. Breaking signature change: `create_cluster` / `join_cluster` take `discovery_url` string instead of `DiscoveryClient` — apps stop constructing the HTTP client themselves. Python binding mirrors the surface (`auki_domain.ClusterTarget` pyclass + `ClusterManager.bootstrap` + `.list_clusters`). Park PR + Boosterapp PR migrate atomically with this SDK PR; v0.0.41 candidate after all three merge. `DiscoveryClient` stays `pub` for now — demotion to `pub(crate)` is a follow-up once live confirms the migration. See [`auki-domain` changelog](crates/auki-domain/changelog.md) + [`auki-domain-py` changelog](crates/auki-domain-py/changelog.md) for the per-crate detail.

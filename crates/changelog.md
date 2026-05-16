@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 15, 2026
+
+**[`auki-geometry`](auki-geometry/changelog.md) — new pure spatial-math crate.** Phase 1 ships convention conversion over existing registry + datatype contracts: `meters_per_unit`, `axis_convention_matrix`, `convention_matrix`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, and `convert_pose_convention`. Public model is direct declared convention A -> declared convention B; no exposed canonical Auki frame. The crate rejects handedness/axis determinant mismatches and keeps full pose-log graph/path `convert_pose` as future work.
+
 ### Nils's claude · May 15, 10:38 HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — `ClusterManager` becomes the single SDK entry point for Discovery + cluster lifecycle.** Hagall constraint #5 enforcement: Park and Boosterapp had divergent app-level Discovery-talking; this PR pulls the decision logic into the SDK so both apps converge. New surface: `ClusterManager::list_clusters(url)`, `ClusterTarget` enum with four variants (`Create` / `Join` / `JoinOrCreate` / `MostRecentOrCreate`), and `ClusterManager::bootstrap(target, ...)` static that does list + decide + create-or-join internally. Python mirrors with `auki_domain.ClusterTarget` pyclass + `ClusterManager.bootstrap` / `.list_clusters` statics. Breaking signature change: `create_cluster` / `join_cluster` take `discovery_url: impl Into<String>` instead of a pre-built `DiscoveryClient`. Park PR + Boosterapp PR must merge atomically. Tests clean; live integration roundtrip against `192.168.9.130:8080` passes. v0.0.41 candidate.

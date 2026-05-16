@@ -87,8 +87,8 @@ pub use auki_datatypes::frame_stream::JpegFrame;
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
-    AcceptInfo, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
-    decline_reason, end_reason, stream_message,
+    AcceptInfo, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest, decline_reason,
+    end_reason, stream_message,
 };
 
 /// libp2p protocol id for the typed-byte-stream protocol. Stable; do
@@ -292,8 +292,7 @@ mod tests {
 
     #[test]
     fn end_of_stream_round_trips() {
-        let msg =
-            StreamMessage::end_of_stream(EndReason::producer_error("encoder died"));
+        let msg = StreamMessage::end_of_stream(EndReason::producer_error("encoder died"));
         let mut bytes = Vec::new();
         msg.encode(&mut bytes).unwrap();
         let back = StreamMessage::decode(&*bytes).unwrap();
@@ -470,10 +469,7 @@ mod tests {
         // (24 = 6 × 4 little-endian f32), then six f32s.
         // 1.0 → 0000803f, 2.0 → 00000040, 3.0 → 00004040,
         // 4.0 → 00008040, 5.0 → 0000a040, 6.0 → 0000c040.
-        assert_eq!(
-            hex,
-            "0a180000803f0000004000004040000080400000a0400000c040"
-        );
+        assert_eq!(hex, "0a180000803f0000004000004040000080400000a0400000c040");
     }
 
     #[test]

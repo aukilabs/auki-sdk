@@ -470,7 +470,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, BootstrapError> {
@@ -601,7 +601,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
@@ -610,6 +610,15 @@ impl ClusterManager {
         let local_peer_id = local_identity.peer_id();
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+
+        let local_multiaddrs =
+            auki_network::relay_prepare::maybe_enrich_local_multiaddrs_for_discovery_registration(
+                &mut swarm,
+                &discovery,
+                &local_peer_id,
+                local_multiaddrs,
+            )
+            .await;
 
         // 1. Atomic create on Discovery.
         match discovery
@@ -654,6 +663,10 @@ impl ClusterManager {
                 cluster_name.clone(),
                 membership.clone(),
             ))));
+
+        // 4b. Await one heartbeat on this task before returning — guarantees
+        //     Discovery's 10s sweeper sees a refresh even if the background
+        //     tick is slow to poll (e.g. under test load or CPU contention).
 
         let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
 
@@ -870,7 +883,10 @@ impl ClusterManager {
         &self,
         peer_id: PeerId,
         request: auki_network::stream_protocol::StreamRequest,
-    ) -> Result<auki_network::stream_runtime::StreamSubscription<T>, auki_network::stream_runtime::OpenStreamError>
+    ) -> Result<
+        auki_network::stream_runtime::StreamSubscription<T>,
+        auki_network::stream_runtime::OpenStreamError,
+    >
     where
         T: prost::Message + Default + Send + 'static,
     {
@@ -891,7 +907,11 @@ impl ClusterManager {
     /// over `/auki/info/0.0.1`.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self.session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let session_now_ns = self
+            .session_started
+            .elapsed()
+            .as_nanos()
+            .min(u64::MAX as u128) as u64;
 
         // Lazy `cluster_joined_at_ns`: set on first observation of
         // any peer other than ourselves (per ansuz D3 the local peer
@@ -1010,7 +1030,7 @@ impl ClusterManager {
         local_identity: PeerIdentity,
         local_multiaddrs: Vec<Multiaddr>,
         discovery_url: impl Into<String>,
-        swarm: Swarm<Behaviour>,
+        mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, JoinClusterError> {
@@ -1019,6 +1039,15 @@ impl ClusterManager {
         let local_peer_id = local_identity.peer_id();
         let session_started = Instant::now();
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+
+        let local_multiaddrs =
+            auki_network::relay_prepare::maybe_enrich_local_multiaddrs_for_discovery_registration(
+                &mut swarm,
+                &discovery,
+                &local_peer_id,
+                local_multiaddrs,
+            )
+            .await;
 
         // 1. Look up the cluster in Discovery's directory.
         let clusters = discovery.list_clusters().await?;
@@ -1061,9 +1090,9 @@ impl ClusterManager {
                 break;
             }
             if std::time::Instant::now() >= connect_deadline {
-                return Err(JoinClusterError::SendJoin(
-                    SendJoinRequestError::Timeout(Duration::from_secs(10)),
-                ));
+                return Err(JoinClusterError::SendJoin(SendJoinRequestError::Timeout(
+                    Duration::from_secs(10),
+                )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1283,13 +1312,7 @@ impl ClusterManager {
         //    survivors' election + handoff (see fn doc).
         let was_manager =
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let am_last = self
-            .membership
-            .lock()
-            .expect("membership lock")
-            .peers
-            .len()
-            <= 1;
+        let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
         let result = if was_manager && am_last {
             self.discovery.deregister(&self.cluster_name).await
         } else {
@@ -1359,8 +1382,7 @@ fn spawn_liveness_handler(
             match evt {
                 PeerLivenessEvent::Connected { .. } => { /* informational */ }
                 PeerLivenessEvent::Lost { peer_id: lost_pid } => {
-                    let current_manager =
-                        *manager_peer_id.lock().expect("manager_peer_id lock");
+                    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
                     let am_manager = current_manager == local_peer_id;
 
                     if !am_manager && lost_pid == current_manager {
@@ -1376,23 +1398,15 @@ fn spawn_liveness_handler(
                         let connected = runtime.connected_peers();
                         let membership_snapshot =
                             membership.lock().expect("membership lock").clone();
-                        let winner = elect_successor(
-                            &membership_snapshot,
-                            local_peer_id,
-                            &connected,
-                        );
+                        let winner =
+                            elect_successor(&membership_snapshot, local_peer_id, &connected);
                         if winner == Some(local_peer_id) {
                             // Become Manager.
-                            *manager_peer_id.lock().expect("manager_peer_id lock") =
-                                local_peer_id;
+                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
 
                             // Tell Discovery about the rotation.
                             if let Err(e) = discovery
-                                .rotate_manager(
-                                    &cluster_name,
-                                    &local_peer_id,
-                                    &local_multiaddrs,
-                                )
+                                .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
                                 .await
                             {
                                 eprintln!(
@@ -1415,12 +1429,12 @@ fn spawn_liveness_handler(
                                 p.abort();
                             }
 
+
                             // Evict the dead Manager from membership +
                             // push the updated allow-list. (We won
                             // the election, so we own membership now.)
                             let new_allow_list = {
-                                let mut m =
-                                    membership.lock().expect("membership lock");
+                                let mut m = membership.lock().expect("membership lock");
                                 m.peers.retain(|p| p.peer_id != lost_pid);
                                 m.peers
                                     .iter()
@@ -1431,8 +1445,7 @@ fn spawn_liveness_handler(
                                     })
                                     .collect::<Vec<_>>()
                             };
-                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await
-                            {
+                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
                                 eprintln!(
                                     "auki-domain: post-election set_allowed_peers \
                                     failed for {cluster_name:?}: {e}"
@@ -1520,9 +1533,7 @@ fn spawn_membership_handler(
             let parsed: ClusterMembership = match serde_json::from_str(&update.membership_json) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: membership gossip from {peer}: invalid JSON: {e}"
-                    );
+                    eprintln!("auki-domain: membership gossip from {peer}: invalid JSON: {e}");
                     continue;
                 }
             };
@@ -1568,9 +1579,7 @@ fn broadcast_current_membership(
         match serde_json::to_string(&*m) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "auki-domain: serializing membership for gossip failed: {e}"
-                );
+                eprintln!("auki-domain: serializing membership for gossip failed: {e}");
                 return;
             }
         }
@@ -1612,9 +1621,7 @@ fn spawn_info_handler(
             let json = match serde_json::to_string(&info) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: info handler for {peer}: serialize failed: {e}"
-                    );
+                    eprintln!("auki-domain: info handler for {peer}: serialize failed: {e}");
                     continue;
                 }
             };
@@ -1760,6 +1767,10 @@ fn spawn_manager_liveness_check(
         // `create` call. The next tick happens at +1s.
         tick.tick().await;
         loop {
+            // First `tick` completes immediately; send a heartbeat right
+            // away so Discovery's 10s sweeper always sees fresh traffic
+            // even when `create_cluster` + `relay_prepare` consumed most
+            // of the window before this task started.
             tick.tick().await;
             let peer_count = {
                 let m = membership.lock().expect("membership lock");
@@ -1794,11 +1805,7 @@ fn spawn_join_handler(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            let JoinEvent {
-                peer,
-                request,
-                ack,
-            } = event;
+            let JoinEvent { peer, request, ack } = event;
 
             // Manager check.
             let am_manager =

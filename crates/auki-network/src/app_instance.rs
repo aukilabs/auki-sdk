@@ -196,8 +196,8 @@ mod tests {
     #[test]
     fn derive_from_skips_loopback_and_picks_remaining_ieee_mac() {
         let macs = [
-            [0u8; 6],                               // loopback
-            [0x00, 0x16, 0x3e, 0xab, 0xcd, 0xef],   // IEEE
+            [0u8; 6],                             // loopback
+            [0x00, 0x16, 0x3e, 0xab, 0xcd, 0xef], // IEEE
         ];
         assert_eq!(derive_from(&macs).unwrap(), "00163eabcdef");
     }
@@ -205,8 +205,8 @@ mod tests {
     #[test]
     fn derive_from_skips_locally_administered_mac() {
         let macs = [
-            [0x02, 0x42, 0xac, 0x11, 0x00, 0x02],   // locally administered
-            [0x3c, 0x22, 0xfb, 0x12, 0x34, 0x56],   // IEEE
+            [0x02, 0x42, 0xac, 0x11, 0x00, 0x02], // locally administered
+            [0x3c, 0x22, 0xfb, 0x12, 0x34, 0x56], // IEEE
         ];
         assert_eq!(derive_from(&macs).unwrap(), "3c22fb123456");
     }
@@ -233,7 +233,8 @@ mod tests {
         let s = derive_from(&macs).unwrap();
         assert_eq!(s.len(), 12);
         assert!(
-            s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            s.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "expected 12 lowercase hex chars, got {s:?}"
         );
     }

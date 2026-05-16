@@ -228,6 +228,9 @@ mod tests {
         }"#;
         // Missing `manager_peer_id` — deserialization fails.
         let result: Result<ParticipantInfo, _> = serde_json::from_str(json);
-        assert!(result.is_err(), "expected error for missing manager_peer_id");
+        assert!(
+            result.is_err(),
+            "expected error for missing manager_peer_id"
+        );
     }
 }

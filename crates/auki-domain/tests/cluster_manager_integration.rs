@@ -92,6 +92,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-mgr-it/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -125,7 +126,10 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
     assert_eq!(info.manager_peer_id, local_peer_id.to_string());
     assert_eq!(info.peer_id, local_peer_id);
     assert_eq!(info.app, "test-daemon");
-    assert!(info.session_now_ns > 0, "session_now_ns advances after construction");
+    assert!(
+        info.session_now_ns > 0,
+        "session_now_ns advances after construction"
+    );
     assert!(
         info.cluster_joined_at_ns.is_none(),
         "alone in cluster — cluster_joined_at_ns stays None per ansuz D3"
@@ -172,13 +176,19 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         .deregister(&cluster_name)
         .await
         .expect("explicit cleanup deregister");
-    let after = discovery.list_clusters().await.expect("list_clusters after");
+    let after = discovery
+        .list_clusters()
+        .await
+        .expect("list_clusters after");
     assert!(
         !after.iter().any(|c| c.name == cluster_name),
         "cluster {cluster_name} still in directory after explicit deregister"
     );
 
-    eprintln!("ClusterManager full lifecycle OK against {}", discovery_url());
+    eprintln!(
+        "ClusterManager full lifecycle OK against {}",
+        discovery_url()
+    );
 }
 
 /// Two-peer end-to-end: Manager `create_cluster`s a fresh cluster;
@@ -199,6 +209,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-join-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -228,6 +239,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-join-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -320,6 +332,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-failover-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -346,6 +359,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-failover-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -439,6 +453,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -465,6 +480,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -496,6 +512,7 @@ async fn three_peer_membership_converges_via_gossip() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-gossip-it-C/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -512,7 +529,11 @@ async fn three_peer_membership_converges_via_gossip() {
     .await
     .expect("join_cluster C");
     assert_eq!(manager_c.manager_peer_id(), pid_a);
-    assert_eq!(manager_c.peer_count(), 3, "C sees A+B+C in its admit snapshot");
+    assert_eq!(
+        manager_c.peer_count(),
+        3,
+        "C sees A+B+C in its admit snapshot"
+    );
 
     // The gossip-blocking assertion: B should converge to 3 members
     // within a few seconds via the membership broadcast from A
@@ -535,8 +556,7 @@ async fn three_peer_membership_converges_via_gossip() {
 
     // Verify B's membership shape — sorted peer-ids match all three.
     let m_b = manager_b.membership();
-    let mut peers_b: Vec<libp2p_identity::PeerId> =
-        m_b.peers.iter().map(|p| p.peer_id).collect();
+    let mut peers_b: Vec<libp2p_identity::PeerId> = m_b.peers.iter().map(|p| p.peer_id).collect();
     peers_b.sort();
     let mut expected = vec![pid_a, pid_b, pid_c];
     expected.sort();
@@ -579,6 +599,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-info-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -612,6 +633,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-info-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -648,7 +670,10 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
     assert_eq!(b_info_from_a.app_instance, "aabbccddee");
     assert!(!b_info_from_a.is_manager, "B is not the Manager");
     assert_eq!(b_info_from_a.manager_peer_id, pid_a.to_string());
-    assert!(b_info_from_a.session_now_ns > 0, "B's session clock advances");
+    assert!(
+        b_info_from_a.session_now_ns > 0,
+        "B's session clock advances"
+    );
 
     // B fetches A's ParticipantInfo over /auki/info/0.0.1.
     let a_info_from_b = manager_b
@@ -704,6 +729,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-sensors-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -730,6 +756,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-sensors-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -810,6 +837,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-arc-shutdown-it/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -884,10 +912,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
         .await
         .expect_err("fetch_participant_info after shutdown must error");
     assert!(
-        matches!(
-            fetch_err,
-            auki_domain::FetchParticipantInfoError::Stopped
-        ),
+        matches!(fetch_err, auki_domain::FetchParticipantInfoError::Stopped),
         "fetch_participant_info after shutdown should return Stopped; got {fetch_err:?}"
     );
 
@@ -930,6 +955,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-graceful-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -954,6 +980,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
             listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             agent_version: "sdk-graceful-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1060,6 +1087,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-jpidlow-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1085,6 +1113,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-jpidlow-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1158,6 +1187,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-mpidlow-it-A/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();
@@ -1183,6 +1213,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
             listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
             agent_version: "sdk-quic-mpidlow-it-B/0".into(),
             enable_relay_server: false,
+            enable_autonat_server: false,
         },
     )
     .unwrap();

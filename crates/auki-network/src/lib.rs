@@ -26,6 +26,9 @@ pub use participant::ParticipantInfo;
 #[cfg(feature = "swarm")]
 pub mod swarm;
 
+#[cfg(all(feature = "swarm", feature = "discovery_client"))]
+pub mod relay_prepare;
+
 /// Re-export of `libp2p::Swarm` so downstream crates can name
 /// `auki_network::Swarm<Behaviour>` without taking a direct `libp2p`
 /// dep.
@@ -59,9 +62,8 @@ pub mod sensors_protocol;
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
     AllowedPeer, BroadcastMembershipError, InfoRequestEvent, JoinEvent, MembershipEvent,
-    NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent, RequestInfoError,
-    RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError,
-    UpdateReport,
+    NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent, RequestInfoError, RequestSensorsError,
+    SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

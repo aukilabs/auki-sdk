@@ -12,17 +12,20 @@ package auki.stream;
 // `Frame` messages until close.
 //
 // Per-substream `T` (mono-T per grimsby D1 / Dagaz D1): the consumer
-// resolves the producer's `AcceptInfo.sensor_hash` against its Sensor
-// Registry to learn which payload type `Frame.payload` carries. The SDK
-// runtime decodes `Frame.payload` (a length-bounded `bytes` field) as
-// the matching prost type from `auki-datatypes` (e.g. `JpegFrame`,
-// `PointCloudFrame`).
+// resolves the producer's `StreamDescriptor.sensor_hash` against its
+// Sensor Registry to learn which payload type `Frame.payload` carries.
+// The SDK runtime decodes `Frame.payload` (a length-bounded `bytes`
+// field) as the matching prost type from `auki-datatypes` (e.g.
+// `JpegFrame`, `PointCloudFrame`).
 //
 // Field number ledger (never reuse, never renumber):
 //   StreamRequest.sensor_id    = 1
-//   AcceptInfo.sensor_hash     = 1
-//   AcceptInfo.clock_id        = 2
-//   AcceptInfo.clock_hash      = 3
+//   StreamDescriptor.sensor_id    = 1
+//   StreamDescriptor.sensor_hash  = 2
+//   StreamDescriptor.clock_id     = 3
+//   StreamDescriptor.clock_hash   = 4
+//   StreamDescriptor.frame_id     = 5
+//   StreamDescriptor.frame_hash   = 6
 //   Frame.timestamp_ns         = 1
 //   Frame.seq                  = 2
 //   Frame.payload              = 3
@@ -32,10 +35,13 @@ message StreamRequest {
   string sensor_id = 1;
 }
 
-message AcceptInfo {
-  string sensor_hash = 1;
-  string clock_id = 2;
-  string clock_hash = 3;
+message StreamDescriptor {
+  string sensor_id = 1;
+  string sensor_hash = 2;
+  string clock_id = 3;
+  string clock_hash = 4;
+  string frame_id = 5;
+  string frame_hash = 6;
 }
 
 message DeclineReason {
@@ -79,7 +85,7 @@ message Frame {
 message StreamMessage {
   oneof variant {
     StreamRequest request = 1;
-    AcceptInfo accept = 2;
+    StreamDescriptor accept = 2;
     DeclineReason decline = 3;
     Frame frame = 4;
     EndReason end_of_stream = 5;

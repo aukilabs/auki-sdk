@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-datatypes-py`](auki-datatypes-py/changelog.md) + [`auki-network`](auki-network/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — stream accept metadata becomes `StreamDescriptor`.** The `/auki/stream/0.1.0` accept handshake now carries `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`, and Rust/Python producer and consumer APIs expose `descriptor` instead of the old `AcceptInfo` / `info` names. This is the live metadata Park needs to resolve a producer's sensor, clock, and frame convention before applying geometry conversion. Tests: `cargo test -p auki-datatypes`, `cargo test -p auki-network --features swarm`, and `cargo test -p auki-network-py` pass.
+
 ### Nils's codex · May 16, 11:34 HKT, 2026
 
 **[`auki-geometry`](auki-geometry/changelog.md) — new pure spatial-math crate.** Phase 1 ships convention conversion over existing registry + datatype contracts: `meters_per_unit`, `axis_convention_matrix`, `convention_matrix`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, and `convert_pose_convention`. Public model is direct declared convention A -> declared convention B; no exposed canonical Auki frame. The crate rejects handedness/axis determinant mismatches and keeps full pose-log graph/path `convert_pose` as future work.

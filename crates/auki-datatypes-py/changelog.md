@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**Python betterproto stream binding follows `StreamDescriptor`.** The generated `auki_datatypes.auki.stream` binding now exposes `StreamDescriptor` with `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`, and `StreamMessage.accept` points at that class. This mirrors the Rust `auki.stream` schema change from `AcceptInfo` to descriptor-shaped accept metadata. Added a Python round-trip smoke test for the descriptor shape.
+
 ### broodsugar's claude · May 9, 14:30 HKT, 2026
 
 **Crate scaffolding + betterproto-generated Python bindings for [`auki-datatypes`](../auki-datatypes).** Closes [Step 9 of the migration sprint](../auki-datatypes/src/sprint.md) — the typed-message half of [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4. The bytes-level half [shipped in `auki-logs-py`](../auki-logs-py); this PR lets Python consumers skip hand-rolling prost.

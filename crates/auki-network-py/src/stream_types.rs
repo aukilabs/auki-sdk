@@ -12,7 +12,7 @@
 //!   shape — `finally`-on-Drop cleanup runs naturally via `aclose`.)
 //! - **Consumer side**: `runtime.open_stream(peer_id, sensor_id)` is
 //!   synchronous-blocking. The returned [`StreamSubscription`] exposes
-//!   accept-time metadata via `.info`; `.frames()` returns a sync
+//!   accept-time metadata via `.descriptor`; `.frames()` returns a sync
 //!   iterator that blocks on each `__next__()` until the next frame
 //!   arrives. Stream-end signals surface as Python exceptions raised
 //!   from `__next__()`.
@@ -23,10 +23,9 @@
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
 use auki_network_rs::stream_protocol::{
-    AudioFrame as RustAudioFrame,
-    AcceptInfo as RustAcceptInfo, DeclineReason as RustDeclineReason,
-    EndReason as RustEndReason, JointEncodersFrame as RustJointEncodersFrame,
-    JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
+    AudioFrame as RustAudioFrame, DeclineReason as RustDeclineReason, EndReason as RustEndReason,
+    JointEncodersFrame as RustJointEncodersFrame, JpegFrame as RustJpegFrame,
+    PointCloudFrame as RustPointCloudFrame, StreamDescriptor as RustStreamDescriptor,
     StreamRequest as RustStreamRequest, decline_reason, end_reason,
 };
 use auki_network_rs::stream_runtime::{
@@ -80,30 +79,43 @@ impl PyStreamRequest {
     }
 }
 
-// ─── AcceptInfo ──────────────────────────────────────────────────────────────
+// ─── StreamDescriptor ──────────────────────────────────────────────────────────────
 
-/// Accept-time metadata the producer commits to for the lifetime of the
-/// subscription — `sensor_hash` (UI-labelling for v1 JPEG payload),
-/// `clock_id` (load-bearing for `timestamp_ns` interpretation),
-/// `clock_hash`.
-#[pyclass(name = "AcceptInfo", frozen)]
+/// Accept-time stream descriptor the producer commits to for the
+/// lifetime of the subscription.
+#[pyclass(name = "StreamDescriptor", frozen)]
 #[derive(Clone, Debug)]
-pub struct PyAcceptInfo {
-    pub(crate) inner: RustAcceptInfo,
+pub struct PyStreamDescriptor {
+    pub(crate) inner: RustStreamDescriptor,
 }
 
 #[pymethods]
-impl PyAcceptInfo {
+impl PyStreamDescriptor {
     #[new]
-    #[pyo3(signature = (*, sensor_hash, clock_id, clock_hash))]
-    fn new(sensor_hash: String, clock_id: String, clock_hash: String) -> Self {
+    #[pyo3(signature = (*, sensor_id, sensor_hash, clock_id, clock_hash, frame_id=None, frame_hash=None))]
+    fn new(
+        sensor_id: String,
+        sensor_hash: String,
+        clock_id: String,
+        clock_hash: String,
+        frame_id: Option<String>,
+        frame_hash: Option<String>,
+    ) -> Self {
         Self {
-            inner: RustAcceptInfo {
+            inner: RustStreamDescriptor {
+                sensor_id,
                 sensor_hash,
                 clock_id,
                 clock_hash,
+                frame_id: frame_id.unwrap_or_default(),
+                frame_hash: frame_hash.unwrap_or_default(),
             },
         }
+    }
+
+    #[getter]
+    fn sensor_id(&self) -> &str {
+        &self.inner.sensor_id
     }
 
     #[getter]
@@ -121,10 +133,25 @@ impl PyAcceptInfo {
         &self.inner.clock_hash
     }
 
+    #[getter]
+    fn frame_id(&self) -> &str {
+        &self.inner.frame_id
+    }
+
+    #[getter]
+    fn frame_hash(&self) -> &str {
+        &self.inner.frame_hash
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "AcceptInfo(sensor_hash={:?}, clock_id={:?}, clock_hash={:?})",
-            self.inner.sensor_hash, self.inner.clock_id, self.inner.clock_hash,
+            "StreamDescriptor(sensor_id={:?}, sensor_hash={:?}, clock_id={:?}, clock_hash={:?}, frame_id={:?}, frame_hash={:?})",
+            self.inner.sensor_id,
+            self.inner.sensor_hash,
+            self.inner.clock_id,
+            self.inner.clock_hash,
+            self.inner.frame_id,
+            self.inner.frame_hash,
         )
     }
 
@@ -774,8 +801,8 @@ impl PyConsumerFrame {
 // ─── StreamDecision ──────────────────────────────────────────────────────────
 
 /// Provider's accept/decline decision. Construct via the static
-/// factories `accept(info, source)` (JPEG substream) /
-/// `accept_pointcloud(info, source)` (PointCloud substream — Dagaz Batch
+/// factories `accept(descriptor, source)` (JPEG substream) /
+/// `accept_pointcloud(descriptor, source)` (PointCloud substream — Dagaz Batch
 /// 2) / `decline(reason)` — there is no public constructor.
 ///
 /// `source` is **a Python async iterator yielding [`PyProducerFrame`]
@@ -795,19 +822,19 @@ pub struct PyStreamDecision {
 
 pub(crate) enum DecisionInner {
     AcceptJpeg {
-        info: PyAcceptInfo,
+        descriptor: PyStreamDescriptor,
         source: Py<PyAny>,
     },
     AcceptPointCloud {
-        info: PyAcceptInfo,
+        descriptor: PyStreamDescriptor,
         source: Py<PyAny>,
     },
     AcceptJointEncoders {
-        info: PyAcceptInfo,
+        descriptor: PyStreamDescriptor,
         source: Py<PyAny>,
     },
     AcceptAudio {
-        info: PyAcceptInfo,
+        descriptor: PyStreamDescriptor,
         source: Py<PyAny>,
     },
     Decline {
@@ -821,10 +848,10 @@ impl PyStreamDecision {
     /// yield `ProducerFrame(payload=JpegFrame(...))` values; yielding a
     /// `PointCloudFrame` ends the stream with `EndReason::ProducerError`.
     #[staticmethod]
-    #[pyo3(signature = (*, info, source))]
-    fn accept(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+    #[pyo3(signature = (*, descriptor, source))]
+    fn accept(descriptor: PyStreamDescriptor, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::AcceptJpeg { info, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptJpeg { descriptor, source })),
         }
     }
 
@@ -833,10 +860,10 @@ impl PyStreamDecision {
     /// values carrying CDR-encoded `PointCloud2` ROS message bytes; the
     /// consumer (Park, future Sentinel) parses CDR on its side.
     #[staticmethod]
-    #[pyo3(signature = (*, info, source))]
-    fn accept_pointcloud(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+    #[pyo3(signature = (*, descriptor, source))]
+    fn accept_pointcloud(descriptor: PyStreamDescriptor, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::AcceptPointCloud { info, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptPointCloud { descriptor, source })),
         }
     }
 
@@ -847,10 +874,13 @@ impl PyStreamDecision {
     /// `JointEncoders { joint_count }` (consumer-enforced; the SDK
     /// doesn't validate length on the wire).
     #[staticmethod]
-    #[pyo3(signature = (*, info, source))]
-    fn accept_joint_encoders(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+    #[pyo3(signature = (*, descriptor, source))]
+    fn accept_joint_encoders(descriptor: PyStreamDescriptor, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::AcceptJointEncoders { info, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptJointEncoders {
+                descriptor,
+                source,
+            })),
         }
     }
 
@@ -862,10 +892,10 @@ impl PyStreamDecision {
     /// `(sensor_id, sensor_hash) → SensorBody::Audio`, so the wire
     /// payload itself is opaque-bytes.
     #[staticmethod]
-    #[pyo3(signature = (*, info, source))]
-    fn accept_audio(info: PyAcceptInfo, source: Py<PyAny>) -> Self {
+    #[pyo3(signature = (*, descriptor, source))]
+    fn accept_audio(descriptor: PyStreamDescriptor, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::AcceptAudio { info, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptAudio { descriptor, source })),
         }
     }
 
@@ -941,92 +971,94 @@ impl PyStreamDecision {
 /// wires its Python `stream_provider` kwarg through this function in
 /// its `init_domain` / `init_or_join_domain` entry points; without
 /// reaching this adapter it would have to re-implement ~500 lines of
-/// `PyStreamDecision` / `PyAcceptInfo` / `PyDeclineReason` pyclass
+/// `PyStreamDecision` / `PyStreamDescriptor` / `PyDeclineReason` pyclass
 /// plumbing. Promoted 2026-05-13.
 pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
-    Arc::new(move |peer: libp2p_identity::PeerId, request: RustStreamRequest| {
-        let py_request = PyStreamRequest { inner: request };
-        let peer_str = peer.to_string();
+    Arc::new(
+        move |peer: libp2p_identity::PeerId, request: RustStreamRequest| {
+            let py_request = PyStreamRequest { inner: request };
+            let peer_str = peer.to_string();
 
-        // Step 1 (under GIL): call the Python provider, extract a
-        // PyStreamDecision (or normalize errors to a Decline).
-        let decision_or_err: Result<DecisionInner, String> = Python::with_gil(|py| {
-            let result = match callable.call1(py, (peer_str.clone(), py_request.clone())) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(error = %e, "stream_provider raised; declining");
-                    return Err(format!("provider raised: {e}"));
+            // Step 1 (under GIL): call the Python provider, extract a
+            // PyStreamDecision (or normalize errors to a Decline).
+            let decision_or_err: Result<DecisionInner, String> = Python::with_gil(|py| {
+                let result = match callable.call1(py, (peer_str.clone(), py_request.clone())) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "stream_provider raised; declining");
+                        return Err(format!("provider raised: {e}"));
+                    }
+                };
+                // Bind & extract a PyStreamDecision PyRef so we can call .take().
+                let bound = result.bind(py);
+                match bound.extract::<PyRef<PyStreamDecision>>() {
+                    Ok(decision_ref) => match decision_ref.take() {
+                        Some(inner) => Ok(inner),
+                        None => Err("provider returned an already-consumed StreamDecision".into()),
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "stream_provider returned non-StreamDecision; declining"
+                        );
+                        Err(format!("provider returned non-StreamDecision: {e}"))
+                    }
                 }
-            };
-            // Bind & extract a PyStreamDecision PyRef so we can call .take().
-            let bound = result.bind(py);
-            match bound.extract::<PyRef<PyStreamDecision>>() {
-                Ok(decision_ref) => match decision_ref.take() {
-                    Some(inner) => Ok(inner),
-                    None => Err("provider returned an already-consumed StreamDecision".into()),
+            });
+
+            // Step 2 (no GIL needed for the type-shape match): map onto a
+            // Rust StreamDispatch variant. On error, synthesize a Decline
+            // carrying the error string.
+            match decision_or_err {
+                Err(detail) => RustStreamDispatch::Decline {
+                    reason: RustDeclineReason::other(detail),
                 },
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "stream_provider returned non-StreamDecision; declining"
-                    );
-                    Err(format!("provider returned non-StreamDecision: {e}"))
+                Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
+                    reason: reason.inner,
+                },
+                Ok(DecisionInner::AcceptJpeg { descriptor, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustJpegFrame>(source, |pf| {
+                            pf.to_rust_jpeg()
+                        });
+                    RustStreamDispatch::AcceptJpeg {
+                        descriptor: descriptor.inner,
+                        source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptPointCloud { descriptor, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustPointCloudFrame>(source, |pf| {
+                            pf.to_rust_pointcloud()
+                        });
+                    RustStreamDispatch::AcceptPointCloud {
+                        descriptor: descriptor.inner,
+                        source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptJointEncoders { descriptor, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustJointEncodersFrame>(source, |pf| {
+                            pf.to_rust_joint_encoders()
+                        });
+                    RustStreamDispatch::AcceptJointEncoders {
+                        descriptor: descriptor.inner,
+                        source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptAudio { descriptor, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustAudioFrame>(source, |pf| {
+                            pf.to_rust_audio()
+                        });
+                    RustStreamDispatch::AcceptAudio {
+                        descriptor: descriptor.inner,
+                        source: source_stream,
+                    }
                 }
             }
-        });
-
-        // Step 2 (no GIL needed for the type-shape match): map onto a
-        // Rust StreamDispatch variant. On error, synthesize a Decline
-        // carrying the error string.
-        match decision_or_err {
-            Err(detail) => RustStreamDispatch::Decline {
-                reason: RustDeclineReason::other(detail),
-            },
-            Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
-                reason: reason.inner,
-            },
-            Ok(DecisionInner::AcceptJpeg { info, source }) => {
-                let source_stream =
-                    python_iter_into_source_stream::<RustJpegFrame>(source, |pf| {
-                        pf.to_rust_jpeg()
-                    });
-                RustStreamDispatch::AcceptJpeg {
-                    info: info.inner,
-                    source: source_stream,
-                }
-            }
-            Ok(DecisionInner::AcceptPointCloud { info, source }) => {
-                let source_stream =
-                    python_iter_into_source_stream::<RustPointCloudFrame>(source, |pf| {
-                        pf.to_rust_pointcloud()
-                    });
-                RustStreamDispatch::AcceptPointCloud {
-                    info: info.inner,
-                    source: source_stream,
-                }
-            }
-            Ok(DecisionInner::AcceptJointEncoders { info, source }) => {
-                let source_stream =
-                    python_iter_into_source_stream::<RustJointEncodersFrame>(source, |pf| {
-                        pf.to_rust_joint_encoders()
-                    });
-                RustStreamDispatch::AcceptJointEncoders {
-                    info: info.inner,
-                    source: source_stream,
-                }
-            }
-            Ok(DecisionInner::AcceptAudio { info, source }) => {
-                let source_stream =
-                    python_iter_into_source_stream::<RustAudioFrame>(source, |pf| {
-                        pf.to_rust_audio()
-                    });
-                RustStreamDispatch::AcceptAudio {
-                    info: info.inner,
-                    source: source_stream,
-                }
-            }
-        }
-    })
+        },
+    )
 }
 
 /// Convert a Python async iterator (yielding `PyProducerFrame`) into a
@@ -1147,20 +1179,16 @@ impl Drop for SourceStreamGuard {
 type RustJpegFrameStream =
     Pin<Box<dyn Stream<Item = Result<RustConsumerFrame<RustJpegFrame>, RustStreamError>> + Send>>;
 type RustPointCloudFrameStream = Pin<
-    Box<
-        dyn Stream<Item = Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>> + Send,
-    >,
+    Box<dyn Stream<Item = Result<RustConsumerFrame<RustPointCloudFrame>, RustStreamError>> + Send>,
 >;
 type RustJointEncodersFrameStream = Pin<
     Box<
-        dyn Stream<
-                Item = Result<RustConsumerFrame<RustJointEncodersFrame>, RustStreamError>,
-            > + Send,
+        dyn Stream<Item = Result<RustConsumerFrame<RustJointEncodersFrame>, RustStreamError>>
+            + Send,
     >,
 >;
-type RustAudioFrameStream = Pin<
-    Box<dyn Stream<Item = Result<RustConsumerFrame<RustAudioFrame>, RustStreamError>> + Send>,
->;
+type RustAudioFrameStream =
+    Pin<Box<dyn Stream<Item = Result<RustConsumerFrame<RustAudioFrame>, RustStreamError>> + Send>>;
 
 /// Tagged union over the underlying typed frame-stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -1175,22 +1203,22 @@ enum FrameStreamKind {
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
 /// returns on a successful Accept. Carries the producer's
-/// [`PyAcceptInfo`]; iterate over frames via `subscription.frames()`.
+/// [`PyStreamDescriptor`]; iterate over frames via `subscription.frames()`.
 ///
 /// The frames iterator can be fetched **at most once**. A second call
 /// raises `RuntimeError` — the underlying Rust `Stream` is single-use.
 #[pyclass(name = "StreamSubscription")]
 pub struct PyStreamSubscription {
-    info: PyAcceptInfo,
+    descriptor: PyStreamDescriptor,
     frames: Mutex<Option<FrameStreamKind>>,
 }
 
 #[pymethods]
 impl PyStreamSubscription {
-    /// Accept-time metadata committed by the producer.
+    /// Accept-time stream descriptor committed by the producer.
     #[getter]
-    fn info(&self) -> PyAcceptInfo {
-        self.info.clone()
+    fn descriptor(&self) -> PyStreamDescriptor {
+        self.descriptor.clone()
     }
 
     /// Drain the frame iterator (sync, blocking). Each `__next__()` blocks
@@ -1207,7 +1235,10 @@ impl PyStreamSubscription {
     /// After the typed exception, subsequent `__next__()` calls raise
     /// `StopIteration` (the iterator is exhausted).
     fn frames(&self) -> PyResult<PyFrameIterator> {
-        let mut guard = self.frames.lock().expect("StreamSubscription mutex poisoned");
+        let mut guard = self
+            .frames
+            .lock()
+            .expect("StreamSubscription mutex poisoned");
         let frames = guard.take().ok_or_else(|| {
             PyRuntimeError::new_err("StreamSubscription.frames() can only be called once")
         })?;
@@ -1217,15 +1248,18 @@ impl PyStreamSubscription {
     }
 
     fn __repr__(&self) -> String {
-        format!("StreamSubscription(info={})", self.info.__repr__())
+        format!(
+            "StreamSubscription(descriptor={})",
+            self.descriptor.__repr__()
+        )
     }
 }
 
 impl PyStreamSubscription {
     pub fn from_rust_jpeg(rust_sub: RustStreamSubscription<RustJpegFrame>) -> Self {
         Self {
-            info: PyAcceptInfo {
-                inner: rust_sub.info,
+            descriptor: PyStreamDescriptor {
+                inner: rust_sub.descriptor,
             },
             frames: Mutex::new(Some(FrameStreamKind::Jpeg(rust_sub.frames))),
         }
@@ -1233,8 +1267,8 @@ impl PyStreamSubscription {
 
     pub fn from_rust_pointcloud(rust_sub: RustStreamSubscription<RustPointCloudFrame>) -> Self {
         Self {
-            info: PyAcceptInfo {
-                inner: rust_sub.info,
+            descriptor: PyStreamDescriptor {
+                inner: rust_sub.descriptor,
             },
             frames: Mutex::new(Some(FrameStreamKind::PointCloud(rust_sub.frames))),
         }
@@ -1244,8 +1278,8 @@ impl PyStreamSubscription {
         rust_sub: RustStreamSubscription<RustJointEncodersFrame>,
     ) -> Self {
         Self {
-            info: PyAcceptInfo {
-                inner: rust_sub.info,
+            descriptor: PyStreamDescriptor {
+                inner: rust_sub.descriptor,
             },
             frames: Mutex::new(Some(FrameStreamKind::JointEncoders(rust_sub.frames))),
         }
@@ -1253,8 +1287,8 @@ impl PyStreamSubscription {
 
     pub fn from_rust_audio(rust_sub: RustStreamSubscription<RustAudioFrame>) -> Self {
         Self {
-            info: PyAcceptInfo {
-                inner: rust_sub.info,
+            descriptor: PyStreamDescriptor {
+                inner: rust_sub.descriptor,
             },
             frames: Mutex::new(Some(FrameStreamKind::Audio(rust_sub.frames))),
         }
@@ -1474,7 +1508,7 @@ fn _build_stream_provider(py: Python<'_>, callable: Py<PyAny>) -> PyResult<Py<Py
 
 pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResult<()> {
     cluster.add_class::<PyStreamRequest>()?;
-    cluster.add_class::<PyAcceptInfo>()?;
+    cluster.add_class::<PyStreamDescriptor>()?;
     cluster.add_class::<PyJpegFrame>()?;
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
@@ -1489,7 +1523,10 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
 
     cluster.add_function(wrap_pyfunction!(_build_stream_provider, cluster)?)?;
 
-    cluster.add("StreamEndOfStream", py.get_type_bound::<StreamEndOfStream>())?;
+    cluster.add(
+        "StreamEndOfStream",
+        py.get_type_bound::<StreamEndOfStream>(),
+    )?;
     cluster.add(
         "StreamConnectionLost",
         py.get_type_bound::<StreamConnectionLost>(),
@@ -1499,7 +1536,10 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
         py.get_type_bound::<StreamProtocolError>(),
     )?;
     cluster.add("StreamDeclined", py.get_type_bound::<StreamDeclined>())?;
-    cluster.add("StreamUnreachable", py.get_type_bound::<StreamUnreachable>())?;
+    cluster.add(
+        "StreamUnreachable",
+        py.get_type_bound::<StreamUnreachable>(),
+    )?;
 
     Ok(())
 }
@@ -1517,7 +1557,12 @@ pub(crate) fn invalid_arg<S: Into<String>>(msg: S) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_network_rs::PeerIdentity;
     use auki_network_rs::stream_runtime::OPEN_STREAM_TIMEOUT;
+
+    fn test_peer_id() -> libp2p_identity::PeerId {
+        PeerIdentity::from_seed(&[23u8; 32]).peer_id()
+    }
 
     #[test]
     fn stream_request_round_trips() {
@@ -1532,15 +1577,39 @@ mod tests {
     }
 
     #[test]
-    fn accept_info_round_trips_and_compares() {
+    fn stream_descriptor_round_trips_and_compares() {
         Python::with_gil(|_py| {
-            let a = PyAcceptInfo::new("h".into(), "c".into(), "ch".into());
-            let b = PyAcceptInfo::new("h".into(), "c".into(), "ch".into());
+            let a = PyStreamDescriptor::new(
+                "sensor".into(),
+                "h".into(),
+                "c".into(),
+                "ch".into(),
+                Some("frame".into()),
+                Some("fh".into()),
+            );
+            let b = PyStreamDescriptor::new(
+                "sensor".into(),
+                "h".into(),
+                "c".into(),
+                "ch".into(),
+                Some("frame".into()),
+                Some("fh".into()),
+            );
+            assert_eq!(a.sensor_id(), "sensor");
             assert_eq!(a.sensor_hash(), "h");
             assert_eq!(a.clock_id(), "c");
             assert_eq!(a.clock_hash(), "ch");
+            assert_eq!(a.frame_id(), "frame");
+            assert_eq!(a.frame_hash(), "fh");
             assert!(a.__eq__(&b));
-            let c = PyAcceptInfo::new("other".into(), "c".into(), "ch".into());
+            let c = PyStreamDescriptor::new(
+                "sensor".into(),
+                "other".into(),
+                "c".into(),
+                "ch".into(),
+                Some("frame".into()),
+                Some("fh".into()),
+            );
             assert!(!a.__eq__(&c));
         });
     }
@@ -1702,8 +1771,7 @@ mod tests {
             assert!(err.contains("AcceptPointCloud"), "{err}");
             assert!(err.contains("PointCloudFrame"), "{err}");
 
-            let pf_pc =
-                PyProducerFrame::new(0, pointcloud_frame_as_any(py, &[2])).unwrap();
+            let pf_pc = PyProducerFrame::new(0, pointcloud_frame_as_any(py, &[2])).unwrap();
             let err = pf_pc.to_rust_jpeg().expect_err("pointcloud ≠ jpeg");
             assert!(err.contains("AcceptJpeg"), "{err}");
             assert!(err.contains("JpegFrame"), "{err}");
@@ -1803,14 +1871,21 @@ mod tests {
         Python::with_gil(|py| {
             // Construct a Python object to stand in for the source iterator
             // (a None object is fine — we only inspect .kind, never drain).
-            let info = PyAcceptInfo::new("h".into(), "c".into(), "ch".into());
-            let acc = PyStreamDecision::accept(info.clone(), py.None());
+            let descriptor = PyStreamDescriptor::new(
+                "sensor".into(),
+                "h".into(),
+                "c".into(),
+                "ch".into(),
+                Some("frame".into()),
+                Some("fh".into()),
+            );
+            let acc = PyStreamDecision::accept(descriptor.clone(), py.None());
             assert_eq!(acc.kind(), "accept");
 
-            let acc_pc = PyStreamDecision::accept_pointcloud(info.clone(), py.None());
+            let acc_pc = PyStreamDecision::accept_pointcloud(descriptor.clone(), py.None());
             assert_eq!(acc_pc.kind(), "accept_pointcloud");
 
-            let acc_audio = PyStreamDecision::accept_audio(info, py.None());
+            let acc_audio = PyStreamDecision::accept_audio(descriptor, py.None());
             assert_eq!(acc_audio.kind(), "accept_audio");
 
             let dec = PyStreamDecision::decline(PyDeclineReason::sensor_not_found());
@@ -1846,7 +1921,7 @@ mod tests {
                 r#"
 import sys
 def _make(cluster):
-    def provider(req):
+    def provider(peer, req):
         return cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
     return provider
 "#,
@@ -1861,7 +1936,7 @@ def _make(cluster):
             let request = RustStreamRequest {
                 sensor_id: "any".into(),
             };
-            match rust_provider(request) {
+            match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason }
                     if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
                 _ => panic!("expected Decline(SensorNotFound)"),
@@ -1881,7 +1956,7 @@ def _make(cluster):
 
             py.run_bound(
                 r#"
-def _bad(req):
+def _bad(peer, req):
     raise RuntimeError("provider broke")
 "#,
                 None,
@@ -1893,7 +1968,7 @@ def _bad(req):
             let request = RustStreamRequest {
                 sensor_id: "any".into(),
             };
-            match rust_provider(request) {
+            match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason } => match reason.kind {
                     Some(decline_reason::Kind::Other(decline_reason::Other { detail })) => assert!(
                         detail.contains("provider broke"),
@@ -1906,7 +1981,7 @@ def _bad(req):
         });
     }
 
-    /// `build_stream_provider` mapping the Python `accept(info, source)`
+    /// `build_stream_provider` mapping the Python `accept(descriptor, source)`
     /// factory onto `RustStreamDispatch::AcceptJpeg`. We don't drain the
     /// source-stream here (that requires the wrapper's tokio runtime
     /// + asyncio loop scaffolding from the cross-language tests); we
@@ -1925,9 +2000,16 @@ def _make(cluster):
     async def _src():
         if False:
             yield None  # makes this an async generator
-    def provider(req):
+    def provider(peer, req):
         return cluster.StreamDecision.accept(
-            info=cluster.AcceptInfo(sensor_hash="h", clock_id="c", clock_hash="ch"),
+            descriptor=cluster.StreamDescriptor(
+                sensor_id=req.sensor_id,
+                sensor_hash="h",
+                clock_id="c",
+                clock_hash="ch",
+                frame_id="frame",
+                frame_hash="fh",
+            ),
             source=_src(),
         )
     return provider
@@ -1940,19 +2022,27 @@ def _make(cluster):
             let provider = make.call1((&cluster,)).unwrap();
             let rust_provider = build_stream_provider(provider.unbind());
 
-            match rust_provider(RustStreamRequest {
-                sensor_id: "any".into(),
-            }) {
-                RustStreamDispatch::AcceptJpeg { info, source: _ } => {
-                    assert_eq!(info.sensor_hash, "h");
-                    assert_eq!(info.clock_id, "c");
+            match rust_provider(
+                test_peer_id(),
+                RustStreamRequest {
+                    sensor_id: "any".into(),
+                },
+            ) {
+                RustStreamDispatch::AcceptJpeg {
+                    descriptor,
+                    source: _,
+                } => {
+                    assert_eq!(descriptor.sensor_id, "any");
+                    assert_eq!(descriptor.sensor_hash, "h");
+                    assert_eq!(descriptor.clock_id, "c");
+                    assert_eq!(descriptor.frame_id, "frame");
                 }
                 _ => panic!("expected AcceptJpeg"),
             }
         });
     }
 
-    /// `build_stream_provider` mapping `accept_pointcloud(info, source)`
+    /// `build_stream_provider` mapping `accept_pointcloud(descriptor, source)`
     /// onto `RustStreamDispatch::AcceptPointCloud` (Dagaz Batch 2 — the
     /// new dispatch arm).
     #[test]
@@ -1969,9 +2059,16 @@ def _make(cluster):
     async def _src():
         if False:
             yield None
-    def provider(req):
+    def provider(peer, req):
         return cluster.StreamDecision.accept_pointcloud(
-            info=cluster.AcceptInfo(sensor_hash="pc", clock_id="c", clock_hash="ch"),
+            descriptor=cluster.StreamDescriptor(
+                sensor_id=req.sensor_id,
+                sensor_hash="pc",
+                clock_id="c",
+                clock_hash="ch",
+                frame_id="pc_frame",
+                frame_hash="pc_fh",
+            ),
             source=_src(),
         )
     return provider
@@ -1984,11 +2081,18 @@ def _make(cluster):
             let provider = make.call1((&cluster,)).unwrap();
             let rust_provider = build_stream_provider(provider.unbind());
 
-            match rust_provider(RustStreamRequest {
-                sensor_id: "any".into(),
-            }) {
-                RustStreamDispatch::AcceptPointCloud { info, source: _ } => {
-                    assert_eq!(info.sensor_hash, "pc");
+            match rust_provider(
+                test_peer_id(),
+                RustStreamRequest {
+                    sensor_id: "any".into(),
+                },
+            ) {
+                RustStreamDispatch::AcceptPointCloud {
+                    descriptor,
+                    source: _,
+                } => {
+                    assert_eq!(descriptor.sensor_hash, "pc");
+                    assert_eq!(descriptor.frame_hash, "pc_fh");
                 }
                 _ => panic!("expected AcceptPointCloud"),
             }

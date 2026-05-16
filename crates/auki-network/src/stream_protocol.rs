@@ -38,7 +38,7 @@
 //!   `oneof` of `Request | Accept | Decline | Frame | EndOfStream`;
 //!   each substream is mono-`T` with `T`'s prost bytes living inside
 //!   `Frame.payload` — the SDK runtime knows which `T` to decode based
-//!   on the [`AcceptInfo::sensor_hash`] handshake.
+//!   on the [`StreamDescriptor::sensor_hash`] handshake.
 //!
 //! ## Why protobuf, why now
 //!
@@ -55,7 +55,7 @@
 //! ## Message order on a healthy stream
 //!
 //! 1. Initiator → Responder: `Request(StreamRequest)`
-//! 2. Responder → Initiator: `Accept(AcceptInfo)` *or*
+//! 2. Responder → Initiator: `Accept(StreamDescriptor)` *or*
 //!    `Decline(DeclineReason)`
 //! 3. Responder → Initiator: zero or more `Frame { … }`
 //! 4. Responder → Initiator: `EndOfStream(EndReason)` *or* substream
@@ -87,7 +87,7 @@ pub use auki_datatypes::frame_stream::JpegFrame;
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
-    AcceptInfo, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
+    DeclineReason, EndReason, Frame, StreamDescriptor, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
 };
 
@@ -217,11 +217,21 @@ mod tests {
         })
     }
 
-    fn accept_msg(sensor_hash: &str, clock_id: &str, clock_hash: &str) -> StreamMessage {
-        StreamMessage::accept(AcceptInfo {
+    fn accept_msg(
+        sensor_id: &str,
+        sensor_hash: &str,
+        clock_id: &str,
+        clock_hash: &str,
+        frame_id: &str,
+        frame_hash: &str,
+    ) -> StreamMessage {
+        StreamMessage::accept(StreamDescriptor {
+            sensor_id: sensor_id.into(),
             sensor_hash: sensor_hash.into(),
             clock_id: clock_id.into(),
             clock_hash: clock_hash.into(),
+            frame_id: frame_id.into(),
+            frame_hash: frame_hash.into(),
         })
     }
 
@@ -256,7 +266,14 @@ mod tests {
 
     #[test]
     fn accept_message_round_trips() {
-        let msg = accept_msg("abcdef", "K1-AABBCCDDEEFF/utc", "deadbeef");
+        let msg = accept_msg(
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "abcdef",
+            "K1-AABBCCDDEEFF/utc",
+            "deadbeef",
+            "K1-AABBCCDDEEFF/head_left_cam/optical",
+            "framebeef",
+        );
         let mut bytes = Vec::new();
         msg.encode(&mut bytes).unwrap();
         let back = StreamMessage::decode(&*bytes).unwrap();
@@ -316,7 +333,7 @@ mod tests {
     async fn write_then_read_round_trips_a_full_session() {
         let messages = vec![
             request_msg("K1/cam_a"),
-            accept_msg("h1", "c1", "h2"),
+            accept_msg("K1/cam_a", "h1", "c1", "h2", "K1/cam_a/frame", "fh1"),
             frame_msg(1, 0, vec![1, 2, 3]),
             frame_msg(2, 1, vec![4, 5, 6]),
             frame_msg(3, 2, vec![7, 8, 9]),
@@ -572,10 +589,13 @@ mod tests {
             stream_message::Variant::Request(StreamRequest {
                 sensor_id: "ordered".into(),
             }),
-            stream_message::Variant::Accept(AcceptInfo {
+            stream_message::Variant::Accept(StreamDescriptor {
+                sensor_id: "ordered".into(),
                 sensor_hash: "h".into(),
                 clock_id: "c".into(),
                 clock_hash: "ch".into(),
+                frame_id: "ordered/frame".into(),
+                frame_hash: "fh".into(),
             }),
             stream_message::Variant::Frame(Frame {
                 timestamp_ns: 1,

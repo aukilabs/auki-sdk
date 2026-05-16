@@ -9,7 +9,7 @@ Current work and next steps for the Hagall cluster-lifecycle layer.
 - Apps declare intent with `ClusterTarget`.
 - `ClusterManager::bootstrap` owns list/decide/create-or-join for headless daemons.
 - `create_cluster` and `join_cluster` take a Discovery URL, not a caller-built `DiscoveryClient`.
-- The manager owns Discovery liveness checks, join handling, membership gossip, peer liveness/election, info/catalog request handlers, and stream openings.
+- The manager owns Discovery liveness checks, join handling, membership gossip, peer liveness/election, info/catalog/registry request handlers, and stream openings.
 
 The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan. Any docs or downstream code still mentioning `DomainHandle`, `init_domain`, `ClusterRuntime`, `cluster.json`, or Discovery SSE membership refresh are stale.
 
@@ -19,6 +19,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Pin the v2 successor-token format and Discovery verification path. v1 keeps `successor_token` opaque and accepts trust-by-shape for the demo.
 - Add SDK-side relay-reservation support once LAN-only Hagall flows are stable and Park-from-home earns the work.
 - Keep `ClusterManager` and `auki-domain-py` APIs aligned as Python consumers adopt `ClusterTarget.bootstrap`.
+- Add catalog bundling only if the extra registry-fetch roundtrip becomes operationally annoying; v0 registry exchange already resolves exact entries by `(kind, id, hash)`.
 
 ## Decisions To Honor
 

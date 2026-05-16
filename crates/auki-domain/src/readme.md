@@ -20,6 +20,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
 - Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches.
+- Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
 - Shared-reference, idempotent `shutdown`.
 
@@ -35,6 +36,10 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `SensorCatalogProvider`
 - `SensorEntry`
 - `SensorsResponse`
+- `SensorRegistryEntry`
+- `ClockRegistryEntry`
+- `FrameRegistryEntry`
+- `RegistryKind`
 - `LIVENESS_CHECK_INTERVAL`
 - Error types for bootstrap/create/join/admit/fetch paths
 - `elect_successor`

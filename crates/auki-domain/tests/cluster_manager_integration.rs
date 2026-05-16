@@ -103,7 +103,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         cluster_name.clone(),
         identity.clone(),
         local_multiaddrs.clone(),
-        discovery.clone(),
+        discovery_url(),
         swarm,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -125,7 +125,10 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
     assert_eq!(info.manager_peer_id, local_peer_id.to_string());
     assert_eq!(info.peer_id, local_peer_id);
     assert_eq!(info.app, "test-daemon");
-    assert!(info.session_now_ns > 0, "session_now_ns advances after construction");
+    assert!(
+        info.session_now_ns > 0,
+        "session_now_ns advances after construction"
+    );
     assert!(
         info.cluster_joined_at_ns.is_none(),
         "alone in cluster — cluster_joined_at_ns stays None per ansuz D3"
@@ -172,13 +175,19 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         .deregister(&cluster_name)
         .await
         .expect("explicit cleanup deregister");
-    let after = discovery.list_clusters().await.expect("list_clusters after");
+    let after = discovery
+        .list_clusters()
+        .await
+        .expect("list_clusters after");
     assert!(
         !after.iter().any(|c| c.name == cluster_name),
         "cluster {cluster_name} still in directory after explicit deregister"
     );
 
-    eprintln!("ClusterManager full lifecycle OK against {}", discovery_url());
+    eprintln!(
+        "ClusterManager full lifecycle OK against {}",
+        discovery_url()
+    );
 }
 
 /// Two-peer end-to-end: Manager `create_cluster`s a fresh cluster;
@@ -208,7 +217,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -237,7 +246,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         cluster_name.clone(),
         id_b.clone(),
         vec![addr_b.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -329,7 +338,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -355,7 +364,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         cluster_name.clone(),
         id_b.clone(),
         vec![addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -427,7 +436,6 @@ async fn manager_failover_when_a_dies_b_takes_over() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn three_peer_membership_converges_via_gossip() {
-    let discovery = DiscoveryClient::new(discovery_url());
     let cluster_name = unique_cluster_name("sdk-gossip-it");
 
     // --- Peer A creates ---
@@ -447,7 +455,7 @@ async fn three_peer_membership_converges_via_gossip() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -473,7 +481,7 @@ async fn three_peer_membership_converges_via_gossip() {
         cluster_name.clone(),
         id_b.clone(),
         vec![_addr_b.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -504,7 +512,7 @@ async fn three_peer_membership_converges_via_gossip() {
         cluster_name.clone(),
         id_c.clone(),
         vec![_addr_c.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_c,
         decline_all_streams(),
         sample_daemon_info("test"),
@@ -512,7 +520,11 @@ async fn three_peer_membership_converges_via_gossip() {
     .await
     .expect("join_cluster C");
     assert_eq!(manager_c.manager_peer_id(), pid_a);
-    assert_eq!(manager_c.peer_count(), 3, "C sees A+B+C in its admit snapshot");
+    assert_eq!(
+        manager_c.peer_count(),
+        3,
+        "C sees A+B+C in its admit snapshot"
+    );
 
     // The gossip-blocking assertion: B should converge to 3 members
     // within a few seconds via the membership broadcast from A
@@ -535,8 +547,7 @@ async fn three_peer_membership_converges_via_gossip() {
 
     // Verify B's membership shape — sorted peer-ids match all three.
     let m_b = manager_b.membership();
-    let mut peers_b: Vec<libp2p_identity::PeerId> =
-        m_b.peers.iter().map(|p| p.peer_id).collect();
+    let mut peers_b: Vec<libp2p_identity::PeerId> = m_b.peers.iter().map(|p| p.peer_id).collect();
     peers_b.sort();
     let mut expected = vec![pid_a, pid_b, pid_c];
     expected.sort();
@@ -567,7 +578,6 @@ async fn three_peer_membership_converges_via_gossip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
-    let discovery = DiscoveryClient::new(discovery_url());
     let cluster_name = unique_cluster_name("sdk-info-it");
 
     // A — the "park"-like daemon, creates the cluster.
@@ -595,7 +605,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         daemon_a,
@@ -628,7 +638,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
         cluster_name.clone(),
         id_b.clone(),
         vec![_addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         daemon_b,
@@ -648,7 +658,10 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
     assert_eq!(b_info_from_a.app_instance, "aabbccddee");
     assert!(!b_info_from_a.is_manager, "B is not the Manager");
     assert_eq!(b_info_from_a.manager_peer_id, pid_a.to_string());
-    assert!(b_info_from_a.session_now_ns > 0, "B's session clock advances");
+    assert!(
+        b_info_from_a.session_now_ns > 0,
+        "B's session clock advances"
+    );
 
     // B fetches A's ParticipantInfo over /auki/info/0.0.1.
     let a_info_from_b = manager_b
@@ -692,7 +705,6 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
         }
     }
 
-    let discovery = DiscoveryClient::new(discovery_url());
     let cluster_name = unique_cluster_name("sdk-sensors-it");
 
     // A — Park-like consumer, creates the cluster. No catalog.
@@ -713,7 +725,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a.clone()],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         daemon_a,
@@ -739,7 +751,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
         cluster_name.clone(),
         id_b.clone(),
         vec![_addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         daemon_b,
@@ -783,6 +795,110 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
     );
 }
 
+/// Cross-fetch a Frame Registry entry over `/auki/registries/0.0.1`:
+/// A creates, B joins. B writes an existing app-root
+/// `FrameRegistryEntry`, registers that app root with the
+/// `ClusterManager`, and A fetches the exact `(frame_id, frame_hash)`.
+///
+/// This pins the metadata-resolution layer Park needs after it sees a
+/// stream descriptor or catalog row with `frame_id + frame_hash`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn cluster_peers_fetch_frame_registry_entry_over_libp2p() {
+    use auki_domain::FetchRegistryEntryError;
+    use auki_registry::{FrameRegistryEntry, write_frame};
+
+    let cluster_name = unique_cluster_name("sdk-registries-it");
+
+    // A — Park-like consumer, creates the cluster.
+    let id_a = PeerIdentity::from_seed(&[103u8; 32]);
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-registries-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("park-a"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // B — Booster-like producer, joins and writes a frame registry entry.
+    let id_b = PeerIdentity::from_seed(&[104u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-registries-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("booster-b"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    let app_root = tempfile::tempdir().expect("temp app root");
+    let frame = FrameRegistryEntry::ros_optical("K1-FAKE/head_cam_points");
+    let frame_hash = write_frame(app_root.path(), &frame)
+        .expect("write frame entry")
+        .hash()
+        .to_string();
+    manager_b.set_registry_app_root(app_root.path());
+
+    let fetched = manager_a
+        .fetch_frame_entry(pid_b, frame.frame_id.clone(), frame_hash.clone())
+        .await
+        .expect("A fetches B's frame entry");
+    assert_eq!(fetched, frame);
+
+    let missing = manager_a
+        .fetch_frame_entry(pid_b, frame.frame_id.clone(), "deadbeef".to_string())
+        .await
+        .expect_err("wrong hash should be a clean not-found");
+    assert!(
+        matches!(
+            missing,
+            FetchRegistryEntryError::NotFound {
+                kind: auki_network::registries_protocol::RegistryKind::Frame,
+                ..
+            }
+        ),
+        "expected NotFound for missing hash, got {missing:?}"
+    );
+
+    manager_b.shutdown().await.expect("B shutdown");
+    manager_a.shutdown().await.expect("A shutdown");
+
+    eprintln!(
+        "Cross-fetch frame registry entry OK against {}: B={pid_b} served {}@{}",
+        discovery_url(),
+        frame.frame_id,
+        frame_hash
+    );
+}
+
 /// Park-side ergonomics: a daemon's stream consumers may hold
 /// `Arc<ClusterManager>` clones (per Park's stream-provider closure
 /// shape, see boosterapp-clone-fan-out + Park's tile consumers).
@@ -819,7 +935,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
         cluster_name.clone(),
         identity.clone(),
         vec![local_addr],
-        discovery.clone(),
+        discovery_url(),
         swarm,
         decline_all_streams(),
         sample_daemon_info("arc-shutdown"),
@@ -884,10 +1000,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
         .await
         .expect_err("fetch_participant_info after shutdown must error");
     assert!(
-        matches!(
-            fetch_err,
-            auki_domain::FetchParticipantInfoError::Stopped
-        ),
+        matches!(fetch_err, auki_domain::FetchParticipantInfoError::Stopped),
         "fetch_participant_info after shutdown should return Stopped; got {fetch_err:?}"
     );
 
@@ -938,7 +1051,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
@@ -962,7 +1075,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         cluster_name.clone(),
         id_b.clone(),
         vec![addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
@@ -1049,7 +1162,6 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn manager_failover_over_quic_when_joiner_pid_lower() {
-    let discovery = DiscoveryClient::new(discovery_url());
     let cluster_name = unique_cluster_name("sdk-quic-jpidlow-it");
 
     let id_a = PeerIdentity::from_seed(&[81u8; 32]);
@@ -1069,7 +1181,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
@@ -1094,7 +1206,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
         cluster_name.clone(),
         id_b.clone(),
         vec![addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
@@ -1147,7 +1259,6 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn manager_failover_over_quic_when_manager_pid_lower() {
-    let discovery = DiscoveryClient::new(discovery_url());
     let cluster_name = unique_cluster_name("sdk-quic-mpidlow-it");
 
     let id_a = PeerIdentity::from_seed(&[91u8; 32]);
@@ -1167,7 +1278,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
         cluster_name.clone(),
         id_a.clone(),
         vec![addr_a],
-        discovery.clone(),
+        discovery_url(),
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
@@ -1192,7 +1303,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
         cluster_name.clone(),
         id_b.clone(),
         vec![addr_b],
-        discovery.clone(),
+        discovery_url(),
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),

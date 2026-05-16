@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/registries/0.0.1` registry exchange v0.** Cluster peers can fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` over libp2p. Producers serve canonical JSON from existing app-root registries via `ClusterManager::set_registry_app_root`; consumers call `fetch_sensor_entry`, `fetch_clock_entry`, or `fetch_frame_entry`, with SDK-side hash verification before typed decode. Not-found is explicit and distinct from transport/protocol failure.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-datatypes-py`](auki-datatypes-py/changelog.md) + [`auki-network`](auki-network/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — stream accept metadata becomes `StreamDescriptor`.** The `/auki/stream/0.1.0` accept handshake now carries `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`, and Rust/Python producer and consumer APIs expose `descriptor` instead of the old `AcceptInfo` / `info` names. This is the live metadata Park needs to resolve a producer's sensor, clock, and frame convention before applying geometry conversion. Tests: `cargo test -p auki-datatypes`, `cargo test -p auki-network --features swarm`, and `cargo test -p auki-network-py` pass.

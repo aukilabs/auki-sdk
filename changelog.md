@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**Registry exchange v0 landed in the SDK.** New `/auki/registries/0.0.1` libp2p protocol lets cluster peers fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)`. Producers serve canonical JSON from existing app-root registries; consumers verify the returned bytes hash before typed decode via `ClusterManager::fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry`. This closes the metadata-resolution gap between stream descriptors/catalog refs and `auki-geometry` convention conversion.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Stream accept metadata becomes `StreamDescriptor`.** `/auki/stream/0.1.0` accept now carries `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`; Rust and Python APIs expose `descriptor` instead of the old `AcceptInfo` / `info` names. This gives Park the live stream metadata needed to resolve sensor, clock, and frame convention before applying geometry conversion. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

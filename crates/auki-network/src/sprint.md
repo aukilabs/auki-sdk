@@ -7,7 +7,7 @@ Current work and next steps to close the gap between [`src/readme.md`](readme.md
 The crate is the low-level networking substrate. The current implementation has three layers:
 
 - **Identity and reachability, default feature path.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies.
-- **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, typed stream opening, and shutdown.
+- **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, registry-entry requests, typed stream opening, and shutdown.
 - **Discovery client, `discovery_client` feature.** `DiscoveryClient` wraps Discovery's cluster directory endpoints: list, atomic create, liveness check, Manager rotation, and deregistration.
 
 Current libp2p protocol modules:
@@ -19,6 +19,7 @@ Current libp2p protocol modules:
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager broadcasts fresh membership JSON |
 | `/auki/info/0.0.1` | `info_protocol` | Fetch another peer's `ParticipantInfo` |
 | `/auki/sensors/0.0.1` | `sensors_protocol` | Fetch another peer's current sensor catalog |
+| `/auki/registries/0.0.1` | `registries_protocol` | Fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
 
 The typed stream runtime is multi-payload on both sides. Producer callbacks have the requester peer id in their signature:

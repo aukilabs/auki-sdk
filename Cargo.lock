@@ -174,8 +174,10 @@ dependencies = [
 name = "auki-domain"
 version = "0.0.0"
 dependencies = [
+ "auki-hash",
  "auki-identity",
  "auki-network",
+ "auki-registry",
  "futures",
  "libp2p",
  "libp2p-identity",
@@ -183,6 +185,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

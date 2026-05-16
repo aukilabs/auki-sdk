@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.
+
+`NetworkRuntime::spawn` now returns a seventh receiver: `mpsc::Receiver<RegistryRequestEvent>`. Inbound `/auki/registries/0.0.1` substreams are cluster-trust gated identically to `/auki/info/0.0.1` and `/auki/sensors/0.0.1` (silent-drop non-allow-list peers). Outbound `NetworkRuntime::request_registry_entry(peer_id, request)` opens the substream, writes the request, reads the response, and times out after `REGISTRIES_REQUEST_TIMEOUT`.
+
+Tests: registry protocol wire round-trips for present and missing entries, frame-size rejection, field-name pinning; existing network runtime tests updated for the new receiver.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Stream accept path now carries a full `StreamDescriptor`.** `/auki/stream/0.1.0` re-exports `StreamDescriptor` from `auki-datatypes`; producer dispatch variants now use `descriptor: StreamDescriptor` instead of `info: AcceptInfo`, and consumer `StreamSubscription<T>` exposes `descriptor`. The runtime writes `StreamMessage::Accept(descriptor)` before frames and tests now assert the accepted descriptor includes the requested `sensor_id` plus spatial `frame_id` / `frame_hash` when present. This makes the live stream handshake self-describing enough for Park to resolve the producer's sensor, clock, and coordinate convention without a separate manifest. `cargo test -p auki-network --features swarm` passes.

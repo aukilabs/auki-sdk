@@ -16,6 +16,7 @@ members = [
     "crates/auki-domain",
     "crates/auki-domain-py",
     "crates/auki-registry",
+    "crates/auki-registry-py",
     "crates/auki-ros-adapter",
     "crates/auki-layout",
     "crates/auki-layout-py",

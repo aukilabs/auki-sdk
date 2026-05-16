@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 19:02 HKT, 2026
+
+**[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.
+
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py/changelog.md) — Python binding for registry-backed stream manifests.** `auki_domain.StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` now mirrors the Rust helper and returns an `auki_network.cluster.StreamManifest` ready for `StreamDecision.accept_*`. The binding preserves cross-`.so` PyO3 type identity by constructing the object through the imported `auki_network` module, with a Rust PyO3 test proving `accept_pointcloud` accepts the result. Tests: `cargo test -p auki-domain-py` passes; Python surface tests refreshed for the current ClusterManager API.

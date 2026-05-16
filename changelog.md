@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 19:02 HKT, 2026
+
+**Python producers can now declare conventions, not just consume existing registry files.** New `auki-registry-py` bindings expose Frame / Sensor / Clock Registry constructors, hashing, and read/write helpers, so Boosterapp can write `FrameRegistryEntry` files, pin `frame_hash` into spatial sensor entries, and hand those hashes to the stream-manifest builder. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
 **Python producers get the registry-backed stream-manifest helper.** `auki-domain-py` now exposes `StreamManifestBuilder.from_registry(...)`, returning a real `auki_network.cluster.StreamManifest` so Boosterapp-style stream providers can feed `StreamDecision.accept_*` without hand-filling `frame_id` + `frame_hash`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

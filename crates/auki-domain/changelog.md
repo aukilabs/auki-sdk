@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**`ClusterManager` wires registry exchange and typed fetch helpers.** Producers register their app root with `set_registry_app_root(app_root)`. The SDK's inbound `/auki/registries/0.0.1` handler reads existing `auki-registry` entries from that app root and replies with canonical JSON envelopes, or `entry: None` when the exact `(kind, id, hash)` is missing.
+
+Consumers get `fetch_sensor_entry(peer_id, sensor_id, sensor_hash)`, `fetch_clock_entry(peer_id, clock_id, clock_hash)`, and `fetch_frame_entry(peer_id, frame_id, frame_hash)`. Each helper calls `NetworkRuntime::request_registry_entry`, verifies the returned envelope's kind/id/hash, hashes `canonical_json.as_bytes()` before decoding, then checks the decoded typed entry id. `FetchRegistryEntryError` separates request failures, not-found, invalid envelopes, hash mismatches, invalid JSON, and stopped managers.
+
+Tests: unit coverage for app-root frame envelope serving and hash-mismatch rejection; ignored live integration test `cluster_peers_fetch_frame_registry_entry_over_libp2p` verifies a Park-like peer fetching a Booster-like peer's `FrameRegistryEntry` over libp2p.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: `auki-domain` READMEs and sprint now match `ClusterManager` as shipped.** The crate docs now present `ClusterManager` as the single app-facing owner for Discovery, cluster bootstrap, membership, Manager state, liveness checks, handoff, peer info, sensor catalogs, and typed stream access. The obsolete Greenland `DomainIdentity` / `init_domain` framing is demoted to stale-history context in the sprint, while the README and implementation map describe the current `ClusterTarget`, `ClusterMembership`, `DaemonInfo`, and public methods. No Rust behavior changed.

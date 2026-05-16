@@ -52,17 +52,22 @@ use auki_network::ParticipantInfo;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
+use auki_network::registries_protocol::{
+    RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
+};
+use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
 // at the top of this module).
 pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
-use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::info_protocol::InfoResponse;
+use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
     AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
-    RequestInfoError, RequestSensorsError, SendJoinRequestError, SensorsRequestEvent, SpawnError,
+    RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestSensorsError,
+    SendJoinRequestError, SensorsRequestEvent, SpawnError,
 };
 pub use auki_network::sensors_protocol::{SensorEntry, SensorsResponse};
 use auki_network::stream_runtime::StreamProvider;
@@ -70,6 +75,7 @@ use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -403,6 +409,11 @@ pub struct ClusterManager {
     /// `shutdown` via the same `Mutex<Option<_>>::take()` pattern
     /// as the other handler tasks.
     sensors_handler_task: Mutex<Option<JoinHandle<()>>>,
+    /// Task that drains inbound `/auki/registries/0.0.1` requests
+    /// from the runtime, reads the requested entry from
+    /// producer-local registry storage, and replies. Cancelled on
+    /// `shutdown`.
+    registry_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
     /// [`Self::set_sensor_catalog_provider`]; the inbound handler
@@ -410,6 +421,10 @@ pub struct ClusterManager {
     /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
     /// and the handler task can read concurrently.
     sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    /// Producer-local app root containing `registries/{sensors,clocks,frames}`.
+    /// `None` until the daemon calls [`Self::set_registry_app_root`];
+    /// inbound registry fetches return `entry: None` while unset.
+    registry_app_root: Arc<Mutex<Option<PathBuf>>>,
     /// Set to `true` by [`Self::shutdown`] before any teardown
     /// begins. Pub I/O methods (`admit_peer`,
     /// `fetch_participant_info`) check this and fast-fail with a
@@ -645,6 +660,7 @@ impl ClusterManager {
             membership_events_rx,
             info_events_rx,
             sensors_events_rx,
+            registry_events_rx,
         ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
 
         // 4. Manager-side Discovery heartbeat tick.
@@ -719,6 +735,15 @@ impl ClusterManager {
             sensor_catalog_provider.clone(),
         )));
 
+        // 10. Drain inbound /auki/registries/0.0.1 requests. Read
+        //     the exact registry entry from app-root storage if the
+        //     daemon has registered an app root.
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
+            registry_events_rx,
+            registry_app_root.clone(),
+        )));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -736,7 +761,9 @@ impl ClusterManager {
             membership_handler_task,
             info_handler_task,
             sensors_handler_task,
+            registry_handler_task,
             sensor_catalog_provider,
+            registry_app_root,
             stopped: AtomicBool::new(false),
         })
     }
@@ -870,7 +897,10 @@ impl ClusterManager {
         &self,
         peer_id: PeerId,
         request: auki_network::stream_protocol::StreamRequest,
-    ) -> Result<auki_network::stream_runtime::StreamSubscription<T>, auki_network::stream_runtime::OpenStreamError>
+    ) -> Result<
+        auki_network::stream_runtime::StreamSubscription<T>,
+        auki_network::stream_runtime::OpenStreamError,
+    >
     where
         T: prost::Message + Default + Send + 'static,
     {
@@ -891,7 +921,11 @@ impl ClusterManager {
     /// over `/auki/info/0.0.1`.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self.session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let session_now_ns = self
+            .session_started
+            .elapsed()
+            .as_nanos()
+            .min(u64::MAX as u128) as u64;
 
         // Lazy `cluster_joined_at_ns`: set on first observation of
         // any peer other than ourselves (per ansuz D3 the local peer
@@ -968,6 +1002,21 @@ impl ClusterManager {
             .expect("sensor_catalog_provider lock") = Some(provider);
     }
 
+    /// Register (or replace) the producer-local app root used to
+    /// serve `/auki/registries/0.0.1` requests. The SDK reads existing
+    /// registry files from this app root via `auki-registry` and
+    /// returns canonical JSON entries to cluster peers.
+    ///
+    /// Inbound registry requests received before this call answer with
+    /// `entry: None`, which means "this peer does not have that exact
+    /// registry entry" from the consumer's perspective.
+    pub fn set_registry_app_root(&self, app_root: impl Into<PathBuf>) {
+        *self
+            .registry_app_root
+            .lock()
+            .expect("registry_app_root lock") = Some(app_root.into());
+    }
+
     /// Fetch a cluster peer's current sensor catalog over the
     /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
     /// `ClusterManager` snapshots its registered
@@ -985,6 +1034,107 @@ impl ClusterManager {
     ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
         let response = self.runtime.request_sensors_catalog(peer_id).await?;
         Ok(response)
+    }
+
+    /// Fetch and verify a peer's `SensorRegistryEntry` by exact
+    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// The SDK verifies the returned canonical JSON bytes hash to the
+    /// requested hash before decoding, then checks the decoded
+    /// `sensor_id` matches the requested id.
+    pub async fn fetch_sensor_entry(
+        &self,
+        peer_id: PeerId,
+        sensor_id: impl Into<String>,
+        sensor_hash: impl Into<String>,
+    ) -> Result<SensorRegistryEntry, FetchRegistryEntryError> {
+        let id = sensor_id.into();
+        let hash = sensor_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Sensor, id.clone(), hash.clone())
+            .await?;
+        let entry: SensorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.sensor_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded sensor_id mismatch: expected {:?}, found {:?}",
+                id, entry.sensor_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `ClockRegistryEntry` by exact
+    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
+    pub async fn fetch_clock_entry(
+        &self,
+        peer_id: PeerId,
+        clock_id: impl Into<String>,
+        clock_hash: impl Into<String>,
+    ) -> Result<ClockRegistryEntry, FetchRegistryEntryError> {
+        let id = clock_id.into();
+        let hash = clock_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Clock, id.clone(), hash.clone())
+            .await?;
+        let entry: ClockRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.clock_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded clock_id mismatch: expected {:?}, found {:?}",
+                id, entry.clock_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `FrameRegistryEntry` by exact
+    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
+    pub async fn fetch_frame_entry(
+        &self,
+        peer_id: PeerId,
+        frame_id: impl Into<String>,
+        frame_hash: impl Into<String>,
+    ) -> Result<FrameRegistryEntry, FetchRegistryEntryError> {
+        let id = frame_id.into();
+        let hash = frame_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Frame, id.clone(), hash.clone())
+            .await?;
+        let entry: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.frame_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded frame_id mismatch: expected {:?}, found {:?}",
+                id, entry.frame_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    async fn fetch_registry_envelope(
+        &self,
+        peer_id: PeerId,
+        kind: RegistryKind,
+        id: String,
+        hash: String,
+    ) -> Result<RegistryEntryEnvelope, FetchRegistryEntryError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FetchRegistryEntryError::Stopped);
+        }
+        let response = self
+            .runtime
+            .request_registry_entry(
+                peer_id,
+                RegistryRequest {
+                    kind,
+                    id: id.clone(),
+                    hash: hash.clone(),
+                },
+            )
+            .await?;
+        let Some(envelope) = response.entry else {
+            return Err(FetchRegistryEntryError::NotFound { kind, id, hash });
+        };
+        verify_registry_envelope(&envelope, kind, &id, &hash)?;
+        Ok(envelope)
     }
 
     /// Join an existing cluster by talking to its Manager. Lists
@@ -1040,6 +1190,7 @@ impl ClusterManager {
             membership_events_rx,
             info_events_rx,
             sensors_events_rx,
+            registry_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![AllowedPeer {
@@ -1061,9 +1212,9 @@ impl ClusterManager {
                 break;
             }
             if std::time::Instant::now() >= connect_deadline {
-                return Err(JoinClusterError::SendJoin(
-                    SendJoinRequestError::Timeout(Duration::from_secs(10)),
-                ));
+                return Err(JoinClusterError::SendJoin(SendJoinRequestError::Timeout(
+                    Duration::from_secs(10),
+                )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1174,6 +1325,15 @@ impl ClusterManager {
             sensor_catalog_provider.clone(),
         )));
 
+        // 11. Drain inbound /auki/registries/0.0.1 requests. Read
+        //     the exact registry entry from app-root storage if the
+        //     daemon has registered an app root.
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
+            registry_events_rx,
+            registry_app_root.clone(),
+        )));
+
         Ok(Self {
             cluster_name,
             local_peer_id,
@@ -1191,7 +1351,9 @@ impl ClusterManager {
             membership_handler_task,
             info_handler_task,
             sensors_handler_task,
+            registry_handler_task,
             sensor_catalog_provider,
+            registry_app_root,
             stopped: AtomicBool::new(false),
         })
     }
@@ -1234,7 +1396,12 @@ impl ClusterManager {
 
         // 1. Cancel background tasks FIRST so we stop touching
         //    Discovery / membership between teardown steps.
-        if let Some(task) = self.liveness_check_task.lock().expect("liveness_check_task lock").take() {
+        if let Some(task) = self
+            .liveness_check_task
+            .lock()
+            .expect("liveness_check_task lock")
+            .take()
+        {
             task.abort();
         }
         if let Some(task) = self
@@ -1277,19 +1444,21 @@ impl ClusterManager {
         {
             task.abort();
         }
+        if let Some(task) = self
+            .registry_handler_task
+            .lock()
+            .expect("registry_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
 
         // 2. Deregister from Discovery only if we're the last
         //    member. Otherwise leave the cluster alive for the
         //    survivors' election + handoff (see fn doc).
         let was_manager =
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let am_last = self
-            .membership
-            .lock()
-            .expect("membership lock")
-            .peers
-            .len()
-            <= 1;
+        let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
         let result = if was_manager && am_last {
             self.discovery.deregister(&self.cluster_name).await
         } else {
@@ -1359,8 +1528,7 @@ fn spawn_liveness_handler(
             match evt {
                 PeerLivenessEvent::Connected { .. } => { /* informational */ }
                 PeerLivenessEvent::Lost { peer_id: lost_pid } => {
-                    let current_manager =
-                        *manager_peer_id.lock().expect("manager_peer_id lock");
+                    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
                     let am_manager = current_manager == local_peer_id;
 
                     if !am_manager && lost_pid == current_manager {
@@ -1376,23 +1544,15 @@ fn spawn_liveness_handler(
                         let connected = runtime.connected_peers();
                         let membership_snapshot =
                             membership.lock().expect("membership lock").clone();
-                        let winner = elect_successor(
-                            &membership_snapshot,
-                            local_peer_id,
-                            &connected,
-                        );
+                        let winner =
+                            elect_successor(&membership_snapshot, local_peer_id, &connected);
                         if winner == Some(local_peer_id) {
                             // Become Manager.
-                            *manager_peer_id.lock().expect("manager_peer_id lock") =
-                                local_peer_id;
+                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
 
                             // Tell Discovery about the rotation.
                             if let Err(e) = discovery
-                                .rotate_manager(
-                                    &cluster_name,
-                                    &local_peer_id,
-                                    &local_multiaddrs,
-                                )
+                                .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
                                 .await
                             {
                                 eprintln!(
@@ -1419,8 +1579,7 @@ fn spawn_liveness_handler(
                             // push the updated allow-list. (We won
                             // the election, so we own membership now.)
                             let new_allow_list = {
-                                let mut m =
-                                    membership.lock().expect("membership lock");
+                                let mut m = membership.lock().expect("membership lock");
                                 m.peers.retain(|p| p.peer_id != lost_pid);
                                 m.peers
                                     .iter()
@@ -1431,8 +1590,7 @@ fn spawn_liveness_handler(
                                     })
                                     .collect::<Vec<_>>()
                             };
-                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await
-                            {
+                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
                                 eprintln!(
                                     "auki-domain: post-election set_allowed_peers \
                                     failed for {cluster_name:?}: {e}"
@@ -1520,9 +1678,7 @@ fn spawn_membership_handler(
             let parsed: ClusterMembership = match serde_json::from_str(&update.membership_json) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: membership gossip from {peer}: invalid JSON: {e}"
-                    );
+                    eprintln!("auki-domain: membership gossip from {peer}: invalid JSON: {e}");
                     continue;
                 }
             };
@@ -1568,9 +1724,7 @@ fn broadcast_current_membership(
         match serde_json::to_string(&*m) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "auki-domain: serializing membership for gossip failed: {e}"
-                );
+                eprintln!("auki-domain: serializing membership for gossip failed: {e}");
                 return;
             }
         }
@@ -1612,9 +1766,7 @@ fn spawn_info_handler(
             let json = match serde_json::to_string(&info) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "auki-domain: info handler for {peer}: serialize failed: {e}"
-                    );
+                    eprintln!("auki-domain: info handler for {peer}: serialize failed: {e}");
                     continue;
                 }
             };
@@ -1696,6 +1848,78 @@ pub enum FetchSensorsCatalogError {
     Request(#[from] RequestSensorsError),
 }
 
+/// Errors from `ClusterManager::fetch_*_entry`.
+#[derive(Debug, Error)]
+pub enum FetchRegistryEntryError {
+    /// libp2p / wire / timeout failure during the request.
+    #[error("request_registry_entry: {0}")]
+    Request(#[from] RequestRegistryError),
+    /// The peer replied cleanly but does not have the exact entry.
+    #[error("registry entry not found: kind={kind} id={id:?} hash={hash}")]
+    NotFound {
+        /// Registry namespace.
+        kind: RegistryKind,
+        /// Requested registry id.
+        id: String,
+        /// Requested registry hash.
+        hash: String,
+    },
+    /// Returned envelope did not match the requested kind/id/hash
+    /// contract.
+    #[error("invalid registry envelope: {0}")]
+    InvalidEnvelope(String),
+    /// Returned canonical JSON bytes did not hash to the requested
+    /// hash.
+    #[error("registry hash mismatch: expected {expected}, got {actual}")]
+    HashMismatch {
+        /// Requested hash.
+        expected: String,
+        /// Hash computed from returned `canonical_json` bytes.
+        actual: String,
+    },
+    /// Returned canonical JSON could not be decoded into the requested
+    /// typed registry entry.
+    #[error("invalid registry JSON from peer: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+    /// [`ClusterManager::shutdown`] has been called.
+    #[error("ClusterManager has been shut down")]
+    Stopped,
+}
+
+fn verify_registry_envelope(
+    envelope: &RegistryEntryEnvelope,
+    expected_kind: RegistryKind,
+    expected_id: &str,
+    expected_hash: &str,
+) -> Result<(), FetchRegistryEntryError> {
+    if envelope.kind != expected_kind {
+        return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+            "kind mismatch: expected {}, found {}",
+            expected_kind, envelope.kind
+        )));
+    }
+    if envelope.id != expected_id {
+        return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+            "id mismatch: expected {:?}, found {:?}",
+            expected_id, envelope.id
+        )));
+    }
+    if envelope.hash != expected_hash {
+        return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+            "hash field mismatch: expected {}, found {}",
+            expected_hash, envelope.hash
+        )));
+    }
+    let actual_hash = auki_hash::hash_jcs_bytes(envelope.canonical_json.as_bytes());
+    if actual_hash != expected_hash {
+        return Err(FetchRegistryEntryError::HashMismatch {
+            expected: expected_hash.to_string(),
+            actual: actual_hash,
+        });
+    }
+    Ok(())
+}
+
 /// Spawn a task that drains inbound `/auki/sensors/0.0.1` requests
 /// from `rx` and replies on each `ack` with a freshly-snapshotted
 /// [`SensorsResponse`]. If no [`SensorCatalogProvider`] is
@@ -1720,6 +1944,96 @@ fn spawn_sensors_handler(
             let _ = ack.send(SensorsResponse { sensors });
         }
     })
+}
+
+/// Spawn a task that drains inbound `/auki/registries/0.0.1` requests
+/// from `rx` and replies with the requested canonical JSON registry
+/// entry if it exists under the registered app root.
+///
+/// `entry: None` is the v0 not-found response: the peer understood
+/// the protocol but does not have that exact `(kind, id, hash)` entry.
+fn spawn_registry_handler(
+    mut rx: mpsc::Receiver<RegistryRequestEvent>,
+    app_root: Arc<Mutex<Option<PathBuf>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(RegistryRequestEvent { peer, request, ack }) = rx.recv().await {
+            let root = app_root.lock().expect("registry_app_root lock").clone();
+            let entry = match root {
+                Some(root) => match read_registry_envelope(&root, &request) {
+                    Ok(entry) => entry,
+                    Err(e) => {
+                        eprintln!(
+                            "auki-domain: registry handler for {peer}: {:?} {:?}@{} failed: {e}",
+                            request.kind, request.id, request.hash
+                        );
+                        None
+                    }
+                },
+                None => None,
+            };
+            let _ = ack.send(RegistryResponse { entry });
+        }
+    })
+}
+
+fn read_registry_envelope(
+    app_root: &std::path::Path,
+    request: &RegistryRequest,
+) -> Result<Option<RegistryEntryEnvelope>, auki_registry::Error> {
+    match request.kind {
+        RegistryKind::Sensor => {
+            let Some(entry) = auki_registry::read_sensor(app_root, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_sensor(entry)))
+        }
+        RegistryKind::Clock => {
+            let Some(entry) = auki_registry::read_clock(app_root, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_clock(entry)))
+        }
+        RegistryKind::Frame => {
+            let Some(entry) = auki_registry::read_frame(app_root, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_frame(entry)))
+        }
+    }
+}
+
+fn envelope_for_sensor(entry: SensorRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Sensor,
+        id: entry.sensor_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_clock(entry: ClockRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Clock,
+        id: entry.clock_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_frame(entry: FrameRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Frame,
+        id: entry.frame_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
 }
 
 /// Cluster-internal election (SDK-T6). Deterministic: sort
@@ -1794,11 +2108,7 @@ fn spawn_join_handler(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            let JoinEvent {
-                peer,
-                request,
-                ack,
-            } = event;
+            let JoinEvent { peer, request, ack } = event;
 
             // Manager check.
             let am_manager =
@@ -1903,6 +2213,47 @@ mod tests {
         // Hagall rename (was 3s / 10s under the original
         // aukilabs/discovery#5 contract).
         assert_eq!(LIVENESS_CHECK_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn registry_envelope_reads_canonical_frame_from_app_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = FrameRegistryEntry::ros_optical("K1-FAKE/head_cam_points");
+        let hash = auki_registry::write_frame(dir.path(), &entry)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let envelope = read_registry_envelope(
+            dir.path(),
+            &RegistryRequest {
+                kind: RegistryKind::Frame,
+                id: entry.frame_id.clone(),
+                hash: hash.clone(),
+            },
+        )
+        .unwrap()
+        .expect("entry exists");
+
+        assert_eq!(envelope.kind, RegistryKind::Frame);
+        assert_eq!(envelope.id, entry.frame_id);
+        assert_eq!(envelope.hash, hash);
+        verify_registry_envelope(&envelope, RegistryKind::Frame, &envelope.id, &hash).unwrap();
+        let decoded: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn registry_envelope_hash_mismatch_is_rejected_before_decode() {
+        let envelope = RegistryEntryEnvelope {
+            kind: RegistryKind::Frame,
+            id: "frame".into(),
+            hash: "deadbeef".into(),
+            canonical_json: r#"{"frame_id":"frame"}"#.into(),
+        };
+        let err = verify_registry_envelope(&envelope, RegistryKind::Frame, "frame", "deadbeef")
+            .unwrap_err();
+        assert!(matches!(err, FetchRegistryEntryError::HashMismatch { .. }));
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

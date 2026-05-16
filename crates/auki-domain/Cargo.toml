@@ -9,10 +9,12 @@ description = "Cluster lifecycle for the Auki SDK — cluster membership documen
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
+auki-hash = { path = "../auki-hash" }
 # `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
 # the cluster manager drives; `discovery_client` brings the HTTP
 # client. Both required for `ClusterManager::create_cluster`.
 auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+auki-registry = { path = "../auki-registry" }
 # `ClusterMembership` carries libp2p `PeerId`s on the wire; the
 # `serde` feature pins their canonical string form so the JSON
 # document is interoperable across languages.
@@ -36,6 +38,7 @@ prost = "0.13"
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+tempfile = "3"
 # Integration tests need to drive a Swarm + listen for events directly
 # (waiting for the OS-chosen TCP port to materialize before calling
 # `ClusterManager::create_cluster`). Matches `auki-network`'s libp2p

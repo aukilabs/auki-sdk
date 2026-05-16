@@ -18,10 +18,12 @@
 pub mod cluster_manager;
 pub mod cluster_membership;
 
+pub use auki_network::registries_protocol::RegistryKind;
+pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiscoveryClientError, DiscoveryClusterEntry, FetchParticipantInfoError,
-    FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL, SensorCatalogProvider,
-    SensorEntry, SensorsResponse, elect_successor,
+    FetchRegistryEntryError, FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL,
+    SensorCatalogProvider, SensorEntry, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};

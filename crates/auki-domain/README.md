@@ -42,7 +42,7 @@ Operator-driven UIs can call the explicit primitives:
 - The local peer id, local advertised multiaddrs, current Manager peer id, and Manager/member role state.
 - A `NetworkRuntime` that drives libp2p.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
-- Background tasks for join admission, peer liveness, membership gossip, info requests, sensor catalog requests, and Manager liveness checks.
+- Background tasks for join admission, peer liveness, membership gossip, info requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:
 
@@ -55,6 +55,8 @@ Useful methods:
 | `fetch_participant_info(peer_id)` | Fetch a peer's `ParticipantInfo` over `/auki/info/0.0.1` |
 | `set_sensor_catalog_provider(provider)` | Install the producer's current sensor catalog source |
 | `fetch_sensors_catalog(peer_id)` | Fetch a peer's sensor catalog over `/auki/sensors/0.0.1` |
+| `set_registry_app_root(app_root)` | Install the producer's app root for serving registry entries |
+| `fetch_sensor_entry` / `fetch_clock_entry` / `fetch_frame_entry` | Fetch and verify hash-pinned registry entries over `/auki/registries/0.0.1` |
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |
 | `shutdown()` | Idempotent shared-reference shutdown |
 

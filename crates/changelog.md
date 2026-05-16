@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/registries/0.0.1` registry exchange v0.** Cluster peers can fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` over libp2p. Producers serve canonical JSON from existing app-root registries via `ClusterManager::set_registry_app_root`; consumers call `fetch_sensor_entry`, `fetch_clock_entry`, or `fetch_frame_entry`, with SDK-side hash verification before typed decode. Not-found is explicit and distinct from transport/protocol failure.
+
 ### Nils's codex · May 16, 11:34 HKT, 2026
 
 **[`auki-geometry`](auki-geometry/changelog.md) — new pure spatial-math crate.** Phase 1 ships convention conversion over existing registry + datatype contracts: `meters_per_unit`, `axis_convention_matrix`, `convention_matrix`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, and `convert_pose_convention`. Public model is direct declared convention A -> declared convention B; no exposed canonical Auki frame. The crate rejects handedness/axis determinant mismatches and keeps full pose-log graph/path `convert_pose` as future work.

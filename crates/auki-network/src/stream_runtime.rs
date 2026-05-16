@@ -44,9 +44,8 @@
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
     AcceptInfo, AudioFrame, DeclineReason, EndReason, Frame, JointEncodersFrame, JpegFrame,
-    PointCloudFrame, STREAM_PROTOCOL,
-    StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message,
-    write_message,
+    PointCloudFrame, STREAM_PROTOCOL, StreamMessage, StreamProtocolError, StreamRequest,
+    read_message, stream_message, write_message,
 };
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
@@ -82,8 +81,7 @@ pub struct ProducerFrame<T> {
 /// on the wire. `None` (stream returns) is mapped to
 /// [`EndReason::SourceEnded`]. The SDK-level shutdown / session-change
 /// paths can override either with their own [`EndReason`].
-pub type SourceStream<T> =
-    Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
+pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<ProducerFrame<T>, String>> + Send>>;
 
 /// Producer's accept/decline decision for a single inbound request.
 /// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
@@ -163,8 +161,7 @@ pub enum StreamDispatch {
 ///
 /// `Send + Sync` because the runtime task holds the callable in an
 /// `Arc` shared across spawned per-substream tasks.
-pub type StreamProvider =
-    Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>;
+pub type StreamProvider = Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>;
 
 /// Convenience constructor for consumer-only nodes (Park, analytics
 /// tools, future Sentinel-as-consumer) that don't expose any sensors.
@@ -316,16 +313,12 @@ impl NetworkRuntime {
             .await
             .map_err(OpenStreamError::Protocol)?;
 
-        let reply = match tokio::time::timeout(
-            OPEN_STREAM_TIMEOUT,
-            read_message(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(OpenStreamError::Timeout(OPEN_STREAM_TIMEOUT)),
-            Ok(Err(e)) => return Err(OpenStreamError::Protocol(e)),
-            Ok(Ok(m)) => m,
-        };
+        let reply =
+            match tokio::time::timeout(OPEN_STREAM_TIMEOUT, read_message(&mut substream)).await {
+                Err(_) => return Err(OpenStreamError::Timeout(OPEN_STREAM_TIMEOUT)),
+                Ok(Err(e)) => return Err(OpenStreamError::Protocol(e)),
+                Ok(Ok(m)) => m,
+            };
 
         let info = match reply.variant {
             Some(stream_message::Variant::Accept(info)) => info,
@@ -336,11 +329,9 @@ impl NetworkRuntime {
                 // Producer wrote something other than Accept / Decline as
                 // its first reply, or the envelope was empty. Wire-
                 // protocol violation; treat as a protocol error.
-                return Err(OpenStreamError::Protocol(
-                    StreamProtocolError::Decode(prost::DecodeError::new(
-                        "expected Accept or Decline as first reply",
-                    )),
-                ));
+                return Err(OpenStreamError::Protocol(StreamProtocolError::Decode(
+                    prost::DecodeError::new("expected Accept or Decline as first reply"),
+                )));
             }
         };
 
@@ -508,9 +499,7 @@ async fn consumer_reader_task<T>(
     loop {
         let msg = match read_message(&mut substream).await {
             Ok(m) => m,
-            Err(StreamProtocolError::Io(e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
+            Err(StreamProtocolError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 // Substream closed without an explicit EndOfStream —
                 // grimsby D5b's "implicit via libp2p disconnect" path.
                 let _ = tx.send(Err(StreamError::ConnectionLost)).await;
@@ -638,15 +627,21 @@ mod tests {
             let frames = vec![
                 Ok(ProducerFrame {
                     timestamp_ns: 1_000,
-                    payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x01] },
+                    payload: JpegFrame {
+                        bytes: vec![0xff, 0xd8, 0x01],
+                    },
                 }),
                 Ok(ProducerFrame {
                     timestamp_ns: 2_000,
-                    payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x02] },
+                    payload: JpegFrame {
+                        bytes: vec![0xff, 0xd8, 0x02],
+                    },
                 }),
                 Ok(ProducerFrame {
                     timestamp_ns: 3_000,
-                    payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x03] },
+                    payload: JpegFrame {
+                        bytes: vec![0xff, 0xd8, 0x03],
+                    },
                 }),
             ];
             StreamDispatch::AcceptJpeg {
@@ -781,7 +776,9 @@ mod tests {
                 },
                 source: Box::pin(stream::iter(vec![Ok(ProducerFrame {
                     timestamp_ns: 1,
-                    payload: JpegFrame { bytes: vec![0xff, 0xd8, 0xab] },
+                    payload: JpegFrame {
+                        bytes: vec![0xff, 0xd8, 0xab],
+                    },
                 })])),
             },
             "pointcloud" => StreamDispatch::AcceptPointCloud {
@@ -792,7 +789,9 @@ mod tests {
                 },
                 source: Box::pin(stream::iter(vec![Ok(ProducerFrame {
                     timestamp_ns: 1,
-                    payload: PointCloudFrame { bytes: vec![0xCD, 0xCD, 0xCD] },
+                    payload: PointCloudFrame {
+                        bytes: vec![0xCD, 0xCD, 0xCD],
+                    },
                 })])),
             },
             _ => StreamDispatch::Decline {
@@ -826,26 +825,25 @@ mod tests {
         // Provider that PANICS if invoked — proves the substream never
         // reached the per-substream handler.
         let panicking_provider: StreamProvider = Arc::new(|_peer, _req| {
-            panic!(
-                "StreamProvider must not be invoked for non-cluster peer — gate failed"
-            )
+            panic!("StreamProvider must not be invoked for non-cluster peer — gate failed")
         });
 
         // Producer has empty allow-list — C is unknown to P.
-        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p) =
+        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p, _registry_p) =
             crate::network_runtime::NetworkRuntime::spawn(swarm_p, vec![], panicking_provider)
                 .expect("producer spawn");
 
         // Consumer has P in its allow-list, so it auto-dials.
-        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c) = crate::network_runtime::NetworkRuntime::spawn(
-            swarm_c,
-            vec![AllowedPeer {
-                peer_id: id_p.peer_id(),
-                multiaddrs: vec![addr_p],
-            }],
-            decline_all_streams(),
-        )
-        .expect("consumer spawn");
+        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c, _registry_c) =
+            crate::network_runtime::NetworkRuntime::spawn(
+                swarm_c,
+                vec![AllowedPeer {
+                    peer_id: id_p.peer_id(),
+                    multiaddrs: vec![addr_p],
+                }],
+                decline_all_streams(),
+            )
+            .expect("consumer spawn");
 
         // Wait for libp2p connection to complete (connection-layer is
         // open by default; this is just confirming the auto-dial worked).
@@ -870,7 +868,9 @@ mod tests {
             Duration::from_secs(35),
             consumer.open_stream::<JpegFrame>(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "anything".into() },
+                StreamRequest {
+                    sensor_id: "anything".into(),
+                },
             ),
         )
         .await
@@ -885,9 +885,9 @@ mod tests {
                  advertise a `NotInCluster` reason to outsiders (probe signal). \
                  Got Declined(reason={reason:?})"
             ),
-            Ok(_) => panic!(
-                "expected silent drop, but open_stream returned Ok — the gate is broken"
-            ),
+            Ok(_) => {
+                panic!("expected silent drop, but open_stream returned Ok — the gate is broken")
+            }
         }
 
         producer.shutdown();
@@ -907,24 +907,26 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p) = crate::network_runtime::NetworkRuntime::spawn(
-            swarm_p,
-            vec![AllowedPeer {
-                peer_id: id_c.peer_id(),
-                multiaddrs: vec![addr_c],
-            }],
-            jpeg_provider_yielding_three_frames(),
-        )
-        .expect("producer spawn");
-        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c) = crate::network_runtime::NetworkRuntime::spawn(
-            swarm_c,
-            vec![AllowedPeer {
-                peer_id: id_p.peer_id(),
-                multiaddrs: vec![addr_p],
-            }],
-            decline_all_streams(),
-        )
-        .expect("consumer spawn");
+        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p, _registry_p) =
+            crate::network_runtime::NetworkRuntime::spawn(
+                swarm_p,
+                vec![AllowedPeer {
+                    peer_id: id_c.peer_id(),
+                    multiaddrs: vec![addr_c],
+                }],
+                jpeg_provider_yielding_three_frames(),
+            )
+            .expect("producer spawn");
+        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c, _registry_c) =
+            crate::network_runtime::NetworkRuntime::spawn(
+                swarm_c,
+                vec![AllowedPeer {
+                    peer_id: id_p.peer_id(),
+                    multiaddrs: vec![addr_p],
+                }],
+                decline_all_streams(),
+            )
+            .expect("consumer spawn");
 
         let connected = poll_until(
             || consumer.connected_peers().contains(&id_p.peer_id()),
@@ -936,7 +938,9 @@ mod tests {
         let sub: StreamSubscription<JpegFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "test/cam".into() },
+                StreamRequest {
+                    sensor_id: "test/cam".into(),
+                },
             )
             .await
             .expect("open_stream should succeed");
@@ -960,7 +964,11 @@ mod tests {
         assert_eq!(f2.timestamp_ns, 3_000);
         assert_eq!(f2.payload.bytes, vec![0xff, 0xd8, 0x03]);
 
-        let end = frames.next().await.unwrap().expect_err("expected terminator");
+        let end = frames
+            .next()
+            .await
+            .unwrap()
+            .expect_err("expected terminator");
         match end {
             StreamError::EndOfStream { reason }
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
@@ -982,15 +990,21 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             jpeg_provider_declines_unknown(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1005,7 +1019,9 @@ mod tests {
         let result: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "does-not-exist".into() },
+                StreamRequest {
+                    sensor_id: "does-not-exist".into(),
+                },
             )
             .await;
 
@@ -1030,15 +1046,21 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             jpeg_provider_yields_then_errors(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1051,7 +1073,12 @@ mod tests {
         assert!(connected);
 
         let sub: StreamSubscription<JpegFrame> = consumer
-            .open_stream(id_p.peer_id(), StreamRequest { sensor_id: "any".into() })
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "any".into(),
+                },
+            )
             .await
             .expect("open_stream");
         let mut frames = sub.frames;
@@ -1059,7 +1086,11 @@ mod tests {
         let f0 = frames.next().await.unwrap().expect("first frame ok");
         assert_eq!(f0.seq, 0);
 
-        let end = frames.next().await.unwrap().expect_err("expected error end");
+        let end = frames
+            .next()
+            .await
+            .unwrap()
+            .expect_err("expected error end");
         match end {
             StreamError::EndOfStream { reason } => match reason.kind {
                 Some(end_reason::Kind::ProducerError(end_reason::ProducerError { detail })) => {
@@ -1091,7 +1122,9 @@ mod tests {
         let provider: StreamProvider = Arc::new(|_peer, _req| {
             let first = stream::iter(vec![Ok(ProducerFrame {
                 timestamp_ns: 1_000,
-                payload: JpegFrame { bytes: vec![0xff, 0xd8, 0x99] },
+                payload: JpegFrame {
+                    bytes: vec![0xff, 0xd8, 0x99],
+                },
             })]);
             let then_pending = stream::pending::<Result<ProducerFrame<JpegFrame>, String>>();
             StreamDispatch::AcceptJpeg {
@@ -1104,15 +1137,21 @@ mod tests {
             }
         });
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             provider,
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1125,7 +1164,12 @@ mod tests {
         assert!(connected);
 
         let sub: StreamSubscription<JpegFrame> = consumer
-            .open_stream(id_p.peer_id(), StreamRequest { sensor_id: "any".into() })
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    sensor_id: "any".into(),
+                },
+            )
             .await
             .expect("open_stream");
         let mut frames = sub.frames;
@@ -1164,7 +1208,7 @@ mod tests {
 
         let unreachable_addr: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/1".parse().unwrap();
 
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_unreachable.peer_id(),
@@ -1178,7 +1222,9 @@ mod tests {
             Duration::from_secs(35),
             consumer.open_stream::<JpegFrame>(
                 id_unreachable.peer_id(),
-                StreamRequest { sensor_id: "any".into() },
+                StreamRequest {
+                    sensor_id: "any".into(),
+                },
             ),
         )
         .await
@@ -1205,15 +1251,21 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-pc-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-pc-consumer/0").await;
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             pointcloud_provider_yielding_three_frames(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1228,7 +1280,9 @@ mod tests {
         let sub: StreamSubscription<PointCloudFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "test/pc".into() },
+                StreamRequest {
+                    sensor_id: "test/pc".into(),
+                },
             )
             .await
             .expect("open_stream<PointCloudFrame>");
@@ -1246,7 +1300,11 @@ mod tests {
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
 
-        let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
+        let end = frames
+            .next()
+            .await
+            .unwrap()
+            .expect_err("expected EndOfStream");
         match end {
             StreamError::EndOfStream { reason }
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
@@ -1269,15 +1327,21 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-audio-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-audio-consumer/0").await;
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             audio_provider_yielding_three_frames(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1292,7 +1356,9 @@ mod tests {
         let sub: StreamSubscription<AudioFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "test/audio".into() },
+                StreamRequest {
+                    sensor_id: "test/audio".into(),
+                },
             )
             .await
             .expect("open_stream<AudioFrame>");
@@ -1310,7 +1376,11 @@ mod tests {
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.payload.data, vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02]);
 
-        let end = frames.next().await.unwrap().expect_err("expected EndOfStream");
+        let end = frames
+            .next()
+            .await
+            .unwrap()
+            .expect_err("expected EndOfStream");
         match end {
             StreamError::EndOfStream { reason }
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
@@ -1333,15 +1403,21 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-multi-p/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-multi-c/0").await;
 
-        let (producer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
-            vec![AllowedPeer { peer_id: id_c.peer_id(), multiaddrs: vec![addr_c] }],
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
             multi_t_provider(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
-            vec![AllowedPeer { peer_id: id_p.peer_id(), multiaddrs: vec![addr_p] }],
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
             decline_all_streams(),
         )
         .expect("consumer spawn");
@@ -1357,7 +1433,9 @@ mod tests {
         let sub_jpeg: StreamSubscription<JpegFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "camera".into() },
+                StreamRequest {
+                    sensor_id: "camera".into(),
+                },
             )
             .await
             .expect("open_stream<JpegFrame> camera");
@@ -1370,7 +1448,9 @@ mod tests {
         let sub_pc: StreamSubscription<PointCloudFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "pointcloud".into() },
+                StreamRequest {
+                    sensor_id: "pointcloud".into(),
+                },
             )
             .await
             .expect("open_stream<PointCloudFrame> pointcloud");
@@ -1383,7 +1463,9 @@ mod tests {
         let unknown: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
-                StreamRequest { sensor_id: "no-such-sensor".into() },
+                StreamRequest {
+                    sensor_id: "no-such-sensor".into(),
+                },
             )
             .await;
         match unknown {
@@ -1400,8 +1482,12 @@ mod tests {
     #[test]
     fn decline_all_streams_returns_sensor_not_found() {
         let provider: StreamProvider = decline_all_streams();
-        let req = StreamRequest { sensor_id: "anything".into() };
-        let any_peer = libp2p_identity::Keypair::generate_ed25519().public().to_peer_id();
+        let req = StreamRequest {
+            sensor_id: "anything".into(),
+        };
+        let any_peer = libp2p_identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
         match provider(any_peer, req) {
             StreamDispatch::Decline { reason }
                 if matches!(reason.kind, Some(decline_reason::Kind::SensorNotFound(_))) => {}
@@ -1409,4 +1495,3 @@ mod tests {
         }
     }
 }
-

@@ -35,6 +35,10 @@ use crate::heartbeat_protocol::{
     HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, HEARTBEAT_TIMEOUT, Heartbeat, read_heartbeat,
     write_heartbeat,
 };
+use crate::info_protocol::{
+    INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
+    read_info_response, write_info_request, write_info_response,
+};
 use crate::join_protocol::{
     JOIN_PROTOCOL, JoinProtocolError, JoinRequest, JoinResponse, read_join_request,
     read_join_response, write_join_request, write_join_response,
@@ -42,26 +46,26 @@ use crate::join_protocol::{
 use crate::membership_protocol::{
     MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
 };
-use crate::info_protocol::{
-    INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
-    read_info_response, write_info_request, write_info_response,
+use crate::registries_protocol::{
+    REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
+    read_registry_request, read_registry_response, write_registry_request, write_registry_response,
 };
 use crate::sensors_protocol::{
     SENSORS_PROTOCOL, SensorsProtocolError, SensorsRequest, SensorsResponse, read_sensors_request,
     read_sensors_response, write_sensors_request, write_sensors_response,
+};
+#[cfg(test)]
+use crate::{
+    PeerIdentity,
+    swarm::{SwarmConfig, build_swarm},
 };
 use crate::{
     stream_protocol::STREAM_PROTOCOL,
     stream_runtime::{StreamProvider, handle_inbound_substream},
     swarm::{self, Behaviour, BehaviourEvent},
 };
-#[cfg(test)]
-use crate::{PeerIdentity, swarm::{SwarmConfig, build_swarm}};
 use futures::StreamExt;
-use libp2p::{
-    Multiaddr, PeerId, StreamProtocol, Swarm,
-    swarm::SwarmEvent,
-};
+use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, swarm::SwarmEvent};
 use libp2p_stream::Control;
 use std::{
     collections::{HashMap, HashSet},
@@ -292,6 +296,55 @@ pub enum RequestSensorsError {
     Timeout(Duration),
 }
 
+/// Inbound `/auki/registries/0.0.1` event surfaced by the runtime to
+/// its owner via the channel returned from [`NetworkRuntime::spawn`].
+///
+/// The owner (typically `auki-domain`'s `ClusterManager`) resolves the
+/// requested registry entry from producer-local storage and replies
+/// via `ack`. The runtime's per-substream task awaits the reply for
+/// up to [`REGISTRIES_RESPONSE_TIMEOUT`] before closing the substream
+/// silently.
+#[derive(Debug)]
+pub struct RegistryRequestEvent {
+    /// The peer-id of the requester. Authenticated by libp2p's noise
+    /// handshake at connection-establishment time.
+    pub peer: PeerId,
+    /// Requested registry kind + id + hash.
+    pub request: RegistryRequest,
+    /// One-shot channel to reply on. Send a [`RegistryResponse`]
+    /// containing either the canonical JSON entry or `None` when this
+    /// peer does not have the exact `(kind, id, hash)` entry.
+    /// Dropping the sender without sending closes the substream
+    /// silently — the requester sees a
+    /// [`RegistriesProtocolError::Io`] with `UnexpectedEof`.
+    pub ack: oneshot::Sender<RegistryResponse>,
+}
+
+/// How long the runtime's per-substream registries task waits for the
+/// owner to reply via the [`RegistryRequestEvent::ack`] channel before
+/// closing the substream.
+const REGISTRIES_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`NetworkRuntime::request_registry_entry`] waits for the
+/// full open-write-read round-trip before returning a timeout error.
+pub const REGISTRIES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Errors from [`NetworkRuntime::request_registry_entry`].
+#[derive(Debug, thiserror::Error)]
+pub enum RequestRegistryError {
+    /// `libp2p_stream::Control::open_stream` failed (peer not
+    /// reachable, not on the allow-list, etc.).
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    /// I/O or wire-format error reading/writing a framed message.
+    #[error("protocol: {0}")]
+    Protocol(#[source] RegistriesProtocolError),
+    /// The round-trip didn't complete within
+    /// [`REGISTRIES_REQUEST_TIMEOUT`].
+    #[error("registry request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
 /// Inbound `/auki/membership/0.0.1` event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
@@ -480,9 +533,10 @@ impl NetworkRuntime {
     /// events + a receiver for inbound `/auki/membership/0.0.1`
     /// gossip events + a receiver for inbound `/auki/info/0.0.1`
     /// participant-info requests + a receiver for inbound
-    /// `/auki/sensors/0.0.1` sensor-catalog requests. Owners that
-    /// don't care about any of them (e.g. tests) can drop the
-    /// receivers; the runtime drops events with no receiver.
+    /// `/auki/sensors/0.0.1` sensor-catalog requests + a receiver for
+    /// inbound `/auki/registries/0.0.1` registry-entry requests.
+    /// Owners that don't care about any of them (e.g. tests) can drop
+    /// the receivers; the runtime drops events with no receiver.
     #[allow(clippy::type_complexity)]
     pub fn spawn(
         swarm: Swarm<Behaviour>,
@@ -496,11 +550,12 @@ impl NetworkRuntime {
             mpsc::Receiver<MembershipEvent>,
             mpsc::Receiver<InfoRequestEvent>,
             mpsc::Receiver<SensorsRequestEvent>,
+            mpsc::Receiver<RegistryRequestEvent>,
         ),
         SpawnError,
     > {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| SpawnError::NoTokioRuntime)?;
+        let handle =
+            tokio::runtime::Handle::try_current().map_err(|_| SpawnError::NoTokioRuntime)?;
         let local_peer_id = *swarm.local_peer_id();
         let connected = Arc::new(Mutex::new(HashSet::new()));
         let outbound_control = swarm.behaviour().stream.new_control();
@@ -513,8 +568,8 @@ impl NetworkRuntime {
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
         let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
         let (info_events_tx, info_events_rx) = mpsc::channel::<InfoRequestEvent>(16);
-        let (sensors_events_tx, sensors_events_rx) =
-            mpsc::channel::<SensorsRequestEvent>(16);
+        let (sensors_events_tx, sensors_events_rx) = mpsc::channel::<SensorsRequestEvent>(16);
+        let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -530,6 +585,7 @@ impl NetworkRuntime {
             membership_events_tx,
             info_events_tx,
             sensors_events_tx,
+            registry_events_tx,
         ));
         Ok((
             Self {
@@ -547,6 +603,7 @@ impl NetworkRuntime {
             membership_events_rx,
             info_events_rx,
             sensors_events_rx,
+            registry_events_rx,
         ))
     }
 
@@ -579,16 +636,14 @@ impl NetworkRuntime {
             .await
             .map_err(SendJoinRequestError::Protocol)?;
 
-        let response = match tokio::time::timeout(
-            JOIN_REQUEST_TIMEOUT,
-            read_join_response(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
-            Ok(Ok(r)) => r,
-        };
+        let response =
+            match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, read_join_response(&mut substream))
+                .await
+            {
+                Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+                Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
+                Ok(Ok(r)) => r,
+            };
         Ok(response)
     }
 
@@ -624,16 +679,14 @@ impl NetworkRuntime {
             .await
             .map_err(RequestInfoError::Protocol)?;
 
-        let response = match tokio::time::timeout(
-            INFO_REQUEST_TIMEOUT,
-            read_info_response(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(RequestInfoError::Protocol(e)),
-            Ok(Ok(r)) => r,
-        };
+        let response =
+            match tokio::time::timeout(INFO_REQUEST_TIMEOUT, read_info_response(&mut substream))
+                .await
+            {
+                Err(_) => return Err(RequestInfoError::Timeout(INFO_REQUEST_TIMEOUT)),
+                Ok(Err(e)) => return Err(RequestInfoError::Protocol(e)),
+                Ok(Ok(r)) => r,
+            };
         Ok(response)
     }
 
@@ -675,6 +728,48 @@ impl NetworkRuntime {
         {
             Err(_) => return Err(RequestSensorsError::Timeout(SENSORS_REQUEST_TIMEOUT)),
             Ok(Err(e)) => return Err(RequestSensorsError::Protocol(e)),
+            Ok(Ok(r)) => r,
+        };
+        Ok(response)
+    }
+
+    /// Fetch one registry entry from a cluster peer over the
+    /// `/auki/registries/0.0.1` libp2p protocol. The request names
+    /// the registry `kind + id + hash`; the response is either the
+    /// canonical JSON entry envelope or `None` when the peer does not
+    /// have that exact entry.
+    ///
+    /// `peer_id` must be on the local allow-list — libp2p refuses
+    /// the substream otherwise. Higher layers are responsible for
+    /// hashing `canonical_json.as_bytes()` and decoding the typed
+    /// registry entry only after the hash matches the request.
+    pub async fn request_registry_entry(
+        &self,
+        peer_id: PeerId,
+        request: RegistryRequest,
+    ) -> Result<RegistryResponse, RequestRegistryError> {
+        let mut control = self.stream_control.clone();
+        let proto = REGISTRIES_PROTOCOL.clone();
+
+        let open_fut = control.open_stream(peer_id, proto);
+        let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
+            Ok(Ok(s)) => s,
+        };
+
+        write_registry_request(&mut substream, &request)
+            .await
+            .map_err(RequestRegistryError::Protocol)?;
+
+        let response = match tokio::time::timeout(
+            REGISTRIES_REQUEST_TIMEOUT,
+            read_registry_response(&mut substream),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestRegistryError::Protocol(e)),
             Ok(Ok(r)) => r,
         };
         Ok(response)
@@ -823,6 +918,7 @@ async fn run_task(
     membership_events_tx: mpsc::Sender<MembershipEvent>,
     info_events_tx: mpsc::Sender<InfoRequestEvent>,
     sensors_events_tx: mpsc::Sender<SensorsRequestEvent>,
+    registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -930,6 +1026,15 @@ async fn run_task(
     let mut incoming_sensors: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(sensors_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/registries/0.0.1` substream acceptance.
+    let registries_proto = REGISTRIES_PROTOCOL.clone();
+    let mut incoming_registries: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(registries_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -1056,6 +1161,19 @@ async fn run_task(
                 }
                 let tx = sensors_events_tx.clone();
                 tokio::spawn(handle_inbound_sensors_substream(peer, substream, tx));
+            }
+
+            registry = incoming_registries.next() => {
+                let Some((peer, substream)) = registry else { return; };
+                // Same cluster-trust gate. Non-cluster peers can't
+                // fetch a daemon's registry entries — privacy by
+                // membership.
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = registry_events_tx.clone();
+                tokio::spawn(handle_inbound_registry_substream(peer, substream, tx));
             }
 
             _ = tick.tick() => {
@@ -1575,9 +1693,7 @@ async fn handle_inbound_membership_substream(
             }
         }
         Err(e) => {
-            eprintln!(
-                "auki-network: membership substream from {peer}: read failed: {e}"
-            );
+            eprintln!("auki-network: membership substream from {peer}: read failed: {e}");
         }
     }
 }
@@ -1621,9 +1737,7 @@ async fn handle_inbound_info_substream(
     let response = match tokio::time::timeout(INFO_RESPONSE_TIMEOUT, ack_rx).await {
         Ok(Ok(r)) => r,
         Ok(Err(_)) => {
-            eprintln!(
-                "auki-network: info handler dropped without replying for peer {peer}"
-            );
+            eprintln!("auki-network: info handler dropped without replying for peer {peer}");
             return;
         }
         Err(_) => {
@@ -1678,9 +1792,7 @@ async fn handle_inbound_sensors_substream(
     let response = match tokio::time::timeout(SENSORS_RESPONSE_TIMEOUT, ack_rx).await {
         Ok(Ok(r)) => r,
         Ok(Err(_)) => {
-            eprintln!(
-                "auki-network: sensors handler dropped without replying for peer {peer}"
-            );
+            eprintln!("auki-network: sensors handler dropped without replying for peer {peer}");
             return;
         }
         Err(_) => {
@@ -1693,6 +1805,61 @@ async fn handle_inbound_sensors_substream(
 
     if let Err(e) = write_sensors_response(&mut substream, &response).await {
         eprintln!("auki-network: sensors substream to {peer}: write response failed: {e}");
+    }
+}
+
+/// Per-substream task for an inbound `/auki/registries/0.0.1`
+/// request. Reads the framed [`RegistryRequest`], forwards it to the
+/// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
+/// reply (up to [`REGISTRIES_RESPONSE_TIMEOUT`]), writes the framed
+/// [`RegistryResponse`] back, closes the substream.
+///
+/// Mirrors `handle_inbound_sensors_substream` in lifecycle — errors
+/// at any stage drop the substream silently; the requester sees
+/// `UnexpectedEof` on read.
+async fn handle_inbound_registry_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
+) {
+    let request = match read_registry_request(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: registry substream from {peer}: read failed: {e}");
+            return;
+        }
+    };
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if registry_events_tx
+        .send(RegistryRequestEvent {
+            peer,
+            request,
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        // Owner has dropped the receiver — drop silently.
+        return;
+    }
+
+    let response = match tokio::time::timeout(REGISTRIES_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => {
+            eprintln!("auki-network: registry handler dropped without replying for peer {peer}");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: registry handler timed out after {REGISTRIES_RESPONSE_TIMEOUT:?} for peer {peer}"
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = write_registry_response(&mut substream, &response).await {
+        eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
     }
 }
 
@@ -1763,9 +1930,7 @@ mod tests {
     async fn build_test_swarm() -> Swarm<Behaviour> {
         let identity = PeerIdentity::from_seed(&[7u8; 32]);
         let cfg = SwarmConfig {
-            listen_addresses: vec![
-                "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
-            ],
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
             ..SwarmConfig::default()
         };
         build_swarm(&identity, cfg).expect("build_swarm succeeds")
@@ -1774,9 +1939,15 @@ mod tests {
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
-        let (rt, _join_events, _liveness, _membership_events, _info_events, _sensors_events) =
-            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-                .expect("spawn succeeds");
+        let (
+            rt,
+            _join_events,
+            _liveness,
+            _membership_events,
+            _info_events,
+            _sensors_events,
+            _registry_events,
+        ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
         rt.shutdown();
     }
@@ -1790,9 +1961,15 @@ mod tests {
         };
         let swarm = build_swarm(&identity, cfg).expect("build_swarm succeeds");
         let expected = identity.peer_id();
-        let (rt, _join_events, _liveness, _membership_events, _info_events, _sensors_events) =
-            NetworkRuntime::spawn(swarm, vec![], decline_all_streams())
-                .expect("spawn succeeds");
+        let (
+            rt,
+            _join_events,
+            _liveness,
+            _membership_events,
+            _info_events,
+            _sensors_events,
+            _registry_events,
+        ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
     }
@@ -1804,22 +1981,41 @@ mod tests {
         let pid_b = PeerIdentity::from_seed(&[2u8; 32]).peer_id();
         let pid_c = PeerIdentity::from_seed(&[3u8; 32]).peer_id();
 
-        let (rt, _join_events, _liveness, _membership_events, _info_events, _sensors_events) =
-            NetworkRuntime::spawn(
-                swarm,
-                vec![
-                    AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },
-                    AllowedPeer { peer_id: pid_b, multiaddrs: vec![] },
-                ],
-                decline_all_streams(),
-            )
-            .expect("spawn succeeds");
+        let (
+            rt,
+            _join_events,
+            _liveness,
+            _membership_events,
+            _info_events,
+            _sensors_events,
+            _registry_events,
+        ) = NetworkRuntime::spawn(
+            swarm,
+            vec![
+                AllowedPeer {
+                    peer_id: pid_a,
+                    multiaddrs: vec![],
+                },
+                AllowedPeer {
+                    peer_id: pid_b,
+                    multiaddrs: vec![],
+                },
+            ],
+            decline_all_streams(),
+        )
+        .expect("spawn succeeds");
 
         // Swap b → c, keep a.
         let report = rt
             .set_allowed_peers(vec![
-                AllowedPeer { peer_id: pid_a, multiaddrs: vec![] },
-                AllowedPeer { peer_id: pid_c, multiaddrs: vec![] },
+                AllowedPeer {
+                    peer_id: pid_a,
+                    multiaddrs: vec![],
+                },
+                AllowedPeer {
+                    peer_id: pid_c,
+                    multiaddrs: vec![],
+                },
             ])
             .await
             .expect("set_allowed_peers succeeds");

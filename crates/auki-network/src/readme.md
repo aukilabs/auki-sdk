@@ -7,12 +7,13 @@ Implementation status for [`auki-network`](../README.md).
 - [`lib.rs`](lib.rs) - always-on peer identity, reachability, capability types, feature-gated module exports, and re-exports.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
 - [`swarm.rs`](swarm.rs) - libp2p `Swarm<Behaviour>` builder, relay support, advertise-address helpers.
-- [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, join/info/sensors/membership helpers, peer-liveness events, idempotent shutdown.
+- [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, join/info/sensors/registries/membership helpers, peer-liveness events, idempotent shutdown.
 - [`join_protocol.rs`](join_protocol.rs) - `/auki/join/0.0.1` framed JSON request/response.
 - [`heartbeat_protocol.rs`](heartbeat_protocol.rs) - `/auki/heartbeat/0.0.1` pairwise liveness frames.
 - [`membership_protocol.rs`](membership_protocol.rs) - `/auki/membership/0.0.1` membership-gossip frames.
 - [`info_protocol.rs`](info_protocol.rs) - `/auki/info/0.0.1` framed request/response for `ParticipantInfo` JSON.
 - [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs.
+- [`registries_protocol.rs`](registries_protocol.rs) - `/auki/registries/0.0.1` framed request/response for hash-pinned registry entries.
 - [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-datatypes`.
 - [`stream_runtime.rs`](stream_runtime.rs) - typed `Stream<T>` producer/consumer API on top of `stream_protocol`.
 - [`discovery_client.rs`](discovery_client.rs) - Discovery HTTP client, behind `discovery_client`.

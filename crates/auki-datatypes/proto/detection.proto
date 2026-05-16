@@ -27,9 +27,31 @@ package auki.detection;
 // `T = DetectionLogEntry`, lifecycle inherited from the sensor-log
 // primitive. No "DetectionLog" abstraction.
 //
+// Cuba additions (2026-05-16):
+//
+// * **`sensor_hash` at field 2 (Cuba T5)** — each detection record
+//   self-describes its source frame. The Detector populates this from
+//   the input sensor's registry hash at append-time. Forwards- and
+//   backwards-compatible: old readers ignore unknown fields; old
+//   writers emit no `sensor_hash` and field 2 stays empty.
+//
+// * **`type` at field 3 (Cuba T12)** — a single-axis discriminator the
+//   consumer (Park, Cactus, an Extractor) uses to choose a per-type
+//   decoder for the opaque `data` bytes. Vocabulary is open-string
+//   (recommended values documented like `Capability`, not enum-closed):
+//   `aruco`, `portal`, `portal_corner`, `esl`, `person`, etc. The SDK
+//   does not ship typed payloads — application code owns the per-type
+//   decoders. The Detector sets `type` at append-time; leaving it
+//   empty is legal for legacy detectors that predate Cuba (consumers
+//   fall back to a debug / skip path).
+//
 // Field number ledger (never reuse, never renumber):
-//   DetectionLogEntry.data = 1
+//   DetectionLogEntry.data        = 1
+//   DetectionLogEntry.sensor_hash = 2   ← Cuba T5
+//   DetectionLogEntry.type        = 3   ← Cuba T12
 
 message DetectionLogEntry {
   bytes data = 1;
+  string sensor_hash = 2;
+  string type = 3;
 }

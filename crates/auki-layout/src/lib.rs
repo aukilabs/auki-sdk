@@ -6,9 +6,10 @@
 //! ```text
 //! <app_root>/
 //! ├── registries/
-//! │   ├── sensors/<sensor_id>/<hash>.json   ← shared across all sessions of this app
+//! │   ├── sensors/<sensor_id>/<hash>.json       ← shared across all sessions of this app
 //! │   ├── clocks/<clock_id>/<hash>.json
-//! │   └── frames/<frame_id>/<hash>.json
+//! │   ├── frames/<frame_id>/<hash>.json
+//! │   └── detectors/<detector_id>/<hash>.json   ← Cuba T4
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── log_manifest.json
@@ -64,6 +65,7 @@ const REGISTRIES_DIR: &str = "registries";
 const SENSORS_DIR: &str = "sensors";
 const CLOCKS_DIR: &str = "clocks";
 const FRAMES_DIR: &str = "frames";
+const DETECTORS_DIR: &str = "detectors"; // Cuba T4
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
 const POSELOGS_DIR: &str = "poselogs";
@@ -98,6 +100,25 @@ pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf 
     registries_root(app_root)
         .join(FRAMES_DIR)
         .join(id_to_segment(frame_id))
+        .join(format!("{hash}.json"))
+}
+
+/// `<app_root>/registries/detectors/<detector_id>/<hash>.json`. Detector
+/// Registry entries declare what one Detector *is* — its identity
+/// (`detector_id`), the body fields the detector needs to interpret
+/// itself (`DetectorBody`, e.g. ArUco dictionary), and the detection
+/// types it emits (`output_types`).
+///
+/// Cuba T4 / T16. Same content-addressed multi-version-by-hash shape as
+/// [`sensor_entry_path`]: consumers resolve a detector's body and
+/// output types via the `(detector_id, detector_hash)` pair, just like
+/// sensors. A `DetectionLogEntry`'s `sensor_hash` (Cuba T5) carries
+/// the input-frame provenance; the detector entry covers everything
+/// else.
+pub fn detector_entry_path(app_root: &Path, detector_id: &str, hash: &str) -> PathBuf {
+    registries_root(app_root)
+        .join(DETECTORS_DIR)
+        .join(id_to_segment(detector_id))
         .join(format!("{hash}.json"))
 }
 
@@ -230,6 +251,17 @@ mod tests {
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/frames/\
                  K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"
+            )
+        );
+    }
+
+    #[test]
+    fn detector_entry_path_uses_detectors_dir_and_id_substitution() {
+        assert_eq!(
+            detector_entry_path(&app(), "aukilabs/aruco/v1", "f00dcafe"),
+            PathBuf::from(
+                "/home/booster/auki/boosterapp/registries/detectors/\
+                 aukilabs__aruco__v1/f00dcafe.json"
             )
         );
     }

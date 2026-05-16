@@ -106,9 +106,7 @@ fn pydict_to_json(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<serde_js
     // here. The dict is small (manifests are ~1 KB at most) so the
     // round-trip cost is negligible.
     let json = py.import_bound("json")?;
-    let s: String = json
-        .call_method1("dumps", (dict,))?
-        .extract()?;
+    let s: String = json.call_method1("dumps", (dict,))?.extract()?;
     serde_json::from_str(&s).map_err(|e| PyValueError::new_err(format!("manifest: {e}")))
 }
 
@@ -174,7 +172,9 @@ impl LogReader {
     /// order. Releases the GIL during the read — the call can be slow
     /// on large logs.
     fn entries(&self, py: Python<'_>) -> PyResult<Vec<Entry>> {
-        let entries = py.allow_threads(|| self.inner.entries()).map_err(err_to_py)?;
+        let entries = py
+            .allow_threads(|| self.inner.entries())
+            .map_err(err_to_py)?;
         Ok(entries.into_iter().map(|e| Entry { inner: e }).collect())
     }
 }
@@ -260,7 +260,7 @@ pub struct Log {
 
 #[pymethods]
 impl Log {
-    /// Open or create a log at `root`. If `manifest.json` is missing,
+    /// Open or create a log at `root`. If `log_manifest.json` is missing,
     /// the `manifest` dict is JCS-canonicalized (RFC 8785) and
     /// written; if present, the on-disk manifest is the source of
     /// truth and `manifest` is ignored.
@@ -280,7 +280,12 @@ impl Log {
     /// Append an entry. Rolls the segment over when `timestamp_ns`
     /// leaves the current segment's window, and evicts segments fully
     /// outside retention.
-    fn append(&mut self, py: Python<'_>, timestamp_ns: i64, payload: &Bound<'_, PyBytes>) -> PyResult<()> {
+    fn append(
+        &mut self,
+        py: Python<'_>,
+        timestamp_ns: i64,
+        payload: &Bound<'_, PyBytes>,
+    ) -> PyResult<()> {
         let inner = self
             .inner
             .as_mut()
@@ -299,7 +304,7 @@ impl Log {
         py.allow_threads(|| inner.flush()).map_err(err_to_py)
     }
 
-    /// Update this log's retention window. Persists to `manifest.json`
+    /// Update this log's retention window. Persists to `log_manifest.json`
     /// atomically. `retention_ns` must be ≥ 0 (0 disables eviction).
     fn set_retention(&mut self, py: Python<'_>, retention_ns: i64) -> PyResult<()> {
         let inner = self
@@ -334,12 +339,7 @@ impl Log {
         slf
     }
 
-    fn __exit__(
-        &mut self,
-        _exc_type: PyObject,
-        _exc: PyObject,
-        _tb: PyObject,
-    ) -> bool {
+    fn __exit__(&mut self, _exc_type: PyObject, _exc: PyObject, _tb: PyObject) -> bool {
         self.close();
         false
     }
@@ -414,13 +414,11 @@ mod tests {
     fn raw_bytes_round_trips_through_log() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut log: RustLog<RawBytes> =
-                RustLog::open(dir.path(), manifest()).unwrap();
+            let mut log: RustLog<RawBytes> = RustLog::open(dir.path(), manifest()).unwrap();
             log.append(100, &RawBytes(b"hello".to_vec())).unwrap();
             log.append(200, &RawBytes(b"world".to_vec())).unwrap();
         }
-        let reader: RustLogReader<RawBytes> =
-            RustLog::<RawBytes>::read(dir.path()).unwrap();
+        let reader: RustLogReader<RawBytes> = RustLog::<RawBytes>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
@@ -433,8 +431,7 @@ mod tests {
     fn raw_bytes_empty_payload_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut log: RustLog<RawBytes> =
-                RustLog::open(dir.path(), manifest()).unwrap();
+            let mut log: RustLog<RawBytes> = RustLog::open(dir.path(), manifest()).unwrap();
             log.append(100, &RawBytes(vec![])).unwrap();
         }
         let reader = RustLog::<RawBytes>::read(dir.path()).unwrap();

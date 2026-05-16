@@ -19,16 +19,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "auki_thread_diag", "")?;
-    let mut info_sub = node
-        .subscribe::<r2r::sensor_msgs::msg::CameraInfo>(
-            "/image_left_raw/camera_info",
-            r2r::QosProfile::default(),
-        )?;
+    let mut info_sub = node.subscribe::<r2r::sensor_msgs::msg::CameraInfo>(
+        "/image_left_raw/camera_info",
+        r2r::QosProfile::default(),
+    )?;
     let mut image_sub = node
-        .subscribe::<r2r::sensor_msgs::msg::Image>(
-            "/image_left_raw",
-            r2r::QosProfile::default(),
-        )?;
+        .subscribe::<r2r::sensor_msgs::msg::Image>("/image_left_raw", r2r::QosProfile::default())?;
 
     let queue: Arc<Mutex<VecDeque<r2r::sensor_msgs::msg::CameraInfo>>> =
         Arc::new(Mutex::new(VecDeque::new()));
@@ -64,7 +60,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if count <= 5 || count % 20 == 0 {
                         println!(
                             "[worker.image] got image #{}: {}x{} encoding={} step={} datalen={}",
-                            count, msg.width, msg.height, msg.encoding, msg.step, msg.data.len()
+                            count,
+                            msg.width,
+                            msg.height,
+                            msg.encoding,
+                            msg.step,
+                            msg.data.len()
                         );
                     }
                 }
@@ -76,7 +77,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     node.spin_once(Duration::from_millis(100));
                     spins += 1;
                     if spins % 10 == 0 {
-                        println!("[worker.spinner] {} spins, stop={}", spins, stop_clone.load(Ordering::Relaxed));
+                        println!(
+                            "[worker.spinner] {} spins, stop={}",
+                            spins,
+                            stop_clone.load(Ordering::Relaxed)
+                        );
                     }
                     tokio::task::yield_now().await;
                 }
@@ -94,7 +99,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(_msg) = queue.lock().unwrap().pop_front() {
             got += 1;
             println!("[main] popped #{got}");
-            if got >= 3 { break; }
+            if got >= 3 {
+                break;
+            }
         }
         thread::sleep(Duration::from_millis(50));
     }

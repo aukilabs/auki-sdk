@@ -54,7 +54,12 @@ fn clock_gettime_ns(clk: libc::clockid_t) -> i64 {
         tv_nsec: 0,
     };
     let rc = unsafe { libc::clock_gettime(clk, &mut ts) };
-    debug_assert_eq!(rc, 0, "clock_gettime failed; errno={}", std::io::Error::last_os_error());
+    debug_assert_eq!(
+        rc,
+        0,
+        "clock_gettime failed; errno={}",
+        std::io::Error::last_os_error()
+    );
     (ts.tv_sec as i64).saturating_mul(1_000_000_000) + ts.tv_nsec as i64
 }
 
@@ -75,11 +80,7 @@ pub fn tick(clock: &dyn Clock) -> (i64, TimeTransformEntry) {
 
     let timestamp_ns = midpoint(m1, m2);
     let offset_ns = r.saturating_sub(timestamp_ns);
-    let uncertainty_ns: u32 = m2
-        .saturating_sub(m1)
-        .max(0)
-        .try_into()
-        .unwrap_or(u32::MAX);
+    let uncertainty_ns: u32 = m2.saturating_sub(m1).max(0).try_into().unwrap_or(u32::MAX);
 
     let entry = TimeTransformEntry {
         offset_ns,
@@ -163,10 +164,18 @@ mod tests {
 
     impl Clock for ScriptedClock {
         fn read_from_ns(&self) -> i64 {
-            self.from.lock().unwrap().pop_front().expect("from-clock script exhausted")
+            self.from
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("from-clock script exhausted")
         }
         fn read_to_ns(&self) -> i64 {
-            self.to.lock().unwrap().pop_front().expect("to-clock script exhausted")
+            self.to
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("to-clock script exhausted")
         }
     }
 
@@ -197,7 +206,9 @@ mod tests {
         // doesn't run out before we stop it. Each tick consumes 2 from-reads + 1 to-read.
         const N: usize = 200;
         let from: Vec<i64> = (0..(2 * N) as i64).map(|i| i * 1_000).collect();
-        let to: Vec<i64> = (0..N as i64).map(|i| 5_000_000_000 + i * 1_000_000).collect();
+        let to: Vec<i64> = (0..N as i64)
+            .map(|i| 5_000_000_000 + i * 1_000_000)
+            .collect();
         let clock = Box::new(ScriptedClock::new(from, to));
 
         let dir = tempfile::tempdir().unwrap();

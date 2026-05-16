@@ -329,10 +329,8 @@ mod tests {
 
             // Extract bytes into owned Vec<u8> so we don't fight with
             // the lifetime of the temporary downcast result.
-            let first_bytes: Vec<u8> =
-                first.downcast::<PyBytes>().unwrap().as_bytes().to_vec();
-            let second_bytes: Vec<u8> =
-                second.downcast::<PyBytes>().unwrap().as_bytes().to_vec();
+            let first_bytes: Vec<u8> = first.downcast::<PyBytes>().unwrap().as_bytes().to_vec();
+            let second_bytes: Vec<u8> = second.downcast::<PyBytes>().unwrap().as_bytes().to_vec();
             assert_eq!(first_bytes, second_bytes);
             assert_eq!(first_bytes.len(), 32);
         });
@@ -388,7 +386,12 @@ mod tests {
             let seed = PyBytes::new_bound(py, &[1u8; 32]);
             let w = Wallet::from_seed(&seed).unwrap();
             let extracted = w.seed(py);
-            let len = extracted.bind(py).downcast::<PyBytes>().unwrap().as_bytes().len();
+            let len = extracted
+                .bind(py)
+                .downcast::<PyBytes>()
+                .unwrap()
+                .as_bytes()
+                .len();
             assert_eq!(len, 32, "seed must be 32 bytes");
         });
     }

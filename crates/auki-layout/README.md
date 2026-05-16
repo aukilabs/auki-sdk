@@ -14,12 +14,12 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 │   └── frames/<frame_id>/<hash>.json     ← Frame Registry (v0.0.22)
 └── <session_id>/                          ← UUIDv4 minted at app boot
     ├── timetransform_logs/<from_id>__<to_id>/
-    │   ├── manifest.json
+    │   ├── log_manifest.json
     │   ├── tags.jsonl                    ← optional TagClaim sidecar; see ../tags.md
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     ├── sensorlogs/
     │   ├── <sensor_log_id_1>/             ← one sensor stream per log
-    │   │   ├── manifest.json
+    │   │   ├── log_manifest.json
     │   │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
     │   │   └── segments/<padded-ns>.seg
     │   ├── <sensor_log_id_2>/
@@ -27,13 +27,13 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
     │   └── <sensor_log_id_3>/
     ├── poselogs/
     │   ├── <from_id>__<to_id>/            ← one (from_frame_id, to_frame_id) pair per log
-    │   │   ├── manifest.json
+    │   │   ├── log_manifest.json
     │   │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
     │   │   └── segments/<padded-ns>.seg
     │   └── <from_id_2>__<to_id_2>/
     └── detection_logs/
         ├── <detector_id>__<input_log_id>/ ← one (Detector, input sensor log) pair (2026-05-09)
-        │   ├── manifest.json
+        │   ├── log_manifest.json
         │   ├── tags.jsonl                ← optional TagClaim sidecar; see ../tags.md
         │   └── segments/<padded-ns>.seg
         └── ...

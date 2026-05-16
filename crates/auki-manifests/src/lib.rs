@@ -38,6 +38,144 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensorLogManifest {
+    pub app_id: String,
+    pub session_id: String,
+    pub sensor_id: String,
+    pub sensor_hash: String,
+    pub clock_id: String,
+    pub clock_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_hash: Option<String>,
+    pub segment_duration_ns: i64,
+    pub retention_ns: i64,
+}
+
+impl SensorLogManifest {
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("app_id", &self.app_id)?;
+        validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("sensor_id", &self.sensor_id)?;
+        validate_non_empty("sensor_hash", &self.sensor_hash)?;
+        validate_non_empty("clock_id", &self.clock_id)?;
+        validate_non_empty("clock_hash", &self.clock_hash)?;
+        validate_optional_pair(
+            "frame_id",
+            self.frame_id.as_deref(),
+            "frame_hash",
+            self.frame_hash.as_deref(),
+        )?;
+        validate_durations(self.segment_duration_ns, self.retention_ns)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseLogManifest {
+    pub app_id: String,
+    pub session_id: String,
+    pub from_frame_id: String,
+    pub from_frame_hash: String,
+    pub to_frame_id: String,
+    pub to_frame_hash: String,
+    pub clock_id: String,
+    pub clock_hash: String,
+    pub source: PoseSource,
+    pub writer_mode: PoseWriterMode,
+    pub expected_rate_hz: u32,
+    pub segment_duration_ns: i64,
+    pub retention_ns: i64,
+}
+
+impl PoseLogManifest {
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("app_id", &self.app_id)?;
+        validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("from_frame_id", &self.from_frame_id)?;
+        validate_non_empty("from_frame_hash", &self.from_frame_hash)?;
+        validate_non_empty("to_frame_id", &self.to_frame_id)?;
+        validate_non_empty("to_frame_hash", &self.to_frame_hash)?;
+        validate_non_empty("clock_id", &self.clock_id)?;
+        validate_non_empty("clock_hash", &self.clock_hash)?;
+        validate_durations(self.segment_duration_ns, self.retention_ns)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeTransformLogManifest {
+    pub app_id: String,
+    pub session_id: String,
+    pub from_clock_id: String,
+    pub from_clock_hash: String,
+    pub to_clock_id: String,
+    pub to_clock_hash: String,
+    pub source: TimeTransformSource,
+    pub segment_duration_ns: i64,
+    pub retention_ns: i64,
+}
+
+impl TimeTransformLogManifest {
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("app_id", &self.app_id)?;
+        validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("from_clock_id", &self.from_clock_id)?;
+        validate_non_empty("from_clock_hash", &self.from_clock_hash)?;
+        validate_non_empty("to_clock_id", &self.to_clock_id)?;
+        validate_non_empty("to_clock_hash", &self.to_clock_hash)?;
+        validate_durations(self.segment_duration_ns, self.retention_ns)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectionLogManifest {
+    pub app_id: String,
+    pub session_id: String,
+    pub detector_id: String,
+    pub detector_hash: String,
+    pub input_log_id: String,
+    pub input_sensor_id: String,
+    pub input_sensor_hash: String,
+    pub clock_id: String,
+    pub clock_hash: String,
+    pub segment_duration_ns: i64,
+    pub retention_ns: i64,
+}
+
+impl DetectionLogManifest {
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("app_id", &self.app_id)?;
+        validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("detector_id", &self.detector_id)?;
+        validate_non_empty("detector_hash", &self.detector_hash)?;
+        validate_non_empty("input_log_id", &self.input_log_id)?;
+        validate_non_empty("input_sensor_id", &self.input_sensor_id)?;
+        validate_non_empty("input_sensor_hash", &self.input_sensor_hash)?;
+        validate_non_empty("clock_id", &self.clock_id)?;
+        validate_non_empty("clock_hash", &self.clock_hash)?;
+        validate_durations(self.segment_duration_ns, self.retention_ns)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestValidationError {
+    pub field: &'static str,
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for ManifestValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid manifest field `{}`: {}",
+            self.field, self.reason
+        )
+    }
+}
+
+impl std::error::Error for ManifestValidationError {}
+
 /// Build a Sensor Log family manifest with the run-identifying `app_id` /
 /// `session_id`, the sensor and clock bindings, and auki-logs's required
 /// `segment_duration_ns` / `retention_ns`.
@@ -57,19 +195,24 @@ pub fn build_sensor_log_manifest(
     sensor_hash: &str,
     clock_id: &str,
     clock_hash: &str,
+    frame_id: Option<&str>,
+    frame_hash: Option<&str>,
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "sensor_id": sensor_id,
-        "sensor_hash": sensor_hash,
-        "clock_id": clock_id,
-        "clock_hash": clock_hash,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
+    serde_json::to_value(SensorLogManifest {
+        app_id: app_id.into(),
+        session_id: session_id.into(),
+        sensor_id: sensor_id.into(),
+        sensor_hash: sensor_hash.into(),
+        clock_id: clock_id.into(),
+        clock_hash: clock_hash.into(),
+        frame_id: frame_id.map(str::to_owned),
+        frame_hash: frame_hash.map(str::to_owned),
+        segment_duration_ns: duration_as_i64_ns(segment_duration),
+        retention_ns: duration_as_i64_ns(retention),
     })
+    .expect("SensorLogManifest serializes")
 }
 
 /// Build a Pose Log manifest for the new `(from, to)`-keyed Pose Log
@@ -120,21 +263,22 @@ pub fn build_pose_log_manifest(
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "from_frame_id": from_frame_id,
-        "from_frame_hash": from_frame_hash,
-        "to_frame_id": to_frame_id,
-        "to_frame_hash": to_frame_hash,
-        "clock_id": clock_id,
-        "clock_hash": clock_hash,
-        "source": source,
-        "writer_mode": writer_mode,
-        "expected_rate_hz": expected_rate_hz,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
+    serde_json::to_value(PoseLogManifest {
+        app_id: app_id.into(),
+        session_id: session_id.into(),
+        from_frame_id: from_frame_id.into(),
+        from_frame_hash: from_frame_hash.into(),
+        to_frame_id: to_frame_id.into(),
+        to_frame_hash: to_frame_hash.into(),
+        clock_id: clock_id.into(),
+        clock_hash: clock_hash.into(),
+        source: source.clone(),
+        writer_mode,
+        expected_rate_hz,
+        segment_duration_ns: duration_as_i64_ns(segment_duration),
+        retention_ns: duration_as_i64_ns(retention),
     })
+    .expect("PoseLogManifest serializes")
 }
 
 /// Build a Detection Log manifest. One Detection Log per
@@ -197,19 +341,20 @@ pub fn build_detection_log_manifest(
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "detector_id": detector_id,
-        "detector_hash": detector_hash,
-        "input_log_id": input_log_id,
-        "input_sensor_id": input_sensor_id,
-        "input_sensor_hash": input_sensor_hash,
-        "clock_id": clock_id,
-        "clock_hash": clock_hash,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
+    serde_json::to_value(DetectionLogManifest {
+        app_id: app_id.into(),
+        session_id: session_id.into(),
+        detector_id: detector_id.into(),
+        detector_hash: detector_hash.into(),
+        input_log_id: input_log_id.into(),
+        input_sensor_id: input_sensor_id.into(),
+        input_sensor_hash: input_sensor_hash.into(),
+        clock_id: clock_id.into(),
+        clock_hash: clock_hash.into(),
+        segment_duration_ns: duration_as_i64_ns(segment_duration),
+        retention_ns: duration_as_i64_ns(retention),
     })
+    .expect("DetectionLogManifest serializes")
 }
 
 /// Build a TimeTransform Log manifest with the four required clock-binding
@@ -238,17 +383,18 @@ pub fn build_time_transform_log_manifest(
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "app_id": app_id,
-        "session_id": session_id,
-        "from_clock_id": from_clock_id,
-        "from_clock_hash": from_clock_hash,
-        "to_clock_id": to_clock_id,
-        "to_clock_hash": to_clock_hash,
-        "source": source,
-        "segment_duration_ns": duration_as_i64_ns(segment_duration),
-        "retention_ns": duration_as_i64_ns(retention),
+    serde_json::to_value(TimeTransformLogManifest {
+        app_id: app_id.into(),
+        session_id: session_id.into(),
+        from_clock_id: from_clock_id.into(),
+        from_clock_hash: from_clock_hash.into(),
+        to_clock_id: to_clock_id.into(),
+        to_clock_hash: to_clock_hash.into(),
+        source: source.clone(),
+        segment_duration_ns: duration_as_i64_ns(segment_duration),
+        retention_ns: duration_as_i64_ns(retention),
     })
+    .expect("TimeTransformLogManifest serializes")
 }
 
 /// Identifies the producer of the offsets in a TimeTransform Log.
@@ -342,6 +488,59 @@ fn duration_as_i64_ns(d: Duration) -> i64 {
     d.as_nanos().min(i64::MAX as u128) as i64
 }
 
+fn validate_non_empty(field: &'static str, value: &str) -> Result<(), ManifestValidationError> {
+    if value.is_empty() {
+        Err(ManifestValidationError {
+            field,
+            reason: "must not be empty",
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_optional_pair(
+    left_field: &'static str,
+    left: Option<&str>,
+    right_field: &'static str,
+    right: Option<&str>,
+) -> Result<(), ManifestValidationError> {
+    match (left, right) {
+        (None, None) => Ok(()),
+        (Some(left), Some(right)) => {
+            validate_non_empty(left_field, left)?;
+            validate_non_empty(right_field, right)
+        }
+        (None, Some(_)) => Err(ManifestValidationError {
+            field: left_field,
+            reason: "must be set when paired field is set",
+        }),
+        (Some(_), None) => Err(ManifestValidationError {
+            field: right_field,
+            reason: "must be set when paired field is set",
+        }),
+    }
+}
+
+fn validate_durations(
+    segment_duration_ns: i64,
+    retention_ns: i64,
+) -> Result<(), ManifestValidationError> {
+    if segment_duration_ns <= 0 {
+        return Err(ManifestValidationError {
+            field: "segment_duration_ns",
+            reason: "must be greater than zero",
+        });
+    }
+    if retention_ns < 0 {
+        return Err(ManifestValidationError {
+            field: "retention_ns",
+            reason: "must be greater than or equal to zero",
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +575,8 @@ mod tests {
             "e8cb3879fcfa7f716047aa0892b0c0c0",
             "K1-AABBCCDDEEFF/utc",
             "89f84f4c2e09bef81d385b2af1d17e6c",
+            Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
+            Some("fd0dc3789e898b71b5e16ee122a81a44"),
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
@@ -385,6 +586,8 @@ mod tests {
         assert_eq!(m["sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
         assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
         assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["frame_id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
+        assert_eq!(m["frame_hash"], "fd0dc3789e898b71b5e16ee122a81a44");
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
         assert_eq!(m["retention_ns"], 30_000_000_000i64);
     }
@@ -399,6 +602,8 @@ mod tests {
             "e8cb3879fcfa7f716047aa0892b0c0c0",
             "K1-AABBCCDDEEFF/utc",
             "89f84f4c2e09bef81d385b2af1d17e6c",
+            None,
+            None,
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
@@ -409,6 +614,46 @@ mod tests {
             reader.manifest()["session_id"],
             "550e8400-e29b-41d4-a716-446655440000"
         );
+    }
+
+    #[test]
+    fn sensor_log_manifest_deserializes_and_validates() {
+        let m = build_sensor_log_manifest(
+            "boosterapp",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "K1-AABBCCDDEEFF/head_left_cam",
+            "e8cb3879fcfa7f716047aa0892b0c0c0",
+            "K1-AABBCCDDEEFF/utc",
+            "89f84f4c2e09bef81d385b2af1d17e6c",
+            Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
+            Some("fd0dc3789e898b71b5e16ee122a81a44"),
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        );
+        let typed: SensorLogManifest = serde_json::from_value(m).unwrap();
+        typed.validate().unwrap();
+        assert_eq!(
+            typed.frame_id.as_deref(),
+            Some("K1-AABBCCDDEEFF/head_left_cam_optical")
+        );
+    }
+
+    #[test]
+    fn sensor_log_manifest_rejects_unpaired_frame_ref() {
+        let typed = SensorLogManifest {
+            app_id: "boosterapp".into(),
+            session_id: "session".into(),
+            sensor_id: "sensor".into(),
+            sensor_hash: "sensor_hash".into(),
+            clock_id: "clock".into(),
+            clock_hash: "clock_hash".into(),
+            frame_id: Some("frame".into()),
+            frame_hash: None,
+            segment_duration_ns: 1,
+            retention_ns: 0,
+        };
+        let err = typed.validate().unwrap_err();
+        assert_eq!(err.field, "frame_hash");
     }
 
     // ─── Pose Log + PoseSource ──────────────────────────────────────────────
@@ -481,10 +726,19 @@ mod tests {
     #[test]
     fn build_pose_log_manifest_serializes_writer_mode_as_snake_case() {
         let m = build_pose_log_manifest(
-            "test", "s", "from", "fh", "to", "th", "c", "ch",
+            "test",
+            "s",
+            "from",
+            "fh",
+            "to",
+            "th",
+            "c",
+            "ch",
             &m1_ros2_tf_source(),
-            PoseWriterMode::Rigid, 0,
-            Duration::from_secs(1), Duration::from_secs(30),
+            PoseWriterMode::Rigid,
+            0,
+            Duration::from_secs(1),
+            Duration::from_secs(30),
         );
         assert_eq!(m["writer_mode"], "rigid");
     }
@@ -580,7 +834,10 @@ mod tests {
         // here so the contract is explicit and the follow-on PR has a
         // failing test to update when it lands.
         let m = m1_detection_log_manifest();
-        assert!(m.get("intent").is_none(), "intent field should be absent until uniform rollout");
+        assert!(
+            m.get("intent").is_none(),
+            "intent field should be absent until uniform rollout"
+        );
     }
 
     #[test]

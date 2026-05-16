@@ -47,7 +47,7 @@ def test_module_exports_expected_classes():
 def test_open_creates_layout_and_writes_manifest(tmp_path: Path):
     log = auki_logs.Log.open(str(tmp_path), manifest())
     log.close()
-    assert (tmp_path / "manifest.json").exists()
+    assert (tmp_path / "log_manifest.json").exists()
     assert (tmp_path / "segments").is_dir()
 
 

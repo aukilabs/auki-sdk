@@ -12,7 +12,7 @@ class StreamRequest(betterproto.Message):
 
 
 @dataclass
-class StreamDescriptor(betterproto.Message):
+class StreamManifest(betterproto.Message):
     sensor_id: str = betterproto.string_field(1)
     sensor_hash: str = betterproto.string_field(2)
     clock_id: str = betterproto.string_field(3)
@@ -88,7 +88,7 @@ class EndReasonProducerError(betterproto.Message):
 
 
 @dataclass
-class Frame(betterproto.Message):
+class StreamEntry(betterproto.Message):
     timestamp_ns: int = betterproto.int64_field(1)
     seq: int = betterproto.uint64_field(2)
     payload: bytes = betterproto.bytes_field(3)
@@ -97,7 +97,7 @@ class Frame(betterproto.Message):
 @dataclass
 class StreamMessage(betterproto.Message):
     request: "StreamRequest" = betterproto.message_field(1, group="variant")
-    accept: "StreamDescriptor" = betterproto.message_field(2, group="variant")
+    accept: "StreamManifest" = betterproto.message_field(2, group="variant")
     decline: "DeclineReason" = betterproto.message_field(3, group="variant")
-    frame: "Frame" = betterproto.message_field(4, group="variant")
+    entry: "StreamEntry" = betterproto.message_field(4, group="variant")
     end_of_stream: "EndReason" = betterproto.message_field(5, group="variant")

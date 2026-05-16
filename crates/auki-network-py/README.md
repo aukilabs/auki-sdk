@@ -50,13 +50,13 @@ def stream_provider(requester_peer_id: str, req: cluster.StreamRequest):
     if req.sensor_id == "head_left_cam":
         async def source():
             async for jpeg in jpeg_fanout.subscribe():
-                yield cluster.ProducerFrame(
+                yield cluster.StreamItem(
                     timestamp_ns=session_clock_now_ns(),
                     payload=cluster.JpegFrame(jpeg),
                 )
 
         return cluster.StreamDecision.accept(
-            descriptor=cluster.StreamDescriptor(
+            manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="...",
                 clock_id="...",
@@ -81,13 +81,13 @@ Supported payload pyclasses:
 
 Factory methods:
 
-- `StreamDecision.accept(descriptor=..., source=...)`
-- `StreamDecision.accept_pointcloud(descriptor=..., source=...)`
-- `StreamDecision.accept_joint_encoders(descriptor=..., source=...)`
-- `StreamDecision.accept_audio(descriptor=..., source=...)`
+- `StreamDecision.accept(manifest=..., source=...)`
+- `StreamDecision.accept_pointcloud(manifest=..., source=...)`
+- `StreamDecision.accept_joint_encoders(manifest=..., source=...)`
+- `StreamDecision.accept_audio(manifest=..., source=...)`
 - `StreamDecision.decline(reason)`
 
-Consumer-side `StreamSubscription`, `FrameIterator`, and `ConsumerFrame` are returned by `auki_domain.ClusterManager.open_*_stream(...)`.
+Consumer-side `StreamSubscription`, `StreamEntryIterator`, and `StreamEntry` are returned by `auki_domain.ClusterManager.open_*_stream(...)`.
 
 ## Install And Test
 

@@ -6,7 +6,7 @@
 //! Substream lifetime IS the stream subscription's lifetime (grimsby D1
 //! RESOLVED 2026-05-05): the initiator opens the substream, writes a
 //! [`StreamRequest`] as the first framed message, the responder either
-//! declines-and-closes or starts pushing typed [`Frame`] messages on
+//! declines-and-closes or starts pushing typed [`StreamEntry`] messages on
 //! the same substream until close. One protocol; full-duplex;
 //! `cluster.json` is the trust boundary (same as ansuz — peers not in
 //! the doc cannot dial).
@@ -35,10 +35,10 @@
 //!   instantiation carries them. JPEG frames typically run 10–100 KB;
 //!   raw `PointCloud2` CDR runs ~700 KB at ~30 Hz.
 //! - **Payload.** Prost-encoded [`StreamMessage`]. The envelope is a
-//!   `oneof` of `Request | Accept | Decline | Frame | EndOfStream`;
+//!   `oneof` of `Request | Accept | Decline | Entry | EndOfStream`;
 //!   each substream is mono-`T` with `T`'s prost bytes living inside
-//!   `Frame.payload` — the SDK runtime knows which `T` to decode based
-//!   on the [`StreamDescriptor::sensor_hash`] handshake.
+//!   `StreamEntry.payload` — the SDK runtime knows which `T` to decode based
+//!   on the [`StreamManifest::sensor_hash`] handshake.
 //!
 //! ## Why protobuf, why now
 //!
@@ -55,9 +55,9 @@
 //! ## Message order on a healthy stream
 //!
 //! 1. Initiator → Responder: `Request(StreamRequest)`
-//! 2. Responder → Initiator: `Accept(StreamDescriptor)` *or*
+//! 2. Responder → Initiator: `Accept(StreamManifest)` *or*
 //!    `Decline(DeclineReason)`
-//! 3. Responder → Initiator: zero or more `Frame { … }`
+//! 3. Responder → Initiator: zero or more `StreamEntry { … }`
 //! 4. Responder → Initiator: `EndOfStream(EndReason)` *or* substream
 //!    closes without it (consumer treats "substream closed without
 //!    EndOfStream" as an implicit connection loss, surfaced as
@@ -87,7 +87,7 @@ pub use auki_datatypes::frame_stream::JpegFrame;
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
-    DeclineReason, EndReason, Frame, StreamDescriptor, StreamMessage, StreamRequest,
+    DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
 };
 
@@ -225,7 +225,7 @@ mod tests {
         frame_id: &str,
         frame_hash: &str,
     ) -> StreamMessage {
-        StreamMessage::accept(StreamDescriptor {
+        StreamMessage::accept(StreamManifest {
             sensor_id: sensor_id.into(),
             sensor_hash: sensor_hash.into(),
             clock_id: clock_id.into(),
@@ -235,8 +235,8 @@ mod tests {
         })
     }
 
-    fn frame_msg(timestamp_ns: i64, seq: u64, payload: Vec<u8>) -> StreamMessage {
-        StreamMessage::frame(Frame {
+    fn entry_msg(timestamp_ns: i64, seq: u64, payload: Vec<u8>) -> StreamMessage {
+        StreamMessage::entry(StreamEntry {
             timestamp_ns,
             seq,
             payload,
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn frame_message_round_trips() {
-        let msg = frame_msg(12_345_678_900, 7, vec![0xff, 0xd8, 0xff, 0xe0, 0x00]);
+        let msg = entry_msg(12_345_678_900, 7, vec![0xff, 0xd8, 0xff, 0xe0, 0x00]);
         let mut bytes = Vec::new();
         msg.encode(&mut bytes).unwrap();
         let back = StreamMessage::decode(&*bytes).unwrap();
@@ -309,8 +309,7 @@ mod tests {
 
     #[test]
     fn end_of_stream_round_trips() {
-        let msg =
-            StreamMessage::end_of_stream(EndReason::producer_error("encoder died"));
+        let msg = StreamMessage::end_of_stream(EndReason::producer_error("encoder died"));
         let mut bytes = Vec::new();
         msg.encode(&mut bytes).unwrap();
         let back = StreamMessage::decode(&*bytes).unwrap();
@@ -334,9 +333,9 @@ mod tests {
         let messages = vec![
             request_msg("K1/cam_a"),
             accept_msg("K1/cam_a", "h1", "c1", "h2", "K1/cam_a/frame", "fh1"),
-            frame_msg(1, 0, vec![1, 2, 3]),
-            frame_msg(2, 1, vec![4, 5, 6]),
-            frame_msg(3, 2, vec![7, 8, 9]),
+            entry_msg(1, 0, vec![1, 2, 3]),
+            entry_msg(2, 1, vec![4, 5, 6]),
+            entry_msg(3, 2, vec![7, 8, 9]),
             StreamMessage::end_of_stream(EndReason::source_ended()),
         ];
 
@@ -391,7 +390,7 @@ mod tests {
     fn write_rejects_oversized_payload_before_io() {
         // 17 MiB payload trips the cap (16 MiB).
         let huge = vec![0u8; 17 * 1024 * 1024];
-        let msg = frame_msg(0, 0, huge);
+        let msg = entry_msg(0, 0, huge);
         let result = futures::executor::block_on(async {
             let mut buf: Vec<u8> = Vec::new();
             write_message(&mut buf, &msg).await
@@ -487,10 +486,7 @@ mod tests {
         // (24 = 6 × 4 little-endian f32), then six f32s.
         // 1.0 → 0000803f, 2.0 → 00000040, 3.0 → 00004040,
         // 4.0 → 00008040, 5.0 → 0000a040, 6.0 → 0000c040.
-        assert_eq!(
-            hex,
-            "0a180000803f0000004000004040000080400000a0400000c040"
-        );
+        assert_eq!(hex, "0a180000803f0000004000004040000080400000a0400000c040");
     }
 
     #[test]
@@ -553,17 +549,17 @@ mod tests {
         assert_eq!(encoded.len(), 1923);
     }
 
-    /// Locked conformance vector for a `StreamMessage::Frame` carrying
-    /// a `PointCloudFrame` payload. Pins the full envelope: the `Frame`
+    /// Locked conformance vector for a `StreamMessage::Entry` carrying
+    /// a `PointCloudFrame` payload. Pins the full envelope: the `StreamEntry`
     /// inside the `StreamMessage` oneof carries a `bytes` field whose
     /// content is the prost-encoded `PointCloudFrame`.
     #[test]
-    fn locked_stream_message_frame_with_point_cloud_payload() {
+    fn locked_stream_message_entry_with_point_cloud_payload() {
         let pc = PointCloudFrame {
             bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
         };
         let pc_encoded = pc.encode_to_vec();
-        let msg = frame_msg(1_700_000_000_000_000_000, 42, pc_encoded.clone());
+        let msg = entry_msg(1_700_000_000_000_000_000, 42, pc_encoded.clone());
 
         let envelope = msg.encode_to_vec();
         let back = StreamMessage::decode(&*envelope).unwrap();
@@ -571,8 +567,8 @@ mod tests {
 
         // Decode the inner payload and confirm it's the same PointCloudFrame.
         let frame_inner = match back.variant {
-            Some(stream_message::Variant::Frame(f)) => f,
-            _ => panic!("expected Frame variant"),
+            Some(stream_message::Variant::Entry(f)) => f,
+            _ => panic!("expected Entry variant"),
         };
         let parsed_pc = PointCloudFrame::decode(&*frame_inner.payload).unwrap();
         assert_eq!(parsed_pc, pc);
@@ -581,7 +577,7 @@ mod tests {
     }
 
     /// Proves the request/response bring-up matches the documented
-    /// message-order spec: Request-then-Accept-then-Frame-then-EndOfStream
+    /// message-order spec: Request-then-Accept-then-StreamEntry-then-EndOfStream
     /// each survive the framing helpers in their typed positions.
     #[test]
     fn typed_session_matches_message_order_spec() {
@@ -589,7 +585,7 @@ mod tests {
             stream_message::Variant::Request(StreamRequest {
                 sensor_id: "ordered".into(),
             }),
-            stream_message::Variant::Accept(StreamDescriptor {
+            stream_message::Variant::Accept(StreamManifest {
                 sensor_id: "ordered".into(),
                 sensor_hash: "h".into(),
                 clock_id: "c".into(),
@@ -597,7 +593,7 @@ mod tests {
                 frame_id: "ordered/frame".into(),
                 frame_hash: "fh".into(),
             }),
-            stream_message::Variant::Frame(Frame {
+            stream_message::Variant::Entry(StreamEntry {
                 timestamp_ns: 1,
                 seq: 0,
                 payload: vec![1, 2, 3],

@@ -854,12 +854,11 @@ impl NetworkRuntime {
         ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
     }
 
-    /// Signal the driver task to shut down and abort it. Inbound
-    /// substream tasks have [`SHUTDOWN_GRACE`] to flush their final
-    /// typed `EndOfStream` before the swarm tears down. Unclean exit
-    /// (`Drop` without an explicit `shutdown` call, panic) skips the
-    /// grace — consumers see `ConnectionLost` instead of the typed
-    /// reason.
+    /// Signal the driver task to shut down. Inbound substream tasks
+    /// have [`SHUTDOWN_GRACE`] to flush their final typed
+    /// `EndOfStream` before the swarm tears down. Unclean exit (`Drop`
+    /// without an explicit `shutdown` call, panic) skips the grace —
+    /// consumers see `ConnectionLost` instead of the typed reason.
     ///
     /// Idempotent: the first call broadcasts the grace signal and
     /// aborts the driver task; subsequent calls find `shutdown_tx` /
@@ -867,7 +866,14 @@ impl NetworkRuntime {
     /// threads concurrently.
     pub fn shutdown(&self) {
         let _ = self.inbound_shutdown_tx.send(true);
-        self.cleanup();
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
     }
 
     fn cleanup(&self) {

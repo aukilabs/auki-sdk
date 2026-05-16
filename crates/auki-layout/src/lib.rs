@@ -11,23 +11,23 @@
 //! │   └── frames/<frame_id>/<hash>.json
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
-//!     │   ├── manifest.json
+//!     │   ├── log_manifest.json
 //!     │   └── segments/<padded-ns>.seg      ← one TT log per session
 //!     ├── sensorlogs/
 //!     │   ├── <sensor_log_id_1>/             ← one sensor stream per log
-//!     │   │   ├── manifest.json
+//!     │   │   ├── log_manifest.json
 //!     │   │   └── segments/<padded-ns>.seg
 //!     │   ├── <sensor_log_id_2>/
 //!     │   │   └── ...
 //!     │   └── <sensor_log_id_3>/
 //!     ├── poselogs/
 //!     │   ├── <pose_log_id_1>/               ← one pose source per log
-//!     │   │   ├── manifest.json
+//!     │   │   ├── log_manifest.json
 //!     │   │   └── segments/<padded-ns>.seg
 //!     │   └── <pose_log_id_2>/
 //!     └── detection_logs/
 //!         ├── <detector_id>__<input_log_id>/ ← one Detector × input sensor log
-//!         │   ├── manifest.json
+//!         │   ├── log_manifest.json
 //!         │   └── segments/<padded-ns>.seg
 //!         └── ...
 //! ```
@@ -107,7 +107,7 @@ pub fn session_root(app_root: &Path, session: &str) -> PathBuf {
 }
 
 /// `<app_root>/<session>/timetransform_logs/<from_id>__<to_id>` — one TT log
-/// per ordered clock pair per session. The auki-logs `manifest.json` and
+/// per ordered clock pair per session. The auki-logs `log_manifest.json` and
 /// `segments/` directory live directly under this path.
 pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -> PathBuf {
     session_root.join(TIMETRANSFORM_LOGS_DIR).join(format!(
@@ -118,7 +118,7 @@ pub fn timetransform_log_path(session_root: &Path, from_id: &str, to_id: &str) -
 }
 
 /// `<app_root>/<session>/sensorlogs/<sensor_log_id>` — one sensor log = one
-/// sensor stream. The auki-logs `manifest.json` and `segments/` directory
+/// sensor stream. The auki-logs `log_manifest.json` and `segments/` directory
 /// live directly under this path. The sensor identity is recorded in the
 /// log's manifest (`sensor_id` + `sensor_hash`), not encoded in the path.
 /// `sensor_log_id` is opaque to the SDK; the integrator (or daemon) mints
@@ -130,7 +130,7 @@ pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf {
 /// `<app_root>/<session>/poselogs/<from_id>__<to_id>` — one pose log per
 /// `(from_frame_id, to_frame_id)` pair per session. Mirrors the
 /// [`timetransform_log_path`] shape (one TT log per ordered clock
-/// pair). The auki-logs `manifest.json` and `segments/` directory live
+/// pair). The auki-logs `log_manifest.json` and `segments/` directory live
 /// directly under this path; the producer identity is recorded inline
 /// in the log's manifest under the `source` field, not encoded in the
 /// path.
@@ -150,7 +150,7 @@ pub fn poselog_path(session_root: &Path, from_frame_id: &str, to_frame_id: &str)
 
 /// `<app_root>/<session>/detection_logs/<detector_id>__<input_log_id>` —
 /// one detection log per `(detector, input sensor log)` pair within a
-/// session. The auki-logs `manifest.json` and `segments/` directory live
+/// session. The auki-logs `log_manifest.json` and `segments/` directory live
 /// directly under this path; the producer identity is recorded inline in
 /// the log's manifest under `detector_id` + `detector_hash`, mirroring
 /// how Sensor Log carries `sensor_id` + `sensor_hash`.
@@ -165,11 +165,7 @@ pub fn poselog_path(session_root: &Path, from_frame_id: &str, to_frame_id: &str)
 /// applies — the same path shape works whether the input sensor log is
 /// being written by a local driver, materialized from a peer's stream,
 /// or opened from a recording.
-pub fn detection_log_path(
-    session_root: &Path,
-    detector_id: &str,
-    input_log_id: &str,
-) -> PathBuf {
+pub fn detection_log_path(session_root: &Path, detector_id: &str, input_log_id: &str) -> PathBuf {
     session_root.join(DETECTION_LOGS_DIR).join(format!(
         "{}__{}",
         id_to_segment(detector_id),
@@ -230,11 +226,7 @@ mod tests {
     #[test]
     fn frame_entry_path_uses_frames_dir() {
         assert_eq!(
-            frame_entry_path(
-                &app(),
-                "K1-AABBCCDDEEFF/head_left_cam_optical",
-                "cafef00d"
-            ),
+            frame_entry_path(&app(), "K1-AABBCCDDEEFF/head_left_cam_optical", "cafef00d"),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/frames/\
                  K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"
@@ -245,7 +237,10 @@ mod tests {
     #[test]
     fn session_root_is_app_join_session_id() {
         let session = session_root(&app(), "abc-123");
-        assert_eq!(session, PathBuf::from("/home/booster/auki/boosterapp/abc-123"));
+        assert_eq!(
+            session,
+            PathBuf::from("/home/booster/auki/boosterapp/abc-123")
+        );
     }
 
     #[test]
@@ -283,14 +278,21 @@ mod tests {
     #[test]
     fn id_to_segment_is_idempotent_for_ids_without_slashes() {
         assert_eq!(id_to_segment("plain"), "plain");
-        assert_eq!(id_to_segment("K1-AABB__already_subbed"), "K1-AABB__already_subbed");
+        assert_eq!(
+            id_to_segment("K1-AABB__already_subbed"),
+            "K1-AABB__already_subbed"
+        );
     }
 
     #[test]
     fn poselog_path_uses_double_underscore_separator() {
         let session = session_root(&app(), "abc-123");
         assert_eq!(
-            poselog_path(&session, "K1-AABB/base_link", "K1-AABB/head_left_cam_optical"),
+            poselog_path(
+                &session,
+                "K1-AABB/base_link",
+                "K1-AABB/head_left_cam_optical"
+            ),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/abc-123/poselogs/\
                  K1-AABB__base_link__K1-AABB__head_left_cam_optical"

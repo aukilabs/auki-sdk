@@ -471,7 +471,10 @@ pub enum Error {
     /// `frame_id` did not match the id in the requested path. Indicates
     /// a misplaced or tampered file — content addressing is meant to
     /// make this detectable.
-    IdMismatch { expected: String, found: String },
+    IdMismatch {
+        expected: String,
+        found: String,
+    },
     /// On write of a [`FrameRegistryEntry`], the [`AxisConvention`]
     /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
     /// the same axis-pair (forward/backward, left/right, or up/down).
@@ -729,10 +732,7 @@ mod tests {
     /// rollout.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(
-            m1_sensor_entry().hash(),
-            "d798fa879c80a5b00cabc1ce47ca4f7a"
-        );
+        assert_eq!(m1_sensor_entry().hash(), "d798fa879c80a5b00cabc1ce47ca4f7a");
     }
 
     #[test]
@@ -745,10 +745,7 @@ mod tests {
 
     #[test]
     fn utc_clock_hash_is_locked() {
-        assert_eq!(
-            m1_utc_entry().hash(),
-            "89f84f4c2e09bef81d385b2af1d17e6c"
-        );
+        assert_eq!(m1_utc_entry().hash(), "89f84f4c2e09bef81d385b2af1d17e6c");
     }
 
     #[test]
@@ -814,9 +811,7 @@ mod tests {
                 cam.width = 1920;
                 cam.height = 1080;
             }
-            SensorBody::PointCloud(_)
-            | SensorBody::Audio(_)
-            | SensorBody::JointEncoders(_) => {
+            SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
                 panic!("test was set up for RgbCamera")
             }
         }
@@ -837,11 +832,12 @@ mod tests {
         assert_eq!(json_count, 2);
 
         // Both resolvable by their respective hashes.
-        assert!(read_sensor(dir.path(), &entry.sensor_id, &first_hash)
-            .unwrap()
-            .is_some());
-        let resolved_second =
-            read_sensor(dir.path(), &entry.sensor_id, &second_hash).unwrap();
+        assert!(
+            read_sensor(dir.path(), &entry.sensor_id, &first_hash)
+                .unwrap()
+                .is_some()
+        );
+        let resolved_second = read_sensor(dir.path(), &entry.sensor_id, &second_hash).unwrap();
         assert_eq!(resolved_second, Some(entry));
     }
 
@@ -908,10 +904,7 @@ mod tests {
         fs::copy(&real, bogus_dir.join(format!("{hash}.json"))).unwrap();
 
         let err = read_sensor(dir.path(), "K1-AABBCCDDEEFF/other_cam", &hash);
-        assert!(
-            matches!(err, Err(Error::IdMismatch { .. })),
-            "got {err:?}"
-        );
+        assert!(matches!(err, Err(Error::IdMismatch { .. })), "got {err:?}");
     }
 
     #[test]
@@ -1032,10 +1025,7 @@ mod tests {
         // tag flipped `"microphone"` → `"audio"`, body bytes unchanged
         // otherwise). Pre-rename locked hash was
         // `6e0a195364866f18834d2db8e2a0699f`.
-        assert_eq!(
-            m1_audio_entry().hash(),
-            "bc4a0e690f1149c4927ea98c96ead65a"
-        );
+        assert_eq!(m1_audio_entry().hash(), "bc4a0e690f1149c4927ea98c96ead65a");
     }
 
     #[test]
@@ -1130,10 +1120,7 @@ mod tests {
     /// shape drifts.
     #[test]
     fn frame_entry_hash_is_locked() {
-        assert_eq!(
-            m1_frame_entry().hash(),
-            "fd0dc3789e898b71b5e16ee122a81a44"
-        );
+        assert_eq!(m1_frame_entry().hash(), "fd0dc3789e898b71b5e16ee122a81a44");
     }
 
     #[test]
@@ -1249,7 +1236,10 @@ mod tests {
         }
         // Verify nothing was written under registries/frames/.
         let frames_root = dir.path().join("registries").join("frames");
-        assert!(!frames_root.exists(), "no on-disk write on validation failure");
+        assert!(
+            !frames_root.exists(),
+            "no on-disk write on validation failure"
+        );
     }
 
     #[test]

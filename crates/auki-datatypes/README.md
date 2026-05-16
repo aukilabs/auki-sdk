@@ -38,7 +38,7 @@ auki-datatypes/
 │   ├── time_transform.proto     ← auki.time_transform — TimeTransformEntry (Step 6, 2026-05-08; on-disk)
 │   ├── frame_stream.proto       ← auki.frame_stream — JpegFrame (Step 2, 2026-05-08; libp2p wire)
 │   ├── point_cloud_stream.proto ← auki.point_cloud_stream — PointCloudFrame (Step 2, 2026-05-08; libp2p wire)
-│   └── stream.proto             ← auki.stream — StreamMessage envelope (Step 2, 2026-05-08; oneof of Request | Accept | Decline | Frame | EndOfStream)
+│   └── stream.proto             ← auki.stream — StreamMessage envelope (Step 2, 2026-05-08; oneof of Request | Accept | Decline | Entry | EndOfStream)
 ├── build.rs                     ← invokes prost-build over proto/
 ├── src/
 │   ├── lib.rs                   ← re-exports generated code from OUT_DIR; impl_log_payload! macro; helper constructors on the stream types
@@ -61,7 +61,7 @@ use auki_datatypes::detection::DetectionLogEntry;                          // St
 use auki_datatypes::frame_stream::JpegFrame;                               // Step 2 (live)
 use auki_datatypes::point_cloud_stream::PointCloudFrame;                   // Step 2 (live)
 use auki_datatypes::stream::{                                              // Step 2 (live)
-    StreamDescriptor, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
+    StreamManifest, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
 };
 ```
 

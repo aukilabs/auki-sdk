@@ -110,10 +110,10 @@ Stream payloads and dispatch:
 
 ```rust
 pub enum StreamDispatch {
-    AcceptJpeg { descriptor: StreamDescriptor, source: SourceStream<JpegFrame> },
-    AcceptPointCloud { descriptor: StreamDescriptor, source: SourceStream<PointCloudFrame> },
-    AcceptJointEncoders { descriptor: StreamDescriptor, source: SourceStream<JointEncodersFrame> },
-    AcceptAudio { descriptor: StreamDescriptor, source: SourceStream<AudioFrame> },
+    AcceptJpeg { manifest: StreamManifest, source: SourceStream<JpegFrame> },
+    AcceptPointCloud { manifest: StreamManifest, source: SourceStream<PointCloudFrame> },
+    AcceptJointEncoders { manifest: StreamManifest, source: SourceStream<JointEncodersFrame> },
+    AcceptAudio { manifest: StreamManifest, source: SourceStream<AudioFrame> },
     Decline { reason: DeclineReason },
 }
 

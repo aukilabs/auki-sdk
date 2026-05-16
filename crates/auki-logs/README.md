@@ -10,7 +10,7 @@ The rest of this README is the **on-disk format spec, version 1** — implementa
 
 ```
 <log_root>/
-  manifest.json             RFC 8785 (JCS) canonical bytes
+  log_manifest.json             RFC 8785 (JCS) canonical bytes
   tags.jsonl                append-only TagClaim sidecar; optional, see ../../tags.md
   segments/
     <padded-ns>.seg         one file per segment
@@ -89,7 +89,7 @@ When `retention_ns == 0`, eviction is disabled entirely: every segment is kept f
 
 ### Runtime mutability
 
-A running log's `retention_ns` can be changed via `Log::set_retention(new_value)` without closing the log. The implementation rewrites `manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart, then updates the in-memory state. Disk-first ordering means a failed write leaves the log unchanged. Eviction itself runs only as part of `append`, so a quiescent log retains its current segments until something appends after the change. The use case is operator-driven endpoints — `PATCH /api/buffer` in the [Control API spec](../../docs/control-api.md) — that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window. The application owns the policy decision; the SDK exposes the mechanism.
+A running log's `retention_ns` can be changed via `Log::set_retention(new_value)` without closing the log. The implementation rewrites `log_manifest.json` atomically (`.tmp` → fsync → rename) so the change survives daemon restart, then updates the in-memory state. Disk-first ordering means a failed write leaves the log unchanged. Eviction itself runs only as part of `append`, so a quiescent log retains its current segments until something appends after the change. The use case is operator-driven endpoints — `PATCH /api/buffer` in the [Control API spec](../../docs/control-api.md) — that extend (or shrink) a recording's retention while it's running, without forcing a close-and-reopen cycle that would drop streaming data during the window. The application owns the policy decision; the SDK exposes the mechanism.
 
 ## Versioning
 

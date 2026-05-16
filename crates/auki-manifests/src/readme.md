@@ -13,6 +13,7 @@ pub fn build_sensor_log_manifest(
     app_id: &str, session_id: &str,
     sensor_id: &str, sensor_hash: &str,
     clock_id: &str, clock_hash: &str,
+    frame_id: Option<&str>, frame_hash: Option<&str>,
     segment_duration: Duration, retention: Duration,
 ) -> serde_json::Value;
 

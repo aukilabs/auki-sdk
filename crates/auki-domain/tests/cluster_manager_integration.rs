@@ -801,7 +801,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
 /// `ClusterManager`, and A fetches the exact `(frame_id, frame_hash)`.
 ///
 /// This pins the metadata-resolution layer Park needs after it sees a
-/// stream descriptor or catalog row with `frame_id + frame_hash`.
+/// stream manifest or catalog row with `frame_id + frame_hash`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn cluster_peers_fetch_frame_registry_entry_over_libp2p() {

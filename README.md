@@ -106,23 +106,23 @@ Files within an app:
 │   └── frames/<frame_id>/<hash>.json
 └── <session_id>/
     ├── timetransform_logs/<from_id>__<to_id>/
-    │   ├── manifest.json
+    │   ├── log_manifest.json
     │   └── segments/<padded-ns>.seg      ← one TT log per session
     ├── sensorlogs/
     │   ├── <sensor_log_id_1>/             ← one sensor stream per log
-    │   │   ├── manifest.json
+    │   │   ├── log_manifest.json
     │   │   └── segments/<padded-ns>.seg
     │   ├── <sensor_log_id_2>/
     │   │   └── ...
     │   └── <sensor_log_id_3>/
     ├── poselogs/
     │   ├── <from_id>__<to_id>/            ← one (from_frame_id, to_frame_id) pair per log
-    │   │   ├── manifest.json
+    │   │   ├── log_manifest.json
     │   │   └── segments/<padded-ns>.seg
     │   └── <from_id_2>__<to_id_2>/
     └── detection_logs/
         └── <detector_id>__<input_log_id>/  ← slashes in detector_id become "__"
-            ├── manifest.json
+            ├── log_manifest.json
             └── segments/<padded-ns>.seg
 ```
 
@@ -149,7 +149,7 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-identity`](crates/auki-identity) | `Wallet`, `PublicKey`, `WalletId`, `Signature`, `CreationCert`, `verify(...)`, `load_or_mint_seed(...)` |
 | [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error`, `LogPayload` (trait — consumers pick the encoder; prost types in `auki-datatypes` get a blanket impl) |
 | [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`RgbCamera`, `PointCloud`, `JointEncoders`, `Audio`), `ClockRegistryEntry`, `FrameRegistryEntry`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. The crate's scope is identity catalogs only; log payloads live in [`auki-datatypes`](crates/auki-datatypes). |
-| [`auki-datatypes`](crates/auki-datatypes) | `camera::PinholeCameraLogEntry`, `camera::DynamicIntrinsics`, `point_cloud::PointCloudLogEntry`, `audio::AudioLogEntry`, `joint_encoders::JointEncodersLogEntry`, `detection::DetectionLogEntry`, `pose::{SpatialTransform, Vec3, Quat}`, `time_transform::TimeTransformEntry`, stream payloads (`JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`), and `stream::{StreamMessage, StreamRequest, AcceptInfo, Frame, DeclineReason, EndReason}` helpers. |
+| [`auki-datatypes`](crates/auki-datatypes) | `camera::PinholeCameraLogEntry`, `camera::DynamicIntrinsics`, `point_cloud::PointCloudLogEntry`, `audio::AudioLogEntry`, `joint_encoders::JointEncodersLogEntry`, `detection::DetectionLogEntry`, `pose::{SpatialTransform, Vec3, Quat}`, `time_transform::TimeTransformEntry`, stream payloads (`JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`), and `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}` helpers. |
 | [`auki-geometry`](crates/auki-geometry) | `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, `axis_convention_matrix`, `convention_matrix`, `meters_per_unit`. Pure math over `auki-registry` declarations + `auki-datatypes` pose types. |
 | [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
@@ -177,7 +177,7 @@ mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine 
 [`auki-network-py`](crates/auki-network-py) — Discovery client value types plus shared stream pyclasses:
 
 - root: `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`
-- `auki_network.cluster`: `StreamRequest`, `AcceptInfo`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `DeclineReason`, `EndReason`, `ProducerFrame`, `ConsumerFrame`, `StreamDecision`, `StreamSubscription`, `FrameIterator`, and stream exceptions
+- `auki_network.cluster`: `StreamRequest`, `StreamManifest`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `DeclineReason`, `EndReason`, `StreamItem`, `StreamEntry`, `StreamDecision`, `StreamSubscription`, `StreamEntryIterator`, and stream exceptions
 
 [`auki-domain-py`](crates/auki-domain-py) — Python daemon facade for cluster lifecycle:
 
@@ -279,6 +279,8 @@ let manifest = build_sensor_log_manifest(
     "abc...",
     "K1-AABBCCDDEEFF/session-monotonic",
     "def...",
+    Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
+    Some("ghi..."),
     Duration::from_secs(1),
     Duration::from_secs(30),
 );
@@ -303,7 +305,7 @@ Critical wire-format and derivation chains are pinned by **locked test vectors**
 | [`auki-network`](crates/auki-network) | `tests::locked_seed_to_peer_id_vector` | `PeerIdentity::from_wallet(Wallet::from_seed([3u8; 32])).peer_id()` → canonical `12D3KooW…` libp2p PeerId string |
 | [`auki-network`](crates/auki-network) | `stream_protocol::tests::jpeg_frame_serializes_to_locked_wire_bytes` | `JpegFrame { bytes: <10-byte JFIF prefix> }` → exact prost wire bytes (`0a0a` tag/length prefix + payload) |
 | [`auki-network`](crates/auki-network) | `stream_protocol::tests::point_cloud_frame_serializes_to_locked_wire_bytes` | `PointCloudFrame { bytes: <8-byte fixture> }` → exact prost wire bytes (same shape as `JpegFrame` — single `bytes` field, separate `.proto` package for independent evolution) |
-| [`auki-network`](crates/auki-network) | `stream_protocol::tests::locked_stream_message_frame_with_point_cloud_payload` | Full envelope: `StreamMessage::Frame { timestamp_ns, seq, payload: <prost-encoded PointCloudFrame> }` → exact prost-encoded bytes. Park's browser-side decoder + cross-language reimplementations pin against this. |
+| [`auki-network`](crates/auki-network) | `stream_protocol::tests::locked_stream_message_entry_with_point_cloud_payload` | Full envelope: `StreamMessage::Entry { timestamp_ns, seq, payload: <prost-encoded PointCloudFrame> }` → exact prost-encoded bytes. Park's browser-side decoder + cross-language reimplementations pin against this. |
 | [`auki-registry`](crates/auki-registry) | `tests::frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | `FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")` → `{"axes":{"x":"forward","y":"left","z":"up"},...}` JSON + XXH3-128 `fd0dc3789e898b71b5e16ee122a81a44` |
 
 The two-stage chain in `auki-identity` + `auki-network` pins the `Wallet -> libp2p PeerId` derivation used by Discovery and cluster membership. The stream vectors pin wire shapes that cross language boundaries to Park's browser-side parser and other consumers. The Frame Registry vector pins convention names so any cross-language reader parses `"forward"` / `"left"` / `"up"` byte-identically.

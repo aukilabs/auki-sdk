@@ -159,9 +159,9 @@ pub mod audio_stream {
 }
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
-/// `StreamDescriptor`, `Frame`, `DeclineReason`, `EndReason`. The
+/// `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. The
 /// libp2p substream wire shape; mono-`T` per substream, with
-/// `Frame.payload` carrying the prost-encoded `T` bytes.
+/// `StreamEntry.payload` carrying the prost-encoded `T` bytes.
 pub mod stream {
     include!(concat!(env!("OUT_DIR"), "/auki.stream.rs"));
 
@@ -171,9 +171,9 @@ pub mod stream {
                 variant: Some(stream_message::Variant::Request(req)),
             }
         }
-        pub fn accept(descriptor: StreamDescriptor) -> Self {
+        pub fn accept(manifest: StreamManifest) -> Self {
             Self {
-                variant: Some(stream_message::Variant::Accept(descriptor)),
+                variant: Some(stream_message::Variant::Accept(manifest)),
             }
         }
         pub fn decline(reason: DeclineReason) -> Self {
@@ -181,9 +181,9 @@ pub mod stream {
                 variant: Some(stream_message::Variant::Decline(reason)),
             }
         }
-        pub fn frame(frame: Frame) -> Self {
+        pub fn entry(entry: StreamEntry) -> Self {
             Self {
-                variant: Some(stream_message::Variant::Frame(frame)),
+                variant: Some(stream_message::Variant::Entry(entry)),
             }
         }
         pub fn end_of_stream(reason: EndReason) -> Self {
@@ -397,10 +397,7 @@ mod tests {
     fn point_cloud_log_entry_serializes_to_locked_wire_bytes() {
         let bytes = step3_point_cloud_log_entry().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        assert_eq!(
-            hex,
-            "0a18000102030405060708090a0b0c0d0e0f1011121314151617"
-        );
+        assert_eq!(hex, "0a18000102030405060708090a0b0c0d0e0f1011121314151617");
     }
 
     /// XXH3-128 of those wire bytes — joins the workspace's locked
@@ -464,7 +461,8 @@ mod tests {
             let mut log: auki_logs::Log<PointCloudLogEntry> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
             log.append(100, &step3_point_cloud_log_entry()).unwrap();
-            log.append(200, &PointCloudLogEntry { data: vec![] }).unwrap();
+            log.append(200, &PointCloudLogEntry { data: vec![] })
+                .unwrap();
         }
         let reader: auki_logs::LogReader<PointCloudLogEntry> =
             auki_logs::Log::<PointCloudLogEntry>::read(dir.path()).unwrap();
@@ -495,10 +493,7 @@ mod tests {
     fn audio_log_entry_serializes_to_locked_wire_bytes() {
         let bytes = step4_audio_log_entry().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        assert_eq!(
-            hex,
-            "0a1000112233445566778899aabbccddeeff"
-        );
+        assert_eq!(hex, "0a1000112233445566778899aabbccddeeff");
     }
 
     /// XXH3-128 of those wire bytes.
@@ -646,8 +641,17 @@ mod tests {
     /// keep the wire bytes stable and human-checkable.
     fn step5_spatial_transform() -> SpatialTransform {
         SpatialTransform {
-            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+            translation: Some(Vec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
         }
     }
 
@@ -703,7 +707,10 @@ mod tests {
     /// `Option<T>` in prost) encodes to zero bytes.
     #[test]
     fn spatial_transform_default_round_trips() {
-        let entry = SpatialTransform { translation: None, orientation: None };
+        let entry = SpatialTransform {
+            translation: None,
+            orientation: None,
+        };
         let bytes = entry.encode_to_vec();
         assert_eq!(bytes.len(), 0);
         let decoded = SpatialTransform::decode(&*bytes).expect("decode");
@@ -728,7 +735,10 @@ mod tests {
             log.append(100, &step5_spatial_transform()).unwrap();
             log.append(
                 200,
-                &SpatialTransform { translation: None, orientation: None },
+                &SpatialTransform {
+                    translation: None,
+                    orientation: None,
+                },
             )
             .unwrap();
         }
@@ -950,7 +960,8 @@ mod tests {
             let mut log: auki_logs::Log<DetectionLogEntry> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
             log.append(100, &step8_detection_log_entry()).unwrap();
-            log.append(200, &DetectionLogEntry { data: vec![] }).unwrap();
+            log.append(200, &DetectionLogEntry { data: vec![] })
+                .unwrap();
         }
         let reader: auki_logs::LogReader<DetectionLogEntry> =
             auki_logs::Log::<DetectionLogEntry>::read(dir.path()).unwrap();

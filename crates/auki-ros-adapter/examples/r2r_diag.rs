@@ -18,12 +18,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "auki_diag", "")?;
 
-    let mut joint_states =
-        node.subscribe::<r2r::sensor_msgs::msg::JointState>("/joint_states", r2r::QosProfile::default())?;
-    let mut tf_static =
-        node.subscribe::<r2r::tf2_msgs::msg::TFMessage>("/tf_static", r2r::QosProfile::default().transient_local())?;
-    let mut camera_info =
-        node.subscribe::<r2r::sensor_msgs::msg::CameraInfo>("/image_left_raw/camera_info", r2r::QosProfile::default())?;
+    let mut joint_states = node.subscribe::<r2r::sensor_msgs::msg::JointState>(
+        "/joint_states",
+        r2r::QosProfile::default(),
+    )?;
+    let mut tf_static = node.subscribe::<r2r::tf2_msgs::msg::TFMessage>(
+        "/tf_static",
+        r2r::QosProfile::default().transient_local(),
+    )?;
+    let mut camera_info = node.subscribe::<r2r::sensor_msgs::msg::CameraInfo>(
+        "/image_left_raw/camera_info",
+        r2r::QosProfile::default(),
+    )?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -40,7 +46,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     msg.header.stamp.sec,
                     msg.header.stamp.nanosec
                 );
-                if count >= 3 { break; }
+                if count >= 3 {
+                    break;
+                }
             }
         };
         let tf = async {
@@ -48,7 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(msg) = tf_static.next().await {
                 count += 1;
                 println!("tf_static #{count}: {} transforms", msg.transforms.len());
-                if count >= 2 { break; }
+                if count >= 2 {
+                    break;
+                }
             }
         };
         let ci = async {
@@ -57,14 +67,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 count += 1;
                 println!(
                     "camera_info #{count}: {}x{} dmodel='{}' k[0]={} d.len={} stamp {}.{:09}",
-                    msg.width, msg.height, msg.distortion_model, msg.k[0], msg.d.len(),
-                    msg.header.stamp.sec, msg.header.stamp.nanosec
+                    msg.width,
+                    msg.height,
+                    msg.distortion_model,
+                    msg.k[0],
+                    msg.d.len(),
+                    msg.header.stamp.sec,
+                    msg.header.stamp.nanosec
                 );
-                if count >= 3 { break; }
+                if count >= 3 {
+                    break;
+                }
             }
         };
         let spinner = async {
-            for _ in 0..80 { // 8s
+            for _ in 0..80 {
+                // 8s
                 node.spin_once(Duration::from_millis(100));
                 tokio::task::yield_now().await;
             }

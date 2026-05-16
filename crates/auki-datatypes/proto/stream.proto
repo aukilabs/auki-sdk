@@ -9,33 +9,33 @@ package auki.stream;
 // substream lifetime IS the subscription's lifetime (grimsby D1):
 // initiator opens the substream, writes a `Request` as the first
 // message, the responder either declines-and-closes or starts pushing
-// `Frame` messages until close.
+// `StreamEntry` messages until close.
 //
 // Per-substream `T` (mono-T per grimsby D1 / Dagaz D1): the consumer
-// resolves the producer's `StreamDescriptor.sensor_hash` against its
-// Sensor Registry to learn which payload type `Frame.payload` carries.
-// The SDK runtime decodes `Frame.payload` (a length-bounded `bytes`
+// resolves the producer's `StreamManifest.sensor_hash` against its
+// Sensor Registry to learn which payload type `StreamEntry.payload` carries.
+// The SDK runtime decodes `StreamEntry.payload` (a length-bounded `bytes`
 // field) as the matching prost type from `auki-datatypes` (e.g.
 // `JpegFrame`, `PointCloudFrame`).
 //
 // Field number ledger (never reuse, never renumber):
 //   StreamRequest.sensor_id    = 1
-//   StreamDescriptor.sensor_id    = 1
-//   StreamDescriptor.sensor_hash  = 2
-//   StreamDescriptor.clock_id     = 3
-//   StreamDescriptor.clock_hash   = 4
-//   StreamDescriptor.frame_id     = 5
-//   StreamDescriptor.frame_hash   = 6
-//   Frame.timestamp_ns         = 1
-//   Frame.seq                  = 2
-//   Frame.payload              = 3
+//   StreamManifest.sensor_id    = 1
+//   StreamManifest.sensor_hash  = 2
+//   StreamManifest.clock_id     = 3
+//   StreamManifest.clock_hash   = 4
+//   StreamManifest.frame_id     = 5
+//   StreamManifest.frame_hash   = 6
+//   StreamEntry.timestamp_ns         = 1
+//   StreamEntry.seq                  = 2
+//   StreamEntry.payload              = 3
 //   StreamMessage.<oneof variant> = 1..5
 
 message StreamRequest {
   string sensor_id = 1;
 }
 
-message StreamDescriptor {
+message StreamManifest {
   string sensor_id = 1;
   string sensor_hash = 2;
   string clock_id = 3;
@@ -76,7 +76,7 @@ message EndReason {
   }
 }
 
-message Frame {
+message StreamEntry {
   int64 timestamp_ns = 1;
   uint64 seq = 2;
   bytes payload = 3;
@@ -85,9 +85,9 @@ message Frame {
 message StreamMessage {
   oneof variant {
     StreamRequest request = 1;
-    StreamDescriptor accept = 2;
+    StreamManifest accept = 2;
     DeclineReason decline = 3;
-    Frame frame = 4;
+    StreamEntry entry = 4;
     EndReason end_of_stream = 5;
   }
 }

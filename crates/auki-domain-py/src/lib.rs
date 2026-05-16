@@ -889,8 +889,8 @@ impl PyClusterManager {
     }
 
     /// Open a JPEG stream subscription on `peer_id` for `sensor_id`.
-    /// Returns a `StreamSubscription` whose `.frames()` iterator
-    /// yields `ConsumerFrame(payload=JpegFrame(bytes=...))` values.
+    /// Returns a `StreamSubscription` whose `.entries()` iterator
+    /// yields `StreamEntry(payload=JpegFrame(bytes=...))` values.
     /// Raises `auki_network.cluster.StreamDeclined` /
     /// `StreamUnreachable` / `StreamProtocolError` on failure.
     fn open_jpeg_stream(
@@ -905,8 +905,8 @@ impl PyClusterManager {
     }
 
     /// Open a PointCloud stream subscription on `peer_id` for
-    /// `sensor_id`. Returns a `StreamSubscription` whose `.frames()`
-    /// iterator yields `ConsumerFrame(payload=PointCloudFrame(...))`.
+    /// `sensor_id`. Returns a `StreamSubscription` whose `.entries()`
+    /// iterator yields `StreamEntry(payload=PointCloudFrame(...))`.
     fn open_pointcloud_stream(
         &self,
         py: Python<'_>,
@@ -919,9 +919,9 @@ impl PyClusterManager {
     }
 
     /// Open a JointEncoders stream subscription on `peer_id` for
-    /// `sensor_id`. Returns a `StreamSubscription` whose `.frames()`
+    /// `sensor_id`. Returns a `StreamSubscription` whose `.entries()`
     /// iterator yields
-    /// `ConsumerFrame(payload=JointEncodersFrame(angles_rad=...))`.
+    /// `StreamEntry(payload=JointEncodersFrame(angles_rad=...))`.
     fn open_joint_encoders_stream(
         &self,
         py: Python<'_>,
@@ -935,8 +935,8 @@ impl PyClusterManager {
 
     /// Open an Audio stream subscription on `peer_id` for `sensor_id`
     /// (Dialogue Batch 1). Returns a `StreamSubscription` whose
-    /// `.frames()` iterator yields
-    /// `ConsumerFrame(payload=AudioFrame(data=...))`. Sample format,
+    /// `.entries()` iterator yields
+    /// `StreamEntry(payload=AudioFrame(data=...))`. Sample format,
     /// channels, sample rate, and channel layout for the PCM bytes are
     /// resolved out-of-band via `(sensor_id, sensor_hash) →
     /// SensorBody::Audio` at handshake; the wire payload is

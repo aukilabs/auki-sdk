@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 17:53 HKT, 2026
+
+**Frame hashes thread through the ROS registry builders.** `StaticCameraMetadata` gains `frame_hash: &'a str`, and `build_point_cloud_registry_entry(sensor_id, msg, frame_rate_hz, frame_id, frame_hash)` now writes both frame fields into the `auki-registry` body. The adapter stays pure translation: it does not scan registries or infer hashes; integrators pass the exact `FrameRegistryEntry` hash they wrote.
+
+**Locked hashes recomputed in lockstep with `auki-registry`:** `build_rgb_camera_registry_entry_matches_m1_example_hash` and `end_to_end_translation_from_subscription_to_log_entry` now expect **`69f37478490cf1c0b226dbb86d3454fc`**; `build_point_cloud_registry_entry_matches_locked_hash` now expects **`2c480838a9be0b14608a8a0d72ee319f`**. The cross-crate equality remains the schema-parity guard.
+
+**Tests:** 19 tests pass in the focused run with `auki-registry` and `auki-domain`.
+
 ### broodsugar's claude · May 8, 10:51 HKT, 2026
 
 **`build_point_cloud_log_entry` now returns the prost type** — Step 3 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md). Function signature `(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry)` is unchanged, but `PointCloudLogEntry` is now [`auki_datatypes::point_cloud::PointCloudLogEntry`](../auki-datatypes/src/lib.rs) (re-exported here) instead of the departed `auki_registry::PointCloudLogEntry`. Construction now sets only `data`; `width` / `height` / `is_dense` are no longer carried per-frame. The producer-side ROS shape interpretation (`apply_normalization` using `msg.width × msg.height` for `num_points`) is unchanged — the result still gets flattened into the bytes the same way.

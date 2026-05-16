@@ -36,6 +36,9 @@ pub struct SensorRegistryEntry {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SensorBody {
     RgbCamera(RgbCamera),     // serializes as "type":"rgb_camera"
+    PointCloud(PointCloud),   // serializes as "type":"point_cloud"
+    Audio(Audio),             // serializes as "type":"audio"
+    JointEncoders(JointEncoders),
 }
 
 pub struct RgbCamera {
@@ -47,12 +50,13 @@ pub struct RgbCamera {
     pub intrinsics_model: String,
     pub distortion_model: String,
     pub frame_id: String,         // ← Frame Registry id for the camera optical frame
+    pub frame_hash: String,       // ← exact FrameRegistryEntry hash for that frame id
 }
 ```
 
 The tagged-enum body shape is the extension point for future sensor types (depth, IMU, lidar, etc.) — each gets its own variant + struct under the same envelope.
 
-`frame_id` references a [`FrameRegistryEntry`](#frameregistryentry) so a consumer can resolve the camera's coordinate convention (handedness, axes, units). Conventionally REP-103 optical (`X right, Y down, Z forward`); the SDK doesn't enforce a specific value.
+`frame_id` and `frame_hash` reference an exact [`FrameRegistryEntry`](#frameregistryentry) version so a consumer can resolve the camera's coordinate convention (handedness, axes, units) without silently picking up later edits. Conventionally REP-103 optical (`X right, Y down, Z forward`); the SDK doesn't enforce a specific value.
 
 ### `ClockRegistryEntry`
 
@@ -95,6 +99,7 @@ pub struct PointCloud {
     pub is_bigendian: bool,
     pub frame_rate_hz: u32,
     pub frame_id: String,         // ← Frame Registry id for the point coordinates
+    pub frame_hash: String,       // ← exact FrameRegistryEntry hash for that frame id
 }
 
 pub struct PointField {
@@ -112,7 +117,7 @@ pub enum PointFieldDataType {
 
 `PointFieldDataType::byte_width()` returns the per-element width in bytes (1, 2, 4, or 8). Used by translation code (e.g. `auki-ros-adapter`) to compute output `point_step` after RGB normalization.
 
-`frame_id` references a [`FrameRegistryEntry`](#frameregistryentry) so a consumer (Park, future Sentinel) can resolve the convention of the XYZ axes carried by the per-point bytes. ROS `PointCloud2` carries `header.frame_id`; the integrator threads it through here.
+`frame_id` and `frame_hash` reference an exact [`FrameRegistryEntry`](#frameregistryentry) version so a consumer (Park, future Sentinel) can resolve the convention of the XYZ axes carried by the per-point bytes. ROS `PointCloud2` carries `header.frame_id`; the integrator threads it through here.
 
 ### `FrameRegistryEntry`
 
@@ -207,6 +212,8 @@ pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Optio
 
 Each entry type also exposes `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
 
+`write_sensor` validates frame-bearing bodies before writing. `RgbCamera` and `PointCloud` must carry non-empty `frame_id` and `frame_hash`, and the exact frame file must already exist at `<app_root>/registries/frames/<frame_id>/<frame_hash>.json`. Non-spatial bodies (`Audio`, `JointEncoders`) do not carry frame fields.
+
 ## `WriteOutcome`
 
 ```rust
@@ -226,6 +233,7 @@ pub enum Error {
     Json(String),
     IdMismatch { expected: String, found: String },
     InvalidAxes(String),
+    FrameReferenceMissing { sensor_id: String, frame_id: String, frame_hash: String },
 }
 ```
 
@@ -233,11 +241,13 @@ pub enum Error {
 
 `InvalidAxes` fires on `write_frame` (and on the `FrameRegistryEntry::validate()` standalone call) when an `AxisConvention` triplet has two axes from the same axis-pair. The on-disk write doesn't happen.
 
+`FrameReferenceMissing` fires on `write_sensor` when a spatial sensor body is missing `frame_id` / `frame_hash` or when the exact frame entry is not already on disk. There is no backwards-compatibility fallback or directory scan; producers must write the frame entry first and pin its hash explicitly.
+
 ## Atomic writes
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (33 total)
+## Tests (38 total)
 
 | Test | Asserts |
 |------|---------|
@@ -245,8 +255,8 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `monotonic_clock_canonical_bytes_match_m1_example` | Same, monotonic clock |
 | `utc_clock_canonical_bytes_match_m1_example` | Same, UTC clock |
 | `frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | Byte-exact JCS output for the locked Frame Registry vector (`ros_body("K1-AABBCCDDEEFF/base_link")`) |
-| `sensor_entry_hash_is_locked` | `d798fa879c80a5b00cabc1ce47ca4f7a` (recomputed at v0.0.22 with `frame_id`) |
-| `point_cloud_entry_hash_is_locked` | `79b58e4e1743d238f93fc27f1a6a5ebf` (recomputed at v0.0.22 with `frame_id`) |
+| `sensor_entry_hash_is_locked` | `69f37478490cf1c0b226dbb86d3454fc` (recomputed with `frame_hash`) |
+| `point_cloud_entry_hash_is_locked` | `2c480838a9be0b14608a8a0d72ee319f` (recomputed with `frame_hash`) |
 | `frame_entry_hash_is_locked` | `fd0dc3789e898b71b5e16ee122a81a44` |
 | `monotonic_clock_hash_is_locked` | `1f2176888b1a6621315033f22659b9f3` |
 | `utc_clock_hash_is_locked` | `89f84f4c2e09bef81d385b2af1d17e6c` |
@@ -268,6 +278,8 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `write_then_read_frame_round_trip` | Frame entry round-trips through write+read |
 | `write_frame_is_idempotent_on_identical_content` | Same input → same hash, second write is no-op |
 | `read_frame_returns_none_for_missing_entry` | Absent file is `Ok(None)` |
+| `write_sensor_rejects_missing_frame_reference` | Spatial sensors cannot be written before their exact frame entry exists |
+| `write_sensor_rejects_empty_frame_hash` | Spatial sensors cannot be written with an empty frame hash |
 
 The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, multiple tests fail at once.
 

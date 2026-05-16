@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 17:53 HKT, 2026
+
+**Producer-side `StreamManifestBuilder` added.** `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` reads the exact local `SensorRegistryEntry`, builds the stream accept `StreamManifest`, and centralizes the producer-side frame metadata projection that Park surfaced during live point-cloud testing.
+
+For `RgbCamera` and `PointCloud` bodies, the builder copies `frame_id` and `frame_hash` from the sensor entry and verifies the exact `FrameRegistryEntry` exists via `read_frame(app_root, frame_id, frame_hash)`. For `Audio` and `JointEncoders`, it emits empty frame fields by contract. It never scans registry directories or guesses a hash.
+
+**Typed loud failures:** `BuildStreamManifestError::{SensorEntryMissing, FrameIdMissing, FrameHashMissing, FrameEntryMissing, Io, Registry}` distinguish missing sensor metadata, malformed spatial sensor entries, missing frame entries, and lower-level registry failures. Producer stream providers can now reject/decline at accept time instead of returning half-populated manifests.
+
+**Tests:** happy spatial path, non-spatial audio path, missing sensor, missing `frame_id`, missing `frame_hash`, missing frame entry, and registry JSON error coverage. Focused run: `cargo test -p auki-registry -p auki-domain -p auki-ros-adapter`.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **`ClusterManager` wires registry exchange and typed fetch helpers.** Producers register their app root with `set_registry_app_root(app_root)`. The SDK's inbound `/auki/registries/0.0.1` handler reads existing `auki-registry` entries from that app root and replies with canonical JSON envelopes, or `entry: None` when the exact `(kind, id, hash)` is missing.

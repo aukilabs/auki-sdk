@@ -3,10 +3,10 @@
 //!
 //! An entry is built from typed fields, canonicalized via [`auki_jcs`], hashed
 //! via [`auki_hash`], and persisted at
-//! `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json`. Path layout lives
-//! in [`auki_layout`]; this crate composes its helpers. Slashes in IDs are
-//! replaced with `__` in path segments. Re-writing identical content is a
-//! no-op; writing different content under the same id produces a sibling file.
+//! `<app_root>/registries/{sensors,clocks,frames}/<id>/<hash>.json`. Path
+//! layout lives in [`auki_layout`]; this crate composes its helpers. Slashes in
+//! IDs are replaced with `__` in path segments. Re-writing identical content is
+//! a no-op; writing different content under the same id produces a sibling file.
 //!
 //! The hash *is* the version. There are no version counters.
 //!
@@ -54,6 +54,9 @@ pub struct RgbCamera {
     /// REP-103 optical convention (`X right, Y down, Z forward`); the
     /// SDK does not enforce a specific convention.
     pub frame_id: String,
+    /// Content hash of the exact [`FrameRegistryEntry`] version the
+    /// camera frame commits to.
+    pub frame_hash: String,
 }
 
 /// Static layout of a point-cloud sensor's per-point bytes. The actual point
@@ -72,6 +75,9 @@ pub struct PointCloud {
     /// know which Frame Registry entry tells them how to interpret the
     /// XYZ axes and units.
     pub frame_id: String,
+    /// Content hash of the exact [`FrameRegistryEntry`] version the
+    /// point coordinates commit to.
+    pub frame_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,6 +485,14 @@ pub enum Error {
     /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
     /// the same axis-pair (forward/backward, left/right, or up/down).
     InvalidAxes(String),
+    /// On write of a frame-bearing [`SensorRegistryEntry`], the
+    /// referenced `(frame_id, frame_hash)` did not resolve to an
+    /// existing [`FrameRegistryEntry`] on disk.
+    FrameReferenceMissing {
+        sensor_id: String,
+        frame_id: String,
+        frame_hash: String,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -490,6 +504,14 @@ impl std::fmt::Display for Error {
                 write!(f, "id mismatch: expected {expected:?}, found {found:?}")
             }
             Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
+            Error::FrameReferenceMissing {
+                sensor_id,
+                frame_id,
+                frame_hash,
+            } => write!(
+                f,
+                "sensor {sensor_id:?} references missing frame ({frame_id:?}, {frame_hash:?})"
+            ),
         }
     }
 }
@@ -507,6 +529,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Write a sensor registry entry under `<app_root>/registries/sensors/...`.
 /// Idempotent on hash: writing identical content is a no-op.
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
+    validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::sensor_entry_path(app_root, &entry.sensor_id, &hash);
@@ -620,6 +643,33 @@ fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcom
     Ok(WriteOutcome::Created(hash))
 }
 
+fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry) -> Result<()> {
+    let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+        return Ok(());
+    };
+
+    if frame_id.is_empty()
+        || frame_hash.is_empty()
+        || read_frame(app_root, frame_id, frame_hash)?.is_none()
+    {
+        return Err(Error::FrameReferenceMissing {
+            sensor_id: entry.sensor_id.clone(),
+            frame_id: frame_id.to_string(),
+            frame_hash: frame_hash.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
+    match body {
+        SensorBody::RgbCamera(b) => Some((&b.frame_id, &b.frame_hash)),
+        SensorBody::PointCloud(b) => Some((&b.frame_id, &b.frame_hash)),
+        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+    }
+}
+
 fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(b) => Ok(Some(b)),
@@ -655,6 +705,8 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    const M1_OPTICAL_FRAME_HASH: &str = "e0d40e7b526e04f15f83f75897f53825";
+
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
             sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
@@ -667,8 +719,18 @@ mod tests {
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "plumb_bob".into(),
                 frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                frame_hash: M1_OPTICAL_FRAME_HASH.into(),
             }),
         }
+    }
+
+    fn m1_optical_frame_entry() -> FrameRegistryEntry {
+        FrameRegistryEntry::ros_optical("K1-AABBCCDDEEFF/head_left_cam_optical")
+    }
+
+    fn write_m1_optical_frame(app_root: &Path) {
+        let outcome = write_frame(app_root, &m1_optical_frame_entry()).unwrap();
+        assert_eq!(outcome.hash(), M1_OPTICAL_FRAME_HASH);
     }
 
     fn m1_monotonic_entry() -> ClockRegistryEntry {
@@ -704,7 +766,7 @@ mod tests {
         // Keys sorted by RFC 8785 §3.2.3 (lexicographic UTF-16 code units).
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb_camera","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb_camera","width":544}"#
         );
     }
 
@@ -727,12 +789,12 @@ mod tests {
     }
 
     /// Locks the XXH3-128 hex of the M1 sensor entry. Catches drift in
-    /// entry shape, canonicalization, or hashing. Recomputed at v0.0.22
-    /// when `frame_id` was added to RgbCamera per the Frame Registry
-    /// rollout.
+    /// entry shape, canonicalization, or hashing. Recomputed when
+    /// `frame_hash` was added to RgbCamera to pin the exact Frame
+    /// Registry entry version.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "d798fa879c80a5b00cabc1ce47ca4f7a");
+        assert_eq!(m1_sensor_entry().hash(), "69f37478490cf1c0b226dbb86d3454fc");
     }
 
     #[test]
@@ -751,6 +813,7 @@ mod tests {
     #[test]
     fn write_then_read_sensor_round_trip() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let entry = m1_sensor_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = match outcome {
@@ -774,6 +837,7 @@ mod tests {
     #[test]
     fn multi_version_same_content_is_no_op() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let entry = m1_sensor_entry();
 
         let first = write_sensor(dir.path(), &entry).unwrap();
@@ -799,6 +863,7 @@ mod tests {
     #[test]
     fn multi_version_different_content_writes_alongside() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let mut entry = m1_sensor_entry();
         let first_hash = entry.hash();
         write_sensor(dir.path(), &entry).unwrap();
@@ -844,6 +909,7 @@ mod tests {
     #[test]
     fn slash_in_id_becomes_double_underscore() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let entry = m1_sensor_entry();
         write_sensor(dir.path(), &entry).unwrap();
 
@@ -880,6 +946,7 @@ mod tests {
     #[test]
     fn read_with_id_mismatch_errors() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let entry = m1_sensor_entry();
         let hash = match write_sensor(dir.path(), &entry).unwrap() {
             WriteOutcome::Created(h) => h,
@@ -944,6 +1011,7 @@ mod tests {
                 is_bigendian: false,
                 frame_rate_hz: 10,
                 frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                frame_hash: M1_OPTICAL_FRAME_HASH.into(),
             }),
         }
     }
@@ -953,7 +1021,7 @@ mod tests {
         let bytes = m1_point_cloud_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -961,25 +1029,54 @@ mod tests {
     fn point_cloud_entry_hash_is_locked() {
         // Pin the XXH3-128 of the M1 example point cloud entry.
         // Updates to this must be coordinated with any cross-language reader.
-        // Recomputed at v0.0.22 when `frame_id` was added per the Frame
-        // Registry rollout. If this trips, either (a) the canonical
-        // bytes assertion above also tripped — see that for the cause —
-        // or (b) `auki-jcs` / `auki-hash` drifted; investigate before
-        // updating.
+        // Recomputed when `frame_hash` was added to pin the exact Frame
+        // Registry entry. If this trips, either (a) the canonical bytes
+        // assertion above also tripped — see that for the cause — or (b)
+        // `auki-jcs` / `auki-hash` drifted; investigate before updating.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "79b58e4e1743d238f93fc27f1a6a5ebf"
+            "2c480838a9be0b14608a8a0d72ee319f"
         );
     }
 
     #[test]
     fn write_then_read_point_cloud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
         let entry = m1_point_cloud_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
         let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
+    }
+
+    #[test]
+    fn write_sensor_rejects_missing_frame_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = m1_sensor_entry();
+        let err = write_sensor(dir.path(), &entry).unwrap_err();
+        assert!(
+            matches!(err, Error::FrameReferenceMissing { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_sensor_rejects_empty_frame_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path());
+        let mut entry = m1_sensor_entry();
+        match &mut entry.body {
+            SensorBody::RgbCamera(cam) => cam.frame_hash.clear(),
+            SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
+                panic!("test was set up for RgbCamera")
+            }
+        }
+        let err = write_sensor(dir.path(), &entry).unwrap_err();
+        assert!(
+            matches!(err, Error::FrameReferenceMissing { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

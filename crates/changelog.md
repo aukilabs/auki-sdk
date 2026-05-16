@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 17:53 HKT, 2026
+
+**[`auki-registry`](auki-registry/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-ros-adapter`](auki-ros-adapter/changelog.md) — stream manifests now derive frame metadata from hash-pinned sensor entries.** `RgbCamera` and `PointCloud` registry bodies require `frame_hash` alongside `frame_id`, and `write_sensor` refuses spatial sensors unless the exact frame entry is already on disk. `auki-domain::StreamManifestBuilder::from_registry` builds accept-time `StreamManifest` values from local registries with typed errors and no directory scanning; `Audio` / `JointEncoders` keep empty frame fields. ROS adapter builders now require/propagate frame hashes, with locked hashes recomputed. Focused tests: `cargo test -p auki-registry -p auki-domain -p auki-ros-adapter`.
+
 ### Nils's codex · May 16, 14:04 HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py/changelog.md) — Python producers can register the registry-serving app root.** `ClusterManager.set_registry_app_root(app_root)` now mirrors Rust `ClusterManager::set_registry_app_root`, accepting `str` / `os.PathLike` and enabling Python daemons such as Boosterapp to serve existing Sensor / Clock / Frame registry files over `/auki/registries/0.0.1`. Python registry-entry fetch helpers remain deferred until a return shape is pinned.

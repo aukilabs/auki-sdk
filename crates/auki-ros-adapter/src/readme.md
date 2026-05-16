@@ -71,10 +71,12 @@ pub struct StaticCameraMetadata<'a> {
     pub color_space: &'a str,
     pub frame_rate_hz: u32,
     pub intrinsics_model: &'a str,
+    pub frame_id: &'a str,
+    pub frame_hash: &'a str,
 }
 ```
 
-The SDK ships the struct only — no per-platform constants. Integrators define their own; e.g. boosterapp owns `K1_HEAD_RGB` in its `auki-k1-binary` crate.
+The SDK ships the struct only — no per-platform constants. Integrators define their own; e.g. boosterapp owns `K1_HEAD_RGB` in its `auki-k1-binary` crate. `frame_hash` pins the exact `FrameRegistryEntry` version named by `frame_id`; this crate does not infer it by scanning registry directories.
 
 ## `CameraSubscriber` trait
 
@@ -106,6 +108,8 @@ pub fn build_point_cloud_registry_entry(
     sensor_id: impl Into<String>,
     msg: &PointCloud2Msg,
     frame_rate_hz: u32,
+    frame_id: impl Into<String>,
+    frame_hash: impl Into<String>,
 ) -> auki_registry::SensorRegistryEntry;
 
 pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry);
@@ -142,7 +146,7 @@ impl R2rCameraSubscriber {
 
 The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The actual `r2r::Node` + subscription wiring lands at task 9 against the real DDS bus, where it can be validated for free during the bring-up walkthrough. Topics: `/boostercamera/head/rgb/camera_info` and `/boostercamera/head/rgb`.
 
-## Tests (22 total)
+## Tests (19 total)
 
 | Test | Asserts |
 |------|---------|
@@ -152,13 +156,19 @@ The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The a
 | `dynamic_intrinsics_extracts_correct_indices` | K[0]/K[4]/K[2]/K[5] → fx/fy/cx/cy |
 | `dynamic_intrinsics_passes_distortion_through_unchanged` | D vector preserved verbatim |
 | `dynamic_intrinsics_accepts_empty_distortion_for_none_model` | Empty D is allowed |
-| `build_rgb_camera_registry_entry_matches_m1_example_hash` | Output hash matches the locked M1 example (`e8cb3879...`) |
+| `build_rgb_camera_registry_entry_matches_m1_example_hash` | Output hash matches the locked M1 example (`69f37478490cf1c0b226dbb86d3454fc`) |
 | `build_sensor_log_entry_combines_info_and_image` | Frame timestamp from image, intrinsics from info |
-| `sensor_log_entry_round_trips_through_cbor` | Full payload survives CBOR encode/decode |
 | `mock_subscriber_returns_scripted_bootstrap_then_drains_events` | Mock semantics |
 | `mock_subscriber_bootstrap_timeout_when_unscripted` | Default mock returns `Timeout` |
 | `mock_subscriber_bootstrap_can_be_scripted_to_error` | Mock can simulate transport failures |
 | `end_to_end_translation_from_subscription_to_log_entry` | Full subscription → registry → log-entry path against the mock |
+| `build_point_cloud_registry_entry_matches_locked_hash` | Output hash matches the locked point-cloud example (`2c480838a9be0b14608a8a0d72ee319f`) |
+| `build_point_cloud_log_entry_extracts_timestamp_and_data` | Point-cloud frame timestamp + normalized data bytes |
+| `rgb_field_normalizes_to_three_uint8s_and_repacks_bytes` | ROS float-packed RGB becomes `r/g/b` uint8 fields |
+| `rgba_field_normalizes_to_four_uint8s_with_alpha_preserved` | ROS float-packed RGBA becomes `r/g/b/a` uint8 fields |
+| `non_rgb_fields_pass_through_unchanged` | Non-color point fields keep datatype/count/layout |
+| `mock_point_cloud_subscriber_bootstrap_then_drains` | Point-cloud mock semantics |
+| `mock_point_cloud_subscriber_bootstrap_timeout_when_unscripted` | Default point-cloud mock returns `Timeout` |
 
 ## Consumers in this workspace
 

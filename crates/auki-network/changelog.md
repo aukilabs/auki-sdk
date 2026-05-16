@@ -12,6 +12,18 @@ Latest entry on top.
 
 `NetworkRuntime::request_sensors_catalog_with(peer_id, request)` is the explicit request path; existing `request_sensors_catalog(peer_id)` remains catalog-only. Tests pin default `{}` serialization, detail flag serialization, embedded JSON round-trips, unknown-field tolerance, and oversize-frame rejection.
 
+### Arshak's claude · May 16, HKT, 2026 — Commit 5/6
+
+**`StreamDispatch::AcceptDetection` lands** as the fifth `Accept*` variant. Closes Cuba **T8** on the producer side. Each [`DetectionLogEntry`](../auki-datatypes/proto/detection.proto) carries the same `data` / `sensor_hash` / `type` shape as the on-disk Detection Log payload — wire and disk are content-identical by construction (both sides `prost::Message::encode_to_vec` the same struct).
+
+Consumer side is already generic — `NetworkRuntime::open_stream::<T>` works for any `T: Message + Default`, so `open_stream::<DetectionLogEntry>` "just works" without an additional change. The dispatch enum stays closed; the new variant slots in beside `AcceptJpeg` / `AcceptPointCloud` / `AcceptJointEncoders` / `AcceptAudio` and pumps through the same `pump_typed::<T>` path.
+
+**`StreamManifest.sensor_hash` for a detection stream** is the *bound input sensor* — the camera frame the detector was bound to. The detector's own identity (`detector_id` / `detector_hash`) is resolved out-of-band via the `/auki/registries/0.0.1` Detector Registry exchange (Commit 4); the same protocol Park already uses for sensor metadata.
+
+**No new tests.** The exhaustive `match dispatch` site is the structural guarantee for the new variant; `cargo build --package auki-network` is clean. A producer-side integration test would mirror `producer_accepts_and_streams_jpeg_frames` but the existing libp2p-flavored integration tests are flaky upstream — not worth chasing here.
+
+**Context**: Commit 5/6 of the Cuba v0.0.45 SDK migration.
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **`RegistryKind::Detector` extends `/auki/registries/0.0.1`.** Fourth variant on the request enum alongside `Sensor` / `Clock` / `Frame`. Wire shape is the same `{ kind, id, hash }` request → `Option<RegistryEntryEnvelope>` response — Cuba's Detector Registry rides the existing protocol; no new substream or wire format. `as_str` returns `"detector"`. Closes Cuba T7 at the protocol level: Park enumerates a peer's detectors via the same libp2p path it already uses for sensors, no HTTP shim required (Cuba T6 dropped).

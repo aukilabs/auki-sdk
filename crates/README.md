@@ -51,5 +51,5 @@ PyO3 wrappers, one per Rust component (no umbrella `auki-py`).
 | [`auki-identity-py`](auki-identity-py) | Wallet primitives + per-machine identity for Python sidecars (BoosterApp's K1 capture). |
 | [`auki-registry-py`](auki-registry-py) | Dict-oriented Sensor / Clock / Frame Registry constructors plus canonical JSON/hash and hash-pinned read/write helpers for Python producers. |
 | [`auki-network-py`](auki-network-py) | Discovery client pyclasses plus shared stream pyclasses for Python (`StreamDecision`, payload frames, subscriptions). |
-| [`auki-domain-py`](auki-domain-py) | Python daemon facade for `ClusterManager`: bootstrap/create/join, role/membership accessors, peer info/catalog exchange, registry serving root registration, stream provider and stream openers. |
+| [`auki-domain-py`](auki-domain-py) | Python daemon facade for `ClusterManager`: bootstrap/create/join, role/membership accessors, peer info/resource catalog exchange, registry serving root registration, stream provider and stream openers. |
 | [`auki-session-py`](auki-session-py) | Transport-neutral session lifecycle surface — opening sessions, registering sensors and clocks, writing and listing logs. The HTTP Control API and the forthcoming libp2p control protocols are thin wrappers over this. |

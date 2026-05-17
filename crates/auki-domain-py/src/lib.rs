@@ -20,9 +20,15 @@ use auki_domain_rs::{
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
     DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
-    JoinClusterError as RustJoinClusterError, SensorCatalogProvider as RustSensorCatalogProvider,
-    SensorEntry as RustSensorEntry, SensorsRequest as RustSensorsRequest,
-    StreamManifestBuilder as RustStreamManifestBuilder,
+    FetchResourcesCatalogError as RustFetchResourcesCatalogError,
+    JoinClusterError as RustJoinClusterError,
+    ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
+    ResourcePinholeIntrinsics as RustResourcePinholeIntrinsics, ResourceQuat as RustResourceQuat,
+    ResourceSpatialTransform as RustResourceSpatialTransform, ResourceVec3 as RustResourceVec3,
+    ResourcesRequest as RustResourcesRequest, SensorCatalogProvider as RustSensorCatalogProvider,
+    SensorEntry as RustSensorEntry, SensorStreamResource as RustSensorStreamResource,
+    SensorsRequest as RustSensorsRequest, StreamManifestBuilder as RustStreamManifestBuilder,
+    TransformEdgeResource as RustTransformEdgeResource,
 };
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
@@ -497,6 +503,505 @@ impl RustSensorCatalogProvider for PySensorCatalogProvider {
                 }
             }
         })
+    }
+}
+
+// ─── Resource catalog pyclasses ─────────────────────────────────────
+
+/// Numeric pinhole camera intrinsics for projection.
+#[pyclass(name = "ResourcePinholeIntrinsics")]
+#[derive(Clone)]
+pub struct PyResourcePinholeIntrinsics {
+    inner: RustResourcePinholeIntrinsics,
+}
+
+#[pymethods]
+impl PyResourcePinholeIntrinsics {
+    #[new]
+    fn new(fx: f64, fy: f64, cx: f64, cy: f64) -> Self {
+        Self {
+            inner: RustResourcePinholeIntrinsics { fx, fy, cx, cy },
+        }
+    }
+
+    #[getter]
+    fn fx(&self) -> f64 {
+        self.inner.fx
+    }
+
+    #[getter]
+    fn fy(&self) -> f64 {
+        self.inner.fy
+    }
+
+    #[getter]
+    fn cx(&self) -> f64 {
+        self.inner.cx
+    }
+
+    #[getter]
+    fn cy(&self) -> f64 {
+        self.inner.cy
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ResourcePinholeIntrinsics(fx={}, fy={}, cx={}, cy={})",
+            self.inner.fx, self.inner.fy, self.inner.cx, self.inner.cy
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// 3D vector used by resource transform rows.
+#[pyclass(name = "ResourceVec3")]
+#[derive(Clone)]
+pub struct PyResourceVec3 {
+    inner: RustResourceVec3,
+}
+
+#[pymethods]
+impl PyResourceVec3 {
+    #[new]
+    fn new(x: f64, y: f64, z: f64) -> Self {
+        Self {
+            inner: RustResourceVec3 { x, y, z },
+        }
+    }
+
+    #[getter]
+    fn x(&self) -> f64 {
+        self.inner.x
+    }
+
+    #[getter]
+    fn y(&self) -> f64 {
+        self.inner.y
+    }
+
+    #[getter]
+    fn z(&self) -> f64 {
+        self.inner.z
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ResourceVec3(x={}, y={}, z={})",
+            self.inner.x, self.inner.y, self.inner.z
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Hamilton quaternion used by resource transform rows.
+#[pyclass(name = "ResourceQuat")]
+#[derive(Clone)]
+pub struct PyResourceQuat {
+    inner: RustResourceQuat,
+}
+
+#[pymethods]
+impl PyResourceQuat {
+    #[new]
+    fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+        Self {
+            inner: RustResourceQuat { x, y, z, w },
+        }
+    }
+
+    #[getter]
+    fn x(&self) -> f64 {
+        self.inner.x
+    }
+
+    #[getter]
+    fn y(&self) -> f64 {
+        self.inner.y
+    }
+
+    #[getter]
+    fn z(&self) -> f64 {
+        self.inner.z
+    }
+
+    #[getter]
+    fn w(&self) -> f64 {
+        self.inner.w
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ResourceQuat(x={}, y={}, z={}, w={})",
+            self.inner.x, self.inner.y, self.inner.z, self.inner.w
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Rigid transform payload carried by `TransformEdgeResource`.
+#[pyclass(name = "ResourceSpatialTransform")]
+#[derive(Clone)]
+pub struct PyResourceSpatialTransform {
+    inner: RustResourceSpatialTransform,
+}
+
+#[pymethods]
+impl PyResourceSpatialTransform {
+    #[new]
+    fn new(translation: PyRef<'_, PyResourceVec3>, orientation: PyRef<'_, PyResourceQuat>) -> Self {
+        Self {
+            inner: RustResourceSpatialTransform {
+                translation: translation.inner,
+                orientation: orientation.inner,
+            },
+        }
+    }
+
+    #[getter]
+    fn translation(&self) -> PyResourceVec3 {
+        PyResourceVec3 {
+            inner: self.inner.translation,
+        }
+    }
+
+    #[getter]
+    fn orientation(&self) -> PyResourceQuat {
+        PyResourceQuat {
+            inner: self.inner.orientation,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ResourceSpatialTransform(translation={:?}, orientation={:?})",
+            self.inner.translation, self.inner.orientation
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Live sensor stream resource row from `/auki/resources/0.0.1`.
+#[pyclass(name = "SensorStreamResource")]
+#[derive(Clone)]
+pub struct PySensorStreamResource {
+    inner: RustSensorStreamResource,
+}
+
+#[pymethods]
+impl PySensorStreamResource {
+    #[new]
+    #[pyo3(signature = (
+        id,
+        sensor_id,
+        sensor_hash,
+        sensor_kind,
+        stream_protocol,
+        payload,
+        pinhole_intrinsics = None,
+        sensor_entry_json = None,
+        frame_entry_json = None
+    ))]
+    fn new(
+        id: String,
+        sensor_id: String,
+        sensor_hash: String,
+        sensor_kind: String,
+        stream_protocol: String,
+        payload: String,
+        pinhole_intrinsics: Option<&Bound<'_, PyAny>>,
+        sensor_entry_json: Option<String>,
+        frame_entry_json: Option<String>,
+    ) -> PyResult<Self> {
+        let pinhole_intrinsics = match pinhole_intrinsics {
+            Some(value) => Some(
+                value
+                    .extract::<PyRef<'_, PyResourcePinholeIntrinsics>>()?
+                    .inner,
+            ),
+            None => None,
+        };
+        Ok(Self {
+            inner: RustSensorStreamResource {
+                id,
+                sensor_id,
+                sensor_hash,
+                sensor_kind,
+                stream_protocol,
+                payload,
+                pinhole_intrinsics,
+                sensor_entry_json,
+                frame_entry_json,
+            },
+        })
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "sensor_stream"
+    }
+
+    #[getter]
+    fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+
+    #[getter]
+    fn sensor_id(&self) -> String {
+        self.inner.sensor_id.clone()
+    }
+
+    #[getter]
+    fn sensor_hash(&self) -> String {
+        self.inner.sensor_hash.clone()
+    }
+
+    #[getter]
+    fn sensor_kind(&self) -> String {
+        self.inner.sensor_kind.clone()
+    }
+
+    #[getter]
+    fn stream_protocol(&self) -> String {
+        self.inner.stream_protocol.clone()
+    }
+
+    #[getter]
+    fn payload(&self) -> String {
+        self.inner.payload.clone()
+    }
+
+    #[getter]
+    fn pinhole_intrinsics(&self) -> Option<PyResourcePinholeIntrinsics> {
+        self.inner
+            .pinhole_intrinsics
+            .map(|inner| PyResourcePinholeIntrinsics { inner })
+    }
+
+    #[getter]
+    fn sensor_entry_json(&self) -> Option<String> {
+        self.inner.sensor_entry_json.clone()
+    }
+
+    #[getter]
+    fn frame_entry_json(&self) -> Option<String> {
+        self.inner.frame_entry_json.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SensorStreamResource(id={:?}, sensor_id={:?}, sensor_hash={:?}, sensor_kind={:?}, payload={:?}, pinhole_intrinsics={})",
+            self.inner.id,
+            self.inner.sensor_id,
+            self.inner.sensor_hash,
+            self.inner.sensor_kind,
+            self.inner.payload,
+            self.inner.pinhole_intrinsics.is_some(),
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Direct rigid transform edge resource row from `/auki/resources/0.0.1`.
+#[pyclass(name = "TransformEdgeResource")]
+#[derive(Clone)]
+pub struct PyTransformEdgeResource {
+    inner: RustTransformEdgeResource,
+}
+
+#[pymethods]
+impl PyTransformEdgeResource {
+    #[new]
+    #[pyo3(signature = (
+        id,
+        from_frame_id,
+        from_frame_hash,
+        to_frame_id,
+        to_frame_hash,
+        writer_mode,
+        transform,
+        source_json = None,
+        from_frame_entry_json = None,
+        to_frame_entry_json = None
+    ))]
+    fn new(
+        id: String,
+        from_frame_id: String,
+        from_frame_hash: String,
+        to_frame_id: String,
+        to_frame_hash: String,
+        writer_mode: String,
+        transform: PyRef<'_, PyResourceSpatialTransform>,
+        source_json: Option<String>,
+        from_frame_entry_json: Option<String>,
+        to_frame_entry_json: Option<String>,
+    ) -> PyResult<Self> {
+        let source = match source_json {
+            Some(json) => Some(serde_json::from_str(&json).map_err(|e| {
+                PyValueError::new_err(format!("source_json must be valid JSON: {e}"))
+            })?),
+            None => None,
+        };
+        Ok(Self {
+            inner: RustTransformEdgeResource {
+                id,
+                from_frame_id,
+                from_frame_hash,
+                to_frame_id,
+                to_frame_hash,
+                writer_mode,
+                source,
+                transform: transform.inner,
+                from_frame_entry_json,
+                to_frame_entry_json,
+            },
+        })
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "transform_edge"
+    }
+
+    #[getter]
+    fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+
+    #[getter]
+    fn from_frame_id(&self) -> String {
+        self.inner.from_frame_id.clone()
+    }
+
+    #[getter]
+    fn from_frame_hash(&self) -> String {
+        self.inner.from_frame_hash.clone()
+    }
+
+    #[getter]
+    fn to_frame_id(&self) -> String {
+        self.inner.to_frame_id.clone()
+    }
+
+    #[getter]
+    fn to_frame_hash(&self) -> String {
+        self.inner.to_frame_hash.clone()
+    }
+
+    #[getter]
+    fn writer_mode(&self) -> String {
+        self.inner.writer_mode.clone()
+    }
+
+    #[getter]
+    fn source_json(&self) -> Option<String> {
+        self.inner
+            .source
+            .as_ref()
+            .map(|value| serde_json::to_string(value).expect("serde_json::Value serializes"))
+    }
+
+    #[getter]
+    fn transform(&self) -> PyResourceSpatialTransform {
+        PyResourceSpatialTransform {
+            inner: self.inner.transform,
+        }
+    }
+
+    #[getter]
+    fn from_frame_entry_json(&self) -> Option<String> {
+        self.inner.from_frame_entry_json.clone()
+    }
+
+    #[getter]
+    fn to_frame_entry_json(&self) -> Option<String> {
+        self.inner.to_frame_entry_json.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TransformEdgeResource(id={:?}, from_frame_id={:?}, to_frame_id={:?}, writer_mode={:?})",
+            self.inner.id, self.inner.from_frame_id, self.inner.to_frame_id, self.inner.writer_mode
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Adapter: wraps a Python callable returning a list containing
+/// `SensorStreamResource` and/or `TransformEdgeResource` objects in a
+/// Rust `ResourceCatalogProvider`.
+struct PyResourceCatalogProvider {
+    callable: Py<PyAny>,
+}
+
+impl RustResourceCatalogProvider for PyResourceCatalogProvider {
+    fn snapshot(&self) -> Vec<RustResourceEntry> {
+        Python::with_gil(|py| {
+            let result = self
+                .callable
+                .bind(py)
+                .call0()
+                .and_then(|res| extract_resource_entries(&res));
+            match result {
+                Ok(entries) => entries,
+                Err(e) => {
+                    eprintln!("auki-domain-py: resource_catalog_provider callable failed: {e}");
+                    Vec::new()
+                }
+            }
+        })
+    }
+}
+
+fn extract_resource_entries(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustResourceEntry>> {
+    let iter = obj.iter().map_err(|_| {
+        PyTypeError::new_err(
+            "resource catalog provider must return an iterable of SensorStreamResource or TransformEdgeResource",
+        )
+    })?;
+    let mut resources = Vec::new();
+    for item in iter {
+        let item: Bound<'_, PyAny> = item?;
+        if let Ok(sensor) = item.extract::<PyRef<'_, PySensorStreamResource>>() {
+            resources.push(RustResourceEntry::SensorStream(sensor.inner.clone()));
+            continue;
+        }
+        if let Ok(edge) = item.extract::<PyRef<'_, PyTransformEdgeResource>>() {
+            resources.push(RustResourceEntry::TransformEdge(edge.inner.clone()));
+            continue;
+        }
+        return Err(PyTypeError::new_err(
+            "resource catalog provider returned an item that is not SensorStreamResource or TransformEdgeResource",
+        ));
+    }
+    Ok(resources)
+}
+
+fn resource_entry_to_py(py: Python<'_>, entry: RustResourceEntry) -> PyResult<PyObject> {
+    match entry {
+        RustResourceEntry::SensorStream(inner) => {
+            Ok(Py::new(py, PySensorStreamResource { inner })?.into_py(py))
+        }
+        RustResourceEntry::TransformEdge(inner) => {
+            Ok(Py::new(py, PyTransformEdgeResource { inner })?.into_py(py))
+        }
     }
 }
 
@@ -1101,6 +1606,20 @@ impl PyClusterManager {
         })
     }
 
+    /// Register (or replace) the application-supplied resource
+    /// catalog provider. `callable` must be a zero-argument Python
+    /// callable returning a list containing `SensorStreamResource`
+    /// and/or `TransformEdgeResource` objects. Called by the SDK once
+    /// per inbound `/auki/resources/0.0.1` request from a cluster
+    /// peer.
+    fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
+        let provider = Arc::new(PyResourceCatalogProvider { callable });
+        self.with_inner(|m| {
+            m.set_resource_catalog_provider(provider);
+            Ok(())
+        })
+    }
+
     /// Register (or replace) the app root used to serve hash-pinned
     /// registry entries over `/auki/registries/0.0.1`.
     ///
@@ -1153,6 +1672,55 @@ impl PyClusterManager {
                     .into_iter()
                     .map(|inner| PySensorEntry { inner })
                     .collect())
+            })
+        })
+    }
+
+    /// Fetch a cluster peer's current resource catalog over
+    /// `/auki/resources/0.0.1`. Returns a Python list containing
+    /// `SensorStreamResource` and/or `TransformEdgeResource` objects.
+    ///
+    /// `kinds` can filter by open-string kind, e.g.
+    /// `["sensor_stream"]` or `["transform_edge"]`.
+    #[pyo3(signature = (
+        peer_id,
+        kinds = None,
+        include_sensor_entries = false,
+        include_frame_entries = false
+    ))]
+    fn fetch_resources_catalog(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        kinds: Option<Vec<String>>,
+        include_sensor_entries: bool,
+        include_frame_entries: bool,
+    ) -> PyResult<Vec<PyObject>> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let resp = manager
+                    .fetch_resources_catalog_with(
+                        peer_id_parsed,
+                        RustResourcesRequest {
+                            kinds: kinds.unwrap_or_default(),
+                            include_sensor_entries,
+                            include_frame_entries,
+                        },
+                    )
+                    .await
+                    .map_err(map_fetch_resources_catalog_error)?;
+                Python::with_gil(|py| {
+                    resp.resources
+                        .into_iter()
+                        .map(|entry| resource_entry_to_py(py, entry))
+                        .collect()
+                })
             })
         })
     }
@@ -1472,6 +2040,14 @@ fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) 
     }
 }
 
+fn map_fetch_resources_catalog_error(e: RustFetchResourcesCatalogError) -> PyErr {
+    match e {
+        RustFetchResourcesCatalogError::Request(err) => {
+            PyOSError::new_err(format!("fetch_resources_catalog: {err}"))
+        }
+    }
+}
+
 fn map_fetch_registry_entry_error(e: RustFetchRegistryEntryError) -> PyErr {
     match e {
         RustFetchRegistryEntryError::Request(err) => {
@@ -1522,6 +2098,12 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PySensorEntry>()?;
+    m.add_class::<PyResourcePinholeIntrinsics>()?;
+    m.add_class::<PyResourceVec3>()?;
+    m.add_class::<PyResourceQuat>()?;
+    m.add_class::<PyResourceSpatialTransform>()?;
+    m.add_class::<PySensorStreamResource>()?;
+    m.add_class::<PyTransformEdgeResource>()?;
     m.add_class::<PyStreamManifestBuilder>()?;
     m.add_class::<PyClusterTarget>()?;
     m.add_class::<PyClusterManager>()?;
@@ -1578,6 +2160,12 @@ mod tests {
             auki_domain(py, &module).unwrap();
 
             assert!(module.getattr("StreamManifestBuilder").is_ok());
+            assert!(module.getattr("ResourcePinholeIntrinsics").is_ok());
+            assert!(module.getattr("ResourceVec3").is_ok());
+            assert!(module.getattr("ResourceQuat").is_ok());
+            assert!(module.getattr("ResourceSpatialTransform").is_ok());
+            assert!(module.getattr("SensorStreamResource").is_ok());
+            assert!(module.getattr("TransformEdgeResource").is_ok());
         });
     }
 

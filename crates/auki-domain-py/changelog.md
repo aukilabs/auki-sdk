@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**Python bindings for `/auki/resources/0.0.1`.** The module now exposes concrete resource value types: `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, `ResourceSpatialTransform`, `SensorStreamResource`, and `TransformEdgeResource`. Producer daemons can register `ClusterManager.set_resource_catalog_provider(callable)`, where the callable returns a list of `SensorStreamResource` / `TransformEdgeResource` objects; the Rust domain layer merges those rows with auto-lifted sensor streams.
+
+Consumers get `ClusterManager.fetch_resources_catalog(peer_id, kinds=None, include_sensor_entries=False, include_frame_entries=False) -> list`, returning concrete `SensorStreamResource` / `TransformEdgeResource` objects. This is the Python-facing half of resource discovery for BoosterApp/Park: stream rows can carry current `fx/fy/cx/cy`, and transform-edge rows can carry `camera_link -> head_left_cam_optical` style rigid edges plus optional embedded frame registry JSON.
+
+Tests: `cargo check -p auki-domain-py`, `cargo test -p auki-domain-py`; Python surface tests updated but not run locally because `maturin` / `pytest` are unavailable in this environment.
+
 ### Nils's codex · May 16, 21:07 HKT, 2026
 
 **Python consumers get registry detail helpers.** `SensorEntry` now exposes optional `sensor_entry_json` and `frame_entry_json`, and `ClusterManager.fetch_sensors_catalog(peer_id, include_registry_entries=False, include_frame_entries=False)` mirrors Rust's opt-in detail request for embedding producer-local Sensor / Frame Registry JSON by value.

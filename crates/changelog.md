@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 17, HKT, 2026
 
+**[`auki-domain-py`](auki-domain-py/changelog.md) — Python bindings for `/auki/resources/0.0.1`.** Python daemons now have resource value classes for sensor streams, transform edges, pinhole intrinsics, and rigid transforms; `ClusterManager.set_resource_catalog_provider` lets producers advertise transform edges and richer resource rows; `fetch_resources_catalog` returns the same concrete objects to consumers.
+
+### Nils's codex · May 17, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/resources/0.0.1` live resource catalogs begin.** Peers can now fetch a generalized resource catalog with `sensor_stream` rows, optional pinhole intrinsics, and rigid `transform_edge` rows. `NetworkRuntime` binds and requests the protocol; `ClusterManager` auto-lifts sensor catalog rows, accepts producer-supplied resource rows through `ResourceCatalogProvider`, and can embed exact Sensor / Frame Registry JSON for resource consumers.
 
 ### Nils's codex · May 16, 19:02 HKT, 2026

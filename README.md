@@ -73,7 +73,7 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-network`](crates/auki-network) | ✓ libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping), typed `/auki/stream/0.1.0` streams, join/membership/heartbeat/info/resources/sensors/registries peer protocols, `NetworkRuntime`, Discovery HTTP client (`list_clusters`, `create_cluster`, `liveness_check`, `rotate_manager`, `deregister`), address-advertisement helpers, and MAC-derived `app_instance`. Peer identity from `Wallet::derive_child("peer/v1")`. |
 | [`auki-domain`](crates/auki-domain) | ✓ App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list/create/join/bootstrap, membership, Manager election, Discovery liveness checks, participant info, resource catalogs, transform edges, registry entry fetches, stream opening, and shutdown. |
 | [`auki-network-py`](crates/auki-network-py) | ✓ PyO3 bindings for Discovery client value types plus shared `auki_network.cluster` stream pyclasses (`JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `StreamDecision`, `StreamSubscription`, etc.). Cluster runtime construction moved to `auki-domain-py`. |
-| [`auki-domain-py`](crates/auki-domain-py) | ✓ Python daemon facade for `ClusterManager`: `ClusterTarget`, `ClusterManager.bootstrap/create_cluster/join_cluster`, participant info, sensor catalog exchange, registry serving root registration, `StreamManifestBuilder.from_registry`, stream provider wiring, typed stream openers, and `external_addresses` advertisement override. |
+| [`auki-domain-py`](crates/auki-domain-py) | ✓ Python daemon facade for `ClusterManager`: `ClusterTarget`, `ClusterManager.bootstrap/create_cluster/join_cluster`, participant info, resource/sensor catalog exchange, registry serving root registration, `StreamManifestBuilder.from_registry`, stream provider wiring, typed stream openers, and `external_addresses` advertisement override. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. `frame_id` + `frame_hash` thread through both builders so sensor entries commit to an exact Frame Registry version. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
 
 **Not yet implemented:**
@@ -187,7 +187,7 @@ mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine 
 - `ClusterManager.bootstrap(...)`
 - `ClusterManager.create_cluster(...)`
 - `ClusterManager.join_cluster(...)`
-- `participant_info`, peer info fetches, sensor catalog fetches, registry serving root registration, stream-provider wiring, and typed stream openers
+- `participant_info`, peer info fetches, resource/sensor catalog fetches, registry serving root registration, stream-provider wiring, and typed stream openers
 
 Consumer apps written in Python import these to participate as cluster peers without reimplementing libp2p or Discovery decision logic.
 
@@ -245,7 +245,7 @@ The main live paths are:
 | `/auki/registries/0.0.1` | Registry metadata | Hash-pinned Sensor / Clock / Frame Registry entries as canonical JSON, verified before typed decode. |
 | `/auki/stream/0.1.0` | Typed sensor data streaming | Prost-encoded `StreamMessage` frames. Today: JPEG, point cloud, joint encoders, and audio. |
 
-Python sidecars (BoosterApp's K1 sensor capture, Sentinel, Park tooling) use [`auki-registry-py`](crates/auki-registry-py) to declare Sensor / Clock / Frame Registry entries, [`auki-domain-py`](crates/auki-domain-py) for cluster lifecycle and registry-backed stream-manifest construction, and [`auki-network-py`](crates/auki-network-py) for the shared stream payload/decision classes passed into `ClusterManager` through `stream_provider`.
+Python sidecars (BoosterApp's K1 sensor capture, Sentinel, Park tooling) use [`auki-registry-py`](crates/auki-registry-py) to declare Sensor / Clock / Frame Registry entries, [`auki-domain-py`](crates/auki-domain-py) for cluster lifecycle, resource catalogs, and registry-backed stream-manifest construction, and [`auki-network-py`](crates/auki-network-py) for the shared stream payload/decision classes passed into `ClusterManager` through `stream_provider`.
 
 ---
 

@@ -16,7 +16,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `ClusterTarget::{create, join, join_or_create, most_recent_or_create}`.
 - Manager admission through `/auki/join/0.0.1`.
 - Membership gossip through `/auki/membership/0.0.1`.
-- Peer-side heartbeat/liveness detection through `/auki/heartbeat/0.0.1`.
+- Manager-star heartbeat/liveness detection through `/auki/heartbeat/0.0.1`, with topology and timeout semantics owned here rather than in `auki-network`.
 - Manager election and Discovery `rotate_manager` handoff.
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.

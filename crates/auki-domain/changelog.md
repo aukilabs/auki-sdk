@@ -6,6 +6,24 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**ClusterManager now owns the heartbeat brain.** Manager-star topology, watched-peer calculation, first-frame timeout seeding, last-heartbeat timestamps, and semantic loss handling moved out of `auki-network` and into the domain liveness handler. `ClusterManager` computes outbound heartbeat targets from `(local_peer_id, manager_peer_id, membership)` and pushes them to `NetworkRuntime::set_heartbeat_targets`; the libp2p runtime only carries frames and reports raw carrier events.
+
+The liveness handler now scans the domain-owned watchlist every `HEARTBEAT_TIMEOUT / 2`. Non-Managers watch the current Manager even before a first heartbeat frame arrives; Managers watch current members and evict dead peers. Carrier disconnect/closure and timeout paths both funnel through the same election/eviction code, preserving the failover behavior while making it transport-agnostic enough for a future Zenoh binding.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain`, and a serial live run of `cargo test -p auki-domain --test cluster_manager_integration manager_failover -- --ignored --nocapture --test-threads=1` against `http://192.168.9.130:8080`.
+
+### Nils's codex · May 17, HKT, 2026
+
+**ClusterManager now steers peer heartbeats by Manager identity.** `create_cluster` sets the local peer as the heartbeat Manager, `join_cluster` sets the discovered Manager after the membership snapshot lands, and the liveness handler updates the runtime again after elections. The election rule is unchanged; the runtime now receives the role information it needs to make Manager death observable in both peer-id orderings.
+
+Regression coverage: the QUIC failover integration tests now assert their peer-id ordering fixtures explicitly, and a new ignored live test `manager_failover_when_manager_dies_before_first_heartbeat` drops the Manager immediately after admitting the joiner to pin the no-first-heartbeat timeout path.
+
+Filed a follow-up parking-lot question for the stricter stale-Discovery case where the Manager is already dead before any join response can provide a membership snapshot; that cannot safely reuse the heartbeat election path without a policy decision.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain`, and focused live Discovery runs for `manager_failover_when_a_dies_b_takes_over`, `manager_failover_over_quic_when_manager_pid_lower`, `manager_failover_over_quic_when_joiner_pid_lower`, and `manager_failover_when_manager_dies_before_first_heartbeat` against `http://192.168.9.130:8080`.
+
 ### Nils's codex · May 16, 21:07 HKT, 2026
 
 **Sensor catalogs can opt into embedded registry details.** `SensorCatalogProvider` keeps its existing `snapshot()` contract and gains a default `snapshot_for_request(...)` enrichment path. When the requester sends a detail `SensorsRequest` and the producer has called `set_registry_app_root(app_root)`, `ClusterManager` reads the exact local `SensorRegistryEntry` for each catalog row and optionally the referenced `FrameRegistryEntry` for spatial sensors, verifies each canonical hash against the advertised hash, and embeds the canonical JSON on the returned `SensorEntry`.

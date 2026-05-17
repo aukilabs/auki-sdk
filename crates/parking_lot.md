@@ -36,6 +36,7 @@ Pin before the next public-API touch on `auki-network`. Surfacing for editorial 
 The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) and its [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) name SDK-side design questions. Resolved questions disappear from this index — see the [crates changelog](changelog.md) and the SDK plan's status log for the decision trail.
 
 - [**SDK-Q3**](auki-domain/parking_lot.md#sdk-q3--hagall-successor-token-format-bare-signed-json-jwt-or-prost-in-auki-datatypes-_filed-by-nilss-claude-2026-05-13_) (auki-domain) — successor-token format: prost in `auki-datatypes`, JWT, or bare signed JSON? Lean: prost, ~60%. Defers to v2 — v1 Discovery contract skips signature verification entirely, so this isn't gating implementation.
+- [**Stale-Manager join policy**](auki-domain/parking_lot.md#hagall-stale-manager-join-policy--what-if-discovery-points-at-a-dead-manager-before-the-join-response-_filed-by-nilss-codex-2026-05-17_) (auki-domain) — what should `join_cluster` do when Discovery points at a dead Manager before any membership snapshot is available? Lean: no unilateral takeover without explicit singleton semantics or a Discovery-served membership snapshot.
 
 ---
 

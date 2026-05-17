@@ -42,6 +42,7 @@ Operator-driven UIs can call the explicit primitives:
 - The local peer id, local advertised multiaddrs, current Manager peer id, and Manager/member role state.
 - A `NetworkRuntime` that drives libp2p.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
+- Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events.
 - Background tasks for join admission, peer liveness, membership gossip, info requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:

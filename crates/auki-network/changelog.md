@@ -6,6 +6,24 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**`/auki/heartbeat/0.0.1` is now a libp2p carrier, not the heartbeat brain.** `NetworkRuntime::set_heartbeat_manager` has been replaced by `set_heartbeat_targets(Vec<PeerId>)`: the runtime opens bidirectional heartbeat substreams only to explicit allow-listed targets, accepts inbound heartbeat carriers from known peers, writes frames at `HEARTBEAT_INTERVAL`, and reports raw carrier facts upward (`Connected`, `Disconnected`, `HeartbeatReceived`, `HeartbeatStreamClosed`). Inbound accepted carriers and outbound target-owned carriers are tracked separately so a non-Manager allow-list refresh cannot abort the Manager's inbound heartbeat stream.
+
+The runtime no longer stores last-heartbeat timestamps, knows the cluster Manager, computes Manager-star topology, or emits semantic `Lost` on timeout. Those decisions moved to `auki-domain::ClusterManager`, which means this crate's `/auki/heartbeat/0.0.1` binding is ready to sit beside future transport bindings instead of baking libp2p-specific topology into the SDK behavior.
+
+Tests: `cargo check -p auki-network --features swarm` and the companion `auki-domain` failover checks.
+
+### Nils's codex · May 17, HKT, 2026
+
+**`/auki/heartbeat/0.0.1` now follows the Hagall Manager-star contract instead of the lower-peer-id opener convention.** `NetworkRuntime` gains `set_heartbeat_manager(peer_id)` on both the owned runtime and cloneable handle. The domain layer sets this after create/join and after elections; the runtime then reconciles heartbeat state from Manager identity rather than peer-id ordering.
+
+Steady-state topology is now one bidirectional heartbeat substream per Manager→peer pair. When the local peer is Manager, it opens to every connected allow-listed peer. When the Manager is remote, the runtime accepts known-peer heartbeat substreams and arms a Manager-death timeout for the expected Manager even if no first heartbeat frame has arrived yet. Reconciliation also removes stale heartbeat timestamps, not just stale task handles, so old Manager liveness entries do not linger after handoff or eviction.
+
+This closes the Park/K1 failure mode where a dead Manager could leave a surviving peer as a passive heartbeat acceptor forever, and the related no-first-frame hole where Manager death between join and the first heartbeat left no timeout ticking.
+
+Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-network --features swarm`, plus the `auki-domain` failover integration tests listed in the companion changelog entry.
+
 ### Nils's codex · May 16, 21:07 HKT, 2026
 
 **`/auki/sensors/0.0.1` gains an optional detail request.** `SensorsRequest` now preserves the catalog-only `{}` default while adding `include_registry_entries` and `include_frame_entries` flags. `SensorEntry` keeps the lightweight `sensor_id` / `sensor_hash` / `kind` row, and can now carry `sensor_entry_json` plus `frame_entry_json` when a requester asks for registry entries embedded by value. The frame cap rises to 512 KiB to leave room for embedded Sensor / Frame Registry JSON.

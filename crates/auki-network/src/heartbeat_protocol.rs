@@ -1,21 +1,22 @@
-//! `/auki/heartbeat/0.0.1` — libp2p protocol for sub-second cluster
-//! liveness detection.
+//! `/auki/heartbeat/0.0.1` — libp2p carrier protocol for sub-second
+//! cluster heartbeat frames.
 //!
 //! ## Shape
 //!
-//! Bidirectional, long-lived. Each cluster pair maintains a single
-//! substream for the duration of their libp2p connection. Both sides
-//! write a [`Heartbeat`] frame every [`HEARTBEAT_INTERVAL`]; both
-//! sides read continuously and update a per-peer "last seen" timestamp
-//! on each frame received.
+//! Bidirectional, long-lived. The domain layer decides which peers
+//! should maintain a heartbeat carrier; the libp2p runtime opens or
+//! accepts the substream and both sides write a [`Heartbeat`] frame
+//! every [`HEARTBEAT_INTERVAL`].
 //!
-//! Manager-death detection on the peer side: if a peer hasn't received
-//! a heartbeat from the Manager within [`HEARTBEAT_TIMEOUT`], the peer
-//! marks the Manager dead and triggers the cluster-internal election.
+//! In today's Hagall cluster behavior, `auki-domain::ClusterManager`
+//! uses a Manager-star topology: the Manager opens carriers to peers,
+//! non-Managers watch the Manager, and missed frames within
+//! [`HEARTBEAT_TIMEOUT`] trigger election or peer eviction. That
+//! topology/timer policy is intentionally above this wire module so a
+//! future non-libp2p transport can carry the same domain heartbeat.
 //!
-//! Peer-death detection on the Manager side: the Manager removes a
-//! peer from cluster membership after the same timeout, so the cluster
-//! doc reflects who's actually reachable.
+//! The runtime reports received frames and carrier closure upward; the
+//! domain layer owns last-seen timestamps and the consequences of loss.
 //!
 //! ## Why custom (vs libp2p `ping`)
 //!

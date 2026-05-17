@@ -64,6 +64,7 @@ use auki_registry::{
 // at the top of this module).
 pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
+use auki_network::heartbeat_protocol::HEARTBEAT_TIMEOUT;
 use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
@@ -77,6 +78,7 @@ use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -401,7 +403,7 @@ pub struct ClusterManager {
     /// `spawn_info_handler` lazily on each `participant_info()`
     /// build.
     cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
-    /// Manager-side Discovery heartbeat task. Wrapped in
+    /// Manager-side Discovery liveness-check task. Wrapped in
     /// `Arc<Mutex<Option<_>>>` so the liveness handler can spawn it
     /// on Manager-promotion (SDK-T7 handoff). `Some` while this peer
     /// is the Manager; `None` otherwise. Cancelled on `shutdown`.
@@ -412,9 +414,10 @@ pub struct ClusterManager {
     /// the `Mutex<Option<_>>::take()` pattern (idempotent against
     /// concurrent / repeated `shutdown` calls).
     join_handler_task: Mutex<Option<JoinHandle<()>>>,
-    /// Task that drains `PeerLivenessEvent`s from the runtime,
-    /// runs the cluster-internal election on Manager death, and
-    /// orchestrates Manager-handoff when the local peer wins.
+    /// Task that drains heartbeat-carrier events from the runtime,
+    /// runs the domain-side heartbeat timer, runs the cluster-
+    /// internal election on Manager death, and orchestrates
+    /// Manager-handoff when the local peer wins.
     /// Cancelled on `shutdown`.
     liveness_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/membership/0.0.1` gossip
@@ -685,8 +688,12 @@ impl ClusterManager {
             sensors_events_rx,
             registry_events_rx,
         ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
+        runtime
+            .set_heartbeat_targets(vec![])
+            .await
+            .map_err(|_| CreateClusterError::Runtime(SpawnError::NoTokioRuntime))?;
 
-        // 4. Manager-side Discovery heartbeat tick.
+        // 4. Manager-side Discovery liveness-check tick.
         let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> =
             Arc::new(Mutex::new(Some(spawn_manager_liveness_check(
                 discovery.clone(),
@@ -706,10 +713,11 @@ impl ClusterManager {
             runtime.handle(),
         )));
 
-        // 6. Drain peer-liveness events: on Manager death, run the
-        //    cluster-internal election; if we win, become the new
-        //    Manager (update state, rotate Discovery, start the
-        //    heartbeat tick).
+        // 6. Drain heartbeat carrier events and run the domain-side
+        //    liveness timer. On Manager death, run the cluster-
+        //    internal election; if we win, become the new Manager
+        //    (update state, rotate Discovery, start the liveness
+        //    check tick).
         let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
             cluster_name.clone(),
@@ -729,6 +737,7 @@ impl ClusterManager {
         //    Manager broadcast supersedes.
         let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
+            cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
@@ -891,6 +900,14 @@ impl ClusterManager {
 
         // Push the updated allow-list to the runtime.
         self.runtime.set_allowed_peers(new_allow_list).await?;
+        sync_heartbeat_targets(
+            &self.runtime.handle(),
+            self.local_peer_id,
+            &self.manager_peer_id,
+            &self.membership,
+            &self.cluster_name,
+        )
+        .await;
 
         // Gossip the updated membership to every connected peer so
         // existing members learn about the new joiner (the joiner
@@ -1324,6 +1341,10 @@ impl ClusterManager {
             .set_allowed_peers(allow_list)
             .await
             .map_err(|e| JoinClusterError::Runtime(SpawnError::NoTokioRuntime).into_with(e))?;
+        runtime
+            .set_heartbeat_targets(vec![])
+            .await
+            .map_err(|e| JoinClusterError::Runtime(SpawnError::NoTokioRuntime).into_with(e))?;
 
         let membership = Arc::new(Mutex::new(membership));
         let manager_peer_id = Arc::new(Mutex::new(manager_peer));
@@ -1341,10 +1362,11 @@ impl ClusterManager {
             runtime.handle(),
         )));
 
-        // 7. Drain peer-liveness events: on Manager death, run the
-        //    cluster-internal election; if we win, become the new
-        //    Manager (update state, rotate Discovery, start the
-        //    heartbeat tick).
+        // 7. Drain heartbeat carrier events and run the domain-side
+        //    liveness timer. On Manager death, run the cluster-
+        //    internal election; if we win, become the new Manager
+        //    (update state, rotate Discovery, start the liveness
+        //    check tick).
         let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
         let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
@@ -1363,6 +1385,7 @@ impl ClusterManager {
         //    after our own join; we apply them last-write-wins.
         let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
+            cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
@@ -1555,9 +1578,227 @@ impl JoinClusterError {
     }
 }
 
-/// Drain peer-liveness events from the runtime; act on Manager
-/// death (run the cluster-internal election, and if local wins,
-/// orchestrate the Manager-handoff).
+fn heartbeat_targets_for(
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) -> Vec<PeerId> {
+    if manager_peer_id != local_peer_id {
+        return Vec::new();
+    }
+    membership
+        .peers
+        .iter()
+        .map(|p| p.peer_id)
+        .filter(|pid| *pid != local_peer_id)
+        .collect()
+}
+
+fn heartbeat_watchlist_for(
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) -> HashSet<PeerId> {
+    if manager_peer_id == local_peer_id {
+        membership
+            .peers
+            .iter()
+            .map(|p| p.peer_id)
+            .filter(|pid| *pid != local_peer_id)
+            .collect()
+    } else {
+        membership
+            .peers
+            .iter()
+            .any(|p| p.peer_id == manager_peer_id)
+            .then_some(manager_peer_id)
+            .into_iter()
+            .collect()
+    }
+}
+
+async fn sync_heartbeat_targets(
+    runtime: &auki_network::NetworkRuntimeHandle,
+    local_peer_id: PeerId,
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    cluster_name: &str,
+) {
+    let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+    let targets = {
+        let m = membership.lock().expect("membership lock");
+        heartbeat_targets_for(local_peer_id, manager, &m)
+    };
+    if let Err(e) = runtime.set_heartbeat_targets(targets).await {
+        eprintln!("auki-domain: sync heartbeat targets failed for cluster {cluster_name:?}: {e}");
+    }
+}
+
+fn reconcile_heartbeat_watchlist(
+    last_heartbeat_at: &mut HashMap<PeerId, Instant>,
+    lost_already: &mut HashSet<PeerId>,
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) {
+    let now = Instant::now();
+    let watchlist = heartbeat_watchlist_for(local_peer_id, manager_peer_id, membership);
+    last_heartbeat_at.retain(|pid, _| watchlist.contains(pid));
+    lost_already.retain(|pid| watchlist.contains(pid));
+    for pid in watchlist {
+        last_heartbeat_at.entry(pid).or_insert(now);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_domain_peer_lost(
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    local_multiaddrs: &[Multiaddr],
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    runtime: &auki_network::NetworkRuntimeHandle,
+    discovery: &DiscoveryClient,
+    liveness_check_task: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    handled_manager_losses: &mut HashSet<PeerId>,
+    lost_pid: PeerId,
+) {
+    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+    let am_manager = current_manager == local_peer_id;
+
+    if !am_manager && lost_pid == current_manager {
+        if !handled_manager_losses.insert(lost_pid) {
+            return;
+        }
+
+        // For "reachable peers", give the connection teardown a
+        // brief moment so connected_peers() reflects the
+        // disconnection.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let connected = runtime.connected_peers();
+        let membership_snapshot = membership.lock().expect("membership lock").clone();
+        let winner = elect_successor(&membership_snapshot, local_peer_id, &connected);
+        if winner == Some(local_peer_id) {
+            // Become Manager.
+            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+
+            // Tell Discovery about the rotation.
+            if let Err(e) = discovery
+                .rotate_manager(cluster_name, &local_peer_id, local_multiaddrs)
+                .await
+            {
+                eprintln!(
+                    "auki-domain: rotate_manager failed for cluster \
+                    {cluster_name:?}: {e}"
+                );
+            }
+
+            // Start the Manager-side Discovery liveness-check tick.
+            let new_tick = spawn_manager_liveness_check(
+                discovery.clone(),
+                cluster_name.to_string(),
+                membership.clone(),
+            );
+            let prev = liveness_check_task
+                .lock()
+                .expect("liveness_check_task lock")
+                .replace(new_tick);
+            if let Some(p) = prev {
+                p.abort();
+            }
+
+            // Evict the dead Manager from membership + push the
+            // updated allow-list. (We won the election, so we own
+            // membership now.)
+            let new_allow_list = {
+                let mut m = membership.lock().expect("membership lock");
+                m.peers.retain(|p| p.peer_id != lost_pid);
+                m.peers
+                    .iter()
+                    .filter(|p| p.peer_id != local_peer_id)
+                    .map(|p| AllowedPeer {
+                        peer_id: p.peer_id,
+                        multiaddrs: p.multiaddrs.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                eprintln!(
+                    "auki-domain: post-election set_allowed_peers \
+                    failed for {cluster_name:?}: {e}"
+                );
+            }
+            sync_heartbeat_targets(
+                runtime,
+                local_peer_id,
+                manager_peer_id,
+                membership,
+                cluster_name,
+            )
+            .await;
+
+            // Gossip the post-handoff view so survivors converge on
+            // the new Manager identity + the post-eviction
+            // membership.
+            broadcast_current_membership(runtime, membership);
+            eprintln!(
+                "auki-domain: cluster {cluster_name:?}: local peer \
+                {local_peer_id} promoted to Manager after detecting Lost {lost_pid}"
+            );
+        } else if let Some(new_manager) = winner {
+            // Someone else (earlier-joined, still reachable) wins.
+            // Update the local view and wait for them to register
+            // with Discovery.
+            *manager_peer_id.lock().expect("manager_peer_id lock") = new_manager;
+            sync_heartbeat_targets(
+                runtime,
+                local_peer_id,
+                manager_peer_id,
+                membership,
+                cluster_name,
+            )
+            .await;
+        }
+    } else if am_manager {
+        // We're the Manager and a peer died. Evict from membership +
+        // push the updated allow-list.
+        let new_allow_list = {
+            let mut m = membership.lock().expect("membership lock");
+            let before = m.peers.len();
+            m.peers.retain(|p| p.peer_id != lost_pid);
+            if m.peers.len() == before {
+                return;
+            }
+            m.peers
+                .iter()
+                .filter(|p| p.peer_id != local_peer_id)
+                .map(|p| AllowedPeer {
+                    peer_id: p.peer_id,
+                    multiaddrs: p.multiaddrs.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+            eprintln!("auki-domain: Manager evict post-Lost set_allowed_peers failed: {e}");
+        }
+        sync_heartbeat_targets(
+            runtime,
+            local_peer_id,
+            manager_peer_id,
+            membership,
+            cluster_name,
+        )
+        .await;
+        // Gossip the shrunken membership so remaining peers also
+        // evict the dead one.
+        broadcast_current_membership(runtime, membership);
+    }
+}
+
+/// Drain heartbeat-carrier events from the runtime and maintain the
+/// domain-owned heartbeat watchlist. Carrier frames refresh
+/// per-peer timestamps; carrier closure or an expired timestamp is
+/// interpreted here as a semantic peer loss.
 ///
 /// **Election rule** (per Hagall T4 / SDK-T6): sort cluster members
 /// by `(join_ts_ns, peer_id)` ascending. The earliest-joined
@@ -1568,7 +1809,7 @@ impl JoinClusterError {
 /// `manager_peer_id` locally so subsequent calls see itself as the
 /// Manager, (b) calls Discovery's `rotate_manager` to update the
 /// directory hint, (c) spawns the Manager-side Discovery
-/// heartbeat tick.
+/// liveness-check tick.
 ///
 /// **Reachability** is approximated as "in the runtime's
 /// `connected_peers()` set OR equal to local_peer_id." When the
@@ -1589,133 +1830,87 @@ fn spawn_liveness_handler(
     discovery: DiscoveryClient,
     liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 ) -> JoinHandle<()> {
-    // Dedupe: don't run election twice for the same Lost event
-    // (the runtime emits Lost from both `ConnectionClosed` and the
-    // heartbeat-timeout monitor; the dedupe is per-peer-id).
-    let acted_on_lost: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     tokio::spawn(async move {
-        while let Some(evt) = rx.recv().await {
-            match evt {
-                PeerLivenessEvent::Connected { .. } => { /* informational */ }
-                PeerLivenessEvent::Lost { peer_id: lost_pid } => {
-                    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
-                    let am_manager = current_manager == local_peer_id;
+        let mut last_heartbeat_at: HashMap<PeerId, Instant> = HashMap::new();
+        let mut lost_already: HashSet<PeerId> = HashSet::new();
+        let mut handled_manager_losses: HashSet<PeerId> = HashSet::new();
+        let mut tick = tokio::time::interval(HEARTBEAT_TIMEOUT / 2);
 
-                    if !am_manager && lost_pid == current_manager {
-                        // Manager died. Run the election.
-                        if acted_on_lost.swap(true, Ordering::SeqCst) {
-                            // Already running / ran.
-                            continue;
-                        }
-                        // For "reachable peers", give the connection
-                        // teardown a brief moment so connected_peers()
-                        // reflects the disconnection.
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        let connected = runtime.connected_peers();
-                        let membership_snapshot =
-                            membership.lock().expect("membership lock").clone();
-                        let winner =
-                            elect_successor(&membership_snapshot, local_peer_id, &connected);
-                        if winner == Some(local_peer_id) {
-                            // Become Manager.
-                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+        loop {
+            let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+            let membership_snapshot = membership.lock().expect("membership lock").clone();
+            reconcile_heartbeat_watchlist(
+                &mut last_heartbeat_at,
+                &mut lost_already,
+                local_peer_id,
+                manager,
+                &membership_snapshot,
+            );
 
-                            // Tell Discovery about the rotation.
-                            if let Err(e) = discovery
-                                .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
-                                .await
-                            {
-                                eprintln!(
-                                    "auki-domain: rotate_manager failed for cluster \
-                                    {cluster_name:?}: {e}"
-                                );
-                            }
+            tokio::select! {
+                biased;
 
-                            // Start the Manager-side heartbeat tick.
-                            let new_tick = spawn_manager_liveness_check(
-                                discovery.clone(),
-                                cluster_name.clone(),
-                                membership.clone(),
-                            );
-                            let prev = liveness_check_task
-                                .lock()
-                                .expect("liveness_check_task lock")
-                                .replace(new_tick);
-                            if let Some(p) = prev {
-                                p.abort();
-                            }
-
-                            // Evict the dead Manager from membership +
-                            // push the updated allow-list. (We won
-                            // the election, so we own membership now.)
-                            let new_allow_list = {
-                                let mut m = membership.lock().expect("membership lock");
-                                m.peers.retain(|p| p.peer_id != lost_pid);
-                                m.peers
-                                    .iter()
-                                    .filter(|p| p.peer_id != local_peer_id)
-                                    .map(|p| AllowedPeer {
-                                        peer_id: p.peer_id,
-                                        multiaddrs: p.multiaddrs.clone(),
-                                    })
-                                    .collect::<Vec<_>>()
-                            };
-                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                                eprintln!(
-                                    "auki-domain: post-election set_allowed_peers \
-                                    failed for {cluster_name:?}: {e}"
-                                );
-                            }
-                            // Gossip the post-handoff view so survivors
-                            // converge on the new Manager identity + the
-                            // post-eviction membership.
-                            broadcast_current_membership(&runtime, &membership);
-                            eprintln!(
-                                "auki-domain: cluster {cluster_name:?}: local peer \
-                                {local_peer_id} promoted to Manager after \
-                                detecting Lost {lost_pid}"
-                            );
-                        } else {
-                            // Someone else (earlier-joined, still
-                            // reachable) wins. Update the local view
-                            // and wait for them to register with
-                            // Discovery.
-                            if let Some(new_manager) = winner {
-                                *manager_peer_id.lock().expect("manager_peer_id lock") =
-                                    new_manager;
+                evt = rx.recv() => {
+                    let Some(evt) = evt else { break; };
+                    let watched = {
+                        let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+                        let m = membership.lock().expect("membership lock");
+                        heartbeat_watchlist_for(local_peer_id, manager, &m)
+                    };
+                    match evt {
+                        PeerLivenessEvent::Connected { peer_id }
+                        | PeerLivenessEvent::HeartbeatReceived { peer_id } => {
+                            if watched.contains(&peer_id) {
+                                last_heartbeat_at.insert(peer_id, Instant::now());
+                                lost_already.remove(&peer_id);
                             }
                         }
-                    } else if am_manager {
-                        // We're the Manager and a peer died. Evict
-                        // from membership + push the updated
-                        // allow-list.
-                        let new_allow_list = {
-                            let mut m = membership.lock().expect("membership lock");
-                            let before = m.peers.len();
-                            m.peers.retain(|p| p.peer_id != lost_pid);
-                            if m.peers.len() == before {
-                                // Wasn't actually a member (or
-                                // already evicted) — nothing to do.
-                                continue;
+                        PeerLivenessEvent::Disconnected { peer_id }
+                        | PeerLivenessEvent::HeartbeatStreamClosed { peer_id } => {
+                            if watched.contains(&peer_id) && lost_already.insert(peer_id) {
+                                handle_domain_peer_lost(
+                                    &cluster_name,
+                                    local_peer_id,
+                                    &local_multiaddrs,
+                                    &manager_peer_id,
+                                    &membership,
+                                    &runtime,
+                                    &discovery,
+                                    &liveness_check_task,
+                                    &mut handled_manager_losses,
+                                    peer_id,
+                                )
+                                .await;
                             }
-                            m.peers
-                                .iter()
-                                .filter(|p| p.peer_id != local_peer_id)
-                                .map(|p| AllowedPeer {
-                                    peer_id: p.peer_id,
-                                    multiaddrs: p.multiaddrs.clone(),
-                                })
-                                .collect::<Vec<_>>()
-                        };
-                        if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                            eprintln!(
-                                "auki-domain: Manager evict post-Lost set_allowed_peers \
-                                failed: {e}"
-                            );
                         }
-                        // Gossip the shrunken membership so remaining
-                        // peers also evict the dead one.
-                        broadcast_current_membership(&runtime, &membership);
+                    }
+                }
+
+                _ = tick.tick() => {
+                    let now = Instant::now();
+                    let timed_out: Vec<PeerId> = last_heartbeat_at
+                        .iter()
+                        .filter_map(|(pid, ts)| {
+                            (now.duration_since(*ts) > HEARTBEAT_TIMEOUT
+                                && !lost_already.contains(pid))
+                                .then_some(*pid)
+                        })
+                        .collect();
+                    for peer_id in timed_out {
+                        lost_already.insert(peer_id);
+                        handle_domain_peer_lost(
+                            &cluster_name,
+                            local_peer_id,
+                            &local_multiaddrs,
+                            &manager_peer_id,
+                            &membership,
+                            &runtime,
+                            &discovery,
+                            &liveness_check_task,
+                            &mut handled_manager_losses,
+                            peer_id,
+                        )
+                        .await;
                     }
                 }
             }
@@ -1738,8 +1933,9 @@ fn spawn_liveness_handler(
 /// that footgun.
 fn spawn_membership_handler(
     mut rx: mpsc::Receiver<MembershipEvent>,
+    cluster_name: String,
     local_peer_id: PeerId,
-    _manager_peer_id: Arc<Mutex<PeerId>>,
+    manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
 ) -> JoinHandle<()> {
@@ -1776,6 +1972,14 @@ fn spawn_membership_handler(
                     failed: {e}"
                 );
             }
+            sync_heartbeat_targets(
+                &runtime,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                &cluster_name,
+            )
+            .await;
         }
     })
 }
@@ -2305,6 +2509,14 @@ fn spawn_join_handler(
                 });
                 continue;
             }
+            sync_heartbeat_targets(
+                &runtime,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                &cluster_name,
+            )
+            .await;
 
             let _ = ack.send(JoinResponse::Accept {
                 membership_json: full_membership_json,

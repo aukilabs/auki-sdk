@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 17, HKT, 2026
 
+**`ClusterManager` now serves and fetches `/auki/resources/0.0.1` catalogs.** The domain layer starts the live resource catalog by auto-lifting the registered `SensorCatalogProvider` into `sensor_stream` resource rows and adding a new `ResourceCatalogProvider` trait for producer-owned rows such as rigid `transform_edge`. Provider rows override auto-lifted rows by `(kind, id)`, so applications can replace the SDK's default sensor-stream projection when they need a richer declaration.
+
+New public surface: `set_resource_catalog_provider`, `fetch_resources_catalog`, and `fetch_resources_catalog_with`, plus re-exports for `ResourceEntry`, `ResourceKind`, `ResourcesRequest`, `ResourcesResponse`, `SensorStreamResource`, `TransformEdgeResource`, `ResourcePinholeIntrinsics`, and the JSON-friendly transform structs. When a requester asks for embedded registry details and the producer has called `set_registry_app_root(app_root)`, the resources handler attaches canonical Sensor / Frame Registry JSON after the same hash checks used by the exact `/auki/registries/0.0.1` path. Transform edges can request both endpoint frame entries, while camera stream rows can carry current `fx/fy/cx/cy`, which is the live discovery piece Park needs before composing `camera_link -> head_left_cam_optical` style frame edges locally.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain`.
+
+### Nils's codex · May 17, HKT, 2026
+
 **ClusterManager now owns the heartbeat brain.** Manager-star topology, watched-peer calculation, first-frame timeout seeding, last-heartbeat timestamps, and semantic loss handling moved out of `auki-network` and into the domain liveness handler. `ClusterManager` computes outbound heartbeat targets from `(local_peer_id, manager_peer_id, membership)` and pushes them to `NetworkRuntime::set_heartbeat_targets`; the libp2p runtime only carries frames and reports raw carrier events.
 
 The liveness handler now scans the domain-owned watchlist every `HEARTBEAT_TIMEOUT / 2`. Non-Managers watch the current Manager even before a first heartbeat frame arrives; Managers watch current members and evict dead peers. Carrier disconnect/closure and timeout paths both funnel through the same election/eviction code, preserving the failover behavior while making it transport-agnostic enough for a future Zenoh binding.

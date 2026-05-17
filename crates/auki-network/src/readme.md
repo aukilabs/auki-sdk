@@ -7,11 +7,12 @@ Implementation status for [`auki-network`](../README.md).
 - [`lib.rs`](lib.rs) - always-on peer identity, reachability, capability types, feature-gated module exports, and re-exports.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
 - [`swarm.rs`](swarm.rs) - libp2p `Swarm<Behaviour>` builder, relay support, advertise-address helpers.
-- [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, heartbeat carrier targets/events, join/info/sensors/registries/membership helpers, idempotent shutdown.
+- [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, heartbeat carrier targets/events, join/info/resources/sensors/registries/membership helpers, idempotent shutdown.
 - [`join_protocol.rs`](join_protocol.rs) - `/auki/join/0.0.1` framed JSON request/response.
 - [`heartbeat_protocol.rs`](heartbeat_protocol.rs) - `/auki/heartbeat/0.0.1` bidirectional heartbeat carrier frames.
 - [`membership_protocol.rs`](membership_protocol.rs) - `/auki/membership/0.0.1` membership-gossip frames.
 - [`info_protocol.rs`](info_protocol.rs) - `/auki/info/0.0.1` framed request/response for `ParticipantInfo` JSON.
+- [`resources_protocol.rs`](resources_protocol.rs) - `/auki/resources/0.0.1` framed request/response for live resource catalogs (`sensor_stream` with optional pinhole intrinsics, and `transform_edge` rows in v0).
 - [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs, with optional embedded Sensor / Frame Registry JSON.
 - [`registries_protocol.rs`](registries_protocol.rs) - `/auki/registries/0.0.1` framed request/response for hash-pinned registry entries.
 - [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-datatypes`.
@@ -102,6 +103,8 @@ impl NetworkRuntime {
 
     pub async fn send_join_request(...);
     pub async fn request_participant_info(...);
+    pub async fn request_resources_catalog(...);
+    pub async fn request_resources_catalog_with(...);
     pub async fn request_sensors_catalog(...);
     pub async fn request_sensors_catalog_with(...);
     pub async fn request_registry_entry(...);
@@ -154,7 +157,7 @@ impl DiscoveryClient {
 
 `NetworkRuntime` is plumbing, not policy. It tracks the current allowed peers handed to it by `auki-domain`, auto-dials their multiaddrs, and uses that set to gate member-only protocols. It intentionally allows the join protocol to be reached by non-members so a new peer can ask to join.
 
-`auki-domain::ClusterManager` owns cluster semantics: create/join/bootstrap, membership mutation, heartbeat topology and timeouts, Manager election, Discovery liveness checks, Manager rotation, participant info, sensor catalog providers, and stream access as the daemon-facing API.
+`auki-domain::ClusterManager` owns cluster semantics: create/join/bootstrap, membership mutation, heartbeat topology and timeouts, Manager election, Discovery liveness checks, Manager rotation, participant info, resource/sensor catalog providers, and stream access as the daemon-facing API.
 
 ## Verification
 

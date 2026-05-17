@@ -2,7 +2,7 @@
 
 Cluster lifecycle for the Auki SDK.
 
-This crate is the app-facing layer above [`auki-network`](../auki-network). It owns cluster creation, joining, membership, Manager role state, peer liveness, successor election, Discovery liveness checks, Manager handoff, peer identity lookup, sensor catalog lookup, and stream access. It is not the home for `convert_time` or `convert_pose`; those operations consume transforms produced elsewhere.
+This crate is the app-facing layer above [`auki-network`](../auki-network). It owns cluster creation, joining, membership, Manager role state, peer liveness, successor election, Discovery liveness checks, Manager handoff, peer identity lookup, resource catalog lookup, transform-edge discovery, and stream access. It is not the home for `convert_time` or `convert_pose`; those operations consume transforms produced elsewhere.
 
 ## Current Surface
 
@@ -43,7 +43,7 @@ Operator-driven UIs can call the explicit primitives:
 - A `NetworkRuntime` that drives libp2p.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
 - Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events.
-- Background tasks for join admission, peer liveness, membership gossip, info requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
+- Background tasks for join admission, peer liveness, membership gossip, info requests, resource catalog requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:
 
@@ -54,6 +54,9 @@ Useful methods:
 | `membership()` / `peer_count()` | Current cluster membership snapshot |
 | `participant_info()` | Fresh SDK-owned `/api/info` payload |
 | `fetch_participant_info(peer_id)` | Fetch a peer's `ParticipantInfo` over `/auki/info/0.0.1` |
+| `set_resource_catalog_provider(provider)` | Install producer-owned resources beyond auto-lifted sensor streams, starting with rigid transform edges |
+| `fetch_resources_catalog(peer_id)` | Fetch a peer's resource catalog over `/auki/resources/0.0.1` |
+| `fetch_resources_catalog_with(peer_id, request)` | Fetch filtered resource rows and optionally embed Sensor / Frame Registry JSON |
 | `set_sensor_catalog_provider(provider)` | Install the producer's current sensor catalog source |
 | `fetch_sensors_catalog(peer_id)` | Fetch a peer's sensor catalog over `/auki/sensors/0.0.1` |
 | `fetch_sensors_catalog_with(peer_id, request)` | Fetch a sensor catalog with optional embedded Sensor / Frame Registry JSON |
@@ -63,6 +66,8 @@ Useful methods:
 | `shutdown()` | Idempotent shared-reference shutdown |
 
 Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `RgbCamera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
+
+`/auki/resources/0.0.1` is the primary live discovery surface. `ClusterManager` auto-lifts the registered `SensorCatalogProvider` into `sensor_stream` resource rows, and `ResourceCatalogProvider` supplies additional resource rows such as `transform_edge`. Producers that have live camera calibration can override an auto-lifted sensor row with a `sensor_stream` row carrying `ResourcePinholeIntrinsics`. When the requester asks for embedded registry details and the producer has called `set_registry_app_root(app_root)`, the resources handler attaches the exact Sensor / Frame Registry JSON after hash checks.
 
 `shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, and rotate the Manager hint in Discovery.
 

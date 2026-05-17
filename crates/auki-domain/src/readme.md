@@ -6,7 +6,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 
 - [`lib.rs`](lib.rs) - module exports and public re-exports.
 - [`cluster_membership.rs`](cluster_membership.rs) - `ClusterMembership`, `ClusterMember`, membership JSON shape, filename helper, admission ordering.
-- [`cluster_manager.rs`](cluster_manager.rs) - `ClusterManager`, `ClusterTarget`, daemon info, sensor catalog provider trait, Discovery bootstrap logic, Manager/member state, join/liveness/membership/info/sensors tasks, stream opener, shutdown, and election helper.
+- [`cluster_manager.rs`](cluster_manager.rs) - `ClusterManager`, `ClusterTarget`, daemon info, sensor/resource catalog provider traits, Discovery bootstrap logic, Manager/member state, join/liveness/membership/info/resources/sensors tasks, stream opener, shutdown, and election helper.
 - [`stream_manifest.rs`](stream_manifest.rs) - producer-side `StreamManifestBuilder` that derives accept metadata from local Sensor / Frame registries.
 
 ## Implemented
@@ -20,6 +20,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Manager election and Discovery `rotate_manager` handoff.
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
+- Resource catalog provider registration plus `/auki/resources/0.0.1` fetches, auto-lifting sensor catalog rows into `sensor_stream` resources and accepting producer-supplied `transform_edge` rows.
 - Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches, including the detail request that can embed local Sensor / Frame Registry JSON by value.
 - Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
 - `StreamManifestBuilder::from_registry`, which constructs stream accept manifests from a producer's local registry and verifies exact frame references for spatial sensors.
@@ -35,6 +36,17 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `ClusterMembership`
 - `ClusterMember`
 - `DaemonInfo`
+- `ResourceCatalogProvider`
+- `ResourceEntry`
+- `ResourceKind`
+- `ResourcePinholeIntrinsics`
+- `ResourceQuat`
+- `ResourceSpatialTransform`
+- `ResourceVec3`
+- `ResourcesRequest`
+- `ResourcesResponse`
+- `SensorStreamResource`
+- `TransformEdgeResource`
 - `SensorCatalogProvider`
 - `SensorEntry`
 - `SensorsRequest`

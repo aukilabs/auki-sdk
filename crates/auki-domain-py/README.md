@@ -33,6 +33,22 @@ manager = auki_domain.ClusterManager.bootstrap(
 )
 manager.set_registry_app_root(app_root)    # serve registry entries to peers
 
+manager.set_resource_catalog_provider(lambda: [
+    auki_domain.TransformEdgeResource(
+        id="K1-LIVE01/camera_link->K1-LIVE01/head_left_cam_optical",
+        from_frame_id="K1-LIVE01/camera_link",
+        from_frame_hash=camera_link_frame_hash,
+        to_frame_id="K1-LIVE01/head_left_cam_optical",
+        to_frame_hash=head_left_frame_hash,
+        writer_mode="rigid",
+        transform=auki_domain.ResourceSpatialTransform(
+            translation=auki_domain.ResourceVec3(0, 0, 0),
+            orientation=auki_domain.ResourceQuat(0.5, -0.5, 0.5, -0.5),
+        ),
+        source_json='{"kind":"ros2_tf"}',
+    )
+])
+
 def stream_provider(_requester_peer_id, request):
     manifest = auki_domain.StreamManifestBuilder.from_registry(
         app_root,
@@ -60,6 +76,7 @@ Value types:
 - `DaemonInfo(app, name, session_id, session_clock_id, session_clock_hash, app_instance)`
 - `ParticipantInfo` returned by `manager.participant_info()` / `fetch_participant_info(...)`
 - `SensorEntry(sensor_id, sensor_hash, kind, sensor_entry_json=None, frame_entry_json=None)`
+- Resource catalog values: `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, `ResourceSpatialTransform`, `SensorStreamResource`, `TransformEdgeResource`
 - `ClusterTarget.create(name)`, `.join(name)`, `.join_or_create(name)`, `.most_recent_or_create(fallback_name)`
 - `StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)`
 
@@ -78,8 +95,10 @@ Manager instance methods/properties:
 - `.participant_info()`
 - `.fetch_participant_info(peer_id)`
 - `.set_sensor_catalog_provider(callable)`
+- `.set_resource_catalog_provider(callable)`
 - `.set_registry_app_root(app_root)`
 - `.fetch_sensors_catalog(peer_id, include_registry_entries=False, include_frame_entries=False)`
+- `.fetch_resources_catalog(peer_id, kinds=None, include_sensor_entries=False, include_frame_entries=False)`
 - `.fetch_sensor_entry(peer_id, sensor_id, sensor_hash) -> str`
 - `.fetch_clock_entry(peer_id, clock_id, clock_hash) -> str`
 - `.fetch_frame_entry(peer_id, frame_id, frame_hash) -> str`
@@ -100,7 +119,9 @@ Manager instance methods/properties:
 - Discovery is mandatory for cluster bootstrap.
 - `ClusterManager` computes dynamic `ParticipantInfo` fields; daemons pass only static `DaemonInfo` at construction.
 - Producer daemons should call `set_registry_app_root(app_root)` so peers can resolve hash-pinned Sensor / Clock / Frame registry entries over libp2p.
+- Producer daemons should use `set_resource_catalog_provider(callable)` for transform edges and richer resource rows. Sensor streams are auto-lifted from `set_sensor_catalog_provider`, but a resource provider can override the auto-lifted `sensor_stream` row by returning the same `id`.
 - Consumers can either call the exact registry fetch helpers, or ask `fetch_sensors_catalog(..., include_registry_entries=True, include_frame_entries=True)` for embedded Sensor / Frame Registry JSON when reducing round trips matters.
+- New consumers should prefer `fetch_resources_catalog(...)` for live stream and transform-edge discovery; `/auki/sensors/0.0.1` remains available for the older sensor-only view.
 - Producer stream providers should use `StreamManifestBuilder.from_registry(...)` instead of hand-filling stream manifests.
 - `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
 - Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.

@@ -20,12 +20,17 @@ pub mod cluster_membership;
 pub mod stream_manifest;
 
 pub use auki_network::registries_protocol::RegistryKind;
+pub use auki_network::resources_protocol::{
+    ResourceEntry, ResourceKind, ResourcePinholeIntrinsics, ResourceQuat, ResourceSpatialTransform,
+    ResourceVec3, ResourcesRequest, ResourcesResponse, SensorStreamResource, TransformEdgeResource,
+};
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiscoveryClientError, DiscoveryClusterEntry, FetchParticipantInfoError,
-    FetchRegistryEntryError, FetchSensorsCatalogError, JoinClusterError, LIVENESS_CHECK_INTERVAL,
-    SensorCatalogProvider, SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
+    FetchRegistryEntryError, FetchResourcesCatalogError, FetchSensorsCatalogError,
+    JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
+    SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

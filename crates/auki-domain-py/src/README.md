@@ -12,6 +12,7 @@
 | `ClusterMember` / `ClusterMembership` pyclasses | shipped |
 | `DaemonInfo` / `ParticipantInfo` pyclasses | shipped |
 | `SensorEntry` pyclass | shipped |
+| Resource catalog pyclasses | shipped |
 | `StreamManifestBuilder.from_registry` | shipped |
 | `ClusterTarget` pyclass | shipped |
 | `ClusterManager.list_clusters` | shipped |
@@ -20,6 +21,7 @@
 | `ClusterManager` role/membership accessors | shipped |
 | `participant_info` / `fetch_participant_info` | shipped |
 | `set_sensor_catalog_provider` / `fetch_sensors_catalog` | shipped |
+| `set_resource_catalog_provider` / `fetch_resources_catalog` | shipped |
 | `set_registry_app_root` | shipped |
 | `fetch_sensor_entry` / `fetch_clock_entry` / `fetch_frame_entry` JSON helpers | shipped |
 | `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` / `open_audio_stream` | shipped |
@@ -33,6 +35,8 @@ The wrapper accepts Python-friendly inputs (seed bytes, multiaddr strings, peer-
 All async Rust calls are `block_on`ed on a process-wide multi-thread tokio runtime so Python callers keep a synchronous API.
 
 Producer daemons can call `ClusterManager.set_registry_app_root(app_root)` with a string or `os.PathLike` so the Rust manager serves existing registry entries from `<app_root>/registries/{sensors,clocks,frames}/...` over `/auki/registries/0.0.1`. The same root powers the optional `ClusterManager.fetch_sensors_catalog(peer_id, include_registry_entries=True, include_frame_entries=True)` detail path, which fills `SensorEntry.sensor_entry_json` and `SensorEntry.frame_entry_json` when the producer can resolve the exact hashes locally.
+
+Producer daemons can call `ClusterManager.set_resource_catalog_provider(callable)` with a zero-argument callable returning `list[SensorStreamResource | TransformEdgeResource]`. `ClusterManager.fetch_resources_catalog(peer_id, kinds=None, include_sensor_entries=False, include_frame_entries=False)` returns the same concrete value objects to consumers. `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, and `ResourceSpatialTransform` cover the nested numeric payloads.
 
 Python consumers can call `ClusterManager.fetch_sensor_entry(...)`, `.fetch_clock_entry(...)`, and `.fetch_frame_entry(...)` for exact hash-addressed registry entries. These methods return canonical JSON strings and map missing entries to `FileNotFoundError`.
 

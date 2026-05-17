@@ -880,21 +880,20 @@ mod tests {
         });
 
         // Producer has empty allow-list — C is unknown to P.
-        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p, _registry_p) =
+        let (producer, ..) =
             crate::network_runtime::NetworkRuntime::spawn(swarm_p, vec![], panicking_provider)
                 .expect("producer spawn");
 
         // Consumer has P in its allow-list, so it auto-dials.
-        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c, _registry_c) =
-            crate::network_runtime::NetworkRuntime::spawn(
-                swarm_c,
-                vec![AllowedPeer {
-                    peer_id: id_p.peer_id(),
-                    multiaddrs: vec![addr_p],
-                }],
-                decline_all_streams(),
-            )
-            .expect("consumer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+        )
+        .expect("consumer spawn");
 
         // Wait for libp2p connection to complete (connection-layer is
         // open by default; this is just confirming the auto-dial worked).
@@ -958,26 +957,24 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _join_p, _liveness_p, _membership_p, _info_p, _sensors_p, _registry_p) =
-            crate::network_runtime::NetworkRuntime::spawn(
-                swarm_p,
-                vec![AllowedPeer {
-                    peer_id: id_c.peer_id(),
-                    multiaddrs: vec![addr_c],
-                }],
-                jpeg_provider_yielding_three_frames(),
-            )
-            .expect("producer spawn");
-        let (consumer, _join_c, _liveness_c, _membership_c, _info_c, _sensors_c, _registry_c) =
-            crate::network_runtime::NetworkRuntime::spawn(
-                swarm_c,
-                vec![AllowedPeer {
-                    peer_id: id_p.peer_id(),
-                    multiaddrs: vec![addr_p],
-                }],
-                decline_all_streams(),
-            )
-            .expect("consumer spawn");
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
+            jpeg_provider_yielding_three_frames(),
+        )
+        .expect("producer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+        )
+        .expect("consumer spawn");
 
         let connected = poll_until(
             || consumer.connected_peers().contains(&id_p.peer_id()),
@@ -1044,7 +1041,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1053,7 +1050,7 @@ mod tests {
             jpeg_provider_declines_unknown(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),
@@ -1100,7 +1097,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-consumer/0").await;
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1109,7 +1106,7 @@ mod tests {
             jpeg_provider_yields_then_errors(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),
@@ -1194,7 +1191,7 @@ mod tests {
             }
         });
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1203,7 +1200,7 @@ mod tests {
             provider,
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),
@@ -1265,7 +1262,7 @@ mod tests {
 
         let unreachable_addr: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/1".parse().unwrap();
 
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_unreachable.peer_id(),
@@ -1308,7 +1305,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-pc-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-pc-consumer/0").await;
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1317,7 +1314,7 @@ mod tests {
             pointcloud_provider_yielding_three_frames(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),
@@ -1387,7 +1384,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-audio-producer/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-audio-consumer/0").await;
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1396,7 +1393,7 @@ mod tests {
             audio_provider_yielding_three_frames(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),
@@ -1466,7 +1463,7 @@ mod tests {
         let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-multi-p/0").await;
         let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-multi-c/0").await;
 
-        let (producer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_p,
             vec![AllowedPeer {
                 peer_id: id_c.peer_id(),
@@ -1475,7 +1472,7 @@ mod tests {
             multi_t_provider(),
         )
         .expect("producer spawn");
-        let (consumer, _, _, _, _, _, _) = crate::network_runtime::NetworkRuntime::spawn(
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
             swarm_c,
             vec![AllowedPeer {
                 peer_id: id_p.peer_id(),

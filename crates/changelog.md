@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purges across four crates: ~300 lines of plan archaeology and deleted-surface references removed.** [`auki-domain-py`](auki-domain-py/changelog.md) reduced to a 3-line stub (all five entries referenced the deleted `init_domain`/`DomainHandle` shape). [`auki-domain`](auki-domain/changelog.md) lost 11 transcribed "Greenland Decision" blocks whose decisions all shipped, plus a week-stale RESOLVED→Propagate placeholder; three live forward-looking items remain. [`auki-network`](auki-network/changelog.md) lost the 53-line Vinland D6 `discovery_client::subscribe` block (subject deleted), the `ClusterRuntime`-owns-SSE-subscription block (subject deleted), and the six `/auki/message/0.0.1` design blocks (protocol never shipped); ~16 substantive design items retained. [`auki-network-py`](auki-network-py/changelog.md) lost the two-runtime test block (test was deleted) and a 43-line inline type-stubs block describing deleted surface (`_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, etc.). Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. Net: 665 → 369 lines across the four files.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py/changelog.md) — Python bindings for `/auki/resources/0.0.1`.** Python daemons now have resource value classes for sensor streams, transform edges, pinhole intrinsics, and rigid transforms; `ClusterManager.set_resource_catalog_provider` lets producers advertise transform edges and richer resource rows; `fetch_resources_catalog` returns the same concrete objects to consumers.

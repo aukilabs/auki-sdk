@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purges across four crates remove ~300 lines of plan archaeology and deleted-surface references.** `auki-domain/`, `auki-domain-py/`, `auki-network/`, and `auki-network-py/` parking-lot files lost entries describing deleted runtime/types (`ClusterRuntime`, `init_domain`/`DomainHandle`, `discovery_client::subscribe`, `update_cluster_doc`, `cluster.spawn`), transcribed Greenland Notion task tables whose decisions all shipped, design blocks for unshipped `/auki/message/0.0.1`, and internal codename leakage. ~16 substantive design questions retained: relay-reservation v2, `DiscoveryRuntime`, peer-key derivation labels, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, JSON-encoding-for-binary-T, cluster.json graduation/signing, `app_instance` containers/multi-NIC, `Capability` open-string, etc. See [`crates/changelog.md`](crates/changelog.md) for per-crate detail.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **Python daemons can now publish and fetch live resource catalogs.** `auki-domain-py` exposes `/auki/resources/0.0.1` value types plus `ClusterManager.set_resource_catalog_provider` / `fetch_resources_catalog`, so BoosterApp and Park can exchange sensor-stream rows, pinhole intrinsics, and rigid transform edges without dropping to Rust. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

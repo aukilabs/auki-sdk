@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: Greenland design archaeology and resolved-but-unpropagated items removed.** Eleven "Greenland Decision" blocks (T1, T2/Q2, T3/Q1, T4/Q3, T5/Q4, T6/Q8, T7/Q5+Q-disc-1, T10/Q10, T11/Q11, T13/Q9, T9/Q12, T12/Q7, T8/Q-disc-2, T14/Q14) transcribed from the retired Greenland Notion task table were deleted — the decisions all shipped (`ClusterManager`, heartbeat, `/auki/registries/0.0.1`, election rule, default-Domain singleton) and the parking-lot transcripts had become plan archaeology. The "Glossary reconciliation" item self-marked Resolved 2026-05-11 with a week-stale Propagate placeholder was also removed (Glossary already carries the live `Domain Identity` definition). Codename leakage ("Hagall", retired "Vinland"/"Greenland") stripped from the three live forward-looking items that remain: successor-token encoding for v2 hardening, stale-Manager join policy (Nils's codex, 2026-05-17), and DHT-backed cluster doc as long-term direction. Net: 161 → 48 lines.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **`ClusterManager` now serves and fetches `/auki/resources/0.0.1` catalogs.** The domain layer starts the live resource catalog by auto-lifting the registered `SensorCatalogProvider` into `sensor_stream` resource rows and adding a new `ResourceCatalogProvider` trait for producer-owned rows such as rigid `transform_edge`. Provider rows override auto-lifted rows by `(kind, id)`, so applications can replace the SDK's default sensor-stream projection when they need a richer declaration.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: all entries removed.** The five items in this file all referenced the deleted `init_domain` / `DomainHandle` / `init_or_join_domain` / `update_cluster_doc` shape that was replaced by `ClusterManager`. Two were self-marked "RESOLVED → Propagate" with week-stale propagation placeholders. Crate-specific Python parity questions for the new `ClusterManager` surface have not surfaced yet from BoosterApp; they belong in a fresh entry when they do. File reduced to a 3-line stub.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **Python bindings for `/auki/resources/0.0.1`.** The module now exposes concrete resource value types: `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, `ResourceSpatialTransform`, `SensorStreamResource`, and `TransformEdgeResource`. Producer daemons can register `ClusterManager.set_resource_catalog_provider(callable)`, where the callable returns a list of `SensorStreamResource` / `TransformEdgeResource` objects; the Rust domain layer merges those rows with auto-lifted sensor streams.

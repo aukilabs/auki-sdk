@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Codex · May 17, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-layout`](auki-layout/changelog.md) + [`auki-registry`](auki-registry/changelog.md) + [`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Detector Registry and live detection streams.** Detection log entries now carry `sensor_hash` plus open-string `type`; app-root registries gain `<app_root>/registries/detectors/<detector_id>/<hash>.json` and typed `DetectorRegistryEntry` support; `/auki/registries/0.0.1` can fetch Detector entries; `ClusterManager::fetch_detector_entry` verifies them like sensor/frame/clock entries; and producers can return `StreamDispatch::AcceptDetection` with `DetectionLogEntry` payloads.
+
 ### Nils's codex · May 16, 21:07 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — sensor catalog detail requests and registry JSON helpers.** `/auki/sensors/0.0.1` keeps its lightweight default `{}` request and adds opt-in flags for embedding Sensor / Frame Registry JSON by value. `ClusterManager::fetch_sensors_catalog_with` serves those details from the registered app-root registry after hash checks, while the existing `/auki/registries/0.0.1` exact-entry fetch remains the authoritative path. Python mirrors the catalog flags, exposes optional `SensorEntry.sensor_entry_json` / `frame_entry_json`, and adds JSON-returning `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry` helpers.

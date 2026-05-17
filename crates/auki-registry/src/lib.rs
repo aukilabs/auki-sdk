@@ -688,10 +688,7 @@ pub fn read_frame(
 
 /// Write a detector registry entry under `<app_root>/registries/detectors/...`.
 /// Idempotent on hash: writing identical content is a no-op. Cuba T4.
-pub fn write_detector(
-    app_root: &Path,
-    entry: &DetectorRegistryEntry,
-) -> Result<WriteOutcome> {
+pub fn write_detector(app_root: &Path, entry: &DetectorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::detector_entry_path(app_root, &entry.detector_id, &hash);

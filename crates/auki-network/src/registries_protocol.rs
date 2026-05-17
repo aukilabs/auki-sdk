@@ -57,6 +57,12 @@ pub enum RegistryKind {
     Clock,
     /// Frame Registry (`FrameRegistryEntry`).
     Frame,
+    /// Detector Registry (`DetectorRegistryEntry`). Cuba T4 +
+    /// `/auki/registries/0.0.1` protocol extension. Symmetric with
+    /// `Sensor` — same on-disk shape under
+    /// `<app_root>/registries/detectors/<id>/<hash>.json`, same
+    /// canonical-bytes + content-addressed-hash model.
+    Detector,
 }
 
 impl RegistryKind {
@@ -67,6 +73,7 @@ impl RegistryKind {
             RegistryKind::Sensor => "sensor",
             RegistryKind::Clock => "clock",
             RegistryKind::Frame => "frame",
+            RegistryKind::Detector => "detector",
         }
     }
 }

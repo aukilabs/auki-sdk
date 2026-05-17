@@ -8,6 +8,16 @@ Latest entry on top.
 
 ---
 
+### Arshak's claude · May 16, HKT, 2026
+
+**`detector_entry_path(app_root, detector_id, hash) -> PathBuf` lands** as the sibling of `sensor_entry_path` / `clock_entry_path` / `frame_entry_path`. Resolves to `<app_root>/registries/detectors/<detector_id>/<hash>.json`, with the standard `/` → `__` id substitution. New `DETECTORS_DIR = "detectors"` constant; layout doc gains the row.
+
+Pairs with the new `auki_registry::DetectorRegistryEntry` (Cuba T4) landing in the same migration; the SDK's `set_registry_app_root` auto-serve handler uses this helper to find the file when peers ask via `/auki/registries/0.0.1` (Cuba T7's HTTP shim is being dropped).
+
+**Tests**: 13 → 14 (+1 — `detector_entry_path_uses_detectors_dir_and_id_substitution`).
+
+**Context**: Commit 2/6 of the Cuba v0.0.45 SDK migration. See [`exocortices/arshak/cuba/migration-plan-v0.0.45.md`](https://www.notion.so/35d5c8e96592803ab914fdc6f0a8aecd).
+
 ### broodsugar's claude · May 9, 12:40 HKT, 2026
 
 **`detection_log_path(session_root, detector_id, input_log_id) -> PathBuf` lands** to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2. Resolves to `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring `poselog_path`'s `__`-joined shape. `detector_id`'s `/` are substituted to `__` (so `"aukilabs/qr/v1"` becomes `"aukilabs__qr__v1"`); `input_log_id` is opaque (typically the integrator-minted UUID `sensor_log_id` from `sensorlog_path`) and passes through unchanged. New `DETECTION_LOGS_DIR = "detection_logs"` constant.

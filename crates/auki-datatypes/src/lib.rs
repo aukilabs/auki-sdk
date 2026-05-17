@@ -880,8 +880,13 @@ mod tests {
     /// per-detector schema (QR corners, ESL bbox, person bbox, …) sits
     /// inside these bytes; the SDK doesn't decode it.
     fn step8_detection_log_entry() -> DetectionLogEntry {
+        // Pre-Cuba shape: only `data` set; `sensor_hash` / `type` defaulted.
+        // Proto3 elides default-valued fields on the wire, so the locked
+        // hex below is unchanged across the Cuba field additions.
         DetectionLogEntry {
             data: (0..12u8).collect(),
+            sensor_hash: String::new(),
+            r#type: String::new(),
         }
     }
 
@@ -937,11 +942,33 @@ mod tests {
     /// per-detector schema's choice of how to express that.
     #[test]
     fn detection_log_entry_empty_data_round_trips() {
-        let entry = DetectionLogEntry { data: vec![] };
+        let entry = DetectionLogEntry {
+            data: vec![],
+            sensor_hash: String::new(),
+            r#type: String::new(),
+        };
         let bytes = entry.encode_to_vec();
         assert_eq!(bytes.len(), 0);
         let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
+    }
+
+    /// Cuba T5 + T12 — sensor_hash and type round-trip when populated.
+    /// Locked-bytes test for `step8_detection_log_entry` proves the
+    /// pre-Cuba empty-string defaults are wire-elided; this test proves
+    /// populated values survive a full encode/decode cycle.
+    #[test]
+    fn detection_log_entry_cuba_fields_round_trip() {
+        let entry = DetectionLogEntry {
+            data: vec![0xAA, 0xBB],
+            sensor_hash: "abcdef0123456789".to_string(),
+            r#type: "aruco".to_string(),
+        };
+        let bytes = entry.encode_to_vec();
+        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, entry);
+        assert_eq!(decoded.sensor_hash, "abcdef0123456789");
+        assert_eq!(decoded.r#type, "aruco");
     }
 
     /// End-to-end seam test: open a real `auki_logs::Log<DetectionLogEntry>`,
@@ -960,8 +987,15 @@ mod tests {
             let mut log: auki_logs::Log<DetectionLogEntry> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
             log.append(100, &step8_detection_log_entry()).unwrap();
-            log.append(200, &DetectionLogEntry { data: vec![] })
-                .unwrap();
+            log.append(
+                200,
+                &DetectionLogEntry {
+                    data: vec![],
+                    sensor_hash: String::new(),
+                    r#type: String::new(),
+                },
+            )
+            .unwrap();
         }
         let reader: auki_logs::LogReader<DetectionLogEntry> =
             auki_logs::Log::<DetectionLogEntry>::read(dir.path()).unwrap();

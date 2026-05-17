@@ -55,7 +55,9 @@ use auki_network::discovery_client::{
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
-use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry};
+use auki_registry::{
+    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
+};
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
@@ -1149,6 +1151,31 @@ impl ClusterManager {
         Ok(entry)
     }
 
+    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
+    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
+    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
+    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
+    pub async fn fetch_detector_entry(
+        &self,
+        peer_id: PeerId,
+        detector_id: impl Into<String>,
+        detector_hash: impl Into<String>,
+    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
+        let id = detector_id.into();
+        let hash = detector_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
+            .await?;
+        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.detector_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded detector_id mismatch: expected {:?}, found {:?}",
+                id, entry.detector_id
+            )));
+        }
+        Ok(entry)
+    }
+
     async fn fetch_registry_envelope(
         &self,
         peer_id: PeerId,
@@ -2100,6 +2127,13 @@ fn read_registry_envelope(
             };
             Ok(Some(envelope_for_frame(entry)))
         }
+        RegistryKind::Detector => {
+            let Some(entry) = auki_registry::read_detector(app_root, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_detector(entry)))
+        }
     }
 }
 
@@ -2128,6 +2162,16 @@ fn envelope_for_frame(entry: FrameRegistryEntry) -> RegistryEntryEnvelope {
     RegistryEntryEnvelope {
         kind: RegistryKind::Frame,
         id: entry.frame_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_detector(entry: DetectorRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Detector,
+        id: entry.detector_id,
         hash: auki_hash::hash_jcs_bytes(&bytes),
         canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
     }
@@ -2337,6 +2381,45 @@ mod tests {
         assert_eq!(envelope.hash, hash);
         verify_registry_envelope(&envelope, RegistryKind::Frame, &envelope.id, &hash).unwrap();
         let decoded: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn registry_envelope_reads_canonical_detector_from_app_root() {
+        use auki_registry::{Aruco, DetectorBody, DetectorRegistryEntry};
+
+        let dir = tempfile::tempdir().unwrap();
+        let entry = DetectorRegistryEntry {
+            detector_id: "aukilabs/aruco/v1".into(),
+            body: DetectorBody::Aruco(Aruco {
+                dictionary: "5x5_50".into(),
+            }),
+            output_types: vec!["aruco".into()],
+        };
+        let hash = auki_registry::write_detector(dir.path(), &entry)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let envelope = read_registry_envelope(
+            dir.path(),
+            &RegistryRequest {
+                kind: RegistryKind::Detector,
+                id: entry.detector_id.clone(),
+                hash: hash.clone(),
+            },
+        )
+        .unwrap()
+        .expect("entry exists");
+
+        assert_eq!(envelope.kind, RegistryKind::Detector);
+        assert_eq!(envelope.id, entry.detector_id);
+        assert_eq!(envelope.hash, hash);
+        // The independent hash from the entry itself must match the envelope hash.
+        assert_eq!(envelope.hash, entry.hash());
+        verify_registry_envelope(&envelope, RegistryKind::Detector, &envelope.id, &hash).unwrap();
+        let decoded: DetectorRegistryEntry =
+            serde_json::from_str(&envelope.canonical_json).unwrap();
         assert_eq!(decoded, entry);
     }
 

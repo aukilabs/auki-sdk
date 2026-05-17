@@ -9,3 +9,5 @@ import betterproto
 @dataclass
 class DetectionLogEntry(betterproto.Message):
     data: bytes = betterproto.bytes_field(1)
+    sensor_hash: str = betterproto.string_field(2)
+    type: str = betterproto.string_field(3)

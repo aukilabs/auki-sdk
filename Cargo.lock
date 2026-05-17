@@ -367,6 +367,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-registry-py"
+version = "0.0.0"
+dependencies = [
+ "auki-registry",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "auki-ros-adapter"
 version = "0.0.0"
 dependencies = [

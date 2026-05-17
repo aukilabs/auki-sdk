@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 16, 19:02 HKT, 2026
+
+**[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.
 ### Nils's codex · May 17, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) + [`auki-network`](auki-network/changelog.md) — heartbeat topology and timeout semantics moved into the domain layer.** `NetworkRuntime` now exposes `set_heartbeat_targets` and reports raw libp2p carrier events; `ClusterManager` owns Manager-star target calculation, first-frame timeout seeding, last-heartbeat timestamps, election on Manager loss, and eviction on peer loss. This keeps `/auki/heartbeat/0.0.1` as the libp2p binding for a domain heartbeat rather than the behavior's source of truth.

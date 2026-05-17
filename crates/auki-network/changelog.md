@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 17, HKT, 2026
 
+**`/auki/resources/0.0.1` starts the generalized live resource catalog.** New `resources_protocol` module defines framed JSON `ResourcesRequest` / `ResourcesResponse` messages and `ResourceEntry` rows tagged by `kind`. v0 ships `sensor_stream` and `transform_edge`: sensor rows advertise `sensor_id`, `sensor_hash`, sensor kind, stream protocol, payload hint, optional current `ResourcePinholeIntrinsics`, and optional embedded Sensor / Frame Registry JSON; transform rows advertise `(from_frame_id, from_frame_hash, to_frame_id, to_frame_hash)`, writer mode, source metadata, and a numeric rigid transform following Pose Log parent-to-child semantics. The frame cap is 1 MiB to leave room for embedded registry entries and modest catalogs.
+
+`NetworkRuntime` now binds `/auki/resources/0.0.1`, returns a `ResourcesRequestEvent` receiver from `spawn`, gates inbound resource requests against the same allowed-peer set as info/sensors/registries, and exposes `request_resources_catalog` plus `request_resources_catalog_with` for outbound fetches. `/auki/sensors/0.0.1` remains in the tree for now, but new discovery work should target resources as the broader surface.
+
+Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-network --features swarm`.
+
+### Nils's codex · May 17, HKT, 2026
+
 **`/auki/heartbeat/0.0.1` is now a libp2p carrier, not the heartbeat brain.** `NetworkRuntime::set_heartbeat_manager` has been replaced by `set_heartbeat_targets(Vec<PeerId>)`: the runtime opens bidirectional heartbeat substreams only to explicit allow-listed targets, accepts inbound heartbeat carriers from known peers, writes frames at `HEARTBEAT_INTERVAL`, and reports raw carrier facts upward (`Connected`, `Disconnected`, `HeartbeatReceived`, `HeartbeatStreamClosed`). Inbound accepted carriers and outbound target-owned carriers are tracked separately so a non-Manager allow-list refresh cannot abort the Manager's inbound heartbeat stream.
 
 The runtime no longer stores last-heartbeat timestamps, knows the cluster Manager, computes Manager-star topology, or emits semantic `Lost` on timeout. Those decisions moved to `auki-domain::ClusterManager`, which means this crate's `/auki/heartbeat/0.0.1` binding is ready to sit beside future transport bindings instead of baking libp2p-specific topology into the SDK behavior.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**Live resource catalogs start with `/auki/resources/0.0.1`.** The SDK now has a peer-to-peer resource discovery surface for `sensor_stream` rows, optional pinhole intrinsics, and rigid `transform_edge` rows. This lets Park-style consumers discover both streamable sensor payloads and direct frame edges such as `camera_link -> head_left_cam_optical` before local inversion/composition. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 16, 19:02 HKT, 2026
 
 **Python producers can now declare conventions, not just consume existing registry files.** New `auki-registry-py` bindings expose Frame / Sensor / Clock Registry constructors, hashing, and read/write helpers, so Boosterapp can write `FrameRegistryEntry` files, pin `frame_hash` into spatial sensor entries, and hand those hashes to the stream-manifest builder. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

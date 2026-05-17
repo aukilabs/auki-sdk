@@ -49,6 +49,11 @@ use crate::registries_protocol::{
     REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
     read_registry_request, read_registry_response, write_registry_request, write_registry_response,
 };
+use crate::resources_protocol::{
+    RESOURCES_PROTOCOL, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
+    read_resources_request, read_resources_response, write_resources_request,
+    write_resources_response,
+};
 use crate::sensors_protocol::{
     SENSORS_PROTOCOL, SensorsProtocolError, SensorsRequest, SensorsResponse, read_sensors_request,
     read_sensors_response, write_sensors_request, write_sensors_response,
@@ -295,6 +300,55 @@ pub enum RequestSensorsError {
     /// The round-trip didn't complete within
     /// [`SENSORS_REQUEST_TIMEOUT`].
     #[error("sensors request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+/// Inbound `/auki/resources/0.0.1` event surfaced by the runtime to
+/// its owner via the channel returned from [`NetworkRuntime::spawn`].
+///
+/// The owner (typically `auki-domain`'s `ClusterManager`) snapshots
+/// the application-supplied resource catalog and replies via `ack`.
+/// The runtime's per-substream task awaits the reply for up to
+/// [`RESOURCES_RESPONSE_TIMEOUT`] before closing the substream
+/// silently.
+#[derive(Debug)]
+pub struct ResourcesRequestEvent {
+    /// The peer-id of the requester. Authenticated by libp2p's noise
+    /// handshake at connection-establishment time.
+    pub peer: PeerId,
+    /// The body of the request.
+    pub request: ResourcesRequest,
+    /// One-shot channel to reply on. Send a [`ResourcesResponse`]
+    /// containing the producer's current resource catalog snapshot.
+    /// Dropping the sender without sending closes the substream
+    /// silently; the requester sees a
+    /// [`ResourcesProtocolError::Io`] with `UnexpectedEof`.
+    pub ack: oneshot::Sender<ResourcesResponse>,
+}
+
+/// How long the runtime's per-substream resources task waits for the
+/// owner to reply via the [`ResourcesRequestEvent::ack`] channel
+/// before closing the substream.
+const RESOURCES_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`NetworkRuntime::request_resources_catalog`] waits for
+/// the full open-write-read round-trip before returning a timeout
+/// error.
+pub const RESOURCES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Errors from [`NetworkRuntime::request_resources_catalog`].
+#[derive(Debug, thiserror::Error)]
+pub enum RequestResourcesError {
+    /// `libp2p_stream::Control::open_stream` failed (peer not
+    /// reachable, not on the allow-list, etc.).
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    /// I/O or wire-format error reading/writing a framed message.
+    #[error("protocol: {0}")]
+    Protocol(#[source] ResourcesProtocolError),
+    /// The round-trip didn't complete within
+    /// [`RESOURCES_REQUEST_TIMEOUT`].
+    #[error("resources request timed out after {0:?}")]
     Timeout(Duration),
 }
 
@@ -549,6 +603,7 @@ impl NetworkRuntime {
     /// carrier events + a receiver for inbound `/auki/membership/0.0.1`
     /// gossip events + a receiver for inbound `/auki/info/0.0.1`
     /// participant-info requests + a receiver for inbound
+    /// `/auki/resources/0.0.1` resource-catalog requests + a receiver for inbound
     /// `/auki/sensors/0.0.1` sensor-catalog requests + a receiver for
     /// inbound `/auki/registries/0.0.1` registry-entry requests.
     /// Owners that don't care about any of them (e.g. tests) can drop
@@ -565,6 +620,7 @@ impl NetworkRuntime {
             mpsc::Receiver<PeerLivenessEvent>,
             mpsc::Receiver<MembershipEvent>,
             mpsc::Receiver<InfoRequestEvent>,
+            mpsc::Receiver<ResourcesRequestEvent>,
             mpsc::Receiver<SensorsRequestEvent>,
             mpsc::Receiver<RegistryRequestEvent>,
         ),
@@ -584,6 +640,7 @@ impl NetworkRuntime {
         let (liveness_tx, liveness_rx) = mpsc::channel::<PeerLivenessEvent>(64);
         let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
         let (info_events_tx, info_events_rx) = mpsc::channel::<InfoRequestEvent>(16);
+        let (resources_events_tx, resources_events_rx) = mpsc::channel::<ResourcesRequestEvent>(16);
         let (sensors_events_tx, sensors_events_rx) = mpsc::channel::<SensorsRequestEvent>(16);
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let task = handle.spawn(run_task(
@@ -600,6 +657,7 @@ impl NetworkRuntime {
             liveness_tx,
             membership_events_tx,
             info_events_tx,
+            resources_events_tx,
             sensors_events_tx,
             registry_events_tx,
         ));
@@ -618,6 +676,7 @@ impl NetworkRuntime {
             liveness_rx,
             membership_events_rx,
             info_events_rx,
+            resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
         ))
@@ -758,6 +817,53 @@ impl NetworkRuntime {
         {
             Err(_) => return Err(RequestSensorsError::Timeout(SENSORS_REQUEST_TIMEOUT)),
             Ok(Err(e)) => return Err(RequestSensorsError::Protocol(e)),
+            Ok(Ok(r)) => r,
+        };
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's current resource catalog over the
+    /// `/auki/resources/0.0.1` libp2p protocol. Returns the response's
+    /// list of resource rows.
+    pub async fn request_resources_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponse, RequestResourcesError> {
+        self.request_resources_catalog_with(peer_id, ResourcesRequest::all())
+            .await
+    }
+
+    /// Fetch a cluster peer's current resource catalog using an
+    /// explicit [`ResourcesRequest`]. This is the canonical discovery
+    /// path for sensor streams, transform edges, and future resource
+    /// kinds.
+    pub async fn request_resources_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequest,
+    ) -> Result<ResourcesResponse, RequestResourcesError> {
+        let mut control = self.stream_control.clone();
+        let proto = RESOURCES_PROTOCOL.clone();
+
+        let open_fut = control.open_stream(peer_id, proto);
+        let mut substream = match tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(RequestResourcesError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestResourcesError::OpenStream(e)),
+            Ok(Ok(s)) => s,
+        };
+
+        write_resources_request(&mut substream, &request)
+            .await
+            .map_err(RequestResourcesError::Protocol)?;
+
+        let response = match tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            read_resources_response(&mut substream),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestResourcesError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(e)) => return Err(RequestResourcesError::Protocol(e)),
             Ok(Ok(r)) => r,
         };
         Ok(response)
@@ -971,6 +1077,7 @@ async fn run_task(
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
     membership_events_tx: mpsc::Sender<MembershipEvent>,
     info_events_tx: mpsc::Sender<InfoRequestEvent>,
+    resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
     sensors_events_tx: mpsc::Sender<SensorsRequestEvent>,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
 ) {
@@ -1060,6 +1167,15 @@ async fn run_task(
     let mut incoming_infos: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(info_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/resources/0.0.1` substream acceptance.
+    let resources_proto = RESOURCES_PROTOCOL.clone();
+    let mut incoming_resources: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(resources_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -1189,6 +1305,18 @@ async fn run_task(
                 }
                 let tx = info_events_tx.clone();
                 tokio::spawn(handle_inbound_info_substream(peer, substream, tx));
+            }
+
+            resources = incoming_resources.next() => {
+                let Some((peer, substream)) = resources else { return; };
+                // Same cluster-trust gate. Non-cluster peers can't
+                // fetch a daemon's generalized resource catalog.
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = resources_events_tx.clone();
+                tokio::spawn(handle_inbound_resources_substream(peer, substream, tx));
             }
 
             sensors = incoming_sensors.next() => {
@@ -1792,6 +1920,61 @@ async fn handle_inbound_info_substream(
     }
 }
 
+/// Per-substream task for an inbound `/auki/resources/0.0.1`
+/// request. Reads the framed [`ResourcesRequest`], forwards it to the
+/// runtime's owner via a [`ResourcesRequestEvent`], awaits the owner's
+/// reply (up to [`RESOURCES_RESPONSE_TIMEOUT`]), writes the framed
+/// [`ResourcesResponse`] back, closes the substream.
+///
+/// Mirrors `handle_inbound_sensors_substream` in lifecycle — errors
+/// at any stage drop the substream silently; the requester sees
+/// `UnexpectedEof` on read.
+async fn handle_inbound_resources_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
+) {
+    let request = match read_resources_request(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: resources substream from {peer}: read failed: {e}");
+            return;
+        }
+    };
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if resources_events_tx
+        .send(ResourcesRequestEvent {
+            peer,
+            request,
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        // Owner has dropped the receiver — drop silently.
+        return;
+    }
+
+    let response = match tokio::time::timeout(RESOURCES_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => {
+            eprintln!("auki-network: resources handler dropped without replying for peer {peer}");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: resources handler timed out after {RESOURCES_RESPONSE_TIMEOUT:?} for peer {peer}"
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = write_resources_response(&mut substream, &response).await {
+        eprintln!("auki-network: resources substream to {peer}: write response failed: {e}");
+    }
+}
+
 /// Per-substream task for an inbound `/auki/sensors/0.0.1` request.
 /// Reads the framed [`SensorsRequest`], forwards it to the runtime's
 /// owner via a [`SensorsRequestEvent`], awaits the owner's reply (up
@@ -1984,6 +2167,7 @@ mod tests {
             _liveness,
             _membership_events,
             _info_events,
+            _resources_events,
             _sensors_events,
             _registry_events,
         ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
@@ -2006,6 +2190,7 @@ mod tests {
             _liveness,
             _membership_events,
             _info_events,
+            _resources_events,
             _sensors_events,
             _registry_events,
         ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
@@ -2026,6 +2211,7 @@ mod tests {
             _liveness,
             _membership_events,
             _info_events,
+            _resources_events,
             _sensors_events,
             _registry_events,
         ) = NetworkRuntime::spawn(

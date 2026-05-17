@@ -17,7 +17,7 @@ The `swarm` feature adds native libp2p support:
 
 - `swarm::build_swarm(identity, SwarmConfig)` builds TCP + QUIC + Noise + Yamux, always with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour used by SDK protocols.
 - `swarm::collect_routable_listen_addrs` and `resolve_advertise_multiaddrs` are the SDK path for deciding which listen addresses a daemon advertises to Discovery.
-- `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)` owns the swarm event loop and exposes small methods for updating peers, opening streams, sending join requests, requesting peer info/catalogs, broadcasting membership, and shutting down.
+- `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)` owns the swarm event loop and exposes small methods for updating peers, opening streams, sending join requests, requesting peer info/resource catalogs, broadcasting membership, and shutting down.
 
 The `discovery_client` feature adds `DiscoveryClient`, the HTTP client for [`aukilabs/discovery`](https://github.com/aukilabs/discovery):
 
@@ -41,6 +41,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames; cluster liveness semantics live in `auki-domain` |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |
+| `/auki/resources/0.0.1` | `resources_protocol` | Cluster peer asks another peer what resources it can provide now; v0 rows are `sensor_stream` (optionally with pinhole intrinsics) and `transform_edge` |
 | `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog, optionally embedding Sensor / Frame Registry JSON |
 | `/auki/registries/0.0.1` | `registries_protocol` | Cluster peer fetches a hash-pinned Sensor / Clock / Frame Registry entry |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
@@ -52,7 +53,7 @@ The stream runtime is a typed API layered over the `/auki/stream/0.1.0` prost en
 The connection layer is not the main trust boundary anymore. The swarm uses a block-list for evicting misbehaving peers, while routine membership checks live in the protocol handlers:
 
 - `/auki/join/0.0.1` intentionally accepts first contact from non-members.
-- `/auki/stream/0.1.0`, `/auki/info/0.0.1`, `/auki/sensors/0.0.1`, `/auki/registries/0.0.1`, heartbeat, and membership paths are gated against the runtime's current allowed-peer set and silently drop outsiders where appropriate.
+- `/auki/stream/0.1.0`, `/auki/info/0.0.1`, `/auki/resources/0.0.1`, `/auki/sensors/0.0.1`, `/auki/registries/0.0.1`, heartbeat, and membership paths are gated against the runtime's current allowed-peer set and silently drop outsiders where appropriate.
 - Heartbeat carrier opening is steered by the domain layer via `set_heartbeat_targets`: the runtime opens `/auki/heartbeat/0.0.1` only to the explicit peers it is given and reports frame/closure events upward.
 - `auki-domain::ClusterManager` owns the membership document, heartbeat topology, heartbeat timeout/loss decisions, election, Discovery liveness checks, and updates to the runtime's allowed-peer set.
 

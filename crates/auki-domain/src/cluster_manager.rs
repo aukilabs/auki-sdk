@@ -55,6 +55,9 @@ use auki_network::discovery_client::{
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
+use auki_network::resources_protocol::{
+    ResourceEntry, ResourceKind, ResourcesRequest, ResourcesResponse, SensorStreamResource,
+};
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
 };
@@ -69,10 +72,12 @@ use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
     AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
-    RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestSensorsError,
-    SendJoinRequestError, SensorsRequestEvent, SpawnError,
+    RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestResourcesError,
+    RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError, SensorsRequestEvent,
+    SpawnError,
 };
 pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
+use auki_network::stream_protocol::STREAM_PROTOCOL;
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
@@ -164,6 +169,36 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
         };
         enrich_sensor_entries(&mut sensors, request, app_root);
         sensors
+    }
+}
+
+/// Application-supplied source of truth for non-sensor resources the
+/// daemon can currently provide. Sensor streams are automatically
+/// lifted from the registered [`SensorCatalogProvider`] into
+/// `/auki/resources/0.0.1`; install this provider for additional
+/// resources such as rigid transform edges.
+pub trait ResourceCatalogProvider: Send + Sync + 'static {
+    /// Snapshot currently-advertised resources. Called once per
+    /// inbound `/auki/resources/0.0.1` request. Keep it cheap — the
+    /// runtime's per-substream task gives the SDK 2 s to respond
+    /// before closing the substream.
+    fn snapshot(&self) -> Vec<ResourceEntry>;
+
+    /// Snapshot resources for a concrete request. The default
+    /// implementation filters by requested open-string kind and
+    /// enriches rows from the producer's registered app root when the
+    /// requester asks for embedded registry entries.
+    fn snapshot_for_request(
+        &self,
+        request: &ResourcesRequest,
+        registry_app_root: Option<&Path>,
+    ) -> Vec<ResourceEntry> {
+        let mut resources = self.snapshot();
+        filter_resource_entries(&mut resources, request);
+        if let Some(app_root) = registry_app_root {
+            enrich_resource_entries(&mut resources, request, app_root);
+        }
+        resources
     }
 }
 
@@ -429,6 +464,10 @@ pub struct ClusterManager {
     /// the runtime, builds a [`ParticipantInfo`] from current
     /// state, and replies. Cancelled on `shutdown`.
     info_handler_task: Mutex<Option<JoinHandle<()>>>,
+    /// Task that drains inbound `/auki/resources/0.0.1` requests
+    /// from the runtime, snapshots resource providers, and replies.
+    /// Cancelled on `shutdown`.
+    resources_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/sensors/0.0.1` requests
     /// from the runtime, snapshots the application-supplied
     /// [`SensorCatalogProvider`], and replies. Cancelled on
@@ -447,6 +486,11 @@ pub struct ClusterManager {
     /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
     /// and the handler task can read concurrently.
     sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    /// Application-supplied non-sensor resource catalog provider.
+    /// Sensor streams are lifted from `sensor_catalog_provider`; this
+    /// provider augments the generalized resource catalog with
+    /// transform edges and future resource kinds.
+    resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>>,
     /// Producer-local app root containing `registries/{sensors,clocks,frames}`.
     /// `None` until the daemon calls [`Self::set_registry_app_root`];
     /// inbound registry fetches return `entry: None` while unset.
@@ -685,6 +729,7 @@ impl ClusterManager {
             liveness_rx,
             membership_events_rx,
             info_events_rx,
+            resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
         ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
@@ -759,19 +804,32 @@ impl ClusterManager {
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
-        // 9. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
+        // 9. Drain inbound /auki/resources/0.0.1 requests. Sensor
+        //    streams are lifted from the sensor catalog provider;
+        //    transform edges and future resource kinds come from the
+        //    resource catalog provider.
+        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
+            resources_events_rx,
+            sensor_catalog_provider.clone(),
+            resource_catalog_provider.clone(),
+            registry_app_root.clone(),
+        )));
+
+        // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //    the application-supplied provider (or return an empty
         //    catalog if none is registered yet), optionally enrich
         //    from the local registry app root, and reply.
-        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
-            Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
             registry_app_root.clone(),
         )));
 
-        // 10. Drain inbound /auki/registries/0.0.1 requests. Read
+        // 11. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
@@ -795,9 +853,11 @@ impl ClusterManager {
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
+            resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
             sensor_catalog_provider,
+            resource_catalog_provider,
             registry_app_root,
             stopped: AtomicBool::new(false),
         })
@@ -1045,6 +1105,21 @@ impl ClusterManager {
             .expect("sensor_catalog_provider lock") = Some(provider);
     }
 
+    /// Register (or replace) the application-supplied
+    /// [`ResourceCatalogProvider`]. Sensor streams are already lifted
+    /// from [`SensorCatalogProvider`]; use this for transform edges
+    /// and future non-sensor resources.
+    ///
+    /// Inbound `/auki/resources/0.0.1` requests received before this
+    /// call still include sensor streams when a sensor provider is
+    /// installed. Additional resource kinds appear after this call.
+    pub fn set_resource_catalog_provider(&self, provider: Arc<dyn ResourceCatalogProvider>) {
+        *self
+            .resource_catalog_provider
+            .lock()
+            .expect("resource_catalog_provider lock") = Some(provider);
+    }
+
     /// Register (or replace) the producer-local app root used to
     /// serve `/auki/registries/0.0.1` requests. The SDK reads existing
     /// registry files from this app root via `auki-registry` and
@@ -1091,6 +1166,34 @@ impl ClusterManager {
         let response = self
             .runtime
             .request_sensors_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's current generalized resource catalog
+    /// over `/auki/resources/0.0.1`. This is the canonical discovery
+    /// path for sensor streams, transform edges, and future resource
+    /// kinds.
+    pub async fn fetch_resources_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self.runtime.request_resources_catalog(peer_id).await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's generalized resource catalog with an
+    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
+    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
+    /// when a consumer wants embedded registry JSON by value.
+    pub async fn fetch_resources_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequest,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self
+            .runtime
+            .request_resources_catalog_with(peer_id, request)
             .await?;
         Ok(response)
     }
@@ -1273,6 +1376,7 @@ impl ClusterManager {
             liveness_rx,
             membership_events_rx,
             info_events_rx,
+            resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
         ) = NetworkRuntime::spawn(
@@ -1407,19 +1511,32 @@ impl ClusterManager {
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
-        // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
+        // 10. Drain inbound /auki/resources/0.0.1 requests. Sensor
+        //     streams are lifted from the sensor catalog provider;
+        //     transform edges and future resource kinds come from the
+        //     resource catalog provider.
+        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
+            resources_events_rx,
+            sensor_catalog_provider.clone(),
+            resource_catalog_provider.clone(),
+            registry_app_root.clone(),
+        )));
+
+        // 11. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //     the application-supplied provider (or return an empty
         //     catalog if none is registered yet), optionally enrich
         //     from the local registry app root, and reply.
-        let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
-            Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
             registry_app_root.clone(),
         )));
 
-        // 11. Drain inbound /auki/registries/0.0.1 requests. Read
+        // 12. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
@@ -1443,9 +1560,11 @@ impl ClusterManager {
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
+            resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
             sensor_catalog_provider,
+            resource_catalog_provider,
             registry_app_root,
             stopped: AtomicBool::new(false),
         })
@@ -1525,6 +1644,14 @@ impl ClusterManager {
             .info_handler_task
             .lock()
             .expect("info_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .resources_handler_task
+            .lock()
+            .expect("resources_handler_task lock")
             .take()
         {
             task.abort();
@@ -2122,6 +2249,14 @@ pub enum FetchSensorsCatalogError {
     Request(#[from] RequestSensorsError),
 }
 
+/// Errors from [`ClusterManager::fetch_resources_catalog`].
+#[derive(Debug, Error)]
+pub enum FetchResourcesCatalogError {
+    /// libp2p / wire / timeout failure during the request.
+    #[error("request_resources_catalog: {0}")]
+    Request(#[from] RequestResourcesError),
+}
+
 /// Errors from `ClusterManager::fetch_*_entry`.
 #[derive(Debug, Error)]
 pub enum FetchRegistryEntryError {
@@ -2241,6 +2376,177 @@ fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
 
 fn canonical_json(bytes: Vec<u8>) -> String {
     String::from_utf8(bytes).expect("JCS output is UTF-8 JSON")
+}
+
+fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
+    ResourceEntry::SensorStream(SensorStreamResource {
+        id: sensor.sensor_id.clone(),
+        sensor_id: sensor.sensor_id,
+        sensor_hash: sensor.sensor_hash,
+        sensor_kind: sensor.kind.clone(),
+        stream_protocol: STREAM_PROTOCOL.into(),
+        payload: stream_payload_for_sensor_kind(&sensor.kind).into(),
+        pinhole_intrinsics: None,
+        sensor_entry_json: sensor.sensor_entry_json,
+        frame_entry_json: sensor.frame_entry_json,
+    })
+}
+
+fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
+    match kind {
+        "rgb_camera" => "jpeg_frame",
+        "point_cloud" => "point_cloud_frame",
+        "joint_encoders" => "joint_encoders_frame",
+        "audio" => "audio_frame",
+        _ => "unknown",
+    }
+}
+
+fn filter_resource_entries(resources: &mut Vec<ResourceEntry>, request: &ResourcesRequest) {
+    if request.kinds.is_empty() {
+        return;
+    }
+    resources.retain(|r| request.kinds.iter().any(|k| k == r.kind().as_str()));
+}
+
+fn enrich_resource_entries(
+    resources: &mut [ResourceEntry],
+    request: &ResourcesRequest,
+    app_root: &Path,
+) {
+    if !request.include_sensor_entries && !request.include_frame_entries {
+        return;
+    }
+
+    for resource in resources {
+        match resource {
+            ResourceEntry::SensorStream(sensor) => {
+                let sensor_entry =
+                    if request.include_sensor_entries || request.include_frame_entries {
+                        match auki_registry::read_sensor(
+                            app_root,
+                            &sensor.sensor_id,
+                            &sensor.sensor_hash,
+                        ) {
+                            Ok(Some(entry)) if entry.hash() == sensor.sensor_hash => Some(entry),
+                            Ok(Some(_)) | Ok(None) | Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                if request.include_sensor_entries {
+                    if let Some(entry) = sensor_entry.as_ref() {
+                        sensor.sensor_entry_json = Some(canonical_json(entry.canonical_bytes()));
+                    }
+                }
+
+                if request.include_frame_entries {
+                    let Some(entry) = sensor_entry.as_ref() else {
+                        continue;
+                    };
+                    let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+                        continue;
+                    };
+                    match auki_registry::read_frame(app_root, frame_id, frame_hash) {
+                        Ok(Some(frame)) if frame.hash() == frame_hash => {
+                            sensor.frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {}
+                    }
+                }
+            }
+            ResourceEntry::TransformEdge(edge) => {
+                if !request.include_frame_entries {
+                    continue;
+                }
+                match auki_registry::read_frame(
+                    app_root,
+                    &edge.from_frame_id,
+                    &edge.from_frame_hash,
+                ) {
+                    Ok(Some(frame)) if frame.hash() == edge.from_frame_hash => {
+                        edge.from_frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
+                    }
+                    Ok(Some(_)) | Ok(None) | Err(_) => {}
+                }
+                match auki_registry::read_frame(app_root, &edge.to_frame_id, &edge.to_frame_hash) {
+                    Ok(Some(frame)) if frame.hash() == edge.to_frame_hash => {
+                        edge.to_frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
+                    }
+                    Ok(Some(_)) | Ok(None) | Err(_) => {}
+                }
+            }
+        }
+    }
+}
+
+fn merge_resource_entries(base: &mut Vec<ResourceEntry>, extra: Vec<ResourceEntry>) {
+    for resource in extra {
+        let kind = resource.kind().as_str();
+        let id = resource.id().to_string();
+        base.retain(|existing| !(existing.kind().as_str() == kind && existing.id() == id));
+        base.push(resource);
+    }
+}
+
+/// Spawn a task that drains inbound `/auki/resources/0.0.1` requests
+/// from `rx` and replies on each `ack` with a freshly-snapshotted
+/// [`ResourcesResponse`].
+///
+/// Sensor streams are lifted from the registered sensor catalog provider
+/// so producers that already publish sensors automatically advertise
+/// them on the generalized resource surface. The resource provider
+/// adds transform edges and future non-sensor resources.
+fn spawn_resources_handler(
+    mut rx: mpsc::Receiver<ResourcesRequestEvent>,
+    sensor_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    resource_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>>,
+    registry_app_root: Arc<Mutex<Option<PathBuf>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(ResourcesRequestEvent { request, ack, .. }) = rx.recv().await {
+            let root = registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
+            let mut resources = Vec::new();
+
+            if request.wants_kind(ResourceKind::SensorStream) {
+                let sensors_request = SensorsRequest {
+                    include_registry_entries: request.include_sensor_entries,
+                    include_frame_entries: request.include_frame_entries,
+                };
+                let sensors = {
+                    let guard = sensor_provider
+                        .lock()
+                        .expect("sensor_catalog_provider lock");
+                    match guard.as_ref() {
+                        Some(p) => p.snapshot_for_request(&sensors_request, root.as_deref()),
+                        None => Vec::new(),
+                    }
+                };
+                resources.extend(sensors.into_iter().map(sensor_resource_from_entry));
+            }
+
+            let provider_resources = {
+                let guard = resource_provider
+                    .lock()
+                    .expect("resource_catalog_provider lock");
+                match guard.as_ref() {
+                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    None => Vec::new(),
+                }
+            };
+            merge_resource_entries(&mut resources, provider_resources);
+            filter_resource_entries(&mut resources, &request);
+            if let Some(app_root) = root.as_deref() {
+                enrich_resource_entries(&mut resources, &request, app_root);
+            }
+
+            let _ = ack.send(ResourcesResponse { resources });
+        }
+    })
 }
 
 /// Spawn a task that drains inbound `/auki/sensors/0.0.1` requests
@@ -2711,6 +3017,93 @@ mod tests {
             serde_json::from_str(enriched.frame_entry_json.as_deref().unwrap()).unwrap();
         assert_eq!(decoded_sensor, sensor);
         assert_eq!(decoded_frame, frame);
+    }
+
+    #[test]
+    fn sensor_entry_lifts_to_sensor_stream_resource() {
+        let resource = sensor_resource_from_entry(SensorEntry {
+            sensor_id: "K1-FAKE/head_left_cam".into(),
+            sensor_hash: "abc123".into(),
+            kind: "rgb_camera".into(),
+            sensor_entry_json: None,
+            frame_entry_json: None,
+        });
+
+        let ResourceEntry::SensorStream(sensor) = resource else {
+            panic!("expected sensor stream resource");
+        };
+        assert_eq!(sensor.id, "K1-FAKE/head_left_cam");
+        assert_eq!(sensor.sensor_id, "K1-FAKE/head_left_cam");
+        assert_eq!(sensor.sensor_hash, "abc123");
+        assert_eq!(sensor.sensor_kind, "rgb_camera");
+        assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
+        assert_eq!(sensor.payload, "jpeg_frame");
+    }
+
+    #[test]
+    fn resource_enrichment_embeds_transform_edge_frame_entries() {
+        use auki_network::resources_protocol::{
+            ResourceQuat, ResourceSpatialTransform, ResourceVec3, TransformEdgeResource,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let from = FrameRegistryEntry::ros_body("K1-FAKE/camera_link");
+        let from_hash = auki_registry::write_frame(dir.path(), &from)
+            .unwrap()
+            .hash()
+            .to_string();
+        let to = FrameRegistryEntry::ros_optical("K1-FAKE/head_left_cam_optical");
+        let to_hash = auki_registry::write_frame(dir.path(), &to)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let mut resources = vec![ResourceEntry::TransformEdge(TransformEdgeResource {
+            id: "K1-FAKE/camera_link->K1-FAKE/head_left_cam_optical".into(),
+            from_frame_id: from.frame_id.clone(),
+            from_frame_hash: from_hash,
+            to_frame_id: to.frame_id.clone(),
+            to_frame_hash: to_hash,
+            writer_mode: "rigid".into(),
+            source: Some(serde_json::json!({
+                "kind": "ros2_tf",
+                "publishers": ["robot_state_publisher"]
+            })),
+            transform: ResourceSpatialTransform {
+                translation: ResourceVec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                orientation: ResourceQuat {
+                    x: 0.5,
+                    y: -0.5,
+                    z: 0.5,
+                    w: -0.5,
+                },
+            },
+            from_frame_entry_json: None,
+            to_frame_entry_json: None,
+        })];
+
+        enrich_resource_entries(
+            &mut resources,
+            &ResourcesRequest {
+                include_frame_entries: true,
+                ..ResourcesRequest::transform_edges()
+            },
+            dir.path(),
+        );
+
+        let ResourceEntry::TransformEdge(edge) = &resources[0] else {
+            panic!("expected transform edge resource");
+        };
+        let decoded_from: FrameRegistryEntry =
+            serde_json::from_str(edge.from_frame_entry_json.as_deref().unwrap()).unwrap();
+        let decoded_to: FrameRegistryEntry =
+            serde_json::from_str(edge.to_frame_entry_json.as_deref().unwrap()).unwrap();
+        assert_eq!(decoded_from, from);
+        assert_eq!(decoded_to, to);
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

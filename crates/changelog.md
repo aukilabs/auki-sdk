@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/resources/0.0.1` live resource catalogs begin.** Peers can now fetch a generalized resource catalog with `sensor_stream` rows, optional pinhole intrinsics, and rigid `transform_edge` rows. `NetworkRuntime` binds and requests the protocol; `ClusterManager` auto-lifts sensor catalog rows, accepts producer-supplied resource rows through `ResourceCatalogProvider`, and can embed exact Sensor / Frame Registry JSON for resource consumers.
+
 ### Nils's codex · May 16, 19:02 HKT, 2026
 
 **[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.

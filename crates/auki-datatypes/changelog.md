@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Arshak's claude · May 16, HKT, 2026
+
+**Cuba T5 + T12 — `DetectionLogEntry` gains `sensor_hash` (field 2) and `type` (field 3).** Each detection record now self-describes its source sensor (T5) and carries an open-string discriminator the consumer uses to pick a per-type decoder for the opaque `data` bytes (T12 — vocabulary like `aruco`, `portal`, `portal_corner`, `esl`, `person`; canonical list in [`detectors/README.md`](https://github.com/aukilabs/detectors)). Field number ledger updated in [`proto/detection.proto`](proto/detection.proto); the SDK still does not decode `data` — application code owns per-type decoders.
+
+**Wire compatibility — preserved.** Proto3 default-elides empty fields, so the existing locked-bytes vector for `step8_detection_log_entry` (`0a0c000102030405060708090a0b`, XXH3-128 `94f8efe6be63d3dc5e045ab08d538a15`) is byte-identical across the addition. Old readers ignore unknown fields; old writers emit no `sensor_hash`/`type` and the new fields stay empty. The test `detection_log_entry_serializes_to_locked_wire_bytes` is the canary against drift.
+
+**Tests**: 51 → 52 (+1 — `detection_log_entry_cuba_fields_round_trip` covering populated-field round-trips). All existing locked-vector tests still pass.
+
+**Touched**: [`proto/detection.proto`](proto/detection.proto) (two-field extension with field-number ledger update); [`src/lib.rs`](src/lib.rs) (fixture, two inline literals, new round-trip test); the Python parity file [`auki-datatypes-py/auki_datatypes/auki/detection.py`](../auki-datatypes-py/auki_datatypes/auki/detection.py) (hand-edited; `protoc-gen-python_betterproto` not installed locally).
+
+**Context**: Commit 1/6 of the Cuba v0.0.45 migration plan in [`exocortices/arshak/cuba/migration-plan-v0.0.45.md`](https://www.notion.so/35d5c8e96592803ab914fdc6f0a8aecd). Sibling commits land `auki_layout::detector_entry_path`, `DetectorRegistryEntry` (+ Cuba T16 `output_types`), `RegistryKind::Detector` on `/auki/registries/0.0.1`, and `StreamDispatch::AcceptDetection` (Cuba T8). The Cuba ArUco daemon consumes all five.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **`auki.stream` accept metadata is now `StreamDescriptor`.** The stream accept message now carries the live stream descriptor Park needs: `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`. This replaces the narrower `AcceptInfo { sensor_hash, clock_id, clock_hash }` shape and keeps `StreamMessage::Accept(...)` as the handshake variant. `frame_id` / `frame_hash` are empty for non-spatial streams; spatial streams publish the exact frame registry reference alongside the sensor and clock references. Breaking wire/source change by design while the SDK is pre-consumer-lock. `cargo test -p auki-datatypes` passes.

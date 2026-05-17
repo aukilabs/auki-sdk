@@ -6,6 +6,48 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 17, HKT, 2026
+
+**`/auki/heartbeat/0.0.1` is now a libp2p carrier, not the heartbeat brain.** `NetworkRuntime::set_heartbeat_manager` has been replaced by `set_heartbeat_targets(Vec<PeerId>)`: the runtime opens bidirectional heartbeat substreams only to explicit allow-listed targets, accepts inbound heartbeat carriers from known peers, writes frames at `HEARTBEAT_INTERVAL`, and reports raw carrier facts upward (`Connected`, `Disconnected`, `HeartbeatReceived`, `HeartbeatStreamClosed`). Inbound accepted carriers and outbound target-owned carriers are tracked separately so a non-Manager allow-list refresh cannot abort the Manager's inbound heartbeat stream.
+
+The runtime no longer stores last-heartbeat timestamps, knows the cluster Manager, computes Manager-star topology, or emits semantic `Lost` on timeout. Those decisions moved to `auki-domain::ClusterManager`, which means this crate's `/auki/heartbeat/0.0.1` binding is ready to sit beside future transport bindings instead of baking libp2p-specific topology into the SDK behavior.
+
+Tests: `cargo check -p auki-network --features swarm` and the companion `auki-domain` failover checks.
+
+### Nils's codex · May 17, HKT, 2026
+
+**`/auki/heartbeat/0.0.1` now follows the Hagall Manager-star contract instead of the lower-peer-id opener convention.** `NetworkRuntime` gains `set_heartbeat_manager(peer_id)` on both the owned runtime and cloneable handle. The domain layer sets this after create/join and after elections; the runtime then reconciles heartbeat state from Manager identity rather than peer-id ordering.
+
+Steady-state topology is now one bidirectional heartbeat substream per Manager→peer pair. When the local peer is Manager, it opens to every connected allow-listed peer. When the Manager is remote, the runtime accepts known-peer heartbeat substreams and arms a Manager-death timeout for the expected Manager even if no first heartbeat frame has arrived yet. Reconciliation also removes stale heartbeat timestamps, not just stale task handles, so old Manager liveness entries do not linger after handoff or eviction.
+
+This closes the Park/K1 failure mode where a dead Manager could leave a surviving peer as a passive heartbeat acceptor forever, and the related no-first-frame hole where Manager death between join and the first heartbeat left no timeout ticking.
+
+Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-network --features swarm`, plus the `auki-domain` failover integration tests listed in the companion changelog entry.
+
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**`/auki/sensors/0.0.1` gains an optional detail request.** `SensorsRequest` now preserves the catalog-only `{}` default while adding `include_registry_entries` and `include_frame_entries` flags. `SensorEntry` keeps the lightweight `sensor_id` / `sensor_hash` / `kind` row, and can now carry `sensor_entry_json` plus `frame_entry_json` when a requester asks for registry entries embedded by value. The frame cap rises to 512 KiB to leave room for embedded Sensor / Frame Registry JSON.
+
+`NetworkRuntime::request_sensors_catalog_with(peer_id, request)` is the explicit request path; existing `request_sensors_catalog(peer_id)` remains catalog-only. Tests pin default `{}` serialization, detail flag serialization, embedded JSON round-trips, unknown-field tolerance, and oversize-frame rejection.
+
+### Arshak's claude · May 16, HKT, 2026 — Commit 5/6
+
+**`StreamDispatch::AcceptDetection` lands** as the fifth `Accept*` variant. Closes Cuba **T8** on the producer side. Each [`DetectionLogEntry`](../auki-datatypes/proto/detection.proto) carries the same `data` / `sensor_hash` / `type` shape as the on-disk Detection Log payload — wire and disk are content-identical by construction (both sides `prost::Message::encode_to_vec` the same struct).
+
+Consumer side is already generic — `NetworkRuntime::open_stream::<T>` works for any `T: Message + Default`, so `open_stream::<DetectionLogEntry>` "just works" without an additional change. The dispatch enum stays closed; the new variant slots in beside `AcceptJpeg` / `AcceptPointCloud` / `AcceptJointEncoders` / `AcceptAudio` and pumps through the same `pump_typed::<T>` path.
+
+**`StreamManifest.sensor_hash` for a detection stream** is the *bound input sensor* — the camera frame the detector was bound to. The detector's own identity (`detector_id` / `detector_hash`) is resolved out-of-band via the `/auki/registries/0.0.1` Detector Registry exchange (Commit 4); the same protocol Park already uses for sensor metadata.
+
+**No new tests.** The exhaustive `match dispatch` site is the structural guarantee for the new variant; `cargo build --package auki-network` is clean. A producer-side integration test would mirror `producer_accepts_and_streams_jpeg_frames` but the existing libp2p-flavored integration tests are flaky upstream — not worth chasing here.
+
+**Context**: Commit 5/6 of the Cuba v0.0.45 SDK migration.
+
+### Arshak's claude · May 16, HKT, 2026
+
+**`RegistryKind::Detector` extends `/auki/registries/0.0.1`.** Fourth variant on the request enum alongside `Sensor` / `Clock` / `Frame`. Wire shape is the same `{ kind, id, hash }` request → `Option<RegistryEntryEnvelope>` response — Cuba's Detector Registry rides the existing protocol; no new substream or wire format. `as_str` returns `"detector"`. Closes Cuba T7 at the protocol level: Park enumerates a peer's detectors via the same libp2p path it already uses for sensors, no HTTP shim required (Cuba T6 dropped).
+
+**Context**: Commit 4/6 of the Cuba v0.0.45 SDK migration. ClusterManager-side dispatch (`read_registry_envelope`, `envelope_for_detector`, `fetch_detector_entry`) lands in `auki-domain` on the same date.
+
 ### Nils's codex · May 16, 13:28 HKT, 2026
 
 **`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.

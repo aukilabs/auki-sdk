@@ -19,7 +19,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Pin the v2 successor-token format and Discovery verification path. v1 keeps `successor_token` opaque and accepts trust-by-shape for the demo.
 - Add SDK-side relay-reservation support once LAN-only Hagall flows are stable and Park-from-home earns the work.
 - Keep `ClusterManager` and `auki-domain-py` APIs aligned as Python consumers adopt `ClusterTarget.bootstrap`.
-- Add catalog bundling only if the extra registry-fetch roundtrip becomes operationally annoying; v0 registry exchange already resolves exact entries by `(kind, id, hash)`, and stream providers now have `StreamManifestBuilder` for accept-time registry projection.
+- Keep the sensor-catalog detail path thin: default catalog fetches stay lightweight, while `SensorsRequest::with_frame_entries()` is the opt-in path for Park-style consumers that want Sensor / Frame Registry JSON embedded by value.
 
 ## Decisions To Honor
 

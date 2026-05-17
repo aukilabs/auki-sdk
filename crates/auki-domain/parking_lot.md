@@ -18,6 +18,22 @@ The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) defin
 
 ---
 
+## Hagall stale-Manager join policy — what if Discovery points at a dead Manager before the join response? _(filed by Nils's codex, 2026-05-17)_
+
+The 2026-05-17 heartbeat fix arms Manager-death detection once a non-Manager has a membership snapshot and an expected `manager_peer_id`. That closes the "Manager dies before the first heartbeat frame" path.
+
+A different edge remains open: `ClusterManager::join_cluster` currently needs the discovered Manager to answer `/auki/join/0.0.1` before the joining peer has any membership document. If Discovery already points at a dead Manager before the join request completes, the peer cannot safely run the existing election rule because it does not know the cluster membership or join ordering.
+
+Options:
+
+1. **Fail loudly and let the operator recreate/join another cluster.** Current behavior: the join request times out or fails. Safest because the SDK does not invent membership it never received, but poor headless recovery from stale one-peer clusters.
+2. **Self-takeover only when Discovery says `peer_count == 1`.** The joining peer rotates Discovery to itself and initializes a one-member membership document. This recovers stale singleton clusters but relies on Discovery's aggregate count being fresh enough to authorize destructive replacement.
+3. **Have Discovery serve a signed/latest membership snapshot.** Joiners can recover from a dead Manager by fetching the last known membership from Discovery, then running the normal election rule. Cleanest model, but it expands Discovery from Manager-address directory into membership-snapshot storage.
+
+**Lean: do not add unilateral takeover without either `peer_count == 1` semantics being explicitly accepted or Discovery carrying a recoverable membership snapshot.** Revisit when Park/Booster need unattended recovery from a stale Discovery Manager hint.
+
+---
+
 ## Hagall — DHT-backed cluster doc as long-term direction _(forward-looking, filed by Nils's claude, 2026-05-13)_
 
 When SDK-Q5 was resolved (yes, surface Manager-role + converge on identical records cluster-wide), Nils flagged a long-term direction: replace the Manager-authoritative-RAM cluster doc with a DHT, so authoritativeness isn't bound to a single Manager.

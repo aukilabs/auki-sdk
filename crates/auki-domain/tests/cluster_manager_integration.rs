@@ -381,7 +381,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
     eprintln!("A=({pid_a}) dying (drop without shutdown)…");
     drop(manager_a);
 
-    // B detects the loss via the heartbeat-timeout monitor
+    // B detects the loss via the domain-owned heartbeat timer
     // (~1500ms) plus a margin for the election + rotate_manager
     // round-trip.
     eprintln!("waiting up to 5s for B to detect loss + run election + rotate Discovery…");
@@ -763,6 +763,8 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
         sensor_id: "K1-FAKE/head_cam".into(),
         sensor_hash: "abc".into(),
         kind: "rgb_camera".into(),
+        sensor_entry_json: None,
+        frame_entry_json: None,
     }];
     manager_b.set_sensor_catalog_provider(Arc::new(FixedCatalog(b_catalog.clone())));
 
@@ -1152,13 +1154,12 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
 /// ConnectionClosed fires within ms). With QUIC + the
 /// pre-fix-missing-heartbeat substream, drop(A) would leave B waiting
 /// for QUIC's multi-second idle timeout. Post-fix, B's election fires
-/// in <2 s via the heartbeat-timeout monitor.
+/// in <2 s via the domain-owned heartbeat timer.
 ///
-/// Seeds `[81]` (Manager) and `[82]` (Joiner) reuse the existing
-/// failover-test peer-ids; we know pid_a > pid_b (Joiner is lower),
-/// which is the OPPOSITE pid ordering — exercises the path where
-/// Joiner opens the heartbeat. Sibling test below covers the other
-/// ordering (Manager lower).
+/// Seeds `[81]` (Manager) and `[82]` (Joiner) pin `pid_a > pid_b`.
+/// The Manager now opens the heartbeat regardless of peer-id ordering,
+/// so this guards against regressing into "the lower peer happens to
+/// save us" behaviour.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn manager_failover_over_quic_when_joiner_pid_lower() {
@@ -1191,6 +1192,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
 
     let id_b = PeerIdentity::from_seed(&[82u8; 32]);
     let pid_b = id_b.peer_id();
+    assert!(pid_a > pid_b, "fixture pins Manager pid higher than Joiner");
     let mut swarm_b = build_swarm(
         &id_b,
         SwarmConfig {
@@ -1248,13 +1250,12 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
 }
 
 /// Sibling of `manager_failover_over_quic_when_joiner_pid_lower` with
-/// the OPPOSITE peer-id ordering: Manager (lower-pid) admits a Joiner
-/// with higher pid. Seeds `[91]` / `[92]` (the same pair the graceful-
-/// shutdown TCP test uses; confirmed pid_a < pid_b).
+/// the opposite peer-id ordering: Manager (lower-pid) admits a Joiner
+/// with higher pid. Seeds `[91]` / `[92]` pin `pid_a < pid_b`.
 ///
 /// This is the exact peer-id ordering Nils hit on K1: Park (lower) +
 /// Booster (higher), Park leaves, Booster should take over via the
-/// heartbeat-timeout monitor regardless of QUIC's slow connection-
+/// domain-owned heartbeat timer regardless of QUIC's slow connection-
 /// close detection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
@@ -1288,6 +1289,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
 
     let id_b = PeerIdentity::from_seed(&[92u8; 32]);
     let pid_b = id_b.peer_id();
+    assert!(pid_a < pid_b, "fixture pins Manager pid lower than Joiner");
     let mut swarm_b = build_swarm(
         &id_b,
         SwarmConfig {
@@ -1336,6 +1338,93 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
     manager_b.shutdown().await.expect("B shutdown");
     eprintln!(
         "QUIC failover OK against {}: A={pid_a} → B={pid_b}",
+        discovery_url()
+    );
+}
+
+/// Manager dies immediately after the join response, before the
+/// joiner has had any grace window to observe a heartbeat frame.
+///
+/// This pins the "no first heartbeat ever arrives" hole: the joiner
+/// must arm Manager-death detection once it has a membership snapshot,
+/// not only after `run_heartbeat_pair` receives its first frame.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_failover_when_manager_dies_before_first_heartbeat() {
+    let cluster_name = unique_cluster_name("sdk-no-first-hb-it");
+
+    let id_a = PeerIdentity::from_seed(&[91u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-no-first-hb-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let id_b = PeerIdentity::from_seed(&[92u8; 32]);
+    let pid_b = id_b.peer_id();
+    assert!(pid_a < pid_b, "fixture pins Manager pid lower than Joiner");
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap()],
+            agent_version: "sdk-no-first-hb-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+    assert_eq!(manager_b.manager_peer_id(), pid_a);
+
+    eprintln!("A=({pid_a}) dropping immediately after admitting B…");
+    drop(manager_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not take over within 5s after A died before the first heartbeat window"
+    );
+    assert_eq!(manager_b.manager_peer_id(), pid_b);
+
+    manager_b.shutdown().await.expect("B shutdown");
+    eprintln!(
+        "No-first-heartbeat failover OK against {}: A={pid_a} → B={pid_b}",
         discovery_url()
     );
 }

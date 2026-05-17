@@ -9,6 +9,21 @@ Latest entry on top.
 ### Nils's codex · May 16, 19:02 HKT, 2026
 
 **Python producers can now declare conventions, not just consume existing registry files.** New `auki-registry-py` bindings expose Frame / Sensor / Clock Registry constructors, hashing, and read/write helpers, so Boosterapp can write `FrameRegistryEntry` files, pin `frame_hash` into spatial sensor entries, and hand those hashes to the stream-manifest builder. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+### Nils's codex · May 17, HKT, 2026
+
+**Heartbeat behavior moved up to `auki-domain`.** `auki-network` now treats `/auki/heartbeat/0.0.1` as the libp2p carrier for heartbeat frames, while `ClusterManager` owns Manager-star topology, timeout windows, and the election/eviction consequences of loss. This keeps today's failover fix while making the split friendlier to a future second transport. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 17, HKT, 2026
+
+**Manager-heartbeat failover now matches the Hagall Manager-star spec.** The SDK no longer relies on lower-peer-id heartbeat opening: `ClusterManager` tells `NetworkRuntime` the current Manager, the Manager opens heartbeat substreams to peers, and non-Managers time out an expected Manager even if the first heartbeat frame never arrives. This closes the Park/K1 dead-Manager stall across both peer-id orderings; the stricter stale-Discovery pre-join takeover case is tracked as an open policy question. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Codex · May 17, HKT, 2026
+
+**Detector Registry and live detection streams are first-class SDK surfaces.** The SDK now has hash-addressed Detector Registry entries, a detector registry path under app-root registries, `/auki/registries/0.0.1` detector fetch support, `ClusterManager::fetch_detector_entry`, `DetectionLogEntry.sensor_hash` / `type`, and `StreamDispatch::AcceptDetection` for live detection data. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**Sensor catalogs can now carry registry details by value.** The SDK keeps `/auki/registries/0.0.1` as the clean hash-addressed registry fetch path, and adds an opt-in `/auki/sensors/0.0.1` detail request that embeds Sensor / Frame Registry JSON for Park-style consumers that want fewer round trips. Python mirrors both paths with catalog flags, optional `SensorEntry` JSON fields, and exact registry-entry JSON fetch helpers. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 16, 18:33 HKT, 2026
 

@@ -55,13 +55,16 @@ use auki_network::discovery_client::{
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
-use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+use auki_registry::{
+    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
+};
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
 // at the top of this module).
 pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
+use auki_network::heartbeat_protocol::HEARTBEAT_TIMEOUT;
 use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
@@ -69,13 +72,14 @@ use auki_network::network_runtime::{
     RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestSensorsError,
     SendJoinRequestError, SensorsRequestEvent, SpawnError,
 };
-pub use auki_network::sensors_protocol::{SensorEntry, SensorsResponse};
+pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -140,6 +144,27 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// it cheap — the runtime's per-substream task gives the SDK
     /// 2 s to respond before closing the substream.
     fn snapshot(&self) -> Vec<SensorEntry>;
+
+    /// Snapshot the catalog for a concrete request. The default
+    /// implementation preserves the lightweight catalog path for
+    /// existing providers, and enriches rows from the producer's
+    /// registered app root only when the requester asks for embedded
+    /// registry entries.
+    fn snapshot_for_request(
+        &self,
+        request: &SensorsRequest,
+        registry_app_root: Option<&Path>,
+    ) -> Vec<SensorEntry> {
+        let mut sensors = self.snapshot();
+        if !request.include_registry_entries && !request.include_frame_entries {
+            return sensors;
+        }
+        let Some(app_root) = registry_app_root else {
+            return sensors;
+        };
+        enrich_sensor_entries(&mut sensors, request, app_root);
+        sensors
+    }
 }
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
@@ -378,7 +403,7 @@ pub struct ClusterManager {
     /// `spawn_info_handler` lazily on each `participant_info()`
     /// build.
     cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
-    /// Manager-side Discovery heartbeat task. Wrapped in
+    /// Manager-side Discovery liveness-check task. Wrapped in
     /// `Arc<Mutex<Option<_>>>` so the liveness handler can spawn it
     /// on Manager-promotion (SDK-T7 handoff). `Some` while this peer
     /// is the Manager; `None` otherwise. Cancelled on `shutdown`.
@@ -389,9 +414,10 @@ pub struct ClusterManager {
     /// the `Mutex<Option<_>>::take()` pattern (idempotent against
     /// concurrent / repeated `shutdown` calls).
     join_handler_task: Mutex<Option<JoinHandle<()>>>,
-    /// Task that drains `PeerLivenessEvent`s from the runtime,
-    /// runs the cluster-internal election on Manager death, and
-    /// orchestrates Manager-handoff when the local peer wins.
+    /// Task that drains heartbeat-carrier events from the runtime,
+    /// runs the domain-side heartbeat timer, runs the cluster-
+    /// internal election on Manager death, and orchestrates
+    /// Manager-handoff when the local peer wins.
     /// Cancelled on `shutdown`.
     liveness_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains inbound `/auki/membership/0.0.1` gossip
@@ -662,8 +688,12 @@ impl ClusterManager {
             sensors_events_rx,
             registry_events_rx,
         ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
+        runtime
+            .set_heartbeat_targets(vec![])
+            .await
+            .map_err(|_| CreateClusterError::Runtime(SpawnError::NoTokioRuntime))?;
 
-        // 4. Manager-side Discovery heartbeat tick.
+        // 4. Manager-side Discovery liveness-check tick.
         let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> =
             Arc::new(Mutex::new(Some(spawn_manager_liveness_check(
                 discovery.clone(),
@@ -683,10 +713,11 @@ impl ClusterManager {
             runtime.handle(),
         )));
 
-        // 6. Drain peer-liveness events: on Manager death, run the
-        //    cluster-internal election; if we win, become the new
-        //    Manager (update state, rotate Discovery, start the
-        //    heartbeat tick).
+        // 6. Drain heartbeat carrier events and run the domain-side
+        //    liveness timer. On Manager death, run the cluster-
+        //    internal election; if we win, become the new Manager
+        //    (update state, rotate Discovery, start the liveness
+        //    check tick).
         let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
             cluster_name.clone(),
@@ -706,6 +737,7 @@ impl ClusterManager {
         //    Manager broadcast supersedes.
         let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
+            cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
@@ -725,20 +757,23 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         )));
 
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
         // 9. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //    the application-supplied provider (or return an empty
-        //    catalog if none is registered yet) and reply.
+        //    catalog if none is registered yet), optionally enrich
+        //    from the local registry app root, and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
+            registry_app_root.clone(),
         )));
 
         // 10. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
-        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
@@ -865,6 +900,14 @@ impl ClusterManager {
 
         // Push the updated allow-list to the runtime.
         self.runtime.set_allowed_peers(new_allow_list).await?;
+        sync_heartbeat_targets(
+            &self.runtime.handle(),
+            self.local_peer_id,
+            &self.manager_peer_id,
+            &self.membership,
+            &self.cluster_name,
+        )
+        .await;
 
         // Gossip the updated membership to every connected peer so
         // existing members learn about the new joiner (the joiner
@@ -1036,6 +1079,22 @@ impl ClusterManager {
         Ok(response)
     }
 
+    /// Fetch a cluster peer's sensor catalog with explicit request
+    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
+    /// consumer wants the producer to embed Sensor / Frame Registry
+    /// JSON by value and avoid per-row registry fetch round trips.
+    pub async fn fetch_sensors_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: SensorsRequest,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self
+            .runtime
+            .request_sensors_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
     /// Fetch and verify a peer's `SensorRegistryEntry` by exact
     /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
     ///
@@ -1104,6 +1163,31 @@ impl ClusterManager {
             return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
                 "decoded frame_id mismatch: expected {:?}, found {:?}",
                 id, entry.frame_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
+    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
+    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
+    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
+    pub async fn fetch_detector_entry(
+        &self,
+        peer_id: PeerId,
+        detector_id: impl Into<String>,
+        detector_hash: impl Into<String>,
+    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
+        let id = detector_id.into();
+        let hash = detector_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
+            .await?;
+        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.detector_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded detector_id mismatch: expected {:?}, found {:?}",
+                id, entry.detector_id
             )));
         }
         Ok(entry)
@@ -1257,6 +1341,10 @@ impl ClusterManager {
             .set_allowed_peers(allow_list)
             .await
             .map_err(|e| JoinClusterError::Runtime(SpawnError::NoTokioRuntime).into_with(e))?;
+        runtime
+            .set_heartbeat_targets(vec![])
+            .await
+            .map_err(|e| JoinClusterError::Runtime(SpawnError::NoTokioRuntime).into_with(e))?;
 
         let membership = Arc::new(Mutex::new(membership));
         let manager_peer_id = Arc::new(Mutex::new(manager_peer));
@@ -1274,10 +1362,11 @@ impl ClusterManager {
             runtime.handle(),
         )));
 
-        // 7. Drain peer-liveness events: on Manager death, run the
-        //    cluster-internal election; if we win, become the new
-        //    Manager (update state, rotate Discovery, start the
-        //    heartbeat tick).
+        // 7. Drain heartbeat carrier events and run the domain-side
+        //    liveness timer. On Manager death, run the cluster-
+        //    internal election; if we win, become the new Manager
+        //    (update state, rotate Discovery, start the liveness
+        //    check tick).
         let liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
         let liveness_handler_task = Mutex::new(Some(spawn_liveness_handler(
             liveness_rx,
@@ -1296,6 +1385,7 @@ impl ClusterManager {
         //    after our own join; we apply them last-write-wins.
         let membership_handler_task = Mutex::new(Some(spawn_membership_handler(
             membership_events_rx,
+            cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
             membership.clone(),
@@ -1315,20 +1405,23 @@ impl ClusterManager {
             cluster_joined_at_ns.clone(),
         )));
 
+        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+
         // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
         //     the application-supplied provider (or return an empty
-        //     catalog if none is registered yet) and reply.
+        //     catalog if none is registered yet), optionally enrich
+        //     from the local registry app root, and reply.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let sensors_handler_task = Mutex::new(Some(spawn_sensors_handler(
             sensors_events_rx,
             sensor_catalog_provider.clone(),
+            registry_app_root.clone(),
         )));
 
         // 11. Drain inbound /auki/registries/0.0.1 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
-        let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
@@ -1485,9 +1578,227 @@ impl JoinClusterError {
     }
 }
 
-/// Drain peer-liveness events from the runtime; act on Manager
-/// death (run the cluster-internal election, and if local wins,
-/// orchestrate the Manager-handoff).
+fn heartbeat_targets_for(
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) -> Vec<PeerId> {
+    if manager_peer_id != local_peer_id {
+        return Vec::new();
+    }
+    membership
+        .peers
+        .iter()
+        .map(|p| p.peer_id)
+        .filter(|pid| *pid != local_peer_id)
+        .collect()
+}
+
+fn heartbeat_watchlist_for(
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) -> HashSet<PeerId> {
+    if manager_peer_id == local_peer_id {
+        membership
+            .peers
+            .iter()
+            .map(|p| p.peer_id)
+            .filter(|pid| *pid != local_peer_id)
+            .collect()
+    } else {
+        membership
+            .peers
+            .iter()
+            .any(|p| p.peer_id == manager_peer_id)
+            .then_some(manager_peer_id)
+            .into_iter()
+            .collect()
+    }
+}
+
+async fn sync_heartbeat_targets(
+    runtime: &auki_network::NetworkRuntimeHandle,
+    local_peer_id: PeerId,
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    cluster_name: &str,
+) {
+    let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+    let targets = {
+        let m = membership.lock().expect("membership lock");
+        heartbeat_targets_for(local_peer_id, manager, &m)
+    };
+    if let Err(e) = runtime.set_heartbeat_targets(targets).await {
+        eprintln!("auki-domain: sync heartbeat targets failed for cluster {cluster_name:?}: {e}");
+    }
+}
+
+fn reconcile_heartbeat_watchlist(
+    last_heartbeat_at: &mut HashMap<PeerId, Instant>,
+    lost_already: &mut HashSet<PeerId>,
+    local_peer_id: PeerId,
+    manager_peer_id: PeerId,
+    membership: &ClusterMembership,
+) {
+    let now = Instant::now();
+    let watchlist = heartbeat_watchlist_for(local_peer_id, manager_peer_id, membership);
+    last_heartbeat_at.retain(|pid, _| watchlist.contains(pid));
+    lost_already.retain(|pid| watchlist.contains(pid));
+    for pid in watchlist {
+        last_heartbeat_at.entry(pid).or_insert(now);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_domain_peer_lost(
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    local_multiaddrs: &[Multiaddr],
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    runtime: &auki_network::NetworkRuntimeHandle,
+    discovery: &DiscoveryClient,
+    liveness_check_task: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    handled_manager_losses: &mut HashSet<PeerId>,
+    lost_pid: PeerId,
+) {
+    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+    let am_manager = current_manager == local_peer_id;
+
+    if !am_manager && lost_pid == current_manager {
+        if !handled_manager_losses.insert(lost_pid) {
+            return;
+        }
+
+        // For "reachable peers", give the connection teardown a
+        // brief moment so connected_peers() reflects the
+        // disconnection.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let connected = runtime.connected_peers();
+        let membership_snapshot = membership.lock().expect("membership lock").clone();
+        let winner = elect_successor(&membership_snapshot, local_peer_id, &connected);
+        if winner == Some(local_peer_id) {
+            // Become Manager.
+            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+
+            // Tell Discovery about the rotation.
+            if let Err(e) = discovery
+                .rotate_manager(cluster_name, &local_peer_id, local_multiaddrs)
+                .await
+            {
+                eprintln!(
+                    "auki-domain: rotate_manager failed for cluster \
+                    {cluster_name:?}: {e}"
+                );
+            }
+
+            // Start the Manager-side Discovery liveness-check tick.
+            let new_tick = spawn_manager_liveness_check(
+                discovery.clone(),
+                cluster_name.to_string(),
+                membership.clone(),
+            );
+            let prev = liveness_check_task
+                .lock()
+                .expect("liveness_check_task lock")
+                .replace(new_tick);
+            if let Some(p) = prev {
+                p.abort();
+            }
+
+            // Evict the dead Manager from membership + push the
+            // updated allow-list. (We won the election, so we own
+            // membership now.)
+            let new_allow_list = {
+                let mut m = membership.lock().expect("membership lock");
+                m.peers.retain(|p| p.peer_id != lost_pid);
+                m.peers
+                    .iter()
+                    .filter(|p| p.peer_id != local_peer_id)
+                    .map(|p| AllowedPeer {
+                        peer_id: p.peer_id,
+                        multiaddrs: p.multiaddrs.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                eprintln!(
+                    "auki-domain: post-election set_allowed_peers \
+                    failed for {cluster_name:?}: {e}"
+                );
+            }
+            sync_heartbeat_targets(
+                runtime,
+                local_peer_id,
+                manager_peer_id,
+                membership,
+                cluster_name,
+            )
+            .await;
+
+            // Gossip the post-handoff view so survivors converge on
+            // the new Manager identity + the post-eviction
+            // membership.
+            broadcast_current_membership(runtime, membership);
+            eprintln!(
+                "auki-domain: cluster {cluster_name:?}: local peer \
+                {local_peer_id} promoted to Manager after detecting Lost {lost_pid}"
+            );
+        } else if let Some(new_manager) = winner {
+            // Someone else (earlier-joined, still reachable) wins.
+            // Update the local view and wait for them to register
+            // with Discovery.
+            *manager_peer_id.lock().expect("manager_peer_id lock") = new_manager;
+            sync_heartbeat_targets(
+                runtime,
+                local_peer_id,
+                manager_peer_id,
+                membership,
+                cluster_name,
+            )
+            .await;
+        }
+    } else if am_manager {
+        // We're the Manager and a peer died. Evict from membership +
+        // push the updated allow-list.
+        let new_allow_list = {
+            let mut m = membership.lock().expect("membership lock");
+            let before = m.peers.len();
+            m.peers.retain(|p| p.peer_id != lost_pid);
+            if m.peers.len() == before {
+                return;
+            }
+            m.peers
+                .iter()
+                .filter(|p| p.peer_id != local_peer_id)
+                .map(|p| AllowedPeer {
+                    peer_id: p.peer_id,
+                    multiaddrs: p.multiaddrs.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+            eprintln!("auki-domain: Manager evict post-Lost set_allowed_peers failed: {e}");
+        }
+        sync_heartbeat_targets(
+            runtime,
+            local_peer_id,
+            manager_peer_id,
+            membership,
+            cluster_name,
+        )
+        .await;
+        // Gossip the shrunken membership so remaining peers also
+        // evict the dead one.
+        broadcast_current_membership(runtime, membership);
+    }
+}
+
+/// Drain heartbeat-carrier events from the runtime and maintain the
+/// domain-owned heartbeat watchlist. Carrier frames refresh
+/// per-peer timestamps; carrier closure or an expired timestamp is
+/// interpreted here as a semantic peer loss.
 ///
 /// **Election rule** (per Hagall T4 / SDK-T6): sort cluster members
 /// by `(join_ts_ns, peer_id)` ascending. The earliest-joined
@@ -1498,7 +1809,7 @@ impl JoinClusterError {
 /// `manager_peer_id` locally so subsequent calls see itself as the
 /// Manager, (b) calls Discovery's `rotate_manager` to update the
 /// directory hint, (c) spawns the Manager-side Discovery
-/// heartbeat tick.
+/// liveness-check tick.
 ///
 /// **Reachability** is approximated as "in the runtime's
 /// `connected_peers()` set OR equal to local_peer_id." When the
@@ -1519,133 +1830,87 @@ fn spawn_liveness_handler(
     discovery: DiscoveryClient,
     liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 ) -> JoinHandle<()> {
-    // Dedupe: don't run election twice for the same Lost event
-    // (the runtime emits Lost from both `ConnectionClosed` and the
-    // heartbeat-timeout monitor; the dedupe is per-peer-id).
-    let acted_on_lost: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     tokio::spawn(async move {
-        while let Some(evt) = rx.recv().await {
-            match evt {
-                PeerLivenessEvent::Connected { .. } => { /* informational */ }
-                PeerLivenessEvent::Lost { peer_id: lost_pid } => {
-                    let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
-                    let am_manager = current_manager == local_peer_id;
+        let mut last_heartbeat_at: HashMap<PeerId, Instant> = HashMap::new();
+        let mut lost_already: HashSet<PeerId> = HashSet::new();
+        let mut handled_manager_losses: HashSet<PeerId> = HashSet::new();
+        let mut tick = tokio::time::interval(HEARTBEAT_TIMEOUT / 2);
 
-                    if !am_manager && lost_pid == current_manager {
-                        // Manager died. Run the election.
-                        if acted_on_lost.swap(true, Ordering::SeqCst) {
-                            // Already running / ran.
-                            continue;
-                        }
-                        // For "reachable peers", give the connection
-                        // teardown a brief moment so connected_peers()
-                        // reflects the disconnection.
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        let connected = runtime.connected_peers();
-                        let membership_snapshot =
-                            membership.lock().expect("membership lock").clone();
-                        let winner =
-                            elect_successor(&membership_snapshot, local_peer_id, &connected);
-                        if winner == Some(local_peer_id) {
-                            // Become Manager.
-                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+        loop {
+            let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+            let membership_snapshot = membership.lock().expect("membership lock").clone();
+            reconcile_heartbeat_watchlist(
+                &mut last_heartbeat_at,
+                &mut lost_already,
+                local_peer_id,
+                manager,
+                &membership_snapshot,
+            );
 
-                            // Tell Discovery about the rotation.
-                            if let Err(e) = discovery
-                                .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
-                                .await
-                            {
-                                eprintln!(
-                                    "auki-domain: rotate_manager failed for cluster \
-                                    {cluster_name:?}: {e}"
-                                );
-                            }
+            tokio::select! {
+                biased;
 
-                            // Start the Manager-side heartbeat tick.
-                            let new_tick = spawn_manager_liveness_check(
-                                discovery.clone(),
-                                cluster_name.clone(),
-                                membership.clone(),
-                            );
-                            let prev = liveness_check_task
-                                .lock()
-                                .expect("liveness_check_task lock")
-                                .replace(new_tick);
-                            if let Some(p) = prev {
-                                p.abort();
-                            }
-
-                            // Evict the dead Manager from membership +
-                            // push the updated allow-list. (We won
-                            // the election, so we own membership now.)
-                            let new_allow_list = {
-                                let mut m = membership.lock().expect("membership lock");
-                                m.peers.retain(|p| p.peer_id != lost_pid);
-                                m.peers
-                                    .iter()
-                                    .filter(|p| p.peer_id != local_peer_id)
-                                    .map(|p| AllowedPeer {
-                                        peer_id: p.peer_id,
-                                        multiaddrs: p.multiaddrs.clone(),
-                                    })
-                                    .collect::<Vec<_>>()
-                            };
-                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                                eprintln!(
-                                    "auki-domain: post-election set_allowed_peers \
-                                    failed for {cluster_name:?}: {e}"
-                                );
-                            }
-                            // Gossip the post-handoff view so survivors
-                            // converge on the new Manager identity + the
-                            // post-eviction membership.
-                            broadcast_current_membership(&runtime, &membership);
-                            eprintln!(
-                                "auki-domain: cluster {cluster_name:?}: local peer \
-                                {local_peer_id} promoted to Manager after \
-                                detecting Lost {lost_pid}"
-                            );
-                        } else {
-                            // Someone else (earlier-joined, still
-                            // reachable) wins. Update the local view
-                            // and wait for them to register with
-                            // Discovery.
-                            if let Some(new_manager) = winner {
-                                *manager_peer_id.lock().expect("manager_peer_id lock") =
-                                    new_manager;
+                evt = rx.recv() => {
+                    let Some(evt) = evt else { break; };
+                    let watched = {
+                        let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
+                        let m = membership.lock().expect("membership lock");
+                        heartbeat_watchlist_for(local_peer_id, manager, &m)
+                    };
+                    match evt {
+                        PeerLivenessEvent::Connected { peer_id }
+                        | PeerLivenessEvent::HeartbeatReceived { peer_id } => {
+                            if watched.contains(&peer_id) {
+                                last_heartbeat_at.insert(peer_id, Instant::now());
+                                lost_already.remove(&peer_id);
                             }
                         }
-                    } else if am_manager {
-                        // We're the Manager and a peer died. Evict
-                        // from membership + push the updated
-                        // allow-list.
-                        let new_allow_list = {
-                            let mut m = membership.lock().expect("membership lock");
-                            let before = m.peers.len();
-                            m.peers.retain(|p| p.peer_id != lost_pid);
-                            if m.peers.len() == before {
-                                // Wasn't actually a member (or
-                                // already evicted) — nothing to do.
-                                continue;
+                        PeerLivenessEvent::Disconnected { peer_id }
+                        | PeerLivenessEvent::HeartbeatStreamClosed { peer_id } => {
+                            if watched.contains(&peer_id) && lost_already.insert(peer_id) {
+                                handle_domain_peer_lost(
+                                    &cluster_name,
+                                    local_peer_id,
+                                    &local_multiaddrs,
+                                    &manager_peer_id,
+                                    &membership,
+                                    &runtime,
+                                    &discovery,
+                                    &liveness_check_task,
+                                    &mut handled_manager_losses,
+                                    peer_id,
+                                )
+                                .await;
                             }
-                            m.peers
-                                .iter()
-                                .filter(|p| p.peer_id != local_peer_id)
-                                .map(|p| AllowedPeer {
-                                    peer_id: p.peer_id,
-                                    multiaddrs: p.multiaddrs.clone(),
-                                })
-                                .collect::<Vec<_>>()
-                        };
-                        if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                            eprintln!(
-                                "auki-domain: Manager evict post-Lost set_allowed_peers \
-                                failed: {e}"
-                            );
                         }
-                        // Gossip the shrunken membership so remaining
-                        // peers also evict the dead one.
-                        broadcast_current_membership(&runtime, &membership);
+                    }
+                }
+
+                _ = tick.tick() => {
+                    let now = Instant::now();
+                    let timed_out: Vec<PeerId> = last_heartbeat_at
+                        .iter()
+                        .filter_map(|(pid, ts)| {
+                            (now.duration_since(*ts) > HEARTBEAT_TIMEOUT
+                                && !lost_already.contains(pid))
+                                .then_some(*pid)
+                        })
+                        .collect();
+                    for peer_id in timed_out {
+                        lost_already.insert(peer_id);
+                        handle_domain_peer_lost(
+                            &cluster_name,
+                            local_peer_id,
+                            &local_multiaddrs,
+                            &manager_peer_id,
+                            &membership,
+                            &runtime,
+                            &discovery,
+                            &liveness_check_task,
+                            &mut handled_manager_losses,
+                            peer_id,
+                        )
+                        .await;
                     }
                 }
             }
@@ -1668,8 +1933,9 @@ fn spawn_liveness_handler(
 /// that footgun.
 fn spawn_membership_handler(
     mut rx: mpsc::Receiver<MembershipEvent>,
+    cluster_name: String,
     local_peer_id: PeerId,
-    _manager_peer_id: Arc<Mutex<PeerId>>,
+    manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
 ) -> JoinHandle<()> {
@@ -1706,6 +1972,14 @@ fn spawn_membership_handler(
                     failed: {e}"
                 );
             }
+            sync_heartbeat_targets(
+                &runtime,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                &cluster_name,
+            )
+            .await;
         }
     })
 }
@@ -1920,6 +2194,55 @@ fn verify_registry_envelope(
     Ok(())
 }
 
+fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, app_root: &Path) {
+    for sensor in sensors {
+        let needs_sensor = request.include_registry_entries || request.include_frame_entries;
+        let sensor_entry = if needs_sensor {
+            match auki_registry::read_sensor(app_root, &sensor.sensor_id, &sensor.sensor_hash) {
+                Ok(Some(entry)) if entry.hash() == sensor.sensor_hash => Some(entry),
+                Ok(Some(_)) | Ok(None) | Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        if request.include_registry_entries {
+            if let Some(entry) = sensor_entry.as_ref() {
+                sensor.sensor_entry_json = Some(canonical_json(entry.canonical_bytes()));
+            }
+        }
+
+        if request.include_frame_entries {
+            let Some(entry) = sensor_entry.as_ref() else {
+                continue;
+            };
+            let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+                continue;
+            };
+            match auki_registry::read_frame(app_root, frame_id, frame_hash) {
+                Ok(Some(frame)) if frame.hash() == frame_hash => {
+                    sensor.frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
+                }
+                Ok(Some(_)) | Ok(None) | Err(_) => {}
+            }
+        }
+    }
+}
+
+fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
+    match body {
+        SensorBody::RgbCamera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
+        SensorBody::PointCloud(point_cloud) => {
+            Some((&point_cloud.frame_id, &point_cloud.frame_hash))
+        }
+        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+    }
+}
+
+fn canonical_json(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("JCS output is UTF-8 JSON")
+}
+
 /// Spawn a task that drains inbound `/auki/sensors/0.0.1` requests
 /// from `rx` and replies on each `ack` with a freshly-snapshotted
 /// [`SensorsResponse`]. If no [`SensorCatalogProvider`] is
@@ -1931,13 +2254,18 @@ fn verify_registry_envelope(
 fn spawn_sensors_handler(
     mut rx: mpsc::Receiver<SensorsRequestEvent>,
     provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
+    registry_app_root: Arc<Mutex<Option<PathBuf>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        while let Some(SensorsRequestEvent { ack, .. }) = rx.recv().await {
+        while let Some(SensorsRequestEvent { request, ack, .. }) = rx.recv().await {
+            let root = registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
             let sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot(),
+                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
@@ -2003,6 +2331,13 @@ fn read_registry_envelope(
             };
             Ok(Some(envelope_for_frame(entry)))
         }
+        RegistryKind::Detector => {
+            let Some(entry) = auki_registry::read_detector(app_root, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_detector(entry)))
+        }
     }
 }
 
@@ -2031,6 +2366,16 @@ fn envelope_for_frame(entry: FrameRegistryEntry) -> RegistryEntryEnvelope {
     RegistryEntryEnvelope {
         kind: RegistryKind::Frame,
         id: entry.frame_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_detector(entry: DetectorRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Detector,
+        id: entry.detector_id,
         hash: auki_hash::hash_jcs_bytes(&bytes),
         canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
     }
@@ -2164,6 +2509,14 @@ fn spawn_join_handler(
                 });
                 continue;
             }
+            sync_heartbeat_targets(
+                &runtime,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                &cluster_name,
+            )
+            .await;
 
             let _ = ack.send(JoinResponse::Accept {
                 membership_json: full_membership_json,
@@ -2244,6 +2597,45 @@ mod tests {
     }
 
     #[test]
+    fn registry_envelope_reads_canonical_detector_from_app_root() {
+        use auki_registry::{Aruco, DetectorBody, DetectorRegistryEntry};
+
+        let dir = tempfile::tempdir().unwrap();
+        let entry = DetectorRegistryEntry {
+            detector_id: "aukilabs/aruco/v1".into(),
+            body: DetectorBody::Aruco(Aruco {
+                dictionary: "5x5_50".into(),
+            }),
+            output_types: vec!["aruco".into()],
+        };
+        let hash = auki_registry::write_detector(dir.path(), &entry)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let envelope = read_registry_envelope(
+            dir.path(),
+            &RegistryRequest {
+                kind: RegistryKind::Detector,
+                id: entry.detector_id.clone(),
+                hash: hash.clone(),
+            },
+        )
+        .unwrap()
+        .expect("entry exists");
+
+        assert_eq!(envelope.kind, RegistryKind::Detector);
+        assert_eq!(envelope.id, entry.detector_id);
+        assert_eq!(envelope.hash, hash);
+        // The independent hash from the entry itself must match the envelope hash.
+        assert_eq!(envelope.hash, entry.hash());
+        verify_registry_envelope(&envelope, RegistryKind::Detector, &envelope.id, &hash).unwrap();
+        let decoded: DetectorRegistryEntry =
+            serde_json::from_str(&envelope.canonical_json).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
     fn registry_envelope_hash_mismatch_is_rejected_before_decode() {
         let envelope = RegistryEntryEnvelope {
             kind: RegistryKind::Frame,
@@ -2254,6 +2646,71 @@ mod tests {
         let err = verify_registry_envelope(&envelope, RegistryKind::Frame, "frame", "deadbeef")
             .unwrap_err();
         assert!(matches!(err, FetchRegistryEntryError::HashMismatch { .. }));
+    }
+
+    #[test]
+    fn sensor_catalog_enrichment_embeds_sensor_and_frame_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let frame = FrameRegistryEntry::opengl("K1-FAKE/lidar_points");
+        let frame_hash = auki_registry::write_frame(dir.path(), &frame)
+            .unwrap()
+            .hash()
+            .to_string();
+        let sensor = SensorRegistryEntry {
+            sensor_id: "K1-FAKE/lidar_top".into(),
+            body: SensorBody::PointCloud(auki_registry::PointCloud {
+                fields: vec![
+                    auki_registry::PointField {
+                        name: "x".into(),
+                        offset: 0,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    auki_registry::PointField {
+                        name: "y".into(),
+                        offset: 4,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    auki_registry::PointField {
+                        name: "z".into(),
+                        offset: 8,
+                        datatype: auki_registry::PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                ],
+                point_step: 12,
+                is_bigendian: false,
+                frame_rate_hz: 10,
+                frame_id: frame.frame_id.clone(),
+                frame_hash: frame_hash.clone(),
+            }),
+        };
+        let sensor_hash = auki_registry::write_sensor(dir.path(), &sensor)
+            .unwrap()
+            .hash()
+            .to_string();
+        let mut sensors = vec![SensorEntry {
+            sensor_id: sensor.sensor_id.clone(),
+            sensor_hash,
+            kind: "point_cloud".into(),
+            sensor_entry_json: None,
+            frame_entry_json: None,
+        }];
+
+        enrich_sensor_entries(
+            &mut sensors,
+            &SensorsRequest::with_frame_entries(),
+            dir.path(),
+        );
+
+        let enriched = &sensors[0];
+        let decoded_sensor: SensorRegistryEntry =
+            serde_json::from_str(enriched.sensor_entry_json.as_deref().unwrap()).unwrap();
+        let decoded_frame: FrameRegistryEntry =
+            serde_json::from_str(enriched.frame_entry_json.as_deref().unwrap()).unwrap();
+        assert_eq!(decoded_sensor, sensor);
+        assert_eq!(decoded_frame, frame);
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

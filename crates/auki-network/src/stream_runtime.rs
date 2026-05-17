@@ -47,6 +47,7 @@ use crate::stream_protocol::{
     STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
     StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
 };
+use auki_datatypes::detection::DetectionLogEntry;
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::OpenStreamError as Libp2pOpenStreamError;
@@ -98,6 +99,9 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// [`StreamMessage::Entry`] values until the source ends or the
 /// substream closes. On [`StreamDispatch::Decline`], the SDK writes
 /// `Decline { reason }` and closes the substream.
+///
+/// SDK-supported `T`s: `JpegFrame`, `PointCloudFrame`,
+/// `JointEncodersFrame`, `AudioFrame`, and (Cuba T8) `DetectionLogEntry`.
 pub enum StreamDispatch {
     /// Accept the request with a JPEG source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
@@ -136,6 +140,25 @@ pub enum StreamDispatch {
     AcceptAudio {
         manifest: StreamManifest,
         source: SourceStream<AudioFrame>,
+    },
+    /// Accept the request with a Detection source-Stream — Cuba T8.
+    /// Each [`DetectionLogEntry`] is the same on-disk Detection Log
+    /// payload reused on the wire — `bytes data` (opaque per-detector
+    /// schema, decoded via the `type=<vocab>` discriminator), plus
+    /// `sensor_hash` (the bound input frame's sensor, Cuba T5) and
+    /// `type` (open-string discriminator, Cuba T12). The wire bytes
+    /// match the on-disk payload by construction, since both sides
+    /// `prost::Message::encode_to_vec` the same struct.
+    ///
+    /// On `StreamManifest.sensor_hash`: this is the *bound input
+    /// sensor* the detector was bound to — the frame the detection
+    /// was computed against. The detector's own identity
+    /// (`detector_id` / `detector_hash`) is resolved out-of-band via
+    /// the daemon's `/auki/registries/0.0.1` Detector Registry
+    /// exchange (Cuba T4).
+    AcceptDetection {
+        manifest: StreamManifest,
+        source: SourceStream<DetectionLogEntry>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -414,6 +437,9 @@ pub(crate) async fn handle_inbound_substream(
         }
         StreamDispatch::AcceptAudio { manifest, source } => {
             pump_typed::<AudioFrame>(substream, manifest, source, shutdown_rx).await;
+        }
+        StreamDispatch::AcceptDetection { manifest, source } => {
+            pump_typed::<DetectionLogEntry>(substream, manifest, source, shutdown_rx).await;
         }
     }
 }

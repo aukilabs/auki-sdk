@@ -9,6 +9,21 @@ Latest entry on top.
 ### Nils's codex · May 16, 19:02 HKT, 2026
 
 **[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.
+### Nils's codex · May 17, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) + [`auki-network`](auki-network/changelog.md) — heartbeat topology and timeout semantics moved into the domain layer.** `NetworkRuntime` now exposes `set_heartbeat_targets` and reports raw libp2p carrier events; `ClusterManager` owns Manager-star target calculation, first-frame timeout seeding, last-heartbeat timestamps, election on Manager loss, and eviction on peer loss. This keeps `/auki/heartbeat/0.0.1` as the libp2p binding for a domain heartbeat rather than the behavior's source of truth.
+
+### Nils's codex · May 17, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/heartbeat/0.0.1` is now Manager-star instead of lower-peer-id driven.** `NetworkRuntime::set_heartbeat_manager` lets `ClusterManager` tell the runtime who owns heartbeat opening on create, join, and election handoff. The Manager opens one bidirectional substream per peer; non-Managers arm Manager-death detection even before the first heartbeat frame. QUIC failover tests now pin both peer-id orderings plus the no-first-heartbeat path. The stricter "Discovery points at a dead Manager before join response" case is filed as a domain parking-lot policy question.
+
+### Codex · May 17, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-layout`](auki-layout/changelog.md) + [`auki-registry`](auki-registry/changelog.md) + [`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Detector Registry and live detection streams.** Detection log entries now carry `sensor_hash` plus open-string `type`; app-root registries gain `<app_root>/registries/detectors/<detector_id>/<hash>.json` and typed `DetectorRegistryEntry` support; `/auki/registries/0.0.1` can fetch Detector entries; `ClusterManager::fetch_detector_entry` verifies them like sensor/frame/clock entries; and producers can return `StreamDispatch::AcceptDetection` with `DetectionLogEntry` payloads.
+
+### Nils's codex · May 16, 21:07 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — sensor catalog detail requests and registry JSON helpers.** `/auki/sensors/0.0.1` keeps its lightweight default `{}` request and adds opt-in flags for embedding Sensor / Frame Registry JSON by value. `ClusterManager::fetch_sensors_catalog_with` serves those details from the registered app-root registry after hash checks, while the existing `/auki/registries/0.0.1` exact-entry fetch remains the authoritative path. Python mirrors the catalog flags, exposes optional `SensorEntry.sensor_entry_json` / `frame_entry_json`, and adds JSON-returning `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry` helpers.
 
 ### Nils's codex · May 16, 18:33 HKT, 2026
 

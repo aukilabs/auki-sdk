@@ -38,10 +38,10 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | Protocol | Module | Purpose |
 |---|---|---|
 | `/auki/join/0.0.1` | `join_protocol` | Non-member asks the current Manager to admit it; response carries membership JSON + successor token |
-| `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Pairwise peer liveness for Manager-death detection |
+| `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames; cluster liveness semantics live in `auki-domain` |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |
-| `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog |
+| `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog, optionally embedding Sensor / Frame Registry JSON |
 | `/auki/registries/0.0.1` | `registries_protocol` | Cluster peer fetches a hash-pinned Sensor / Clock / Frame Registry entry |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
 
@@ -53,7 +53,8 @@ The connection layer is not the main trust boundary anymore. The swarm uses a bl
 
 - `/auki/join/0.0.1` intentionally accepts first contact from non-members.
 - `/auki/stream/0.1.0`, `/auki/info/0.0.1`, `/auki/sensors/0.0.1`, `/auki/registries/0.0.1`, heartbeat, and membership paths are gated against the runtime's current allowed-peer set and silently drop outsiders where appropriate.
-- `auki-domain::ClusterManager` owns the membership document, election, Discovery liveness checks, and updates to the runtime's allowed-peer set.
+- Heartbeat carrier opening is steered by the domain layer via `set_heartbeat_targets`: the runtime opens `/auki/heartbeat/0.0.1` only to the explicit peers it is given and reports frame/closure events upward.
+- `auki-domain::ClusterManager` owns the membership document, heartbeat topology, heartbeat timeout/loss decisions, election, Discovery liveness checks, and updates to the runtime's allowed-peer set.
 
 ## Not Here
 

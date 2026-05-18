@@ -89,7 +89,7 @@ pub struct ClusterMember {
 }
 ```
 
-Admission order is preserved. Election sorts by `(join_ts_ns, peer_id)` and chooses the earliest reachable member. Successor tokens are opaque in v1; Discovery-side verification is deferred.
+Admission order is preserved. On Manager loss, election removes the timed-out Manager and chooses the earliest surviving member by `(join_ts_ns, peer_id)`. Followers then watch that selected successor by heartbeat; if the candidate is also dead, its timeout advances the election again. Successor tokens are opaque in v1; Discovery-side verification is deferred.
 
 ## Relationship To Other Crates
 

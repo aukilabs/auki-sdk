@@ -1131,6 +1131,153 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
     );
 }
 
+/// Regression for the false second handoff observed after v0.0.48:
+/// A leaves, B correctly becomes Manager, then B appears to disappear
+/// and C takes over even though B is still alive.
+///
+/// Root cause shape: when A timed out, C could run the election while
+/// B was not yet reflected in C's instantaneous `connected_peers()`
+/// set. The old "earliest reachable" election let C skip alive B and
+/// self-promote. The fixed path chooses the earliest surviving member
+/// by membership order first, then watches that candidate by heartbeat;
+/// only a later B timeout can advance the election to C.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn three_peer_handoff_keeps_first_successor_as_manager() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-stable-handoff-it");
+
+    let id_a = PeerIdentity::from_seed(&[101u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-stable-handoff-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let id_b = PeerIdentity::from_seed(&[102u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-stable-handoff-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    let id_c = PeerIdentity::from_seed(&[103u8; 32]);
+    let pid_c = id_c.peer_id();
+    let mut swarm_c = build_swarm(
+        &id_c,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-stable-handoff-it-C/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_c = wait_for_listen_addr(&mut swarm_c).await;
+    let manager_c = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_c.clone(),
+        vec![addr_c],
+        discovery_url(),
+        swarm_c,
+        decline_all_streams(),
+        sample_daemon_info("test-C"),
+    )
+    .await
+    .expect("join_cluster C");
+    assert_eq!(manager_c.peer_count(), 3);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.peer_count() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        manager_b.peer_count(),
+        3,
+        "B should see A+B+C before handoff"
+    );
+
+    eprintln!("A=({pid_a}) dropping; B={pid_b} should remain Manager over C={pid_c}...");
+    drop(manager_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not become Manager after A left"
+    );
+
+    // Wait past another heartbeat timeout window. Pre-fix, C could
+    // self-promote in this interval even though B was still alive.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(manager_b.is_manager(), "B should still be Manager");
+    assert!(
+        !manager_c.is_manager(),
+        "C should not self-promote while B is alive"
+    );
+    assert_eq!(
+        manager_c.manager_peer_id(),
+        pid_b,
+        "C should converge on B as Manager"
+    );
+
+    let snapshot = discovery.list_clusters().await.expect("list_clusters");
+    let entry = snapshot
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .expect("cluster should remain in Discovery after handoff");
+    assert_eq!(
+        entry.manager_peer_id, pid_b,
+        "Discovery should keep B as Manager while B is alive"
+    );
+
+    manager_c.shutdown().await.expect("C shutdown");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    manager_b.shutdown().await.expect("B shutdown");
+    let _ = discovery.deregister(&cluster_name).await;
+}
+
 /// **Regression test for the QUIC-transport handoff bug** Nils reported
 /// on K1 + Park on 2026-05-14 against SDK v0.0.37 (commit `b6fab53`):
 /// Park as Manager, Booster joins, Park leaves — Booster's view freezes

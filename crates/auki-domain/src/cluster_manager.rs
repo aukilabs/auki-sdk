@@ -1810,6 +1810,29 @@ fn note_watched_transport_closed(
     }
 }
 
+fn remove_member_and_build_allow_list(
+    membership: &Arc<Mutex<ClusterMembership>>,
+    local_peer_id: PeerId,
+    lost_pid: PeerId,
+) -> Option<Vec<AllowedPeer>> {
+    let mut m = membership.lock().expect("membership lock");
+    let before = m.peers.len();
+    m.peers.retain(|p| p.peer_id != lost_pid);
+    if m.peers.len() == before {
+        return None;
+    }
+    Some(
+        m.peers
+            .iter()
+            .filter(|p| p.peer_id != local_peer_id)
+            .map(|p| AllowedPeer {
+                peer_id: p.peer_id,
+                multiaddrs: p.multiaddrs.clone(),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_domain_peer_lost(
     cluster_name: &str,
@@ -1831,13 +1854,8 @@ async fn handle_domain_peer_lost(
             return;
         }
 
-        // For "reachable peers", give the connection teardown a
-        // brief moment so connected_peers() reflects the
-        // disconnection.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let connected = runtime.connected_peers();
         let membership_snapshot = membership.lock().expect("membership lock").clone();
-        let winner = elect_successor(&membership_snapshot, local_peer_id, &connected);
+        let winner = elect_successor_after_loss(&membership_snapshot, lost_pid);
         if winner == Some(local_peer_id) {
             // Become Manager.
             *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
@@ -1870,23 +1888,15 @@ async fn handle_domain_peer_lost(
             // Evict the dead Manager from membership + push the
             // updated allow-list. (We won the election, so we own
             // membership now.)
-            let new_allow_list = {
-                let mut m = membership.lock().expect("membership lock");
-                m.peers.retain(|p| p.peer_id != lost_pid);
-                m.peers
-                    .iter()
-                    .filter(|p| p.peer_id != local_peer_id)
-                    .map(|p| AllowedPeer {
-                        peer_id: p.peer_id,
-                        multiaddrs: p.multiaddrs.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            };
-            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                eprintln!(
-                    "auki-domain: post-election set_allowed_peers \
-                    failed for {cluster_name:?}: {e}"
-                );
+            if let Some(new_allow_list) =
+                remove_member_and_build_allow_list(membership, local_peer_id, lost_pid)
+            {
+                if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                    eprintln!(
+                        "auki-domain: post-election set_allowed_peers \
+                        failed for {cluster_name:?}: {e}"
+                    );
+                }
             }
             sync_heartbeat_targets(
                 runtime,
@@ -1910,6 +1920,16 @@ async fn handle_domain_peer_lost(
             // Update the local view and wait for them to register
             // with Discovery.
             *manager_peer_id.lock().expect("manager_peer_id lock") = new_manager;
+            if let Some(new_allow_list) =
+                remove_member_and_build_allow_list(membership, local_peer_id, lost_pid)
+            {
+                if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                    eprintln!(
+                        "auki-domain: post-election follower set_allowed_peers \
+                        failed for {cluster_name:?}: {e}"
+                    );
+                }
+            }
             sync_heartbeat_targets(
                 runtime,
                 local_peer_id,
@@ -1922,21 +1942,10 @@ async fn handle_domain_peer_lost(
     } else if am_manager {
         // We're the Manager and a peer died. Evict from membership +
         // push the updated allow-list.
-        let new_allow_list = {
-            let mut m = membership.lock().expect("membership lock");
-            let before = m.peers.len();
-            m.peers.retain(|p| p.peer_id != lost_pid);
-            if m.peers.len() == before {
-                return;
-            }
-            m.peers
-                .iter()
-                .filter(|p| p.peer_id != local_peer_id)
-                .map(|p| AllowedPeer {
-                    peer_id: p.peer_id,
-                    multiaddrs: p.multiaddrs.clone(),
-                })
-                .collect::<Vec<_>>()
+        let Some(new_allow_list) =
+            remove_member_and_build_allow_list(membership, local_peer_id, lost_pid)
+        else {
+            return;
         };
         if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
             eprintln!("auki-domain: Manager evict post-Lost set_allowed_peers failed: {e}");
@@ -1960,10 +1969,13 @@ async fn handle_domain_peer_lost(
 /// per-peer timestamps; carrier closure or an expired timestamp is
 /// interpreted here as a semantic peer loss.
 ///
-/// **Election rule** (per Hagall T4 / SDK-T6): sort cluster members
-/// by `(join_ts_ns, peer_id)` ascending. The earliest-joined
-/// reachable peer wins. If the local peer is that earliest-joined
-/// reachable peer, it becomes the new Manager.
+/// **Election rule** (per Hagall T4 / SDK-T6): when the current
+/// Manager times out, remove that Manager from the local membership
+/// and pick the earliest remaining member by `(join_ts_ns, peer_id)`.
+/// If the local peer is that earliest surviving member, it becomes the
+/// new Manager. Otherwise the local peer watches the selected
+/// successor as the next Manager; if that candidate is also dead, its
+/// own heartbeat timeout advances the election again.
 ///
 /// **Handoff** (per Hagall T7 / SDK-T7): the winner (a) updates
 /// `manager_peer_id` locally so subsequent calls see itself as the
@@ -1971,13 +1983,11 @@ async fn handle_domain_peer_lost(
 /// directory hint, (c) spawns the Manager-side Discovery
 /// liveness-check tick.
 ///
-/// **Reachability** is approximated as "in the runtime's
-/// `connected_peers()` set OR equal to local_peer_id." When the
-/// Manager dies, the local peer is always "reachable to itself"; the
-/// other reachable peers are those still libp2p-connected via the
-/// runtime. The earliest peer with a join_ts_ns less than the local
-/// peer's own that's also reachable wins; if none such exists, the
-/// local peer wins.
+/// The election deliberately does not skip an earlier surviving
+/// member merely because the libp2p connected set is momentarily stale
+/// during old-Manager teardown. That prevents later peers from
+/// self-promoting during the handoff window when the intended
+/// successor is alive but not yet observed as connected.
 #[allow(clippy::too_many_arguments)]
 fn spawn_liveness_handler(
     mut rx: mpsc::Receiver<PeerLivenessEvent>,
@@ -2733,6 +2743,33 @@ fn envelope_for_detector(entry: DetectorRegistryEntry) -> RegistryEntryEnvelope 
     }
 }
 
+/// Cluster-internal Manager-loss election. Deterministic: remove the
+/// timed-out Manager, then sort remaining members by
+/// `(join_ts_ns, peer_id)` ascending and return the earliest survivor.
+///
+/// Unlike [`elect_successor`], this path deliberately does not use the
+/// runtime's instantaneous connected set. During Manager teardown,
+/// connections between survivors can be briefly absent or not yet
+/// reflected in `connected_peers()`. Skipping an earlier surviving peer
+/// at that instant can make a later peer self-promote even though the
+/// intended successor is alive.
+fn elect_successor_after_loss(
+    membership: &ClusterMembership,
+    lost_peer_id: PeerId,
+) -> Option<PeerId> {
+    let mut sorted: Vec<&ClusterMember> = membership
+        .peers
+        .iter()
+        .filter(|m| m.peer_id != lost_peer_id)
+        .collect();
+    sorted.sort_by(|a, b| {
+        a.join_ts_ns
+            .cmp(&b.join_ts_ns)
+            .then_with(|| a.peer_id.cmp(&b.peer_id))
+    });
+    sorted.first().map(|m| m.peer_id)
+}
+
 /// Cluster-internal election (SDK-T6). Deterministic: sort
 /// membership by `(join_ts_ns, peer_id)` ascending; return the
 /// earliest-joined peer that's "reachable" (in `connected` or equal
@@ -3224,6 +3261,47 @@ mod tests {
         // local = B; A unreachable.
         let winner = elect_successor(&membership, m_b.peer_id, &[]);
         assert_eq!(winner, Some(m_b.peer_id));
+    }
+
+    #[test]
+    fn manager_loss_election_picks_earliest_survivor_without_connected_set() {
+        let manager = make_peer(1, 100);
+        let intended_successor = make_peer(2, 200);
+        let later_peer = make_peer(3, 300);
+        let mut membership = ClusterMembership::new("foo");
+        for m in [
+            manager.clone(),
+            intended_successor.clone(),
+            later_peer.clone(),
+        ] {
+            membership.admit(m);
+        }
+
+        let winner = elect_successor_after_loss(&membership, manager.peer_id);
+
+        assert_eq!(winner, Some(intended_successor.peer_id));
+    }
+
+    #[test]
+    fn manager_loss_election_advances_when_successor_times_out() {
+        let old_manager = make_peer(1, 100);
+        let first_successor = make_peer(2, 200);
+        let second_successor = make_peer(3, 300);
+        let mut membership = ClusterMembership::new("foo");
+        for m in [
+            old_manager.clone(),
+            first_successor.clone(),
+            second_successor.clone(),
+        ] {
+            membership.admit(m);
+        }
+        membership
+            .peers
+            .retain(|p| p.peer_id != old_manager.peer_id);
+
+        let winner = elect_successor_after_loss(&membership, first_successor.peer_id);
+
+        assert_eq!(winner, Some(second_successor.peer_id));
     }
 
     #[test]

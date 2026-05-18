@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**[`auki-domain`](auki-domain/changelog.md) — Manager-loss election keeps the first surviving successor stable.** In three-peer handoff A->B->C, later peers no longer skip alive B just because B is momentarily absent from their instantaneous libp2p connected set. The election removes only the timed-out Manager, selects the earliest remaining membership row, and watches that candidate before advancing.
+
+### Nils's codex · May 18, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Manager handoff is less edge-triggered and membership gossip carries Manager identity.** Raw heartbeat carrier close no longer causes immediate election or eviction; `ClusterManager` waits for the heartbeat timeout unless a fresh heartbeat/connection refreshes the peer first. `/auki/membership/0.0.1` now carries `manager_peer_id`, and receivers apply it when the sender is the claimed Manager and the snapshot contains that Manager.
 
 ### Nils's codex · May 17, HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**Three-peer Manager handoff now keeps the intended successor stable.** When A leaves and B is the earliest surviving member, C no longer self-promotes merely because B is momentarily missing from C's libp2p connected set. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 18, HKT, 2026
+
 **Manager handoff is less brittle under heartbeat carrier churn.** `ClusterManager` now waits for heartbeat timeout before treating raw libp2p carrier close as semantic peer death, and `/auki/membership/0.0.1` handoff gossip carries the authoring Manager peer id so surviving peers can converge on the new Manager. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 17, HKT, 2026

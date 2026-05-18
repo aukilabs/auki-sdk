@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**Manager-loss election no longer skips the intended successor on a transient missing connection.** The v0.0.48 handoff path still used `connected_peers()` during election, so in a three-peer cluster A->B->C, C could see A time out while B was momentarily absent from C's instantaneous connected set, skip alive B, self-promote, and rotate Discovery to C. That matched the observed "B disappeared and handed over to C" symptom without B actually crashing.
+
+The Manager-loss path now removes the timed-out Manager from local membership and chooses the earliest remaining member by `(join_ts_ns, peer_id)` without consulting the connected set. If the chosen successor is not local, the peer watches that successor by heartbeat; only if that candidate also times out does election advance again. Followers also evict the lost old Manager locally before rebuilding allow-lists, so subsequent candidate timeouts operate on the post-loss membership.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain cluster_manager::tests -- --nocapture`, and live Discovery regression `cargo test -p auki-domain --test cluster_manager_integration three_peer_handoff_keeps_first_successor_as_manager -- --ignored --nocapture --test-threads=1` against `http://192.168.9.130:8080`.
+
+### Nils's codex · May 18, HKT, 2026
+
 **Manager handoff now waits for heartbeat timeout and gossips the new Manager identity.** The liveness handler no longer treats raw libp2p `Disconnected` or `HeartbeatStreamClosed` carrier events as immediate semantic peer death. Those events now leave the last heartbeat timestamp intact and let the `HEARTBEAT_TIMEOUT` scan decide, so transient carrier churn has a chance to reconnect before causing peer eviction or Manager promotion.
 
 Membership gossip now applies the advertised `manager_peer_id` from `/auki/membership/0.0.1` when the sender is that Manager and the Manager exists in the membership snapshot. This gives post-handoff broadcasts an explicit convergence signal for peers that did not independently choose the same winner at exactly the same time.

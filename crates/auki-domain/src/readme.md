@@ -17,7 +17,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Manager admission through `/auki/join/0.0.1`.
 - Membership gossip through `/auki/membership/0.0.1`, including the Manager peer id to converge handoff broadcasts.
 - Manager-star heartbeat/liveness detection through `/auki/heartbeat/0.0.1`, with topology and timeout semantics owned here rather than in `auki-network`; raw carrier close is not treated as semantic death until the heartbeat timeout expires.
-- Manager election and Discovery `rotate_manager` handoff.
+- Manager election and Discovery `rotate_manager` handoff. On Manager loss, election chooses the earliest surviving membership row rather than skipping an intended successor because its libp2p connection is momentarily absent during handoff.
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
 - Resource catalog provider registration plus `/auki/resources/0.0.1` fetches, auto-lifting sensor catalog rows into `sensor_stream` resources and accepting producer-supplied `transform_edge` rows.

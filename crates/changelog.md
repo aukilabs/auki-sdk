@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Manager handoff is less edge-triggered and membership gossip carries Manager identity.** Raw heartbeat carrier close no longer causes immediate election or eviction; `ClusterManager` waits for the heartbeat timeout unless a fresh heartbeat/connection refreshes the peer first. `/auki/membership/0.0.1` now carries `manager_peer_id`, and receivers apply it when the sender is the claimed Manager and the snapshot contains that Manager.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **[`auki-domain-py`](auki-domain-py/changelog.md) — Python bindings for `/auki/resources/0.0.1`.** Python daemons now have resource value classes for sensor streams, transform edges, pinhole intrinsics, and rigid transforms; `ClusterManager.set_resource_catalog_provider` lets producers advertise transform edges and richer resource rows; `fetch_resources_catalog` returns the same concrete objects to consumers.

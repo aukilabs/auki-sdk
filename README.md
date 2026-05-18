@@ -219,7 +219,7 @@ For peer-to-peer participation. Not REST-shaped, but they are public protocols t
 |---|---|
 | `/auki/join/0.0.1` | Joiner asks the current Manager to admit it; response carries membership JSON + successor token. |
 | `/auki/heartbeat/0.0.1` | Pairwise peer liveness for Manager-death detection. |
-| `/auki/membership/0.0.1` | Manager gossips membership JSON to current members. |
+| `/auki/membership/0.0.1` | Manager gossips its peer id plus membership JSON to current members. |
 | `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` fetch. |
 | `/auki/resources/0.0.1` | Peer-to-peer resource catalog fetch: live `sensor_stream` rows, optional pinhole intrinsics for camera streams, plus rigid `transform_edge` rows in v0. |
 | `/auki/sensors/0.0.1` | Peer-to-peer sensor catalog fetch. Superseded for new consumers by `/auki/resources/0.0.1` sensor-stream rows. |
@@ -239,7 +239,7 @@ The main live paths are:
 | Protocol | Purpose | What it carries |
 |---|---|---|
 | `ClusterManager` + Discovery REST | Cluster bootstrap and Manager hinting | List/create/join/bootstrap, Manager liveness checks, Manager rotation, and final deregistration. |
-| `/auki/join/0.0.1` + `/auki/membership/0.0.1` | Membership convergence | Join request/response plus Manager-gossiped membership JSON. |
+| `/auki/join/0.0.1` + `/auki/membership/0.0.1` | Membership convergence | Join request/response plus Manager-gossiped Manager id + membership JSON. |
 | `/auki/heartbeat/0.0.1` | Peer-side liveness | Pairwise heartbeat frames used to detect Manager death. |
 | `/auki/info/0.0.1` + `/auki/resources/0.0.1` | Peer metadata and resource discovery | `ParticipantInfo`, current sensor streams with optional pinhole intrinsics, and direct rigid transform edges. |
 | `/auki/registries/0.0.1` | Registry metadata | Hash-pinned Sensor / Clock / Frame Registry entries as canonical JSON, verified before typed decode. |

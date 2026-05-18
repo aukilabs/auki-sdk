@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**Membership gossip now carries the Manager peer id explicitly.** `/auki/membership/0.0.1` `MembershipUpdate` grows `manager_peer_id` alongside `membership_json`, and `NetworkRuntime::broadcast_membership` now requires the Manager id that authored the update. This makes handoff broadcasts self-describing: receivers no longer have to infer the Manager solely from their local election path, which matters when multiple surviving peers are converging after the old Manager disappears.
+
+Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-network --features swarm membership_protocol -- --nocapture`.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **`/auki/resources/0.0.1` starts the generalized live resource catalog.** New `resources_protocol` module defines framed JSON `ResourcesRequest` / `ResourcesResponse` messages and `ResourceEntry` rows tagged by `kind`. v0 ships `sensor_stream` and `transform_edge`: sensor rows advertise `sensor_id`, `sensor_hash`, sensor kind, stream protocol, payload hint, optional current `ResourcePinholeIntrinsics`, and optional embedded Sensor / Frame Registry JSON; transform rows advertise `(from_frame_id, from_frame_hash, to_frame_id, to_frame_hash)`, writer mode, source metadata, and a numeric rigid transform following Pose Log parent-to-child semantics. The frame cap is 1 MiB to leave room for embedded registry entries and modest catalogs.

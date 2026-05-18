@@ -509,6 +509,23 @@ pub struct ClusterManager {
 }
 
 impl ClusterManager {
+    fn abort_background_tasks(&self) {
+        abort_background_task(&self.liveness_handler_task, "liveness_handler_task lock");
+        abort_background_task(
+            self.liveness_check_task.as_ref(),
+            "liveness_check_task lock",
+        );
+        abort_background_task(&self.join_handler_task, "join_handler_task lock");
+        abort_background_task(
+            &self.membership_handler_task,
+            "membership_handler_task lock",
+        );
+        abort_background_task(&self.info_handler_task, "info_handler_task lock");
+        abort_background_task(&self.resources_handler_task, "resources_handler_task lock");
+        abort_background_task(&self.sensors_handler_task, "sensors_handler_task lock");
+        abort_background_task(&self.registry_handler_task, "registry_handler_task lock");
+    }
+
     /// Snapshot Discovery's cluster directory. The SDK-fronted entry
     /// point for "list clusters" — apps don't construct
     /// [`DiscoveryClient`] themselves.
@@ -743,6 +760,8 @@ impl ClusterManager {
             Arc::new(Mutex::new(Some(spawn_manager_liveness_check(
                 discovery.clone(),
                 cluster_name.clone(),
+                local_peer_id,
+                local_multiaddrs.clone(),
                 membership.clone(),
             ))));
 
@@ -1612,70 +1631,7 @@ impl ClusterManager {
 
         // 1. Cancel background tasks FIRST so we stop touching
         //    Discovery / membership between teardown steps.
-        if let Some(task) = self
-            .liveness_check_task
-            .lock()
-            .expect("liveness_check_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .join_handler_task
-            .lock()
-            .expect("join_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .liveness_handler_task
-            .lock()
-            .expect("liveness_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .membership_handler_task
-            .lock()
-            .expect("membership_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .info_handler_task
-            .lock()
-            .expect("info_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .resources_handler_task
-            .lock()
-            .expect("resources_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .sensors_handler_task
-            .lock()
-            .expect("sensors_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .registry_handler_task
-            .lock()
-            .expect("registry_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
+        self.abort_background_tasks();
 
         // 2. Deregister from Discovery only if we're the last
         //    member. Otherwise leave the cluster alive for the
@@ -1693,6 +1649,22 @@ impl ClusterManager {
         //    `NetworkRuntime::shutdown` is `&self` + idempotent.
         self.runtime.shutdown();
         result
+    }
+}
+
+impl Drop for ClusterManager {
+    fn drop(&mut self) {
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.abort_background_tasks();
+        self.runtime.shutdown();
+    }
+}
+
+fn abort_background_task(slot: &Mutex<Option<JoinHandle<()>>>, lock_name: &'static str) {
+    if let Some(task) = slot.lock().expect(lock_name).take() {
+        task.abort();
     }
 }
 
@@ -1875,6 +1847,8 @@ async fn handle_domain_peer_lost(
             let new_tick = spawn_manager_liveness_check(
                 discovery.clone(),
                 cluster_name.to_string(),
+                local_peer_id,
+                local_multiaddrs.to_vec(),
                 membership.clone(),
             );
             let prev = liveness_check_task
@@ -2799,6 +2773,8 @@ pub fn elect_successor(
 fn spawn_manager_liveness_check(
     discovery: DiscoveryClient,
     cluster_name: String,
+    local_peer_id: PeerId,
+    local_multiaddrs: Vec<Multiaddr>,
     membership: Arc<Mutex<ClusterMembership>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -2818,10 +2794,27 @@ fn spawn_manager_liveness_check(
             // Discovery hiccup shouldn't kill the cluster. Discovery
             // sweeps after 3s of no liveness check (3 missed at 1s
             // cadence), so persistent failures self-resolve.
-            if let Err(e) = discovery.liveness_check(&cluster_name, peer_count).await {
-                eprintln!(
-                    "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
-                );
+            match discovery.liveness_check(&cluster_name, peer_count).await {
+                Ok(entry) => {
+                    if entry.manager_peer_id != local_peer_id
+                        || entry.manager_multiaddrs != local_multiaddrs
+                    {
+                        if let Err(e) = discovery
+                            .rotate_manager(&cluster_name, &local_peer_id, &local_multiaddrs)
+                            .await
+                        {
+                            eprintln!(
+                                "auki-domain: Discovery manager reassertion for cluster \
+                                {cluster_name:?} failed: {e}"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
+                    );
+                }
             }
         }
     })

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**Dropped Managers stop keeping stale Discovery entries alive.** `ClusterManager` now aborts SDK background tasks on `Drop`, and live Managers reassert their Discovery Manager hint when liveness responses still point at an old peer. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 18, HKT, 2026
+
 **Three-peer Manager handoff now keeps the intended successor stable.** When A leaves and B is the earliest surviving member, C no longer self-promotes merely because B is momentarily missing from C's libp2p connected set. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 18, HKT, 2026

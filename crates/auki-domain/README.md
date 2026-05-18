@@ -63,13 +63,13 @@ Useful methods:
 | `set_registry_app_root(app_root)` | Install the producer's app root for serving registry entries |
 | `fetch_sensor_entry` / `fetch_clock_entry` / `fetch_frame_entry` | Fetch and verify hash-pinned registry entries over `/auki/registries/0.0.1` |
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |
-| `shutdown()` | Idempotent shared-reference shutdown |
+| `shutdown()` | Idempotent shared-reference shutdown; `Drop` also stops local SDK tasks without async Discovery deregistration |
 
 Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `RgbCamera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
 
 `/auki/resources/0.0.1` is the primary live discovery surface. `ClusterManager` auto-lifts the registered `SensorCatalogProvider` into `sensor_stream` resource rows, and `ResourceCatalogProvider` supplies additional resource rows such as `transform_edge`. Producers that have live camera calibration can override an auto-lifted sensor row with a `sensor_stream` row carrying `ResourcePinholeIntrinsics`. When the requester asks for embedded registry details and the producer has called `set_registry_app_root(app_root)`, the resources handler attaches the exact Sensor / Frame Registry JSON after hash checks.
 
-`shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, rotate the Manager hint in Discovery, and gossip the new Manager peer id with the updated membership snapshot.
+`shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, rotate the Manager hint in Discovery, and gossip the new Manager peer id with the updated membership snapshot. Dropping a `ClusterManager` without `shutdown()` is treated like process-local unclean exit: SDK background tasks are aborted and libp2p is shut down, but Discovery deregistration is left to the normal liveness sweep or successor rotation because `Drop` cannot await HTTP. A live Manager's liveness loop reasserts its Discovery Manager hint if the liveness response still points at a stale Manager peer id or address set.
 
 ## Membership
 

@@ -1016,6 +1016,62 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
     );
 }
 
+/// Regression for a process-local "kill" / owner-drop path:
+/// dropping `ClusterManager` without calling async `shutdown()`
+/// must stop SDK background tasks. Tokio detaches a task when its
+/// `JoinHandle` is dropped, so without an explicit `Drop` impl the
+/// Manager-side Discovery liveness task kept refreshing the cluster
+/// forever inside the still-running process.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_drop_without_shutdown_stops_discovery_liveness() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-drop-stops-liveness-it");
+
+    let identity = PeerIdentity::from_seed(&[99u8; 32]);
+    let mut swarm = build_swarm(
+        &identity,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-drop-stops-liveness-it/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr = wait_for_listen_addr(&mut swarm).await;
+    let manager = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        identity,
+        vec![addr],
+        discovery_url(),
+        swarm,
+        decline_all_streams(),
+        sample_daemon_info("test-drop"),
+    )
+    .await
+    .expect("create_cluster");
+
+    let snapshot = discovery.list_clusters().await.expect("list_clusters");
+    assert!(
+        snapshot.iter().any(|c| c.name == cluster_name),
+        "cluster should exist before manager drop"
+    );
+
+    drop(manager);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        let snapshot = discovery.list_clusters().await.expect("list_clusters");
+        if !snapshot.iter().any(|c| c.name == cluster_name) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let _ = discovery.deregister(&cluster_name).await;
+    panic!("cluster {cluster_name} was still in Discovery after dropped Manager liveness stopped");
+}
+
 /// Regression test for the "Manager leaves → cluster closes → no
 /// successor elected" bug. `ClusterManager::shutdown()` used to
 /// unconditionally call `discovery.deregister(...)` when the local
@@ -1129,6 +1185,105 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         "Graceful Manager handoff OK against {}: A={pid_a} → B={pid_b}",
         discovery_url()
     );
+}
+
+/// Regression for stale Discovery Manager hints kept alive by a
+/// successor's liveness checks. Discovery v1 liveness carries only
+/// `peer_count`, not `manager_peer_id`, so if the one-shot
+/// `rotate_manager` call after promotion is lost, the new Manager can
+/// accidentally refresh the old dead Manager hint forever. The
+/// Manager-side liveness tick must notice and reassert itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn manager_liveness_reasserts_discovery_manager_hint() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-manager-reassert-it");
+
+    let id_a = PeerIdentity::from_seed(&[96u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-manager-reassert-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let id_b = PeerIdentity::from_seed(&[97u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-manager-reassert-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    drop(manager_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(manager_b.is_manager(), "B did not become Manager");
+
+    discovery
+        .rotate_manager(&cluster_name, &pid_a, &[addr_a])
+        .await
+        .expect("corrupt Discovery manager hint back to old A");
+    let corrupted = discovery.list_clusters().await.expect("list corrupted");
+    let entry = corrupted
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .expect("cluster should exist after corruption");
+    assert_eq!(entry.manager_peer_id, pid_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let snapshot = discovery.list_clusters().await.expect("list_clusters");
+        if snapshot
+            .iter()
+            .any(|c| c.name == cluster_name && c.manager_peer_id == pid_b)
+        {
+            manager_b.shutdown().await.expect("B shutdown");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _ = manager_b.shutdown().await;
+    panic!("B did not reassert itself as Discovery Manager after stale hint refresh");
 }
 
 /// Regression for the false second handoff observed after v0.0.48:

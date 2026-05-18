@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**[`auki-domain`](auki-domain/changelog.md) — Dropped Manager handles stop refreshing Discovery, and live Managers reassert stale hints.** `ClusterManager::drop` now aborts SDK background tasks and shuts down libp2p; the Manager liveness loop also retries `rotate_manager` when Discovery's liveness response still points at a different Manager.
+
+### Nils's codex · May 18, HKT, 2026
+
 **[`auki-domain`](auki-domain/changelog.md) — Manager-loss election keeps the first surviving successor stable.** In three-peer handoff A->B->C, later peers no longer skip alive B just because B is momentarily absent from their instantaneous libp2p connected set. The election removes only the timed-out Manager, selects the earliest remaining membership row, and watches that candidate before advancing.
 
 ### Nils's codex · May 18, HKT, 2026

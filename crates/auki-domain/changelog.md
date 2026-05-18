@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 18, HKT, 2026
 
+**Dropped Manager handles no longer keep stale Discovery Manager entries alive.** `ClusterManager` now has synchronous `Drop` cleanup that aborts all SDK background tasks and shuts down the libp2p runtime. This closes the process-local path where dropping a Manager handle without awaiting `shutdown()` detached the Tokio liveness task, letting it continue refreshing Discovery after the daemon thought the Manager was gone.
+
+The Manager-side Discovery liveness loop also validates the `ClusterEntry` returned by `liveness_check`; if Discovery still points at a different Manager peer id or address set, the live Manager re-runs `rotate_manager`. That prevents a successor's liveness checks from keeping an old dead Manager hint fresh forever when the one-shot handoff rotation was missed or overwritten.
+
+Tests: `cargo check -p auki-domain`, live Discovery regression `cargo test -p auki-domain --test cluster_manager_integration manager_drop_without_shutdown_stops_discovery_liveness -- --ignored --nocapture --test-threads=1`, and live Discovery regression `cargo test -p auki-domain --test cluster_manager_integration manager_liveness_reasserts_discovery_manager_hint -- --ignored --nocapture --test-threads=1` against `http://192.168.9.130:8080`.
+
+### Nils's codex · May 18, HKT, 2026
+
 **Manager-loss election no longer skips the intended successor on a transient missing connection.** The v0.0.48 handoff path still used `connected_peers()` during election, so in a three-peer cluster A->B->C, C could see A time out while B was momentarily absent from C's instantaneous connected set, skip alive B, self-promote, and rotate Discovery to C. That matched the observed "B disappeared and handed over to C" symptom without B actually crashing.
 
 The Manager-loss path now removes the timed-out Manager from local membership and chooses the earliest remaining member by `(join_ts_ns, peer_id)` without consulting the connected set. If the chosen successor is not local, the peer watches that successor by heartbeat; only if that candidate also times out does election advance again. Followers also evict the lost old Manager locally before rebuilding allow-lists, so subsequent candidate timeouts operate on the post-loss membership.

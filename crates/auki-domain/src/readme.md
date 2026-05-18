@@ -18,14 +18,14 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Membership gossip through `/auki/membership/0.0.1`, including the Manager peer id to converge handoff broadcasts.
 - Manager-star heartbeat/liveness detection through `/auki/heartbeat/0.0.1`, with topology and timeout semantics owned here rather than in `auki-network`; raw carrier close is not treated as semantic death until the heartbeat timeout expires.
 - Manager election and Discovery `rotate_manager` handoff. On Manager loss, election chooses the earliest surviving membership row rather than skipping an intended successor because its libp2p connection is momentarily absent during handoff.
-- Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
+- Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second), with manager-hint reassertion when Discovery reports a stale Manager peer id or address set.
 - SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
 - Resource catalog provider registration plus `/auki/resources/0.0.1` fetches, auto-lifting sensor catalog rows into `sensor_stream` resources and accepting producer-supplied `transform_edge` rows.
 - Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches, including the detail request that can embed local Sensor / Frame Registry JSON by value.
 - Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
 - `StreamManifestBuilder::from_registry`, which constructs stream accept manifests from a producer's local registry and verifies exact frame references for spatial sensors.
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
-- Shared-reference, idempotent `shutdown`.
+- Shared-reference, idempotent `shutdown`, plus `Drop` cleanup that aborts SDK background tasks and shuts down libp2p so process-local handle drops do not leave liveness tasks running.
 
 ## Public Re-exports
 

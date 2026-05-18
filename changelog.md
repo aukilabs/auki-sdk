@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Codex · May 18, HKT, 2026
+
+**Connection-close liveness now ignores partial libp2p connection churn.** `NetworkRuntime` no longer reports a peer disconnected when one connection closes but libp2p still has another established connection to the same peer. This protects Manager liveness from stream/audio connection churn. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Manager handoff is less brittle under heartbeat carrier churn.** `ClusterManager` now waits for heartbeat timeout before treating raw libp2p carrier close as semantic peer death, and `/auki/membership/0.0.1` handoff gossip carries the authoring Manager peer id so surviving peers can converge on the new Manager. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

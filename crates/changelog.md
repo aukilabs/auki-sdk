@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Codex · May 18, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — connection-close liveness no longer false-disconnects peers with another live libp2p connection.** `NetworkRuntime` now ignores `ConnectionClosed` when libp2p reports `num_established > 0`, preserving `connected_peers`, heartbeat carrier tasks, and peer liveness while stream/audio connection churn settles.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Manager handoff is less edge-triggered and membership gossip carries Manager identity.** Raw heartbeat carrier close no longer causes immediate election or eviction; `ClusterManager` waits for the heartbeat timeout unless a fresh heartbeat/connection refreshes the peer first. `/auki/membership/0.0.1` now carries `manager_peer_id`, and receivers apply it when the sender is the claimed Manager and the snapshot contains that Manager.

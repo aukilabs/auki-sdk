@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Codex · May 18, HKT, 2026
+
+**Connection-close liveness now respects libp2p's remaining-connection count.** `NetworkRuntime` no longer treats every `SwarmEvent::ConnectionClosed` as a peer disconnect: when libp2p reports `num_established > 0` for the same peer, the runtime keeps the peer in `connected_peers`, preserves heartbeat carrier tasks, and does not emit `PeerLivenessEvent::Disconnected`. This fixes the false peer-death path where stream or audio traffic could churn one connection while another connection to the same peer remained alive, causing the Manager to stop heartbeat and eventually evict a healthy peer.
+
+Tests: `cargo test -p auki-network --features swarm`, `cargo test -p auki-domain`.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Membership gossip now carries the Manager peer id explicitly.** `/auki/membership/0.0.1` `MembershipUpdate` grows `manager_peer_id` alongside `membership_json`, and `NetworkRuntime::broadcast_membership` now requires the Manager id that authored the update. This makes handoff broadcasts self-describing: receivers no longer have to infer the Manager solely from their local election path, which matters when multiple surviving peers are converging after the old Manager disappears.

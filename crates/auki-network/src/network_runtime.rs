@@ -1424,7 +1424,14 @@ fn handle_event(
                 );
             }
         }
-        SwarmEvent::ConnectionClosed { peer_id, .. } => {
+        SwarmEvent::ConnectionClosed {
+            peer_id,
+            num_established,
+            ..
+        } => {
+            if num_established > 0 {
+                return;
+            }
             connected
                 .lock()
                 .expect("connected set mutex poisoned")
@@ -2163,6 +2170,7 @@ fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId
 mod tests {
     use super::*;
     use crate::stream_runtime::decline_all_streams;
+    use libp2p::{core::ConnectedPoint, swarm::ConnectionId};
 
     async fn build_test_swarm() -> Swarm<Behaviour> {
         let identity = PeerIdentity::from_seed(&[7u8; 32]);
@@ -2263,5 +2271,49 @@ mod tests {
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
         rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn connection_closed_with_remaining_connections_does_not_signal_disconnect() {
+        let mut swarm = build_test_swarm().await;
+        let local = *swarm.local_peer_id();
+        let peer = PeerIdentity::from_seed(&[8u8; 32]).peer_id();
+        let connected = Arc::new(Mutex::new(HashSet::from([peer])));
+        let known_peers = HashMap::from([(peer, vec!["/ip4/127.0.0.1/tcp/4001".parse().unwrap()])]);
+        let mut schedules = HashMap::new();
+        let stream_control = swarm.behaviour().stream.new_control();
+        let (_lifeline_tx, lifeline_rx) = watch::channel(());
+        let mut outbound_heartbeat_tasks = HashMap::new();
+        let mut inbound_heartbeat_tasks = HashMap::new();
+        let heartbeat_targets = HashSet::new();
+        let (liveness_tx, mut liveness_rx) = mpsc::channel(1);
+
+        handle_event(
+            SwarmEvent::ConnectionClosed {
+                peer_id: peer,
+                connection_id: ConnectionId::new_unchecked(1),
+                endpoint: ConnectedPoint::Listener {
+                    local_addr: "/ip4/127.0.0.1/tcp/4001".parse().unwrap(),
+                    send_back_addr: "/ip4/127.0.0.1/tcp/50001".parse().unwrap(),
+                },
+                num_established: 1,
+                cause: None,
+            },
+            local,
+            &mut swarm,
+            &known_peers,
+            &mut schedules,
+            &connected,
+            &stream_control,
+            &lifeline_rx,
+            &mut outbound_heartbeat_tasks,
+            &mut inbound_heartbeat_tasks,
+            &heartbeat_targets,
+            &liveness_tx,
+        );
+
+        assert!(connected.lock().expect("connected lock").contains(&peer));
+        assert!(!schedules.contains_key(&peer));
+        assert!(liveness_rx.try_recv().is_err());
     }
 }

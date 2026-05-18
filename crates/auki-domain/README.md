@@ -42,7 +42,7 @@ Operator-driven UIs can call the explicit primitives:
 - The local peer id, local advertised multiaddrs, current Manager peer id, and Manager/member role state.
 - A `NetworkRuntime` that drives libp2p.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
-- Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events.
+- Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events, while raw carrier close waits for the heartbeat timeout before election or eviction.
 - Background tasks for join admission, peer liveness, membership gossip, info requests, resource catalog requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:
@@ -69,7 +69,7 @@ Producer-side stream providers can use `StreamManifestBuilder::from_registry(app
 
 `/auki/resources/0.0.1` is the primary live discovery surface. `ClusterManager` auto-lifts the registered `SensorCatalogProvider` into `sensor_stream` resource rows, and `ResourceCatalogProvider` supplies additional resource rows such as `transform_edge`. Producers that have live camera calibration can override an auto-lifted sensor row with a `sensor_stream` row carrying `ResourcePinholeIntrinsics`. When the requester asks for embedded registry details and the producer has called `set_registry_app_root(app_root)`, the resources handler attaches the exact Sensor / Frame Registry JSON after hash checks.
 
-`shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, and rotate the Manager hint in Discovery.
+`shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, rotate the Manager hint in Discovery, and gossip the new Manager peer id with the updated membership snapshot.
 
 ## Membership
 

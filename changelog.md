@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**Manager handoff is less brittle under heartbeat carrier churn.** `ClusterManager` now waits for heartbeat timeout before treating raw libp2p carrier close as semantic peer death, and `/auki/membership/0.0.1` handoff gossip carries the authoring Manager peer id so surviving peers can converge on the new Manager. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **Python daemons can now publish and fetch live resource catalogs.** `auki-domain-py` exposes `/auki/resources/0.0.1` value types plus `ClusterManager.set_resource_catalog_provider` / `fetch_resources_catalog`, so BoosterApp and Park can exchange sensor-stream rows, pinhole intrinsics, and rigid transform edges without dropping to Rust. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

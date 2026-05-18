@@ -39,7 +39,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 |---|---|---|
 | `/auki/join/0.0.1` | `join_protocol` | Non-member asks the current Manager to admit it; response carries membership JSON + successor token |
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames; cluster liveness semantics live in `auki-domain` |
-| `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips fresh membership JSON to members |
+| `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips its peer id plus fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |
 | `/auki/resources/0.0.1` | `resources_protocol` | Cluster peer asks another peer what resources it can provide now; v0 rows are `sensor_stream` (optionally with pinhole intrinsics) and `transform_edge` |
 | `/auki/sensors/0.0.1` | `sensors_protocol` | Cluster peer asks another peer for its current sensor catalog, optionally embedding Sensor / Frame Registry JSON |

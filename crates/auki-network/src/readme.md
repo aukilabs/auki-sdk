@@ -10,7 +10,7 @@ Implementation status for [`auki-network`](../README.md).
 - [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, heartbeat carrier targets/events, join/info/resources/sensors/registries/membership helpers, idempotent shutdown.
 - [`join_protocol.rs`](join_protocol.rs) - `/auki/join/0.0.1` framed JSON request/response.
 - [`heartbeat_protocol.rs`](heartbeat_protocol.rs) - `/auki/heartbeat/0.0.1` bidirectional heartbeat carrier frames.
-- [`membership_protocol.rs`](membership_protocol.rs) - `/auki/membership/0.0.1` membership-gossip frames.
+- [`membership_protocol.rs`](membership_protocol.rs) - `/auki/membership/0.0.1` Manager-id + membership-gossip frames.
 - [`info_protocol.rs`](info_protocol.rs) - `/auki/info/0.0.1` framed request/response for `ParticipantInfo` JSON.
 - [`resources_protocol.rs`](resources_protocol.rs) - `/auki/resources/0.0.1` framed request/response for live resource catalogs (`sensor_stream` with optional pinhole intrinsics, and `transform_edge` rows in v0).
 - [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs, with optional embedded Sensor / Frame Registry JSON.
@@ -108,7 +108,7 @@ impl NetworkRuntime {
     pub async fn request_sensors_catalog(...);
     pub async fn request_sensors_catalog_with(...);
     pub async fn request_registry_entry(...);
-    pub fn broadcast_membership(...);
+    pub fn broadcast_membership(manager_peer_id, membership_json);
 }
 ```
 

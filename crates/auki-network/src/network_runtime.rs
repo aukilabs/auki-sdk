@@ -571,9 +571,15 @@ impl NetworkRuntimeHandle {
     /// Same semantics as [`NetworkRuntime::broadcast_membership`].
     pub fn broadcast_membership(
         &self,
+        manager_peer_id: PeerId,
         membership_json: String,
     ) -> Result<(), BroadcastMembershipError> {
-        broadcast_membership_impl(&self.stream_control, &self.connected, membership_json)
+        broadcast_membership_impl(
+            &self.stream_control,
+            &self.connected,
+            manager_peer_id,
+            membership_json,
+        )
     }
 }
 
@@ -939,6 +945,7 @@ impl NetworkRuntime {
     /// per peer are logged at warn level and dropped; the next
     /// broadcast will re-converge.
     ///
+    /// `manager_peer_id` identifies the Manager authoring the update.
     /// `membership_json` is the serialized
     /// `auki_domain::ClusterMembership` (typically built via
     /// `ClusterMembership::to_json`). The runtime doesn't interpret
@@ -950,9 +957,15 @@ impl NetworkRuntime {
     /// spawned. The broadcast continues asynchronously.
     pub fn broadcast_membership(
         &self,
+        manager_peer_id: PeerId,
         membership_json: String,
     ) -> Result<(), BroadcastMembershipError> {
-        broadcast_membership_impl(&self.stream_control, &self.connected, membership_json)
+        broadcast_membership_impl(
+            &self.stream_control,
+            &self.connected,
+            manager_peer_id,
+            membership_json,
+        )
     }
 
     /// Snapshot of currently-connected peers.
@@ -2093,6 +2106,7 @@ async fn handle_inbound_registry_substream(
 fn broadcast_membership_impl(
     stream_control: &Control,
     connected: &Arc<Mutex<HashSet<PeerId>>>,
+    manager_peer_id: PeerId,
     membership_json: String,
 ) -> Result<(), BroadcastMembershipError> {
     if membership_json.len() as u64 > crate::membership_protocol::MAX_MEMBERSHIP_FRAME_BYTES as u64
@@ -2114,6 +2128,7 @@ fn broadcast_membership_impl(
             match control.open_stream(peer, proto).await {
                 Ok(mut substream) => {
                     let msg = MembershipUpdate {
+                        manager_peer_id,
                         membership_json: json,
                     };
                     if let Err(e) = write_membership_update(&mut substream, &msg).await {

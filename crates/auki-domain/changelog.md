@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**Manager handoff now waits for heartbeat timeout and gossips the new Manager identity.** The liveness handler no longer treats raw libp2p `Disconnected` or `HeartbeatStreamClosed` carrier events as immediate semantic peer death. Those events now leave the last heartbeat timestamp intact and let the `HEARTBEAT_TIMEOUT` scan decide, so transient carrier churn has a chance to reconnect before causing peer eviction or Manager promotion.
+
+Membership gossip now applies the advertised `manager_peer_id` from `/auki/membership/0.0.1` when the sender is that Manager and the Manager exists in the membership snapshot. This gives post-handoff broadcasts an explicit convergence signal for peers that did not independently choose the same winner at exactly the same time.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain cluster_manager::tests -- --nocapture`, plus serial live Discovery runs for `manager_failover_when_a_dies_b_takes_over`, `manager_graceful_shutdown_passes_cluster_to_surviving_peer`, `three_peer_membership_converges_via_gossip`, and `manager_failover_when_manager_dies_before_first_heartbeat` against `http://192.168.9.130:8080`.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **`ClusterManager` now serves and fetches `/auki/resources/0.0.1` catalogs.** The domain layer starts the live resource catalog by auto-lifting the registered `SensorCatalogProvider` into `sensor_stream` resource rows and adding a new `ResourceCatalogProvider` trait for producer-owned rows such as rigid `transform_edge`. Provider rows override auto-lifted rows by `(kind, id)`, so applications can replace the SDK's default sensor-stream projection when they need a richer declaration.

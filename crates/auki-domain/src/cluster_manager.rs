@@ -974,7 +974,11 @@ impl ClusterManager {
         // itself already has the same JSON in the `JoinResponse::Accept`
         // it just received). Fire-and-forget; per-peer errors are
         // logged inside the broadcast tasks.
-        broadcast_current_membership(&self.runtime.handle(), &self.membership);
+        broadcast_current_membership(
+            &self.runtime.handle(),
+            &self.manager_peer_id,
+            &self.membership,
+        );
 
         Ok(member)
     }
@@ -1777,6 +1781,35 @@ fn reconcile_heartbeat_watchlist(
     }
 }
 
+fn note_watched_peer_alive(
+    watched: &HashSet<PeerId>,
+    last_heartbeat_at: &mut HashMap<PeerId, Instant>,
+    lost_already: &mut HashSet<PeerId>,
+    peer_id: PeerId,
+) {
+    if watched.contains(&peer_id) {
+        last_heartbeat_at.insert(peer_id, Instant::now());
+        lost_already.remove(&peer_id);
+    }
+}
+
+fn note_watched_transport_closed(
+    watched: &HashSet<PeerId>,
+    last_heartbeat_at: &mut HashMap<PeerId, Instant>,
+    peer_id: PeerId,
+) {
+    if watched.contains(&peer_id) {
+        // Raw libp2p connection and heartbeat-carrier closure are
+        // transport symptoms, not semantic peer death. Keep the
+        // existing last-seen time and let the heartbeat timeout
+        // decide. A reconnect or fresh heartbeat before the timeout
+        // refreshes the timestamp via `note_watched_peer_alive`.
+        last_heartbeat_at
+            .entry(peer_id)
+            .or_insert_with(Instant::now);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_domain_peer_lost(
     cluster_name: &str,
@@ -1867,7 +1900,7 @@ async fn handle_domain_peer_lost(
             // Gossip the post-handoff view so survivors converge on
             // the new Manager identity + the post-eviction
             // membership.
-            broadcast_current_membership(runtime, membership);
+            broadcast_current_membership(runtime, manager_peer_id, membership);
             eprintln!(
                 "auki-domain: cluster {cluster_name:?}: local peer \
                 {local_peer_id} promoted to Manager after detecting Lost {lost_pid}"
@@ -1918,7 +1951,7 @@ async fn handle_domain_peer_lost(
         .await;
         // Gossip the shrunken membership so remaining peers also
         // evict the dead one.
-        broadcast_current_membership(runtime, membership);
+        broadcast_current_membership(runtime, manager_peer_id, membership);
     }
 }
 
@@ -1987,28 +2020,20 @@ fn spawn_liveness_handler(
                     match evt {
                         PeerLivenessEvent::Connected { peer_id }
                         | PeerLivenessEvent::HeartbeatReceived { peer_id } => {
-                            if watched.contains(&peer_id) {
-                                last_heartbeat_at.insert(peer_id, Instant::now());
-                                lost_already.remove(&peer_id);
-                            }
+                            note_watched_peer_alive(
+                                &watched,
+                                &mut last_heartbeat_at,
+                                &mut lost_already,
+                                peer_id,
+                            );
                         }
                         PeerLivenessEvent::Disconnected { peer_id }
                         | PeerLivenessEvent::HeartbeatStreamClosed { peer_id } => {
-                            if watched.contains(&peer_id) && lost_already.insert(peer_id) {
-                                handle_domain_peer_lost(
-                                    &cluster_name,
-                                    local_peer_id,
-                                    &local_multiaddrs,
-                                    &manager_peer_id,
-                                    &membership,
-                                    &runtime,
-                                    &discovery,
-                                    &liveness_check_task,
-                                    &mut handled_manager_losses,
-                                    peer_id,
-                                )
-                                .await;
-                            }
+                            note_watched_transport_closed(
+                                &watched,
+                                &mut last_heartbeat_at,
+                                peer_id,
+                            );
                         }
                     }
                 }
@@ -2051,13 +2076,11 @@ fn spawn_liveness_handler(
 /// `runtime`. Lives for the lifetime of the `ClusterManager`;
 /// cancelled on `shutdown`.
 ///
-/// **Does NOT mutate `manager_peer_id`.** The election in
-/// `spawn_liveness_handler` is the single source of truth for who
-/// the Manager is — each peer runs the same deterministic algorithm
-/// over the same membership and converges independently. A gossip
-/// from a non-Manager (e.g. during a split-brain window) would lie
-/// about the Manager identity; ignoring the sender peer-id avoids
-/// that footgun.
+/// Manager gossip carries the authoring Manager's peer id. Receivers
+/// apply it only when the sender is the claimed Manager and the
+/// claimed Manager exists in the membership snapshot; this gives
+/// post-handoff broadcasts a convergence signal without letting an
+/// arbitrary member claim the role for another peer.
 fn spawn_membership_handler(
     mut rx: mpsc::Receiver<MembershipEvent>,
     cluster_name: String,
@@ -2075,12 +2098,20 @@ fn spawn_membership_handler(
                     continue;
                 }
             };
-            // Last-write-wins: replace local membership and rebuild
-            // the allow-list. The cluster-trust gate on the runtime
-            // side already refused non-cluster senders, but any
-            // cluster member can in principle send — `manager_peer_id`
-            // intentionally stays unchanged so a non-Manager
-            // gossiper can't claim the role.
+            let advertised_manager = update.manager_peer_id;
+            if !valid_membership_update_manager(peer, advertised_manager, &parsed) {
+                eprintln!(
+                    "auki-domain: membership gossip from {peer}: invalid advertised Manager {advertised_manager}"
+                );
+                continue;
+            }
+
+            // Last-write-wins: replace local membership, adopt the
+            // advertised Manager, and rebuild the allow-list. The
+            // cluster-trust gate on the runtime side already refused
+            // non-cluster senders; the sender==manager check above
+            // prevents an arbitrary member from claiming the role for
+            // another peer.
             let new_allow_list: Vec<AllowedPeer> = {
                 let mut m = membership.lock().expect("membership lock");
                 *m = parsed;
@@ -2093,6 +2124,7 @@ fn spawn_membership_handler(
                     })
                     .collect()
             };
+            *manager_peer_id.lock().expect("manager_peer_id lock") = advertised_manager;
             if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
                 eprintln!(
                     "auki-domain: membership gossip apply: set_allowed_peers \
@@ -2111,6 +2143,18 @@ fn spawn_membership_handler(
     })
 }
 
+fn valid_membership_update_manager(
+    sender: PeerId,
+    advertised_manager: PeerId,
+    membership: &ClusterMembership,
+) -> bool {
+    sender == advertised_manager
+        && membership
+            .peers
+            .iter()
+            .any(|p| p.peer_id == advertised_manager)
+}
+
 /// Serialize the current `membership` and `broadcast_membership` it
 /// over `/auki/membership/0.0.1`. Logged-and-swallow on encode
 /// failure; per-peer write failures are logged inside the runtime's
@@ -2118,8 +2162,10 @@ fn spawn_membership_handler(
 /// eviction, and on Manager-promotion.
 fn broadcast_current_membership(
     runtime: &auki_network::NetworkRuntimeHandle,
+    manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
 ) {
+    let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
     let json = {
         let m = membership.lock().expect("membership lock");
         match serde_json::to_string(&*m) {
@@ -2130,7 +2176,7 @@ fn broadcast_current_membership(
             }
         }
     };
-    if let Err(e) = runtime.broadcast_membership(json) {
+    if let Err(e) = runtime.broadcast_membership(manager, json) {
         eprintln!("auki-domain: broadcast_membership failed: {e}");
     }
 }
@@ -2834,7 +2880,7 @@ fn spawn_join_handler(
             // The new joiner itself just received the same JSON in
             // the JoinResponse::Accept above; the broadcast targets
             // everyone else.
-            broadcast_current_membership(&runtime, &membership);
+            broadcast_current_membership(&runtime, &manager_peer_id, &membership);
         }
     })
 }
@@ -3178,6 +3224,59 @@ mod tests {
         // local = B; A unreachable.
         let winner = elect_successor(&membership, m_b.peer_id, &[]);
         assert_eq!(winner, Some(m_b.peer_id));
+    }
+
+    #[test]
+    fn transport_close_keeps_last_seen_until_timeout() {
+        let peer = auki_network::PeerIdentity::from_seed(&[4u8; 32]).peer_id();
+        let mut watched = HashSet::new();
+        watched.insert(peer);
+        let mut last_heartbeat_at = HashMap::new();
+        let first_seen = Instant::now() - Duration::from_millis(250);
+        last_heartbeat_at.insert(peer, first_seen);
+
+        note_watched_transport_closed(&watched, &mut last_heartbeat_at, peer);
+
+        assert_eq!(last_heartbeat_at.get(&peer), Some(&first_seen));
+    }
+
+    #[test]
+    fn heartbeat_refresh_clears_prior_loss_marker() {
+        let peer = auki_network::PeerIdentity::from_seed(&[5u8; 32]).peer_id();
+        let mut watched = HashSet::new();
+        watched.insert(peer);
+        let mut last_heartbeat_at = HashMap::new();
+        let mut lost_already = HashSet::new();
+        lost_already.insert(peer);
+
+        note_watched_peer_alive(&watched, &mut last_heartbeat_at, &mut lost_already, peer);
+
+        assert!(last_heartbeat_at.contains_key(&peer));
+        assert!(!lost_already.contains(&peer));
+    }
+
+    #[test]
+    fn membership_gossip_manager_must_be_sender_and_member() {
+        let manager = make_peer(6, 100);
+        let member = make_peer(7, 200);
+        let outsider = make_peer(8, 300);
+        let mut membership = ClusterMembership::new("foo");
+        membership.admit(manager.clone());
+        membership.admit(member.clone());
+
+        assert!(valid_membership_update_manager(
+            manager.peer_id,
+            manager.peer_id,
+            &membership
+        ));
+        assert!(
+            !valid_membership_update_manager(member.peer_id, manager.peer_id, &membership),
+            "non-Manager sender cannot claim another peer is Manager"
+        );
+        assert!(
+            !valid_membership_update_manager(outsider.peer_id, outsider.peer_id, &membership),
+            "advertised Manager must exist in the membership snapshot"
+        );
     }
 
     #[test]

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Implementation status doc names native pointcloud frames.** `src/readme.md` now documents `build_point_cloud_log_entry(msg) -> (timestamp_ns, PointCloudFrame)` and notes that ROS `PointCloud2` input is converted into native `{ point_count, data }`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **README points pointcloud translation at the native frame.** Active docs now describe `build_point_cloud_log_entry(msg) -> (timestamp_ns, PointCloudFrame)` and `PointCloudFrame { point_count, data }`, with interpretation resolved through `SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }`.
 
 ### Nils's codex · May 16, 17:53 HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**ROS adapter status doc names native pointcloud frames.** `auki-ros-adapter/src/readme.md` now shows `build_point_cloud_log_entry` returning `PointCloudFrame` and describes the ROS `PointCloud2` conversion as native `{ point_count, data }`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud status docs propagated across crate consumers.** Implementation status docs and adjacent consumer READMEs now remove the retired `PointCloudLogEntry`, `point_cloud_stream`, and `is_bigendian` surfaces and name native `PointCloudFrame { point_count, data }` instead. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

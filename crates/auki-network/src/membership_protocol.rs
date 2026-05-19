@@ -63,6 +63,7 @@
 //! DHT" — v1 keeps the simple shape.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+use libp2p_identity::PeerId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -75,10 +76,10 @@ pub const MEMBERSHIP_PROTOCOL: &str = "/auki/membership/0.0.1";
 /// is defense against malformed senders.
 pub const MAX_MEMBERSHIP_FRAME_BYTES: u32 = 1024 * 1024;
 
-/// Body of a membership broadcast. The Manager fills `membership_json`
-/// with the serialized
-/// [`auki_domain::ClusterMembership`](../../auki-domain) — the same
-/// JSON shape `JoinResponse::Accept` already carries.
+/// Body of a membership broadcast. The Manager fills
+/// `manager_peer_id` with its own peer id and `membership_json` with
+/// the serialized [`auki_domain::ClusterMembership`](../../auki-domain)
+/// — the same JSON shape `JoinResponse::Accept` already carries.
 ///
 /// `membership_json` is a [`String`] (not a typed Rust struct) so
 /// this module stays independent of `auki-domain`'s
@@ -86,6 +87,8 @@ pub const MAX_MEMBERSHIP_FRAME_BYTES: u32 = 1024 * 1024;
 /// clean layering.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MembershipUpdate {
+    /// Peer-id of the Manager that authored this update.
+    pub manager_peer_id: PeerId,
     /// Serialized `auki_domain::ClusterMembership` (JSON).
     pub membership_json: String,
 }
@@ -178,7 +181,11 @@ mod tests {
     use super::*;
 
     fn sample_update() -> MembershipUpdate {
+        let manager_peer_id = "12D3KooWDsPnHkgZPVtTpt8ZNQm8cE1hGfTRmG5pce8YjzNDZFrN"
+            .parse()
+            .unwrap();
         MembershipUpdate {
+            manager_peer_id,
             membership_json: r#"{"cluster_name":"foo","peers":[{"peer_id":"12D3KooWA","multiaddrs":["/ip4/127.0.0.1/tcp/4001"],"join_ts_ns":1000,"successor_token":[]}]}"#.to_string(),
         }
     }
@@ -216,15 +223,21 @@ mod tests {
     #[test]
     fn wire_shape_locked_field_name() {
         let json = serde_json::to_string(&sample_update()).unwrap();
+        assert!(json.contains(r#""manager_peer_id":"#), "{json}");
         assert!(json.contains(r#""membership_json":"#), "{json}");
     }
 
-    /// An empty membership_json string serializes through cleanly.
+    /// An empty membership_json string serializes through cleanly
+    /// as long as the Manager identity is present.
     /// Edge case for the Manager-handoff broadcast when a Manager
     /// promotes itself in a one-peer (just-itself) cluster.
     #[test]
     fn empty_membership_json_round_trips() {
+        let manager_peer_id = "12D3KooWDsPnHkgZPVtTpt8ZNQm8cE1hGfTRmG5pce8YjzNDZFrN"
+            .parse()
+            .unwrap();
         let msg = MembershipUpdate {
+            manager_peer_id,
             membership_json: String::new(),
         };
         let json = serde_json::to_string(&msg).unwrap();

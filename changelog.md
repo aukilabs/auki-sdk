@@ -9,6 +9,14 @@ Latest entry on top.
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purges across four crates remove ~300 lines of plan archaeology and deleted-surface references.** `auki-domain/`, `auki-domain-py/`, `auki-network/`, and `auki-network-py/` parking-lot files lost entries describing deleted runtime/types (`ClusterRuntime`, `init_domain`/`DomainHandle`, `discovery_client::subscribe`, `update_cluster_doc`, `cluster.spawn`), transcribed Greenland Notion task tables whose decisions all shipped, design blocks for unshipped `/auki/message/0.0.1`, and internal codename leakage. ~16 substantive design questions retained: relay-reservation v2, `DiscoveryRuntime`, peer-key derivation labels, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, JSON-encoding-for-binary-T, cluster.json graduation/signing, `app_instance` containers/multi-NIC, `Capability` open-string, etc. See [`crates/changelog.md`](crates/changelog.md) for per-crate detail.
+### Nils's codex · May 19, HKT, 2026
+
+**Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+**Manager election ignores the heartbeat-lost Manager even if transport teardown lags.** `auki-domain` now excludes the timed-out peer from successor election before consulting libp2p's connected set, preventing battery-pull / QUIC-idle cases from re-electing the dead Manager and leaving Discovery unrotated. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Manager handoff is less brittle under heartbeat carrier churn.** `ClusterManager` now waits for heartbeat timeout before treating raw libp2p carrier close as semantic peer death, and `/auki/membership/0.0.1` handoff gossip carries the authoring Manager peer id so surviving peers can converge on the new Manager. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 17, HKT, 2026
 

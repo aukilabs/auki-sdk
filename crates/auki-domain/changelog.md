@@ -9,6 +9,19 @@ Latest entry on top.
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purged: Greenland design archaeology and resolved-but-unpropagated items removed.** Eleven "Greenland Decision" blocks (T1, T2/Q2, T3/Q1, T4/Q3, T5/Q4, T6/Q8, T7/Q5+Q-disc-1, T10/Q10, T11/Q11, T13/Q9, T9/Q12, T12/Q7, T8/Q-disc-2, T14/Q14) transcribed from the retired Greenland Notion task table were deleted — the decisions all shipped (`ClusterManager`, heartbeat, `/auki/registries/0.0.1`, election rule, default-Domain singleton) and the parking-lot transcripts had become plan archaeology. The "Glossary reconciliation" item self-marked Resolved 2026-05-11 with a week-stale Propagate placeholder was also removed (Glossary already carries the live `Domain Identity` definition). Codename leakage ("Hagall", retired "Vinland"/"Greenland") stripped from the three live forward-looking items that remain: successor-token encoding for v2 hardening, stale-Manager join policy (Nils's codex, 2026-05-17), and DHT-backed cluster doc as long-term direction. Net: 161 → 48 lines.
+### Nils's codex · May 19, HKT, 2026
+
+**Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.
+
+Tests: `cargo test -p auki-domain`.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Manager handoff now waits for heartbeat timeout and gossips the new Manager identity.** The liveness handler no longer treats raw libp2p `Disconnected` or `HeartbeatStreamClosed` carrier events as immediate semantic peer death. Those events now leave the last heartbeat timestamp intact and let the `HEARTBEAT_TIMEOUT` scan decide, so transient carrier churn has a chance to reconnect before causing peer eviction or Manager promotion.
+
+Membership gossip now applies the advertised `manager_peer_id` from `/auki/membership/0.0.1` when the sender is that Manager and the Manager exists in the membership snapshot. This gives post-handoff broadcasts an explicit convergence signal for peers that did not independently choose the same winner at exactly the same time.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain cluster_manager::tests -- --nocapture`, plus serial live Discovery runs for `manager_failover_when_a_dies_b_takes_over`, `manager_graceful_shutdown_passes_cluster_to_surviving_peer`, `three_peer_membership_converges_via_gossip`, and `manager_failover_when_manager_dies_before_first_heartbeat` against `http://192.168.9.130:8080`.
 
 ### Nils's codex · May 17, HKT, 2026
 

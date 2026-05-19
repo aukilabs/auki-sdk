@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: Greenland design archaeology and resolved-but-unpropagated items removed.** Eleven "Greenland Decision" blocks (T1, T2/Q2, T3/Q1, T4/Q3, T5/Q4, T6/Q8, T7/Q5+Q-disc-1, T10/Q10, T11/Q11, T13/Q9, T9/Q12, T12/Q7, T8/Q-disc-2, T14/Q14) transcribed from the retired Greenland Notion task table were deleted — the decisions all shipped (`ClusterManager`, heartbeat, `/auki/registries/0.0.1`, election rule, default-Domain singleton) and the parking-lot transcripts had become plan archaeology. The "Glossary reconciliation" item self-marked Resolved 2026-05-11 with a week-stale Propagate placeholder was also removed (Glossary already carries the live `Domain Identity` definition). Codename leakage ("Hagall", retired "Vinland"/"Greenland") stripped from the three live forward-looking items that remain: successor-token encoding for v2 hardening, stale-Manager join policy (Nils's codex, 2026-05-17), and DHT-backed cluster doc as long-term direction. Net: 161 → 48 lines.
 ### Nils's codex · May 19, HKT, 2026
 
 **Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.

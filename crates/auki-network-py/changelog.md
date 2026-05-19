@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: deleted-surface references removed.** The "Two-runtime test uses fixed loopback ports" block was deleted (the test `test_two_runtimes_discover_each_other_via_cluster_doc` was deleted with `ClusterRuntime`). The "Type stubs (`auki_network.pyi`)" block was rewritten: its 43-line inline stub describing `_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, `PeerSnapshot`, `load_doc` — all deleted surface — was replaced with a single sentence naming the current public surface (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `cluster.*` stream types, `AudioFrame`). "Logging routing" edited to drop the now-false "initialized lazily on first `cluster.spawn`" claim — no `tracing` subscriber is installed by the crate today, host process wins by default. Codename leakage ("ansuz", "Vinland", retired version numbers like v0.0.13/v0.0.14 tied to ansuz) stripped. The substantive items kept: stderr-vs-pyo3-log default, PyPI distribution deferral, type-stubs decision, identity-py recipe reuse, single-task tokio runtime, Python version floor. Net: 104 → 52 lines.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Python stream surface renames accept metadata to `StreamDescriptor`.** `cluster.StreamDescriptor` now requires `sensor_id`, `sensor_hash`, `clock_id`, and `clock_hash`, with optional `frame_id` / `frame_hash` defaulting to empty strings for non-spatial streams. Producer factories take `descriptor=...` (`accept`, `accept_pointcloud`, `accept_joint_encoders`, `accept_audio`) and `StreamSubscription` exposes `.descriptor` on the consumer side. The PyO3 bridge maps the descriptor through to `auki-network::StreamDispatch`, and Python stream tests assert sensor/frame metadata survives the round trip. `cargo test -p auki-network-py` passes.

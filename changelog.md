@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser/WASM rust-libp2p feature probe unblocked.** `auki-network-browser-wasm` now enables the `getrandom` 0.3 browser RNG feature needed by libp2p/yamux, so the current WebRTC/WebTransport/WebSocket browser feature set compiles and packages for wasm. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser/WASM rust-libp2p feature probe run.** `auki-network-browser-wasm` now records that the current `browser_libp2p` wasm check is blocked by transitive `getrandom` 0.3 requiring the wasm JS RNG cfg before Park Domain join work proceeds. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

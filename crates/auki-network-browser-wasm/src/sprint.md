@@ -2,15 +2,12 @@
 
 ## Now
 
-Prove the first wasm package boundary:
+Build the first SDK-owned browser-to-native protocol probe:
 
-- build the crate for `wasm32-unknown-unknown`
-- export a small wasm-bindgen function
-- add canonical seed-to-PeerId derivation
-- add a JS import smoke test
-- resolve the `browser_libp2p` `getrandom` 0.3 wasm JS RNG cfg blocker
-- rerun the rust-libp2p browser transport feature compile probe
+- choose the native probe listener transport, starting with WebRTC Direct
+- instantiate a browser wasm libp2p peer with the canonical Auki PeerId
+- dial the native probe and open one SDK-owned named protocol stream
 
 ## Next
 
-If `browser_libp2p` compiles, build an SDK-owned native probe listener and open one named protocol stream from the browser wasm peer.
+After the probe stream opens, lift it into `auki-domain-browser` as the transport backing for Domain join, participant metadata, sensor catalogs, and media streams.

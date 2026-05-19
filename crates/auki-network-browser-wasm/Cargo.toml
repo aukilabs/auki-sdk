@@ -22,9 +22,11 @@ auki-network = { path = "../auki-network" }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 
-# Enables browser RNG support for transitive `getrandom` 0.2 users when this
-# crate is built for `wasm32-unknown-unknown`.
+# Enables browser RNG support for transitive `getrandom` users when this crate
+# is built for `wasm32-unknown-unknown`. The SDK identity path currently pulls
+# 0.2, while libp2p/yamux pulls 0.3.
 getrandom = { version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 libp2p = { version = "0.56", default-features = false, optional = true, features = [
     "ed25519",

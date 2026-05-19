@@ -8,11 +8,10 @@ Currently implemented:
 - `sdkName()` smoke export
 - canonical seed-to-PeerId export
 - Node import smoke script for `wasm-pack --target nodejs`
-- exact `browser_libp2p` compile blocker captured in `parking_lot.md`
+- rust-libp2p browser transport feature compile probe
 
 Not yet implemented:
 
 - browser-page import smoke script
-- rust-libp2p browser feature compile probe
 - native browser-compatible probe listener
 - browser-to-native protocol dial

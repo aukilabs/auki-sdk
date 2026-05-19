@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ### Nils's codex · May 19, HKT, 2026
 
+Enabled the `getrandom` 0.3 `wasm_js` feature required by the libp2p/yamux browser build path. The `browser_libp2p` feature now compiles for `wasm32-unknown-unknown`, and `wasm-pack --target web --features browser_libp2p` produces the browser package.
+
+### Nils's codex · May 19, HKT, 2026
+
 Ran the rust-libp2p browser feature compile probe for `wasm32-unknown-unknown`. Outcome: blocked, with the exact first blocker recorded in `parking_lot.md`. The crate still keeps `auki-domain-browser` fail-closed for Domain join until a browser peer can dial a native SDK probe.
 
 ### Nils's codex · May 19, HKT, 2026

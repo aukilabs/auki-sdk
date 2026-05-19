@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — rust-libp2p browser feature compile probe unblocked.** Enabled the `getrandom` 0.3 `wasm_js` feature for the libp2p/yamux wasm path; the browser WebRTC/WebTransport/WebSocket feature set now compiles and packages with `wasm-pack --target web`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — rust-libp2p browser feature compile probe.** Ran the `browser_libp2p` wasm feature check and recorded that the current SDK stack is blocked by transitive `getrandom` 0.3 wasm JS RNG configuration before WebRTC/WebTransport/WebSocket browser transport modules compile.
 
 ### Nils's codex · May 19, HKT, 2026

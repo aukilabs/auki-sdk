@@ -1,4 +1,4 @@
-import type { PeerError, Result } from "./contract";
+import type { PeerError, Result } from "./contract.js";
 
 export function ok<T>(value: T): Result<T> {
   return { ok: true, value };

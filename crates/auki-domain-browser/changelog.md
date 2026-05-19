@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser Domain peer adapter. Latest entr
 
 ### Nils's codex · May 19, HKT, 2026
 
+Hardened the browser package after code review. The emitted ESM entry now imports correctly under NodeNext semantics, `npm run smoke:import` verifies the built package entry, Discovery malformed-payload errors are classified as `domain_list_failed`, and all transport-backed peer methods are pinned to fail closed until browser transport exists.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the first-tranche `createBrowserDomainPeer(...)` shell. It reports its peer id, emits an idle unjoined participant snapshot immediately, delegates `listDomains(...)` to Discovery mapping, accepts local metadata/sensor declarations as no-ops, and returns `transport_unavailable` for join/create/sensor stream operations until browser SDK transport exists.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { installAukiBrowserPeer } from "./installGlobal";
-import type { BrowserDomainPeer } from "./contract";
+import { installAukiBrowserPeer } from "./installGlobal.js";
+import type { BrowserDomainPeer } from "./contract.js";
 
 declare global {
   interface Window {

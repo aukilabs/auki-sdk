@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter package import and validation hardened.** `auki-domain-browser` now emits NodeNext-compatible ESM, verifies the built package entry with `npm run smoke:import`, treats malformed Discovery payloads as `domain_list_failed`, and tests every transport-backed peer method as fail-closed. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter has a first peer shell.** `auki-domain-browser` now creates a Park-compatible browser peer object with idle participant snapshots, Discovery delegation, metadata/sensor declaration no-ops, and explicit `transport_unavailable` responses for real peer/stream operations. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -1,4 +1,4 @@
-import type { BrowserDomainPeer, BrowserDomainPeerFactory } from "./contract";
+import type { BrowserDomainPeer, BrowserDomainPeerFactory } from "./contract.js";
 
 declare global {
   interface Window {

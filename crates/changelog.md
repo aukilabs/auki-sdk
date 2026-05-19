@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — package import smoke test and Discovery validation hardening.** Switched the TypeScript package to NodeNext-compatible ESM specifiers, added `npm run smoke:import`, classified malformed Discovery payloads as `domain_list_failed`, and pinned all transport-backed peer methods to fail closed.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-domain-browser`](auki-domain-browser/changelog.md) — first browser Domain peer shell.** Added `createBrowserDomainPeer(...)` with idle snapshots, Discovery delegation, metadata/sensor declaration no-ops, and explicit `transport_unavailable` results for real peer/stream operations.
 
 ### Nils's codex · May 19, HKT, 2026

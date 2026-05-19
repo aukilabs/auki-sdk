@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadOrCreateSeed, memorySeedStore, shortPeerId } from "./identity";
+import { loadOrCreateSeed, memorySeedStore, shortPeerId } from "./identity.js";
 
 describe("browser identity helpers", () => {
   it("persists generated seed through the provided store", async () => {

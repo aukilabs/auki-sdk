@@ -4,9 +4,9 @@ import type {
   PeerSnapshot,
   Result,
   SensorSummary,
-} from "./contract";
-import { listDomains as listDiscoveryDomains } from "./discovery";
-import { ok, transportUnavailable } from "./errors";
+} from "./contract.js";
+import { listDomains as listDiscoveryDomains } from "./discovery.js";
+import { ok, transportUnavailable } from "./errors.js";
 
 type Fetcher = (url: string) => Promise<Response>;
 

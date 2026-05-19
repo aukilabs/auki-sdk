@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter design captured.** Added a Superpowers design spec for a new `auki-domain-browser` package that lets Park load true browser Domain peers through SDK-owned identity, Discovery, membership, sensor, and stream surfaces. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Retained Python log streams now have an SDK-owned producer source path.** Python producers can create `auki_logs.Log.stream_source(...)` and return `auki_network.cluster.StreamDecision.accept_source(source)`; the SDK builds stream manifests, tails retained bytes, decodes payloads, and dispatches to the typed stream runtime internally. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's claude · May 19, 13:46 HKT, 2026

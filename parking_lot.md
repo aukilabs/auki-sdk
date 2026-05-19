@@ -6,6 +6,13 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 ---
 
+## Browser Domain peer — transport and Manager scope
+
+Park's browser-peer Milestone 0 needs a real SDK browser Domain peer. The design spec is [`docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md`](docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md). Two cross-cutting decisions remain open before full two-browser audio acceptance:
+
+- **Browser transport.** Native peers currently advertise TCP/QUIC multiaddrs that browsers cannot dial directly. Pick the first SDK-owned browser transport path: WebSocket multiaddrs, WebTransport, WebRTC-as-transport, or an SDK relay. App-owned media/control relays remain disallowed.
+- **Browser Manager/create-Domain semantics.** Park needs Domain creation, but a browser Manager must be reachable, admit joins, gossip membership, and run liveness/Manager behavior. Decide whether v1 browser `createDomain` makes the browser Manager, provisions/depends on a native Manager, or lands after leaf-peer join support.
+
 ## Hagall (Networking) — SDK-side open questions _(filed by Nils's claude, 2026-05-13)_
 
 The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) is a clean rewrite of Auki peer-to-peer cluster networking — Vinland and Greenland are reference, not foundation. The [SDK plan subpage](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) maps the SDK's responsibilities into 12 SDK tasks and 5 design questions; 4 questions resolved 2026-05-13. **SDK-Q3 and the stale-Manager join policy remain open.** Decision trail lives in [`changelog.md`](changelog.md) and the SDK plan's status log.

@@ -16,10 +16,6 @@ This is a deliberate divergence from the sibling precedent, made to fit the lang
 
 `build-xcframework.sh` produces `auki_network_swiftFFI` (the generated `.swift` + a `.xcframework`). Open: are these build artifacts (gitignored, built by iosapp's CI / a release job) or committed into this repo (a `swift/` dir, or a separate `aukilabs/auki-sdk-swift` SwiftPM-package repo for `Package.swift` consumption)? The `-py` crates ship as `maturin` wheels and do **not** commit generated code; the analogous Swift answer (committed SwiftPM package vs. pip-equivalent build step) is a distribution decision the SDK owners should make. Not blocking Stage 1 (host build/test is green without it).
 
-## iOS crypto backend: `ring` vs `aws-lc-rs`
-
-The `discovery_client` path pulls `reqwest` + `rustls-tls`, which needs `ring` (or `aws-lc-rs`). `ring` historically needs correct `CC`/SDK env to cross-compile to `aarch64-apple-ios`; `aws-lc-rs` is the more iOS-friendly drop-in. Decide which to pin once `build-xcframework.sh` is actually run on the Apple targets (Stage 1 host build is unaffected — this only bites the iOS cross-compile). Tracked in `src/sprint.md` Next #1.
-
 ## Stream payload parity with `auki-network`
 
 When Stage 2 lands the stream surface, keep payload parity: when Rust adds a `StreamDispatch` variant, the Swift side (and the swift-protobuf `.proto` consumption) must follow in the same release — same standing rule `auki-network-py`'s parking lot records for itself.

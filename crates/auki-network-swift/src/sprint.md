@@ -14,18 +14,21 @@ Stage 1 landed: the crate exists as a workspace member, mirrors the `auki-networ
 | `rotateManager(name, managerPeerId, managerMultiaddrs)` | `DiscoveryClient::rotate_manager` |
 | `deregister(name)` | `DiscoveryClient::deregister` |
 
+## Done since Stage 1
+
+- **iOS XCFramework validated.** `build-xcframework.sh` runs clean against `aarch64-apple-ios` / `aarch64-apple-ios-sim` / `x86_64-apple-ios` (rustc 1.94, Xcode 26.3) and emits a well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings (see `src/readme.md`). The anticipated `ring`/`SystemConfiguration` sharp edges did **not** occur — rustls' default `aws-lc-rs` cross-compiles to iOS cleanly and Stage 1 is `discovery_client`-only. Build output is gitignored (`target-xcframework/`).
+
 ## Next
 
 In priority order:
 
-1. **Validate the iOS XCFramework build.** Run `build-xcframework.sh` end to end on a machine with the Apple Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`. Resolve the known sharp edges — `ring` vs `aws-lc-rs` cross-compile for the rustls/Discovery path, and the `SystemConfiguration.framework` link. This is the gating unknown before iosapp can consume anything.
-2. **Stage 2 — stream/audio surface.** Port `auki-network-py`'s `stream_types`/`stream_bridge` model to UniFFI: `StreamRequest`/`StreamDescriptor`, the producer `StreamProvider` callback, consumer subscription. Per iosapp's Q1, the prost payloads (`AudioFrame`, `StreamMessage`) cross the FFI as opaque `bytes` and are decoded Swift-side via swift-protobuf against the committed `crates/auki-datatypes/proto/*.proto`. UniFFI has no native `Stream`; use an async callback interface or a poll object + explicit `cancel()`.
-3. **Stage 3 — `auki-domain-swift`.** Cluster join + peer enumeration + `ParticipantInfo`, mirroring `auki-domain-py`'s `ClusterManager`. This is what iosapp's peer list actually needs; it is a *separate* crate, not this one.
-4. **Wire into iosapp.** SPM dependency + `Bridge/` shim in `aukilabs/iosapp` (that repo's Sprint 1 item).
+1. **Stage 2 — stream/audio surface.** Port `auki-network-py`'s `stream_types`/`stream_bridge` model to UniFFI: `StreamRequest`/`StreamDescriptor`, the producer `StreamProvider` callback, consumer subscription. Per iosapp's Q1, the prost payloads (`AudioFrame`, `StreamMessage`) cross the FFI as opaque `bytes` and are decoded Swift-side via swift-protobuf against the committed `crates/auki-datatypes/proto/*.proto`. UniFFI has no native `Stream`; use an async callback interface or a poll object + explicit `cancel()`. Note: Stage 2 pulls the `swarm` feature → libp2p, which is where the `SystemConfiguration.framework` link edge may finally surface (it did not at Stage 1).
+2. **Stage 3 — `auki-domain-swift`.** Cluster join + peer enumeration + `ParticipantInfo`, mirroring `auki-domain-py`'s `ClusterManager`. This is what iosapp's peer list actually needs; it is a *separate* crate, not this one.
+3. **Wire into iosapp.** SPM dependency + `Bridge/` shim in `aukilabs/iosapp` (that repo's Sprint 1 item) — now unblocked for the Discovery surface since the XCFramework builds.
 
 ## Open Items
 
-See [`parking_lot.md`](parking_lot.md): the async-vs-sync API-shape divergence from `-py` (flagged for human confirmation), where generated Swift/XCFramework artifacts live and whether they are committed or built downstream, and the iOS crypto-backend choice.
+See [`parking_lot.md`](parking_lot.md): the async-vs-sync API-shape divergence from `-py` (flagged for human confirmation) and where generated Swift/XCFramework artifacts live (committed SwiftPM package vs. downstream build step). The iOS crypto-backend question is resolved — `aws-lc-rs` (rustls default) cross-compiles to iOS with no intervention.
 
 ## Out Of Scope
 

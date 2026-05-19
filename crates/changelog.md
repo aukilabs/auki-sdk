@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 19, 14:27 HKT, 2026
+
+**[`auki-network-swift`](auki-network-swift/changelog.md) — iOS XCFramework build validated.** `build-xcframework.sh` runs clean on `aarch64-apple-ios{,-sim}` / `x86_64-apple-ios` → well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings. No `ring`/`SystemConfiguration` edge (rustls `aws-lc-rs` default cross-compiles cleanly). Build output gitignored; `ring`-vs-`aws-lc-rs` parking-lot item resolved/removed; docs updated.
+
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **[`auki-network-swift`](auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.

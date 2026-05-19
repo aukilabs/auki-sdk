@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 19, 14:27 HKT, 2026
+
+**`auki-network-swift` iOS XCFramework validated.** `build-xcframework.sh` produces a well-formed device + simulator `AukiNetwork.xcframework` with correct async Swift bindings; no `ring`/`SystemConfiguration` cross-compile edge (rustls `aws-lc-rs` default). Build output gitignored; crypto-backend parking-lot item resolved. Unblocks the iosapp Discovery wiring. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **New crate `auki-network-swift` — UniFFI Swift bindings for `auki-network` (Stage 1).** Discovery HTTP client surface for native iOS (`aukilabs/iosapp`), async via UniFFI/tokio, mirroring `auki-network-py`. Host `cargo build`/`cargo test` green; iOS XCFramework scripted but unvalidated; stream/audio (Stage 2) and `auki-domain-swift` (Stage 3) scoped. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**README points pointcloud translation at the native frame.** Active docs now describe `build_point_cloud_log_entry(msg) -> (timestamp_ns, PointCloudFrame)` and `PointCloudFrame { point_count, data }`, with interpretation resolved through `SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }`.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Frame hashes thread through the ROS registry builders.** `StaticCameraMetadata` gains `frame_hash: &'a str`, and `build_point_cloud_registry_entry(sensor_id, msg, frame_rate_hz, frame_id, frame_hash)` now writes both frame fields into the `auki-registry` body. The adapter stays pure translation: it does not scan registries or infer hashes; integrators pass the exact `FrameRegistryEntry` hash they wrote.

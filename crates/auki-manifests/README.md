@@ -87,7 +87,7 @@ Every manifest extends `auki-logs`'s required base (`segment_duration_ns`, `rete
 | `frame_id`            | string? | Optional Frame Registry ID for spatial sensor samples            |
 | `frame_hash`          | string? | Optional XXH3-128 hex of the frame's registry entry              |
 
-The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`PinholeCameraLogEntry`, `PointCloudLogEntry`, `JointEncodersLogEntry`, `AudioLogEntry`). Spatial sensors also pin their sample convention through the optional `(frame_id, frame_hash)` pair; both fields must be present together or omitted together.
+The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`PinholeCameraLogEntry`, native `PointCloudFrame`, `JointEncodersLogEntry`, `AudioLogEntry`). Spatial sensors also pin their sample convention through the optional `(frame_id, frame_hash)` pair; both fields must be present together or omitted together.
 
 ### Pose Log
 

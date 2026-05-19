@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Implementation status doc follows native pointcloud.** `src/readme.md` no longer advertises `PointCloud.is_bigendian`, now documents the little-endian native pointcloud invariant, and updates the scope-shrink summary from `PointCloudLogEntry` to shared `PointCloudFrame`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Active README follows the native pointcloud registry contract.** `README.md` no longer documents `PointCloud.is_bigendian`, now states that native pointcloud data is little-endian by contract, and points log readers at `PointCloudFrame { point_count, data }` plus `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }` for layout and frame interpretation.
 
 ### Nils's codex · May 19, HKT, 2026

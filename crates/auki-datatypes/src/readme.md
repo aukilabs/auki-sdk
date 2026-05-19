@@ -7,14 +7,13 @@ Implementation status of `auki-datatypes`. Spec: this crate's [outer `README.md`
 A single source file: [`lib.rs`](lib.rs). It includes the prost-generated modules — every on-disk and libp2p-wire payload type the SDK ships:
 
 - `camera` (Step 1, 2026-05-08) — `PinholeCameraLogEntry` + `DynamicIntrinsics`.
-- `point_cloud` (Step 3, 2026-05-08) — `PointCloudLogEntry { bytes data }`. Opaque-bytes-only — layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`. Symmetric with the wire's `PointCloudFrame`.
+- `point_cloud` — `PointCloudFrame { uint32 point_count; bytes data }`. Shared by Sensor Logs and libp2p pointcloud substreams. Layout interpretation comes from `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }`; native numeric fields are little-endian by contract and every valid layout starts with `x`, `y`, `z` as `float32` at offsets `0`, `4`, and `8`.
 - `audio` (Step 4, 2026-05-08) — `AudioLogEntry { bytes data }`. Opaque-bytes-only — `sample_format`, `channels`, `sample_rate_hz`, `channel_layout` come from `(sensor_id, sensor_hash) → SensorBody::Audio`.
 - `pose` (Step 5, 2026-05-08) — `SpatialTransform { Vec3 translation; Quat orientation }`, flat. No `PoseLogEntry` wrapper, no per-sample `parent_frame`/`child_frame` — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair. Quat is `(x, y, z, w)` Hamilton.
 - `time_transform` (Step 6, 2026-05-08) — `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }`. The pre-migration per-entry `source` field moved to the manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); the per-entry `discontinuous: bool` is gone (computed on read).
 - `detection` (Step 8, 2026-05-08) — `DetectionLogEntry { bytes data }`. Opaque-bytes-only — the per-frame detection schema is defined by the Detector, not the SDK (QR portal-uid + corners; ESL class + bbox + confidence; people bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. The exact registry shape that pins per-`(detector_id, ...)` interpretation is TBD; it'll be the Detection-Log analog of `SensorRegistryEntry`.
 - `joint_encoders` (2026-05-09) — `JointEncodersLogEntry { repeated float angles_rad }`. Per-frame joint-encoder readings in radians, indexed in the producer's emit order; vector length pinned by `(sensor_id, sensor_hash) → SensorBody::JointEncoders { joint_count }`. Joint angles are encoder readings — measurements before any kinematic interpretation; FK against the URDF is a consumer-side derivation (Park).
 - `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
-- `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `joint_encoders_stream` (2026-05-09) — `JointEncodersFrame { repeated float angles_rad }`. libp2p `/auki/stream/0.1.0` payload. Same shape as `joint_encoders::JointEncodersLogEntry` (separate proto package so wire and disk dispatch on distinct Rust types — Step 2/3 precedent). Symmetry locked by an explicit `joint_encoders_disk_wire_byte_identical` test.
 - `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Entry | EndOfStream`), `StreamRequest`, `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/entry/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
 
@@ -42,8 +41,8 @@ pub mod camera {
 }
 
 pub mod point_cloud {
-    // prost-generated; opaque-bytes-only.
-    pub struct PointCloudLogEntry { pub data: Vec<u8> }
+    // prost-generated; shared log and stream pointcloud payload.
+    pub struct PointCloudFrame { pub point_count: u32, pub data: Vec<u8> }
 }
 
 pub mod audio {
@@ -76,10 +75,6 @@ pub mod detection {
 
 pub mod frame_stream {
     pub struct JpegFrame { pub bytes: Vec<u8> }
-}
-
-pub mod point_cloud_stream {
-    pub struct PointCloudFrame { pub bytes: Vec<u8> }
 }
 
 pub mod stream {
@@ -130,13 +125,13 @@ pub mod stream {
 // Every on-disk prost type satisfies auki_logs::LogPayload via:
 macro_rules! impl_log_payload { ($t:ty) => { /* encode_to_vec / decode */ }; }
 impl_log_payload!(camera::PinholeCameraLogEntry);
-impl_log_payload!(point_cloud::PointCloudLogEntry);
+impl_log_payload!(point_cloud::PointCloudFrame);
 impl_log_payload!(audio::AudioLogEntry);
 impl_log_payload!(pose::SpatialTransform);
 impl_log_payload!(time_transform::TimeTransformEntry);
 impl_log_payload!(detection::DetectionLogEntry);
-// (Stream types don't get LogPayload — they're wire types, not on-disk
-// payloads. `StreamEntry.payload` carries the on-disk T's prost bytes.)
+// (Stream-only types don't get LogPayload — they're wire types, not
+// on-disk payloads. `point_cloud::PointCloudFrame` is deliberately both.)
 ```
 
 ## Tests (37 total)
@@ -149,12 +144,12 @@ impl_log_payload!(detection::DetectionLogEntry);
 | `pinhole_camera_log_entry_log_payload_round_trips` | Same, via the `LogPayload` macro impl — pins the macro wiring. |
 | `pinhole_camera_log_entry_without_intrinsics_round_trips` | `dynamic_intrinsics: None` (non-autofocusing camera) round-trips. |
 | `pinhole_camera_log_entry_segment_round_trip` | End-to-end seam: open `auki_logs::Log<PinholeCameraLogEntry>`, append two entries (one with intrinsics, one without), close, re-read, assert byte-equality. |
-| `point_cloud_log_entry_serializes_to_locked_wire_bytes` | Locked prost wire bytes for a 24-byte fixture: `0a18000102030405060708090a0b0c0d0e0f1011121314151617`. Cross-language readers must reproduce them. |
-| `point_cloud_log_entry_hash_is_locked` | XXH3-128 of those bytes — `4ea525d849212b2e067e33bec455c7ea`. |
-| `point_cloud_log_entry_round_trips` | `encode_to_vec` → `decode` gives back the same struct. |
-| `point_cloud_log_entry_log_payload_round_trips` | Same, via the `LogPayload` macro impl. |
-| `point_cloud_log_entry_empty_data_round_trips` | proto3 default-elision: `PointCloudLogEntry { data: vec![] }` encodes to zero bytes and decodes back to the empty form. |
-| `point_cloud_log_entry_segment_round_trip` | End-to-end seam: open `auki_logs::Log<PointCloudLogEntry>`, append two entries (one populated, one empty), close, re-read, assert byte-equality. |
+| `point_cloud_frame_serializes_to_locked_wire_bytes` | Locked prost wire bytes for the native two-point fixture: `080212180000803f0000004000004040000080400000a0400000c040`. Cross-language readers must reproduce them. |
+| `point_cloud_frame_hash_is_locked` | XXH3-128 of those bytes — `f629645289882067aece1781d34cec92`. |
+| `point_cloud_frame_round_trips` | `encode_to_vec` → `decode` gives back the same struct. |
+| `point_cloud_frame_log_payload_round_trips` | Same, via the `LogPayload` macro impl. |
+| `point_cloud_frame_empty_data_round_trips` | proto3 default-elision: `PointCloudFrame { point_count: 0, data: vec![] }` encodes to zero bytes and decodes back to the empty form. |
+| `point_cloud_frame_segment_round_trip` | End-to-end seam: open `auki_logs::Log<PointCloudFrame>`, append two entries (one populated, one empty), close, re-read, assert byte-equality. |
 | `audio_log_entry_serializes_to_locked_wire_bytes` | Locked prost wire bytes for a 16-byte `pcm_s16le` stereo fixture: `0a1000112233445566778899aabbccddeeff`. |
 | `audio_log_entry_hash_is_locked` | XXH3-128 of those bytes — `a5864ae7018f28a5c094a714af1db62e`. |
 | `audio_log_entry_round_trips` | `encode_to_vec` → `decode` gives back the same struct. |
@@ -183,7 +178,7 @@ impl_log_payload!(detection::DetectionLogEntry);
 
 ## Consumers
 
-- `auki-ros-adapter` — `build_sensor_log_entry` produces `PinholeCameraLogEntry`; `build_point_cloud_log_entry` produces `PointCloudLogEntry` (opaque-bytes-only since Step 3, 2026-05-08; ROS-side `width × height × is_dense` flattened into the bytes via the registry's `point_step` and `fields`). No `AudioLogEntry` builder yet — the type is here for future audio capture pipelines. No `SpatialTransform` builder yet either — a future TF adapter would fan a `TFMessage` into N parallel pose logs.
+- `auki-ros-adapter` — `build_sensor_log_entry` produces `PinholeCameraLogEntry`; `build_point_cloud_log_entry` produces native `PointCloudFrame` records (`point_count` plus packed point bytes). No `AudioLogEntry` builder yet — the type is here for future audio capture pipelines. No `SpatialTransform` builder yet either — a future TF adapter would fan a `TFMessage` into N parallel pose logs.
 - `auki-time-transforms` — `tick()` and `Sampler::start` produce `TimeTransformEntry` (re-exported from this crate since Step 6, 2026-05-08); `TimeTransformSource` is now manifest metadata in `auki-manifests`, also re-exported.
 - `auki-manifests` — `build_pose_log_manifest` references the new pose-log shape: `(from_frame_id, from_frame_hash, to_frame_id, to_frame_hash, …, writer_mode: PoseWriterMode, expected_rate_hz)` (Step 5, 2026-05-08). `build_time_transform_log_manifest` takes `&TimeTransformSource` since Step 6.
 - `auki-layout` — `poselog_path(session_root, from_frame_id, to_frame_id) -> PathBuf` mirrors `timetransform_log_path`'s `(from, to)`-keyed shape (Step 5).

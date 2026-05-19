@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Implementation status doc follows native pointcloud.** `src/readme.md` now documents `point_cloud::PointCloudFrame { point_count, data }` as the shared log/stream pointcloud payload, removes the retired `point_cloud_stream` module from the public surface, and updates the pointcloud locked-test names and `LogPayload` impl notes.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Active README follows the native pointcloud payload.** `README.md` now documents `point_cloud.proto` as the shared `PointCloudFrame { point_count, data }` source for pointcloud logs and streams, removes the retired `point_cloud_stream.proto` line, and updates the Rust surface example to import `auki_datatypes::point_cloud::PointCloudFrame`.
 
 ### Nils's codex · May 19, HKT, 2026

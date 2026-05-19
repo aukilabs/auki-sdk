@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud status docs propagated across crate consumers.** [`auki-datatypes`](auki-datatypes/changelog.md) and [`auki-registry`](auki-registry/changelog.md) implementation status docs now remove `PointCloudLogEntry`, `point_cloud_stream`, and `is_bigendian`; [`auki-manifests`](auki-manifests/changelog.md) and [`auki-ros-adapter`](auki-ros-adapter/changelog.md) READMEs now name native `PointCloudFrame { point_count, data }`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-registry`](auki-registry/changelog.md) — active pointcloud READMEs follow the native contract.** Docs now describe shared `point_cloud::PointCloudFrame { point_count, data }`, remove the retired `point_cloud_stream` and `is_bigendian` surfaces, and pin pointcloud interpretation to native layout metadata plus frame references.
 
 ### Nils's codex · May 19, HKT, 2026

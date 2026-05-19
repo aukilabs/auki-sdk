@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1); `PointCloudLogEntry` (Step 3, opaque-bytes-only); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
+> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1); native `PointCloudFrame` (Step 3, now shared by pointcloud logs and streams); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
 
 ## What's here
 
@@ -96,7 +96,6 @@ pub enum Scope {
 pub struct PointCloud {
     pub fields: Vec<PointField>,
     pub point_step: u32,
-    pub is_bigendian: bool,
     pub frame_rate_hz: u32,
     pub frame_id: String,         // ← Frame Registry id for the point coordinates
     pub frame_hash: String,       // ← exact FrameRegistryEntry hash for that frame id
@@ -116,6 +115,11 @@ pub enum PointFieldDataType {
 ```
 
 `PointFieldDataType::byte_width()` returns the per-element width in bytes (1, 2, 4, or 8). Used by translation code (e.g. `auki-ros-adapter`) to compute output `point_step` after RGB normalization.
+
+Native pointcloud numeric fields are little-endian by contract. `write_sensor`
+validates that every layout starts with `x`, `y`, and `z` as `float32`,
+`count = 1`, at offsets `0`, `4`, and `8`; every declared field must fit
+within `point_step` and field byte spans may not overlap.
 
 `frame_id` and `frame_hash` reference an exact [`FrameRegistryEntry`](#frameregistryentry) version so a consumer (Park, future Sentinel) can resolve the convention of the XYZ axes carried by the per-point bytes. ROS `PointCloud2` carries `header.frame_id`; the integrator threads it through here.
 

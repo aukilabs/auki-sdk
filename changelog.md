@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud status docs propagated across crate consumers.** Implementation status docs and adjacent consumer READMEs now remove the retired `PointCloudLogEntry`, `point_cloud_stream`, and `is_bigendian` surfaces and name native `PointCloudFrame { point_count, data }` instead. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Active pointcloud READMEs follow the native contract.** Root, `auki-datatypes`, and `auki-registry` docs now describe shared `point_cloud::PointCloudFrame { point_count, data }`, remove the retired `point_cloud_stream` and `is_bigendian` surfaces, and tie pointcloud interpretation to native layout metadata plus frame references. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Sensor-log manifest docs name the native pointcloud payload.** README now says pointcloud sensor logs hold native `PointCloudFrame` records rather than the retired `PointCloudLogEntry` type.
+
 ### broodsugar's claude · May 9, 12:40 HKT, 2026
 
 **`build_detection_log_manifest` lands** to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2 (Detector binding API). Mirrors the existing builders' shape — JCS-canonical JSON via [`auki-jcs`](../auki-jcs), 11 args:

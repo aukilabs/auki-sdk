@@ -42,13 +42,43 @@ def test_pinhole_camera_log_entry_locked_wire_bytes():
     assert bytes(entry).hex() == expected
 
 
-# ─── Step 3 — auki.point_cloud ───────────────────────────────────────────────
+# ─── Native pointcloud — auki.point_cloud ────────────────────────────────────
 
 
-def test_point_cloud_log_entry_locked_wire_bytes():
-    # auki-datatypes/src/lib.rs::point_cloud_log_entry_serializes_to_locked_wire_bytes
-    entry = adt.point_cloud.PointCloudLogEntry(data=bytes(range(24)))
-    expected = "0a18000102030405060708090a0b0c0d0e0f1011121314151617"
+def test_point_cloud_frame_locked_wire_bytes():
+    # auki-datatypes/src/lib.rs::point_cloud_frame_serializes_to_locked_wire_bytes
+    entry = adt.point_cloud.PointCloudFrame(
+        point_count=2,
+        data=bytes(
+            [
+                0x00,
+                0x00,
+                0x80,
+                0x3F,
+                0x00,
+                0x00,
+                0x00,
+                0x40,
+                0x00,
+                0x00,
+                0x40,
+                0x40,
+                0x00,
+                0x00,
+                0x80,
+                0x40,
+                0x00,
+                0x00,
+                0xA0,
+                0x40,
+                0x00,
+                0x00,
+                0xC0,
+                0x40,
+            ]
+        ),
+    )
+    expected = "080212180000803f0000004000004040000080400000a0400000c040"
     assert bytes(entry).hex() == expected
 
 
@@ -159,9 +189,10 @@ def test_module_re_exports_all_packages():
         "joint_encoders",
         "joint_encoders_stream",
         "point_cloud",
-        "point_cloud_stream",
         "pose",
         "stream",
         "time_transform",
     ]:
         assert hasattr(adt, name), f"missing top-level submodule: {name}"
+    assert hasattr(adt.point_cloud, "PointCloudFrame")
+    assert not hasattr(adt, "point_cloud_stream")

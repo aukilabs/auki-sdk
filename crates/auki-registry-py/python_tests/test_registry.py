@@ -47,7 +47,6 @@ def test_point_cloud_sensor_write_requires_frame(tmp_path: pathlib.Path) -> None
             auki_registry.point_field("z", 8, "float32"),
         ],
         point_step=12,
-        is_bigendian=False,
         frame_rate_hz=10,
         frame_id=FRAME_ID,
         frame_hash=frame_hash,
@@ -69,15 +68,36 @@ def test_spatial_sensor_rejects_missing_frame(tmp_path: pathlib.Path) -> None:
 
     sensor = auki_registry.point_cloud_sensor_entry(
         sensor_id="K1-AABBCCDDEEFF/head_depth_points",
-        fields=[auki_registry.point_field("x", 0, "float32")],
-        point_step=4,
-        is_bigendian=False,
+        fields=[
+            auki_registry.point_field("x", 0, "float32"),
+            auki_registry.point_field("y", 4, "float32"),
+            auki_registry.point_field("z", 8, "float32"),
+        ],
+        point_step=12,
         frame_rate_hz=10,
         frame_id=FRAME_ID,
         frame_hash="missing",
     )
 
     with pytest.raises(ValueError, match="references missing frame"):
+        auki_registry.write_sensor(tmp_path, sensor)
+
+
+def test_point_cloud_sensor_rejects_non_xyz_layout(tmp_path: pathlib.Path) -> None:
+    import auki_registry
+
+    frame = auki_registry.frame_ros_optical(FRAME_ID)
+    frame_hash = auki_registry.write_frame(tmp_path, frame)
+    sensor = auki_registry.point_cloud_sensor_entry(
+        sensor_id="K1-AABBCCDDEEFF/head_depth_points",
+        fields=[auki_registry.point_field("x", 0, "float32")],
+        point_step=4,
+        frame_rate_hz=10,
+        frame_id=FRAME_ID,
+        frame_hash=frame_hash,
+    )
+
+    with pytest.raises(ValueError, match="invalid pointcloud layout"):
         auki_registry.write_sensor(tmp_path, sensor)
 
 

@@ -7,5 +7,6 @@ import betterproto
 
 
 @dataclass
-class PointCloudLogEntry(betterproto.Message):
-    data: bytes = betterproto.bytes_field(1)
+class PointCloudFrame(betterproto.Message):
+    point_count: int = betterproto.uint32_field(1)
+    data: bytes = betterproto.bytes_field(2)

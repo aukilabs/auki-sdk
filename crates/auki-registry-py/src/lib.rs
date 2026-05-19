@@ -164,13 +164,12 @@ fn rgb_camera_sensor_entry(
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, sensor_id, fields, point_step, is_bigendian, frame_rate_hz, frame_id, frame_hash))]
+#[pyo3(signature = (*, sensor_id, fields, point_step, frame_rate_hz, frame_id, frame_hash))]
 fn point_cloud_sensor_entry(
     py: Python<'_>,
     sensor_id: &str,
     fields: &Bound<'_, PyAny>,
     point_step: u32,
-    is_bigendian: bool,
     frame_rate_hz: u32,
     frame_id: &str,
     frame_hash: &str,
@@ -181,7 +180,6 @@ fn point_cloud_sensor_entry(
         body: registry::SensorBody::PointCloud(registry::PointCloud {
             fields,
             point_step,
-            is_bigendian,
             frame_rate_hz,
             frame_id: frame_id.to_string(),
             frame_hash: frame_hash.to_string(),
@@ -450,14 +448,15 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let frame = frame_ros_optical(py, FRAME_ID).unwrap();
             let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
-            let field = point_field(py, "x", 0, "float32", 1).unwrap();
-            let fields = PyList::new_bound(py, [field.bind(py)]);
+            let x = point_field(py, "x", 0, "float32", 1).unwrap();
+            let y = point_field(py, "y", 4, "float32", 1).unwrap();
+            let z = point_field(py, "z", 8, "float32", 1).unwrap();
+            let fields = PyList::new_bound(py, [x.bind(py), y.bind(py), z.bind(py)]);
             let sensor = point_cloud_sensor_entry(
                 py,
                 "K1-AABBCCDDEEFF/head_depth_points",
                 fields.as_any(),
-                4,
-                false,
+                12,
                 10,
                 FRAME_ID,
                 &frame_hash,
@@ -509,14 +508,23 @@ mod tests {
                 .unwrap()
                 .call1(("x", 0_u32, "float32"))
                 .unwrap();
-            let fields = PyList::new_bound(py, [field]);
+            let field_y = module
+                .getattr("point_field")
+                .unwrap()
+                .call1(("y", 4_u32, "float32"))
+                .unwrap();
+            let field_z = module
+                .getattr("point_field")
+                .unwrap()
+                .call1(("z", 8_u32, "float32"))
+                .unwrap();
+            let fields = PyList::new_bound(py, [field, field_y, field_z]);
             let kwargs = PyDict::new_bound(py);
             kwargs
                 .set_item("sensor_id", "K1-AABBCCDDEEFF/head_depth_points")
                 .unwrap();
             kwargs.set_item("fields", &fields).unwrap();
-            kwargs.set_item("point_step", 4_u32).unwrap();
-            kwargs.set_item("is_bigendian", false).unwrap();
+            kwargs.set_item("point_step", 12_u32).unwrap();
             kwargs.set_item("frame_rate_hz", 10_u32).unwrap();
             kwargs.set_item("frame_id", FRAME_ID).unwrap();
             kwargs.set_item("frame_hash", &frame_hash).unwrap();
@@ -551,14 +559,15 @@ mod tests {
     fn write_sensor_rejects_missing_frame_hash() {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
-            let field = point_field(py, "x", 0, "float32", 1).unwrap();
-            let fields = PyList::new_bound(py, [field.bind(py)]);
+            let x = point_field(py, "x", 0, "float32", 1).unwrap();
+            let y = point_field(py, "y", 4, "float32", 1).unwrap();
+            let z = point_field(py, "z", 8, "float32", 1).unwrap();
+            let fields = PyList::new_bound(py, [x.bind(py), y.bind(py), z.bind(py)]);
             let sensor = point_cloud_sensor_entry(
                 py,
                 "K1-AABBCCDDEEFF/head_depth_points",
                 fields.as_any(),
-                4,
-                false,
+                12,
                 10,
                 FRAME_ID,
                 "missing",

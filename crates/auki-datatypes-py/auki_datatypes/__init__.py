@@ -12,8 +12,7 @@ Surface mirrors the Rust crate's module layout one-to-one — every
 
 Re-exported submodules:
     audio, camera, detection, frame_stream, joint_encoders,
-    joint_encoders_stream, point_cloud, point_cloud_stream, pose,
-    stream, time_transform.
+    joint_encoders_stream, point_cloud, pose, stream, time_transform.
 
 The generated files live one level down, in the `auki/` package
 (matching the proto-package path). The re-exports below let consumers
@@ -28,7 +27,6 @@ from .auki import frame_stream
 from .auki import joint_encoders
 from .auki import joint_encoders_stream
 from .auki import point_cloud
-from .auki import point_cloud_stream
 from .auki import pose
 from .auki import stream
 from .auki import time_transform
@@ -41,7 +39,6 @@ __all__ = [
     "joint_encoders",
     "joint_encoders_stream",
     "point_cloud",
-    "point_cloud_stream",
     "pose",
     "stream",
     "time_transform",

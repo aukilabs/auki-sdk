@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Python datatypes expose the native pointcloud frame.** Regenerated the betterproto binding so `auki_datatypes.point_cloud.PointCloudFrame(point_count, data)` mirrors the Rust `auki.point_cloud` payload, removed the retired `point_cloud_stream` re-export, and updated the locked Python wire vector to the native frame bytes.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Python betterproto stream binding follows `StreamDescriptor`.** The generated `auki_datatypes.auki.stream` binding now exposes `StreamDescriptor` with `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`, and `StreamMessage.accept` points at that class. This mirrors the Rust `auki.stream` schema change from `AcceptInfo` to descriptor-shaped accept metadata. Added a Python round-trip smoke test for the descriptor shape.

@@ -7,12 +7,13 @@ Currently implemented:
 - package scaffold
 - Park-compatible contract types
 - global installer
-- browser identity seam
-- Discovery HTTP list mapping
-- explicit transport-unavailable behavior for real peer operations
+- structured result helpers
 
 Not yet implemented:
 
+- browser identity seam
+- Discovery HTTP list mapping
+- explicit transport-unavailable behavior for real peer operations
 - browser-dialable SDK transport
 - `/auki/join/0.0.1`
 - `/auki/info/0.0.1`

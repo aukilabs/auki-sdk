@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter exposes Park contract and global installer.** `auki-domain-browser` now exports the TypeScript `BrowserDomainPeer` contract, result/error helpers, and `window.aukiBrowserPeer.createPeer()` installer Park needs to load an SDK-owned browser adapter. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter package scaffolded.** Added the `auki-domain-browser` package shell for Park's browser-peer Milestone 0, with browser transport and browser-Manager scope tracked as explicit open SDK questions. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -9,6 +9,7 @@ Latest entry on top.
 ### Nils's codex · May 19, HKT, 2026
 
 **Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+**Manager election ignores the heartbeat-lost Manager even if transport teardown lags.** `auki-domain` now excludes the timed-out peer from successor election before consulting libp2p's connected set, preventing battery-pull / QUIC-idle cases from re-electing the dead Manager and leaving Discovery unrotated. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 18, HKT, 2026
 

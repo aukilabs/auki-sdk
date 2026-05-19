@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser/WASM networking probe scaffolded.** Added `auki-network-browser-wasm` as the low-level crate for proving rust-libp2p browser transport before wiring real Domain join into Park. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **WASM libp2p browser transport compile-probe planned.** Added a Superpowers implementation plan for `auki-network-browser-wasm`: scaffold, canonical PeerId wasm export, JS import smoke test, and rust-libp2p browser feature compile probe before native dial work. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

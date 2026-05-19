@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser/WASM networking probe scaffold.** Added the crate shell for the rust-libp2p browser transport spike, with docs and workspace registration before identity/import/libp2p probes.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-domain-browser`](auki-domain-browser/changelog.md) — package import smoke test and Discovery validation hardening.** Switched the TypeScript package to NodeNext-compatible ESM specifiers, added `npm run smoke:import`, classified malformed Discovery payloads as `domain_list_failed`, and pinned all transport-backed peer methods to fail closed.
 
 ### Nils's codex · May 19, HKT, 2026

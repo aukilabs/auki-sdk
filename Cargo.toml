@@ -11,6 +11,7 @@ members = [
     "crates/auki-manifests",
     "crates/auki-manifests-py",
     "crates/auki-network",
+    "crates/auki-network-browser-wasm",
     "crates/auki-network-py",
     "crates/auki-network-swift",
     "crates/auki-datatypes",

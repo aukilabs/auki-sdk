@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+`auki-domain-browser`: created the browser Domain peer adapter package scaffold for Park's Milestone 0 SDK handoff. See `auki-domain-browser/changelog.md` for detail.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.
 
 ### Nils's claude · May 19, 13:46 HKT, 2026

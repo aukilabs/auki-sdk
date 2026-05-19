@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter package scaffolded.** Added the `auki-domain-browser` package shell for Park's browser-peer Milestone 0, with browser transport and browser-Manager scope tracked as explicit open SDK questions. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter implementation planned.** Added a Superpowers implementation plan for the first `auki-domain-browser` tranche: package scaffold, Park-compatible contract, browser identity and Discovery seams, idle snapshots, and fail-closed transport errors before real browser networking. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

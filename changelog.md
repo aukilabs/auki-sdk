@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser/WASM probe exports canonical PeerIds.** `auki-network-browser-wasm` now exposes `peerIdFromSeed(seed)` and tests it against the SDK's locked libp2p PeerId vector. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser/WASM networking probe scaffolded.** Added `auki-network-browser-wasm` as the low-level crate for proving rust-libp2p browser transport before wiring real Domain join into Park. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

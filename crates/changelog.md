@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — canonical PeerId wasm export.** Added `peerIdFromSeed(seed)` and pinned the browser wasm crate to the SDK's locked seed-to-libp2p-PeerId vector.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser/WASM networking probe scaffold.** Added the crate shell for the rust-libp2p browser transport spike, with docs and workspace registration before identity/import/libp2p probes.
 
 ### Nils's codex · May 19, HKT, 2026

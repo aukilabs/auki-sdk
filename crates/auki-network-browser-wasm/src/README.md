@@ -6,10 +6,10 @@ Currently implemented:
 
 - wasm crate scaffold
 - `sdkName()` smoke export
+- canonical seed-to-PeerId export
 
 Not yet implemented:
 
-- canonical seed-to-PeerId export
 - Node/browser import smoke script
 - rust-libp2p browser feature compile probe
 - native browser-compatible probe listener

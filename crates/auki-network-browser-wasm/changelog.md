@@ -6,4 +6,8 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the canonical `peerIdFromSeed(seed)` wasm export. The Rust test pins seed `[3u8; 32]` to the SDK's locked libp2p PeerId vector, and wrong-length seeds return a typed error instead of panicking.
+
+### Nils's codex · May 19, HKT, 2026
+
 Created the `auki-network-browser-wasm` crate scaffold for the rust-libp2p browser transport spike. The crate starts as an importable wasm shell; identity and libp2p browser feature probes follow in separate commits.

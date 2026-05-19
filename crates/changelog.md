@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — Discovery domain listing maps into Park's browser contract.** Added browser-side `/clusters` mapping with fetch injection and UI-friendly Discovery error results.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-domain-browser`](auki-domain-browser/changelog.md) — browser identity seed storage seam.** Added injectable 32-byte browser peer seed storage plus the last-six-character peer id display helper the Park UI expects.
 
 ### Nils's codex · May 19, HKT, 2026

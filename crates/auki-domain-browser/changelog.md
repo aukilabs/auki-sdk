@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser Domain peer adapter. Latest entr
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added Discovery HTTP domain listing for browser peers. `listDomains(...)` maps `/clusters` responses into the Park-compatible `DomainSummary` contract and returns UI-friendly `discovery_unreachable` / `domain_list_failed` errors.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the browser identity seed storage seam and `shortPeerId(...)` helper. The seed helper persists exactly 32-byte seeds through an injectable store, rejects malformed stored/generated seeds, and formats visible peer ids from the final six characters.
 
 ### Nils's codex · May 19, HKT, 2026

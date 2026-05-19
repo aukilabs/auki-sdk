@@ -10,10 +10,10 @@ Currently implemented:
 - structured result helpers
 - browser identity seed storage seam
 - last-six-character peer id display helper
+- Discovery HTTP list mapping
 
 Not yet implemented:
 
-- Discovery HTTP list mapping
 - explicit transport-unavailable behavior for real peer operations
 - browser-dialable SDK transport
 - `/auki/join/0.0.1`

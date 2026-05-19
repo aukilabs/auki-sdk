@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added a Node import smoke script for the wasm package. `wasm-pack --target nodejs` output can be imported from JavaScript and reproduces the locked PeerId vector through the wasm boundary.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the canonical `peerIdFromSeed(seed)` wasm export. The Rust test pins seed `[3u8; 32]` to the SDK's locked libp2p PeerId vector, and wrong-length seeds return a typed error instead of panicking.
 
 ### Nils's codex · May 19, HKT, 2026

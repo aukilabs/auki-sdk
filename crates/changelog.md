@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — wasm package import smoke test.** Added a Node smoke script proving the generated wasm package imports and returns the locked PeerId vector through JavaScript.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — canonical PeerId wasm export.** Added `peerIdFromSeed(seed)` and pinned the browser wasm crate to the SDK's locked seed-to-libp2p-PeerId vector.
 
 ### Nils's codex · May 19, HKT, 2026

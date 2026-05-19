@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — first browser Domain peer shell.** Added `createBrowserDomainPeer(...)` with idle snapshots, Discovery delegation, metadata/sensor declaration no-ops, and explicit `transport_unavailable` results for real peer/stream operations.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-domain-browser`](auki-domain-browser/changelog.md) — Discovery domain listing maps into Park's browser contract.** Added browser-side `/clusters` mapping with fetch injection and UI-friendly Discovery error results.
 
 ### Nils's codex · May 19, HKT, 2026

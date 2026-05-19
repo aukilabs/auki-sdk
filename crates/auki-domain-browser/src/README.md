@@ -11,10 +11,11 @@ Currently implemented:
 - browser identity seed storage seam
 - last-six-character peer id display helper
 - Discovery HTTP list mapping
+- idle participant snapshot shell
+- explicit transport-unavailable behavior for real peer operations
 
 Not yet implemented:
 
-- explicit transport-unavailable behavior for real peer operations
 - browser-dialable SDK transport
 - `/auki/join/0.0.1`
 - `/auki/info/0.0.1`

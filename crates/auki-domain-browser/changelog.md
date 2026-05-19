@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser Domain peer adapter. Latest entr
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the first-tranche `createBrowserDomainPeer(...)` shell. It reports its peer id, emits an idle unjoined participant snapshot immediately, delegates `listDomains(...)` to Discovery mapping, accepts local metadata/sensor declarations as no-ops, and returns `transport_unavailable` for join/create/sensor stream operations until browser SDK transport exists.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added Discovery HTTP domain listing for browser peers. `listDomains(...)` maps `/clusters` responses into the Park-compatible `DomainSummary` contract and returns UI-friendly `discovery_unreachable` / `domain_list_failed` errors.
 
 ### Nils's codex · May 19, HKT, 2026

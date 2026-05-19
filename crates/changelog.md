@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — browser probe protocol begins.** Added the shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate for the WebRTC Direct listener proof.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — rust-libp2p browser feature compile probe unblocked.** Enabled the `getrandom` 0.3 `wasm_js` feature for the libp2p/yamux wasm path; the browser WebRTC/WebTransport/WebSocket feature set now compiles and packages with `wasm-pack --target web`.
 
 ### Nils's codex · May 19, HKT, 2026

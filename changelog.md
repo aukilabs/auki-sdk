@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser probe protocol begins in `auki-network`.** The SDK now has shared `/auki/browser-probe/0.0.1` request/response structs plus a native-only `browser_probe` feature gate for the upcoming WebRTC Direct listener. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser WebRTC probe stream planned.** Added the next Superpowers plan for a native SDK WebRTC Direct probe listener, browser wasm `dialBrowserProbe`, and browser-to-native smoke test proving one SDK-owned named protocol stream. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

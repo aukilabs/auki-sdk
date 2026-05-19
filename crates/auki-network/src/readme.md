@@ -6,6 +6,7 @@ Implementation status for [`auki-network`](../README.md).
 
 - [`lib.rs`](lib.rs) - always-on peer identity, reachability, capability types, feature-gated module exports, and re-exports.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
+- [`browser_probe_protocol.rs`](browser_probe_protocol.rs) - shared `/auki/browser-probe/0.0.1` request/response structs for the browser WebRTC probe.
 - [`swarm.rs`](swarm.rs) - libp2p `Swarm<Behaviour>` builder, relay support, advertise-address helpers.
 - [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, heartbeat carrier targets/events, join/info/resources/sensors/registries/membership helpers, idempotent shutdown.
 - [`join_protocol.rs`](join_protocol.rs) - `/auki/join/0.0.1` framed JSON request/response.
@@ -60,6 +61,24 @@ pub struct ParticipantInfo {
     pub is_manager: bool,
     pub manager_peer_id: String,
 }
+
+pub const BROWSER_PROBE_PROTOCOL: &str = "/auki/browser-probe/0.0.1";
+pub struct BrowserProbeRequest {
+    pub nonce: String,
+    pub payload: Vec<u8>,
+}
+pub struct BrowserProbeResponse {
+    pub nonce: String,
+    pub payload: Vec<u8>,
+    pub responder: String,
+}
+```
+
+Behind `browser_probe`:
+
+```rust
+// Native-only proof feature. Pulls in `swarm` plus `libp2p-webrtc`
+// so the SDK can host a WebRTC Direct probe listener for browser peers.
 ```
 
 Behind `swarm`:

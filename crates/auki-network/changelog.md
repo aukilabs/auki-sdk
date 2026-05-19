@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Browser probe protocol begins.** Added shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate that pulls in `libp2p-webrtc` for the upcoming browser-to-native WebRTC Direct listener.
+
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purged: `ClusterRuntime`-era items deleted.** Three blocks describing the deleted `ClusterRuntime` runtime were removed: the "Vinland D6 — `discovery_client::subscribe` pre-implementation decisions" block (53 lines, self-marked "✓ Implemented 2026-05-09" and the subject itself was deleted with `ClusterRuntime`); the "stream-runtime integration tests deleted" block was rewritten as a leaner "Restore the 6 deleted producer/consumer stream tests against `NetworkRuntime::spawn`" entry; and "`ClusterRuntime` should own its Discovery SSE subscription internally" was removed (subject deleted). Six `/auki/message/0.0.1` design blocks (log ownership, substream lifecycle, crate placement, envelope typing, message log topology, ack semantics) were removed — the protocol never shipped and the questions can be re-filed when the messaging primitive becomes live work. Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. The substantive design-space items (relay-reservation v2 helper with its six sub-questions, `DiscoveryRuntime`, TLS knobs, peer-key derivation label evolution, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, `BuildError::Transport`, JSON-encoding-for-binary-T, libp2p-stream pin, DCUtR, cluster.json graduation and signing, operator UX, `app_instance` containers/multi-NIC/stable-id, `Capability` open-string, `PEER_DERIVATION_LABEL` wrong-crate, `StreamDispatch` README disclosure, stream-subscribers visibility) all retained, with `ClusterRuntime` references in the stream-subscribers item updated to `NetworkRuntime`. Net: 385 → 266 lines.

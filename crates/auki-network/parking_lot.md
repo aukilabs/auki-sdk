@@ -4,7 +4,7 @@
 
 ## SDK relay-reservation helper — v2 story for NAT/firewalled daemons _(filed by Nils's claude, 2026-05-14)_
 
-`auki_network::swarm::resolve_advertise_multiaddrs` shipped 2026-05-14 for v1 (LAN-only Hagall demo, plus operator-override for multi-NIC / VPN / container-host ambiguity). It does NOT solve the dual-firewalled case where neither peer has a public IP — those daemons need libp2p Circuit Relay v2: dial a relay → reserve a slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (replace-semantics override). v2 should provide an SDK helper that owns the dial + reserve + listen dance and surfaces the resolved circuit address back to the caller, so daemons don't reimplement it.
+`auki_network::swarm::resolve_advertise_multiaddrs` shipped 2026-05-14 for v1 (LAN-only demo, plus operator-override for multi-NIC / VPN / container-host ambiguity). It does NOT solve the dual-firewalled case where neither peer has a public IP — those daemons need libp2p Circuit Relay v2: dial a relay → reserve a slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (replace-semantics override). v2 should provide an SDK helper that owns the dial + reserve + listen dance and surfaces the resolved circuit address back to the caller, so daemons don't reimplement it.
 
 Open design questions to land BEFORE the v2 helper ships:
 
@@ -20,13 +20,13 @@ Open design questions to land BEFORE the v2 helper ships:
 
 6. **Operator UX shape.** Boosterapp (headless): another CLI flag (`--relay-multiaddrs <addr>...`)? Park (GUI): an "Advanced settings" panel where the operator pastes a relay multiaddr? Or `external_addresses` continues to subsume both (operator pastes a fully-assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` for v1, and v2 adds dedicated flags when the dial-reserve-listen happens inside the SDK)? Lean `external_addresses`-as-escape-hatch for v1 (matches what's shipped today); dedicated `--relay-multiaddrs` for v2 when the SDK helper lands and the operator no longer needs to assemble the circuit address by hand.
 
-Scope landing trigger for the v2 work: when (a) the v1 Hagall demo is end-to-end, and (b) Park-from-home or a similar two-network scenario earns the engineering. Reid parking-lot 3c ("Manual peer-id paste for Park-from-home") already names that scenario; this is its SDK-side counterpart.
+Scope landing trigger for the v2 work: when (a) the v1 LAN demo is end-to-end, and (b) Park-from-home or a similar two-network scenario earns the engineering.
 
 ---
 
-## Stream-runtime integration tests deleted in the network_runtime PR _(filed by Nils's claude, 2026-05-13)_
+## Restore the 6 deleted producer/consumer stream tests against `NetworkRuntime::spawn` _(filed by Nils's claude, 2026-05-13)_
 
-When `ClusterRuntime` was replaced by `NetworkRuntime` (Greenland → demo-spec rewrite), the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved (`ClusterRuntime::from_swarm(swarm, doc, participant_provider, stream_provider)` → `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)`). The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:
+When `ClusterRuntime` was replaced by `NetworkRuntime`, the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved. The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:
 
 - `producer_accepts_and_streams_jpeg_frames`
 - `producer_declines_unknown_sensor`
@@ -35,73 +35,17 @@ When `ClusterRuntime` was replaced by `NetworkRuntime` (Greenland → demo-spec 
 - `open_stream_against_unreachable_peer_surfaces_typed_error`
 - `producer_accepts_and_streams_pointcloud_frames`
 
-**Port plan when SDK-T11 lands** (stream consumption wiring): adapt the fixture to construct `NetworkRuntime` pairs via `spawn` with mutual `AllowedPeer`s and replace `consumer.peers().iter().any(...)` checks with `consumer.connected_peers().contains(&...)`. Mechanical port; ~200 LOC of fixture rewiring. These tests are the stream-protocol coverage we lean on; restore before any stream-touching change.
-
----
-
-## `/auki/message/0.0.1` — inbound message log ownership
-
-Does the SDK runtime write the inbound message log itself (every well-formed envelope hits disk before dispatch to a registered handler), or does the consumer write it inside their handler (mirroring how sensor logs work — caller owns the log lifecycle)?
-
-The two outcomes diverge most visibly when a handler raises before its payload-typed parsing happens — SDK-owned guarantees the log entry exists; consumer-owned needs every handler to wrap try/except to ensure log-on-error coverage. They also diverge on replay-from-disk independence — SDK-owned means demos replay even when the consumer crashed before registering a handler.
-
-**Lean: SDK owns the inbound message log.** Symmetric with the wire's fire-and-forget semantics — the runtime already accepts every well-formed envelope, capturing them is the natural extension. Replay-from-disk is a stated goal of the messaging primitive (quest README: "both peers append every message to a local message log on disk, so the demo is replayable from disk without rerunning the click"); SDK ownership makes replay independent of consumer health. Decode-failure exceptions never lose log entries. Outbound capture (the `messages_to_<peer>` knob from the message log topology question below) belongs symmetrically to the SDK on the send side — both halves SDK-owned, consumer optionally tails for application-level visibility.
-
----
-
-## `/auki/message/0.0.1` — substream lifecycle
-
-A new libp2p protocol carrying typed messages between peers (first application: click events from Park to a robot peer; future: actuation commands, status reports, voice events, application messages). Two shapes for the substream pump:
-
-**A. Substream-per-message.** Initiator opens a substream, writes one length-prefixed `MessageEnvelope`, closes. No inbox driver, no reconnect-on-stream-death edge cases, every send is self-contained on both wire and disk. Cost: one libp2p substream open per message.
-
-**B. Long-lived inbox substream.** Each peer pair opens one substream the first time they need to talk; all envelopes flow over it until either side disconnects. Cheaper per message after the first. Needs a per-pair inbox-multiplexer driver task with lifecycle similar to `stream_runtime`'s pump.
-
-**Lean: A.** The stated future use cases (actuation, walk-to, status, voice intents, application messages) are event-grain, not high-rate; nobody's sending 1000 envelopes/s on this protocol. Stateless on each side, replay-from-disk is trivial because each log entry is a self-contained envelope. Bypasses the edge cases stream's pump had to solve. If voice push-to-talk wants high-rate carrying, voice belongs on `/auki/stream/` as a typed `T`, not on `/auki/message/`.
-
----
-
-## `/auki/message/0.0.1` — crate placement
-
-Sibling module to [`stream_protocol`](src/stream_protocol.rs) / [`stream_runtime`](src/stream_runtime.rs) inside this crate, or its own crate (`auki-messaging`)?
-
-**Lean: inside `auki-network`.** Both protocols share the same `libp2p_stream::Behaviour` in the swarm composition and the same `cluster.json` trust boundary. Splitting crates re-creates the swarm-wiring boilerplate without buying separation that the design calls for. Layering call worth getting right on the first PR — wrong placement is expensive to undo once the protocol has consumers.
-
----
-
-## `/auki/message/0.0.1` — envelope typing
-
-`google.protobuf.Any` (open registry, `type_url` string per message — applications register types without SDK changes) vs. plain `string type_url + bytes body` (same expressive power, no `Any` import in every consumer) vs. a sealed `Message` oneof in the SDK enumerating every known message type.
-
-**Lean: plain `string type_url + bytes body`.** Same semantics as `google.protobuf.Any` without dragging the well-known type into every consumer's prost-generated code; matches the existing SDK precedent where [`stream::StreamEntry.payload`](../auki-datatypes/proto/stream.proto) is opaque `bytes` and interpretation lives in registry. Apps register their own types without an SDK release. Sealed-oneof is rejected — closes the registry, breaks the "any future peer can carry its own message types" goal.
-
-Open sub-question: does the SDK ship a built-in `auki.message.v1.ClickEvent` type as part of the same [`auki-datatypes`](../auki-datatypes) proto sweep, or do consumers always define their own message types? Lean: ship the click-event type in the SDK so the click-to-look application can build against locked SDK types instead of inventing a registry on day one. Defer the generalised "registry of canonical message types" question until a third type wants to land.
-
----
-
-## `/auki/message/0.0.1` — message log topology
-
-One log per peer multiplexing all senders (encode sender per-entry) vs. one log per peer-pair (sender becomes the producer in the manifest, `sensor_id` keyed `messages_from_<sender_peer_id>`).
-
-**Lean: per-peer-pair on the receiving side.** Matches the existing `<platform>-<machine_id>/<sensor_name>` `sensor_id` convention; keeps producer-identity story consistent with how every other sensor log is keyed. Sender side mirrors with `messages_to_<receiver_peer_id>` if bidirectional capture is wanted; defer that until someone asks (config knob on the message runtime, off by default).
-
----
-
-## `/auki/message/0.0.1` — ack semantics
-
-Fire-and-forget vs. request/response on the same protocol. Click-to-look ships fine without an ack; a future application might need one.
-
-**Lean: fire-and-forget for v1.** Substream-per-message means the libp2p layer's substream-open-and-write success is already a coarse delivery signal on the sender side ("we got the bytes onto the wire to this peer"). Future request/response is its own protocol id (`/auki/request/0.0.1` or correlation-id-on-message-with-reply); don't conflate. Leaves the message envelope's `correlation_id` field reserved-but-unused in v1 so v2 can light it up without a wire bump.
+Port plan: construct `NetworkRuntime` pairs via `spawn` with mutual `AllowedPeer`s; replace any `consumer.peers().iter().any(...)` checks with `consumer.connected_peers().contains(&...)`. Mechanical port; ~200 LOC of fixture rewiring. These tests are the stream-protocol coverage we lean on; restore before any stream-touching change.
 
 ---
 
 ## `discovery_client` — `DiscoveryRuntime` (re-register / poll loop)
 
-Vinland v1 ships `DiscoveryClient::register/fetch/deregister` as one-shots. The Notion doc explicitly defers a `DiscoveryRuntime` (long-lived task that re-registers periodically and/or polls for updates) until Discovery itself grows TTL (D1) or push (D2). When that happens:
+v1 ships `DiscoveryClient::register/fetch/deregister` as one-shots. A `DiscoveryRuntime` (long-lived task that re-registers periodically and/or polls for updates) is deferred until Discovery itself grows TTL or push. When that happens:
 
 - **Re-register loop.** Daemons should renew their entry every `ttl/3` or so to outlive Discovery's eviction. Suggests a small task: `DiscoveryRuntime::spawn(client, wallet, cluster_name, addresses, expected_app_id?, note?, period?)` that calls `register` on a tokio interval. Owns its own task handle; `shutdown(self)` deregisters and returns.
 - **Poll-for-updates loop.** Daemons that want to see new peers without an operator nudge call `fetch(cluster_name)` on a slower interval (every 30–60s). Same runtime can host both loops.
-- **Push channel.** If Discovery grows SSE / WebSocket, the poll loop swaps for a streaming consumer of the same shape. **Push side landed Vinland D6 — see [`subscribe` parking-lot decisions below](#vinland-d6--discovery_clientsubscribe-pre-implementation-decisions-filed-by-broodsugars-dobby-2026-05-09).** The push channel obviates the poll loop's need entirely; the re-register loop remains a separate question for whenever Discovery v2's TTL lands.
+- **Push channel.** If Discovery grows SSE / WebSocket, the poll loop swaps for a streaming consumer of the same shape.
 
 Defer until Discovery v2 lands. The current one-shot surface is forward-compatible — a `DiscoveryRuntime` builds *on* `DiscoveryClient`, doesn't replace it.
 
@@ -177,21 +121,25 @@ On real networks, external addresses get learned via identify (the client tells 
 
 ## `stream_protocol` — JSON encoding for binary `T` is wasteful
 
-The grimsby D4-resolved framing is **JSON-serialized `StreamMessage<T>`** with a 4-byte length prefix. For grimsby v1 (`T = JpegFrame { bytes: Vec<u8> }`), `serde_json` renders the `bytes` field as a JSON array of integers — each byte becomes ~4 ASCII bytes (`"123,"`), producing roughly a 4× bandwidth hit vs. raw. For 30 fps × 100 KB JPEGs that's ~12 MB/s on the wire vs. ~3 MB/s raw — fine for a 1–4 robot LAN demo, real concern for anything larger.
+The v1 framing is **JSON-serialized `StreamMessage<T>`** with a 4-byte length prefix. For `T = JpegFrame { bytes: Vec<u8> }`, `serde_json` renders the `bytes` field as a JSON array of integers — each byte becomes ~4 ASCII bytes (`"123,"`), producing roughly a 4× bandwidth hit vs. raw. For 30 fps × 100 KB JPEGs that's ~12 MB/s on the wire vs. ~3 MB/s raw — fine for a 1–4 robot LAN demo, real concern for anything larger.
 
-**Resolved 2026-05-06 for `PointCloudFrame` only** (Dagaz Batch 1, D3 wire-side). Path (1) — `#[serde(with = "base64_bytes")]` adapter — applied to `PointCloudFrame.bytes` because pointcloud at 22 MB/s × 4 was untenable on a Wi-Fi LAN. The adapter lives at module scope in `stream_protocol`; `JpegFrame.bytes` was deliberately **not** updated to keep grimsby v1 wire compat (existing consumers — boosterapp's Python sidecar, Park's browser-side decoder — would fail closed on the encoding swap). Locked cross-language conformance vector pinned in [`stream_protocol::tests::locked_point_cloud_frame_wire_shape_vector`](src/stream_protocol.rs).
+**Resolved 2026-05-06 for `PointCloudFrame` only** — path (1) `#[serde(with = "base64_bytes")]` adapter applied to `PointCloudFrame.bytes` because pointcloud at 22 MB/s × 4 was untenable on a Wi-Fi LAN. The adapter lives at module scope in `stream_protocol`; `JpegFrame.bytes` was deliberately **not** updated to keep v1 wire compat (existing consumers — boosterapp's Python sidecar, Park's browser-side decoder — would fail closed on the encoding swap). Locked cross-language conformance vector pinned in [`stream_protocol::tests::locked_point_cloud_frame_wire_shape_vector`](src/stream_protocol.rs).
 
 **Still open for `JpegFrame`** (and any future binary-heavy `T`). Three forward paths, in order of effort:
 
-1. **Base64-encode `JpegFrame.bytes` inside JSON.** Same adapter `PointCloudFrame` already uses. Wire-compat-breaking — every grimsby consumer renegotiates. Defer until a JPEG consumer reports stutter or a producer reports outbound saturation; not a v1 bottleneck.
+1. **Base64-encode `JpegFrame.bytes` inside JSON.** Same adapter `PointCloudFrame` already uses. Wire-compat-breaking — every JPEG consumer renegotiates. Defer until a JPEG consumer reports stutter or a producer reports outbound saturation; not a v1 bottleneck.
 2. **Switch the codec to CBOR** (`ciborium` or `serde_cbor`). Native binary support; `Vec<u8>` rides as raw bytes. Wire-compat-breaking for everyone; no longer human-readable in tcpdump but still serde-driven.
 3. **Hybrid framing** — JSON envelope with a `payload_size: u32` field, plus a separate length-prefixed binary section after. Most efficient, most bespoke; preserves human readability of the envelope.
 
 Path (2) is a coordinated bump for every `Stream<T>` consumer at once. Path (3) is the most engineering work but doesn't sacrifice tcpdump readability of the envelope. Stay deferred until a real consumer asks.
 
+---
+
 ## `stream_protocol` — `libp2p-stream` 0.4.0-alpha pin
 
 `libp2p-stream` ships separately from the `libp2p` umbrella crate (the umbrella's 0.56 release does not expose a `stream` feature flag). The version that pairs with `libp2p` 0.56 / `libp2p-swarm` 0.47 is `0.4.0-alpha` — pre-1.0. We pin exactly (`= 0.4.0-alpha`) to avoid surprise breakage when an alpha-2 ships with API churn. Relax to `^0.4` (or `^X.Y` once it stabilizes) when the upstream surface stops moving. No action items today; revisit at the next libp2p bump.
+
+---
 
 ## DCUtR / hole-punching — when?
 
@@ -203,7 +151,7 @@ Ship it when (a) the M2 demo is end-to-end and (b) Park-from-home traffic volume
 
 ## Cluster Registry primitive — does `cluster.json` graduate?
 
-ansuz #1 ships `cluster.json` as a **flat** single-file directory under `<app_root>/registries/cluster_registries/cluster.json`, deliberately **not** hash-keyed like the existing `Sensor` / `Clock` / `Frame` registries. The flat shape is right for ansuz: a small handful of pinned peers, edited by hand, no per-cluster history needed.
+v1 ships `cluster.json` as a **flat** single-file directory under `<app_root>/registries/cluster_registries/cluster.json`, deliberately **not** hash-keyed like the existing `Sensor` / `Clock` / `Frame` registries. The flat shape is right for v1: a small handful of pinned peers, edited by hand, no per-cluster history needed.
 
 Open: when (if ever) does this graduate to a real Cluster Registry primitive — hash-keyed entries at `<app_root>/registries/cluster_registries/<cluster_id>/<hash>.json`, content-addressed so consumers can pin a specific cluster snapshot? Plausible triggers:
 
@@ -217,7 +165,7 @@ Defer until one of those earns it. The flat path is a forward-compatible subset 
 
 ## `cluster.json` signing — when?
 
-The doc is unsigned for ansuz. Trust is "operator wrote this file"; tampering on disk is out of scope. Once a Wallet-backed signing primitive is available (the partial answer in [`auki-identity/parking_lot.md`](../auki-identity/parking_lot.md)'s "Encrypted-at-rest format" thread), `cluster.json` becomes a natural candidate: sign the doc with the cluster operator's wallet, distribute the public key alongside, every reader verifies. Likely shape: a sibling `cluster.json.sig` rather than embedded signature — keeps the JSON itself diff-friendly.
+The doc is unsigned for v1. Trust is "operator wrote this file"; tampering on disk is out of scope. Once a Wallet-backed signing primitive is available (the partial answer in [`auki-identity/parking_lot.md`](../auki-identity/parking_lot.md)'s "Encrypted-at-rest format" thread), `cluster.json` becomes a natural candidate: sign the doc with the cluster operator's wallet, distribute the public key alongside, every reader verifies. Likely shape: a sibling `cluster.json.sig` rather than embedded signature — keeps the JSON itself diff-friendly.
 
 ---
 
@@ -235,9 +183,11 @@ Not a `cluster.json` concern per se — just adjacent. Document the recommended 
 
 ## `app_instance` — container / Docker handling
 
-`app_instance::derive()` typically returns `NoSuitableMac` inside a Docker container — the bridge-network interface gets a locally-administered MAC (first octet `0x02`), and there's usually no IEEE-administered NIC visible from inside the container. ansuz accepts this; daemons running in containers will need a fallback strategy (envvar override? hostname-derived? wallet-derived persisted?) before the SDK is comfortable in containerized deployments.
+`app_instance::derive()` typically returns `NoSuitableMac` inside a Docker container — the bridge-network interface gets a locally-administered MAC (first octet `0x02`), and there's usually no IEEE-administered NIC visible from inside the container. v1 accepts this; daemons running in containers will need a fallback strategy (envvar override? hostname-derived? wallet-derived persisted?) before the SDK is comfortable in containerized deployments.
 
 Pin a story before the first daemon is shipped in a container.
+
+---
 
 ## `app_instance` — multi-NIC tiebreaker semantics
 
@@ -248,7 +198,9 @@ Alternatives if this becomes painful:
 - **Hash all eligible MACs** rather than picking one. Stable under add/remove? No — adding a NIC still changes the input set.
 - **Combined wallet-derived + first-boot persistence** (see next item) — stop relying on hardware altogether.
 
-Not blocking ansuz; revisit if real deployments hit it.
+Not blocking v1; revisit if real deployments hit it.
+
+---
 
 ## `Capability(pub String)` — open-string vs typed enum _(filed by Dobby, 2026-05-08)_
 
@@ -280,7 +232,7 @@ Cross-references the existing [Wallet → peer-key derivation label evolution](#
 
 ## `StreamDispatch` is the streaming-stability lever — README should call it out _(filed by Dobby, 2026-05-08)_
 
-`pub enum StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` is a **closed** enum. Adding a new payload type — when an SLAM odometry stream or a cell-phone-camera variant lands — is a coordinated SDK + consumer release: bump the crate, add the variant, every consumer that wants the new sensor type opts in. The May 6 changelog entry (Dagaz Batch 1 #1) explicitly lays out the rationale ("trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries…").
+`pub enum StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` is a **closed** enum. Adding a new payload type — when an SLAM odometry stream or a cell-phone-camera variant lands — is a coordinated SDK + consumer release: bump the crate, add the variant, every consumer that wants the new sensor type opts in. The May 6 changelog entry explicitly lays out the rationale ("trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries…").
 
 The decision is correct. The disclosure is missing. The root [`README.md`](../../README.md) "API surface" section presents `StreamDispatch` as an implementation detail of `/auki/stream/0.1.0` ("dispatched by `sensor_id` via the closed `StreamDispatch` enum"). To a downstream consumer reading the README to plan their integration, that's an aside — but it's actually the SDK's primary stability lever for streaming. Every new `T` is a public-API touch; that's the point.
 
@@ -298,88 +250,17 @@ MAC-by-convention is fragile in containers, VMs, and multi-NIC environments (see
 - **OS machine-id** (`/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, MachineGuid in Windows registry). Cross-platform but each platform has its own gotchas (machine-id can be stale-cloned across VM templates, IOPlatformUUID is reset by some firmware updates).
 - **MAC + persisted nonce** — hash the MAC together with a per-install random value, persist the result. Decouples the public id from the underlying MAC; new MAC selection still produces the same id.
 
-Decide before any cross-machine coordination relies on `app_instance` being stable. ansuz only needs distinguishability, not stability.
-
----
-
-## Vinland D6 — `discovery_client::subscribe` pre-implementation decisions _(filed by broodsugar's dobby, 2026-05-09)_
-
-**✓ Implemented 2026-05-09.** All eight decisions below were upheld in the implementing PR; `discovery_client::subscribe` and `cluster_runtime::update_cluster_doc` ship together. Two implementation choices that surfaced during the work both went with the parking-lot leans:
-
-- **`SubscribeError` placement.** Sibling enum to `DiscoveryError` (the parking-lot lean), not a `Subscribe { ... }` variant on the existing enum. Keeps the existing `register / fetch / deregister` consumers' `match` arms stable; the SSE-side error modes (per-event parse errors, mid-stream connection drop) get their own variants without widening the one-shot HTTP surface.
-- **`RuntimeCmd` actor pattern over lock-based path.** New `mpsc::Sender<RuntimeCmd>` field on `ClusterRuntime`; `update_cluster_doc` sends an `UpdateClusterDoc { new_doc, ack }` command and awaits the oneshot ack. Rationale: the diff path needs to call `swarm.disconnect_peer_id(...)` and schedule new dials, both of which must run on the swarm task. A lock-based path (`Arc<Mutex<RuntimeState>>` mutation from the public method) would require shipping a `swarm` reference across the boundary too; the actor pattern is the cleanest extension of the existing shape.
-
-The eight decisions below remain as-filed for the historical record.
-
-Discovery's SSE endpoint (`GET /clusters/{cluster_name}/events`, `event: cluster_doc\ndata: {ClusterDoc-JSON}\n\n`) shipped 2026-05-07 against `aukilabs/discovery` commit `97c4dd8`. SDK side adds a fourth method to `DiscoveryClient` next to `register / fetch / deregister`:
-
-```rust
-pub async fn subscribe(
-    &self,
-    cluster_name: &str,
-) -> Result<impl Stream<Item = Result<ClusterDoc, SubscribeError>> + Send + 'static, SubscribeError>;
-```
-
-Paired with `ClusterRuntime::update_cluster_doc(new_doc)` so the daemon has somewhere to deliver fresh docs without tearing down the runtime. Single PR; the two pieces are tightly coupled. Daemon-side adoption (boosterapp / park / sentinel each pick up `subscribe` and feed the doc into their `ClusterRuntime`) is per-daemon-repo follow-ups after the SDK ships.
-
-Four pre-implementation decisions filed before the implementing PR per the [auki-labs-repos convention](../../CLAUDE.md):
-
-### Decision — reconnect / backoff in `subscribe`
-
-**Decided 2026-05-09. Caller owns retry; `subscribe` ends on transport failure.** Reasons: (a) any retry policy baked in (jittered exponential backoff? max retries? circuit breaker?) becomes opinionated before any daemon has hit the wall and told us what semantics they need; (b) the natural place for retry is the daemon's outer supervisory loop, which already exists for `register`; (c) making `subscribe` "just ends on failure" matches the shape of the other three `DiscoveryClient` methods (one-shot semantics, caller decides what's next). Revisit if the first daemon shipping `subscribe` reports the boilerplate is non-trivial; a sibling helper (`DiscoveryRuntime::subscribe_with_reconnect(...)` etc.) is the right place for retry, not the primitive itself.
-
-### Decision — lag signal in the subscribe stream
-
-**Decided 2026-05-09. Silently drop intermediate events; the next emitted `ClusterDoc` reconciles.** Reasons: (a) Discovery's `tokio::sync::broadcast::channel(16)` per `cluster_name` already drops events for receivers more than 16 events behind, but the next event still carries the full snapshot (idempotent recovery); (b) surfacing `Lagged` to the SDK consumer would force the consumer to decide what to do with a state that resolves itself within one more event (resubscribe? log?); (c) cluster-membership events are convergent — the consumer cares about "current peers," not "every transition," and a snapshot delivers the former. Revisit if a consumer ever needs strong ordering / no-loss semantics for cluster events (currently no consumer does).
-
-### Decision — diff events vs full snapshots on the wire
-
-**Decided 2026-05-09. Snapshots only for v1; the wire shape is locked.** Reasons: (a) snapshots are simpler to encode (`ClusterDoc` JSON; no cross-event state machine); (b) idempotent under reconnect — a fresh subscriber and a reconnecting subscriber are indistinguishable from Discovery's side; (c) survive lagged subscribers without bookkeeping (the lag-decision item above depends on this); (d) cluster sizes for the demo are <10 peers, snapshot bandwidth is negligible. Revisit when a single cluster crosses ~100 peers and snapshot serialization shows up in profiles. The forward path is additive — Discovery could emit a `cluster_doc_delta` event type in parallel without breaking `cluster_doc` consumers.
-
-### Decision — multi-cluster `subscribe` on the same `DiscoveryClient` instance
-
-**Decided 2026-05-09. v1 spawns one HTTP connection per `subscribe` call.** Reasons: (a) `DiscoveryClient`'s existing `register` / `fetch` / `deregister` methods are one-shot HTTP; an SSE long-poll on top of that is the simplest extension; (b) the v1 case is one-cluster-per-daemon (boosterapp / park / sentinel each subscribe to their own cluster, not multiple); (c) connection pooling semantics for long-lived SSE streams are non-obvious (per-host connection limits in `reqwest`, keepalive interaction, connection-shutdown ownership). Revisit if a daemon ever subscribes to multiple clusters from the same client — at that point the question is "do we share a single connection, or open one per cluster" and either answer needs explicit design.
-
-### Decision — `subscribe` item type
-
-**Decided 2026-05-09. Per-item `Result`: `impl Stream<Item = Result<ClusterDoc, SubscribeError>>`.** Reasons: (a) gives the consumer a chance to log/skip a single bad event (e.g. a flaky proxy chewing the SSE bytes mid-stream, a parse error on a malformed `data:` line) without ending the stream; (b) the terminal-error variant interacts badly with the [caller-owns-retry decision](#decision--reconnect--backoff-in-subscribe) above — every parse error becomes a reconnect cycle, amplifying transient noise into churn; (c) call-site cost is small — `while let Some(Ok(doc)) = stream.next().await { ... }` either way; the `Err` arm gets `tracing::warn!` and the loop continues. Confidence: high.
-
-### Decision — `update_cluster_doc` return type
-
-**Decided 2026-05-09. `Result<UpdateReport, UpdateError>` with `UpdateReport { added: Vec<PeerId>, removed: Vec<PeerId> }`.** Reasons: (a) the diff is computed internally regardless (it drives the dial / drop decisions); surfacing it costs nothing; (b) pays for itself the first time a daemon writes "joined cluster X" / "left cluster X" log lines or surfaces them in operator UI; (c) ignoring it is `let _ = runtime.update_cluster_doc(...)` — one character of noise; (d) the `()` variant is the choice we'd regret six months later when every daemon has reimplemented the diff externally. **No `unchanged: Vec<PeerId>` field** — derivable from `previous_doc.peers ∖ removed` if a caller wants it, and adds noise to the typical `info!("cluster: +{added} -{removed}")` log line. Confidence: high.
-
-### Decision — `spawn_with_subscribe` convenience constructor
-
-**Decided 2026-05-09. Not in this PR.** The "subscribe loop and feed `update_cluster_doc`" boilerplate is ~15 lines; three daemons (boosterapp / park / sentinel) writing it three different ways is what tells us the right shape for a convenience constructor. Premature unification locks in the wrong tokio task topology — does the constructor own the `JoinHandle`? does shutdown cascade? does it surface per-event errors or swallow them? Each is a real design choice that benefits from seeing real call sites. File-and-revisit after the daemon-side adoption PRs converge on a pattern. Confidence: high.
-
-### Decision — Python binding (`auki-network-py`) for `subscribe` + `update_cluster_doc`
-
-**Decided 2026-05-09. Not in this PR; follow-up PR after the Rust types stabilize.** Same precedent as `auki-logs-py` shipping after `auki-logs` had a tag — bind to a stable Rust surface, don't co-design two language surfaces in one PR. The boosterapp Python sidecar is the only Python consumer for now and can wait one release. Adding `subscribe` + `update_cluster_doc` wrappers to the existing `auki-network-py` is mechanical (the Rust surface is the design; PyO3 wraps it) — small follow-up PR after the implementing PR lands and gets a release tag. Confidence: high.
-
+Decide before any cross-machine coordination relies on `app_instance` being stable. v1 only needs distinguishability, not stability.
 
 ---
 
 ## `/auki/stream/0.1.0` — operator visibility into stream subscribers _(filed by Nils, 2026-05-12)_
 
-`ClusterRuntime` doesn't surface who's currently subscribed to streams from this node. Operators inspecting BoosterApp's `/api/cluster` see the cluster's peer list but not which of those peers are actively pulling frames.
+`NetworkRuntime` doesn't surface who's currently subscribed to streams from this node. Operators inspecting BoosterApp's `/api/cluster` see the cluster's peer list but not which of those peers are actively pulling frames.
 
 Two halves:
 
-- **SDK side (this crate).** Add a `runtime.stream_subscribers() -> Vec<(PeerId, StreamRequest)>` accessor for currently-open inbound substreams. Lifecycle: an entry appears when `handle_inbound_substream` calls the provider with a non-`Decline` dispatch, disappears when the pump task ends (substream dropped, peer disconnected, source ended, shutdown). Bookkeeping: a `tokio::sync::RwLock<HashMap<...>>` (or actor-pattern `RuntimeCmd::ListSubscribers`) on the runtime; the pump task inserts on accept, removes on drop via a `Drop`-guard wrapper. Read-side only — no behavior change.
+- **SDK side (this crate).** Add a `runtime.stream_subscribers() -> Vec<(PeerId, StreamRequest)>` accessor for currently-open inbound substreams. Lifecycle: an entry appears when `handle_inbound_substream` calls the provider with a non-`Decline` dispatch, disappears when the pump task ends (substream dropped, peer disconnected, source ended, shutdown). Bookkeeping: a `tokio::sync::RwLock<HashMap<...>>` (or actor-pattern command on the runtime); the pump task inserts on accept, removes on drop via a `Drop`-guard wrapper. Read-side only — no behavior change.
 - **Daemon side (out of crate).** Expose the SDK accessor via a new HTTP endpoint (e.g. `GET /api/streams/subscribers` returning JSON `[{peer_id, sensor_id}]`) in BoosterApp / Park / Sentinel control APIs. Out of scope for `auki-network`; file in each daemon repo once the SDK accessor ships.
 
-**Lean.** Ship the SDK accessor first, non-invasive. The `(PeerId, StreamRequest)` data this accessor needs is the same data that drives the server-side cluster-membership gate on accept (resolved 2026-05-13 — see [changelog](changelog.md)). Daemons add their HTTP shims afterward.
-
----
-
-## `ClusterRuntime` should own its Discovery SSE subscription internally _(filed by broodsugar's claude, 2026-05-12)_
-
-PR B closed the last static-config bypass: the only way to construct a `ClusterRuntime` is `auki_domain::init_domain`, which goes through Discovery's `create_cluster` + `register`. But the runtime still depends on the daemon to drive its `update_cluster_doc(new_doc)` loop — the daemon calls `discovery.subscribe(cluster_name)` separately and feeds each fresh `ClusterDoc` into the runtime.
-
-This leaves one footgun: a daemon that constructs a runtime via `init_domain` but never wires up the SSE subscription loop will operate on a stale `ClusterDoc` forever. New peers joining the cluster will be denied by libp2p (because the local allow-list never updates), and the operator-visible symptom is "the cluster's new peer can't connect" with no SDK-side diagnostic.
-
-**Lean: bake the SSE subscription into the runtime.** `init_domain` already has the `DiscoveryClient` reference; pass it (or a clone of the relevant bits) into the runtime, spawn an internal task that calls `discovery.subscribe(&cluster_name)` and pumps `update_cluster_doc(new_doc)` into the actor channel. The daemon stops needing to wire anything — Discovery → SSE → allow-list flips happen entirely inside the runtime.
-
-**Trade-off.** Adds a tokio task to the runtime's footprint (already has one for the swarm event loop; this is a second). Caller can't override the subscribe-retry policy without a config knob; today they own the loop and can do whatever they want. Need a clean shutdown story for the subscribe task that doesn't cascade through to the runtime's main task.
-
-**Why this isn't urgent.** Park (the one consumer that goes through `init_domain` today via PR #37) already wires up subscribe + `update_cluster_doc` correctly. The footgun only bites a future daemon that wires `init_domain` but forgets the subscribe loop. As long as the team is small and reviewing each other's daemons, social pressure works. Worth closing before the SDK has many external consumers.
+**Lean.** Ship the SDK accessor first, non-invasive. Daemons add their HTTP shims afterward.

@@ -6,6 +6,9 @@ Latest entry on top.
 
 ---
 
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purges across four crates remove ~300 lines of plan archaeology and deleted-surface references.** `auki-domain/`, `auki-domain-py/`, `auki-network/`, and `auki-network-py/` parking-lot files lost entries describing deleted runtime/types (`ClusterRuntime`, `init_domain`/`DomainHandle`, `discovery_client::subscribe`, `update_cluster_doc`, `cluster.spawn`), transcribed Greenland Notion task tables whose decisions all shipped, design blocks for unshipped `/auki/message/0.0.1`, and internal codename leakage. ~16 substantive design questions retained: relay-reservation v2, `DiscoveryRuntime`, peer-key derivation labels, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, JSON-encoding-for-binary-T, cluster.json graduation/signing, `app_instance` containers/multi-NIC, `Capability` open-string, etc. See [`crates/changelog.md`](crates/changelog.md) for per-crate detail.
 ### Nils's codex · May 19, HKT, 2026
 
 **Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

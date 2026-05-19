@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.
+
+Tests: `cargo test -p auki-domain`.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Manager handoff now waits for heartbeat timeout and gossips the new Manager identity.** The liveness handler no longer treats raw libp2p `Disconnected` or `HeartbeatStreamClosed` carrier events as immediate semantic peer death. Those events now leave the last heartbeat timestamp intact and let the `HEARTBEAT_TIMEOUT` scan decide, so transient carrier churn has a chance to reconnect before causing peer eviction or Manager promotion.

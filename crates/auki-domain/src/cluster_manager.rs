@@ -1831,13 +1831,18 @@ async fn handle_domain_peer_lost(
             return;
         }
 
-        // For "reachable peers", give the connection teardown a
-        // brief moment so connected_peers() reflects the
-        // disconnection.
+        // For other reachable peers, give connection teardown a
+        // brief moment to settle. The heartbeat-lost peer is still
+        // excluded below even if the transport connected set lags.
         tokio::time::sleep(Duration::from_millis(100)).await;
         let connected = runtime.connected_peers();
         let membership_snapshot = membership.lock().expect("membership lock").clone();
-        let winner = elect_successor(&membership_snapshot, local_peer_id, &connected);
+        let winner = elect_successor_excluding_lost(
+            &membership_snapshot,
+            local_peer_id,
+            &connected,
+            lost_pid,
+        );
         if winner == Some(local_peer_id) {
             // Become Manager.
             *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
@@ -1972,12 +1977,13 @@ async fn handle_domain_peer_lost(
 /// liveness-check tick.
 ///
 /// **Reachability** is approximated as "in the runtime's
-/// `connected_peers()` set OR equal to local_peer_id." When the
-/// Manager dies, the local peer is always "reachable to itself"; the
-/// other reachable peers are those still libp2p-connected via the
-/// runtime. The earliest peer with a join_ts_ns less than the local
-/// peer's own that's also reachable wins; if none such exists, the
-/// local peer wins.
+/// `connected_peers()` set OR equal to local_peer_id," with the
+/// heartbeat-lost peer explicitly excluded from the handoff
+/// election. When the Manager dies, the local peer is always
+/// "reachable to itself"; the other reachable peers are those still
+/// libp2p-connected via the runtime. The earliest peer with a
+/// join_ts_ns less than the local peer's own that's also reachable
+/// wins; if none such exists, the local peer wins.
 #[allow(clippy::too_many_arguments)]
 fn spawn_liveness_handler(
     mut rx: mpsc::Receiver<PeerLivenessEvent>,
@@ -2759,6 +2765,22 @@ pub fn elect_successor(
     None
 }
 
+fn elect_successor_excluding_lost(
+    membership: &ClusterMembership,
+    local_peer_id: PeerId,
+    connected: &[PeerId],
+    lost_peer_id: PeerId,
+) -> Option<PeerId> {
+    let connected: Vec<PeerId> = connected
+        .iter()
+        .copied()
+        .filter(|pid| *pid != lost_peer_id)
+        .collect();
+    let mut membership = membership.clone();
+    membership.peers.retain(|p| p.peer_id != lost_peer_id);
+    elect_successor(&membership, local_peer_id, &connected)
+}
+
 fn spawn_manager_liveness_check(
     discovery: DiscoveryClient,
     cluster_name: String,
@@ -3223,6 +3245,30 @@ mod tests {
         membership.admit(m_b.clone());
         // local = B; A unreachable.
         let winner = elect_successor(&membership, m_b.peer_id, &[]);
+        assert_eq!(winner, Some(m_b.peer_id));
+    }
+
+    #[test]
+    fn election_excludes_lost_manager_even_if_transport_still_connected() {
+        // A joined first and is still in the runtime's connected set,
+        // but the domain heartbeat has already timed it out. B must
+        // win so it can rotate Discovery instead of re-electing the
+        // dead Manager.
+        let m_a = make_peer(1, 100);
+        let m_b = make_peer(2, 200);
+        let m_c = make_peer(3, 300);
+        let mut membership = ClusterMembership::new("foo");
+        for m in [m_a.clone(), m_b.clone(), m_c.clone()] {
+            membership.admit(m);
+        }
+
+        let winner = elect_successor_excluding_lost(
+            &membership,
+            m_b.peer_id,
+            &[m_a.peer_id, m_c.peer_id],
+            m_a.peer_id,
+        );
+
         assert_eq!(winner, Some(m_b.peer_id));
     }
 

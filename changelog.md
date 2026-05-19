@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Manager election ignores the heartbeat-lost Manager even if transport teardown lags.** `auki-domain` now excludes the timed-out peer from successor election before consulting libp2p's connected set, preventing battery-pull / QUIC-idle cases from re-electing the dead Manager and leaving Discovery unrotated. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Manager handoff is less brittle under heartbeat carrier churn.** `ClusterManager` now waits for heartbeat timeout before treating raw libp2p carrier close as semantic peer death, and `/auki/membership/0.0.1` handoff gossip carries the authoring Manager peer id so surviving peers can converge on the new Manager. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

@@ -12,6 +12,7 @@ members = [
     "crates/auki-manifests-py",
     "crates/auki-network",
     "crates/auki-network-py",
+    "crates/auki-network-swift",
     "crates/auki-datatypes",
     "crates/auki-domain",
     "crates/auki-domain-py",

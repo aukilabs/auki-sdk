@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Project-local worktrees are ignored for SDK development.** Added `.worktrees/` to `.gitignore` so isolated implementation branches can live under the repo without polluting status.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud implementation plan captured.** Added a Superpowers implementation plan for the approved breaking pointcloud refactor across datatypes, registry, streams, Python bindings, ROS adapter, docs, and verification. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

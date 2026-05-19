@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud registry validation landed.** `auki-registry` now rejects non-canonical native pointcloud field layouts and removes `PointCloud.is_bigendian`, relying on the native little-endian contract. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud datatypes landed.** `auki-datatypes` now uses one `auki.point_cloud.PointCloudFrame { point_count, data }` protobuf record for pointcloud logs and live pointcloud streams, replacing the old ROS-CDR log/stream split. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

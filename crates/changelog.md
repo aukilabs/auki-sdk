@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-registry`](auki-registry/changelog.md) — native pointcloud sensor layouts are validated.** `PointCloud` registry metadata drops `is_bigendian`, validates canonical little-endian native XYZ field layout before sensor writes, rejects out-of-bounds or overlapping fields, and recomputes the locked M1 pointcloud sensor hash.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-datatypes`](auki-datatypes/changelog.md) — native pointcloud frames replace the log/stream split.** `auki.point_cloud.PointCloudFrame { point_count, data }` is now the single protobuf record for Sensor Logs and `/auki/stream/0.1.0` pointcloud substreams; `auki.point_cloud_stream` and `PointCloudLogEntry` are removed.
 
 ### Nils's codex · May 18, HKT, 2026

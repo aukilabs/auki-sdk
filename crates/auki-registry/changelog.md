@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Native pointcloud registry layouts are now validated.** `SensorBody::PointCloud` metadata no longer carries `is_bigendian`; numeric native pointcloud data is little-endian by contract. `PointCloud::validate_layout` now requires canonical `x`, `y`, and `z` fields as `float32`, `count=1`, at offsets `0`, `4`, and `8`; rejects `point_step < 12`; verifies every declared field fits within `point_step`; and rejects overlapping field spans. `write_sensor` runs this validation before accepting a pointcloud sensor entry or checking its frame reference.
+
+**Locked-vector recompute.** The M1 pointcloud canonical JSON drops `"is_bigendian":false`, and its XXH3-128 sensor hash changes from `2c480838a9be0b14608a8a0d72ee319f` to **`d62ed811edcfb3e1a400f7aaa290eb85`**.
+
+**Tests:** `auki-registry` 44 → 47 (+3 — `pointcloud_layout_accepts_canonical_xyz_prefix`, `pointcloud_layout_rejects_missing_canonical_xyz_prefix`, `pointcloud_layout_rejects_overlapping_fields`).
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **Detector Registry lands — `DetectorRegistryEntry { detector_id, body, output_types }`.** Closes Cuba **T4** + **T16** together. Mirrors `SensorRegistryEntry`: stable `detector_id` + typed `body` (`DetectorBody::{Aruco, Qr, Esl}`) + content-addressed hash via `canonicalize` → `auki_hash::hash_jcs_bytes`. The new `output_types: Vec<String>` field (T16) is the capability-discovery axis — *advertise what you detect, not which implementation you're running* — and its values must match `DetectionLogEntry.type` (Cuba T12) for the entries the detector emits.

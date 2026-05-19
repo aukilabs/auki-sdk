@@ -67,7 +67,6 @@ pub struct RgbCamera {
 pub struct PointCloud {
     pub fields: Vec<PointField>,
     pub point_step: u32,
-    pub is_bigendian: bool,
     pub frame_rate_hz: u32,
     /// Frame Registry id for the coordinate system the point bytes are
     /// in. ROS `PointCloud2` carries `header.frame_id`; the integrator
@@ -113,6 +112,80 @@ impl PointFieldDataType {
             PointFieldDataType::Float64 => 8,
         }
     }
+}
+
+impl PointCloud {
+    pub fn validate_layout(&self) -> Result<()> {
+        if self.point_step < 12 {
+            return Err(Error::InvalidPointCloudLayout(format!(
+                "point_step must be at least 12 bytes for canonical XYZ; got {}",
+                self.point_step
+            )));
+        }
+        require_xyz_field(&self.fields, "x", 0)?;
+        require_xyz_field(&self.fields, "y", 4)?;
+        require_xyz_field(&self.fields, "z", 8)?;
+        validate_field_bounds_and_overlaps(&self.fields, self.point_step)?;
+        Ok(())
+    }
+}
+
+fn require_xyz_field(fields: &[PointField], name: &str, offset: u32) -> Result<()> {
+    let Some(field) = fields.iter().find(|f| f.name == name) else {
+        return Err(Error::InvalidPointCloudLayout(format!(
+            "missing required {name}:float32 field at offset {offset}"
+        )));
+    };
+    if field.offset != offset || field.datatype != PointFieldDataType::Float32 || field.count != 1 {
+        return Err(Error::InvalidPointCloudLayout(format!(
+            "field {name:?} must be float32 count=1 at offset {offset}; got offset={} datatype={:?} count={}",
+            field.offset, field.datatype, field.count
+        )));
+    }
+    Ok(())
+}
+
+fn validate_field_bounds_and_overlaps(fields: &[PointField], point_step: u32) -> Result<()> {
+    let mut spans: Vec<(&str, u32, u32)> = Vec::new();
+    for field in fields {
+        let width = field
+            .datatype
+            .byte_width()
+            .checked_mul(field.count)
+            .ok_or_else(|| {
+                Error::InvalidPointCloudLayout(format!(
+                    "field {:?} byte width overflows u32",
+                    field.name
+                ))
+            })?;
+        if width == 0 {
+            return Err(Error::InvalidPointCloudLayout(format!(
+                "field {:?} count must be greater than zero",
+                field.name
+            )));
+        }
+        let end = field.offset.checked_add(width).ok_or_else(|| {
+            Error::InvalidPointCloudLayout(format!("field {:?} offset overflows u32", field.name))
+        })?;
+        if end > point_step {
+            return Err(Error::InvalidPointCloudLayout(format!(
+                "field {:?} ends at byte {}, beyond point_step {}",
+                field.name, end, point_step
+            )));
+        }
+        spans.push((&field.name, field.offset, end));
+    }
+    spans.sort_by_key(|(_, start, _)| *start);
+    for pair in spans.windows(2) {
+        let (a_name, _a_start, a_end) = pair[0];
+        let (b_name, b_start, _b_end) = pair[1];
+        if a_end > b_start {
+            return Err(Error::InvalidPointCloudLayout(format!(
+                "field {a_name:?} overlaps field {b_name:?}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Static identity of an audio sensor (microphone or microphone array) — the
@@ -550,6 +623,7 @@ pub enum Error {
     /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
     /// the same axis-pair (forward/backward, left/right, or up/down).
     InvalidAxes(String),
+    InvalidPointCloudLayout(String),
     /// On write of a frame-bearing [`SensorRegistryEntry`], the
     /// referenced `(frame_id, frame_hash)` did not resolve to an
     /// existing [`FrameRegistryEntry`] on disk.
@@ -569,6 +643,9 @@ impl std::fmt::Display for Error {
                 write!(f, "id mismatch: expected {expected:?}, found {found:?}")
             }
             Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
+            Error::InvalidPointCloudLayout(msg) => {
+                write!(f, "invalid pointcloud layout: {msg}")
+            }
             Error::FrameReferenceMissing {
                 sensor_id,
                 frame_id,
@@ -741,7 +818,14 @@ fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcom
 }
 
 fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry) -> Result<()> {
-    let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+    let Some((frame_id, frame_hash)) = (match &entry.body {
+        SensorBody::RgbCamera(rgb_camera) => Some((&rgb_camera.frame_id, &rgb_camera.frame_hash)),
+        SensorBody::PointCloud(point_cloud) => {
+            point_cloud.validate_layout()?;
+            Some((&point_cloud.frame_id, &point_cloud.frame_hash))
+        }
+        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+    }) else {
         return Ok(());
     };
 
@@ -757,14 +841,6 @@ fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry)
     }
 
     Ok(())
-}
-
-fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
-    match body {
-        SensorBody::RgbCamera(b) => Some((&b.frame_id, &b.frame_hash)),
-        SensorBody::PointCloud(b) => Some((&b.frame_id, &b.frame_hash)),
-        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
-    }
 }
 
 fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -1080,6 +1156,90 @@ mod tests {
 
     // ─── Point cloud tests ──────────────────────────────────────────────────
 
+    fn canonical_xyz_fields() -> Vec<PointField> {
+        vec![
+            PointField {
+                name: "x".into(),
+                offset: 0,
+                datatype: PointFieldDataType::Float32,
+                count: 1,
+            },
+            PointField {
+                name: "y".into(),
+                offset: 4,
+                datatype: PointFieldDataType::Float32,
+                count: 1,
+            },
+            PointField {
+                name: "z".into(),
+                offset: 8,
+                datatype: PointFieldDataType::Float32,
+                count: 1,
+            },
+        ]
+    }
+
+    #[test]
+    fn pointcloud_layout_accepts_canonical_xyz_prefix() {
+        let pc = PointCloud {
+            fields: canonical_xyz_fields(),
+            point_step: 12,
+            frame_rate_hz: 30,
+            frame_id: "frame/points".into(),
+            frame_hash: "hash".into(),
+        };
+        pc.validate_layout().unwrap();
+    }
+
+    #[test]
+    fn pointcloud_layout_rejects_missing_canonical_xyz_prefix() {
+        let pc = PointCloud {
+            fields: vec![PointField {
+                name: "x".into(),
+                offset: 0,
+                datatype: PointFieldDataType::Float32,
+                count: 1,
+            }],
+            point_step: 12,
+            frame_rate_hz: 30,
+            frame_id: "frame/points".into(),
+            frame_hash: "hash".into(),
+        };
+        match pc.validate_layout() {
+            Err(Error::InvalidPointCloudLayout(msg)) => {
+                assert!(msg.contains("y"), "message should name missing y: {msg}");
+            }
+            other => panic!("expected InvalidPointCloudLayout; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pointcloud_layout_rejects_overlapping_fields() {
+        let mut fields = canonical_xyz_fields();
+        fields.push(PointField {
+            name: "confidence".into(),
+            offset: 8,
+            datatype: PointFieldDataType::Float32,
+            count: 1,
+        });
+        let pc = PointCloud {
+            fields,
+            point_step: 16,
+            frame_rate_hz: 30,
+            frame_id: "frame/points".into(),
+            frame_hash: "hash".into(),
+        };
+        match pc.validate_layout() {
+            Err(Error::InvalidPointCloudLayout(msg)) => {
+                assert!(
+                    msg.contains("overlap"),
+                    "message should mention overlap: {msg}"
+                );
+            }
+            other => panic!("expected InvalidPointCloudLayout; got {other:?}"),
+        }
+    }
+
     fn m1_point_cloud_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
             sensor_id: "K1-AABBCCDDEEFF/head_depth_points".into(),
@@ -1105,7 +1265,6 @@ mod tests {
                     },
                 ],
                 point_step: 12,
-                is_bigendian: false,
                 frame_rate_hz: 10,
                 frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
                 frame_hash: M1_OPTICAL_FRAME_HASH.into(),
@@ -1118,7 +1277,7 @@ mod tests {
         let bytes = m1_point_cloud_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -1127,12 +1286,13 @@ mod tests {
         // Pin the XXH3-128 of the M1 example point cloud entry.
         // Updates to this must be coordinated with any cross-language reader.
         // Recomputed when `frame_hash` was added to pin the exact Frame
-        // Registry entry. If this trips, either (a) the canonical bytes
+        // Registry entry, then again when native pointcloud metadata removed
+        // `is_bigendian`. If this trips, either (a) the canonical bytes
         // assertion above also tripped — see that for the cause — or (b)
         // `auki-jcs` / `auki-hash` drifted; investigate before updating.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "2c480838a9be0b14608a8a0d72ee319f"
+            "d62ed811edcfb3e1a400f7aaa290eb85"
         );
     }
 

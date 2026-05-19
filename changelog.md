@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**WASM libp2p browser transport spike specified.** Added a Superpowers design spec that narrows Park's browser-peer transport work to a rust-libp2p Wasm probe, with WebRTC Direct first, WebTransport second, and Secure WebSocket only as fallback before Domain join/audio. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter package import and validation hardened.** `auki-domain-browser` now emits NodeNext-compatible ESM, verifies the built package entry with `npm run smoke:import`, treats malformed Discovery payloads as `domain_list_failed`, and tests every transport-backed peer method as fail-closed. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

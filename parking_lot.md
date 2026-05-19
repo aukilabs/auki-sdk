@@ -10,7 +10,7 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 Park's browser-peer Milestone 0 needs a real SDK browser Domain peer. The design spec is [`docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md`](docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md). Two cross-cutting decisions remain open before full two-browser audio acceptance:
 
-- **Browser transport.** Native peers currently advertise TCP/QUIC multiaddrs that browsers cannot dial directly. Pick the first SDK-owned browser transport path: WebSocket multiaddrs, WebTransport, WebRTC-as-transport, or an SDK relay. App-owned media/control relays remain disallowed.
+- **Browser transport spike.** Native peers currently advertise TCP/QUIC multiaddrs that browsers cannot dial directly. The next approved direction is a rust-libp2p Wasm spike: WebRTC Direct first, WebTransport second, Secure WebSocket only as fallback. The remaining question is whether that spike proves a browser peer can open an SDK-owned libp2p protocol stream to a native SDK peer without app-owned media/control relays.
 - **Browser Manager/create-Domain semantics.** Park needs Domain creation, but a browser Manager must be reachable, admit joins, gossip membership, and run liveness/Manager behavior. Decide whether v1 browser `createDomain` makes the browser Manager, provisions/depends on a native Manager, or lands after leaf-peer join support.
 
 ## Hagall (Networking) — SDK-side open questions _(filed by Nils's claude, 2026-05-13)_

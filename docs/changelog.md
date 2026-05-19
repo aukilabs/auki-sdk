@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the Superpowers wasm libp2p browser transport spike spec and propagated the docs-level changelog chain for the SDK-owned browser networking proof.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the Superpowers browser Domain peer adapter implementation plan and propagated the docs-level changelog chain for the first SDK package tranche.
 
 ### Nils's codex · May 19, HKT, 2026

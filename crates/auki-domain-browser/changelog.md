@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser Domain peer adapter. Latest entr
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the browser identity seed storage seam and `shortPeerId(...)` helper. The seed helper persists exactly 32-byte seeds through an injectable store, rejects malformed stored/generated seeds, and formats visible peer ids from the final six characters.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the Park-compatible browser peer contract, structured result/error helpers, package exports, and the `window.aukiBrowserPeer.createPeer()` global installer. The focused installer test and TypeScript build pass for the first importable package surface.
 
 ### Nils's codex · May 19, HKT, 2026

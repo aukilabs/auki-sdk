@@ -8,10 +8,11 @@ Currently implemented:
 - Park-compatible contract types
 - global installer
 - structured result helpers
+- browser identity seed storage seam
+- last-six-character peer id display helper
 
 Not yet implemented:
 
-- browser identity seam
 - Discovery HTTP list mapping
 - explicit transport-unavailable behavior for real peer operations
 - browser-dialable SDK transport

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — browser identity seed storage seam.** Added injectable 32-byte browser peer seed storage plus the last-six-character peer id display helper the Park UI expects.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-domain-browser`](auki-domain-browser/changelog.md) — Park-compatible browser peer contract and global installer.** Added the TypeScript `BrowserDomainPeer` contract, result/error helpers, package exports, and `window.aukiBrowserPeer.createPeer()` installer so Park can load an SDK-owned adapter boundary.
 
 ### Nils's codex · May 19, HKT, 2026

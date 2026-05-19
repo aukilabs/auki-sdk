@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter has an identity seed seam.** `auki-domain-browser` now persists exactly 32-byte browser peer seeds through an injectable store and exposes the last-six-character peer id display helper Park expects. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter exposes Park contract and global installer.** `auki-domain-browser` now exports the TypeScript `BrowserDomainPeer` contract, result/error helpers, and `window.aukiBrowserPeer.createPeer()` installer Park needs to load an SDK-owned browser adapter. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

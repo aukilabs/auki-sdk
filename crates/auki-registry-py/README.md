@@ -24,7 +24,6 @@ sensor = auki_registry.point_cloud_sensor_entry(
         auki_registry.point_field("z", 8, "float32"),
     ],
     point_step=12,
-    is_bigendian=False,
     frame_rate_hz=10,
     frame_id=frame["frame_id"],
     frame_hash=frame_hash,
@@ -102,6 +101,8 @@ The Rust crate remains the source of truth for validation:
 - `read_*` returns `None` when the requested hash-pinned file is absent.
 
 `write_sensor` validates frame-bearing bodies exactly like Rust: `RgbCamera` and `PointCloud` entries must carry non-empty `frame_id` + `frame_hash`, and the exact frame file must already exist under `<app_root>/registries/frames/...`. There is no compatibility fallback or directory scan.
+
+Pointcloud sensors also validate the native layout invariant: every point starts with little-endian `float32` fields `x`, `y`, and `z` at offsets `0`, `4`, and `8`; extra fields may follow within `point_step`.
 
 ## Install
 

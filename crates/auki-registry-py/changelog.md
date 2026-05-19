@@ -6,6 +6,10 @@ Detailed changes for `auki-registry-py`. Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud Python registry docs corrected.** README examples no longer pass `is_bigendian` to `point_cloud_sensor_entry(...)` and now document the canonical native XYZ little-endian layout invariant that Rust validates during `write_sensor`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Python pointcloud registry constructors follow the native layout contract.** `point_cloud_sensor_entry(...)` no longer accepts `is_bigendian`; Python producers declare fields, `point_step`, cadence, and frame reference only. `write_sensor` now surfaces the Rust native-layout validation error for non-canonical XYZ metadata.
 
 ### Nils's codex · May 16, 19:02 HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Python pointcloud README examples match the native API.** `auki-datatypes-py` and `auki-registry-py` docs no longer advertise the retired `point_cloud_stream` or `is_bigendian` surfaces and now describe the native XYZ little-endian layout invariant. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Python pointcloud bindings are native.** `auki-datatypes-py` now exposes `auki.point_cloud.PointCloudFrame { point_count, data }` and `auki-registry-py` drops `is_bigendian` from pointcloud sensor construction while preserving Rust layout validation. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -28,7 +28,7 @@ st = adt.pose.SpatialTransform(
 )
 ```
 
-Every Rust `auki_datatypes::<name>::<Type>` has a matching `auki_datatypes.<name>.<Type>` in Python. The submodules are: `audio`, `camera`, `detection`, `frame_stream`, `joint_encoders`, `joint_encoders_stream`, `point_cloud`, `point_cloud_stream`, `pose`, `stream`, `time_transform`.
+Every Rust `auki_datatypes::<name>::<Type>` has a matching `auki_datatypes.<name>.<Type>` in Python. The submodules are: `audio`, `camera`, `detection`, `frame_stream`, `joint_encoders`, `joint_encoders_stream`, `point_cloud`, `pose`, `stream`, `time_transform`. Pointcloud samples use `adt.point_cloud.PointCloudFrame(point_count=..., data=...)`; the former separate stream-only pointcloud package is gone.
 
 ## Cross-language byte equality
 

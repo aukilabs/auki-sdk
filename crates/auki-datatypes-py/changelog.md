@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud Python docs corrected.** README surface docs now list `point_cloud.PointCloudFrame(point_count, data)` as the Python pointcloud payload and no longer advertise the retired `point_cloud_stream` package.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Python datatypes expose the native pointcloud frame.** Regenerated the betterproto binding so `auki_datatypes.point_cloud.PointCloudFrame(point_count, data)` mirrors the Rust `auki.point_cloud` payload, removed the retired `point_cloud_stream` re-export, and updated the locked Python wire vector to the native frame bytes.
 
 ### Nils's codex · May 16, 12:31 HKT, 2026

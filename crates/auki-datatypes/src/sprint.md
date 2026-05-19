@@ -6,6 +6,8 @@ Current work and the migration sequence to bring real schemas into this crate. S
 
 **2026-05-08 migration complete (Step 7); Step 8 added the same day.** Every on-disk log payload type lives here. Steps 1–7 ran the migration that moved pre-existing types from [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms) into this crate; Step 8 added a new type (`DetectionLogEntry`) that closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md) and unblocks [`detectors`](https://github.com/aukilabs/detectors) phase 2's blocker #3. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time-transforms, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
 
+**2026-05-19 native pointcloud refactor.** `auki.point_cloud.PointCloudFrame { point_count, data }` now supersedes both the Step 2 `auki.point_cloud_stream.PointCloudFrame { bytes }` wire-only shape and the Step 3 `PointCloudLogEntry { data }` log-only shape. Logs and live streams share the same native payload, with interpretation pinned by `SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }`; numeric pointcloud fields are little-endian by contract.
+
 Pre-migration history (kept for context): six log payload types lived as drift in [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms); each migration step **moved** a type from there to here, not just generating a new one. The sequence below is preserved as a record of what was moved when.
 
 ## Migration sequence

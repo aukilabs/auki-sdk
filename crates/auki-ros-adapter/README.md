@@ -87,6 +87,8 @@ build_point_cloud_log_entry(msg)                                                
 
 `PointCloudFrame` is `auki_datatypes::point_cloud::PointCloudFrame { point_count, data }` (re-exported here). The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; the producer (this crate) uses the ROS-side `width × height` to compute `point_count` for the layout repacking, then flattens native point records into `data`. Readers resolve interpretation via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }` registry entry.
 
+The adapter accepts ROS `PointCloud2Msg.is_bigendian` as an input detail only. Auki-native pointcloud frames are always little-endian; multi-byte numeric fields are byte-swapped while repacking when the ROS message is big-endian. The registry entry does not carry endianness.
+
 Inputs are mirrors of ROS2's `sensor_msgs/PointCloud2` and `sensor_msgs/PointField`. The ROS2 `datatype` byte (1..=8) is mapped to the SDK's typed enum (`int8`..`float64`); unknown values panic loudly so wire-format drift surfaces instead of silently corrupting data. The frame hash is not inferred from disk by this crate; integrators pass the exact frame entry hash they wrote to `auki-registry`.
 
 ### RGB/RGBA normalization
@@ -99,7 +101,7 @@ ROS2 historically packs RGB into a `float32` whose 4 bytes are `0x00RRGGBB` (or 
 | `name="rgba"`, `float32`, `count=1`      | four sequential `uint8` fields `r`, `g`, `b`, `a`   |
 | Anything else (intensity, ring, t, ...)  | pass-through; datatype/count preserved              |
 
-Per-point bytes are repacked accordingly: source `[B, G, R, pad]` → output `[R, G, B]`; source `[B, G, R, A]` → output `[R, G, B, A]`. The registry entry's `fields`/`point_step` describe the **normalized** layout, not the raw ROS layout.
+Per-point bytes are repacked accordingly: little-endian source `[B, G, R, pad]` → output `[R, G, B]`; little-endian source `[B, G, R, A]` → output `[R, G, B, A]`. Big-endian ROS inputs are handled as `[pad, R, G, B]` / `[A, R, G, B]`. The registry entry's `fields`/`point_step` describe the **normalized** layout, not the raw ROS layout.
 
 ### `PointCloudSubscriber` trait
 

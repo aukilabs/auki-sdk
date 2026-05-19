@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Pointcloud layout code docs point at the native frame.** The `PointCloud` struct comment now references `auki_datatypes::point_cloud::PointCloudFrame` instead of the retired `PointCloudLogEntry`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Implementation status doc follows native pointcloud.** `src/readme.md` no longer advertises `PointCloud.is_bigendian`, now documents the little-endian native pointcloud invariant, and updates the scope-shrink summary from `PointCloudLogEntry` to shared `PointCloudFrame`.
 
 ### Nils's codex · May 19, HKT, 2026

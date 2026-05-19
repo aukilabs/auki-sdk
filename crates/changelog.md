@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-registry`](auki-registry/changelog.md) — active status/code docs finish native pointcloud naming.** Datatypes sprint status now names the native pointcloud supersession, and the registry `PointCloud` code docs reference `PointCloudFrame` instead of the retired log-only type.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-ros-adapter`](auki-ros-adapter/changelog.md) — ROS pointcloud translation emits native frames.** The adapter now returns `PointCloudFrame { point_count, data }`, converts big-endian ROS numeric fields into little-endian native bytes, validates canonical `x/y/z` layout metadata, and drops pointcloud registry endianness.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md), [`auki-network-py`](auki-network-py/changelog.md), [`auki-domain`](auki-domain/changelog.md), [`auki-domain-py`](auki-domain-py/changelog.md) — live pointcloud stream surfaces use native frames.** Rust streams now re-export `auki.point_cloud.PointCloudFrame { point_count, data }`, Python stream frames expose `.point_count` / `.data`, and resource catalog payload hints identify `auki.point_cloud.PointCloudFrame`.
 
 ### Nils's codex · May 19, HKT, 2026

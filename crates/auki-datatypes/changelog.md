@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Sprint status calls out the native pointcloud supersession.** `src/sprint.md` now notes that `auki.point_cloud.PointCloudFrame { point_count, data }` supersedes both the old `auki.point_cloud_stream` wire-only frame and the old `PointCloudLogEntry` log-only payload, with interpretation pinned by native `SensorBody::PointCloud` layout metadata.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Implementation status doc follows native pointcloud.** `src/readme.md` now documents `point_cloud::PointCloudFrame { point_count, data }` as the shared log/stream pointcloud payload, removes the retired `point_cloud_stream` module from the public surface, and updates the pointcloud locked-test names and `LogPayload` impl notes.
 
 ### Nils's codex · May 19, HKT, 2026

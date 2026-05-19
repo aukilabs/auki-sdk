@@ -125,8 +125,8 @@ pub struct MockPointCloudSubscriber { /* test-only helper, same shape as the cam
 
 Internal helpers (private):
 - `ros_datatype_to_sdk(u8)` — maps ROS2's `1..=8` discriminant to `PointFieldDataType`.
-- `normalize_layout(&[PointFieldMsg]) -> Normalized` — produces the SDK-side fields, packed `point_step`, and a per-source-field repacking plan. Both builders call this; the registry builder discards the plan.
-- `apply_normalization(plans, src_data, src_step, num_points, dst_step) -> Vec<u8>` — repacks per-frame bytes per the plan. RGB/RGBA in particular: source `[B, G, R, pad]` becomes `[R, G, B]`; source `[B, G, R, A]` becomes `[R, G, B, A]`.
+- `normalize_layout(&[PointFieldMsg]) -> Normalized` — produces the SDK-side fields, packed `point_step`, and a per-source-field repacking plan. Both builders call this; the registry builder validates the normalized layout starts with canonical `x/y/z`.
+- `apply_normalization(plans, src_data, src_step, row_step, width, num_points, dst_step, is_bigendian) -> Vec<u8>` — repacks per-frame bytes per the plan, respects ROS row padding, and converts multi-byte numeric fields to little-endian native bytes. RGB/RGBA in particular: little-endian source `[B, G, R, pad]` becomes `[R, G, B]`; big-endian source `[pad, R, G, B]` becomes `[R, G, B]`.
 
 ## `r2r_subscriber` module (feature-gated)
 
@@ -146,7 +146,7 @@ impl R2rCameraSubscriber {
 
 The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The actual `r2r::Node` + subscription wiring lands at task 9 against the real DDS bus, where it can be validated for free during the bring-up walkthrough. Topics: `/boostercamera/head/rgb/camera_info` and `/boostercamera/head/rgb`.
 
-## Tests (19 total)
+## Tests (21 total)
 
 | Test | Asserts |
 |------|---------|
@@ -162,8 +162,10 @@ The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The a
 | `mock_subscriber_bootstrap_timeout_when_unscripted` | Default mock returns `Timeout` |
 | `mock_subscriber_bootstrap_can_be_scripted_to_error` | Mock can simulate transport failures |
 | `end_to_end_translation_from_subscription_to_log_entry` | Full subscription → registry → log-entry path against the mock |
-| `build_point_cloud_registry_entry_matches_locked_hash` | Output hash matches the locked point-cloud example (`2c480838a9be0b14608a8a0d72ee319f`) |
+| `build_point_cloud_registry_entry_matches_locked_hash` | Output hash matches the locked point-cloud example (`d62ed811edcfb3e1a400f7aaa290eb85`) |
 | `build_point_cloud_log_entry_extracts_timestamp_and_data` | Point-cloud frame timestamp + normalized data bytes |
+| `build_point_cloud_log_entry_converts_big_endian_xyz_to_native_little_endian` | Big-endian ROS xyz bytes become native little-endian xyz bytes |
+| `build_point_cloud_log_entry_respects_organized_row_padding` | Organized ROS rows flatten without row padding bytes |
 | `rgb_field_normalizes_to_three_uint8s_and_repacks_bytes` | ROS float-packed RGB becomes `r/g/b` uint8 fields |
 | `rgba_field_normalizes_to_four_uint8s_with_alpha_preserved` | ROS float-packed RGBA becomes `r/g/b/a` uint8 fields |
 | `non_rgb_fields_pass_through_unchanged` | Non-color point fields keep datatype/count/layout |

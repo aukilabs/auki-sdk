@@ -61,7 +61,7 @@ pub struct RgbCamera {
 
 /// Static layout of a point-cloud sensor's per-point bytes. The actual point
 /// data lives in the per-frame log payload
-/// ([`auki_datatypes::point_cloud::PointCloudLogEntry`]); this describes how
+/// ([`auki_datatypes::point_cloud::PointCloudFrame`]); this describes how
 /// to interpret those bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointCloud {

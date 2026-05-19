@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**ROS pointcloud translation now emits native frames.** `build_point_cloud_log_entry` now returns `PointCloudFrame { point_count, data }`, converts ROS big-endian numeric fields to native little-endian bytes while repacking, respects `row_step` for organized source data, and validates that normalized registry layouts start with canonical `x/y/z` float32 fields. `build_point_cloud_registry_entry` drops `is_bigendian`, recomputing the locked pointcloud hash to **`d62ed811edcfb3e1a400f7aaa290eb85`**. Tests now cover native `point_count`, big-endian XYZ conversion, organized row padding, RGB/RGBA normalization under the native prefix, and non-color fields trailing XYZ.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Implementation status doc names native pointcloud frames.** `src/readme.md` now documents `build_point_cloud_log_entry(msg) -> (timestamp_ns, PointCloudFrame)` and notes that ROS `PointCloud2` input is converted into native `{ point_count, data }`.
 
 ### Nils's codex · May 19, HKT, 2026

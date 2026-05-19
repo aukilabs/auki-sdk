@@ -87,12 +87,11 @@ pub struct PointFieldMsg {
 //
 // `DynamicIntrinsics` + the camera log entry moved to
 // [`auki-datatypes`](../../auki-datatypes)'s `auki.camera` `.proto` at
-// Step 1; `PointCloudLogEntry` followed at Step 3 under `auki.point_cloud`
-// (now opaque-bytes-only). Re-exported here so existing call sites stay
-// short.
+// Step 1; `PointCloudFrame` followed under `auki.point_cloud` as the native
+// pointcloud payload. Re-exported here so existing call sites stay short.
 
 pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
-pub use auki_datatypes::point_cloud::PointCloudLogEntry;
+pub use auki_datatypes::point_cloud::PointCloudFrame;
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -284,7 +283,8 @@ enum NormalizationPlan {
     PassThrough {
         src_offset: u32,
         dst_offset: u32,
-        size: u32,
+        datatype: auki_registry::PointFieldDataType,
+        count: u32,
     },
     /// `name="rgb"`, `float32` → three `uint8` fields. 4 src bytes (`B,G,R,pad`)
     /// become 3 dst bytes (`R,G,B`).
@@ -318,7 +318,10 @@ fn normalize_layout(src_fields: &[PointFieldMsg]) -> Normalized {
     let mut plans = Vec::with_capacity(src_fields.len());
     let mut dst_offset: u32 = 0;
 
-    for f in src_fields {
+    let mut ordered_fields: Vec<_> = src_fields.iter().collect();
+    ordered_fields.sort_by_key(|f| f.offset);
+
+    for f in ordered_fields {
         match (f.name.as_str(), f.datatype, f.count) {
             ("rgb", ROS2_FLOAT32, 1) => {
                 let dst = dst_offset;
@@ -364,7 +367,8 @@ fn normalize_layout(src_fields: &[PointFieldMsg]) -> Normalized {
                 plans.push(NormalizationPlan::PassThrough {
                     src_offset: f.offset,
                     dst_offset,
-                    size,
+                    datatype,
+                    count: f.count,
                 });
                 dst_offset += size;
             }
@@ -379,61 +383,116 @@ fn normalize_layout(src_fields: &[PointFieldMsg]) -> Normalized {
 }
 
 /// Repack `src_data` into `num_points × dst_point_step` bytes per the plans.
+/// ROS numeric fields may arrive big-endian; Auki-native pointcloud bytes are
+/// always little-endian, so multi-byte pass-through fields are byte-swapped
+/// element-wise when `src_bigendian` is true.
 fn apply_normalization(
     plans: &[NormalizationPlan],
     src_data: &[u8],
     src_point_step: u32,
+    src_row_step: u32,
+    src_width: u32,
     num_points: usize,
     dst_point_step: u32,
+    src_bigendian: bool,
 ) -> Vec<u8> {
     let dst_step = dst_point_step as usize;
     let src_step = src_point_step as usize;
+    let src_row_step = if src_row_step == 0 {
+        src_point_step.saturating_mul(src_width)
+    } else {
+        src_row_step
+    } as usize;
+    let src_width = src_width.max(1) as usize;
     let mut out = vec![0u8; num_points * dst_step];
 
     for p in 0..num_points {
-        let src_base = p * src_step;
+        let src_base = (p / src_width) * src_row_step + (p % src_width) * src_step;
         let dst_base = p * dst_step;
         for plan in plans {
             match *plan {
                 NormalizationPlan::PassThrough {
                     src_offset,
                     dst_offset,
-                    size,
+                    datatype,
+                    count,
                 } => {
                     let so = src_base + src_offset as usize;
                     let d = dst_base + dst_offset as usize;
-                    let n = size as usize;
-                    out[d..d + n].copy_from_slice(&src_data[so..so + n]);
+                    copy_native_endian_field(
+                        &src_data[so..],
+                        &mut out[d..],
+                        datatype,
+                        count,
+                        src_bigendian,
+                    );
                 }
                 NormalizationPlan::ExpandRgb {
                     src_offset,
                     dst_offset,
                 } => {
-                    // src bytes (little-endian float32): [B, G, R, padding]
-                    // dst bytes:                        [R, G, B]
+                    // src little-endian float32 bytes: [B, G, R, padding]
+                    // src big-endian float32 bytes:    [padding, R, G, B]
+                    // dst bytes:                       [R, G, B]
                     let so = src_base + src_offset as usize;
                     let d = dst_base + dst_offset as usize;
-                    out[d] = src_data[so + 2];
-                    out[d + 1] = src_data[so + 1];
-                    out[d + 2] = src_data[so];
+                    if src_bigendian {
+                        out[d] = src_data[so + 1];
+                        out[d + 1] = src_data[so + 2];
+                        out[d + 2] = src_data[so + 3];
+                    } else {
+                        out[d] = src_data[so + 2];
+                        out[d + 1] = src_data[so + 1];
+                        out[d + 2] = src_data[so];
+                    }
                 }
                 NormalizationPlan::ExpandRgba {
                     src_offset,
                     dst_offset,
                 } => {
-                    // src bytes (little-endian float32): [B, G, R, A]
-                    // dst bytes:                        [R, G, B, A]
+                    // src little-endian float32 bytes: [B, G, R, A]
+                    // src big-endian float32 bytes:    [A, R, G, B]
+                    // dst bytes:                       [R, G, B, A]
                     let so = src_base + src_offset as usize;
                     let d = dst_base + dst_offset as usize;
-                    out[d] = src_data[so + 2];
-                    out[d + 1] = src_data[so + 1];
-                    out[d + 2] = src_data[so];
-                    out[d + 3] = src_data[so + 3];
+                    if src_bigendian {
+                        out[d] = src_data[so + 1];
+                        out[d + 1] = src_data[so + 2];
+                        out[d + 2] = src_data[so + 3];
+                        out[d + 3] = src_data[so];
+                    } else {
+                        out[d] = src_data[so + 2];
+                        out[d + 1] = src_data[so + 1];
+                        out[d + 2] = src_data[so];
+                        out[d + 3] = src_data[so + 3];
+                    }
                 }
             }
         }
     }
     out
+}
+
+fn copy_native_endian_field(
+    src: &[u8],
+    dst: &mut [u8],
+    datatype: auki_registry::PointFieldDataType,
+    count: u32,
+    src_bigendian: bool,
+) {
+    let width = datatype.byte_width() as usize;
+    for idx in 0..count as usize {
+        let start = idx * width;
+        let end = start + width;
+        if src_bigendian && width > 1 {
+            for (dst_byte, src_byte) in dst[start..end].iter_mut().zip(src[start..end].iter().rev())
+            {
+                *dst_byte = *src_byte;
+            }
+        } else {
+            dst[start..end].copy_from_slice(&src[start..end]);
+        }
+    }
 }
 
 /// Build a `SensorRegistryEntry` (with `SensorBody::PointCloud`) from a
@@ -454,41 +513,46 @@ pub fn build_point_cloud_registry_entry(
     frame_hash: impl Into<String>,
 ) -> auki_registry::SensorRegistryEntry {
     let normalized = normalize_layout(&msg.fields);
+    let point_cloud = auki_registry::PointCloud {
+        fields: normalized.fields,
+        point_step: normalized.point_step,
+        frame_rate_hz,
+        frame_id: frame_id.into(),
+        frame_hash: frame_hash.into(),
+    };
+    point_cloud
+        .validate_layout()
+        .expect("ROS PointCloud2 layout must normalize to native Auki xyz float32 prefix");
     auki_registry::SensorRegistryEntry {
         sensor_id: sensor_id.into(),
-        body: auki_registry::SensorBody::PointCloud(auki_registry::PointCloud {
-            fields: normalized.fields,
-            point_step: normalized.point_step,
-            is_bigendian: msg.is_bigendian,
-            frame_rate_hz,
-            frame_id: frame_id.into(),
-            frame_hash: frame_hash.into(),
-        }),
+        body: auki_registry::SensorBody::PointCloud(point_cloud),
     }
 }
 
-/// Build a `PointCloudLogEntry` from a `PointCloud2` message. Returns
+/// Build a `PointCloudFrame` from a `PointCloud2` message. Returns
 /// `(timestamp_ns, entry)` ready for `auki_logs::Log::append`. Applies the
 /// same RGB(A) normalization as `build_point_cloud_registry_entry`.
 ///
-/// Step 3 (2026-05-08): the entry is now opaque-bytes-only. `width` /
-/// `height` / `is_dense` no longer ride on the per-frame entry — readers
-/// resolve them via the `(sensor_id, sensor_hash)` pointing at the
-/// `SensorBody::PointCloud` registry entry. ROS-shape interpretation
-/// (`width × height × is_dense`) lives in the producer (here) and is
-/// flattened into the bytes via the registry's `point_step` and `fields`.
-pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry) {
+/// Native frames carry `point_count` plus packed point records. ROS-shape
+/// interpretation (`width × height × row_step × is_dense`) lives in the
+/// producer (here) and is flattened into the native bytes described by the
+/// registry's `point_step` and `fields`.
+pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudFrame) {
     let timestamp_ns = stamp_to_ns(msg.stamp);
     let normalized = normalize_layout(&msg.fields);
-    let num_points = (msg.width as usize).saturating_mul(msg.height as usize);
+    let point_count = msg.width.saturating_mul(msg.height);
+    let num_points = point_count as usize;
     let data = apply_normalization(
         &normalized.plans,
         &msg.data,
         msg.point_step,
+        msg.row_step,
+        msg.width,
         num_points,
         normalized.point_step,
+        msg.is_bigendian,
     );
-    let entry = PointCloudLogEntry { data };
+    let entry = PointCloudFrame { point_count, data };
     (timestamp_ns, entry)
 }
 
@@ -1107,9 +1171,9 @@ mod tests {
         );
         // Locked: this is the same hash exercised by auki-registry's
         // `point_cloud_entry_hash_is_locked`. If the two diverge, one of the
-        // crates drifted from the schema. Recomputed when `frame_hash`
-        // was added to PointCloud.
-        assert_eq!(entry.hash(), "2c480838a9be0b14608a8a0d72ee319f");
+        // crates drifted from the schema. Recomputed when native pointcloud
+        // metadata removed `is_bigendian`.
+        assert_eq!(entry.hash(), "d62ed811edcfb3e1a400f7aaa290eb85");
     }
 
     #[test]
@@ -1117,9 +1181,61 @@ mod tests {
         let msg = xyz_pc2(2);
         let (ts, entry) = build_point_cloud_log_entry(&msg);
         assert_eq!(ts, 100_000_000_500);
+        assert_eq!(entry.point_count, 2);
         // 2 points × 12 bytes each, no normalization for xyz-only.
         assert_eq!(entry.data.len(), 24);
         assert_eq!(entry.data, msg.data);
+    }
+
+    #[test]
+    fn build_point_cloud_log_entry_converts_big_endian_xyz_to_native_little_endian() {
+        let mut msg = xyz_pc2(1);
+        msg.is_bigendian = true;
+        msg.data.clear();
+        msg.data.extend_from_slice(&1.0f32.to_be_bytes());
+        msg.data.extend_from_slice(&2.0f32.to_be_bytes());
+        msg.data.extend_from_slice(&3.0f32.to_be_bytes());
+
+        let (_, entry) = build_point_cloud_log_entry(&msg);
+
+        assert_eq!(entry.point_count, 1);
+        assert_eq!(&entry.data[0..4], &1.0f32.to_le_bytes());
+        assert_eq!(&entry.data[4..8], &2.0f32.to_le_bytes());
+        assert_eq!(&entry.data[8..12], &3.0f32.to_le_bytes());
+    }
+
+    #[test]
+    fn build_point_cloud_log_entry_respects_organized_row_padding() {
+        fn push_xyz(data: &mut Vec<u8>, base: f32) {
+            data.extend_from_slice(&base.to_le_bytes());
+            data.extend_from_slice(&(base + 0.1).to_le_bytes());
+            data.extend_from_slice(&(base + 0.2).to_le_bytes());
+        }
+
+        let mut data = Vec::new();
+        for base in [1.0, 2.0] {
+            push_xyz(&mut data, base);
+        }
+        data.extend_from_slice(&[0xEE; 4]);
+        for base in [3.0, 4.0] {
+            push_xyz(&mut data, base);
+        }
+        data.extend_from_slice(&[0xDD; 4]);
+
+        let mut msg = xyz_pc2(4);
+        msg.width = 2;
+        msg.height = 2;
+        msg.row_step = 28;
+        msg.data = data;
+
+        let (_, entry) = build_point_cloud_log_entry(&msg);
+
+        let mut expected = Vec::new();
+        for base in [1.0, 2.0, 3.0, 4.0] {
+            push_xyz(&mut expected, base);
+        }
+        assert_eq!(entry.point_count, 4);
+        assert_eq!(entry.data, expected);
     }
 
     #[test]
@@ -1208,6 +1324,8 @@ mod tests {
         // [B=0x11, G=0x22, R=0x33, A=0x44]
         let mut data = Vec::new();
         data.extend_from_slice(&1.0f32.to_le_bytes()); // x
+        data.extend_from_slice(&2.0f32.to_le_bytes()); // y
+        data.extend_from_slice(&3.0f32.to_le_bytes()); // z
         data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
 
         let msg = PointCloud2Msg {
@@ -1222,15 +1340,27 @@ mod tests {
                     count: 1,
                 },
                 PointFieldMsg {
-                    name: "rgba".into(),
+                    name: "y".into(),
                     offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "z".into(),
+                    offset: 8,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "rgba".into(),
+                    offset: 12,
                     datatype: 7,
                     count: 1,
                 },
             ],
             is_bigendian: false,
-            point_step: 8,
-            row_step: 8,
+            point_step: 16,
+            row_step: 16,
             data,
             is_dense: true,
         };
@@ -1241,24 +1371,29 @@ mod tests {
             panic!("expected PointCloud variant");
         };
         let names: Vec<_> = pc.fields.iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(names, vec!["x", "r", "g", "b", "a"]);
-        // point_step unchanged: 8 (4 bytes x + 4 bytes rgba) → 8 (4 bytes x + 4 bytes rgba)
-        assert_eq!(pc.point_step, 8);
+        assert_eq!(names, vec!["x", "y", "z", "r", "g", "b", "a"]);
+        // point_step unchanged: 16 (12 bytes xyz + 4 bytes rgba) → 16.
+        assert_eq!(pc.point_step, 16);
 
         let (_, log) = build_point_cloud_log_entry(&msg);
-        assert_eq!(log.data.len(), 8);
+        assert_eq!(log.data.len(), 16);
         assert_eq!(&log.data[0..4], &1.0f32.to_le_bytes()); // x pass-through
-        assert_eq!(log.data[4], 0x33); // R
-        assert_eq!(log.data[5], 0x22); // G
-        assert_eq!(log.data[6], 0x11); // B
-        assert_eq!(log.data[7], 0x44); // A preserved
+        assert_eq!(&log.data[4..8], &2.0f32.to_le_bytes()); // y pass-through
+        assert_eq!(&log.data[8..12], &3.0f32.to_le_bytes()); // z pass-through
+        assert_eq!(log.data[12], 0x33); // R
+        assert_eq!(log.data[13], 0x22); // G
+        assert_eq!(log.data[14], 0x11); // B
+        assert_eq!(log.data[15], 0x44); // A preserved
     }
 
     #[test]
     fn non_rgb_fields_pass_through_unchanged() {
-        // intensity (float32) and ring (uint16) — neither is rgb/rgba; both
-        // should pass through with original datatypes.
+        // intensity (float32) and ring (uint16) trail canonical xyz; neither
+        // is rgb/rgba, so both should pass through with original datatypes.
         let mut data = Vec::new();
+        data.extend_from_slice(&1.0f32.to_le_bytes()); // x
+        data.extend_from_slice(&2.0f32.to_le_bytes()); // y
+        data.extend_from_slice(&3.0f32.to_le_bytes()); // z
         data.extend_from_slice(&1.5f32.to_le_bytes()); // intensity
         data.extend_from_slice(&7u16.to_le_bytes()); // ring
 
@@ -1268,21 +1403,39 @@ mod tests {
             width: 1,
             fields: vec![
                 PointFieldMsg {
-                    name: "intensity".into(),
+                    name: "x".into(),
                     offset: 0,
                     datatype: 7,
                     count: 1,
                 },
                 PointFieldMsg {
-                    name: "ring".into(),
+                    name: "y".into(),
                     offset: 4,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "z".into(),
+                    offset: 8,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "intensity".into(),
+                    offset: 12,
+                    datatype: 7,
+                    count: 1,
+                },
+                PointFieldMsg {
+                    name: "ring".into(),
+                    offset: 16,
                     datatype: 4,
                     count: 1,
                 },
             ],
             is_bigendian: false,
-            point_step: 6,
-            row_step: 6,
+            point_step: 18,
+            row_step: 18,
             data: data.clone(),
             is_dense: true,
         };
@@ -1292,18 +1445,18 @@ mod tests {
         let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
             panic!("expected PointCloud variant");
         };
-        assert_eq!(pc.fields.len(), 2);
-        assert_eq!(pc.fields[0].name, "intensity");
+        assert_eq!(pc.fields.len(), 5);
+        assert_eq!(pc.fields[3].name, "intensity");
         assert_eq!(
-            pc.fields[0].datatype,
+            pc.fields[3].datatype,
             auki_registry::PointFieldDataType::Float32
         );
-        assert_eq!(pc.fields[1].name, "ring");
+        assert_eq!(pc.fields[4].name, "ring");
         assert_eq!(
-            pc.fields[1].datatype,
+            pc.fields[4].datatype,
             auki_registry::PointFieldDataType::Uint16
         );
-        assert_eq!(pc.point_step, 6);
+        assert_eq!(pc.point_step, 18);
 
         let (_, log) = build_point_cloud_log_entry(&msg);
         assert_eq!(log.data, data);

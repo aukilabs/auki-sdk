@@ -155,7 +155,6 @@ def test_module_re_exports_all_packages():
         "audio",
         "camera",
         "detection",
-        "frame_stream",
         "joint_encoders",
         "joint_encoders_stream",
         "point_cloud",

@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**Camera streams now reuse `auki.camera.PinholeCameraLogEntry` directly.** The stream-only `auki.frame_stream.JpegFrame` package is retired: `proto/frame_stream.proto` is deleted, `build.rs` no longer generates it, and `src/lib.rs` no longer exports a `frame_stream` module. `/auki/stream/0.1.0` camera entries now carry the same prost record bytes as camera Sensor Logs, so "robot log == Park stream" holds at the payload-record level.
+
+Docs and parking-lot propagation now say Step 2's camera path reuses `auki.camera`, while `auki.point_cloud_stream.PointCloudFrame` remains stream-specific. This resolves the stale package-naming question for camera payloads without changing the existing point-cloud stream wrapper.
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **Cuba T5 + T12 — `DetectionLogEntry` gains `sensor_hash` (field 2) and `type` (field 3).** Each detection record now self-describes its source sensor (T5) and carries an open-string discriminator the consumer uses to pick a per-type decoder for the opaque `data` bytes (T12 — vocabulary like `aruco`, `portal`, `portal_corner`, `esl`, `person`; canonical list in [`detectors/README.md`](https://github.com/aukilabs/detectors)). Field number ledger updated in [`proto/detection.proto`](proto/detection.proto); the SDK still does not decode `data` — application code owns per-type decoders.

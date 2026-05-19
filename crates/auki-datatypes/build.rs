@@ -18,7 +18,6 @@ fn main() -> std::io::Result<()> {
                 "proto/audio_stream.proto",
                 "proto/camera.proto",
                 "proto/detection.proto",
-                "proto/frame_stream.proto",
                 "proto/joint_encoders.proto",
                 "proto/joint_encoders_stream.proto",
                 "proto/point_cloud.proto",

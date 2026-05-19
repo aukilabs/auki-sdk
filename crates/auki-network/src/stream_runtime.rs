@@ -7,7 +7,7 @@
 //! invokes per inbound substream. The callable returns a [`StreamDispatch`]
 //! variant that pairs the typed source-stream with the [`StreamManifest`],
 //! or [`StreamDispatch::Decline`] with a typed reason. The
-//! dispatch enum is *closed* over the SDK-supported `T`s (`JpegFrame`,
+//! dispatch enum is *closed* over the SDK-supported `T`s (`PinholeCameraLogEntry`,
 //! `PointCloudFrame` today; new variants added per coordinated
 //! SDK + consumer release). Each substream is mono-`T`; the producer's
 //! callback decides which `T` based on `request.sensor_id`.
@@ -32,9 +32,9 @@
 //!
 //! ## Per-call `T` on the producer side (Dagaz D1)
 //!
-//! grimsby v1 pinned `T = JpegFrame` at `NetworkRuntime::spawn` time —
-//! the producer's callback was `StreamProvider<JpegFrame>`, returning
-//! `StreamDecision<JpegFrame>`. Dagaz lifts that pinning so a single
+//! grimsby v1 pinned `T = PinholeCameraLogEntry` at `NetworkRuntime::spawn` time —
+//! the producer's callback was `StreamProvider<PinholeCameraLogEntry>`, returning
+//! `StreamDecision<PinholeCameraLogEntry>`. Dagaz lifts that pinning so a single
 //! daemon can serve multiple `T`s (camera + pointcloud, today). The
 //! producer dispatches on `request.sensor_id` and returns a
 //! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
@@ -43,9 +43,9 @@
 
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
-    AudioFrame, DeclineReason, EndReason, JointEncodersFrame, JpegFrame, PointCloudFrame,
-    STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
-    StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
+    AudioFrame, DeclineReason, EndReason, JointEncodersFrame, PinholeCameraLogEntry,
+    PointCloudFrame, STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest,
+    StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
 };
 use auki_datatypes::detection::DetectionLogEntry;
 use futures::{Stream, StreamExt, channel::mpsc};
@@ -85,7 +85,7 @@ pub struct StreamItem<T> {
 pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, String>> + Send>>;
 
 /// Producer's accept/decline decision for a single inbound request.
-/// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
+/// Closed over the `T`s the SDK supports today: `PinholeCameraLogEntry` (grimsby v1),
 /// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2),
 /// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
 /// byte-identical to the on-disk `JointEncodersLogEntry`), and
@@ -100,15 +100,15 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// substream closes. On [`StreamDispatch::Decline`], the SDK writes
 /// `Decline { reason }` and closes the substream.
 ///
-/// SDK-supported `T`s: `JpegFrame`, `PointCloudFrame`,
+/// SDK-supported `T`s: `PinholeCameraLogEntry`, `PointCloudFrame`,
 /// `JointEncodersFrame`, `AudioFrame`, and (Cuba T8) `DetectionLogEntry`.
 pub enum StreamDispatch {
-    /// Accept the request with a JPEG source-Stream — grimsby v1's
+    /// Accept the request with a Camera source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
     /// as every other `T`.
-    AcceptJpeg {
+    AcceptCamera {
         manifest: StreamManifest,
-        source: SourceStream<JpegFrame>,
+        source: SourceStream<PinholeCameraLogEntry>,
     },
     /// Accept the request with a PointCloud source-Stream — Dagaz's new
     /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
@@ -383,7 +383,7 @@ impl NetworkRuntime {
 /// concrete `T` matching the [`StreamDispatch`] variant.
 ///
 /// 1. Read [`StreamMessage::Request`] (the Request variant carries no
-///    `T`-dependent data, so we read it as `StreamMessage<JpegFrame>`
+///    `T`-dependent data, so we read it as `StreamMessage<PinholeCameraLogEntry>`
 ///    — any concrete `T` works for the Request shape).
 /// 2. Invoke `provider(request) -> StreamDispatch`.
 /// 3. Match the dispatch variant; for Accept variants, hand off to
@@ -426,8 +426,8 @@ pub(crate) async fn handle_inbound_substream(
             let msg = StreamMessage::decline(reason);
             let _ = write_message(&mut substream, &msg).await;
         }
-        StreamDispatch::AcceptJpeg { manifest, source } => {
-            pump_typed::<JpegFrame>(substream, manifest, source, shutdown_rx).await;
+        StreamDispatch::AcceptCamera { manifest, source } => {
+            pump_typed::<PinholeCameraLogEntry>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptPointCloud { manifest, source } => {
             pump_typed::<PointCloudFrame>(substream, manifest, source, shutdown_rx).await;
@@ -454,7 +454,7 @@ pub(crate) async fn handle_inbound_substream(
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
-/// (`JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
+/// (`PinholeCameraLogEntry`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
 /// variant means adding a new monomorphization plus extending
 /// [`StreamDispatch`].
 async fn pump_typed<T>(
@@ -574,17 +574,17 @@ async fn consumer_reader_task<T>(
 }
 
 // Type alias re-exports for ergonomics — consumers reading
-// `auki_network::stream_runtime::*` get `JpegFrame` here without the
+// `auki_network::stream_runtime::*` get `PinholeCameraLogEntry` here without the
 // extra `stream_protocol::` hop.
-pub use crate::stream_protocol::JpegFrame as _JpegFrameReExport;
+pub use crate::stream_protocol::PinholeCameraLogEntry as _PinholeCameraLogEntryReExport;
 #[allow(unused_imports)]
-use _JpegFrameReExport as _;
+use _PinholeCameraLogEntryReExport as _;
 
-// Static check that `JpegFrame` and `PointCloudFrame` satisfy the
+// Static check that `PinholeCameraLogEntry` and `PointCloudFrame` satisfy the
 // bounds the runtime expects for `T`.
 const _: fn() = || {
     fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
-    assert_message_send_static::<JpegFrame>();
+    assert_message_send_static::<PinholeCameraLogEntry>();
     assert_message_send_static::<PointCloudFrame>();
 };
 
@@ -666,29 +666,32 @@ mod tests {
 
     // ─── Provider fixtures ───────────────────────────────────────────────
 
-    fn jpeg_provider_yielding_three_frames() -> StreamProvider {
+    fn camera_provider_yielding_three_frames() -> StreamProvider {
         Arc::new(|_peer, _req| {
             let frames = vec![
                 Ok(StreamItem {
                     timestamp_ns: 1_000,
-                    payload: JpegFrame {
-                        bytes: vec![0xff, 0xd8, 0x01],
+                    payload: PinholeCameraLogEntry {
+                        dynamic_intrinsics: None,
+                        frame: vec![0xff, 0xd8, 0x01],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 2_000,
-                    payload: JpegFrame {
-                        bytes: vec![0xff, 0xd8, 0x02],
+                    payload: PinholeCameraLogEntry {
+                        dynamic_intrinsics: None,
+                        frame: vec![0xff, 0xd8, 0x02],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 3_000,
-                    payload: JpegFrame {
-                        bytes: vec![0xff, 0xd8, 0x03],
+                    payload: PinholeCameraLogEntry {
+                        dynamic_intrinsics: None,
+                        frame: vec![0xff, 0xd8, 0x03],
                     },
                 }),
             ];
-            StreamDispatch::AcceptJpeg {
+            StreamDispatch::AcceptCamera {
                 manifest: manifest(
                     "test/cam",
                     "sensor-hash-3",
@@ -702,14 +705,17 @@ mod tests {
         })
     }
 
-    fn jpeg_provider_declines_unknown() -> StreamProvider {
+    fn camera_provider_declines_unknown() -> StreamProvider {
         Arc::new(|_peer, req| {
             if req.sensor_id == "exists" {
-                StreamDispatch::AcceptJpeg {
+                StreamDispatch::AcceptCamera {
                     manifest: manifest("exists", "h", "c", "ch", "exists/frame", "fh"),
                     source: Box::pin(stream::iter(vec![Ok(StreamItem {
                         timestamp_ns: 1,
-                        payload: JpegFrame { bytes: vec![0xff] },
+                        payload: PinholeCameraLogEntry {
+                            dynamic_intrinsics: None,
+                            frame: vec![0xff],
+                        },
                     })])),
                 }
             } else {
@@ -720,16 +726,19 @@ mod tests {
         })
     }
 
-    fn jpeg_provider_yields_then_errors() -> StreamProvider {
+    fn camera_provider_yields_then_errors() -> StreamProvider {
         Arc::new(|_peer, _req| {
             let items = vec![
                 Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: JpegFrame { bytes: vec![0xaa] },
+                    payload: PinholeCameraLogEntry {
+                        dynamic_intrinsics: None,
+                        frame: vec![0xaa],
+                    },
                 }),
                 Err("encoder died".to_string()),
             ];
-            StreamDispatch::AcceptJpeg {
+            StreamDispatch::AcceptCamera {
                 manifest: manifest("test/cam", "h", "c", "ch", "test/cam/frame", "fh"),
                 source: Box::pin(stream::iter(items)),
             }
@@ -813,7 +822,7 @@ mod tests {
 
     fn multi_t_provider() -> StreamProvider {
         Arc::new(|_peer, req| match req.sensor_id.as_str() {
-            "camera" => StreamDispatch::AcceptJpeg {
+            "camera" => StreamDispatch::AcceptCamera {
                 manifest: manifest(
                     "camera",
                     "cam-hash",
@@ -824,8 +833,9 @@ mod tests {
                 ),
                 source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: JpegFrame {
-                        bytes: vec![0xff, 0xd8, 0xab],
+                    payload: PinholeCameraLogEntry {
+                        dynamic_intrinsics: None,
+                        frame: vec![0xff, 0xd8, 0xab],
                     },
                 })])),
             },
@@ -916,7 +926,7 @@ mod tests {
         // LibP2p; we accept either.
         let result = tokio::time::timeout(
             Duration::from_secs(35),
-            consumer.open_stream::<JpegFrame>(
+            consumer.open_stream::<PinholeCameraLogEntry>(
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "anything".into(),
@@ -950,7 +960,7 @@ mod tests {
     /// reads 3 frames + a final `Err(EndOfStream { reason: SourceEnded })`,
     /// then None.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn producer_accepts_and_streams_jpeg_frames() {
+    async fn producer_accepts_and_streams_camera_frames() {
         let id_p = PeerIdentity::from_seed(&[101u8; 32]);
         let id_c = PeerIdentity::from_seed(&[102u8; 32]);
 
@@ -963,7 +973,7 @@ mod tests {
                 peer_id: id_c.peer_id(),
                 multiaddrs: vec![addr_c],
             }],
-            jpeg_provider_yielding_three_frames(),
+            camera_provider_yielding_three_frames(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -983,7 +993,7 @@ mod tests {
         .await;
         assert!(connected, "consumer did not connect to producer within 15s");
 
-        let sub: StreamSubscription<JpegFrame> = consumer
+        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1004,7 +1014,7 @@ mod tests {
         let f0 = entries.next().await.unwrap().expect("frame 0 ok");
         assert_eq!(f0.seq, 0);
         assert_eq!(f0.timestamp_ns, 1_000);
-        assert_eq!(f0.payload.bytes, vec![0xff, 0xd8, 0x01]);
+        assert_eq!(f0.payload.frame, vec![0xff, 0xd8, 0x01]);
 
         let f1 = entries.next().await.unwrap().expect("frame 1 ok");
         assert_eq!(f1.seq, 1);
@@ -1013,7 +1023,7 @@ mod tests {
         let f2 = entries.next().await.unwrap().expect("frame 2 ok");
         assert_eq!(f2.seq, 2);
         assert_eq!(f2.timestamp_ns, 3_000);
-        assert_eq!(f2.payload.bytes, vec![0xff, 0xd8, 0x03]);
+        assert_eq!(f2.payload.frame, vec![0xff, 0xd8, 0x03]);
 
         let end = entries
             .next()
@@ -1047,7 +1057,7 @@ mod tests {
                 peer_id: id_c.peer_id(),
                 multiaddrs: vec![addr_c],
             }],
-            jpeg_provider_declines_unknown(),
+            camera_provider_declines_unknown(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1067,7 +1077,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let result: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer
+        let result: Result<StreamSubscription<PinholeCameraLogEntry>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1103,7 +1113,7 @@ mod tests {
                 peer_id: id_c.peer_id(),
                 multiaddrs: vec![addr_c],
             }],
-            jpeg_provider_yields_then_errors(),
+            camera_provider_yields_then_errors(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1123,7 +1133,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<JpegFrame> = consumer
+        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1173,12 +1183,14 @@ mod tests {
         let provider: StreamProvider = Arc::new(|_peer, _req| {
             let first = stream::iter(vec![Ok(StreamItem {
                 timestamp_ns: 1_000,
-                payload: JpegFrame {
-                    bytes: vec![0xff, 0xd8, 0x99],
+                payload: PinholeCameraLogEntry {
+                    dynamic_intrinsics: None,
+                    frame: vec![0xff, 0xd8, 0x99],
                 },
             })]);
-            let then_pending = stream::pending::<Result<StreamItem<JpegFrame>, String>>();
-            StreamDispatch::AcceptJpeg {
+            let then_pending =
+                stream::pending::<Result<StreamItem<PinholeCameraLogEntry>, String>>();
+            StreamDispatch::AcceptCamera {
                 manifest: manifest(
                     "shutdown/cam",
                     "shutdown-test",
@@ -1217,7 +1229,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<JpegFrame> = consumer
+        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1230,7 +1242,7 @@ mod tests {
 
         let f0 = entries.next().await.unwrap().expect("first frame ok");
         assert_eq!(f0.seq, 0);
-        assert_eq!(f0.payload.bytes, vec![0xff, 0xd8, 0x99]);
+        assert_eq!(f0.payload.frame, vec![0xff, 0xd8, 0x99]);
 
         producer.shutdown();
 
@@ -1274,7 +1286,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(35),
-            consumer.open_stream::<JpegFrame>(
+            consumer.open_stream::<PinholeCameraLogEntry>(
                 id_unreachable.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
@@ -1294,7 +1306,7 @@ mod tests {
         consumer.shutdown();
     }
 
-    /// Same happy-path as `producer_accepts_and_streams_jpeg_frames`
+    /// Same happy-path as `producer_accepts_and_streams_camera_frames`
     /// but with `T = PointCloudFrame`. Exercises the multi-`T`
     /// dispatch chain (Dagaz D1) end-to-end.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1451,12 +1463,12 @@ mod tests {
         consumer.shutdown();
     }
 
-    /// One producer serves both JPEG and PointCloud over the same
+    /// One producer serves both Camera and PointCloud over the same
     /// runtime via `sensor_id` dispatch (Dagaz D1). Three substreams
-    /// over one libp2p connection: camera → AcceptJpeg, pointcloud →
+    /// over one libp2p connection: camera → AcceptCamera, pointcloud →
     /// AcceptPointCloud, unknown sensor → Decline.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn one_producer_serves_jpeg_and_pointcloud_via_sensor_id_dispatch() {
+    async fn one_producer_serves_camera_and_pointcloud_via_sensor_id_dispatch() {
         let id_p = PeerIdentity::from_seed(&[121u8; 32]);
         let id_c = PeerIdentity::from_seed(&[122u8; 32]);
 
@@ -1489,8 +1501,8 @@ mod tests {
         .await;
         assert!(connected);
 
-        // Substream 1: JPEG.
-        let sub_jpeg: StreamSubscription<JpegFrame> = consumer
+        // Substream 1: Camera.
+        let sub_camera: StreamSubscription<PinholeCameraLogEntry> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1498,12 +1510,12 @@ mod tests {
                 },
             )
             .await
-            .expect("open_stream<JpegFrame> camera");
-        assert_eq!(sub_jpeg.manifest.sensor_id, "camera");
-        assert_eq!(sub_jpeg.manifest.sensor_hash, "cam-hash");
-        let mut jpeg_entries = sub_jpeg.entries;
-        let jf = jpeg_entries.next().await.unwrap().expect("jpeg frame");
-        assert_eq!(jf.payload.bytes, vec![0xff, 0xd8, 0xab]);
+            .expect("open_stream<PinholeCameraLogEntry> camera");
+        assert_eq!(sub_camera.manifest.sensor_id, "camera");
+        assert_eq!(sub_camera.manifest.sensor_hash, "cam-hash");
+        let mut camera_entries = sub_camera.entries;
+        let cf = camera_entries.next().await.unwrap().expect("camera frame");
+        assert_eq!(cf.payload.frame, vec![0xff, 0xd8, 0xab]);
 
         // Substream 2: PointCloud.
         let sub_pc: StreamSubscription<PointCloudFrame> = consumer
@@ -1522,7 +1534,7 @@ mod tests {
         assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
 
         // Substream 3: unknown sensor → Decline.
-        let unknown: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer
+        let unknown: Result<StreamSubscription<PinholeCameraLogEntry>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {

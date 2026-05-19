@@ -116,7 +116,7 @@ Stream payloads and dispatch:
 
 ```rust
 pub enum StreamDispatch {
-    AcceptJpeg { manifest: StreamManifest, source: SourceStream<JpegFrame> },
+    AcceptCamera { manifest: StreamManifest, source: SourceStream<PinholeCameraLogEntry> },
     AcceptPointCloud { manifest: StreamManifest, source: SourceStream<PointCloudFrame> },
     AcceptJointEncoders { manifest: StreamManifest, source: SourceStream<JointEncodersFrame> },
     AcceptAudio { manifest: StreamManifest, source: SourceStream<AudioFrame> },

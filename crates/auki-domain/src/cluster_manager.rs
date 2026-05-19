@@ -997,7 +997,7 @@ impl ClusterManager {
     /// `/auki/stream/0.1.0` trust-boundary resolution 2026-05-13 —
     /// non-cluster substreams are silently dropped).
     ///
-    /// `T` is the typed payload the substream carries (`JpegFrame`,
+    /// `T` is the typed payload the substream carries (`PinholeCameraLogEntry`,
     /// `PointCloudFrame`, `JointEncodersFrame`); the consumer
     /// statically knows which `T` to expect per call.
     pub async fn open_stream<T>(
@@ -2446,7 +2446,7 @@ fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
 
 fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
     match kind {
-        "rgb_camera" => "jpeg_frame",
+        "rgb_camera" => "pinhole_camera_log_entry",
         "point_cloud" => "point_cloud_frame",
         "joint_encoders" => "joint_encoders_frame",
         "audio" => "audio_frame",
@@ -3105,7 +3105,7 @@ mod tests {
         assert_eq!(sensor.sensor_hash, "abc123");
         assert_eq!(sensor.sensor_kind, "rgb_camera");
         assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
-        assert_eq!(sensor.payload, "jpeg_frame");
+        assert_eq!(sensor.payload, "pinhole_camera_log_entry");
     }
 
     #[test]

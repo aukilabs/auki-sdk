@@ -13,7 +13,7 @@ A single source file: [`lib.rs`](lib.rs). It includes the prost-generated module
 - `time_transform` (Step 6, 2026-05-08) — `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }`. The pre-migration per-entry `source` field moved to the manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); the per-entry `discontinuous: bool` is gone (computed on read).
 - `detection` (Step 8, 2026-05-08) — `DetectionLogEntry { bytes data }`. Opaque-bytes-only — the per-frame detection schema is defined by the Detector, not the SDK (QR portal-uid + corners; ESL class + bbox + confidence; people bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. The exact registry shape that pins per-`(detector_id, ...)` interpretation is TBD; it'll be the Detection-Log analog of `SensorRegistryEntry`.
 - `joint_encoders` (2026-05-09) — `JointEncodersLogEntry { repeated float angles_rad }`. Per-frame joint-encoder readings in radians, indexed in the producer's emit order; vector length pinned by `(sensor_id, sensor_hash) → SensorBody::JointEncoders { joint_count }`. Joint angles are encoder readings — measurements before any kinematic interpretation; FK against the URDF is a consumer-side derivation (Park).
-- `frame_stream` (Step 2, 2026-05-08) — `JpegFrame`. libp2p `/auki/stream/0.1.0` payload.
+- Camera streams reuse `camera::PinholeCameraLogEntry` directly, so robot logs and Park stream records share the same payload bytes.
 - `point_cloud_stream` (Step 2, 2026-05-08) — `PointCloudFrame`. libp2p `/auki/stream/0.1.0` payload.
 - `joint_encoders_stream` (2026-05-09) — `JointEncodersFrame { repeated float angles_rad }`. libp2p `/auki/stream/0.1.0` payload. Same shape as `joint_encoders::JointEncodersLogEntry` (separate proto package so wire and disk dispatch on distinct Rust types — Step 2/3 precedent). Symmetry locked by an explicit `joint_encoders_disk_wire_byte_identical` test.
 - `stream` (Step 2, 2026-05-08) — full envelope: `StreamMessage` (oneof of `Request | Accept | Decline | Entry | EndOfStream`), `StreamRequest`, `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. Helper constructors (`StreamMessage::request/accept/decline/entry/end_of_stream`, `DeclineReason::sensor_not_found/sensor_unavailable/producer_shutting_down/other`, same shape on `EndReason`) live in this module — orphan rule satisfied since impls sit in the type's defining crate.
@@ -74,10 +74,6 @@ pub mod detection {
     pub struct DetectionLogEntry { pub data: Vec<u8> }
 }
 
-pub mod frame_stream {
-    pub struct JpegFrame { pub bytes: Vec<u8> }
-}
-
 pub mod point_cloud_stream {
     pub struct PointCloudFrame { pub bytes: Vec<u8> }
 }
@@ -135,8 +131,9 @@ impl_log_payload!(audio::AudioLogEntry);
 impl_log_payload!(pose::SpatialTransform);
 impl_log_payload!(time_transform::TimeTransformEntry);
 impl_log_payload!(detection::DetectionLogEntry);
-// (Stream types don't get LogPayload — they're wire types, not on-disk
-// payloads. `StreamEntry.payload` carries the on-disk T's prost bytes.)
+// (Stream-only types don't get LogPayload. Camera streams deliberately
+// carry camera::PinholeCameraLogEntry, which is an on-disk payload type,
+// so `StreamEntry.payload` can match the robot log record bytes.)
 ```
 
 ## Tests (37 total)
@@ -187,7 +184,7 @@ impl_log_payload!(detection::DetectionLogEntry);
 - `auki-time-transforms` — `tick()` and `Sampler::start` produce `TimeTransformEntry` (re-exported from this crate since Step 6, 2026-05-08); `TimeTransformSource` is now manifest metadata in `auki-manifests`, also re-exported.
 - `auki-manifests` — `build_pose_log_manifest` references the new pose-log shape: `(from_frame_id, from_frame_hash, to_frame_id, to_frame_hash, …, writer_mode: PoseWriterMode, expected_rate_hz)` (Step 5, 2026-05-08). `build_time_transform_log_manifest` takes `&TimeTransformSource` since Step 6.
 - `auki-layout` — `poselog_path(session_root, from_frame_id, to_frame_id) -> PathBuf` mirrors `timetransform_log_path`'s `(from, to)`-keyed shape (Step 5).
-- `auki-network`'s `stream_protocol` — re-exports `JpegFrame`, `PointCloudFrame`, and the full `auki.stream` envelope; `stream_runtime`'s `T` bound is `prost::Message + Default + Send + 'static` (Step 2, 2026-05-08).
+- `auki-network`'s `stream_protocol` — re-exports `PinholeCameraLogEntry`, `PointCloudFrame`, and the full `auki.stream` envelope; `stream_runtime`'s `T` bound is `prost::Message + Default + Send + 'static` (Step 2, 2026-05-08).
 - `auki-network-py` — PyO3 wrappers track the prost match shape; Python surface unchanged.
 - `auki-logs` (transitive) — every on-disk prost type gets `LogPayload` for free via `impl_log_payload!`.
 - [`detectors`](https://github.com/aukilabs/detectors) (downstream) — phase-2 Detection-Log writers append `DetectionLogEntry { data: <detector-specific schema> }` to a `Log<DetectionLogEntry>`; the SDK doesn't decode `data`, so each detector controls its own schema. Step 8 unblocks phase-2 blocker #3 (the `DetectionLogEntry` type); the remaining phase-2 blockers — `Log<T>::tail()` for the read side, the Detector binding API, the `auki-sdk-py` Python binding — sit elsewhere.

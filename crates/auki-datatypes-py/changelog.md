@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 18, HKT, 2026
+
+**`frame_stream` is removed from the Python betterproto surface.** The generated `auki_datatypes.auki.frame_stream` module and top-level `frame_stream` re-export are gone because camera streams now use `auki_datatypes.camera.PinholeCameraLogEntry` directly. The module-shape test and README were updated so Python consumers see the same "camera log record == camera stream record" contract as Rust.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Python betterproto stream binding follows `StreamDescriptor`.** The generated `auki_datatypes.auki.stream` binding now exposes `StreamDescriptor` with `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `frame_id`, and `frame_hash`, and `StreamMessage.accept` points at that class. This mirrors the Rust `auki.stream` schema change from `AcceptInfo` to descriptor-shaped accept metadata. Added a Python round-trip smoke test for the descriptor shape.

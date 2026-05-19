@@ -12,7 +12,7 @@ import auki_datatypes as adt
 # Step 1 — Pinhole camera log entry
 frame = adt.camera.PinholeCameraLogEntry(
     dynamic_intrinsics=adt.camera.DynamicIntrinsics(fx=1234.5, fy=1234.5, cx=272.0, cy=244.0, distortion_coefficients=[]),
-    frame=jpeg_bytes,
+    frame=camera_bytes,
 )
 on_disk = bytes(frame)
 decoded = adt.camera.PinholeCameraLogEntry().parse(on_disk)
@@ -28,7 +28,7 @@ st = adt.pose.SpatialTransform(
 )
 ```
 
-Every Rust `auki_datatypes::<name>::<Type>` has a matching `auki_datatypes.<name>.<Type>` in Python. The submodules are: `audio`, `camera`, `detection`, `frame_stream`, `joint_encoders`, `joint_encoders_stream`, `point_cloud`, `point_cloud_stream`, `pose`, `stream`, `time_transform`.
+Every Rust `auki_datatypes::<name>::<Type>` has a matching `auki_datatypes.<name>.<Type>` in Python. The submodules are: `audio`, `camera`, `detection`, `joint_encoders`, `joint_encoders_stream`, `point_cloud`, `point_cloud_stream`, `pose`, `stream`, `time_transform`.
 
 ## Cross-language byte equality
 
@@ -55,7 +55,7 @@ input_path = auki_layout.sensorlog_path(session, input_log_id)
 for entry in auki_logs.Log.tail(input_path):
     # Decode the input log's PinholeCameraLogEntry from opaque bytes
     camera_frame = adt.camera.PinholeCameraLogEntry().parse(entry.payload)
-    # Run the ESL detector on the JPEG bytes
+    # Run the ESL detector on the camera bytes
     detections = run_esl(camera_frame.frame)
     # Encode the detector output as a DetectionLogEntry
     payload = bytes(adt.detection.DetectionLogEntry(data=serialize(detections)))

@@ -23,10 +23,12 @@
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
 use auki_network_rs::stream_protocol::{
-    AudioFrame as RustAudioFrame, DeclineReason as RustDeclineReason, EndReason as RustEndReason,
-    JointEncodersFrame as RustJointEncodersFrame, JpegFrame as RustJpegFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamManifest as RustStreamManifest,
-    StreamRequest as RustStreamRequest, decline_reason, end_reason,
+    AudioFrame as RustAudioFrame, DeclineReason as RustDeclineReason,
+    DynamicIntrinsics as RustDynamicIntrinsics, EndReason as RustEndReason,
+    JointEncodersFrame as RustJointEncodersFrame,
+    PinholeCameraLogEntry as RustPinholeCameraLogEntry, PointCloudFrame as RustPointCloudFrame,
+    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest, decline_reason,
+    end_reason,
 };
 use auki_network_rs::stream_runtime::{
     OpenStreamError as RustOpenStreamError, SourceStream, StreamDispatch as RustStreamDispatch,
@@ -160,40 +162,121 @@ impl PyStreamManifest {
     }
 }
 
-// ─── JpegFrame ───────────────────────────────────────────────────────────────
+// ─── CameraFrame ──────────────────────────────────────────────────
 
-/// Grimsby v1 payload `T` — JPEG bytes (per D4). Byte-identical to what
-/// `GET /api/preview/latest.jpg` serves today over HTTP.
-#[pyclass(name = "JpegFrame", frozen)]
-#[derive(Clone, Debug)]
-pub struct PyJpegFrame {
-    pub(crate) inner: RustJpegFrame,
+/// Optional per-frame pinhole intrinsics carried by
+/// [`PyCameraFrame`]. Static intrinsics still live in the
+/// Sensor Registry; this field is for cameras whose intrinsics can vary
+/// per frame.
+#[pyclass(name = "DynamicIntrinsics", frozen)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PyDynamicIntrinsics {
+    pub(crate) inner: RustDynamicIntrinsics,
 }
 
 #[pymethods]
-impl PyJpegFrame {
+impl PyDynamicIntrinsics {
     #[new]
-    #[pyo3(signature = (bytes, /))]
-    fn new(bytes: Bound<'_, PyBytes>) -> Self {
+    #[pyo3(signature = (*, fx, fy, cx, cy, distortion_coefficients=None))]
+    fn new(fx: f64, fy: f64, cx: f64, cy: f64, distortion_coefficients: Option<Vec<f64>>) -> Self {
         Self {
-            inner: RustJpegFrame {
-                bytes: bytes.as_bytes().to_vec(),
+            inner: RustDynamicIntrinsics {
+                fx,
+                fy,
+                cx,
+                cy,
+                distortion_coefficients: distortion_coefficients.unwrap_or_default(),
             },
         }
     }
 
-    /// Raw JPEG bytes. Returns a fresh `bytes` copy each call.
     #[getter]
-    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new_bound(py, &self.inner.bytes)
+    fn fx(&self) -> f64 {
+        self.inner.fx
     }
 
-    fn __len__(&self) -> usize {
-        self.inner.bytes.len()
+    #[getter]
+    fn fy(&self) -> f64 {
+        self.inner.fy
+    }
+
+    #[getter]
+    fn cx(&self) -> f64 {
+        self.inner.cx
+    }
+
+    #[getter]
+    fn cy(&self) -> f64 {
+        self.inner.cy
+    }
+
+    #[getter]
+    fn distortion_coefficients(&self) -> Vec<f64> {
+        self.inner.distortion_coefficients.clone()
     }
 
     fn __repr__(&self) -> String {
-        format!("JpegFrame(<{} bytes>)", self.inner.bytes.len())
+        format!(
+            "DynamicIntrinsics(fx={}, fy={}, cx={}, cy={}, distortion_coefficients=<{} values>)",
+            self.inner.fx,
+            self.inner.fy,
+            self.inner.cx,
+            self.inner.cy,
+            self.inner.distortion_coefficients.len(),
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+/// Camera stream payload `T`. Python exposes this as `CameraFrame`; internally
+/// it is the same protobuf record as the on-disk
+/// `auki.camera.PinholeCameraLogEntry`, so the bytes inside
+/// `StreamEntry.payload` can match the camera Sensor Log entry exactly.
+#[pyclass(name = "CameraFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyCameraFrame {
+    pub(crate) inner: RustPinholeCameraLogEntry,
+}
+
+#[pymethods]
+impl PyCameraFrame {
+    #[new]
+    #[pyo3(signature = (frame, /, dynamic_intrinsics=None))]
+    fn new(frame: Bound<'_, PyBytes>, dynamic_intrinsics: Option<PyDynamicIntrinsics>) -> Self {
+        Self {
+            inner: RustPinholeCameraLogEntry {
+                dynamic_intrinsics: dynamic_intrinsics.map(|i| i.inner),
+                frame: frame.as_bytes().to_vec(),
+            },
+        }
+    }
+
+    /// Encoded camera frame bytes. Returns a fresh `bytes` copy each call.
+    #[getter]
+    fn frame<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.frame)
+    }
+
+    #[getter]
+    fn dynamic_intrinsics(&self) -> Option<PyDynamicIntrinsics> {
+        self.inner
+            .dynamic_intrinsics
+            .clone()
+            .map(|inner| PyDynamicIntrinsics { inner })
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.frame.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CameraFrame(<{} frame bytes>)",
+            self.inner.frame.len()
+        )
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -206,7 +289,7 @@ impl PyJpegFrame {
 /// Dagaz Batch 1 payload `T` — raw CDR-encoded `PointCloud2` ROS message
 /// bytes (per [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) D2).
 /// Consumer (Park, future Sentinel) parses CDR on its side; the SDK doesn't
-/// decode or interpret these bytes. Same shape as [`PyJpegFrame`] —
+/// decode or interpret these bytes. Same shape as [`PyCameraFrame`] —
 /// opaque-bytes-with-a-`bytes`-property — but the wire envelope uses a
 /// base64 adapter so a 22 MB/s raw stream lands at ~30 MB/s on the wire
 /// instead of ~80 MB/s (grimsby's JSON-of-binary tax dodge, per Dagaz D2).
@@ -258,7 +341,7 @@ impl PyPointCloudFrame {
 /// design (locked in `auki-datatypes` by the
 /// `joint_encoders_disk_wire_byte_identical` test).
 ///
-/// Differs from [`PyJpegFrame`] / [`PyPointCloudFrame`] in payload
+/// Differs from [`PyCameraFrame`] / [`PyPointCloudFrame`] in payload
 /// shape: a `list[float]` of joint angles, not opaque `bytes`. The
 /// underlying prost type is the same `repeated float angles_rad` Vec
 /// you'd encode by hand if there were no Python binding.
@@ -309,7 +392,7 @@ impl PyJointEncodersFrame {
 /// `auki-datatypes` by `audio_disk_wire_byte_identical`). Opaque-bytes:
 /// `sample_format` / `channels` / `sample_rate_hz` / `channel_layout`
 /// resolution comes from `(sensor_id, sensor_hash) → SensorBody::Audio`
-/// at handshake. Same opaque-`bytes`-property shape as [`PyJpegFrame`] /
+/// at handshake. Same opaque-`bytes`-property shape as [`PyCameraFrame`] /
 /// [`PyPointCloudFrame`], but the Python getter is named `.data` to
 /// match the proto field name (the proto says `bytes data`, not
 /// `bytes bytes`).
@@ -521,7 +604,7 @@ impl PyEndReason {
     }
 }
 
-// ─── Stream payload (Jpeg vs PointCloud vs JointEncoders) ────────────────────
+// ─── Stream payload (Camera vs PointCloud vs JointEncoders) ────────────────────
 
 /// Tagged union over the payload `T`s the SDK currently supports.
 /// The producer's [`PyStreamItem`] and the consumer's [`PyStreamEntry`]
@@ -529,7 +612,7 @@ impl PyEndReason {
 /// matching [`RustStreamDispatch`] variant.
 #[derive(Clone, Debug)]
 pub(crate) enum StreamPayload {
-    Jpeg(PyJpegFrame),
+    Camera(PyCameraFrame),
     PointCloud(PyPointCloudFrame),
     JointEncoders(PyJointEncodersFrame),
     Audio(PyAudioFrame),
@@ -537,8 +620,8 @@ pub(crate) enum StreamPayload {
 
 impl StreamPayload {
     fn from_py(payload: &Bound<'_, PyAny>) -> PyResult<Self> {
-        if let Ok(jpeg) = payload.extract::<PyJpegFrame>() {
-            return Ok(Self::Jpeg(jpeg));
+        if let Ok(camera) = payload.extract::<PyCameraFrame>() {
+            return Ok(Self::Camera(camera));
         }
         if let Ok(pc) = payload.extract::<PyPointCloudFrame>() {
             return Ok(Self::PointCloud(pc));
@@ -550,7 +633,7 @@ impl StreamPayload {
             return Ok(Self::Audio(a));
         }
         Err(PyValueError::new_err(format!(
-            "stream payload must be a JpegFrame, PointCloudFrame, JointEncodersFrame, or AudioFrame; got {}",
+            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, or AudioFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -560,7 +643,9 @@ impl StreamPayload {
 
     fn into_py(self, py: Python<'_>) -> PyObject {
         match self {
-            Self::Jpeg(f) => Py::new(py, f).expect("alloc JpegFrame").into_py(py),
+            Self::Camera(f) => Py::new(py, f)
+                .expect("alloc CameraFrame")
+                .into_py(py),
             Self::PointCloud(f) => Py::new(py, f).expect("alloc PointCloudFrame").into_py(py),
             Self::JointEncoders(f) => Py::new(py, f)
                 .expect("alloc JointEncodersFrame")
@@ -571,7 +656,7 @@ impl StreamPayload {
 
     fn repr(&self) -> String {
         match self {
-            Self::Jpeg(f) => f.__repr__(),
+            Self::Camera(f) => f.__repr__(),
             Self::PointCloud(f) => f.__repr__(),
             Self::JointEncoders(f) => f.__repr__(),
             Self::Audio(f) => f.__repr__(),
@@ -584,10 +669,10 @@ impl StreamPayload {
 /// What the producer's source-iterator yields. `seq` is stamped by the
 /// SDK at send time; producers only set `timestamp_ns` + `payload`.
 ///
-/// `payload` accepts either a [`PyJpegFrame`] or a [`PyPointCloudFrame`]
+/// `payload` accepts either a [`PyCameraFrame`] or a [`PyPointCloudFrame`]
 /// (Dagaz Batch 2). The SDK type-checks the payload against the matching
 /// [`PyStreamDecision`] accept variant when draining the source iterator
-/// — yielding a `JpegFrame` from an `accept_pointcloud(...)` source ends
+/// — yielding a `CameraFrame` from an `accept_pointcloud(...)` source ends
 /// the substream with `EndReason::ProducerError`.
 #[pyclass(name = "StreamItem", frozen)]
 #[derive(Clone, Debug)]
@@ -612,7 +697,7 @@ impl PyStreamItem {
         self.timestamp_ns
     }
 
-    /// The wrapped stream payload — either a `JpegFrame` or a
+    /// The wrapped stream payload — either a `CameraFrame` or a
     /// `PointCloudFrame`. Returns a fresh Python object each call.
     #[getter]
     fn payload(&self, py: Python<'_>) -> PyObject {
@@ -629,19 +714,21 @@ impl PyStreamItem {
 }
 
 impl PyStreamItem {
-    /// Convert to a `RustStreamItem<RustJpegFrame>`. Errors with a
+    /// Convert to a `RustStreamItem<RustPinholeCameraLogEntry>`. Errors with a
     /// human-readable detail if the payload is `PointCloud`. Used by
-    /// the producer-side source-stream pump for an `AcceptJpeg`
+    /// the producer-side source-stream pump for an `AcceptCamera`
     /// dispatch.
-    pub(crate) fn to_rust_jpeg(&self) -> Result<RustStreamItem<RustJpegFrame>, String> {
+    pub(crate) fn to_rust_camera(
+        &self,
+    ) -> Result<RustStreamItem<RustPinholeCameraLogEntry>, String> {
         match &self.payload {
-            StreamPayload::Jpeg(f) => Ok(RustStreamItem {
+            StreamPayload::Camera(f) => Ok(RustStreamItem {
                 timestamp_ns: self.timestamp_ns,
                 payload: f.inner.clone(),
             }),
             other => Err(format!(
-                "AcceptJpeg source yielded a StreamItem with {} payload; \
-                 the substream is mono-T — yield JpegFrame or use the matching factory",
+                "AcceptCamera source yielded a StreamItem with {} payload; \
+                 the substream is mono-T — yield CameraFrame or use the matching factory",
                 other.kind_name(),
             )),
         }
@@ -703,7 +790,7 @@ impl PyStreamItem {
 impl StreamPayload {
     fn kind_name(&self) -> &'static str {
         match self {
-            Self::Jpeg(_) => "JpegFrame",
+            Self::Camera(_) => "CameraFrame",
             Self::PointCloud(_) => "PointCloudFrame",
             Self::JointEncoders(_) => "JointEncodersFrame",
             Self::Audio(_) => "AudioFrame",
@@ -716,8 +803,8 @@ impl StreamPayload {
 /// What the consumer reads off `StreamSubscription.entries()`. Same as
 /// [`PyStreamItem`] but with the SDK-stamped `seq` exposed.
 ///
-/// `payload` is whichever `T` the producer accepted with — `JpegFrame`
-/// for an `accept(...)` substream or `PointCloudFrame` for an
+/// `payload` is whichever `T` the producer accepted with — `CameraFrame`
+/// for an `accept_camera(...)` substream or `PointCloudFrame` for an
 /// `accept_pointcloud(...)` substream. Each substream is mono-`T`, so a
 /// given `StreamSubscription` only ever surfaces one payload variant.
 #[pyclass(name = "StreamEntry", frozen)]
@@ -740,7 +827,7 @@ impl PyStreamEntry {
         self.seq
     }
 
-    /// The wrapped stream payload — either a `JpegFrame` or a
+    /// The wrapped stream payload — either a `CameraFrame` or a
     /// `PointCloudFrame`. Returns a fresh Python object each call.
     #[getter]
     fn payload(&self, py: Python<'_>) -> PyObject {
@@ -758,11 +845,11 @@ impl PyStreamEntry {
 }
 
 impl PyStreamEntry {
-    fn from_rust_jpeg(frame: RustStreamEntry<RustJpegFrame>) -> Self {
+    fn from_rust_camera(frame: RustStreamEntry<RustPinholeCameraLogEntry>) -> Self {
         Self {
             timestamp_ns: frame.timestamp_ns,
             seq: frame.seq,
-            payload: StreamPayload::Jpeg(PyJpegFrame {
+            payload: StreamPayload::Camera(PyCameraFrame {
                 inner: frame.payload,
             }),
         }
@@ -802,9 +889,10 @@ impl PyStreamEntry {
 // ─── StreamDecision ──────────────────────────────────────────────────────────
 
 /// Provider's accept/decline decision. Construct via the static
-/// factories `accept(manifest, source)` (JPEG substream) /
-/// `accept_pointcloud(manifest, source)` (PointCloud substream — Dagaz Batch
-/// 2) / `decline(reason)` — there is no public constructor.
+/// factories `accept_camera(manifest, source)`,
+/// `accept_pointcloud(manifest, source)`,
+/// `accept_joint_encoders(manifest, source)`, `accept_audio(manifest,
+/// source)`, or `decline(reason)` — there is no public constructor.
 ///
 /// `source` is **a Python async iterator yielding [`PyStreamItem`]
 /// values**. Typically an `async def` generator; any object with
@@ -812,17 +900,17 @@ impl PyStreamEntry {
 /// asyncio loop; `finally` blocks fire when the SDK drops the iterator
 /// (consumer disconnect → `aclose` driven through).
 ///
-/// **Each substream is mono-`T`.** The `accept` factory commits to a
-/// `JpegFrame` substream — yielding a `PointCloudFrame` ends the stream
-/// with `EndReason::ProducerError`. Use `accept_pointcloud` for a
-/// `PointCloudFrame` substream.
+/// **Each substream is mono-`T`.** The `accept_camera` factory commits
+/// to a `CameraFrame` substream — yielding a
+/// `PointCloudFrame` ends the stream with `EndReason::ProducerError`.
+/// Use `accept_pointcloud` for a `PointCloudFrame` substream.
 #[pyclass(name = "StreamDecision", frozen)]
 pub struct PyStreamDecision {
     pub(crate) inner: Mutex<Option<DecisionInner>>,
 }
 
 pub(crate) enum DecisionInner {
-    AcceptJpeg {
+    AcceptCamera {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
     },
@@ -845,14 +933,14 @@ pub(crate) enum DecisionInner {
 
 #[pymethods]
 impl PyStreamDecision {
-    /// Accept the request with a JPEG source. The async iterator must
-    /// yield `StreamItem(payload=JpegFrame(...))` values; yielding a
+    /// Accept the request with a camera source. The async iterator must
+    /// yield `StreamItem(payload=CameraFrame(...))` values; yielding a
     /// `PointCloudFrame` ends the stream with `EndReason::ProducerError`.
     #[staticmethod]
     #[pyo3(signature = (*, manifest, source))]
-    fn accept(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
+    fn accept_camera(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
         Self {
-            inner: Mutex::new(Some(DecisionInner::AcceptJpeg { manifest, source })),
+            inner: Mutex::new(Some(DecisionInner::AcceptCamera { manifest, source })),
         }
     }
 
@@ -908,7 +996,7 @@ impl PyStreamDecision {
         }
     }
 
-    /// Discriminator: `"accept"` (JPEG), `"accept_pointcloud"`,
+    /// Discriminator: `"accept_camera"`, `"accept_pointcloud"`,
     /// `"accept_joint_encoders"`, `"accept_audio"`, `"decline"`, or
     /// `"consumed"` (post-`take`). Read-only inspection; the actual
     /// fields aren't exposed because the source iterator is consumed
@@ -917,7 +1005,7 @@ impl PyStreamDecision {
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
         match guard.as_ref() {
-            Some(DecisionInner::AcceptJpeg { .. }) => "accept",
+            Some(DecisionInner::AcceptCamera { .. }) => "accept_camera",
             Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
             Some(DecisionInner::AcceptJointEncoders { .. }) => "accept_joint_encoders",
             Some(DecisionInner::AcceptAudio { .. }) => "accept_audio",
@@ -957,10 +1045,11 @@ impl PyStreamDecision {
 /// they are currently inspecting.
 ///
 /// Maps the Python [`PyStreamDecision`]'s [`DecisionInner`] variants
-/// (`AcceptJpeg`, `AcceptPointCloud`, `Decline`) onto the matching
+/// (`AcceptCamera`, `AcceptPointCloud`, `Decline`) onto the matching
 /// Rust [`RustStreamDispatch`] variant. Each substream is mono-`T`;
 /// the `T` is decided here by which factory the Python provider used
-/// (`accept` → `AcceptJpeg`, `accept_pointcloud` → `AcceptPointCloud`).
+/// (`accept_camera` → `AcceptCamera`,
+/// `accept_pointcloud` → `AcceptPointCloud`).
 ///
 /// Behaviour on Python exception / non-`StreamDecision` return:
 /// the wrapper logs the offence via `tracing::warn!` and synthesizes a
@@ -1017,12 +1106,12 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                 Ok(DecisionInner::Decline { reason }) => RustStreamDispatch::Decline {
                     reason: reason.inner,
                 },
-                Ok(DecisionInner::AcceptJpeg { manifest, source }) => {
+                Ok(DecisionInner::AcceptCamera { manifest, source }) => {
                     let source_stream =
-                        python_iter_into_source_stream::<RustJpegFrame>(source, |pf| {
-                            pf.to_rust_jpeg()
+                        python_iter_into_source_stream::<RustPinholeCameraLogEntry>(source, |pf| {
+                            pf.to_rust_camera()
                         });
-                    RustStreamDispatch::AcceptJpeg {
+                    RustStreamDispatch::AcceptCamera {
                         manifest: manifest.inner,
                         source: source_stream,
                     }
@@ -1065,7 +1154,7 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
 /// Convert a Python async iterator (yielding `PyStreamItem`) into a
 /// Rust [`SourceStream<T>`] the SDK can drain. The `convert` callback
 /// extracts the per-substream typed payload from each yielded
-/// [`PyStreamItem`] — `JpegFrame` for an `AcceptJpeg` dispatch,
+/// [`PyStreamItem`] — `CameraFrame` for an `AcceptCamera` dispatch,
 /// `PointCloudFrame` for `AcceptPointCloud`. Yielding a frame with the
 /// wrong payload variant produces `Some(Err("..."))`, which the SDK
 /// converts into [`auki_network::stream_protocol::EndReason::ProducerError`]
@@ -1177,8 +1266,12 @@ impl Drop for SourceStreamGuard {
 
 // ─── StreamSubscription + StreamEntryIterator ──────────────────────────────────────
 
-type RustJpegFrameStream =
-    Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustJpegFrame>, RustStreamError>> + Send>>;
+type RustPinholeCameraLogEntryStream = Pin<
+    Box<
+        dyn Stream<Item = Result<RustStreamEntry<RustPinholeCameraLogEntry>, RustStreamError>>
+            + Send,
+    >,
+>;
 type RustPointCloudFrameStream = Pin<
     Box<dyn Stream<Item = Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>> + Send>,
 >;
@@ -1193,7 +1286,7 @@ type RustAudioFrameStream =
 /// variant is fixed at `open_stream` time and never changes for the
 /// lifetime of the subscription.
 enum EntryStreamKind {
-    Jpeg(RustJpegFrameStream),
+    Camera(RustPinholeCameraLogEntryStream),
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
@@ -1251,12 +1344,12 @@ impl PyStreamSubscription {
 }
 
 impl PyStreamSubscription {
-    pub fn from_rust_jpeg(rust_sub: RustStreamSubscription<RustJpegFrame>) -> Self {
+    pub fn from_rust_camera(rust_sub: RustStreamSubscription<RustPinholeCameraLogEntry>) -> Self {
         Self {
             manifest: PyStreamManifest {
                 inner: rust_sub.manifest,
             },
-            entries: Mutex::new(Some(EntryStreamKind::Jpeg(rust_sub.entries))),
+            entries: Mutex::new(Some(EntryStreamKind::Camera(rust_sub.entries))),
         }
     }
 
@@ -1305,7 +1398,7 @@ pub struct PyStreamEntryIterator {
 /// closure and convert to a [`PyStreamEntry`] with the GIL held
 /// afterwards.
 enum EntryNext {
-    Jpeg(Result<RustStreamEntry<RustJpegFrame>, RustStreamError>),
+    Camera(Result<RustStreamEntry<RustPinholeCameraLogEntry>, RustStreamError>),
     PointCloud(Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
@@ -1346,8 +1439,8 @@ impl PyStreamEntryIterator {
             let rt = crate::cluster_tokio_runtime();
             rt.block_on(async {
                 match &mut stream {
-                    EntryStreamKind::Jpeg(s) => match s.next().await {
-                        Some(item) => EntryNext::Jpeg(item),
+                    EntryStreamKind::Camera(s) => match s.next().await {
+                        Some(item) => EntryNext::Camera(item),
                         None => EntryNext::Done,
                     },
                     EntryStreamKind::PointCloud(s) => match s.next().await {
@@ -1367,13 +1460,13 @@ impl PyStreamEntryIterator {
         });
 
         match item {
-            EntryNext::Jpeg(Ok(frame)) => {
+            EntryNext::Camera(Ok(frame)) => {
                 let mut guard = self
                     .entries
                     .lock()
                     .expect("StreamEntryIterator mutex poisoned");
                 *guard = Some(stream);
-                Ok(PyStreamEntry::from_rust_jpeg(frame))
+                Ok(PyStreamEntry::from_rust_camera(frame))
             }
             EntryNext::PointCloud(Ok(frame)) => {
                 let mut guard = self
@@ -1399,7 +1492,7 @@ impl PyStreamEntryIterator {
                 *guard = Some(stream);
                 Ok(PyStreamEntry::from_rust_audio(frame))
             }
-            EntryNext::Jpeg(Err(stream_err))
+            EntryNext::Camera(Err(stream_err))
             | EntryNext::PointCloud(Err(stream_err))
             | EntryNext::JointEncoders(Err(stream_err))
             | EntryNext::Audio(Err(stream_err)) => {
@@ -1519,7 +1612,8 @@ fn _build_stream_provider(py: Python<'_>, callable: Py<PyAny>) -> PyResult<Py<Py
 pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResult<()> {
     cluster.add_class::<PyStreamRequest>()?;
     cluster.add_class::<PyStreamManifest>()?;
-    cluster.add_class::<PyJpegFrame>()?;
+    cluster.add_class::<PyDynamicIntrinsics>()?;
+    cluster.add_class::<PyCameraFrame>()?;
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyAudioFrame>()?;
@@ -1625,14 +1719,17 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_frame_round_trips_through_pybytes() {
+    fn pinhole_camera_log_entry_round_trips_through_pybytes() {
         Python::with_gil(|py| {
             let payload = PyBytes::new_bound(py, &[0xff, 0xd8, 0x01, 0x02, 0x03]);
-            let f = PyJpegFrame::new(payload);
+            let intrinsics =
+                PyDynamicIntrinsics::new(400.0, 401.0, 272.5, 244.5, Some(vec![0.1, -0.2]));
+            let f = PyCameraFrame::new(payload, Some(intrinsics.clone()));
             assert_eq!(f.__len__(), 5);
             // Round-trip the bytes back out.
-            let out = f.bytes(py);
+            let out = f.frame(py);
             assert_eq!(out.as_bytes(), &[0xff, 0xd8, 0x01, 0x02, 0x03]);
+            assert_eq!(f.dynamic_intrinsics(), Some(intrinsics));
         });
     }
 
@@ -1674,13 +1771,13 @@ mod tests {
         });
     }
 
-    /// Helper: wrap a [`PyJpegFrame`] as a `Bound<'_, PyAny>` for the
+    /// Helper: wrap a [`PyCameraFrame`] as a `Bound<'_, PyAny>` for the
     /// new typed-payload `PyStreamItem::new` constructor (which
-    /// accepts either `JpegFrame` or `PointCloudFrame`).
-    fn jpeg_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
-        let frame = PyJpegFrame::new(PyBytes::new_bound(py, bytes));
+    /// accepts either `CameraFrame` or `PointCloudFrame`).
+    fn camera_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
+        let frame = PyCameraFrame::new(PyBytes::new_bound(py, bytes), None);
         Py::new(py, frame)
-            .expect("alloc PyJpegFrame")
+            .expect("alloc PyCameraFrame")
             .bind(py)
             .clone()
             .into_any()
@@ -1721,7 +1818,7 @@ mod tests {
     }
 
     /// Dialogue Batch 1 — `PyAudioFrame` is the audio analog of
-    /// `PyJpegFrame` / `PyPointCloudFrame`. Same opaque-bytes shape on
+    /// `PyCameraFrame` / `PyPointCloudFrame`. Same opaque-bytes shape on
     /// the Python surface, but the getter is named `.data` to match
     /// the underlying `bytes data = 1` proto field (not `bytes bytes
     /// = 1`).
@@ -1737,13 +1834,13 @@ mod tests {
     }
 
     #[test]
-    fn stream_item_extracts_to_rust_jpeg() {
+    fn stream_item_extracts_to_rust_camera() {
         Python::with_gil(|py| {
-            let payload_any = jpeg_frame_as_any(py, &[1, 2, 3]);
+            let payload_any = camera_frame_as_any(py, &[1, 2, 3]);
             let pf = PyStreamItem::new(123_456_789, payload_any).unwrap();
-            let rust = pf.to_rust_jpeg().expect("payload is Jpeg");
+            let rust = pf.to_rust_camera().expect("payload is Camera");
             assert_eq!(rust.timestamp_ns, 123_456_789);
-            assert_eq!(rust.payload.bytes, vec![1, 2, 3]);
+            assert_eq!(rust.payload.frame, vec![1, 2, 3]);
         });
     }
 
@@ -1776,25 +1873,27 @@ mod tests {
     #[test]
     fn stream_item_to_rust_errors_on_mismatched_payload() {
         Python::with_gil(|py| {
-            let pf_jpeg = PyStreamItem::new(0, jpeg_frame_as_any(py, &[1])).unwrap();
-            let err = pf_jpeg.to_rust_pointcloud().expect_err("jpeg ≠ pointcloud");
+            let pf_camera = PyStreamItem::new(0, camera_frame_as_any(py, &[1])).unwrap();
+            let err = pf_camera
+                .to_rust_pointcloud()
+                .expect_err("camera != pointcloud");
             assert!(err.contains("AcceptPointCloud"), "{err}");
             assert!(err.contains("PointCloudFrame"), "{err}");
 
             let pf_pc = PyStreamItem::new(0, pointcloud_frame_as_any(py, &[2])).unwrap();
-            let err = pf_pc.to_rust_jpeg().expect_err("pointcloud ≠ jpeg");
-            assert!(err.contains("AcceptJpeg"), "{err}");
-            assert!(err.contains("JpegFrame"), "{err}");
+            let err = pf_pc.to_rust_camera().expect_err("pointcloud ≠ camera");
+            assert!(err.contains("AcceptCamera"), "{err}");
+            assert!(err.contains("CameraFrame"), "{err}");
 
-            // Audio ≠ Jpeg: same mismatch shape for the Dialogue arm.
+            // Audio ≠ Camera: same mismatch shape for the Dialogue arm.
             let pf_audio = PyStreamItem::new(0, audio_frame_as_any(py, &[3])).unwrap();
-            let err = pf_audio.to_rust_jpeg().expect_err("audio ≠ jpeg");
-            assert!(err.contains("AcceptJpeg"), "{err}");
+            let err = pf_audio.to_rust_camera().expect_err("audio ≠ camera");
+            assert!(err.contains("AcceptCamera"), "{err}");
             assert!(err.contains("AudioFrame"), "{err}");
         });
     }
 
-    /// A non-JpegFrame / non-PointCloudFrame object passed as `payload`
+    /// A non-CameraFrame / non-PointCloudFrame object passed as `payload`
     /// must surface a `ValueError` at construction time — the Python
     /// surface is closed over the two SDK-supported `T`s.
     #[test]
@@ -1806,31 +1905,32 @@ mod tests {
             let bad = py.None();
             let err = PyStreamItem::new(0, bad.bind(py).clone()).expect_err("None is not a frame");
             assert!(err.is_instance_of::<PyValueError>(py));
-            assert!(err.to_string().contains("JpegFrame"), "{err}");
+            assert!(err.to_string().contains("CameraFrame"), "{err}");
             assert!(err.to_string().contains("PointCloudFrame"), "{err}");
             assert!(err.to_string().contains("AudioFrame"), "{err}");
         });
     }
 
     #[test]
-    fn stream_entry_constructs_from_rust_jpeg() {
+    fn stream_entry_constructs_from_rust_camera() {
         Python::with_gil(|_py| {
             let rust_frame = RustStreamEntry {
                 timestamp_ns: 9_999,
                 seq: 17,
-                payload: RustJpegFrame {
-                    bytes: vec![0xff, 0xd8, 0xee],
+                payload: RustPinholeCameraLogEntry {
+                    dynamic_intrinsics: None,
+                    frame: vec![0xff, 0xd8, 0xee],
                 },
             };
-            let pf = PyStreamEntry::from_rust_jpeg(rust_frame);
+            let pf = PyStreamEntry::from_rust_camera(rust_frame);
             assert_eq!(pf.timestamp_ns(), 9_999);
             assert_eq!(pf.seq(), 17);
             // Inspect the payload variant directly via the
             // `pub(crate)` field — exposing `__len__` would require
             // routing through the GIL-bound getter.
             match &pf.payload {
-                StreamPayload::Jpeg(j) => assert_eq!(j.inner.bytes.len(), 3),
-                _ => panic!("expected Jpeg payload variant"),
+                StreamPayload::Camera(j) => assert_eq!(j.inner.frame.len(), 3),
+                _ => panic!("expected Camera payload variant"),
             }
         });
     }
@@ -1888,8 +1988,8 @@ mod tests {
                 Some("frame".into()),
                 Some("fh".into()),
             );
-            let acc = PyStreamDecision::accept(manifest.clone(), py.None());
-            assert_eq!(acc.kind(), "accept");
+            let acc = PyStreamDecision::accept_camera(manifest.clone(), py.None());
+            assert_eq!(acc.kind(), "accept_camera");
 
             let acc_pc = PyStreamDecision::accept_pointcloud(manifest.clone(), py.None());
             assert_eq!(acc_pc.kind(), "accept_pointcloud");
@@ -1990,16 +2090,17 @@ def _bad(peer, req):
         });
     }
 
-    /// `build_stream_provider` mapping the Python `accept(manifest, source)`
-    /// factory onto `RustStreamDispatch::AcceptJpeg`. We don't drain the
+    /// `build_stream_provider` mapping the Python
+    /// `accept_camera(manifest, source)`
+    /// factory onto `RustStreamDispatch::AcceptCamera`. We don't drain the
     /// source-stream here (that requires the wrapper's tokio runtime
     /// + asyncio loop scaffolding from the cross-language tests); we
     /// only assert that the dispatch variant matches the Python call.
     #[test]
-    fn build_stream_provider_accept_jpeg_maps_to_dispatch_acceptjpeg() {
+    fn build_stream_provider_accept_camera_maps_to_dispatch_acceptcamera() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let module = PyModule::new_bound(py, "test_provider_accept_jpeg").unwrap();
+            let module = PyModule::new_bound(py, "test_provider_accept_camera").unwrap();
             crate::populate_module(&module).unwrap();
             let cluster = module.getattr("cluster").unwrap();
 
@@ -2010,7 +2111,7 @@ def _make(cluster):
         if False:
             yield None  # makes this an async generator
     def provider(peer, req):
-        return cluster.StreamDecision.accept(
+        return cluster.StreamDecision.accept_camera(
             manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="h",
@@ -2037,7 +2138,7 @@ def _make(cluster):
                     sensor_id: "any".into(),
                 },
             ) {
-                RustStreamDispatch::AcceptJpeg {
+                RustStreamDispatch::AcceptCamera {
                     manifest,
                     source: _,
                 } => {
@@ -2046,7 +2147,7 @@ def _make(cluster):
                     assert_eq!(manifest.clock_id, "c");
                     assert_eq!(manifest.frame_id, "frame");
                 }
-                _ => panic!("expected AcceptJpeg"),
+                _ => panic!("expected AcceptCamera"),
             }
         });
     }

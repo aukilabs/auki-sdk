@@ -19,12 +19,12 @@
 //! - `StreamManifest(sensor_id=..., sensor_hash=..., clock_id=...,
 //!   clock_hash=..., frame_id=..., frame_hash=...)` — accept-time
 //!   metadata the producer commits to.
-//! - `JpegFrame(bytes)` / `PointCloudFrame(bytes)` /
+//! - `CameraFrame(frame)` / `PointCloudFrame(bytes)` /
 //!   `JointEncodersFrame(angles_rad)` — payload `T` types.
 //! - `StreamItem(timestamp_ns=..., payload=...)` — what the
 //!   source async iterator yields.
 //! - `DeclineReason.*` / `EndReason.*` — typed reason factories.
-//! - `StreamDecision.accept(manifest, source)` /
+//! - `StreamDecision.accept_camera(manifest, source)` /
 //!   `accept_pointcloud(manifest, source)` /
 //!   `accept_joint_encoders(manifest, source)` /
 //!   `decline(reason)` — the value the provider callable returns.
@@ -328,7 +328,7 @@ fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {
 ///
 /// - Root-level: `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`.
 /// - `cluster` submodule: every stream type (`StreamRequest`,
-///   `StreamManifest`, `JpegFrame`, `PointCloudFrame`, `JointEncodersFrame`,
+///   `StreamManifest`, `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`,
 ///   `StreamItem`, `StreamEntry`, `DeclineReason`, `EndReason`,
 ///   `StreamDecision`, `StreamSubscription`, `StreamEntryIterator`, plus the
 ///   five `Stream*` exception classes).

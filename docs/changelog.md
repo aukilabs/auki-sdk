@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the Superpowers browser WebRTC probe stream implementation plan and propagated the docs-level changelog chain for the native listener plus browser wasm dial proof.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the Superpowers wasm libp2p browser transport compile-probe implementation plan and propagated the docs-level changelog chain for the first SDK browser networking spike slice.
 
 ### Nils's codex · May 19, HKT, 2026

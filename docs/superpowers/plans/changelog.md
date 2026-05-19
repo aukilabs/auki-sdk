@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+Created the browser WebRTC probe stream implementation plan, scoped to a native `auki-network` WebRTC Direct listener, a browser wasm `dialBrowserProbe` export, and a Playwright smoke test that proves one SDK-owned named protocol stream.
+
+### Nils's codex · May 19, HKT, 2026
+
 Created the wasm libp2p browser transport compile-probe implementation plan, scoped to `auki-network-browser-wasm` scaffolding, canonical PeerId wasm export, JS import smoke testing, and a rust-libp2p browser feature compile check before native dial work.
 
 ### Nils's codex · May 19, HKT, 2026

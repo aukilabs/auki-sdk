@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser WebRTC probe stream planned.** Added the next Superpowers plan for a native SDK WebRTC Direct probe listener, browser wasm `dialBrowserProbe`, and browser-to-native smoke test proving one SDK-owned named protocol stream. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser/WASM rust-libp2p feature probe unblocked.** `auki-network-browser-wasm` now enables the `getrandom` 0.3 browser RNG feature needed by libp2p/yamux, so the current WebRTC/WebTransport/WebSocket browser feature set compiles and packages for wasm. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

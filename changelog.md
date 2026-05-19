@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser/WASM rust-libp2p feature probe run.** `auki-network-browser-wasm` now records that the current `browser_libp2p` wasm check is blocked by transitive `getrandom` 0.3 requiring the wasm JS RNG cfg before Park Domain join work proceeds. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser/WASM probe imports from JavaScript.** `auki-network-browser-wasm` now has a Node smoke script proving generated wasm can be imported and used from JS. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

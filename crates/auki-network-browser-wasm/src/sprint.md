@@ -8,7 +8,8 @@ Prove the first wasm package boundary:
 - export a small wasm-bindgen function
 - add canonical seed-to-PeerId derivation
 - add a JS import smoke test
-- compile the rust-libp2p browser transport feature set
+- resolve the `browser_libp2p` `getrandom` 0.3 wasm JS RNG cfg blocker
+- rerun the rust-libp2p browser transport feature compile probe
 
 ## Next
 

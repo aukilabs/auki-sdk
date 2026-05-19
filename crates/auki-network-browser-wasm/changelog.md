@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ### Nils's codex · May 19, HKT, 2026
 
+Ran the rust-libp2p browser feature compile probe for `wasm32-unknown-unknown`. Outcome: blocked, with the exact first blocker recorded in `parking_lot.md`. The crate still keeps `auki-domain-browser` fail-closed for Domain join until a browser peer can dial a native SDK probe.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added a Node import smoke script for the wasm package. `wasm-pack --target nodejs` output can be imported from JavaScript and reproduces the locked PeerId vector through the wasm boundary.
 
 ### Nils's codex · May 19, HKT, 2026

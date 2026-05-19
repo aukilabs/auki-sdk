@@ -8,6 +8,7 @@ Currently implemented:
 - `sdkName()` smoke export
 - canonical seed-to-PeerId export
 - Node import smoke script for `wasm-pack --target nodejs`
+- exact `browser_libp2p` compile blocker captured in `parking_lot.md`
 
 Not yet implemented:
 

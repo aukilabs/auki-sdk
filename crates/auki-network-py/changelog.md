@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Python producers can accept retained log sources with `StreamDecision.accept_source(source)`.** The source comes from `auki_logs.Log.stream_source(...)`; `auki-network-py` unwraps the named `auki_logs_py::stream_source::v1` capsule, builds `StreamManifest` from source metadata, tails the retained `auki-logs` directory, decodes retained prost payload bytes by `payload_kind`, and dispatches internally to `AcceptCamera`, `AcceptPointCloud`, `AcceptJointEncoders`, or `AcceptAudio`.
+
+This keeps app-facing producer code uniform: retained-log producers hand the SDK a `StreamSource` and do not construct manifests, decode log bytes, or choose typed accept factories. The existing typed `accept_*` factories remain available for custom typed async iterators and SDK tests. Python tests cover `accept_source` kind resolution and retained payload smoke cases; Rust tests cover historical retained decoding for all four payload families.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Python camera payload pyclass is `CameraFrame` with no legacy alias.** The stream-facing Python class is `auki_network.cluster.CameraFrame(frame, dynamic_intrinsics=None)`, matching `PointCloudFrame`, `AudioFrame`, and `JointEncodersFrame`. The generated Rust/protobuf record remains `PinholeCameraLogEntry` internally, but `cluster.PinholeCameraLogEntry` is not registered on the Python surface and no compatibility alias is provided. Tests now assert the old Python name is absent.
 
 The Python surface tests now match the crate boundary documented in `src/readme.md`: `auki-network-py` owns root-level Discovery bindings plus shared stream pyclasses/provider bridge only. Stale `cluster.spawn` / `cluster.load_doc` runtime tests were removed from this crate; runtime-level stream integration lives in Rust and `auki-domain-py`.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Retained Python log streams now have an SDK-owned producer source path.** Python producers can create `auki_logs.Log.stream_source(...)` and return `auki_network.cluster.StreamDecision.accept_source(source)`; the SDK builds stream manifests, tails retained bytes, decodes payloads, and dispatches to the typed stream runtime internally. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **New crate `auki-network-swift` — UniFFI Swift bindings for `auki-network` (Stage 1).** Discovery HTTP client surface for native iOS (`aukilabs/iosapp`), async via UniFFI/tokio, mirroring `auki-network-py`. Host `cargo build`/`cargo test` green; iOS XCFramework scripted but unvalidated; stream/audio (Stage 2) and `auki-domain-swift` (Stage 3) scoped. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

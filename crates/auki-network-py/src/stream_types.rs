@@ -22,6 +22,16 @@
 //! SDK's tokio worker. Caller processes (BoosterApp's `BaseHTTPServer`
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
+use auki_datatypes::{
+    audio::AudioLogEntry as RustAudioLogEntry,
+    joint_encoders::JointEncodersLogEntry as RustJointEncodersLogEntry,
+    point_cloud::PointCloudLogEntry as RustPointCloudLogEntry,
+};
+use auki_logs_py_rs::{
+    RawBytes as RustRawLogBytes, RetainedStreamSource as RustRetainedStreamSource,
+    STREAM_SOURCE_CAPSULE_NAME,
+};
+use auki_logs_rs::{Error as RustLogError, Log as RustLog};
 use auki_network_rs::stream_protocol::{
     AudioFrame as RustAudioFrame, DeclineReason as RustDeclineReason,
     DynamicIntrinsics as RustDynamicIntrinsics, EndReason as RustEndReason,
@@ -36,10 +46,12 @@ use auki_network_rs::stream_runtime::{
     StreamProvider, StreamSubscription as RustStreamSubscription,
 };
 use futures::{Stream, StreamExt};
+use prost::Message;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyModule};
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -273,10 +285,7 @@ impl PyCameraFrame {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "CameraFrame(<{} frame bytes>)",
-            self.inner.frame.len()
-        )
+        format!("CameraFrame(<{} frame bytes>)", self.inner.frame.len())
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -643,9 +652,7 @@ impl StreamPayload {
 
     fn into_py(self, py: Python<'_>) -> PyObject {
         match self {
-            Self::Camera(f) => Py::new(py, f)
-                .expect("alloc CameraFrame")
-                .into_py(py),
+            Self::Camera(f) => Py::new(py, f).expect("alloc CameraFrame").into_py(py),
             Self::PointCloud(f) => Py::new(py, f).expect("alloc PointCloudFrame").into_py(py),
             Self::JointEncoders(f) => Py::new(py, f)
                 .expect("alloc JointEncodersFrame")
@@ -914,17 +921,33 @@ pub(crate) enum DecisionInner {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
     },
+    AcceptCameraRetained {
+        manifest: PyStreamManifest,
+        source: SourceStream<RustPinholeCameraLogEntry>,
+    },
     AcceptPointCloud {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
+    },
+    AcceptPointCloudRetained {
+        manifest: PyStreamManifest,
+        source: SourceStream<RustPointCloudFrame>,
     },
     AcceptJointEncoders {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
     },
+    AcceptJointEncodersRetained {
+        manifest: PyStreamManifest,
+        source: SourceStream<RustJointEncodersFrame>,
+    },
     AcceptAudio {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
+    },
+    AcceptAudioRetained {
+        manifest: PyStreamManifest,
+        source: SourceStream<RustAudioFrame>,
     },
     Decline {
         reason: PyDeclineReason,
@@ -988,6 +1011,46 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with an SDK-owned retained log source created
+    /// by `auki_logs.Log.stream_source(...)`. This is the recommended
+    /// producer API for apps: the SDK builds the stream manifest,
+    /// tails retained log bytes, decodes them into the correct payload
+    /// type, and maps to the runtime's typed dispatch internally.
+    #[staticmethod]
+    #[pyo3(signature = (source, /))]
+    fn accept_source(source: Bound<'_, PyAny>) -> PyResult<Self> {
+        let retained = retained_stream_source_from_python(&source)?;
+        let manifest = PyStreamManifest {
+            inner: manifest_from_retained_source(&retained),
+        };
+        let inner = match retained.payload_kind.as_str() {
+            "camera" => DecisionInner::AcceptCameraRetained {
+                manifest,
+                source: retained_log_into_source_stream(retained, decode_retained_camera)?,
+            },
+            "pointcloud" => DecisionInner::AcceptPointCloudRetained {
+                manifest,
+                source: retained_log_into_source_stream(retained, decode_retained_pointcloud)?,
+            },
+            "joint_encoders" => DecisionInner::AcceptJointEncodersRetained {
+                manifest,
+                source: retained_log_into_source_stream(retained, decode_retained_joint_encoders)?,
+            },
+            "audio" => DecisionInner::AcceptAudioRetained {
+                manifest,
+                source: retained_log_into_source_stream(retained, decode_retained_audio)?,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "payload_kind must be one of camera, pointcloud, joint_encoders, or audio; got {other:?}"
+                )));
+            }
+        };
+        Ok(Self {
+            inner: Mutex::new(Some(inner)),
+        })
+    }
+
     #[staticmethod]
     #[pyo3(signature = (reason, /))]
     fn decline(reason: PyDeclineReason) -> Self {
@@ -1005,10 +1068,14 @@ impl PyStreamDecision {
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
         match guard.as_ref() {
-            Some(DecisionInner::AcceptCamera { .. }) => "accept_camera",
-            Some(DecisionInner::AcceptPointCloud { .. }) => "accept_pointcloud",
-            Some(DecisionInner::AcceptJointEncoders { .. }) => "accept_joint_encoders",
-            Some(DecisionInner::AcceptAudio { .. }) => "accept_audio",
+            Some(DecisionInner::AcceptCamera { .. })
+            | Some(DecisionInner::AcceptCameraRetained { .. }) => "accept_camera",
+            Some(DecisionInner::AcceptPointCloud { .. })
+            | Some(DecisionInner::AcceptPointCloudRetained { .. }) => "accept_pointcloud",
+            Some(DecisionInner::AcceptJointEncoders { .. })
+            | Some(DecisionInner::AcceptJointEncodersRetained { .. }) => "accept_joint_encoders",
+            Some(DecisionInner::AcceptAudio { .. })
+            | Some(DecisionInner::AcceptAudioRetained { .. }) => "accept_audio",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -1116,6 +1183,12 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         source: source_stream,
                     }
                 }
+                Ok(DecisionInner::AcceptCameraRetained { manifest, source }) => {
+                    RustStreamDispatch::AcceptCamera {
+                        manifest: manifest.inner,
+                        source,
+                    }
+                }
                 Ok(DecisionInner::AcceptPointCloud { manifest, source }) => {
                     let source_stream =
                         python_iter_into_source_stream::<RustPointCloudFrame>(source, |pf| {
@@ -1124,6 +1197,12 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     RustStreamDispatch::AcceptPointCloud {
                         manifest: manifest.inner,
                         source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptPointCloudRetained { manifest, source }) => {
+                    RustStreamDispatch::AcceptPointCloud {
+                        manifest: manifest.inner,
+                        source,
                     }
                 }
                 Ok(DecisionInner::AcceptJointEncoders { manifest, source }) => {
@@ -1136,6 +1215,12 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         source: source_stream,
                     }
                 }
+                Ok(DecisionInner::AcceptJointEncodersRetained { manifest, source }) => {
+                    RustStreamDispatch::AcceptJointEncoders {
+                        manifest: manifest.inner,
+                        source,
+                    }
+                }
                 Ok(DecisionInner::AcceptAudio { manifest, source }) => {
                     let source_stream =
                         python_iter_into_source_stream::<RustAudioFrame>(source, |pf| {
@@ -1146,9 +1231,149 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         source: source_stream,
                     }
                 }
+                Ok(DecisionInner::AcceptAudioRetained { manifest, source }) => {
+                    RustStreamDispatch::AcceptAudio {
+                        manifest: manifest.inner,
+                        source,
+                    }
+                }
             }
         },
     )
+}
+
+fn retained_stream_source_from_python(
+    source: &Bound<'_, PyAny>,
+) -> PyResult<RustRetainedStreamSource> {
+    let capsule_obj = source.call_method0("_stream_source_capsule").map_err(|e| {
+        PyValueError::new_err(format!(
+            "accept_source expects auki_logs.Log.stream_source(...) object: {e}"
+        ))
+    })?;
+    let capsule = capsule_obj.downcast::<PyCapsule>().map_err(|e| {
+        PyRuntimeError::new_err(format!("stream source bridge returned non-PyCapsule: {e}"))
+    })?;
+    let expected_name =
+        CString::new(STREAM_SOURCE_CAPSULE_NAME).expect("static literal contains no nul");
+    match capsule.name()? {
+        Some(name) if name == expected_name.as_c_str() => {}
+        Some(other) => {
+            return Err(PyRuntimeError::new_err(format!(
+                "stream-source capsule has unexpected name {other:?} (want {STREAM_SOURCE_CAPSULE_NAME:?})"
+            )));
+        }
+        None => {
+            return Err(PyRuntimeError::new_err(
+                "stream-source capsule has no name; rejecting",
+            ));
+        }
+    }
+    // SAFETY: the capsule name pins the payload ABI to
+    // `RustRetainedStreamSource`, and `auki-network-py` depends on the
+    // same `auki-logs-py` rlib that created it.
+    let source_ref: &RustRetainedStreamSource =
+        unsafe { capsule.reference::<RustRetainedStreamSource>() };
+    Ok(source_ref.clone())
+}
+
+fn manifest_from_retained_source(source: &RustRetainedStreamSource) -> RustStreamManifest {
+    RustStreamManifest {
+        sensor_id: source.sensor_id.clone(),
+        sensor_hash: source.sensor_hash.clone(),
+        clock_id: source.clock_id.clone(),
+        clock_hash: source.clock_hash.clone(),
+        frame_id: source.frame_id.clone(),
+        frame_hash: source.frame_hash.clone(),
+    }
+}
+
+fn log_error_to_string(e: RustLogError) -> String {
+    e.to_string()
+}
+
+fn retained_log_into_source_stream<T>(
+    source: RustRetainedStreamSource,
+    decode: fn(Vec<u8>) -> Result<T, String>,
+) -> PyResult<SourceStream<T>>
+where
+    T: Send + 'static,
+{
+    let tail = RustLog::<RustRawLogBytes>::tail(&source.root)
+        .map_err(|e| PyRuntimeError::new_err(format!("stream source tail: {e}")))?;
+    let historical = RustLog::<RustRawLogBytes>::read(&source.root)
+        .and_then(|reader| reader.entries())
+        .map_err(|e| PyRuntimeError::new_err(format!("stream source read: {e}")))?;
+    let state = RetainedSourceState {
+        historical: historical.into(),
+        tail: Some(tail),
+    };
+
+    let stream = futures::stream::unfold(state, move |mut state| async move {
+        if let Some(entry) = state.historical.pop_front() {
+            let frame = decode(entry.payload.0).map(|payload| RustStreamItem {
+                timestamp_ns: entry.timestamp_ns,
+                payload,
+            });
+            return Some((frame, state));
+        }
+
+        let Some(tail) = state.tail.take() else {
+            return None;
+        };
+        let joined = tokio::task::spawn_blocking(move || {
+            let mut tail = tail;
+            let next = tail.next();
+            (tail, next)
+        })
+        .await;
+
+        let (tail, next) = match joined {
+            Ok(pair) => pair,
+            Err(e) => {
+                return Some((Err(format!("stream source tail task failed: {e}")), state));
+            }
+        };
+        state.tail = Some(tail);
+
+        match next {
+            Some(Ok(entry)) => {
+                let frame = decode(entry.payload.0).map(|payload| RustStreamItem {
+                    timestamp_ns: entry.timestamp_ns,
+                    payload,
+                });
+                Some((frame, state))
+            }
+            Some(Err(e)) => Some((Err(log_error_to_string(e)), state)),
+            None => None,
+        }
+    });
+    Ok(Box::pin(stream))
+}
+
+struct RetainedSourceState {
+    historical: VecDeque<auki_logs_rs::Entry<RustRawLogBytes>>,
+    tail: Option<auki_logs_rs::TailIter<RustRawLogBytes>>,
+}
+
+fn decode_retained_camera(bytes: Vec<u8>) -> Result<RustPinholeCameraLogEntry, String> {
+    RustPinholeCameraLogEntry::decode(&*bytes).map_err(|e| e.to_string())
+}
+
+fn decode_retained_pointcloud(bytes: Vec<u8>) -> Result<RustPointCloudFrame, String> {
+    let entry = RustPointCloudLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
+    Ok(RustPointCloudFrame { bytes: entry.data })
+}
+
+fn decode_retained_joint_encoders(bytes: Vec<u8>) -> Result<RustJointEncodersFrame, String> {
+    let entry = RustJointEncodersLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
+    Ok(RustJointEncodersFrame {
+        angles_rad: entry.angles_rad,
+    })
+}
+
+fn decode_retained_audio(bytes: Vec<u8>) -> Result<RustAudioFrame, String> {
+    let entry = RustAudioLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
+    Ok(RustAudioFrame { data: entry.data })
 }
 
 /// Convert a Python async iterator (yielding `PyStreamItem`) into a
@@ -1661,11 +1886,45 @@ pub(crate) fn invalid_arg<S: Into<String>>(msg: S) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_datatypes::audio::AudioLogEntry;
+    use auki_datatypes::camera::PinholeCameraLogEntry;
+    use auki_datatypes::joint_encoders::JointEncodersLogEntry;
+    use auki_datatypes::point_cloud::PointCloudLogEntry;
+    use auki_logs_rs::Log as RawLog;
     use auki_network_rs::PeerIdentity;
     use auki_network_rs::stream_runtime::OPEN_STREAM_TIMEOUT;
+    use prost::Message;
+    use serde_json::json;
 
     fn test_peer_id() -> libp2p_identity::PeerId {
         PeerIdentity::from_seed(&[23u8; 32]).peer_id()
+    }
+
+    fn raw_log_manifest() -> serde_json::Value {
+        json!({
+            "segment_duration_ns": 1_000_000_000i64,
+            "retention_ns": 10_000_000_000i64,
+            "kind": "test",
+        })
+    }
+
+    fn retained_source_for(root: &std::path::Path, payload_kind: &str) -> RustRetainedStreamSource {
+        RustRetainedStreamSource {
+            root: root.to_path_buf(),
+            sensor_id: format!("robot/{payload_kind}"),
+            sensor_hash: "sensor-hash".into(),
+            clock_id: "robot/clock".into(),
+            clock_hash: "clock-hash".into(),
+            payload_kind: payload_kind.into(),
+            frame_id: "robot/base".into(),
+            frame_hash: "frame-hash".into(),
+        }
+    }
+
+    fn append_raw_payload(root: &std::path::Path, timestamp_ns: i64, payload: Vec<u8>) {
+        let mut log = RawLog::<RustRawLogBytes>::open(root, raw_log_manifest()).unwrap();
+        log.append(timestamp_ns, &RustRawLogBytes(payload)).unwrap();
+        log.flush().unwrap();
     }
 
     #[test]
@@ -1731,6 +1990,95 @@ mod tests {
             assert_eq!(out.as_bytes(), &[0xff, 0xd8, 0x01, 0x02, 0x03]);
             assert_eq!(f.dynamic_intrinsics(), Some(intrinsics));
         });
+    }
+
+    #[test]
+    fn retained_camera_source_decodes_historical_log_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = PinholeCameraLogEntry {
+            dynamic_intrinsics: None,
+            frame: b"jpeg".to_vec(),
+        };
+        append_raw_payload(dir.path(), 100, entry.encode_to_vec());
+
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "camera"),
+            decode_retained_camera,
+        )
+        .unwrap();
+        let got = crate::cluster_tokio_runtime()
+            .block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(got.timestamp_ns, 100);
+        assert_eq!(got.payload.frame, b"jpeg");
+    }
+
+    #[test]
+    fn retained_pointcloud_source_maps_log_data_to_stream_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = PointCloudLogEntry {
+            data: b"cdr".to_vec(),
+        };
+        append_raw_payload(dir.path(), 200, entry.encode_to_vec());
+
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "pointcloud"),
+            decode_retained_pointcloud,
+        )
+        .unwrap();
+        let got = crate::cluster_tokio_runtime()
+            .block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(got.timestamp_ns, 200);
+        assert_eq!(got.payload.bytes, b"cdr");
+    }
+
+    #[test]
+    fn retained_joint_encoder_source_maps_log_angles_to_stream_angles() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = JointEncodersLogEntry {
+            angles_rad: vec![0.1, 0.2, 0.3],
+        };
+        append_raw_payload(dir.path(), 300, entry.encode_to_vec());
+
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "joint_encoders"),
+            decode_retained_joint_encoders,
+        )
+        .unwrap();
+        let got = crate::cluster_tokio_runtime()
+            .block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(got.timestamp_ns, 300);
+        assert_eq!(got.payload.angles_rad, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn retained_audio_source_maps_log_data_to_stream_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = AudioLogEntry {
+            data: b"pcm".to_vec(),
+        };
+        append_raw_payload(dir.path(), 400, entry.encode_to_vec());
+
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "audio"),
+            decode_retained_audio,
+        )
+        .unwrap();
+        let got = crate::cluster_tokio_runtime()
+            .block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(got.timestamp_ns, 400);
+        assert_eq!(got.payload.data, b"pcm");
     }
 
     #[test]

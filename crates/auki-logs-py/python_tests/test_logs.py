@@ -75,6 +75,85 @@ def test_append_after_close_raises(tmp_path: Path):
         log.append(100, b"hi")
 
 
+def test_stream_source_carries_manifest_metadata(tmp_path: Path):
+    log = auki_logs.Log.open(str(tmp_path), manifest())
+
+    source = log.stream_source(
+        sensor_id="robot/rgb",
+        sensor_hash="sensor-hash",
+        clock_id="robot/clock",
+        clock_hash="clock-hash",
+        payload_kind="camera",
+        frame_id="robot/base",
+        frame_hash="frame-hash",
+    )
+
+    assert source.root == str(tmp_path)
+    assert source.sensor_id == "robot/rgb"
+    assert source.sensor_hash == "sensor-hash"
+    assert source.clock_id == "robot/clock"
+    assert source.clock_hash == "clock-hash"
+    assert source.payload_kind == "camera"
+    assert source.frame_id == "robot/base"
+    assert source.frame_hash == "frame-hash"
+    assert "robot/rgb" in repr(source)
+    assert "camera" in repr(source)
+    log.close()
+
+
+def test_stream_source_accepts_absent_frame_metadata(tmp_path: Path):
+    log = auki_logs.Log.open(str(tmp_path), manifest())
+
+    source = log.stream_source(
+        sensor_id="robot/audio",
+        sensor_hash="sensor-hash",
+        clock_id="robot/clock",
+        clock_hash="clock-hash",
+        payload_kind="audio",
+    )
+
+    assert source.frame_id == ""
+    assert source.frame_hash == ""
+    log.close()
+
+
+def test_stream_source_rejects_unknown_payload_kind(tmp_path: Path):
+    log = auki_logs.Log.open(str(tmp_path), manifest())
+
+    with pytest.raises(ValueError, match="payload_kind"):
+        log.stream_source(
+            sensor_id="robot/thermal",
+            sensor_hash="sensor-hash",
+            clock_id="robot/clock",
+            clock_hash="clock-hash",
+            payload_kind="thermal",
+        )
+
+    log.close()
+
+
+def test_stream_source_exposes_named_internal_capsule(tmp_path: Path):
+    import ctypes
+
+    log = auki_logs.Log.open(str(tmp_path), manifest())
+    source = log.stream_source(
+        sensor_id="robot/rgb",
+        sensor_hash="sensor-hash",
+        clock_id="robot/clock",
+        clock_hash="clock-hash",
+        payload_kind="camera",
+    )
+
+    capsule = source._stream_source_capsule()
+    assert type(capsule).__name__ == "PyCapsule"
+
+    ctypes.pythonapi.PyCapsule_GetName.restype = ctypes.c_char_p
+    ctypes.pythonapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
+    name = ctypes.pythonapi.PyCapsule_GetName(capsule)
+    assert name == b"auki_logs_py::stream_source::v1"
+    log.close()
+
+
 # ─── Round-trip tests ────────────────────────────────────────────────────────
 
 

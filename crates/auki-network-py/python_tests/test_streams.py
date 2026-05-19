@@ -17,8 +17,11 @@ Two-tier coverage:
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
+import auki_logs
 from auki_network import cluster
 
 
@@ -177,6 +180,113 @@ def test_stream_decision_factory_tags() -> None:
 
     dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
     assert dec.kind == "decline"
+
+
+def _prost_varint(value: int) -> bytes:
+    out = bytearray()
+    while value >= 0x80:
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+
+def _prost_bytes_field(field_number: int, payload: bytes) -> bytes:
+    return bytes([(field_number << 3) | 2]) + _prost_varint(len(payload)) + payload
+
+
+def _camera_log_payload(frame: bytes) -> bytes:
+    return _prost_bytes_field(2, frame)
+
+
+def _pointcloud_log_payload(data: bytes) -> bytes:
+    return _prost_bytes_field(1, data)
+
+
+def _joint_encoders_log_payload(angles: list[float]) -> bytes:
+    packed = b"".join(struct.pack("<f", angle) for angle in angles)
+    return _prost_bytes_field(1, packed)
+
+
+def _audio_log_payload(data: bytes) -> bytes:
+    return _prost_bytes_field(1, data)
+
+
+def _retained_source(tmp_path, payload_kind: str, payload: bytes | None = None):
+    log = auki_logs.Log.open(
+        str(tmp_path),
+        {
+            "segment_duration_ns": 1_000_000_000,
+            "retention_ns": 10_000_000_000,
+            "kind": "test",
+        },
+    )
+    try:
+        if payload is not None:
+            log.append(123_000, payload)
+            log.flush()
+        return log.stream_source(
+            sensor_id=f"robot/{payload_kind}",
+            sensor_hash="sensor-hash",
+            clock_id="robot/clock",
+            clock_hash="clock-hash",
+            payload_kind=payload_kind,
+            frame_id="robot/base",
+            frame_hash="frame-hash",
+        )
+    finally:
+        log.close()
+
+
+@pytest.mark.parametrize(
+    ("payload_kind", "decision_kind"),
+    [
+        ("camera", "accept_camera"),
+        ("pointcloud", "accept_pointcloud"),
+        ("joint_encoders", "accept_joint_encoders"),
+        ("audio", "accept_audio"),
+    ],
+)
+def test_stream_decision_accept_source_resolves_payload_kind(
+    tmp_path, payload_kind: str, decision_kind: str
+) -> None:
+    source = _retained_source(tmp_path, payload_kind)
+
+    decision = cluster.StreamDecision.accept_source(source)
+
+    assert decision.kind == decision_kind
+
+
+@pytest.mark.parametrize(
+    ("payload_kind", "payload", "decision_kind"),
+    [
+        ("camera", _camera_log_payload(b"jpeg"), "accept_camera"),
+        ("pointcloud", _pointcloud_log_payload(b"cdr"), "accept_pointcloud"),
+        (
+            "joint_encoders",
+            _joint_encoders_log_payload([0.1, 0.2, 0.3]),
+            "accept_joint_encoders",
+        ),
+        ("audio", _audio_log_payload(b"pcm"), "accept_audio"),
+    ],
+)
+def test_stream_decision_accept_source_uses_retained_log_payloads(
+    tmp_path, payload_kind: str, payload: bytes, decision_kind: str
+) -> None:
+    source = _retained_source(tmp_path, payload_kind, payload=payload)
+
+    decision = cluster.StreamDecision.accept_source(source)
+
+    assert decision.kind == decision_kind
+
+
+def test_stream_decision_accept_source_keeps_camera_name_clean(tmp_path) -> None:
+    source = _retained_source(tmp_path, "camera")
+
+    decision = cluster.StreamDecision.accept_source(source)
+
+    assert decision.kind == "accept_camera"
+    assert not hasattr(cluster, "PinholeCameraLogEntry")
 
 
 # ─── Cross-`.so` bridge for sibling PyO3 wrapper crates ─────────────────────

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.
+
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **[`auki-network-swift`](auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.

@@ -51,6 +51,7 @@ StreamDecision.accept_camera(manifest=..., source=...)
 StreamDecision.accept_pointcloud(manifest=..., source=...)
 StreamDecision.accept_joint_encoders(manifest=..., source=...)
 StreamDecision.accept_audio(manifest=..., source=...)
+StreamDecision.accept_source(source)
 StreamDecision.decline(reason)
 StreamSubscription.manifest
 StreamSubscription.entries()
@@ -65,6 +66,21 @@ _build_stream_provider(callable) -> PyCapsule
 
 There is intentionally no `cluster.spawn`, `cluster.load_doc`, `ClusterRuntime`, `ClusterDoc`, `PeerSnapshot`, or Python `DiscoveryClient.register/fetch` surface.
 
+## Retained Producer Source
+
+`StreamDecision.accept_source(source)` is the app-facing producer path for retained sensor logs. `source` is produced by `auki_logs.Log.stream_source(...)` and crosses the PyO3 extension boundary through the named capsule `auki_logs_py::stream_source::v1`.
+
+The network binding unwraps the retained source, builds `StreamManifest` from its metadata, tails historical and newly appended `auki-logs` entries, decodes each retained prost payload by `payload_kind`, and maps to the existing typed dispatch arms:
+
+| `payload_kind` | Internal stream dispatch |
+|---|---|
+| `camera` | `AcceptCamera` |
+| `pointcloud` | `AcceptPointCloud` |
+| `joint_encoders` | `AcceptJointEncoders` |
+| `audio` | `AcceptAudio` |
+
+The typed `accept_camera` / `accept_pointcloud` / `accept_joint_encoders` / `accept_audio` factories remain lower-level hooks for custom typed async iterators. Retained-log app producers should prefer `accept_source(source)` so manifest construction, retained-byte decoding, and type-specific dispatch stay inside the SDK.
+
 ## Rust Mapping
 
 | Python | Rust |
@@ -73,6 +89,7 @@ There is intentionally no `cluster.spawn`, `cluster.load_doc`, `ClusterRuntime`,
 | `ClusterEntry` | `auki_network::discovery_client::ClusterEntry` |
 | `CreateClusterOutcome` | `auki_network::discovery_client::CreateClusterOutcome` |
 | stream pyclasses | `auki_network::{stream_protocol, stream_runtime}` types |
+| `StreamDecision.accept_source` | `auki_logs::Log<RawBytes>` reader/tailer plus retained prost decoders |
 | `_build_stream_provider` | `stream_types::build_stream_provider` wrapped in a named `PyCapsule` |
 
 `cluster_tokio_runtime()` is a process-wide multi-thread tokio runtime used for Discovery calls and blocking frame iteration. The Python API stays synchronous.

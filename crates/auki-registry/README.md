@@ -2,7 +2,7 @@
 
 The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (all landed 2026-05-08) moved every log payload type out — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and `SpatialTransform` (Step 5, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape). All five live in [`auki-datatypes`](../auki-datatypes); `auki-registry` now holds the Sensor / Clock / Frame registry types and IO only.
+> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) moved every log payload type out — `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), native `PointCloudFrame` (Step 3, now shared by pointcloud logs and streams), `AudioLogEntry` (Step 4, opaque-bytes-only), and `SpatialTransform` (Step 5, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape). All five live in [`auki-datatypes`](../auki-datatypes); `auki-registry` now holds the Sensor / Clock / Frame registry types and IO only.
 
 ## Two kinds of typed data (today, with one departing)
 
@@ -13,7 +13,7 @@ The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
 
-All log payload types departed at Steps 1, 3, 4, and 5 of the migration (all 2026-05-08): `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5, replaced by flat `SpatialTransform` + `Vec3` + `Quat`). All five now live in [`auki-datatypes`](../auki-datatypes), protobuf via prost.
+All log payload types departed at Steps 1, 3, 4, and 5 of the migration: `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1), native `PointCloudFrame` (Step 3, now shared by pointcloud logs and streams), `AudioLogEntry` (Step 4, opaque-bytes-only), and the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5, replaced by flat `SpatialTransform` + `Vec3` + `Quat`). All five now live in [`auki-datatypes`](../auki-datatypes), protobuf via prost.
 
 ---
 
@@ -87,7 +87,6 @@ When `type = "point_cloud"`:
 PointCloud {
   fields:        [PointField],   // byte layout of one point
   point_step:    u32,            // bytes per point
-  is_bigendian:  bool,           // byte order of multi-byte fields in `data`
   frame_rate_hz: u32,
   frame_id:      string,         // Frame Registry id for the point coordinates
   frame_hash:    string,         // exact FrameRegistryEntry hash for that frame_id
@@ -100,6 +99,11 @@ PointField {
   count:    u32,                 // number of `datatype` elements; usually 1
 }
 ```
+
+Native Auki pointcloud payloads are little-endian by contract. `write_sensor`
+validates that every `PointCloud` layout starts with `x`, `y`, and `z` as
+`float32`, `count = 1`, at offsets `0`, `4`, and `8`; extra fields may follow
+within `point_step`.
 
 When `type = "audio"`:
 
@@ -151,9 +155,9 @@ The Sensor Log payload (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics`
 
 ## Point Cloud Log payload — moved to `auki-datatypes` (Step 3, 2026-05-08)
 
-`PointCloudLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The Step 3 decision was **opaque-bytes-only** — `PointCloudLogEntry { bytes data = 1; }` — symmetric with the wire's `PointCloudFrame`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id, frame_hash }` chain that already governs interpretation. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+`PointCloudFrame` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The native record is shared by Sensor Logs and `/auki/stream/0.1.0` pointcloud substreams: `PointCloudFrame { point_count, data }`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve interpretation via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }` chain that governs native layout and coordinate frame. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
 
-The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `PointCloudLogEntry`. Capturing camera + point cloud simultaneously is still two parallel sensor logs sharing a session.
+The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold native `PointCloudFrame` records. Capturing camera + point cloud simultaneously is still two parallel sensor logs sharing a session.
 
 ### RGB(A) normalization (still here)
 
@@ -192,4 +196,4 @@ Each `from_frame_id` / `to_frame_id` in a Pose Log manifest references an entry 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`PinholeCameraLogEntry` / `DynamicIntrinsics` / `PointCloudFrame` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

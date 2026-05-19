@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Active README follows the native pointcloud registry contract.** `README.md` no longer documents `PointCloud.is_bigendian`, now states that native pointcloud data is little-endian by contract, and points log readers at `PointCloudFrame { point_count, data }` plus `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, frame_id, frame_hash }` for layout and frame interpretation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud registry layouts are now validated.** `SensorBody::PointCloud` metadata no longer carries `is_bigendian`; numeric native pointcloud data is little-endian by contract. `PointCloud::validate_layout` now requires canonical `x`, `y`, and `z` fields as `float32`, `count=1`, at offsets `0`, `4`, and `8`; rejects `point_step < 12`; verifies every declared field fits within `point_step`; and rejects overlapping field spans. `write_sensor` runs this validation before accepting a pointcloud sensor entry or checking its frame reference.
 
 **Locked-vector recompute.** The M1 pointcloud canonical JSON drops `"is_bigendian":false`, and its XXH3-128 sensor hash changes from `2c480838a9be0b14608a8a0d72ee319f` to **`d62ed811edcfb3e1a400f7aaa290eb85`**.

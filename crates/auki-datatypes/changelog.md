@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Active README follows the native pointcloud payload.** `README.md` now documents `point_cloud.proto` as the shared `PointCloudFrame { point_count, data }` source for pointcloud logs and streams, removes the retired `point_cloud_stream.proto` line, and updates the Rust surface example to import `auki_datatypes::point_cloud::PointCloudFrame`.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud frames replace the log/stream split.** `auki.point_cloud` now defines one `PointCloudFrame { point_count, data }` record for both Sensor Logs and `/auki/stream/0.1.0` pointcloud substreams. The old `PointCloudLogEntry { data }` log type and `auki.point_cloud_stream` package are removed; the shared frame is registered as the `LogPayload` type. Locked tests pin the native frame bytes, hash, prost round-trip, log-payload round-trip, empty default elision, and segment replay.
 
 ### Arshak's claude · May 16, HKT, 2026

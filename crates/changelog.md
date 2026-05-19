@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-registry`](auki-registry/changelog.md) — active pointcloud READMEs follow the native contract.** Docs now describe shared `point_cloud::PointCloudFrame { point_count, data }`, remove the retired `point_cloud_stream` and `is_bigendian` surfaces, and pin pointcloud interpretation to native layout metadata plus frame references.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-datatypes-py`](auki-datatypes-py/changelog.md) + [`auki-registry-py`](auki-registry-py/changelog.md) — Python pointcloud README examples match the native API.** Active docs no longer advertise `point_cloud_stream` or `is_bigendian`, and pointcloud sensor docs call out the canonical native XYZ little-endian layout.
 
 ### Nils's codex · May 19, HKT, 2026

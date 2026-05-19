@@ -53,3 +53,11 @@ PyO3 wrappers, one per Rust component (no umbrella `auki-py`).
 | [`auki-network-py`](auki-network-py) | Discovery client pyclasses plus shared stream pyclasses for Python (`StreamDecision`, payload frames, subscriptions). |
 | [`auki-domain-py`](auki-domain-py) | Python daemon facade for `ClusterManager`: bootstrap/create/join, role/membership accessors, peer info/resource catalog exchange, registry serving root registration, stream provider and stream openers. |
 | [`auki-session-py`](auki-session-py) | Transport-neutral session lifecycle surface — opening sessions, registering sensors and clocks, writing and listing logs. The HTTP Control API and the forthcoming libp2p control protocols are thin wrappers over this. |
+
+## Swift bindings
+
+UniFFI wrappers for native iOS (`aukilabs/iosapp`), one per Rust component, same per-component rule as the Python bindings (no umbrella `auki-swift`).
+
+| Crate | What it does |
+|---|---|
+| [`auki-network-swift`](auki-network-swift) | Discovery HTTP client for Swift (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`), async via UniFFI/tokio. Stage 1; stream/audio types and a future `auki-domain-swift` (cluster/peer enumeration) are scoped in its `src/sprint.md`. |

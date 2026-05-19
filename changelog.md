@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 19, 13:46 HKT, 2026
+
+**New crate `auki-network-swift` — UniFFI Swift bindings for `auki-network` (Stage 1).** Discovery HTTP client surface for native iOS (`aukilabs/iosapp`), async via UniFFI/tokio, mirroring `auki-network-py`. Host `cargo build`/`cargo test` green; iOS XCFramework scripted but unvalidated; stream/audio (Stage 2) and `auki-domain-swift` (Stage 3) scoped. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

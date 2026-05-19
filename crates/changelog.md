@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 19, 13:46 HKT, 2026
+
+**[`auki-network-swift`](auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — Manager election excludes the heartbeat-lost peer.** A timed-out Manager is removed from the election candidate view before consulting stale transport reachability, so a battery-pulled or QUIC-idle Manager cannot be re-elected and block Discovery rotation.

@@ -396,7 +396,7 @@ mod tests {
                     sensor_hash: "sensorhash".into(),
                     sensor_kind: "rgb_camera".into(),
                     stream_protocol: "/auki/stream/0.1.0".into(),
-                    payload: "jpeg_frame".into(),
+                    payload: "pinhole_camera_log_entry".into(),
                     pinhole_intrinsics: Some(ResourcePinholeIntrinsics {
                         fx: 400.0,
                         fy: 401.0,

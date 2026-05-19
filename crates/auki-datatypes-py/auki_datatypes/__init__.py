@@ -11,9 +11,8 @@ Surface mirrors the Rust crate's module layout one-to-one — every
 `auki_datatypes.<name>.<Type>` in Python.
 
 Re-exported submodules:
-    audio, camera, detection, frame_stream, joint_encoders,
-    joint_encoders_stream, point_cloud, point_cloud_stream, pose,
-    stream, time_transform.
+    audio, camera, detection, joint_encoders, joint_encoders_stream,
+    point_cloud, point_cloud_stream, pose, stream, time_transform.
 
 The generated files live one level down, in the `auki/` package
 (matching the proto-package path). The re-exports below let consumers
@@ -24,7 +23,6 @@ write `from auki_datatypes import detection` without the double
 from .auki import audio
 from .auki import camera
 from .auki import detection
-from .auki import frame_stream
 from .auki import joint_encoders
 from .auki import joint_encoders_stream
 from .auki import point_cloud
@@ -37,7 +35,6 @@ __all__ = [
     "audio",
     "camera",
     "detection",
-    "frame_stream",
     "joint_encoders",
     "joint_encoders_stream",
     "point_cloud",

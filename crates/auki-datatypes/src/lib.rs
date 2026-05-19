@@ -123,12 +123,6 @@ pub mod time_transform {
 
 impl_log_payload!(time_transform::TimeTransformEntry);
 
-/// `auki.frame_stream` — `JpegFrame` substream payload (libp2p
-/// `/auki/stream/0.1.0`). Migration Step 2.
-pub mod frame_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.frame_stream.rs"));
-}
-
 /// `auki.point_cloud_stream` — `PointCloudFrame` substream payload
 /// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
 pub mod point_cloud_stream {
@@ -141,8 +135,7 @@ pub mod point_cloud_stream {
 /// the wire and log code paths dispatch on distinct Rust types — Step
 /// 2/3 precedent). No `impl_stream_payload!` macro registration —
 /// wire-side prost types are used directly by the substream runtime,
-/// same as [`frame_stream::JpegFrame`] and
-/// [`point_cloud_stream::PointCloudFrame`].
+/// same as [`point_cloud_stream::PointCloudFrame`].
 pub mod joint_encoders_stream {
     include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders_stream.rs"));
 }

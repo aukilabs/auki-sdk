@@ -102,7 +102,8 @@ Manager instance methods/properties:
 - `.fetch_sensor_entry(peer_id, sensor_id, sensor_hash) -> str`
 - `.fetch_clock_entry(peer_id, clock_id, clock_hash) -> str`
 - `.fetch_frame_entry(peer_id, frame_id, frame_hash) -> str`
-- `.open_jpeg_stream(peer_id, sensor_id)`
+- `.open_stream(peer_id, sensor_id)` — recommended generic consumer opener. The SDK resolves the remote resource catalog row and returns a `StreamSubscription` whose entries carry the existing typed payload pyclasses (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, or `AudioFrame`).
+- `.open_camera_stream(peer_id, sensor_id)`
 - `.open_pointcloud_stream(peer_id, sensor_id)`
 - `.open_joint_encoders_stream(peer_id, sensor_id)`
 - `.open_audio_stream(peer_id, sensor_id)`
@@ -110,7 +111,7 @@ Manager instance methods/properties:
 
 `stream_provider` uses the `auki_network.cluster` stream types. Its callable signature is `(requester_peer_id: str, request: StreamRequest) -> StreamDecision`.
 
-`StreamManifestBuilder.from_registry(...)` returns an `auki_network.cluster.StreamManifest` constructed by the `auki_network` module itself, so it can be passed directly to `cluster.StreamDecision.accept(...)`, `.accept_pointcloud(...)`, `.accept_joint_encoders(...)`, or `.accept_audio(...)`. Spatial sensors get `frame_id` + `frame_hash` from the local Sensor Registry entry and verify the exact Frame Registry entry exists; audio and joint encoders return empty frame fields.
+`StreamManifestBuilder.from_registry(...)` returns an `auki_network.cluster.StreamManifest` constructed by the `auki_network` module itself, so it can be passed directly to `cluster.StreamDecision.accept_camera(...)`, `.accept_pointcloud(...)`, `.accept_joint_encoders(...)`, or `.accept_audio(...)`. Spatial sensors get `frame_id` + `frame_hash` from the local Sensor Registry entry and verify the exact Frame Registry entry exists; audio and joint encoders return empty frame fields.
 
 `external_addresses` has replace semantics: if provided and non-empty, those exact multiaddrs are advertised to Discovery instead of auto-detected listen addresses.
 
@@ -122,6 +123,7 @@ Manager instance methods/properties:
 - Producer daemons should use `set_resource_catalog_provider(callable)` for transform edges and richer resource rows. Sensor streams are auto-lifted from `set_sensor_catalog_provider`, but a resource provider can override the auto-lifted `sensor_stream` row by returning the same `id`.
 - Consumers can either call the exact registry fetch helpers, or ask `fetch_sensors_catalog(..., include_registry_entries=True, include_frame_entries=True)` for embedded Sensor / Frame Registry JSON when reducing round trips matters.
 - New consumers should prefer `fetch_resources_catalog(...)` for live stream and transform-edge discovery; `/auki/sensors/0.0.1` remains available for the older sensor-only view.
+- New stream consumers should call `open_stream(peer_id, sensor_id)`. The binding resolves the remote `sensor_stream` resource inside the SDK and delegates to the matching typed subscription internally. The older `open_camera_stream`, `open_pointcloud_stream`, `open_joint_encoders_stream`, and `open_audio_stream` methods remain for compatibility and SDK-internal use.
 - Producer stream providers should use `StreamManifestBuilder.from_registry(...)` instead of hand-filling stream manifests.
 - `shutdown()` is the explicit leave path. It deregisters only if this peer is the last member; otherwise surviving peers elect a successor.
 - Stream classes live in `auki-network-py` so user callbacks and this wrapper share one PyO3 type registry.

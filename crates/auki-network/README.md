@@ -46,7 +46,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | `/auki/registries/0.0.1` | `registries_protocol` | Cluster peer fetches a hash-pinned Sensor / Clock / Frame Registry entry |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |
 
-The stream runtime is a typed API layered over the `/auki/stream/0.1.0` prost envelope. Producer callbacks are `StreamProvider = Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>`, so producers can enforce per-requester policy. `StreamDispatch` currently supports `AcceptJpeg`, `AcceptPointCloud`, `AcceptJointEncoders`, `AcceptAudio`, and `Decline`. Each substream is mono-`T`; the consumer calls `open_stream::<T>(peer_id, request)` with the payload type it expects.
+The stream runtime is a typed API layered over the `/auki/stream/0.1.0` prost envelope. Producer callbacks are `StreamProvider = Arc<dyn Fn(PeerId, StreamRequest) -> StreamDispatch + Send + Sync>`, so producers can enforce per-requester policy. `StreamDispatch` currently supports `AcceptCamera`, `AcceptPointCloud`, `AcceptJointEncoders`, `AcceptAudio`, and `Decline`. Each substream is mono-`T`; the consumer calls `open_stream::<T>(peer_id, request)` with the payload type it expects. New payload types ship as coordinated SDK releases because adding a `StreamDispatch` variant is a public API change that consumers opt into.
 
 ## Trust Boundary
 

@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Python camera payload pyclass is `CameraFrame` with no legacy alias.** The stream-facing Python class is `auki_network.cluster.CameraFrame(frame, dynamic_intrinsics=None)`, matching `PointCloudFrame`, `AudioFrame`, and `JointEncodersFrame`. The generated Rust/protobuf record remains `PinholeCameraLogEntry` internally, but `cluster.PinholeCameraLogEntry` is not registered on the Python surface and no compatibility alias is provided. Tests now assert the old Python name is absent.
+
+The Python surface tests now match the crate boundary documented in `src/readme.md`: `auki-network-py` owns root-level Discovery bindings plus shared stream pyclasses/provider bridge only. Stale `cluster.spawn` / `cluster.load_doc` runtime tests were removed from this crate; runtime-level stream integration lives in Rust and `auki-domain-py`.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Python camera streams replace `JpegFrame` with `CameraFrame`.** `auki_network.cluster` now exposes `DynamicIntrinsics` and `CameraFrame(frame, dynamic_intrinsics=None)` for camera payloads, `StreamItem.payload` accepts that type, and consumer entries surface it with a `.frame` getter. The producer factory is now `StreamDecision.accept_camera(...)` and reports `.kind == "accept_camera"`, matching Rust's `StreamDispatch::AcceptCamera`; mismatch errors now name `CameraFrame`.
+
+Docs, Rust tests, and Python surface tests were updated for `open_camera_stream(...)`, `accept_camera(...)`, and the retired `JpegFrame` class. Tests: `cargo check -p auki-network -p auki-network-py -p auki-domain-py -p auki-datatypes`.
+
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purged: deleted-surface references removed.** The "Two-runtime test uses fixed loopback ports" block was deleted (the test `test_two_runtimes_discover_each_other_via_cluster_doc` was deleted with `ClusterRuntime`). The "Type stubs (`auki_network.pyi`)" block was rewritten: its 43-line inline stub describing `_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, `PeerSnapshot`, `load_doc` — all deleted surface — was replaced with a single sentence naming the current public surface (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `cluster.*` stream types, `AudioFrame`). "Logging routing" edited to drop the now-false "initialized lazily on first `cluster.spawn`" claim — no `tracing` subscriber is installed by the crate today, host process wins by default. Codename leakage ("ansuz", "Vinland", retired version numbers like v0.0.13/v0.0.14 tied to ansuz) stripped. The substantive items kept: stderr-vs-pyo3-log default, PyPI distribution deferral, type-stubs decision, identity-py recipe reuse, single-task tokio runtime, Python version floor. Net: 104 → 52 lines.

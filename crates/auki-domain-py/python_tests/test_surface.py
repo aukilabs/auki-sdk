@@ -91,7 +91,7 @@ def test_resource_value_types() -> None:
         sensor_hash="sensor-hash",
         sensor_kind="rgb_camera",
         stream_protocol="/auki/stream/0.1.0",
-        payload="jpeg_frame",
+        payload="pinhole_camera_log_entry",
         pinhole_intrinsics=intrinsics,
     )
 

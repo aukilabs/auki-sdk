@@ -49,13 +49,13 @@ from auki_network import cluster
 def stream_provider(requester_peer_id: str, req: cluster.StreamRequest):
     if req.sensor_id == "head_left_cam":
         async def source():
-            async for jpeg in jpeg_fanout.subscribe():
+            async for camera in camera_fanout.subscribe():
                 yield cluster.StreamItem(
                     timestamp_ns=session_clock_now_ns(),
-                    payload=cluster.JpegFrame(jpeg),
+                    payload=cluster.CameraFrame(camera),
                 )
 
-        return cluster.StreamDecision.accept(
+        return cluster.StreamDecision.accept_camera(
             manifest=cluster.StreamManifest(
                 sensor_id=req.sensor_id,
                 sensor_hash="...",
@@ -74,14 +74,14 @@ The provider signature is `Callable[[str, StreamRequest], StreamDecision]`. The 
 
 Supported payload pyclasses:
 
-- `JpegFrame(bytes)` with `.bytes`
+- `CameraFrame(frame: bytes, dynamic_intrinsics=None)` with `.frame`
 - `PointCloudFrame(bytes)` with `.bytes`
 - `JointEncodersFrame(list[float])` with `.angles_rad`
 - `AudioFrame(bytes)` with `.data`
 
 Factory methods:
 
-- `StreamDecision.accept(manifest=..., source=...)`
+- `StreamDecision.accept_camera(manifest=..., source=...)`
 - `StreamDecision.accept_pointcloud(manifest=..., source=...)`
 - `StreamDecision.accept_joint_encoders(manifest=..., source=...)`
 - `StreamDecision.accept_audio(manifest=..., source=...)`

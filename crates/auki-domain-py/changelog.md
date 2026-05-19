@@ -6,6 +6,26 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Generic stream resolution is payload-authoritative.** `ClusterManager.open_stream(peer_id, sensor_id)` now rejects unsupported `sensor_stream.payload` values even when `sensor_kind` looks familiar. Producer resource catalogs already compute the payload name, so the generic consumer opener dispatches from that explicit SDK metadata rather than falling back to a local kind-to-type compatibility inference.
+
+Tests: `cargo test -p auki-domain-py generic_stream_resolver -- --nocapture`, `cargo test -p auki-domain-py -- --nocapture`.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Generic Python consumer stream opener.** `ClusterManager.open_stream(peer_id, sensor_id)` is now the recommended app-facing consumer API. The binding fetches the peer's SDK resource catalog, resolves the matching `sensor_stream` row's advertised payload inside the SDK, then delegates internally to the existing typed Rust subscriptions. The returned `auki_network.cluster.StreamSubscription` still yields entries whose `.payload` is one of the existing pyclasses: `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, or `AudioFrame`.
+
+The type-specific `open_camera_stream`, `open_pointcloud_stream`, `open_joint_encoders_stream`, and `open_audio_stream` methods remain as compatibility wrappers, but apps such as BoosterApp no longer need to choose them or infer stream type locally. Rust tests pin the resource-payload resolver; the Python surface test now expects `ClusterManager.open_stream`.
+
+Tests: `cargo test -p auki-domain-py generic_stream_resolver -- --nocapture`.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Python consumers open camera streams as camera-log records.** `ClusterManager.open_jpeg_stream(...)` is replaced by `open_camera_stream(...)`, which returns entries whose payload is `auki_network.cluster.CameraFrame`. Resource surface tests now expect `pinhole_camera_log_entry`, and README examples point producers at `StreamDecision.accept_camera(...)`.
+
+Tests: `cargo check -p auki-network -p auki-network-py -p auki-domain-py -p auki-datatypes`.
+
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purged: all entries removed.** The five items in this file all referenced the deleted `init_domain` / `DomainHandle` / `init_or_join_domain` / `update_cluster_doc` shape that was replaced by `ClusterManager`. Two were self-marked "RESOLVED → Propagate" with week-stale propagation placeholders. Crate-specific Python parity questions for the new `ClusterManager` surface have not surfaced yet from BoosterApp; they belong in a fresh entry when they do. File reduced to a 3-line stub.

@@ -13,9 +13,26 @@ Latest entry on top.
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purges across four crates: ~300 lines of plan archaeology and deleted-surface references removed.** [`auki-domain-py`](auki-domain-py/changelog.md) reduced to a 3-line stub (all five entries referenced the deleted `init_domain`/`DomainHandle` shape). [`auki-domain`](auki-domain/changelog.md) lost 11 transcribed "Greenland Decision" blocks whose decisions all shipped, plus a week-stale RESOLVED→Propagate placeholder; three live forward-looking items remain. [`auki-network`](auki-network/changelog.md) lost the 53-line Vinland D6 `discovery_client::subscribe` block (subject deleted), the `ClusterRuntime`-owns-SSE-subscription block (subject deleted), and the six `/auki/message/0.0.1` design blocks (protocol never shipped); ~16 substantive design items retained. [`auki-network-py`](auki-network-py/changelog.md) lost the two-runtime test block (test was deleted) and a 43-line inline type-stubs block describing deleted surface (`_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, etc.). Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. Net: 665 → 369 lines across the four files.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — generic stream dispatch is payload-authoritative.** The SDK-owned `ClusterManager.open_stream(peer_id, sensor_id)` resolver now rejects unknown resource `payload` values instead of falling back to `sensor_kind`, keeping app-facing stream type selection explicit in resource metadata.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-py`](auki-network-py/changelog.md) — Python camera stream payloads are `CameraFrame`, with no legacy alias.** The public `auki_network.cluster` surface exposes `CameraFrame` only; `PinholeCameraLogEntry` remains an internal generated Rust/protobuf record name and is not registered as a Python pyclass.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — Python consumers get a generic `ClusterManager.open_stream(peer_id, sensor_id)`.** The binding resolves the remote `sensor_stream` resource payload inside the SDK and delegates to typed subscriptions internally, so apps no longer choose audio/camera/pointcloud/joint-specific openers.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — Manager election excludes the heartbeat-lost peer.** A timed-out Manager is removed from the election candidate view before consulting stale transport reachability, so a battery-pulled or QUIC-idle Manager cannot be re-elected and block Discovery rotation.
+
+### Nils's codex · May 18, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) + Python bindings — camera streams now carry `PinholeCameraLogEntry` records.** The stream-only `JpegFrame`/`frame_stream` payload is retired; Rust dispatch uses `AcceptCamera`, Python producers use `StreamDecision.accept_camera(...)`, consumers use `open_camera_stream(...)`, and resource catalogs advertise `pinhole_camera_log_entry`.
 
 ### Nils's codex · May 18, HKT, 2026
 

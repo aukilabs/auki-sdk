@@ -36,7 +36,7 @@ use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::stream_protocol::{
     AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
-    JpegFrame as RustJpegFrame, PointCloudFrame as RustPointCloudFrame,
+    PinholeCameraLogEntry as RustPinholeCameraLogEntry, PointCloudFrame as RustPointCloudFrame,
     StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
@@ -56,13 +56,54 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::Runtime;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenericStreamPayloadKind {
+    Camera,
+    PointCloud,
+    JointEncoders,
+    Audio,
+}
+
+fn resolve_generic_stream_payload_kind(
+    resources: &[RustResourceEntry],
+    sensor_id: &str,
+) -> Result<GenericStreamPayloadKind, PyErr> {
+    let Some(resource) = resources.iter().find_map(|resource| match resource {
+        RustResourceEntry::SensorStream(stream) if stream.sensor_id == sensor_id => Some(stream),
+        _ => None,
+    }) else {
+        return Err(PyFileNotFoundError::new_err(format!(
+            "sensor stream {sensor_id:?} not found in remote resource catalog"
+        )));
+    };
+
+    generic_stream_payload_kind_for_resource(resource).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "sensor stream {sensor_id:?} advertises unsupported payload {:?} for sensor kind {:?}",
+            resource.payload, resource.sensor_kind
+        ))
+    })
+}
+
+fn generic_stream_payload_kind_for_resource(
+    resource: &RustSensorStreamResource,
+) -> Option<GenericStreamPayloadKind> {
+    match resource.payload.as_str() {
+        "pinhole_camera_log_entry" => Some(GenericStreamPayloadKind::Camera),
+        "point_cloud_frame" => Some(GenericStreamPayloadKind::PointCloud),
+        "joint_encoders_frame" => Some(GenericStreamPayloadKind::JointEncoders),
+        "audio_frame" => Some(GenericStreamPayloadKind::Audio),
+        _ => None,
+    }
+}
+
 // ─── Stream provider bridge ────────────────────────────────────────────
 //
 // `auki-network-py` and `auki-domain-py` are separate Python extension
 // modules. Although both link the `auki-network-py` rlib, each `.so`
 // gets its own copy of every `#[pyclass]`'s PyType registration with a
 // distinct type-id. A `PyStreamDecision` created by user code (via
-// `auki_network.cluster.StreamDecision.accept(...)` → registered in
+// `auki_network.cluster.StreamDecision.accept_camera(...)` → registered in
 // `auki_network.so`) is therefore NOT extractable as
 // `PyRef<PyStreamDecision>` from inside `auki_domain.so` — the
 // type-ids mismatch with the misleading error
@@ -1493,19 +1534,19 @@ impl PyClusterManager {
         })
     }
 
-    /// Open a JPEG stream subscription on `peer_id` for `sensor_id`.
+    /// Open a camera stream subscription on `peer_id` for `sensor_id`.
     /// Returns a `StreamSubscription` whose `.entries()` iterator
-    /// yields `StreamEntry(payload=JpegFrame(bytes=...))` values.
+    /// yields `StreamEntry(payload=CameraFrame(frame=...))` values.
     /// Raises `auki_network.cluster.StreamDeclined` /
     /// `StreamUnreachable` / `StreamProtocolError` on failure.
-    fn open_jpeg_stream(
+    fn open_camera_stream(
         &self,
         py: Python<'_>,
         peer_id: &str,
         sensor_id: &str,
     ) -> PyResult<PyStreamSubscription> {
-        self.open_typed_stream::<RustJpegFrame>(py, peer_id, sensor_id, |sub| {
-            PyStreamSubscription::from_rust_jpeg(sub)
+        self.open_typed_stream::<RustPinholeCameraLogEntry>(py, peer_id, sensor_id, |sub| {
+            PyStreamSubscription::from_rust_camera(sub)
         })
     }
 
@@ -1555,6 +1596,43 @@ impl PyClusterManager {
         self.open_typed_stream::<RustAudioFrame>(py, peer_id, sensor_id, |sub| {
             PyStreamSubscription::from_rust_audio(sub)
         })
+    }
+
+    /// Open a stream subscription on `peer_id` for `sensor_id` without
+    /// requiring the Python caller to choose a payload-specific opener.
+    ///
+    /// The SDK fetches the peer's resource catalog, resolves the
+    /// matching `sensor_stream` row to the advertised stream payload,
+    /// then delegates internally to the typed Rust subscription. The
+    /// returned `StreamSubscription.entries()` iterator still yields the
+    /// existing typed payload pyclasses (`CameraFrame`,
+    /// `PointCloudFrame`, `JointEncodersFrame`, or `AudioFrame`).
+    fn open_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        match self.resolve_stream_payload_kind(py, peer_id, sensor_id)? {
+            GenericStreamPayloadKind::Camera => self
+                .open_typed_stream::<RustPinholeCameraLogEntry>(py, peer_id, sensor_id, |sub| {
+                    PyStreamSubscription::from_rust_camera(sub)
+                }),
+            GenericStreamPayloadKind::PointCloud => {
+                self.open_typed_stream::<RustPointCloudFrame>(py, peer_id, sensor_id, |sub| {
+                    PyStreamSubscription::from_rust_pointcloud(sub)
+                })
+            }
+            GenericStreamPayloadKind::JointEncoders => self
+                .open_typed_stream::<RustJointEncodersFrame>(py, peer_id, sensor_id, |sub| {
+                    PyStreamSubscription::from_rust_joint_encoders(sub)
+                }),
+            GenericStreamPayloadKind::Audio => {
+                self.open_typed_stream::<RustAudioFrame>(py, peer_id, sensor_id, |sub| {
+                    PyStreamSubscription::from_rust_audio(sub)
+                })
+            }
+        }
     }
 
     /// Build a fresh `ParticipantInfo` snapshot. Combines the
@@ -1837,7 +1915,7 @@ impl PyClusterManager {
         f(manager)
     }
 
-    /// Internal helper shared by `open_jpeg_stream` /
+    /// Internal helper shared by `open_camera_stream` /
     /// `open_pointcloud_stream` / `open_joint_encoders_stream`.
     /// Each typed wrapper supplies the matching `T` plus a closure
     /// that builds a `PyStreamSubscription` from the corresponding
@@ -1878,6 +1956,33 @@ impl PyClusterManager {
                     .await
                     .map_err(|e| Python::with_gil(|py| open_stream_error_to_pyerr(py, e)))?;
                 Ok(to_py_sub(rust_sub))
+            })
+        })
+    }
+
+    fn resolve_stream_payload_kind(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        sensor_id: &str,
+    ) -> PyResult<GenericStreamPayloadKind> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let sensor_id = sensor_id.to_string();
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let resp = manager
+                    .fetch_resources_catalog_with(
+                        peer_id_parsed,
+                        RustResourcesRequest::sensor_streams(),
+                    )
+                    .await
+                    .map_err(map_fetch_resources_catalog_error)?;
+                resolve_generic_stream_payload_kind(&resp.resources, &sensor_id)
             })
         })
     }
@@ -2166,6 +2271,83 @@ mod tests {
             assert!(module.getattr("ResourceSpatialTransform").is_ok());
             assert!(module.getattr("SensorStreamResource").is_ok());
             assert!(module.getattr("TransformEdgeResource").is_ok());
+        });
+    }
+
+    #[test]
+    fn generic_stream_resolver_uses_resource_payload_metadata() {
+        let resources = vec![
+            RustResourceEntry::SensorStream(RustSensorStreamResource {
+                id: "camera".into(),
+                sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
+                sensor_hash: "camera-hash".into(),
+                sensor_kind: "rgb_camera".into(),
+                stream_protocol: "/auki/stream/0.1.0".into(),
+                payload: "pinhole_camera_log_entry".into(),
+                pinhole_intrinsics: None,
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            }),
+            RustResourceEntry::SensorStream(RustSensorStreamResource {
+                id: "audio".into(),
+                sensor_id: "K1-AABBCCDDEEFF/head_array_4mic".into(),
+                sensor_hash: "audio-hash".into(),
+                sensor_kind: "audio".into(),
+                stream_protocol: "/auki/stream/0.1.0".into(),
+                payload: "audio_frame".into(),
+                pinhole_intrinsics: None,
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            }),
+        ];
+
+        assert_eq!(
+            resolve_generic_stream_payload_kind(&resources, "K1-AABBCCDDEEFF/head_left_cam")
+                .unwrap(),
+            GenericStreamPayloadKind::Camera
+        );
+        assert_eq!(
+            resolve_generic_stream_payload_kind(&resources, "K1-AABBCCDDEEFF/head_array_4mic")
+                .unwrap(),
+            GenericStreamPayloadKind::Audio
+        );
+    }
+
+    #[test]
+    fn generic_stream_resolver_rejects_unknown_payloads_in_sdk() {
+        let resources = vec![
+            RustResourceEntry::SensorStream(RustSensorStreamResource {
+                id: "custom".into(),
+                sensor_id: "robot/custom".into(),
+                sensor_hash: "custom-hash".into(),
+                sensor_kind: "custom_sensor".into(),
+                stream_protocol: "/auki/stream/0.1.0".into(),
+                payload: "custom_frame".into(),
+                pinhole_intrinsics: None,
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            }),
+            RustResourceEntry::SensorStream(RustSensorStreamResource {
+                id: "camera-bad-payload".into(),
+                sensor_id: "robot/camera".into(),
+                sensor_hash: "camera-hash".into(),
+                sensor_kind: "rgb_camera".into(),
+                stream_protocol: "/auki/stream/0.1.0".into(),
+                payload: "custom_camera_frame".into(),
+                pinhole_intrinsics: None,
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            }),
+        ];
+
+        let err = resolve_generic_stream_payload_kind(&resources, "robot/custom").unwrap_err();
+        Python::with_gil(|py| {
+            assert!(err.is_instance_of::<PyValueError>(py));
+        });
+
+        let err = resolve_generic_stream_payload_kind(&resources, "robot/camera").unwrap_err();
+        Python::with_gil(|py| {
+            assert!(err.is_instance_of::<PyValueError>(py));
         });
     }
 

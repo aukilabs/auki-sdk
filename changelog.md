@@ -13,10 +13,31 @@ Latest entry on top.
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purges across four crates remove ~300 lines of plan archaeology and deleted-surface references.** `auki-domain/`, `auki-domain-py/`, `auki-network/`, and `auki-network-py/` parking-lot files lost entries describing deleted runtime/types (`ClusterRuntime`, `init_domain`/`DomainHandle`, `discovery_client::subscribe`, `update_cluster_doc`, `cluster.spawn`), transcribed Greenland Notion task tables whose decisions all shipped, design blocks for unshipped `/auki/message/0.0.1`, and internal codename leakage. ~16 substantive design questions retained: relay-reservation v2, `DiscoveryRuntime`, peer-key derivation labels, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, JSON-encoding-for-binary-T, cluster.json graduation/signing, `app_instance` containers/multi-NIC, `Capability` open-string, etc. See [`crates/changelog.md`](crates/changelog.md) for per-crate detail.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Generic stream dispatch is driven by explicit resource payload metadata.** `ClusterManager.open_stream(peer_id, sensor_id)` now fails closed on unsupported `sensor_stream.payload` values instead of falling back to sensor-kind inference. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Python camera stream payloads are `CameraFrame`, with no legacy alias.** `auki-network-py` now exposes only `auki_network.cluster.CameraFrame` for app-facing camera stream frames; the internal protobuf record name is not a Python compatibility surface. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Project-local worktrees are ignored for SDK development.** Added `.worktrees/` to `.gitignore` so isolated implementation branches can live under the repo without polluting status.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Python consumers can open streams through one generic SDK call.** `auki-domain-py` now exposes `ClusterManager.open_stream(peer_id, sensor_id)`, resolving stream payload kind from SDK resource catalogs and returning typed payload entries without app-side type-specific opener calls. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 **Manager election ignores the heartbeat-lost Manager even if transport teardown lags.** `auki-domain` now excludes the timed-out peer from successor election before consulting libp2p's connected set, preventing battery-pull / QUIC-idle cases from re-electing the dead Manager and leaving Discovery unrotated. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Camera streams now use the same record bytes as camera logs.** `/auki/stream/0.1.0` camera payloads carry `PinholeCameraLogEntry` directly; the stream-only JPEG wrapper is retired across Rust, Python, resource catalogs, docs, and tests. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 18, HKT, 2026
 

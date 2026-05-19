@@ -24,7 +24,8 @@
 | `set_resource_catalog_provider` / `fetch_resources_catalog` | shipped |
 | `set_registry_app_root` | shipped |
 | `fetch_sensor_entry` / `fetch_clock_entry` / `fetch_frame_entry` JSON helpers | shipped |
-| `open_jpeg_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` / `open_audio_stream` | shipped |
+| `open_stream` generic consumer opener | shipped |
+| `open_camera_stream` / `open_pointcloud_stream` / `open_joint_encoders_stream` / `open_audio_stream` | shipped |
 | `stream_provider` kwarg via `auki_network.cluster._build_stream_provider` PyCapsule | shipped |
 | `external_addresses` advertise override | shipped |
 
@@ -39,6 +40,8 @@ Producer daemons can call `ClusterManager.set_registry_app_root(app_root)` with 
 Producer daemons can call `ClusterManager.set_resource_catalog_provider(callable)` with a zero-argument callable returning `list[SensorStreamResource | TransformEdgeResource]`. `ClusterManager.fetch_resources_catalog(peer_id, kinds=None, include_sensor_entries=False, include_frame_entries=False)` returns the same concrete value objects to consumers. `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, and `ResourceSpatialTransform` cover the nested numeric payloads.
 
 Python consumers can call `ClusterManager.fetch_sensor_entry(...)`, `.fetch_clock_entry(...)`, and `.fetch_frame_entry(...)` for exact hash-addressed registry entries. These methods return canonical JSON strings and map missing entries to `FileNotFoundError`.
+
+Python stream consumers should call `ClusterManager.open_stream(peer_id, sensor_id)`. The binding fetches the peer's `sensor_stream` resource rows, resolves the advertised payload inside the SDK, and returns the same `auki_network.cluster.StreamSubscription` shape used by the typed compatibility wrappers. Entries expose typed payload pyclasses such as `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, or `AudioFrame`.
 
 Producer stream providers can call `StreamManifestBuilder.from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to get an `auki_network.cluster.StreamManifest` backed by the local registry. The binding deliberately instantiates the object through the imported `auki_network` module so the returned manifest has the same PyO3 type identity that `auki_network.cluster.StreamDecision.accept_*` expects.
 

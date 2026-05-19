@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Retained stream sources for Python producers.** `auki_logs.Log.stream_source(...)` now returns a frozen `StreamSource` metadata object carrying the log root, sensor/clock/frame hashes, and a `payload_kind` discriminator (`camera`, `pointcloud`, `joint_encoders`, or `audio`). Apps pass this object to `auki_network.cluster.StreamDecision.accept_source(source)` instead of constructing stream manifests or choosing typed accept factories.
+
+The cross-extension bridge is a named SDK-internal PyCapsule, `auki_logs_py::stream_source::v1`, whose payload is a Rust `RetainedStreamSource`. The logs binding still stores opaque bytes; the network binding owns retained-log tailing and payload decoding. Python tests cover metadata getters, optional frame metadata, payload-kind validation, and capsule naming.
+
 ### broodsugar's claude · May 9, 13:30 HKT, 2026
 
 **Crate scaffolding + Python surface for [`auki-logs`](../auki-logs)'s `Log<T>` framing primitive.** Closes [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4 at the bytes level — the ESL detector (Python) can now tail an input sensor log and append to an output detection log without leaving Python.

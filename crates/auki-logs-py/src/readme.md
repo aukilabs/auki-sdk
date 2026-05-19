@@ -4,7 +4,7 @@ PyO3 bindings for `auki-logs`. Spec: this crate's [outer `README.md`](../README.
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). Wraps the Rust `Log<T>` framing primitive monomorphized to opaque bytes (`Log<RawBytes>`), exposing it as a Python `auki_logs` extension module via PyO3.
+A single source file: [`lib.rs`](lib.rs). Wraps the Rust `Log<T>` framing primitive monomorphized to opaque bytes (`Log<RawBytes>`), exposing it as a Python `auki_logs` extension module via PyO3. It also exposes `StreamSource`, an SDK-owned retained-source metadata object consumed by `auki-network-py`.
 
 ## Public surface
 
@@ -30,12 +30,33 @@ class Log:
     def flush(self) -> None
     def set_retention(self, retention_ns: int) -> None
     def manifest(self) -> dict
+    def stream_source(
+        self,
+        *,
+        sensor_id: str,
+        sensor_hash: str,
+        clock_id: str,
+        clock_hash: str,
+        payload_kind: str,
+        frame_id: Optional[str] = None,
+        frame_hash: Optional[str] = None,
+    ) -> StreamSource
     def close(self) -> None
     # __enter__ / __exit__ — context-manager protocol
     @staticmethod
     def read(root: str) -> LogReader
     @staticmethod
     def tail(root: str) -> TailIter
+
+class StreamSource:
+    root: str
+    sensor_id: str
+    sensor_hash: str
+    clock_id: str
+    clock_hash: str
+    payload_kind: str
+    frame_id: str
+    frame_hash: str
 ```
 
 ## Encoding stance
@@ -43,6 +64,14 @@ class Log:
 **Opaque bytes only.** The Python surface doesn't expose `LogPayload`; the framing primitive stays out of the encoder's way (mirrors the Rust crate's stance). Internally, `lib.rs` uses a tiny `RawBytes(Vec<u8>)` newtype with an identity-encoding `LogPayload` impl to satisfy the generic `Log<T>` bound.
 
 This means a Python writer's bytes land on disk byte-for-byte the same as a Rust writer's bytes — cross-language byte equality is determined by what the producer hands to `append()`, not by any wrapper logic.
+
+## Retained stream source bridge
+
+`Log.stream_source(...)` creates a frozen `StreamSource` object with log path, stream manifest metadata, and a `payload_kind` discriminator (`camera`, `pointcloud`, `joint_encoders`, or `audio`). Apps pass this object directly to `auki_network.cluster.StreamDecision.accept_source(source)`.
+
+The object exposes read-only metadata for inspection and an underscore-prefixed `_stream_source_capsule()` method for the sibling PyO3 bridge. The capsule name is `auki_logs_py::stream_source::v1`; `auki-network-py` validates that exact name before unboxing the Rust `RetainedStreamSource` payload.
+
+The logs binding still does not decode per-frame bytes. It owns the retained source identity; `auki-network-py` owns payload-kind dispatch, retained-log tailing, and prost decoding into stream runtime frames.
 
 ## Manifest seam
 
@@ -73,9 +102,9 @@ Long-blocking calls (`Log.open`, `append`, `flush`, `read`, `entries`, `tail.nex
 | `raw_bytes_empty_payload_round_trips` | Empty payload survives the round-trip. |
 | `raw_bytes_can_read_what_prost_wrote` | Stub — full cross-encoder seam test deferred (would need a circular path-dep through `auki-datatypes`). |
 
-### Python-side (`pytest python_tests/`, 13 tests)
+### Python-side (`pytest python_tests/`, 17 tests)
 
-Surface tests, round-trip tests, tail tests, and an end-to-end "fake detector loop" smoke test. See [`python_tests/test_logs.py`](../python_tests/test_logs.py) for the full set.
+Surface tests, retained-source metadata/capsule tests, round-trip tests, tail tests, and an end-to-end "fake detector loop" smoke test. See [`python_tests/test_logs.py`](../python_tests/test_logs.py) for the full set.
 
 ## Consumers in this workspace
 

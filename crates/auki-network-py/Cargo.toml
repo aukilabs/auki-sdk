@@ -29,6 +29,14 @@ extension-module = ["pyo3/extension-module"]
 # pyclass surface (StreamRequest, StreamManifest, StreamDispatch,
 # StreamSubscription, ...); `discovery_client` for DiscoveryClient.
 auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["swarm", "discovery_client"] }
+# Retained producer sources originate in `auki-logs-py`; renamed here
+# so the rlib can coexist with the upstream `auki-logs` crate name.
+auki-logs-py-rs = { package = "auki-logs-py", path = "../auki-logs-py" }
+# Underlying segmented log reader/tailer for retained source pumping.
+auki-logs-rs = { package = "auki-logs", path = "../auki-logs" }
+# Disk payload prost types used when decoding retained log bytes into
+# stream payloads.
+auki-datatypes = { path = "../auki-datatypes" }
 # `PeerId` parsing on the Python ↔ Rust seam.
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 # `Multiaddr` parsing for the Python multiaddr string kwargs.
@@ -52,9 +60,13 @@ pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
 # `futures::Stream` / `StreamExt` for the source-Stream bridge on
 # the producer side and consumer-side substream draining.
 futures = "0.3"
+# Prost decode for retained log payloads.
+prost = "0.13"
 
 [dev-dependencies]
 # `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
 # manually starting an interpreter; needs the runtime linked, which is
 # why we don't enable it on the production extension build.
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+serde_json = "1"
+tempfile = "3"

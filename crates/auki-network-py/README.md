@@ -44,33 +44,29 @@ Errors map to built-in Python exceptions: transport failures become `OSError`, D
 Producer-side:
 
 ```python
+import auki_logs
 from auki_network import cluster
+
+camera_log = auki_logs.Log.open("/path/to/head_left_cam.log", camera_manifest)
+camera_source = camera_log.stream_source(
+    sensor_id="head_left_cam",
+    sensor_hash="...",
+    clock_id="robot/clock",
+    clock_hash="...",
+    payload_kind="camera",
+    frame_id="robot/head_left_cam_optical",
+    frame_hash="...",
+)
 
 def stream_provider(requester_peer_id: str, req: cluster.StreamRequest):
     if req.sensor_id == "head_left_cam":
-        async def source():
-            async for camera in camera_fanout.subscribe():
-                yield cluster.StreamItem(
-                    timestamp_ns=session_clock_now_ns(),
-                    payload=cluster.CameraFrame(camera),
-                )
-
-        return cluster.StreamDecision.accept_camera(
-            manifest=cluster.StreamManifest(
-                sensor_id=req.sensor_id,
-                sensor_hash="...",
-                clock_id="...",
-                clock_hash="...",
-                frame_id="...",
-                frame_hash="...",
-            ),
-            source=source(),
-        )
-
+        return cluster.StreamDecision.accept_source(camera_source)
     return cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
 ```
 
 The provider signature is `Callable[[str, StreamRequest], StreamDecision]`. The first argument is the requester's libp2p peer id string; producers use it for per-requester policy. Returning or raising anything other than `StreamDecision` is normalized to a typed `DeclineReason.other(...)` so requesters get a failure instead of a hung substream.
+
+For retained sensor logs, `StreamDecision.accept_source(source)` is the recommended producer API. The source is created by `auki_logs.Log.stream_source(...)`; the SDK builds the `StreamManifest`, tails retained log bytes, decodes them according to `payload_kind`, and dispatches internally to the typed stream runtime arms.
 
 Supported payload pyclasses:
 
@@ -81,11 +77,14 @@ Supported payload pyclasses:
 
 Factory methods:
 
+- `StreamDecision.accept_source(source)` for SDK-owned retained logs, recommended for app producers
 - `StreamDecision.accept_camera(manifest=..., source=...)`
 - `StreamDecision.accept_pointcloud(manifest=..., source=...)`
 - `StreamDecision.accept_joint_encoders(manifest=..., source=...)`
 - `StreamDecision.accept_audio(manifest=..., source=...)`
 - `StreamDecision.decline(reason)`
+
+The typed `accept_*` factories remain available for SDK tests and custom live sources that already have typed async iterators. App producers serving retained logs should prefer `accept_source(source)` so they do not construct stream manifests, decode retained bytes, or pick type-specific factories themselves.
 
 Consumer-side `StreamSubscription`, `StreamEntryIterator`, and `StreamEntry` are returned by `auki_domain.ClusterManager.open_*_stream(...)`.
 

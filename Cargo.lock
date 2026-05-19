@@ -404,12 +404,18 @@ dependencies = [
 name = "auki-network-py"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
+ "auki-logs",
+ "auki-logs-py",
  "auki-network",
  "futures",
  "libp2p-identity",
  "multiaddr",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

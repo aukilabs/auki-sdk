@@ -37,12 +37,13 @@
 //! Python (specifically the ESL detector). Higher-level abstractions
 //! (`Session`, registry helpers) live elsewhere and grow independently.
 
+use std::ffi::CString;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyModule};
+use pyo3::types::{PyBytes, PyCapsule, PyDict, PyModule};
 
 // Renamed via `package =` in Cargo.toml so the upstream crate's name
 // doesn't collide with this crate's own lib name `auki_logs` (which is
@@ -66,7 +67,7 @@ use auki_logs_rs::{
 /// byte-for-byte; the difference is just whether the `LogPayload`
 /// impl decodes prost on the Rust side or returns raw bytes here.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RawBytes(Vec<u8>);
+pub struct RawBytes(pub Vec<u8>);
 
 impl LogPayload for RawBytes {
     fn encode(&self) -> Vec<u8> {
@@ -93,6 +94,35 @@ fn err_to_py(e: RustError) -> PyErr {
 
 fn map_err<T>(r: RustResult<T>) -> PyResult<T> {
     r.map_err(err_to_py)
+}
+
+/// Capsule name for retained stream source payloads exchanged with
+/// sibling PyO3 wrapper crates. Includes a version suffix so future ABI
+/// changes fail loudly on mismatch.
+pub const STREAM_SOURCE_CAPSULE_NAME: &str = "auki_logs_py::stream_source::v1";
+
+/// SDK-owned retained source metadata. `auki-logs-py` constructs this
+/// from a concrete log handle; `auki-network-py` consumes it through a
+/// named PyCapsule and owns the payload-kind dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedStreamSource {
+    pub root: PathBuf,
+    pub sensor_id: String,
+    pub sensor_hash: String,
+    pub clock_id: String,
+    pub clock_hash: String,
+    pub payload_kind: String,
+    pub frame_id: String,
+    pub frame_hash: String,
+}
+
+fn validate_payload_kind(payload_kind: &str) -> PyResult<()> {
+    match payload_kind {
+        "camera" | "pointcloud" | "joint_encoders" | "audio" => Ok(()),
+        other => Err(PyValueError::new_err(format!(
+            "payload_kind must be one of camera, pointcloud, joint_encoders, or audio; got {other:?}"
+        ))),
+    }
 }
 
 /// Walk a Python dict into a `serde_json::Value`. The `auki-logs`
@@ -256,6 +286,78 @@ impl TailIter {
 #[pyclass(module = "auki_logs")]
 pub struct Log {
     inner: Option<RustLog<RawBytes>>,
+    root: PathBuf,
+}
+
+/// Retained source produced by `Log.stream_source(...)`. Apps hand this
+/// object directly to `auki_network.cluster.StreamDecision.accept_source`;
+/// the SDK bridge carries the source metadata across PyO3 extension
+/// module boundaries without relying on pyclass type identity.
+#[pyclass(module = "auki_logs", frozen)]
+#[derive(Clone)]
+pub struct StreamSource {
+    inner: RetainedStreamSource,
+}
+
+#[pymethods]
+impl StreamSource {
+    #[getter]
+    fn root(&self) -> String {
+        self.inner.root.to_string_lossy().into_owned()
+    }
+
+    #[getter]
+    fn sensor_id(&self) -> &str {
+        &self.inner.sensor_id
+    }
+
+    #[getter]
+    fn sensor_hash(&self) -> &str {
+        &self.inner.sensor_hash
+    }
+
+    #[getter]
+    fn clock_id(&self) -> &str {
+        &self.inner.clock_id
+    }
+
+    #[getter]
+    fn clock_hash(&self) -> &str {
+        &self.inner.clock_hash
+    }
+
+    #[getter]
+    fn payload_kind(&self) -> &str {
+        &self.inner.payload_kind
+    }
+
+    #[getter]
+    fn frame_id(&self) -> &str {
+        &self.inner.frame_id
+    }
+
+    #[getter]
+    fn frame_hash(&self) -> &str {
+        &self.inner.frame_hash
+    }
+
+    /// SDK-internal bridge consumed by `auki-network-py`.
+    fn _stream_source_capsule(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
+        let name =
+            CString::new(STREAM_SOURCE_CAPSULE_NAME).expect("static literal contains no nul");
+        let capsule =
+            PyCapsule::new_bound::<RetainedStreamSource>(py, self.inner.clone(), Some(name))?;
+        Ok(capsule.unbind())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "StreamSource(sensor_id={:?}, payload_kind={:?}, root={:?})",
+            self.inner.sensor_id,
+            self.inner.payload_kind,
+            self.inner.root.to_string_lossy(),
+        )
+    }
 }
 
 #[pymethods]
@@ -274,7 +376,10 @@ impl Log {
         let log = py
             .allow_threads(|| RustLog::<RawBytes>::open(&root, manifest_json))
             .map_err(err_to_py)?;
-        Ok(Log { inner: Some(log) })
+        Ok(Log {
+            inner: Some(log),
+            root,
+        })
     }
 
     /// Append an entry. Rolls the segment over when `timestamp_ns`
@@ -323,6 +428,39 @@ impl Log {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("log has been closed"))?;
         json_to_pyobject(py, inner.manifest())
+    }
+
+    /// Build an SDK-owned retained stream source from this log. The
+    /// returned source carries the manifest metadata needed by
+    /// `StreamDecision.accept_source(source)`; the network binding owns
+    /// payload decoding and typed dispatch.
+    #[pyo3(signature = (*, sensor_id, sensor_hash, clock_id, clock_hash, payload_kind, frame_id=None, frame_hash=None))]
+    fn stream_source(
+        &self,
+        sensor_id: String,
+        sensor_hash: String,
+        clock_id: String,
+        clock_hash: String,
+        payload_kind: String,
+        frame_id: Option<String>,
+        frame_hash: Option<String>,
+    ) -> PyResult<StreamSource> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("log has been closed"))?;
+        validate_payload_kind(&payload_kind)?;
+        Ok(StreamSource {
+            inner: RetainedStreamSource {
+                root: self.root.clone(),
+                sensor_id,
+                sensor_hash,
+                clock_id,
+                clock_hash,
+                payload_kind,
+                frame_id: frame_id.unwrap_or_default(),
+                frame_hash: frame_hash.unwrap_or_default(),
+            },
+        })
     }
 
     /// Close the log explicitly. Subsequent calls on this handle
@@ -388,6 +526,7 @@ fn auki_logs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<LogReader>()?;
     m.add_class::<TailIter>()?;
     m.add_class::<Entry>()?;
+    m.add_class::<StreamSource>()?;
     Ok(())
 }
 

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**WASM libp2p browser transport compile-probe planned.** Added a Superpowers implementation plan for `auki-network-browser-wasm`: scaffold, canonical PeerId wasm export, JS import smoke test, and rust-libp2p browser feature compile probe before native dial work. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **WASM libp2p browser transport spike specified.** Added a Superpowers design spec that narrows Park's browser-peer transport work to a rust-libp2p Wasm probe, with WebRTC Direct first, WebTransport second, and Secure WebSocket only as fallback before Domain join/audio. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

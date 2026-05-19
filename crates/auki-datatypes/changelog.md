@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Native pointcloud frames replace the log/stream split.** `auki.point_cloud` now defines one `PointCloudFrame { point_count, data }` record for both Sensor Logs and `/auki/stream/0.1.0` pointcloud substreams. The old `PointCloudLogEntry { data }` log type and `auki.point_cloud_stream` package are removed; the shared frame is registered as the `LogPayload` type. Locked tests pin the native frame bytes, hash, prost round-trip, log-payload round-trip, empty default elision, and segment replay.
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **Cuba T5 + T12 — `DetectionLogEntry` gains `sensor_hash` (field 2) and `type` (field 3).** Each detection record now self-describes its source sensor (T5) and carries an open-string discriminator the consumer uses to pick a per-type decoder for the opaque `data` bytes (T12 — vocabulary like `aruco`, `portal`, `portal_corner`, `esl`, `person`; canonical list in [`detectors/README.md`](https://github.com/aukilabs/detectors)). Field number ledger updated in [`proto/detection.proto`](proto/detection.proto); the SDK still does not decode `data` — application code owns per-type decoders.

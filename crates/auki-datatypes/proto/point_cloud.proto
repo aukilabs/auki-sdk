@@ -2,24 +2,21 @@ syntax = "proto3";
 
 package auki.point_cloud;
 
-// Per-frame point-cloud log payload — the segment payload for a Sensor
-// Log whose registry entry has body kind `point_cloud`. The frame
-// timestamp rides in the auki-logs framing's `timestamp_ns`, not here.
+// Native Auki pointcloud sample used by both Sensor Logs and
+// `/auki/stream/0.1.0` pointcloud substreams.
 //
-// Step 3 decision (2026-05-08): opaque-bytes-only. Layout — the
-// `width × height × is_dense` ROS-shaped fields that lived on the
-// pre-migration `auki_registry::PointCloudLogEntry` are gone; the byte
-// stream is the single thing the SDK persists per frame. Interpretation
-// (`fields`, `point_step`, `is_bigendian`, `frame_id`) comes from the
-// SensorRegistryEntry's `PointCloud` body that the log's manifest pins
-// via `(sensor_id, sensor_hash)`. Symmetric with the wire — same
-// `bytes`-only shape on disk and on `/auki/stream/0.1.0`'s
-// `PointCloudFrame`. Resolves the on-disk-vs-wire drift in
-// ../parking_lot.md.
+// `data` is `point_count` packed point records. The fixed per-stream
+// layout lives in the pinned `SensorBody::PointCloud` registry entry:
+// `fields`, `point_step`, `frame_id`, and `frame_hash`. Numeric fields
+// in Auki-native pointclouds are little-endian by contract. Every valid
+// pointcloud layout starts with `x`, `y`, `z` as float32 at offsets
+// 0, 4, and 8.
 //
-// Field number ledger (never reuse, never renumber):
-//   PointCloudLogEntry.data = 1
+// Field number ledger:
+//   PointCloudFrame.point_count = 1
+//   PointCloudFrame.data        = 2
 
-message PointCloudLogEntry {
-  bytes data = 1;
+message PointCloudFrame {
+  uint32 point_count = 1;
+  bytes data = 2;
 }

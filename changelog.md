@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud datatypes landed.** `auki-datatypes` now uses one `auki.point_cloud.PointCloudFrame { point_count, data }` protobuf record for pointcloud logs and live pointcloud streams, replacing the old ROS-CDR log/stream split. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Project-local worktrees are ignored for SDK development.** Added `.worktrees/` to `.gitignore` so isolated implementation branches can live under the repo without polluting status.
 
 ### Nils's codex · May 19, HKT, 2026

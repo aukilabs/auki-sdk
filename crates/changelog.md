@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) — native pointcloud frames replace the log/stream split.** `auki.point_cloud.PointCloudFrame { point_count, data }` is now the single protobuf record for Sensor Logs and `/auki/stream/0.1.0` pointcloud substreams; `auki.point_cloud_stream` and `PointCloudLogEntry` are removed.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Manager handoff is less edge-triggered and membership gossip carries Manager identity.** Raw heartbeat carrier close no longer causes immediate election or eviction; `ClusterManager` waits for the heartbeat timeout unless a fresh heartbeat/connection refreshes the peer first. `/auki/membership/0.0.1` now carries `manager_peer_id`, and receivers apply it when the sender is the claimed Manager and the snapshot contains that Manager.

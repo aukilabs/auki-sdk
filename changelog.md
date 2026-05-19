@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native pointcloud implementation plan captured.** Added a Superpowers implementation plan for the approved breaking pointcloud refactor across datatypes, registry, streams, Python bindings, ROS adapter, docs, and verification. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native pointcloud refactor design captured.** Added a Superpowers design spec for replacing ROS-CDR pointcloud streams with a shared native `auki.point_cloud.PointCloudFrame { point_count, data }` record used by logs and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 18, HKT, 2026

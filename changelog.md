@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain peer adapter implementation planned.** Added a Superpowers implementation plan for the first `auki-domain-browser` tranche: package scaffold, Park-compatible contract, browser identity and Discovery seams, idle snapshots, and fail-closed transport errors before real browser networking. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser Domain peer adapter design captured.** Added a Superpowers design spec for a new `auki-domain-browser` package that lets Park load true browser Domain peers through SDK-owned identity, Discovery, membership, sensor, and stream surfaces. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

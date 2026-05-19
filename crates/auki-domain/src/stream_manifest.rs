@@ -162,14 +162,27 @@ mod tests {
         SensorRegistryEntry {
             sensor_id: "K1-AABBCCDDEEFF/head_depth_points".into(),
             body: SensorBody::PointCloud(PointCloud {
-                fields: vec![PointField {
-                    name: "x".into(),
-                    offset: 0,
-                    datatype: PointFieldDataType::Float32,
-                    count: 1,
-                }],
-                point_step: 4,
-                is_bigendian: false,
+                fields: vec![
+                    PointField {
+                        name: "x".into(),
+                        offset: 0,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    PointField {
+                        name: "y".into(),
+                        offset: 4,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                    PointField {
+                        name: "z".into(),
+                        offset: 8,
+                        datatype: PointFieldDataType::Float32,
+                        count: 1,
+                    },
+                ],
+                point_step: 12,
                 frame_rate_hz: 10,
                 frame_id: FRAME_ID.into(),
                 frame_hash: frame_hash.into(),

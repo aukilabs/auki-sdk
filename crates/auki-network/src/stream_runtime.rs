@@ -86,7 +86,7 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 
 /// Producer's accept/decline decision for a single inbound request.
 /// Closed over the `T`s the SDK supports today: `JpegFrame` (grimsby v1),
-/// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2),
+/// `PointCloudFrame` (native Auki pointcloud samples),
 /// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
 /// byte-identical to the on-disk `JointEncodersLogEntry`), and
 /// `AudioFrame` (Dialogue Batch 1 — opaque interleaved PCM bytes,
@@ -110,9 +110,9 @@ pub enum StreamDispatch {
         manifest: StreamManifest,
         source: SourceStream<JpegFrame>,
     },
-    /// Accept the request with a PointCloud source-Stream — Dagaz's new
-    /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
-    /// `PointCloud2` ROS message; the consumer parses CDR on its side.
+    /// Accept the request with a PointCloud source-Stream. Each
+    /// [`PointCloudFrame`] carries a `point_count` plus packed point
+    /// records whose fixed field layout is declared by the Sensor Registry.
     AcceptPointCloud {
         manifest: StreamManifest,
         source: SourceStream<PointCloudFrame>,
@@ -664,6 +664,19 @@ mod tests {
         }
     }
 
+    fn native_pointcloud(points: &[[f32; 3]]) -> PointCloudFrame {
+        let mut data = Vec::with_capacity(points.len() * 12);
+        for point in points {
+            for value in point {
+                data.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        PointCloudFrame {
+            point_count: points.len() as u32,
+            data,
+        }
+    }
+
     // ─── Provider fixtures ───────────────────────────────────────────────
 
     fn jpeg_provider_yielding_three_frames() -> StreamProvider {
@@ -741,21 +754,15 @@ mod tests {
             let frames = vec![
                 Ok(StreamItem {
                     timestamp_ns: 10_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x01, 0x02, 0x03],
-                    },
+                    payload: native_pointcloud(&[[1.0, 2.0, 3.0]]),
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 20_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x04, 0x05, 0x06],
-                    },
+                    payload: native_pointcloud(&[[4.0, 5.0, 6.0]]),
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 30_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x07, 0x08, 0x09],
-                    },
+                    payload: native_pointcloud(&[[7.0, 8.0, 9.0]]),
                 }),
             ];
             StreamDispatch::AcceptPointCloud {
@@ -840,9 +847,7 @@ mod tests {
                 ),
                 source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xCD, 0xCD],
-                    },
+                    payload: native_pointcloud(&[[1.0, 1.0, 1.0]]),
                 })])),
             },
             _ => StreamDispatch::Decline {
@@ -1350,12 +1355,13 @@ mod tests {
         let mut entries = sub.entries;
         let f0 = entries.next().await.unwrap().expect("frame 0");
         assert_eq!(f0.seq, 0);
-        assert_eq!(f0.payload.bytes, vec![0xCD, 0xAA, 0x01, 0x02, 0x03]);
+        assert_eq!(f0.payload, native_pointcloud(&[[1.0, 2.0, 3.0]]));
         let f1 = entries.next().await.unwrap().expect("frame 1");
         assert_eq!(f1.seq, 1);
+        assert_eq!(f1.payload.point_count, 1);
         let f2 = entries.next().await.unwrap().expect("frame 2");
         assert_eq!(f2.seq, 2);
-        assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
+        assert_eq!(f2.payload, native_pointcloud(&[[7.0, 8.0, 9.0]]));
 
         let end = entries
             .next()
@@ -1519,7 +1525,7 @@ mod tests {
         assert_eq!(sub_pc.manifest.sensor_hash, "pc-hash");
         let mut pc_entries = sub_pc.entries;
         let pcf = pc_entries.next().await.unwrap().expect("pc frame");
-        assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
+        assert_eq!(pcf.payload, native_pointcloud(&[[1.0, 1.0, 1.0]]));
 
         // Substream 3: unknown sensor → Decline.
         let unknown: Result<StreamSubscription<JpegFrame>, OpenStreamError> = consumer

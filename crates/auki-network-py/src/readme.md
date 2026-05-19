@@ -34,7 +34,7 @@ client.deregister(name: str) -> None
 StreamRequest(sensor_id=...)
 StreamManifest(sensor_id=..., sensor_hash=..., clock_id=..., clock_hash=..., frame_id=..., frame_hash=...)
 JpegFrame(bytes)
-PointCloudFrame(bytes)
+PointCloudFrame(point_count, data)
 JointEncodersFrame(angles_rad)
 AudioFrame(data)
 StreamItem(timestamp_ns=..., payload=...)

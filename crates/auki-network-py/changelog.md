@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Python pointcloud stream frames are native.** `cluster.PointCloudFrame` now constructs as `PointCloudFrame(point_count, data)` and exposes `.point_count` plus `.data`, mirroring `auki.point_cloud.PointCloudFrame`. Producer/consumer pointcloud stream tests and active README/status/sprint docs were updated from the old opaque `.bytes` surface.
+
 ### Nils's codex · May 16, 12:31 HKT, 2026
 
 **Python stream surface renames accept metadata to `StreamDescriptor`.** `cluster.StreamDescriptor` now requires `sensor_id`, `sensor_hash`, `clock_id`, and `clock_hash`, with optional `frame_id` / `frame_hash` defaulting to empty strings for non-spatial streams. Producer factories take `descriptor=...` (`accept`, `accept_pointcloud`, `accept_joint_encoders`, `accept_audio`) and `StreamSubscription` exposes `.descriptor` on the consumer side. The PyO3 bridge maps the descriptor through to `auki-network::StreamDispatch`, and Python stream tests assert sensor/frame metadata survives the round trip. `cargo test -p auki-network-py` passes.

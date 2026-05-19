@@ -203,13 +203,10 @@ impl PyJpegFrame {
 
 // ─── PointCloudFrame ─────────────────────────────────────────────────────────
 
-/// Dagaz Batch 1 payload `T` — raw CDR-encoded `PointCloud2` ROS message
-/// bytes (per [Dagaz](https://www.notion.so/3585c8e96592805b8d83c89f849d3577) D2).
-/// Consumer (Park, future Sentinel) parses CDR on its side; the SDK doesn't
-/// decode or interpret these bytes. Same shape as [`PyJpegFrame`] —
-/// opaque-bytes-with-a-`bytes`-property — but the wire envelope uses a
-/// base64 adapter so a 22 MB/s raw stream lands at ~30 MB/s on the wire
-/// instead of ~80 MB/s (grimsby's JSON-of-binary tax dodge, per Dagaz D2).
+/// Native Auki pointcloud payload `T`. The Sensor Registry declares the
+/// fixed per-point layout; each stream frame carries the point count and
+/// packed point records. Every native layout starts with little-endian
+/// `float32` x/y/z at offsets 0/4/8.
 #[pyclass(name = "PointCloudFrame", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyPointCloudFrame {
@@ -219,28 +216,37 @@ pub struct PyPointCloudFrame {
 #[pymethods]
 impl PyPointCloudFrame {
     #[new]
-    #[pyo3(signature = (bytes, /))]
-    fn new(bytes: Bound<'_, PyBytes>) -> Self {
+    #[pyo3(signature = (point_count, data, /))]
+    fn new(point_count: u32, data: Bound<'_, PyBytes>) -> Self {
         Self {
             inner: RustPointCloudFrame {
-                bytes: bytes.as_bytes().to_vec(),
+                point_count,
+                data: data.as_bytes().to_vec(),
             },
         }
     }
 
-    /// Raw CDR-encoded `PointCloud2` bytes. Returns a fresh `bytes` copy
-    /// each call.
     #[getter]
-    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new_bound(py, &self.inner.bytes)
+    fn point_count(&self) -> u32 {
+        self.inner.point_count
+    }
+
+    /// Packed native point records. Returns a fresh `bytes` copy each call.
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.data)
     }
 
     fn __len__(&self) -> usize {
-        self.inner.bytes.len()
+        self.inner.point_count as usize
     }
 
     fn __repr__(&self) -> String {
-        format!("PointCloudFrame(<{} bytes>)", self.inner.bytes.len())
+        format!(
+            "PointCloudFrame(<{} points, {} bytes>)",
+            self.inner.point_count,
+            self.inner.data.len()
+        )
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -856,10 +862,10 @@ impl PyStreamDecision {
         }
     }
 
-    /// Accept the request with a PointCloud source (Dagaz Batch 2). The
+    /// Accept the request with a PointCloud source. The
     /// async iterator must yield `StreamItem(payload=PointCloudFrame(...))`
-    /// values carrying CDR-encoded `PointCloud2` ROS message bytes; the
-    /// consumer (Park, future Sentinel) parses CDR on its side.
+    /// values carrying native Auki pointcloud samples; the Sensor Registry
+    /// declares the fixed point layout.
     #[staticmethod]
     #[pyo3(signature = (*, manifest, source))]
     fn accept_pointcloud(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
@@ -1676,7 +1682,7 @@ mod tests {
 
     /// Helper: wrap a [`PyJpegFrame`] as a `Bound<'_, PyAny>` for the
     /// new typed-payload `PyStreamItem::new` constructor (which
-    /// accepts either `JpegFrame` or `PointCloudFrame`).
+    /// accepts any supported frame type).
     fn jpeg_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
         let frame = PyJpegFrame::new(PyBytes::new_bound(py, bytes));
         Py::new(py, frame)
@@ -1688,8 +1694,12 @@ mod tests {
 
     /// Helper: wrap a [`PyPointCloudFrame`] as a `Bound<'_, PyAny>` for
     /// the typed-payload `PyStreamItem::new` constructor.
-    fn pointcloud_frame_as_any<'py>(py: Python<'py>, bytes: &[u8]) -> Bound<'py, PyAny> {
-        let frame = PyPointCloudFrame::new(PyBytes::new_bound(py, bytes));
+    fn pointcloud_frame_as_any<'py>(
+        py: Python<'py>,
+        point_count: u32,
+        data: &[u8],
+    ) -> Bound<'py, PyAny> {
+        let frame = PyPointCloudFrame::new(point_count, PyBytes::new_bound(py, data));
         Py::new(py, frame)
             .expect("alloc PyPointCloudFrame")
             .bind(py)
@@ -1713,10 +1723,11 @@ mod tests {
     fn point_cloud_frame_round_trips_through_pybytes() {
         Python::with_gil(|py| {
             let payload = PyBytes::new_bound(py, &[0x10, 0x20, 0x30]);
-            let f = PyPointCloudFrame::new(payload);
-            assert_eq!(f.__len__(), 3);
-            assert_eq!(f.bytes(py).as_bytes(), &[0x10, 0x20, 0x30]);
-            assert_eq!(f.__repr__(), "PointCloudFrame(<3 bytes>)");
+            let f = PyPointCloudFrame::new(7, payload);
+            assert_eq!(f.point_count(), 7);
+            assert_eq!(f.__len__(), 7);
+            assert_eq!(f.data(py).as_bytes(), &[0x10, 0x20, 0x30]);
+            assert_eq!(f.__repr__(), "PointCloudFrame(<7 points, 3 bytes>)");
         });
     }
 
@@ -1750,11 +1761,12 @@ mod tests {
     #[test]
     fn stream_item_extracts_to_rust_pointcloud() {
         Python::with_gil(|py| {
-            let payload_any = pointcloud_frame_as_any(py, &[0xaa, 0xbb]);
+            let payload_any = pointcloud_frame_as_any(py, 2, &[0xaa, 0xbb]);
             let pf = PyStreamItem::new(42, payload_any).unwrap();
             let rust = pf.to_rust_pointcloud().expect("payload is PointCloud");
             assert_eq!(rust.timestamp_ns, 42);
-            assert_eq!(rust.payload.bytes, vec![0xaa, 0xbb]);
+            assert_eq!(rust.payload.point_count, 2);
+            assert_eq!(rust.payload.data, vec![0xaa, 0xbb]);
         });
     }
 
@@ -1781,7 +1793,7 @@ mod tests {
             assert!(err.contains("AcceptPointCloud"), "{err}");
             assert!(err.contains("PointCloudFrame"), "{err}");
 
-            let pf_pc = PyStreamItem::new(0, pointcloud_frame_as_any(py, &[2])).unwrap();
+            let pf_pc = PyStreamItem::new(0, pointcloud_frame_as_any(py, 1, &[2])).unwrap();
             let err = pf_pc.to_rust_jpeg().expect_err("pointcloud ≠ jpeg");
             assert!(err.contains("AcceptJpeg"), "{err}");
             assert!(err.contains("JpegFrame"), "{err}");
@@ -1842,14 +1854,18 @@ mod tests {
                 timestamp_ns: 1_000,
                 seq: 7,
                 payload: RustPointCloudFrame {
-                    bytes: vec![0x01, 0x02, 0x03, 0x04],
+                    point_count: 2,
+                    data: vec![0x01, 0x02, 0x03, 0x04],
                 },
             };
             let pf = PyStreamEntry::from_rust_pointcloud(rust_frame);
             assert_eq!(pf.timestamp_ns(), 1_000);
             assert_eq!(pf.seq(), 7);
             match &pf.payload {
-                StreamPayload::PointCloud(p) => assert_eq!(p.inner.bytes.len(), 4),
+                StreamPayload::PointCloud(p) => {
+                    assert_eq!(p.inner.point_count, 2);
+                    assert_eq!(p.inner.data.len(), 4);
+                }
                 _ => panic!("expected PointCloud payload variant"),
             }
         });

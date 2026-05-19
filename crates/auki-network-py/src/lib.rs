@@ -19,7 +19,7 @@
 //! - `StreamManifest(sensor_id=..., sensor_hash=..., clock_id=...,
 //!   clock_hash=..., frame_id=..., frame_hash=...)` — accept-time
 //!   metadata the producer commits to.
-//! - `JpegFrame(bytes)` / `PointCloudFrame(bytes)` /
+//! - `JpegFrame(bytes)` / `PointCloudFrame(point_count, data)` /
 //!   `JointEncodersFrame(angles_rad)` — payload `T` types.
 //! - `StreamItem(timestamp_ns=..., payload=...)` — what the
 //!   source async iterator yields.

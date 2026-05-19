@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Live pointcloud stream surfaces use native frames.** Rust streams now re-export `auki.point_cloud.PointCloudFrame { point_count, data }`, Python stream frames expose `.point_count` / `.data`, and resource catalog payload hints identify `auki.point_cloud.PointCloudFrame`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **ROS adapter status doc names native pointcloud frames.** `auki-ros-adapter/src/readme.md` now shows `build_point_cloud_log_entry` returning `PointCloudFrame` and describes the ROS `PointCloud2` conversion as native `{ point_count, data }`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

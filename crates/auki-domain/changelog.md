@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Resource catalog pointcloud rows advertise the native payload.** Auto-lifted `point_cloud` sensor stream resources now use payload hint `auki.point_cloud.PointCloudFrame`, and pointcloud test fixtures use the canonical native XYZ registry layout without `is_bigendian`.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Manager handoff now waits for heartbeat timeout and gossips the new Manager identity.** The liveness handler no longer treats raw libp2p `Disconnected` or `HeartbeatStreamClosed` carrier events as immediate semantic peer death. Those events now leave the last heartbeat timestamp intact and let the `HEARTBEAT_TIMEOUT` scan decide, so transient carrier churn has a chance to reconnect before causing peer eviction or Manager promotion.

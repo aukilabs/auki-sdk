@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Python domain pointcloud stream docs and fixtures follow native frames.** `open_pointcloud_stream` docs now describe `PointCloudFrame(point_count, data)`, and registry-backed pointcloud test fixtures use canonical native XYZ metadata without `is_bigendian`.
+
 ### Nils's codex · May 17, HKT, 2026
 
 **Python bindings for `/auki/resources/0.0.1`.** The module now exposes concrete resource value types: `ResourcePinholeIntrinsics`, `ResourceVec3`, `ResourceQuat`, `ResourceSpatialTransform`, `SensorStreamResource`, and `TransformEdgeResource`. Producer daemons can register `ClusterManager.set_resource_catalog_provider(callable)`, where the callable returns a list of `SensorStreamResource` / `TransformEdgeResource` objects; the Rust domain layer merges those rows with auto-lifted sensor streams.

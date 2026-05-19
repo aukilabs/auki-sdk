@@ -2441,7 +2441,7 @@ fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
 fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
     match kind {
         "rgb_camera" => "jpeg_frame",
-        "point_cloud" => "point_cloud_frame",
+        "point_cloud" => "auki.point_cloud.PointCloudFrame",
         "joint_encoders" => "joint_encoders_frame",
         "audio" => "audio_frame",
         _ => "unknown",
@@ -3032,7 +3032,6 @@ mod tests {
                     },
                 ],
                 point_step: 12,
-                is_bigendian: false,
                 frame_rate_hz: 10,
                 frame_id: frame.frame_id.clone(),
                 frame_hash: frame_hash.clone(),
@@ -3084,6 +3083,23 @@ mod tests {
         assert_eq!(sensor.sensor_kind, "rgb_camera");
         assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
         assert_eq!(sensor.payload, "jpeg_frame");
+    }
+
+    #[test]
+    fn pointcloud_sensor_entry_lifts_to_native_payload_hint() {
+        let resource = sensor_resource_from_entry(SensorEntry {
+            sensor_id: "K1-FAKE/head_depth_points".into(),
+            sensor_hash: "pc123".into(),
+            kind: "point_cloud".into(),
+            sensor_entry_json: None,
+            frame_entry_json: None,
+        });
+
+        let ResourceEntry::SensorStream(sensor) = resource else {
+            panic!("expected sensor stream resource");
+        };
+        assert_eq!(sensor.sensor_kind, "point_cloud");
+        assert_eq!(sensor.payload, "auki.point_cloud.PointCloudFrame");
     }
 
     #[test]

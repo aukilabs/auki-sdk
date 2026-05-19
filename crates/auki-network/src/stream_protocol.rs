@@ -31,9 +31,9 @@
 //! - **Length prefix.** 4-byte big-endian unsigned 32-bit length of the
 //!   protobuf payload that follows. Bounded by [`MAX_FRAME_BYTES`] so a
 //!   peer can't drive an OOM by claiming a huge length; generous enough
-//!   (16 MiB) to admit raw sensor frames if a future `Stream<T>`
-//!   instantiation carries them. JPEG frames typically run 10–100 KB;
-//!   raw `PointCloud2` CDR runs ~700 KB at ~30 Hz.
+//!   (16 MiB) to admit raw sensor frames. JPEG frames typically run
+//!   10–100 KB; native pointcloud frames can run hundreds of KB at
+//!   camera cadence depending on point density.
 //! - **Payload.** Prost-encoded [`StreamMessage`]. The envelope is a
 //!   `oneof` of `Request | Accept | Decline | Entry | EndOfStream`;
 //!   each substream is mono-`T` with `T`'s prost bytes living inside
@@ -85,7 +85,7 @@ fn _phantom() -> Option<Wallet> {
 pub use auki_datatypes::audio_stream::AudioFrame;
 pub use auki_datatypes::frame_stream::JpegFrame;
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
-pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
+pub use auki_datatypes::point_cloud::PointCloudFrame;
 pub use auki_datatypes::stream::{
     DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
@@ -427,45 +427,57 @@ mod tests {
         assert_eq!(back, frame);
     }
 
-    /// `PointCloudFrame` prost wire bytes. Same shape as `JpegFrame`
-    /// (single `bytes` field) but separate `.proto` package so the two
-    /// streams have independent evolution.
+    fn native_point_cloud_frame() -> PointCloudFrame {
+        PointCloudFrame {
+            point_count: 2,
+            data: vec![
+                0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x40, 0x40, 0x00,
+                0x00, 0x80, 0x40, 0x00, 0x00, 0xa0, 0x40, 0x00, 0x00, 0xc0, 0x40,
+            ],
+        }
+    }
+
+    /// `PointCloudFrame` prost wire bytes. Native pointcloud frames
+    /// carry an explicit `point_count` plus packed point data; the
+    /// per-point field layout lives in the Sensor Registry.
     #[test]
     fn point_cloud_frame_serializes_to_locked_wire_bytes() {
-        let frame = PointCloudFrame {
-            bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
-        };
+        let frame = native_point_cloud_frame();
         let bytes = frame.encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        let expected: String = std::iter::once(0x0au8)
-            .chain(std::iter::once(0x08u8))
-            .chain(frame.bytes.iter().copied())
-            .map(|b| format!("{:02x}", b))
-            .collect();
-        assert_eq!(hex, expected);
+        assert_eq!(
+            hex,
+            "080212180000803f0000004000004040000080400000a0400000c040"
+        );
     }
 
     #[test]
     fn point_cloud_frame_round_trips_a_kilobyte_payload() {
-        let bytes: Vec<u8> = (0..1024u32).map(|i| (i * 37 + 11) as u8).collect();
+        let data: Vec<u8> = (0..1024u32).map(|i| (i * 37 + 11) as u8).collect();
         let frame = PointCloudFrame {
-            bytes: bytes.clone(),
+            point_count: 64,
+            data: data.clone(),
         };
         let encoded = frame.encode_to_vec();
         let back = PointCloudFrame::decode(&*encoded).unwrap();
-        assert_eq!(back.bytes, bytes);
+        assert_eq!(back.point_count, 64);
+        assert_eq!(back.data, data);
     }
 
-    /// Wire-size pin: protobuf's `bytes` field is native binary, no
-    /// JSON tax. A 1 KB payload encodes to ~1 KB + tiny envelope (tag +
-    /// varint length).
+    /// Wire-size pin: protobuf's `bytes data` field is native binary,
+    /// no JSON tax. A 1 KB payload encodes to ~1 KB + tiny envelope
+    /// (`point_count` tag/value + `data` tag/varint length).
     #[test]
     fn point_cloud_frame_wire_size_is_native_binary() {
-        let bytes = vec![0xAB; 1024];
-        let frame = PointCloudFrame { bytes };
+        let data = vec![0xAB; 1024];
+        let frame = PointCloudFrame {
+            point_count: 64,
+            data,
+        };
         let encoded = frame.encode_to_vec();
-        // 1 byte tag + 2 bytes varint length (1024) + 1024 bytes payload = 1027.
-        assert_eq!(encoded.len(), 1027);
+        // point_count: 2 bytes. data: 1 byte tag + 2 bytes varint
+        // length (1024) + 1024 bytes payload = 1029.
+        assert_eq!(encoded.len(), 1029);
     }
 
     /// `JointEncodersFrame` prost wire bytes (sawslin Phase B). Same
@@ -555,9 +567,7 @@ mod tests {
     /// content is the prost-encoded `PointCloudFrame`.
     #[test]
     fn locked_stream_message_entry_with_point_cloud_payload() {
-        let pc = PointCloudFrame {
-            bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
-        };
+        let pc = native_point_cloud_frame();
         let pc_encoded = pc.encode_to_vec();
         let msg = entry_msg(1_700_000_000_000_000_000, 42, pc_encoded.clone());
 

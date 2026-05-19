@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 19, HKT, 2026
+
+**Pointcloud streams use the native Auki payload.** `/auki/stream/0.1.0` now re-exports `auki_datatypes::point_cloud::PointCloudFrame` instead of the removed `auki.point_cloud_stream` package. Pointcloud stream tests now lock `PointCloudFrame { point_count, data }`, native binary wire size, and `StreamMessage::Entry` envelopes carrying the shared log/stream payload. Runtime pointcloud fixtures now pump native little-endian XYZ point bytes.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Membership gossip now carries the Manager peer id explicitly.** `/auki/membership/0.0.1` `MembershipUpdate` grows `manager_peer_id` alongside `membership_json`, and `NetworkRuntime::broadcast_membership` now requires the Manager id that authored the update. This makes handoff broadcasts self-describing: receivers no longer have to infer the Manager solely from their local election path, which matters when multiple surviving peers are converging after the old Manager disappears.

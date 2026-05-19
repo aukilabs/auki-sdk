@@ -83,13 +83,14 @@ def test_jpeg_frame_carries_bytes() -> None:
 
 
 def test_pointcloud_frame_carries_bytes() -> None:
-    """Dagaz Batch 2 — `cluster.PointCloudFrame` is the analog of
-    `JpegFrame` for raw CDR-encoded `PointCloud2` ROS payloads. Same
-    shape, same accessors; the SDK doesn't decode either."""
+    """`cluster.PointCloudFrame` carries native Auki pointcloud samples:
+    a point count plus packed point records whose layout is declared in
+    the Sensor Registry."""
     payload = b"\x00\x01\x02\x03\xff"
-    f = cluster.PointCloudFrame(payload)
-    assert f.bytes == payload
-    assert len(f) == len(payload)
+    f = cluster.PointCloudFrame(2, payload)
+    assert f.point_count == 2
+    assert f.data == payload
+    assert len(f) == 2
     assert "PointCloudFrame" in repr(f)
 
 
@@ -140,11 +141,12 @@ def test_stream_item_accepts_pointcloud_payload() -> None:
     happens later, when the source iterator is paired with a
     `StreamDecision.accept_pointcloud(...)` Accept variant."""
     pf = cluster.StreamItem(
-        timestamp_ns=42_000, payload=cluster.PointCloudFrame(b"\x01\x02")
+        timestamp_ns=42_000, payload=cluster.PointCloudFrame(1, b"\x01\x02")
     )
     assert pf.timestamp_ns == 42_000
     assert isinstance(pf.payload, cluster.PointCloudFrame)
-    assert pf.payload.bytes == b"\x01\x02"
+    assert pf.payload.point_count == 1
+    assert pf.payload.data == b"\x01\x02"
 
 
 def test_stream_item_accepts_audio_payload() -> None:
@@ -474,15 +476,15 @@ def test_python_producer_python_consumer_round_trip_pointcloud(
         async def gen():
             yield cluster.StreamItem(
                 timestamp_ns=10_000,
-                payload=cluster.PointCloudFrame(b"\x00\x01\x02"),
+                payload=cluster.PointCloudFrame(1, b"\x00\x01\x02"),
             )
             yield cluster.StreamItem(
                 timestamp_ns=20_000,
-                payload=cluster.PointCloudFrame(b"\x10\x11"),
+                payload=cluster.PointCloudFrame(2, b"\x10\x11"),
             )
             yield cluster.StreamItem(
                 timestamp_ns=30_000,
-                payload=cluster.PointCloudFrame(b"\xa0\xa1\xa2\xa3"),
+                payload=cluster.PointCloudFrame(3, b"\xa0\xa1\xa2\xa3"),
             )
 
         return cluster.StreamDecision.accept_pointcloud(
@@ -537,16 +539,19 @@ def test_python_producer_python_consumer_round_trip_pointcloud(
         assert f0.seq == 0
         assert f0.timestamp_ns == 10_000
         assert isinstance(f0.payload, cluster.PointCloudFrame)
-        assert f0.payload.bytes == b"\x00\x01\x02"
+        assert f0.payload.point_count == 1
+        assert f0.payload.data == b"\x00\x01\x02"
 
         f1 = next(frames)
         assert f1.seq == 1
         assert f1.timestamp_ns == 20_000
-        assert f1.payload.bytes == b"\x10\x11"
+        assert f1.payload.point_count == 2
+        assert f1.payload.data == b"\x10\x11"
 
         f2 = next(frames)
         assert f2.seq == 2
-        assert f2.payload.bytes == b"\xa0\xa1\xa2\xa3"
+        assert f2.payload.point_count == 3
+        assert f2.payload.data == b"\xa0\xa1\xa2\xa3"
 
         with pytest.raises(cluster.StreamEndOfStream) as excinfo:
             next(frames)

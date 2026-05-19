@@ -22,7 +22,7 @@ Root-level Discovery methods:
 Current stream payload pyclasses:
 
 - `JpegFrame(bytes)`
-- `PointCloudFrame(bytes)`
+- `PointCloudFrame(point_count, data)`
 - `JointEncodersFrame(list[float])`
 - `AudioFrame(bytes)`
 

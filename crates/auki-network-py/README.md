@@ -75,7 +75,7 @@ The provider signature is `Callable[[str, StreamRequest], StreamDecision]`. The 
 Supported payload pyclasses:
 
 - `JpegFrame(bytes)` with `.bytes`
-- `PointCloudFrame(bytes)` with `.bytes`
+- `PointCloudFrame(point_count, data)` with `.point_count` and `.data`
 - `JointEncodersFrame(list[float])` with `.angles_rad`
 - `AudioFrame(bytes)` with `.data`
 

@@ -13,9 +13,10 @@ Related glossary:
 ## Scope Of This Version
 
 This document specifies the first minimal version of the peer-to-peer cluster
-protocol. Its scope is bootstrapping: peers identify each other, declare
-domains, discover or configure reachable peers, authorize connections, and
-exchange spatial data through simple peer-to-peer relationships.
+protocol. Its scope is bootstrapping: peers identify each other, declare served
+domains when they expose domain-scoped data, discover or configure reachable
+peers, authorize connections, and exchange spatial data through simple
+peer-to-peer relationships.
 
 The goal is not centralized runtime control. The goal is a small protocol
 foundation that lets peers form clusters and exchange spatial data directly.
@@ -176,17 +177,27 @@ Define the validation path from runtime connection to spatial data exchange:
 
 ## Peer And Domain Model
 
-### RFC-0007: Peers Serve Declared Domains
+### RFC-0007: Serving Peers Declare Domains
 
 #### Requirement
 
-Each peer that participates in spatial-data exchange MUST declare at least one
-local domain for which it controls the domain owner wallet or has a valid
-delegation.
+A peer MAY participate in spatial-data exchange without declaring a local domain
+when it only consumes remote offers.
+
+A peer that serves offers, publishes spatial data, or asks a remote peer to
+accept it as serving a domain MUST declare that domain and MUST prove that it
+controls the domain owner wallet or has a valid delegation.
 
 A local domain is the authority boundary for spatial state served by the peer,
 including frames, clocks, sensors, streams, logs, maps, transforms, offers, and
 resources.
+
+A peer MAY own or maintain a local domain without advertising it.
+
+When a peer chooses to advertise a domain, it MAY do so through Discovery,
+through peer-to-peer handshake or offer exchange, or through both. Discovery
+advertisement is optional and does not replace domain declaration and authority
+validation when another peer is asked to consume or accept domain-scoped offers.
 
 Connecting to another peer MUST NOT require either peer to abandon its local
 domain.
@@ -210,8 +221,8 @@ A cluster MUST NOT be treated as authoritative for:
 #### Consequences
 
 A peer can consume another peer's spatial data through a direct peer
-relationship. The peers do not need to merge their domains or share a common
-runtime authority.
+relationship without declaring its own local domain. The peers do not need to
+merge their domains or share a common runtime authority.
 
 Failure of one peer SHOULD affect that peer's served domains and peer
 relationships only; it SHOULD NOT invalidate unrelated domains.
@@ -224,6 +235,9 @@ relationship.
 A served domain set is computed from the remote peer's declared domains after
 domain declaration and delegation validation. It is used to decide which offers
 the remote peer may expose in that relationship.
+
+A peer relationship MAY have an empty served domain set when the remote peer is
+only consuming local offers or when none of its declared domains are accepted.
 
 - declared domains presented during handshake;
 - validation result for each declared domain;
@@ -406,7 +420,8 @@ sufficient.
 Define the first exchange after dialing:
 
 - peer id and peer binding;
-- declared domains, domain declarations, and delegations;
+- declared domains, domain declarations, and delegations, when the peer claims
+  to serve domains;
 - authority-chain validation result;
 - accepted served domain set;
 - supported protocol versions;
@@ -484,6 +499,9 @@ data peer-to-peer.
 
 A peer MAY choose not to expose spatial data, or MAY expose only a subset of
 its spatial data according to local policy.
+
+A peer that only consumes remote offers is not required to expose offers or
+declare a local domain.
 
 The minimum baseline exchange shape is:
 

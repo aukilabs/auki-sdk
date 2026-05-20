@@ -4,8 +4,8 @@ Status: draft normative baseline.
 
 Last updated: 2026-05-20.
 
-Related requirements draft:
-[`cluster-lifecycle-requirements.md`](cluster-lifecycle-requirements.md).
+Related RFC backlog:
+[`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md).
 
 Related glossary:
 [`glossary.md`](glossary.md).
@@ -27,23 +27,6 @@ Terminology used by this document is defined in the related glossary.
 
 Sections marked "To Fill" are placeholders for future RFC work. They are not
 normative until their status changes.
-
-## Non-Normative Context
-
-The SDK currently has code for shared cluster membership and cluster-wide
-coordination. That implementation is not treated as the source of truth for
-this document.
-
-The baseline product scope is smaller:
-
-- peers use wallet-bound runtime identities;
-- domains are authority boundaries for spatial state;
-- peers can form peer-to-peer connectivity/session graphs;
-- peers exchange spatial data directly after authorization;
-- Discovery helps peers find entrypoints but never become authority.
-
-Shared domain clusters and cluster-wide authority overlays may return as future
-RFCs, but they are not baseline requirements in this iteration.
 
 ## Protocol Structure
 
@@ -179,9 +162,21 @@ behalf of a domain owner wallet:
 - revocation or replacement behavior;
 - how the delegation is presented during peer handshake.
 
+### RFC-0006: Authority Chain Validation (To Fill)
+
+Define the validation path from runtime connection to spatial data exchange:
+
+- connected libp2p peer id;
+- peer binding and wallet public key;
+- domain declaration;
+- delegation, when the peer does not control the domain owner wallet;
+- accepted served domain set;
+- offer catalog entries scoped to served domains;
+- failure reasons when any link in the chain is missing or invalid.
+
 ## Peer And Domain Model
 
-### RFC-0006: Peers Serve Declared Domains
+### RFC-0007: Peers Serve Declared Domains
 
 #### Requirement
 
@@ -221,7 +216,24 @@ runtime authority.
 Failure of one peer SHOULD affect that peer's served domains and peer
 relationships only; it SHOULD NOT invalidate unrelated domains.
 
-### RFC-0007: Private And Discoverable Peers
+### RFC-0008: Served Domain Set (To Fill)
+
+Define how a peer records which remote domains are accepted for one peer
+relationship.
+
+A served domain set is computed from the remote peer's declared domains after
+domain declaration and delegation validation. It is used to decide which offers
+the remote peer may expose in that relationship.
+
+- declared domains presented during handshake;
+- validation result for each declared domain;
+- whether a peer may add or remove served domains after handshake;
+- whether offers for domains outside the served domain set are rejected,
+  ignored, or treated as degraded;
+- how served-domain changes affect existing offers, gets, and subscriptions;
+- diagnostics for rejected or degraded served domains.
+
+### RFC-0009: Private And Discoverable Peers
 
 #### Requirement
 
@@ -245,7 +257,7 @@ Discovery.
 
 ## Discovery And Reachability
 
-### RFC-0008: Discovery Is Optional Entrypoint Rendezvous
+### RFC-0010: Discovery Is Optional Entrypoint Rendezvous
 
 #### Requirement
 
@@ -307,20 +319,30 @@ unavailable, assuming the underlying peer-to-peer transport remains healthy.
 SDK status/diagnostics SHOULD distinguish "Discovery presence degraded" from
 "peer relationship degraded".
 
-### RFC-0009: Discovery Record Shape (To Fill)
+### RFC-0011: Discovery Record Shape (To Fill)
 
 Define the concrete Discovery advertisement:
 
 - domain id and optional display label;
 - peer id and dialable advertised addresses;
 - freshness fields such as `ttl`, `expires_at`, or `last_seen_at`;
-- coarse, non-authoritative data-kind hints;
+- coarse, non-authoritative data-type hints;
 - refresh, update, remove, and expiry behavior.
 
 The record shape should preserve entrypoint advertisement semantics and avoid
 becoming an authoritative offer catalog.
 
-### RFC-0010: Listen Addresses And Advertised Addresses Are Different
+### RFC-0012: Discovery Data-Type Hints (To Fill)
+
+Define the coarse data-type hints allowed in Discovery records:
+
+- vocabulary for baseline hints;
+- how hints differ from offers;
+- whether hints are free-form, registered, or both;
+- freshness behavior for hints;
+- how clients should treat missing, stale, or unsupported hints.
+
+### RFC-0013: Listen Addresses And Advertised Addresses Are Different
 
 #### Requirement
 
@@ -355,7 +377,7 @@ Apps SHOULD expose listen and advertised address configuration separately.
 SDK diagnostics SHOULD report the final advertised address set and identify
 whether each address was auto-detected, operator-supplied, or relay-mediated.
 
-### RFC-0011: Relay Is Connectivity, Not Authority
+### RFC-0014: Relay Is Connectivity, Not Authority
 
 #### Requirement
 
@@ -379,18 +401,20 @@ sufficient.
 
 ## Connection Lifecycle
 
-### RFC-0012: Peer Handshake (To Fill)
+### RFC-0015: Peer Handshake (To Fill)
 
 Define the first exchange after dialing:
 
 - peer id and peer binding;
-- local domain id and domain declaration;
+- declared domains, domain declarations, and delegations;
+- authority-chain validation result;
+- accepted served domain set;
 - supported protocol versions;
 - authorization material;
 - offer-catalog fetch path;
 - liveness/status initialization.
 
-### RFC-0013: Authorization Model (To Fill)
+### RFC-0016: Authorization Model (To Fill)
 
 Define the pragmatic authorization model:
 
@@ -400,7 +424,7 @@ Define the pragmatic authorization model:
 - per-offer policy hooks;
 - which parts are required in the baseline and which are pluggable hardening.
 
-### RFC-0014: Peer Connectivity State Is Tracked Per Remote Peer
+### RFC-0017: Peer Connectivity State Is Tracked Per Remote Peer
 
 #### Requirement
 
@@ -434,22 +458,22 @@ connections.
 A peer exiting SHOULD make that peer unavailable to other peers. It SHOULD NOT
 by itself invalidate unrelated peer relationships or domains.
 
-### RFC-0015: Peer Graph Hints (To Fill)
+### RFC-0018: Peer Graph Hints (To Fill)
 
 Define how a peer shares additional peer candidates after connection:
 
 - whether learned peers are dialed automatically or surfaced as candidates;
 - what metadata can be shared;
 - whether a peer may hide known peers;
-- how the exchange avoids becoming authoritative membership.
-- DHT?
+- how the exchange avoids becoming authoritative membership;
+- whether DHT-style peer discovery is in scope for this baseline.
 
 The baseline default should treat learned peers as non-authoritative candidate
 dial targets or offer sources.
 
 ## Spatial Data Exchange
 
-### RFC-0016: Peers Exchange Spatial Data With Offer / Get / Subscribe
+### RFC-0019: Peers Exchange Spatial Data With Offer / Get / Subscribe
 
 #### Requirement
 
@@ -471,7 +495,8 @@ Discovery MAY help a peer find how to dial into a peer graph or cluster, and
 MAY include coarse, non-authoritative summary metadata about the kinds of data
 that may be available there.
 
-Peers MUST fetch offers from remote peers after connecting.
+A peer that intends to consume spatial data SHOULD fetch offers from remote
+peers after connecting and authorizing.
 
 Discovery MUST NOT be required as the transport for spatial data exchange,
 and MUST NOT be treated as the authoritative offer registry.
@@ -530,12 +555,14 @@ final Offer / Get / Subscribe contract.
 The SDK SHOULD support a peer learning what another peer can share by name or
 type before opening a stream or fetching data.
 
-### RFC-0017: Offer Catalog (To Fill)
+### RFC-0020: Offer Catalog (To Fill)
 
 Define the concrete offer-catalog protocol:
 
 - request and response shape;
 - offer id/name scope;
+- domain id scope;
+- authority reference to the served domain set;
 - data-kind vocabulary;
 - payload/schema versioning;
 - get/subscribe support flags;
@@ -546,7 +573,29 @@ Define the concrete offer-catalog protocol:
 
 This is the likely replacement or evolution path for `/auki/resources/0.0.1`.
 
-### RFC-0018: Get (To Fill)
+### RFC-0021: Offer Domain Scope And Authority (To Fill)
+
+Define how an offer is tied to a served domain:
+
+- required domain id field;
+- whether one offer may reference multiple domains;
+- how an offer references delegation or served-domain validation;
+- behavior when the served domain becomes rejected, expired, or removed;
+- how consumers distinguish producer-declared metadata from verified authority.
+
+### RFC-0022: Spatial Message Envelope (To Fill)
+
+Define common metadata for spatial data messages:
+
+- producing peer id;
+- domain id;
+- offer id;
+- payload/schema type and version;
+- frame and clock references when spatial/temporal interpretation is needed;
+- freshness or sequence metadata;
+- error and end-of-stream metadata shared by get and subscribe paths.
+
+### RFC-0023: Get (To Fill)
 
 Define one-shot fetch semantics:
 
@@ -560,7 +609,7 @@ Define one-shot fetch semantics:
 The first implementation should keep this narrow: descriptors, registry
 entries, transform edges, small snapshots, and possibly log ranges.
 
-### RFC-0019: Subscribe (To Fill)
+### RFC-0024: Subscribe (To Fill)
 
 Define live update semantics:
 
@@ -574,7 +623,7 @@ Define live update semantics:
 
 This is the likely replacement or evolution path for `/auki/stream/0.1.0`.
 
-### RFC-0020: Minimum Offer Kinds (To Fill)
+### RFC-0025: Minimum Offer Kinds (To Fill)
 
 Choose the first offer kinds for implementation. Candidate set:
 
@@ -583,13 +632,12 @@ Choose the first offer kinds for implementation. Candidate set:
 - `pose_stream` or `pose_log_range`;
 - `registry_entry`.
 
-Maps, generic spatial query, payment, booking, and canonical map authority
-should stay out of the first iteration unless a concrete milestone requires
-them.
+Maps, generic spatial query, payment, and booking should stay out of the first
+iteration unless a concrete milestone requires them.
 
 ## Compatibility And Observability
 
-### RFC-0021: Protocol Versions Are Compatibility Contracts
+### RFC-0026: Protocol Versions Are Compatibility Contracts
 
 #### Requirement
 
@@ -607,7 +655,7 @@ For an existing protocol version, implementations:
 - MUST NOT change the meaning of an existing field;
 - MUST ignore unknown additive fields when feasible;
 - SHOULD include locked field-name tests;
-- SHOULD include compatibility tests for any accepted legacy shape.
+- SHOULD include compatibility tests for any previously accepted shape.
 
 Incompatible wire changes MUST use a new protocol ID.
 
@@ -627,7 +675,7 @@ incompatible unless the reader can still handle frames without it.
 An incompatible version should instead use a new protocol ID such as
 `/auki/example/0.0.2`.
 
-### RFC-0022: Observability Must Explain State Transitions
+### RFC-0027: Observability Must Explain State Transitions
 
 #### Requirement
 
@@ -656,14 +704,15 @@ rate-limited or omitted by default.
 State transitions and failures SHOULD be logged once with enough context to
 debug the lifecycle.
 
-### RFC-0023: Status And Observability API (To Fill)
+### RFC-0028: Status And Observability API (To Fill)
 
 Define the concrete status surface:
 
 - local domain id and domain declaration state;
+- served domain set and validation state;
 - Discovery advertisement state;
 - known peers and how they were learned;
 - per-peer lifecycle state;
-- loaded offers;
+- loaded offers and their served-domain scope;
 - active gets/subscriptions;
 - last failure reason per peer and per offer.

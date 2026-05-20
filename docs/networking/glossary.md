@@ -63,6 +63,20 @@ The wallet that controls a domain namespace.
 
 A signed statement by the domain owner wallet declaring a domain id.
 
+### Declared Domain
+
+A domain a peer claims to serve during handshake.
+
+A declared domain is backed by a domain declaration and, when required, a
+delegation.
+
+### Served Domain Set
+
+The domains a remote peer is accepted to serve within one peer relationship.
+
+The served domain set is produced by validating declared domains. It is not
+every domain the remote peer knows about.
+
 ### Display Label
 
 A human-readable label for a domain, peer, or offer.
@@ -107,7 +121,12 @@ A non-authoritative advertisement published through Discovery or an equivalent
 index.
 
 A Discovery record may include a domain id, peer id, advertised addresses,
-freshness metadata, entrypoint hints, and coarse data-kind hints.
+freshness metadata, entrypoint hints, and coarse data-type hints.
+
+### Data-Type Hint
+
+Coarse, non-authoritative Discovery metadata about data types that may be
+available behind an entrypoint.
 
 ### Entrypoint
 
@@ -151,6 +170,11 @@ The identifier used to request a specific offer from the producing peer.
 ### Offer Catalog
 
 The protocol surface a peer uses to list current offers.
+
+### Spatial Message Envelope
+
+Common metadata carried with spatial data messages so a consumer can interpret
+the payload.
 
 ### Get
 

@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+Created the browser Domain WebRTC join implementation plan, sequencing production native WebRTC Direct Manager advertisement, browser wasm raw SDK substreams, `auki-domain-browser` join wiring, and the next Chrome smoke test after the probe stream passed.
+
+### Nils's codex · May 19, HKT, 2026
+
 Created the browser WebRTC probe stream implementation plan, scoped to a native `auki-network` WebRTC Direct listener, a browser wasm `dialBrowserProbe` export, and a Playwright smoke test that proves one SDK-owned named protocol stream.
 
 ### Nils's codex · May 19, HKT, 2026

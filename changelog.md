@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser Domain WebRTC join planned.** Added the next Superpowers plan for production native Manager WebRTC Direct advertisement, browser wasm raw SDK substreams, and `auki-domain-browser` join/participant-info wiring. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser WebRTC probe smoke passes.** The SDK now has a Chrome-driven smoke harness proving wasm `dialBrowserProbe` can open `/auki/browser-probe/0.0.1` to the native WebRTC Direct listener and round-trip payload bytes with the browser peer identity. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the browser Domain WebRTC join implementation plan under [`plans/`](plans/changelog.md), following the passing browser-to-native probe with production Manager WebRTC advertisement and browser join/info wiring.
+
+### Nils's codex · May 19, HKT, 2026
+
 Added the browser WebRTC probe stream implementation plan under [`plans/`](plans/changelog.md), sequencing the first browser-to-native SDK-owned protocol stream after the wasm libp2p feature compile probe passed.
 
 ### Nils's codex · May 19, HKT, 2026

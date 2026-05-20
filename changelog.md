@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser WebRTC probe smoke passes.** The SDK now has a Chrome-driven smoke harness proving wasm `dialBrowserProbe` can open `/auki/browser-probe/0.0.1` to the native WebRTC Direct listener and round-trip payload bytes with the browser peer identity. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser wasm probe dial export added.** `auki-network-browser-wasm` now exports `dialBrowserProbe(seed, address, payload)` behind `browser_libp2p`, dialing a native SDK WebRTC Direct listener over `/auki/browser-probe/0.0.1` with the browser peer's SDK identity. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

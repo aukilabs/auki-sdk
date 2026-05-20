@@ -1,11 +1,20 @@
 use crate::sdk_runtime::{RuntimeCommand, RuntimeSnapshot, SdkRuntime};
 
+const MAX_FLASH_EVENTS: usize = 12;
+
 pub struct DiagnosticApp {
     runtime: SdkRuntime,
     snapshot: RuntimeSnapshot,
+    flash_events: FlashEventLog,
     pub(crate) discovery_url_input: String,
     pub(crate) cluster_name_input: String,
     pub(crate) display_name_input: String,
+}
+
+#[derive(Debug, Default)]
+struct FlashEventLog {
+    events: Vec<String>,
+    last_on: bool,
 }
 
 impl DiagnosticApp {
@@ -18,6 +27,7 @@ impl DiagnosticApp {
             display_name_input: snapshot.display_name.clone(),
             runtime,
             snapshot,
+            flash_events: FlashEventLog::default(),
         }
     }
 
@@ -32,6 +42,14 @@ impl DiagnosticApp {
     pub fn snapshot(&self) -> &RuntimeSnapshot {
         &self.snapshot
     }
+
+    pub fn record_flash_state(&mut self, on: bool, now_ns: u128) {
+        self.flash_events.record(on, now_ns);
+    }
+
+    pub fn flash_events(&self) -> &[String] {
+        self.flash_events.events()
+    }
 }
 
 impl eframe::App for DiagnosticApp {
@@ -40,6 +58,35 @@ impl eframe::App for DiagnosticApp {
         crate::ui::render(ctx, self);
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
+}
+
+impl FlashEventLog {
+    fn record(&mut self, on: bool, now_ns: u128) {
+        if on && !self.last_on {
+            self.events
+                .push(format!("flash UTC {}", format_utc_time_of_day(now_ns)));
+            if self.events.len() > MAX_FLASH_EVENTS {
+                self.events.remove(0);
+            }
+        }
+        self.last_on = on;
+    }
+
+    fn events(&self) -> &[String] {
+        &self.events
+    }
+}
+
+fn format_utc_time_of_day(now_ns: u128) -> String {
+    let total_ms = now_ns / 1_000_000;
+    let ms = total_ms % 1_000;
+    let total_seconds = total_ms / 1_000;
+    let seconds_in_day = total_seconds % 86_400;
+    let hours = seconds_in_day / 3_600;
+    let minutes = (seconds_in_day % 3_600) / 60;
+    let seconds = seconds_in_day % 60;
+
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{ms:03}")
 }
 
 #[cfg(test)]
@@ -79,5 +126,38 @@ mod tests {
 
         assert_eq!(row.role, Role::Manager);
         assert_eq!(row.suffix, "...Q2La9F");
+    }
+
+    #[test]
+    fn flash_event_logs_on_rising_edge() {
+        let mut state = FlashEventLog::default();
+
+        state.record(false, 11_999_900_000);
+        state.record(true, 12_000_000_000);
+
+        assert_eq!(state.events(), &["flash UTC 00:00:12.000"]);
+    }
+
+    #[test]
+    fn flash_event_does_not_repeat_while_flash_stays_on() {
+        let mut state = FlashEventLog::default();
+
+        state.record(true, 12_000_000_000);
+        state.record(true, 12_000_050_000);
+
+        assert_eq!(state.events().len(), 1);
+    }
+
+    #[test]
+    fn flash_event_log_is_bounded() {
+        let mut state = FlashEventLog::default();
+
+        for tick in 1..=20 {
+            state.record(false, tick * 3_000_000_000 - 1);
+            state.record(true, tick * 3_000_000_000);
+        }
+
+        assert_eq!(state.events().len(), MAX_FLASH_EVENTS);
+        assert_eq!(state.events().first().unwrap(), "flash UTC 00:00:27.000");
     }
 }

@@ -98,8 +98,8 @@ fn render_status_strip(ui: &mut egui::Ui, app: &DiagnosticApp) {
     });
 }
 
-fn render_flash_panel(ui: &mut egui::Ui, app: &DiagnosticApp) {
-    let snapshot = app.snapshot();
+fn render_flash_panel(ui: &mut egui::Ui, app: &mut DiagnosticApp) {
+    let snapshot = app.snapshot().clone();
     ui.horizontal(|ui| {
         ui.label("Flash timing");
         let utc_selected = snapshot.flash_mode == FlashMode::Utc;
@@ -135,6 +135,7 @@ fn render_flash_panel(ui: &mut egui::Ui, app: &DiagnosticApp) {
         FlashMode::Utc => flash_is_on(now_ns, FLASH_PERIOD.as_nanos(), FLASH_ON.as_nanos()),
         FlashMode::Domain => false,
     };
+    app.record_flash_state(on, now_ns);
 
     let desired = egui::vec2(ui.available_width(), 380.0);
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
@@ -168,6 +169,11 @@ fn render_bottom_diagnostics(ui: &mut egui::Ui, app: &DiagnosticApp) {
 
         columns[1].heading("Events");
         for event in snapshot.events.iter().rev().take(8) {
+            columns[1].monospace(event);
+        }
+        columns[1].add_space(8.0);
+        columns[1].heading("Flash Events");
+        for event in app.flash_events().iter().rev() {
             columns[1].monospace(event);
         }
     });

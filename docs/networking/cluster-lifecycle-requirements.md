@@ -6,6 +6,9 @@ Owner: TBD.
 
 Last updated: 2026-05-20.
 
+Related glossary:
+[`glossary.md`](glossary.md).
+
 ## Purpose
 
 Define the product requirements for domain discovery, peer connectivity,
@@ -21,7 +24,7 @@ RFC explicitly makes them so.
 
 - Requirements come before design.
 - Product behavior comes before implementation mechanics.
-- Every spatial participant can own its own domain.
+- Every participant owns and maintains its own domain.
 - Clusters are peer connectivity/session graphs by default, not shared
   authority objects.
 - Discovery is optional infrastructure for findability. It is not required for
@@ -46,80 +49,14 @@ The v1 foundation should choose the smaller model: participant-owned domains
 and direct exchange. Shared cluster authority remains a future overlay that
 must justify itself with a concrete workflow.
 
-## Vocabulary
+## Terminology
 
-### Participant
+Terms used by this requirements draft are defined in the related glossary.
 
-An actor running SDK networking code. Examples: Park, Sentinel, BoosterApp,
-BracketApp, RealmanApp, a browser app, a cloud worker, or a relay service.
-
-A participant may:
-
-- own a spatial domain;
-- publish spatial data;
-- consume spatial data;
-- act as a diagnostic observer;
-- provide connectivity or compute without owning spatial data;
-- stay private and never register with Discovery.
-
-Not every participant is expected to publish spatial data. A participant can be
-read-only for one relationship and a producer for another.
-
-### Domain
-
-A participant-owned authority boundary for local spatial state: frames,
-clocks, sensors, streams, maps, logs, transforms, resources, and identity.
-
-For v1, a spatial participant owns its own domain by default. A domain is not a
-shared mutable container merely because other peers connect to its owner.
-
-The domain owner is the key or authority that owns the domain. A runtime
-process may manage the domain on behalf of that owner, but that runtime role is
-not a cluster-wide Manager by default.
-
-When the runtime serving a domain exits, that domain's live availability is
-lost or degraded. Other participants' domains and peer relationships continue.
-
-### Cluster
-
-A runtime peer graph around exchange. It answers:
-
-- which peers are currently connected or known;
-- how they were learned;
-- what they claim they can share;
-- whether each peer relationship is healthy.
-
-For v1, cluster membership is diagnostic and operational, not authoritative
-for domain ownership, data ownership, or publish/consume permission.
-
-### Manager
-
-Manager is not a baseline cluster-wide role for v1.
-
-If the term remains in implementation while the SDK migrates, it should be
-treated as a compatibility name for a runtime that bootstraps or coordinates a
-specific current implementation. It must not imply authority over unrelated
-participant-owned domains.
-
-Future shared-domain workflows may introduce a Manager role, but those
-workflows must specify:
-
-- what shared state exists;
-- who owns it;
-- why peer-to-peer participant-owned domains are insufficient;
-- what happens when the Manager exits or partitions.
-
-### Discovery
-
-Optional rendezvous/findability infrastructure. Discovery publicly advertises a
-domain or runtime presence and tells interested peers how to attempt a
-connection.
-
-Discovery is allowed to be stale. Stale records should cause clear connection
-or liveness failures, not authority changes.
-
-Discovery does not store authoritative membership, does not prove that private
-participants do not exist, and does not authorize data access.
+This document may use product examples to explain requirements, but protocol
+wording should use the glossary terms consistently. In particular,
+`participant`, `peer`, `wallet`, `domain`, `domain id`, `peer binding`,
+`Discovery record`, `offer`, `Get`, and `Subscribe` are defined there.
 
 ## Architecture Decision
 
@@ -131,7 +68,7 @@ Owner: RFC working session.
 
 Decision:
 
-Each spatial participant owns and maintains its own domain. Participants may
+Each participant owns and maintains its own domain. Participants may
 discover or be configured with each other, connect peer-to-peer, authorize as
 needed, advertise what spatial data they can share, and exchange that data
 directly.
@@ -330,8 +267,8 @@ Discovery should not answer:
 
 ### R3: Participants Own Their Domains
 
-Each spatial participant should be able to own its own authority boundary for
-its spatial data and resources.
+Each participant should own and maintain its own authority boundary for spatial
+data and resources.
 
 The SDK should not require a shared cluster Manager just for:
 
@@ -366,14 +303,14 @@ Example: if Park is connected to Robot A, Robot B, and Robot C, and Robot C
 goes offline, Park should mark Robot C as lost or degraded while keeping Robot A
 and Robot B ready if their connections still work.
 
-### R5: Peers Exchange Spatial Knowledge Directly
+### R5: Peers Exchange Spatial Data Directly
 
 Each participant may maintain its own local spatial state: observations,
 resources, maps, frames, streams, logs, transforms, or other domain-specific
-spatial knowledge.
+spatial data.
 
 After participants discover or are configured with each other, they should be
-able to exchange relevant spatial knowledge directly with each other.
+able to exchange relevant spatial data directly with each other.
 
 Discovery may help participants find an entrypoint, but Discovery should not be
 the data exchange path. Discovery should not proxy spatial data.
@@ -391,7 +328,7 @@ how to request it:
 
 - offer id;
 - producer peer id;
-- producer domain id or domain identity;
+- producer domain id;
 - kind, for example sensor stream, transform edge, pose log, map, or point
   cloud;
 - payload or schema identifier;
@@ -526,7 +463,7 @@ Open questions:
 - Do consumers trust producer-declared frames/resources by default in trusted
   lab deployments?
 - Is signing required in v1, or is it a later hardening layer?
-- How does a domain owner delegate runtime management without creating a
+- How does a domain owner wallet delegate runtime management without creating a
   cluster-wide Manager?
 
 ### A2: Membership Authority

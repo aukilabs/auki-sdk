@@ -7,6 +7,9 @@ Last updated: 2026-05-20.
 Related requirements draft:
 [`cluster-lifecycle-requirements.md`](cluster-lifecycle-requirements.md).
 
+Related glossary:
+[`glossary.md`](glossary.md).
+
 ## Status Of This Document
 
 This document records cluster-lifecycle contracts that are stable enough to
@@ -15,6 +18,9 @@ architecture.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", "MAY",
 and "OPTIONAL" are to be interpreted as described in RFC 2119.
+
+Terminology used by this document is defined in the related glossary. When this
+document and the glossary conflict, this document is authoritative.
 
 ## Non-Normative Context
 
@@ -26,7 +32,7 @@ The v1 product baseline is smaller:
 
 - every participant owns and maintains its own domain;
 - participants can form peer-to-peer connectivity/session graphs;
-- participants exchange spatial knowledge directly after authorization;
+- participants exchange spatial data directly after authorization;
 - Discovery helps peers find entrypoints but does not become authority.
 
 Shared domain clusters, Manager election, and Manager handoff MAY return as a
@@ -207,7 +213,7 @@ Relay support MUST NOT change:
 ### Consequences
 
 A relay-mediated connection MUST be treated as a transport path to the same
-remote peer identity, not as a different authority model.
+remote peer id, not as a different authority model.
 
 Discovery MAY advertise relay-mediated multiaddrs when direct addresses are not
 sufficient.
@@ -247,14 +253,14 @@ A participant exiting SHOULD make that peer unavailable to other peers. It
 SHOULD NOT by itself invalidate unrelated peer relationships or
 participant-owned domains.
 
-## RFC-0007: Peers Exchange Spatial Knowledge With Offer / Get / Subscribe
+## RFC-0007: Peers Exchange Spatial Data With Offer / Get / Subscribe
 
 ### Requirement
 
 Each participant SHOULD maintain its own local spatial state.
 
 After discovery/configuration and authorization, participants SHOULD exchange
-spatial knowledge peer-to-peer.
+spatial data peer-to-peer.
 
 A participant MAY choose not to expose spatial data, or MAY expose only a
 subset of its spatial data according to local policy.
@@ -412,8 +418,9 @@ delegation, and policy.
 A participant is an actor using the SDK. A participant MUST have a wallet
 identity.
 
-A participant MAY operate one or more peer identities, and MAY own or serve
-one or more domains.
+A participant MAY operate one or more peers.
+
+A participant MAY serve domains it does not own when authorized.
 
 ### Peer Binding
 
@@ -443,10 +450,13 @@ When a peer presents a peer binding, the receiver MUST verify that:
 ### Consequences
 
 A peer binding does not prove domain ownership, runtime authority for a domain,
-data correctness, or dialability at any advertised address. It prove the wallet recognizes this libp2p peer id as one of its runtime peers.
+data correctness, or dialability at any advertised address.
+
+It proves only that the wallet recognizes this libp2p peer id as one of its
+runtime peers.
 
 Runtime authority for a domain still requires control of the domain owner
-wallet or a valid owner-signed delegation.
+wallet or a valid delegation signed by the domain owner wallet.
 
 ## RFC-0011: Domain Identity And Ownership
 
@@ -457,18 +467,29 @@ blockchain access, or any online registry.
 
 ### Domain Owner Wallet
 
-A domain owner wallet is the wallet that controls one domain namespace.
+A domain owner wallet is the wallet that controls a domain namespace.
 
-A domain id is derived from the domain owner wallet's public key:
+A domain id is derived from the domain owner wallet's public key and a nonce:
 
-domain_id = hash(domain_owner_wallet_public_key)
+domain_id = hash(domain_owner_wallet_public_key, nonce)
+
+The nonce MUST be unique for domains created by the same domain owner wallet.
+
+The domain owner wallet MUST sign a domain declaration that binds:
+
+- domain id;
+- domain owner wallet public key;
+- nonce.
+
+A receiver MUST verify the domain declaration by recomputing the domain id and
+verifying the signature against the domain owner wallet public key.
 
 ### Domain Ownership
 
 Domain ownership means authority over a domain namespace.
 
-The domain owner MAY authorize runtime peers to advertise, serve, or update
-data under that domain.
+The domain owner wallet MAY authorize runtime peers to advertise, serve, or
+update data under that domain.
 
 Domain ownership MUST NOT by itself be treated as proof that associated spatial
 data is correct, canonical, complete, or trusted.
@@ -478,8 +499,8 @@ data is correct, canonical, complete, or trusted.
 A peer MAY serve a domain directly when the peer controls the domain owner
 wallet.
 
-A peer MAY serve a domain on behalf of the domain owner when it presents a
-valid owner-signed delegation.
+A peer MAY serve a domain on behalf of the domain owner wallet when it presents
+a valid delegation signed by the domain owner wallet.
 
 A valid delegation proves only the delegated authority it states.
 
@@ -493,7 +514,7 @@ peer-to-peer mode.
 
 ### Consequences
 
-The same domain identity model supports local, LAN-only, offline, externally
+The same domain id model supports local, LAN-only, offline, externally
 registered, and tokenomics-backed domains.
 
 Discovery may help locate peers that claim to serve a domain, but Discovery
@@ -508,7 +529,7 @@ decisions in this document.
 ### Domain Delegation Schema
 
 Define the concrete delegation format used when a peer serves a domain on
-behalf of a domain owner:
+behalf of a domain owner wallet:
 
 - required fields;
 - permitted actions or scopes;
@@ -520,7 +541,7 @@ behalf of a domain owner:
 
 Define the concrete Discovery advertisement:
 
-- domain identity and optional display label;
+- domain id and optional display label;
 - peer id and dialable advertised addresses;
 - freshness fields such as `ttl`, `expires_at`, or `last_seen_at`;
 - coarse, non-authoritative data-kind hints;
@@ -533,8 +554,8 @@ offer catalogs.
 
 Define the first exchange after dialing:
 
-- peer identity;
-- local domain identity;
+- peer id and peer binding;
+- local domain id and domain declaration;
 - supported protocol versions;
 - authorization material;
 - offer-catalog fetch path;
@@ -545,7 +566,7 @@ Define the first exchange after dialing:
 Define the pragmatic v1 authorization model:
 
 - open/trusted-lab mode;
-- allowlist by peer id or wallet;
+- allowlist by peer id or wallet public key;
 - invite token or signed challenge, if needed;
 - per-offer policy hooks;
 - which parts are required in v1 and which are pluggable hardening.
@@ -623,7 +644,7 @@ dial targets or offer sources.
 
 Define the concrete status surface:
 
-- local domain identity;
+- local domain id and domain declaration state;
 - Discovery advertisement state;
 - known peers and how they were learned;
 - per-peer lifecycle state;

@@ -42,14 +42,6 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 |---|---|
 | [`auki-ros-adapter`](auki-ros-adapter) | Translation from ROS2 sensor messages into Auki SDK types. Lets a ROS2 node mint registry entries and write Sensor Logs without knowing the SDK's on-disk format. |
 
-## Python bindings
+## Language bindings
 
-Python packages live in [`../bindings/python`](../bindings/python), preserving the same per-component package names while keeping this directory focused on Rust crates.
-
-## Swift bindings
-
-UniFFI wrappers for native iOS (`aukilabs/iosapp`), one per Rust component, same per-component rule as the Python bindings (no umbrella `auki-swift`).
-
-| Crate | What it does |
-|---|---|
-| [`auki-network-swift`](auki-network-swift) | Discovery HTTP client for Swift (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`), async via UniFFI/tokio. Stage 1; stream/audio types and a future `auki-domain-swift` (cluster/peer enumeration) are scoped in its `src/sprint.md`. |
+Non-Rust bindings live in [`../bindings`](../bindings) — Python at [`../bindings/python`](../bindings/python), Swift at [`../bindings/swift`](../bindings/swift). Per-component package names are preserved; this directory stays focused on Rust crates.

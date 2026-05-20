@@ -1,10 +1,14 @@
 # Changelog — auki-network-swift
 
-Append-only changelog for this crate. See [CLAUDE.md](../../CLAUDE.md) for the format and propagation rules.
+Append-only changelog for this crate. See [CLAUDE.md](../../../CLAUDE.md) for the format and propagation rules.
 
 Latest entry on top.
 
 ---
+
+### Nils's claude · May 20, 13:31 HKT, 2026
+
+**Crate relocated `crates/auki-network-swift` → `bindings/swift/auki-network-swift`.** Brings the UniFFI Swift binding under the `bindings/<language>/` convention established by [#156](https://github.com/aukilabs/auki-sdk/pull/156) for the Python packages — a structural follow-up that should have landed alongside the Python move. Done via `git mv` so history is preserved. Internal changes: workspace `Cargo.toml` member path updated; `Cargo.toml` path-dep `auki-network-rs = { path = "../auki-network" }` → `path = "../../../crates/auki-network"`; relative-path links in `README.md`, `src/lib.rs`, `parking_lot.md`, `changelog.md` adjusted for the new depth (and pointed at sibling `../../python/auki-*-py` for Python references). New `bindings/swift/{README,changelog,parking_lot}.md` mirror the `bindings/python/` per-language index. The crate's old listings under `crates/README.md` (Swift-bindings section) and `crates/parking_lot.md` (per-crate summary) are removed; the `bindings/` umbrella `README` + `parking_lot` now include Swift. Package name, lib name, surface, runtime behavior unchanged; `cargo test -p auki-network-swift` still 4/4 green.
 
 ### Nils's claude · May 20, 11:43 HKT, 2026
 

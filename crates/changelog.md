@@ -6,9 +6,13 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 20, 13:31 HKT, 2026
+
+**`auki-network-swift` left `crates/`** — relocated to [`bindings/swift/auki-network-swift`](../bindings/swift/auki-network-swift) under the per-language convention introduced for Python by #156. See [`../bindings/changelog.md`](../bindings/changelog.md) for the umbrella-level entry and [`../bindings/swift/auki-network-swift/changelog.md`](../bindings/swift/auki-network-swift/changelog.md) for the per-crate detail.
+
 ### Nils's claude · May 20, 11:43 HKT, 2026
 
-**[`auki-network-swift`](auki-network-swift/changelog.md) — review-driven fixes to PR #152.** Critical: TLS-backend claim corrected — iOS cross-compile is on **`ring 0.17`** (reqwest `rustls-tls` default), not `aws-lc-rs`; works because ring 0.17 has first-class iOS support. Important: build-xcframework.sh no longer packages the Swift glue into the xcframework's Headers dir (moved to `target-xcframework/swift/`); `Eq` semantics on FFI records documented; `with_http` omission documented + parked. Re-validated: tests green, xcframework Headers clean.
+**[`auki-network-swift`](../bindings/swift/auki-network-swift/changelog.md) — review-driven fixes to PR #152.** Critical: TLS-backend claim corrected — iOS cross-compile is on **`ring 0.17`** (reqwest `rustls-tls` default), not `aws-lc-rs`; works because ring 0.17 has first-class iOS support. Important: build-xcframework.sh no longer packages the Swift glue into the xcframework's Headers dir (moved to `target-xcframework/swift/`); `Eq` semantics on FFI records documented; `with_http` omission documented + parked. Re-validated: tests green, xcframework Headers clean.
 
 ### Nils's codex · May 20, HKT, 2026
 
@@ -24,7 +28,7 @@ Latest entry on top.
 
 ### Nils's claude · May 19, 14:27 HKT, 2026
 
-**[`auki-network-swift`](auki-network-swift/changelog.md) — iOS XCFramework build validated.** `build-xcframework.sh` runs clean on `aarch64-apple-ios{,-sim}` / `x86_64-apple-ios` → well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so no CC/SDK intervention. Build output gitignored; `ring`-vs-`aws-lc-rs` parking-lot item resolved/removed; docs updated.
+**[`auki-network-swift`](../bindings/swift/auki-network-swift/changelog.md) — iOS XCFramework build validated.** `build-xcframework.sh` runs clean on `aarch64-apple-ios{,-sim}` / `x86_64-apple-ios` → well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so no CC/SDK intervention. Build output gitignored; `ring`-vs-`aws-lc-rs` parking-lot item resolved/removed; docs updated.
 
 ### Nils's codex · May 19, HKT, 2026
 
@@ -32,7 +36,7 @@ Latest entry on top.
 
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
-**[`auki-network-swift`](auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.
+**[`auki-network-swift`](../bindings/swift/auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.
 
 ### Dobby · May 17, HKT, 2026
 

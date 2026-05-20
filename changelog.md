@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 20, 13:31 HKT, 2026
+
+**`auki-network-swift` relocated to [`bindings/swift/`](bindings/swift) under the per-language convention.** PR #156 moved the Python packages out of `crates/`; the Swift crate now follows. `git mv` preserved history. Workspace `members` updated, new `bindings/swift/{README,changelog,parking_lot}.md` mirror `bindings/python/`, `crates/README.md` and `crates/parking_lot.md` no longer list the swift crate, relative-path links inside the crate adjusted for the new depth. Package name / lib name / surface / runtime behavior unchanged; `cargo test -p auki-network-swift` 4/4 green. See [`bindings/changelog.md`](bindings/changelog.md) for the bindings-level entry.
+
 ### Nils's claude · May 20, 11:43 HKT, 2026
 
 **`auki-network-swift` PR #152 — review-driven fixes.** Corrected the factually wrong claim that the iOS cross-compile used `aws-lc-rs`: it's actually **`ring 0.17`** via reqwest's `rustls-tls` default (the build worked because ring 0.17 has first-class iOS support now). Fixed a real bug in `build-xcframework.sh` (Swift glue was being packaged into the xcframework Headers dir; moved to a sibling `swift/` dir per the standard UniFFI iOS recipe). Documented `Eq` byte-equality semantics on FFI records and the deliberate `with_http` omission. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

@@ -1,6 +1,6 @@
 # Parking lot — auki-network-swift
 
-Open questions specific to the Swift/UniFFI bindings. Cross-cutting questions about the underlying primitives belong in [`auki-network/parking_lot.md`](../auki-network/parking_lot.md).
+Open questions specific to the Swift/UniFFI bindings. Cross-cutting questions about the underlying primitives belong in [`auki-network/parking_lot.md`](../../../crates/auki-network/parking_lot.md).
 
 ---
 

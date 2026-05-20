@@ -30,7 +30,7 @@ cli = ["uniffi/cli"]
 # only needs `discovery_client` (the async reqwest HTTP client) — NOT
 # `swarm`, so this crate stays off the libp2p iOS-link sharp edges
 # until the Stage 2 stream surface lands.
-auki-network-rs = { package = "auki-network", path = "../auki-network", features = ["discovery_client"] }
+auki-network-rs = { package = "auki-network", path = "../../../crates/auki-network", features = ["discovery_client"] }
 # `PeerId` / `Multiaddr` parsing on the Swift ↔ Rust seam (they cross
 # the FFI as their canonical string forms).
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }

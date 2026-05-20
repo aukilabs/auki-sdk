@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Browser Domain plan corrected for peer symmetry.** The follow-up plan now treats browser peers as full Domain peers, including Manager eligibility; SDK reachability replaces platform-specific role assumptions. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Browser Domain WebRTC join planned.** Added the next Superpowers plan for production native Manager WebRTC Direct advertisement, browser wasm raw SDK substreams, and `auki-domain-browser` join/participant-info wiring. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

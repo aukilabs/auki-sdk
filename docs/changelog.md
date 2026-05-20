@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+Rewrote the browser Domain WebRTC plan around true peer symmetry: browser peers can be Managers, Discovery records PeerIds rather than platform classes, and reachability is an SDK transport concern.
+
 ### Nils's codex · May 19, HKT, 2026
 
 Added the Superpowers browser Domain WebRTC join implementation plan after the browser probe smoke passed, covering production Manager WebRTC advertisement, browser wasm raw SDK substreams, and `auki-domain-browser` join wiring.

@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+Reframed the browser Domain WebRTC implementation plan under [`plans/`](plans/changelog.md) so browser peers are full role-symmetric Domain peers, including Manager eligibility, with reachability handled as SDK transport state.
+
 ### Nils's codex · May 19, HKT, 2026
 
 Added the browser Domain WebRTC join implementation plan under [`plans/`](plans/changelog.md), following the passing browser-to-native probe with production Manager WebRTC advertisement and browser join/info wiring.

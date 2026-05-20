@@ -19,7 +19,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Manager-star heartbeat/liveness detection through `/auki/heartbeat/0.0.1`, with topology and timeout semantics owned here rather than in `auki-network`; raw carrier close is not treated as semantic death until the heartbeat timeout expires.
 - Manager election and Discovery `rotate_manager` handoff.
 - Manager -> Discovery `liveness_check` loop every `LIVENESS_CHECK_INTERVAL` (1 second).
-- SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches.
+- SDK-owned `ParticipantInfo` generation plus `/auki/info/0.0.1` fetches, with `session_now_ns` and session clock id/hash sourced from `auki_time::SessionClock`.
 - Resource catalog provider registration plus `/auki/resources/0.0.1` fetches, auto-lifting sensor catalog rows into `sensor_stream` resources and accepting producer-supplied `transform_edge` rows.
 - Sensor catalog provider registration plus `/auki/sensors/0.0.1` fetches, including the detail request that can embed local Sensor / Frame Registry JSON by value.
 - Registry app-root registration plus `/auki/registries/0.0.1` typed fetches for Sensor / Clock / Frame Registry entries.
@@ -59,6 +59,12 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `LIVENESS_CHECK_INTERVAL`
 - Error types for bootstrap/create/join/admit/fetch paths
 - `elect_successor`
+
+## Timekeeping
+
+`ClusterManager` constructs one SDK-owned `SessionClock` at create/join time using the local peer id and `DaemonInfo.session_id`. `ParticipantInfo.session_clock_id`, `session_clock_hash`, and `session_now_ns` come from that clock, not from caller-supplied `DaemonInfo.session_clock_id/hash`. Those input fields remain accepted for compatibility until the constructor surface can stop asking callers for session clock identity.
+
+Heartbeat time sync is intentionally not implemented here yet. When it lands, heartbeat timestamps should read from this same `SessionClock` so the timestamp values and Clock Registry identity stay bound to one monotonic epoch.
 
 ## Deferred
 

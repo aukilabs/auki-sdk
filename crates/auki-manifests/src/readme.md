@@ -99,6 +99,6 @@ Dev-deps: `auki-logs` (round-trip test opens an actual `Log<T>`), `ciborium` (pl
 ## Consumers in this workspace
 
 - [`auki-registry`](../../auki-registry) — uses `build_sensor_log_manifest` and `build_pose_log_manifest` in its end-to-end log integration tests (the registry crate doesn't open logs in production code, but its tests do).
-- [`auki-time-transforms`](../../auki-time-transforms) — uses `build_time_transform_log_manifest` in its `Sampler` integration test (the production sampler accepts a pre-built manifest).
+- [`auki-time`](../../auki-time) — uses `build_time_transform_log_manifest` in its `Sampler` integration test (the production sampler accepts a pre-built manifest).
 - *Downstream apps* (boosterapp, Park, future Sentinel) — call these builders directly when opening logs.
 - [`detectors`](https://github.com/aukilabs/detectors) (downstream) — the integrator (Park / Boosterapp) calls `build_detection_log_manifest` + `auki_layout::detection_log_path` to pre-create the output `Log<DetectionLogEntry>`, then hands the write-handle to the detector loop. The detector itself doesn't construct the manifest — caller-decides per the [keystone's intent-decoupling entry](../../../parking_lot.md).

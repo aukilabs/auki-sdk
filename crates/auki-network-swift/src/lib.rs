@@ -3,7 +3,7 @@
 //! ## Scope (Stage 1)
 //!
 //! This crate mirrors the **root Discovery surface** of
-//! [`auki-network-py`](../auki-network-py): `DiscoveryClient` plus the
+//! [`auki-network-py`](../../bindings/python/auki-network-py): `DiscoveryClient` plus the
 //! `ClusterEntry` / `CreateClusterOutcome` value types. The stream
 //! (audio) surface is Stage 2 and cluster lifecycle / peer enumeration
 //! is a future `auki-domain-swift`, exactly mirroring the

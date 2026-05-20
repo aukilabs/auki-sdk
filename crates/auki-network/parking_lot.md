@@ -28,7 +28,7 @@ Scope landing trigger for the v2 work: when (a) the v1 LAN demo is end-to-end, a
 
 When `ClusterRuntime` was replaced by `NetworkRuntime`, the 6 multi-runtime `#[tokio::test]` integration tests in `src/stream_runtime.rs` were deleted along with the `ClusterDoc` / `ParticipantInfo` / `participant_provider` fixture they depended on. The stream protocol itself is unchanged; only the runtime construction shape moved. The 7 stream-protocol wire-shape unit tests still cover the on-wire format; the missing coverage is the end-to-end producer-pair scenarios:
 
-- `producer_accepts_and_streams_jpeg_frames`
+- `producer_accepts_and_streams_camera_frames`
 - `producer_declines_unknown_sensor`
 - `producer_error_signals_consumer_with_detail`
 - `producer_shutdown_signals_consumer_with_typed_end_of_stream`
@@ -116,22 +116,6 @@ Lean toward (2) once a consumer wants programmatic dispatch. (1) is fine for M1.
 The `relay_server_accepts_reservation` test calls `relay_swarm.add_external_address(relay_addr)` so the relay's reservation response includes the loopback listen address (which the swarm doesn't auto-discover as external).
 
 On real networks, external addresses get learned via identify (the client tells the relay what address it dialed) or AutoNAT. This isn't really a parking-lot question — just documented here so a future reader doesn't strip the `add_external_address` call thinking it's redundant. Move to a comment-only note if/when AutoNAT lands.
-
----
-
-## `stream_protocol` — JSON encoding for binary `T` is wasteful
-
-The v1 framing is **JSON-serialized `StreamMessage<T>`** with a 4-byte length prefix. For `T = JpegFrame { bytes: Vec<u8> }`, `serde_json` renders the `bytes` field as a JSON array of integers — each byte becomes ~4 ASCII bytes (`"123,"`), producing roughly a 4× bandwidth hit vs. raw. For 30 fps × 100 KB JPEGs that's ~12 MB/s on the wire vs. ~3 MB/s raw — fine for a 1–4 robot LAN demo, real concern for anything larger.
-
-**Resolved 2026-05-06 for `PointCloudFrame` only** — path (1) `#[serde(with = "base64_bytes")]` adapter applied to `PointCloudFrame.bytes` because pointcloud at 22 MB/s × 4 was untenable on a Wi-Fi LAN. The adapter lives at module scope in `stream_protocol`; `JpegFrame.bytes` was deliberately **not** updated to keep v1 wire compat (existing consumers — boosterapp's Python sidecar, Park's browser-side decoder — would fail closed on the encoding swap). Locked cross-language conformance vector pinned in [`stream_protocol::tests::locked_point_cloud_frame_wire_shape_vector`](src/stream_protocol.rs).
-
-**Still open for `JpegFrame`** (and any future binary-heavy `T`). Three forward paths, in order of effort:
-
-1. **Base64-encode `JpegFrame.bytes` inside JSON.** Same adapter `PointCloudFrame` already uses. Wire-compat-breaking — every JPEG consumer renegotiates. Defer until a JPEG consumer reports stutter or a producer reports outbound saturation; not a v1 bottleneck.
-2. **Switch the codec to CBOR** (`ciborium` or `serde_cbor`). Native binary support; `Vec<u8>` rides as raw bytes. Wire-compat-breaking for everyone; no longer human-readable in tcpdump but still serde-driven.
-3. **Hybrid framing** — JSON envelope with a `payload_size: u32` field, plus a separate length-prefixed binary section after. Most efficient, most bespoke; preserves human readability of the envelope.
-
-Path (2) is a coordinated bump for every `Stream<T>` consumer at once. Path (3) is the most engineering work but doesn't sacrifice tcpdump readability of the envelope. Stay deferred until a real consumer asks.
 
 ---
 
@@ -227,18 +211,6 @@ Two forward paths:
 2. **Move the constant + introduce a labels module in `auki-identity`** as the canonical home for every label any future child derivation will use (e.g. an eventual `app_instance/v1` per the Wallet-derived alternative discussed in this same parking-lot above). Sets up the convention before a second label needs it.
 
 Cross-references the existing [Wallet → peer-key derivation label evolution](#wallet--peer-key-derivation-label-evolution) thread above and the [BIP32-vs-labeled-hash derivation](../auki-identity/parking_lot.md) thread in `auki-identity`. Picking (2) makes the most sense the moment a second label is committed to.
-
----
-
-## `StreamDispatch` is the streaming-stability lever — README should call it out _(filed by Dobby, 2026-05-08)_
-
-`pub enum StreamDispatch { AcceptJpeg, AcceptPointCloud, Decline }` is a **closed** enum. Adding a new payload type — when an SLAM odometry stream or a cell-phone-camera variant lands — is a coordinated SDK + consumer release: bump the crate, add the variant, every consumer that wants the new sensor type opts in. The May 6 changelog entry explicitly lays out the rationale ("trait-object dispatch (open-set) was rejected because Rust generics + serde bounds don't compose well across `dyn Fn` boundaries…").
-
-The decision is correct. The disclosure is missing. The root [`README.md`](../../README.md) "API surface" section presents `StreamDispatch` as an implementation detail of `/auki/stream/0.1.0` ("dispatched by `sensor_id` via the closed `StreamDispatch` enum"). To a downstream consumer reading the README to plan their integration, that's an aside — but it's actually the SDK's primary stability lever for streaming. Every new `T` is a public-API touch; that's the point.
-
-Suggest: add one sentence to the API-surface table's `/auki/stream/0.1.0` row, or to the libp2p wire-protocols section that follows, calling out the closed-enum stability model explicitly. Something like *"New payload types ship as a coordinated SDK release: a new `StreamDispatch` variant is a public-API change consumers opt into."* Doc-only; no code touch.
-
-Surfacing for editorial pass; not gating anything.
 
 ---
 

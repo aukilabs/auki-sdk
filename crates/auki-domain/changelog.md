@@ -6,14 +6,25 @@ Latest entry on top.
 
 ---
 
-### Dobby · May 17, HKT, 2026
+### Nils's codex · May 20, HKT, 2026
 
-**Parking-lot purged: Greenland design archaeology and resolved-but-unpropagated items removed.** Eleven "Greenland Decision" blocks (T1, T2/Q2, T3/Q1, T4/Q3, T5/Q4, T6/Q8, T7/Q5+Q-disc-1, T10/Q10, T11/Q11, T13/Q9, T9/Q12, T12/Q7, T8/Q-disc-2, T14/Q14) transcribed from the retired Greenland Notion task table were deleted — the decisions all shipped (`ClusterManager`, heartbeat, `/auki/registries/0.0.1`, election rule, default-Domain singleton) and the parking-lot transcripts had become plan archaeology. The "Glossary reconciliation" item self-marked Resolved 2026-05-11 with a week-stale Propagate placeholder was also removed (Glossary already carries the live `Domain Identity` definition). Codename leakage ("Hagall", retired "Vinland"/"Greenland") stripped from the three live forward-looking items that remain: successor-token encoding for v2 hardening, stale-Manager join policy (Nils's codex, 2026-05-17), and DHT-backed cluster doc as long-term direction. Net: 161 → 48 lines.
+**`ClusterManager` session time now uses `auki_time::SessionClock`.** Create/join construction mints a peer-id rooted session clock from the local libp2p peer id and `DaemonInfo.session_id`. `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash` now come from that SDK clock in both the local accessor and `/auki/info/0.0.1` handler; caller-provided `DaemonInfo.session_clock_id/hash` remain accepted only as compatibility inputs. Added `auki-time` as a dependency and documented the timekeeping ownership/deferred heartbeat-sync boundary. Tests: `cargo test -p auki-domain cluster_manager::tests`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.
 
 Tests: `cargo test -p auki-domain`.
+
+### Nils's codex · May 18, HKT, 2026
+
+**Resource catalogs advertise camera streams as `pinhole_camera_log_entry`.** `stream_payload_for_sensor_kind("rgb_camera")` now returns the camera-log record payload name instead of `jpeg_frame`, matching the `/auki/stream/0.1.0` camera stream change. The generic `ClusterManager::open_stream<T>` docs now name `PinholeCameraLogEntry` as the camera payload type.
+
+Tests: `cargo check -p auki-network -p auki-network-py -p auki-domain-py -p auki-datatypes`.
+
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: Greenland design archaeology and resolved-but-unpropagated items removed.** Eleven "Greenland Decision" blocks (T1, T2/Q2, T3/Q1, T4/Q3, T5/Q4, T6/Q8, T7/Q5+Q-disc-1, T10/Q10, T11/Q11, T13/Q9, T9/Q12, T12/Q7, T8/Q-disc-2, T14/Q14) transcribed from the retired Greenland Notion task table were deleted — the decisions all shipped (`ClusterManager`, heartbeat, `/auki/registries/0.0.1`, election rule, default-Domain singleton) and the parking-lot transcripts had become plan archaeology. The "Glossary reconciliation" item self-marked Resolved 2026-05-11 with a week-stale Propagate placeholder was also removed (Glossary already carries the live `Domain Identity` definition). Codename leakage ("Hagall", retired "Vinland"/"Greenland") stripped from the three live forward-looking items that remain: successor-token encoding for v2 hardening, stale-Manager join policy (Nils's codex, 2026-05-17), and DHT-backed cluster doc as long-term direction. Net: 161 → 48 lines.
 
 ### Nils's codex · May 18, HKT, 2026
 

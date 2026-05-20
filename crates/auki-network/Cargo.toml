@@ -60,7 +60,7 @@ thiserror = { version = "2", optional = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"], optional = true }
 # `StreamExt` for polling `swarm.next()` in the runtime task.
 futures = { version = "0.3", default-features = false, optional = true }
-# Stream-protocol wire types — `JpegFrame`, `PointCloudFrame`,
+# Stream-protocol wire types — `PinholeCameraLogEntry`, `PointCloudFrame`,
 # `StreamMessage` envelope. Step 2 of the auki-datatypes migration
 # moves these from this crate's hand-rolled serde structs to
 # auki-datatypes-owned prost types.

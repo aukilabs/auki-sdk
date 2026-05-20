@@ -32,7 +32,7 @@
 //!   protobuf payload that follows. Bounded by [`MAX_FRAME_BYTES`] so a
 //!   peer can't drive an OOM by claiming a huge length; generous enough
 //!   (16 MiB) to admit raw sensor frames if a future `Stream<T>`
-//!   instantiation carries them. JPEG frames typically run 10–100 KB;
+//!   instantiation carries them. Camera frames typically run 10–100 KB;
 //!   raw `PointCloud2` CDR runs ~700 KB at ~30 Hz.
 //! - **Payload.** Prost-encoded [`StreamMessage`]. The envelope is a
 //!   `oneof` of `Request | Accept | Decline | Entry | EndOfStream`;
@@ -83,7 +83,7 @@ fn _phantom() -> Option<Wallet> {
 // `auki-datatypes`'s `auki.stream` package; this module owns the
 // protocol id, framing helpers, and error type.
 pub use auki_datatypes::audio_stream::AudioFrame;
-pub use auki_datatypes::frame_stream::JpegFrame;
+pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
@@ -108,7 +108,7 @@ pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
 /// cannot drive an OOM by sending an arbitrarily-large length prefix;
 /// generous enough to admit any reasonable single sensor frame.
 ///
-/// 16 MiB. JPEG frames typically run 10–100 KB; raw NV12 frames at K1
+/// 16 MiB. Camera frames typically run 10–100 KB; raw NV12 frames at K1
 /// resolutions run ~400 KB; point cloud frames after server-side
 /// decimation are usually well under 1 MB.
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
@@ -403,33 +403,35 @@ mod tests {
 
     // ─── Locked cross-language conformance vectors ────────────────────────
 
-    /// `JpegFrame` prost wire bytes. Cross-language readers (Park's
-    /// browser-side decoder, future Sentinel ports) MUST produce these
-    /// exact bytes from the same input.
+    /// `PinholeCameraLogEntry` prost wire bytes. Camera streams carry the
+    /// exact same payload record as camera Sensor Logs, not a stream-only
+    /// wrapper around the JPEG bytes.
     #[test]
-    fn jpeg_frame_serializes_to_locked_wire_bytes() {
-        let frame = JpegFrame {
-            bytes: vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46],
+    fn camera_frame_serializes_to_locked_wire_bytes() {
+        let frame = PinholeCameraLogEntry {
+            dynamic_intrinsics: None,
+            frame: vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46],
         };
         let bytes = frame.encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        // Field 1 length-delimited: tag 0x0a, len 0x0a, then 10 bytes.
-        assert_eq!(hex, "0a0affd8ffe000104a464946");
+        // Field 2 (`frame`) length-delimited: tag 0x12, len 0x0a, then 10 bytes.
+        assert_eq!(hex, "120affd8ffe000104a464946");
     }
 
     #[test]
-    fn jpeg_frame_round_trips() {
-        let frame = JpegFrame {
-            bytes: vec![1, 2, 3, 4, 5],
+    fn camera_frame_round_trips() {
+        let frame = PinholeCameraLogEntry {
+            dynamic_intrinsics: None,
+            frame: vec![1, 2, 3, 4, 5],
         };
         let bytes = frame.encode_to_vec();
-        let back = JpegFrame::decode(&*bytes).unwrap();
+        let back = PinholeCameraLogEntry::decode(&*bytes).unwrap();
         assert_eq!(back, frame);
     }
 
-    /// `PointCloudFrame` prost wire bytes. Same shape as `JpegFrame`
-    /// (single `bytes` field) but separate `.proto` package so the two
-    /// streams have independent evolution.
+    /// `PointCloudFrame` prost wire bytes. Point clouds still use a
+    /// stream-specific opaque-byte wrapper because their log entry has
+    /// the same field shape and no per-record metadata to preserve.
     #[test]
     fn point_cloud_frame_serializes_to_locked_wire_bytes() {
         let frame = PointCloudFrame {
@@ -512,7 +514,7 @@ mod tests {
     }
 
     /// `AudioFrame` prost wire bytes (Dialogue Batch 1). Same `bytes`
-    /// shape as `JpegFrame` / `PointCloudFrame` but a separate `.proto`
+    /// shape as `PinholeCameraLogEntry` / `PointCloudFrame` but a separate `.proto`
     /// package so the stream dispatch on a distinct Rust type. Byte-
     /// identical wire/disk with `AudioLogEntry` is locked by
     /// `audio_disk_wire_byte_identical` in `auki-datatypes`.

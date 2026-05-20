@@ -10,9 +10,25 @@ Latest entry on top.
 
 **[`auki-network-swift`](auki-network-swift/changelog.md) — review-driven fixes to PR #152.** Critical: TLS-backend claim corrected — iOS cross-compile is on **`ring 0.17`** (reqwest `rustls-tls` default), not `aws-lc-rs`; works because ring 0.17 has first-class iOS support. Important: build-xcframework.sh no longer packages the Swift glue into the xcframework's Headers dir (moved to `target-xcframework/swift/`); `Eq` semantics on FFI records documented; `with_http` omission documented + parked. Re-validated: tests green, xcframework Headers clean.
 
+### Nils's codex · May 20, HKT, 2026
+
+**Python binding packages moved to [`bindings/python`](../bindings/python/changelog.md).** The `auki-*-py` package family left `crates/` with package names, Python module names, and runtime behavior preserved; `crates/` now reads as the Rust component workspace plus non-Python adapters.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-owned session clocks.** `auki-time` adds `SessionClock`, a peer-id rooted session-monotonic `ClockRegistryEntry` plus monotonic reader. `ClusterManager` now mints one at create/join time and publishes its id/hash and `now_ns()` in `ParticipantInfo`, leaving `DaemonInfo.session_clock_id/hash` as compatibility inputs only.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — crate renamed from `auki-time-transforms`.** The crate now names the broader SDK timekeeping responsibility while retaining the existing TimeTransform Log sampler surface. Workspace metadata, live docs/plans, and parking-lot summaries now point at `auki-time`; historical changelog prose keeps the old name as context.
+
 ### Nils's claude · May 19, 14:27 HKT, 2026
 
 **[`auki-network-swift`](auki-network-swift/changelog.md) — iOS XCFramework build validated.** `build-xcframework.sh` runs clean on `aarch64-apple-ios{,-sim}` / `x86_64-apple-ios` → well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so no CC/SDK intervention. Build output gitignored; `ring`-vs-`aws-lc-rs` parking-lot item resolved/removed; docs updated.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-logs-py`](../bindings/python/auki-logs-py/changelog.md) + [`auki-network-py`](../bindings/python/auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.
 
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
@@ -21,9 +37,26 @@ Latest entry on top.
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purges across four crates: ~300 lines of plan archaeology and deleted-surface references removed.** [`auki-domain-py`](auki-domain-py/changelog.md) reduced to a 3-line stub (all five entries referenced the deleted `init_domain`/`DomainHandle` shape). [`auki-domain`](auki-domain/changelog.md) lost 11 transcribed "Greenland Decision" blocks whose decisions all shipped, plus a week-stale RESOLVED→Propagate placeholder; three live forward-looking items remain. [`auki-network`](auki-network/changelog.md) lost the 53-line Vinland D6 `discovery_client::subscribe` block (subject deleted), the `ClusterRuntime`-owns-SSE-subscription block (subject deleted), and the six `/auki/message/0.0.1` design blocks (protocol never shipped); ~16 substantive design items retained. [`auki-network-py`](auki-network-py/changelog.md) lost the two-runtime test block (test was deleted) and a 43-line inline type-stubs block describing deleted surface (`_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, etc.). Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. Net: 665 → 369 lines across the four files.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — generic stream dispatch is payload-authoritative.** The SDK-owned `ClusterManager.open_stream(peer_id, sensor_id)` resolver now rejects unknown resource `payload` values instead of falling back to `sensor_kind`, keeping app-facing stream type selection explicit in resource metadata.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-py`](auki-network-py/changelog.md) — Python camera stream payloads are `CameraFrame`, with no legacy alias.** The public `auki_network.cluster` surface exposes `CameraFrame` only; `PinholeCameraLogEntry` remains an internal generated Rust/protobuf record name and is not registered as a Python pyclass.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py/changelog.md) — Python consumers get a generic `ClusterManager.open_stream(peer_id, sensor_id)`.** The binding resolves the remote `sensor_stream` resource payload inside the SDK and delegates to typed subscriptions internally, so apps no longer choose audio/camera/pointcloud/joint-specific openers.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — Manager election excludes the heartbeat-lost peer.** A timed-out Manager is removed from the election candidate view before consulting stale transport reachability, so a battery-pulled or QUIC-idle Manager cannot be re-elected and block Discovery rotation.
+
+### Nils's codex · May 18, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) + Python bindings — camera streams now carry `PinholeCameraLogEntry` records.** The stream-only `JpegFrame`/`frame_stream` payload is retired; Rust dispatch uses `AcceptCamera`, Python producers use `StreamDecision.accept_camera(...)`, consumers use `open_camera_stream(...)`, and resource catalogs advertise `pinhole_camera_log_entry`.
 
 ### Nils's codex · May 18, HKT, 2026
 

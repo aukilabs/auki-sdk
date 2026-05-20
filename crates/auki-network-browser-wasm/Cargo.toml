@@ -13,7 +13,12 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 browser_libp2p = [
+    "dep:futures",
     "dep:libp2p",
+    "dep:serde",
+    "dep:serde-wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
 ]
 
 [dependencies]
@@ -42,6 +47,11 @@ libp2p = { version = "0.56", default-features = false, optional = true, features
     "webtransport-websys",
     "yamux",
 ] }
+futures = { version = "0.3", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Window"], optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

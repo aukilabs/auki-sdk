@@ -4,10 +4,10 @@
 
 Build the first SDK-owned browser-to-native protocol probe:
 
-- choose the native probe listener transport, starting with WebRTC Direct
-- instantiate a browser wasm libp2p peer with the canonical Auki PeerId
-- dial the native probe and open one SDK-owned named protocol stream
+- native WebRTC Direct listener: implemented in `auki-network` behind `browser_probe`
+- browser wasm libp2p peer: implemented behind `browser_libp2p`
+- browser dial export: `dialBrowserProbe(seed, address, payload)` parses `/p2p/<peer-id>`, dials through SDK libp2p WebRTC Direct, and returns a UI-friendly result shape
 
 ## Next
 
-After the probe stream opens, lift it into `auki-domain-browser` as the transport backing for Domain join, participant metadata, sensor catalogs, and media streams.
+Run the browser-to-native smoke harness. Once the probe stream opens in Chromium, lift it into `auki-domain-browser` as the transport backing for Domain join, participant metadata, sensor catalogs, and media streams.

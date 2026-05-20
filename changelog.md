@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Browser wasm probe dial export added.** `auki-network-browser-wasm` now exports `dialBrowserProbe(seed, address, payload)` behind `browser_libp2p`, dialing a native SDK WebRTC Direct listener over `/auki/browser-probe/0.0.1` with the browser peer's SDK identity. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Native SDK browser probe listener added.** `auki-network` can now host `/auki/browser-probe/0.0.1` over WebRTC Direct with the SDK peer identity and emit browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

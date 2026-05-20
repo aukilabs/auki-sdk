@@ -6,6 +6,10 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ### Nils's codex · May 19, HKT, 2026
 
+Added the browser-side `dialBrowserProbe(seed, address, payload)` wasm export behind `browser_libp2p`. It builds a browser libp2p peer from the SDK wallet-derived identity, parses the native `/p2p/<peer-id>` multiaddr, opens `/auki/browser-probe/0.0.1` through `libp2p-webrtc-websys`, and returns a UI-friendly success/error result.
+
+### Nils's codex · May 19, HKT, 2026
+
 Enabled the `getrandom` 0.3 `wasm_js` feature required by the libp2p/yamux browser build path. The `browser_libp2p` feature now compiles for `wasm32-unknown-unknown`, and `wasm-pack --target web --features browser_libp2p` produces the browser package.
 
 ### Nils's codex · May 19, HKT, 2026

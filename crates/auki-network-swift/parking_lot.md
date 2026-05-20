@@ -16,6 +16,12 @@ This is a deliberate divergence from the sibling precedent, made to fit the lang
 
 `build-xcframework.sh` produces `auki_network_swiftFFI` (the generated `.swift` + a `.xcframework`). Open: are these build artifacts (gitignored, built by iosapp's CI / a release job) or committed into this repo (a `swift/` dir, or a separate `aukilabs/auki-sdk-swift` SwiftPM-package repo for `Package.swift` consumption)? The `-py` crates ship as `maturin` wheels and do **not** commit generated code; the analogous Swift answer (committed SwiftPM package vs. pip-equivalent build step) is a distribution decision the SDK owners should make. Not blocking Stage 1 (host build/test is green without it).
 
+## `with_http` not exposed — TLS / proxy / timeout knob shape
+
+The Rust `DiscoveryClient::with_http(base_url, reqwest::Client)` lets callers configure custom timeouts, proxies, and custom TLS roots. The Swift binding at Stage 1 uses `reqwest::Client::new()` defaults only — `with_http` is not surfaced.
+
+This is fine for v0 iosapp (Auki cluster on a known LAN), but the right Swift-friendly FFI shape isn't obvious: do we expose a string proxy URL? A CA-bundle as `Data`? A timeout in milliseconds? Best to wait for a concrete iosapp deployment that actually needs the knob, so we design once against a real requirement rather than guess. `auki-network-py` has the same standing item.
+
 ## Stream payload parity with `auki-network`
 
 When Stage 2 lands the stream surface, keep payload parity: when Rust adds a `StreamDispatch` variant, the Swift side (and the swift-protobuf `.proto` consumption) must follow in the same release — same standing rule `auki-network-py`'s parking lot records for itself.

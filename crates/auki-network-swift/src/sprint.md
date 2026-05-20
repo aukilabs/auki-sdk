@@ -16,7 +16,7 @@ Stage 1 landed: the crate exists as a workspace member, mirrors the `auki-networ
 
 ## Done since Stage 1
 
-- **iOS XCFramework validated.** `build-xcframework.sh` runs clean against `aarch64-apple-ios` / `aarch64-apple-ios-sim` / `x86_64-apple-ios` (rustc 1.94, Xcode 26.3) and emits a well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings (see `src/readme.md`). The anticipated `ring`/`SystemConfiguration` sharp edges did **not** occur — rustls' default `aws-lc-rs` cross-compiles to iOS cleanly and Stage 1 is `discovery_client`-only. Build output is gitignored (`target-xcframework/`).
+- **iOS XCFramework validated.** `build-xcframework.sh` runs clean against `aarch64-apple-ios` / `aarch64-apple-ios-sim` / `x86_64-apple-ios` (rustc 1.94, Xcode 26.3) and emits a well-formed two-slice `AukiNetwork.xcframework` + correct async Swift bindings (see `src/readme.md`). The anticipated sharp edges did **not** occur — `ring 0.17.x` (the `rustls-tls` default backend in `Cargo.lock`, not `aws-lc-rs`) has first-class iOS cross-compile support, so no `CC`/SDK env intervention was needed; Stage 1 is `discovery_client`-only so no libp2p / `SystemConfiguration.framework`. Build output is gitignored (`target-xcframework/`).
 
 ## Next
 
@@ -28,7 +28,7 @@ In priority order:
 
 ## Open Items
 
-See [`parking_lot.md`](parking_lot.md): the async-vs-sync API-shape divergence from `-py` (flagged for human confirmation) and where generated Swift/XCFramework artifacts live (committed SwiftPM package vs. downstream build step). The iOS crypto-backend question is resolved — `aws-lc-rs` (rustls default) cross-compiles to iOS with no intervention.
+See [`parking_lot.md`](parking_lot.md): the async-vs-sync API-shape divergence from `-py` (flagged for human confirmation) and where generated Swift/XCFramework artifacts live (committed SwiftPM package vs. downstream build step). The iOS crypto-backend question is resolved — the active backend is **`ring 0.17`** (via `rustls-tls`'s default in `reqwest 0.12`), and `ring 0.17.x` cross-compiles to `aarch64-apple-ios`/`-sim` with no intervention. `aws-lc-rs` remains a fallback if `ring` ever regresses.
 
 ## Out Of Scope
 

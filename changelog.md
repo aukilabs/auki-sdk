@@ -6,9 +6,13 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 20, 11:43 HKT, 2026
+
+**`auki-network-swift` PR #152 — review-driven fixes.** Corrected the factually wrong claim that the iOS cross-compile used `aws-lc-rs`: it's actually **`ring 0.17`** via reqwest's `rustls-tls` default (the build worked because ring 0.17 has first-class iOS support now). Fixed a real bug in `build-xcframework.sh` (Swift glue was being packaged into the xcframework Headers dir; moved to a sibling `swift/` dir per the standard UniFFI iOS recipe). Documented `Eq` byte-equality semantics on FFI records and the deliberate `with_http` omission. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's claude · May 19, 14:27 HKT, 2026
 
-**`auki-network-swift` iOS XCFramework validated.** `build-xcframework.sh` produces a well-formed device + simulator `AukiNetwork.xcframework` with correct async Swift bindings; no `ring`/`SystemConfiguration` cross-compile edge (rustls `aws-lc-rs` default). Build output gitignored; crypto-backend parking-lot item resolved. Unblocks the iosapp Discovery wiring. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+**`auki-network-swift` iOS XCFramework validated.** `build-xcframework.sh` produces a well-formed device + simulator `AukiNetwork.xcframework` with correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so the historical CC/SDK sharp edge is obsolete. Build output gitignored; crypto-backend parking-lot item resolved. Unblocks the iosapp Discovery wiring. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's claude · May 19, 13:46 HKT, 2026
 

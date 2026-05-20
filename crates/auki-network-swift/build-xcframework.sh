@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Build the auki-network-swift XCFramework + generated Swift bindings.
 #
-# STATUS: scaffolding. The host `cargo build/test -p auki-network-swift`
-# is the validated Stage 1 gate; this script encodes the standard
-# UniFFI 0.31 iOS flow but has NOT been run/verified here. Known sharp
-# edges to expect on first real run (see parking_lot.md):
-#   - `ring` cross-compile to aarch64-apple-ios may need CC/SDK env;
-#     `aws-lc-rs` is the iOS-friendly fallback.
-#   - link `SystemConfiguration.framework` in the consuming Xcode target
-#     if libp2p/if-watch symbols surface (Stage 2+, swarm feature).
+# Validated 2026-05-19 against rustc 1.94 + Xcode 26.3 on the three
+# Apple targets below. Produces a two-slice AukiNetwork.xcframework
+# (device ios-arm64 + fat simulator ios-arm64_x86_64-simulator) plus
+# the generated Swift glue (auki_network_swift.swift) in $OUT/swift/,
+# kept *outside* the xcframework Headers dir so SwiftPM consumers can
+# pick it up at the package level while the xcframework Headers stay
+# clean (FFI header + modulemap only). Active TLS backend on iOS is
+# `ring 0.17` via reqwest's `rustls-tls` default (no aws-lc-rs);
+# ring 0.17.x has first-class iOS cross-compile support so no CC/SDK
+# env intervention is required.
+#
+# Heads-up for Stage 2: when the `swarm` feature gets pulled (libp2p),
+# the consuming Xcode target may need to link `SystemConfiguration.
+# framework` if if-watch symbols surface; not the case at Stage 1.
 #
 # Prereqs:
 #   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
@@ -39,6 +45,9 @@ lipo -create \
 
 # 3. Generate the Swift bindings + FFI header/modulemap from the built
 #    library (UniFFI 0.31 library mode auto-detects; no UDL).
+#    Generating against the *device* .a is fine: uniffi-bindgen reads
+#    arch-independent UNIFFI_META_* symbols via the `object` crate, so
+#    the resulting .swift/.h/.modulemap are correct for both slices.
 cargo run --release --features cli --bin uniffi-bindgen -- generate \
   --library "$DEVICE_LIB" \
   --language swift \
@@ -47,8 +56,14 @@ cargo run --release --features cli --bin uniffi-bindgen -- generate \
 if [ -f "$BINDINGS/${LIB_NAME}FFI.modulemap" ]; then
   mv "$BINDINGS/${LIB_NAME}FFI.modulemap" "$BINDINGS/module.modulemap"
 fi
+# The Swift glue file is consumed at the SwiftPM-package level, not
+# embedded in the xcframework — move it out of $BINDINGS so step 4's
+# `-headers $BINDINGS` packages only the FFI header + modulemap.
+SWIFT_OUT="$OUT/swift"
+mkdir -p "$SWIFT_OUT"
+mv "$BINDINGS/${LIB_NAME}.swift" "$SWIFT_OUT/${LIB_NAME}.swift"
 
-# 4. Assemble the XCFramework (headers = the generated FFI dir).
+# 4. Assemble the XCFramework (headers = the FFI .h + modulemap only).
 rm -rf "$OUT/AukiNetwork.xcframework"
 xcodebuild -create-xcframework \
   -library "$DEVICE_LIB" -headers "$BINDINGS" \
@@ -56,4 +71,4 @@ xcodebuild -create-xcframework \
   -output "$OUT/AukiNetwork.xcframework"
 
 echo "XCFramework: $OUT/AukiNetwork.xcframework"
-echo "Swift glue : $BINDINGS/${LIB_NAME}.swift"
+echo "Swift glue : $SWIFT_OUT/${LIB_NAME}.swift"

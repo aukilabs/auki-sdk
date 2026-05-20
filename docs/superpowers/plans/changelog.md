@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 20, HKT, 2026
 
+Revised the browser Domain peer symmetry plan to prevent SDK drift: browser support is now framed as wasm-targeting the same `auki-network` and `auki-domain` Rust logic, with TypeScript kept as facade glue and runtime-specific code limited to concrete browser constraints.
+
+### Nils's codex · May 20, HKT, 2026
+
 Rewrote the browser Domain WebRTC follow-up plan around peer symmetry: any runtime can create, join, manage, publish, fail, and recover through the same Domain role rules; transport reachability is now treated as an SDK routing concern rather than a role distinction.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 20, HKT, 2026
 
+Updated the browser Domain plan to prevent browser/native SDK drift: browser crates are now bindings/facades over shared Rust `auki-network` and `auki-domain` logic, with runtime-specific code limited to concrete wasm/browser constraints.
+
+### Nils's codex · May 20, HKT, 2026
+
 Rewrote the browser Domain WebRTC plan around true peer symmetry: browser peers can be Managers, Discovery records PeerIds rather than platform classes, and reachability is an SDK transport concern.
 
 ### Nils's codex · May 19, HKT, 2026

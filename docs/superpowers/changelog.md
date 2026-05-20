@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 20, HKT, 2026
 
+Updated the browser Domain peer symmetry plan under [`plans/`](plans/changelog.md) so `auki-network-browser-wasm` and `auki-domain-browser` are bindings/facades over shared Rust SDK logic rather than parallel browser implementations.
+
+### Nils's codex · May 20, HKT, 2026
+
 Reframed the browser Domain WebRTC implementation plan under [`plans/`](plans/changelog.md) so browser peers are full role-symmetric Domain peers, including Manager eligibility, with reachability handled as SDK transport state.
 
 ### Nils's codex · May 19, HKT, 2026

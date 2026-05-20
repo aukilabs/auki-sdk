@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 20, HKT, 2026
 
+**Browser/native SDK drift plan corrected.** The browser Domain plan now makes browser support a wasm target/facade over shared Rust `auki-network` and `auki-domain` logic, not a parallel browser implementation. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
 **Browser Domain plan corrected for peer symmetry.** The follow-up plan now treats browser peers as full Domain peers, including Manager eligibility; SDK reachability replaces platform-specific role assumptions. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026

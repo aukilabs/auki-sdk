@@ -16,19 +16,19 @@ spatial data exchange, and failure recovery before continuing SDK networking
 redesign.
 
 The current SDK implementation is evidence, not the source of truth. Existing
-Manager election, shared membership, and Discovery cluster APIs may be useful
-prototypes, but they are not baseline requirements unless this document or an
-RFC explicitly makes them so.
+shared membership, cluster-wide coordination, and Discovery cluster APIs may be
+useful prototypes, but they are not baseline requirements unless this document
+or an RFC explicitly makes them so.
 
 ## Working Principles
 
 - Requirements come before design.
 - Product behavior comes before implementation mechanics.
-- Every participant owns and maintains its own domain.
+- Every peer that exchanges spatial data serves a declared domain.
 - Clusters are peer connectivity/session graphs by default, not shared
   authority objects.
 - Discovery is optional infrastructure for findability. It is not required for
-  private participants or direct configuration.
+  private peers or direct configuration.
 - Spatial data exchange happens peer-to-peer after discovery/configuration and
   authorization.
 - libp2p is a transport mechanism. It should not define the product model by
@@ -39,15 +39,14 @@ RFC explicitly makes them so.
 The documentation set currently contains two competing models:
 
 - Legacy `auki/` concept and capability docs describe a Domain Cluster with a
-  current Manager, shared Cluster Registry, Manager-written membership, and
-  Manager failover.
-- Newer SDK/app docs and live app behavior mostly need participants to find
+  shared Cluster Registry, cluster-wide membership authority, and failover.
+- Newer SDK/app docs and live app behavior mostly need peers to find
   each other, connect directly, advertise what they can share, and stream or
   fetch data peer-to-peer.
 
-The v1 foundation should choose the smaller model: participant-owned domains
-and direct exchange. Shared cluster authority remains a future overlay that
-must justify itself with a concrete workflow.
+The v1 foundation should choose the smaller model: domains served over direct
+peer exchange. Shared cluster authority remains a future overlay that must
+justify itself with a concrete workflow.
 
 ## Terminology
 
@@ -55,12 +54,12 @@ Terms used by this requirements draft are defined in the related glossary.
 
 This document may use product examples to explain requirements, but protocol
 wording should use the glossary terms consistently. In particular,
-`participant`, `peer`, `wallet`, `domain`, `domain id`, `peer binding`,
-`Discovery record`, `offer`, `Get`, and `Subscribe` are defined there.
+`peer`, `wallet`, `domain`, `domain id`, `peer binding`, `Discovery record`,
+`offer`, `Get`, and `Subscribe` are defined there.
 
 ## Architecture Decision
 
-### Decision: Participant-Owned Domains Are The Baseline
+### Decision: Declared Domains Are The Baseline
 
 Date: 2026-05-20.
 
@@ -68,26 +67,26 @@ Owner: RFC working session.
 
 Decision:
 
-Each participant owns and maintains its own domain. Participants may
-discover or be configured with each other, connect peer-to-peer, authorize as
-needed, advertise what spatial data they can share, and exchange that data
-directly.
+Each peer serves a local domain it controls directly or through delegation.
+Peers may discover or be configured with each other, connect peer-to-peer,
+authorize as needed, advertise what spatial data they can share, and exchange
+that data directly.
 
 Reasoning:
 
 This is the smallest model that satisfies the core product requirement:
-participants maintain spatial state, form peer-to-peer clusters, and exchange
+peers maintain spatial state, form peer-to-peer clusters, and exchange
 spatial data. It also matches the ad-hoc robot story: each robot keeps its own
 domain and creates transforms when it learns enough about another domain.
 
 Implications:
 
 - Park viewing robot streams does not require Park and robots to share one
-  cluster Manager.
+  cluster-wide authority.
 - Robots continue operating without Park.
-- Losing one participant does not invalidate other participants' domains.
+- Losing one peer does not invalidate other peers' domains.
 - Discovery advertises entrypoints, not "who owns the world".
-- Shared Manager handoff is not a v1 requirement.
+- Shared authority handoff is not a v1 requirement.
 
 Follow-up:
 
@@ -109,13 +108,13 @@ graph.
 
 Reasoning:
 
-Discovery should make participants findable without becoming a central control
-plane. It must support private participants and tolerate stale records.
+Discovery should make peers findable without becoming a central control
+plane. It must support private peers and tolerate stale records.
 
 Implications:
 
 - Discovery registration is optional.
-- A private participant can dial a discoverable participant if it has the
+- A private peer can dial a discoverable peer if it has the
   address/invitation/configuration and passes authorization.
 - Existing peer connections can continue while Discovery is unavailable.
 - Discovery TTL and explicit deregistration are operational hygiene, not
@@ -158,8 +157,8 @@ Implications:
 Expected role:
 
 - User-facing viewer/control app.
-- Discovers or is configured with robot participants.
-- Tracks each remote participant independently.
+- Discovers or is configured with robot peers.
+- Tracks each remote peer independently.
 - Fetches offers and subscribes to streams.
 - May publish its own offers, for example microphone audio.
 
@@ -167,8 +166,8 @@ Requirements:
 
 - Park must remain usable when no robots are online.
 - Robots must remain usable when Park exits.
-- Park should not need to manage another participant's domain to view or
-  control that participant.
+- Park should not need to manage another peer's domain to view or
+  control that peer.
 
 ### Sentinel
 
@@ -182,8 +181,8 @@ Expected role:
 Requirements:
 
 - Sentinel registration in Discovery should be configurable.
-- Sentinel should not be eligible for Manager/election because Manager/election
-  is not a v1 baseline requirement.
+- Sentinel should not be eligible for cluster-wide authority election because
+  such election is not a v1 baseline requirement.
 
 ### Robot Apps
 
@@ -199,10 +198,10 @@ Expected role:
 
 Requirements:
 
-- Each robot should own its own domain.
+- Each robot should serve its own declared domain.
 - Robot-to-robot connections are optional and workflow-driven.
-- One robot should not become Manager for another robot's domain in the v1
-  baseline.
+- One robot should not become the cluster-wide authority for another robot's
+  domain in the v1 baseline.
 
 ### Discovery Service
 
@@ -216,7 +215,7 @@ Expected role:
 Requirements:
 
 - Discovery must not store authoritative peer membership.
-- Discovery must not be required for private participants.
+- Discovery must not be required for private peers.
 - Discovery should expose freshness/TTL semantics so stale advertisements are
   explainable.
 
@@ -235,15 +234,15 @@ Requirements:
 
 ## Functional Requirements
 
-### R1: Participants Can Be Private Or Discoverable
+### R1: Peers Can Be Private Or Discoverable
 
-A participant must not be required to register with Discovery merely to use the
+A peer must not be required to register with Discovery merely to use the
 SDK.
 
-A participant that wants to be found through Discovery must be able to register
+A peer that wants to be found through Discovery must be able to register
 presence, dialable entrypoints, and high-level offer metadata.
 
-A participant that does not register must still be able to connect through
+A peer that does not register must still be able to connect through
 manual configuration, invitation, direct address exchange, or another discovery
 mechanism.
 
@@ -261,16 +260,16 @@ Discovery should not answer:
 - who owns a domain;
 - who is allowed to publish spatial data;
 - who is allowed to consume spatial data;
-- who is the global Manager;
+- who is the global cluster authority;
 - who belongs to a cluster;
-- whether a private participant exists.
+- whether a private peer exists.
 
-### R3: Participants Own Their Domains
+### R3: Peers Serve Declared Domains
 
-Each participant should own and maintain its own authority boundary for spatial
-data and resources.
+Each peer should serve an authority boundary for spatial data and resources
+through a declared domain.
 
-The SDK should not require a shared cluster Manager just for:
+The SDK should not require shared cluster authority just for:
 
 - Park to view robot streams;
 - peers to discover each other's offers;
@@ -280,8 +279,8 @@ The SDK should not require a shared cluster Manager just for:
 
 ### R4: Peer Connectivity State Is Tracked Per Remote Peer
 
-A local participant should track connectivity and readiness independently for
-each remote participant.
+A local peer should track connectivity and readiness independently for
+each remote peer.
 
 Candidate relationship states:
 
@@ -296,7 +295,7 @@ Candidate relationship states:
 - degraded;
 - lost.
 
-Failure of one remote participant should not invalidate unrelated peer
+Failure of one remote peer should not invalidate unrelated peer
 relationships.
 
 Example: if Park is connected to Robot A, Robot B, and Robot C, and Robot C
@@ -305,14 +304,14 @@ and Robot B ready if their connections still work.
 
 ### R5: Peers Exchange Spatial Data Directly
 
-Each participant may maintain its own local spatial state: observations,
+Each peer may maintain its own local spatial state: observations,
 resources, maps, frames, streams, logs, transforms, or other domain-specific
 spatial data.
 
-After participants discover or are configured with each other, they should be
+After peers discover or are configured with each other, they should be
 able to exchange relevant spatial data directly with each other.
 
-Discovery may help participants find an entrypoint, but Discovery should not be
+Discovery may help peers find an entrypoint, but Discovery should not be
 the data exchange path. Discovery should not proxy spatial data.
 
 ### R6: Offer / Get / Subscribe Is The Minimum Exchange Shape
@@ -343,8 +342,8 @@ is a menu of available exchange paths, not proof of authority.
 
 ### R7: Shared Cluster Authority Is Optional Until Proven Required
 
-The SDK may eventually support shared domains/clusters with Manager election,
-but the requirements must state why they are needed.
+The SDK may eventually support shared domains/clusters with cluster-wide
+authority election, but the requirements must state why they are needed.
 
 Shared cluster authority should not be the default answer to:
 
@@ -356,7 +355,7 @@ Shared cluster authority should not be the default answer to:
 - replaying another peer's pose/path data.
 
 Any proposal for shared authority must identify the shared state, owner,
-failure semantics, partition behavior, and migration path from participant-owned
+failure semantics, partition behavior, and migration path from declared
 domains.
 
 ## Failure Requirements
@@ -365,7 +364,7 @@ domains.
 
 Expected behavior:
 
-- Robots continue owning and serving their own domains.
+- Robots continue serving their own domains.
 - Other observers can still discover/connect to robots if robots are
   discoverable.
 - No robot loses its own domain solely because Park exited.
@@ -375,17 +374,17 @@ Expected behavior:
 Expected behavior:
 
 - That robot's live offers become unavailable.
-- Other participants remain available.
+- Other peers remain available.
 - Park should show the robot as lost/stale/offline with a clear reason if
   known.
 
-### F3: Discoverable Participant Loses Discovery
+### F3: Discoverable Peer Loses Discovery
 
 Expected behavior:
 
 - Existing peer connections may continue.
 - New peers may not discover it until Discovery registration returns.
-- The participant should report degraded discovery presence, not degraded local
+- The peer should report degraded discovery presence, not degraded local
   domain operation unless local operation is also affected.
 
 ### F4: Direct Dial Fails
@@ -414,11 +413,11 @@ Expected behavior:
   compatibility.
 - If compatibility cannot be maintained, protocol ids must bump.
 
-### F7: Shared Manager Dies, If Shared Manager Exists
+### F7: Shared Authority Fails, If Shared Authority Exists
 
-Out of scope for the v1 baseline. Any later shared Manager RFC must define:
+Out of scope for the v1 baseline. Any later shared-authority RFC must define:
 
-- who is eligible to become Manager;
+- who is eligible to become the shared authority;
 - how the winner is chosen;
 - what happens under partition;
 - what state Discovery updates;
@@ -432,7 +431,7 @@ Out of scope for the v1 baseline. Any later shared Manager RFC must define:
 The SDK must distinguish:
 
 - listen addresses: where the local swarm binds;
-- advertised addresses: what other participants should dial.
+- advertised addresses: what other peers should dial.
 
 Non-dialable bind addresses such as `/ip4/0.0.0.0/...` must not be treated as
 cross-machine advertised addresses unless explicitly intended for local-only
@@ -440,7 +439,7 @@ testing.
 
 ### N2: Discovery Should Store Dialable Entrypoints
 
-If a participant registers with Discovery, the registered addresses should be
+If a peer registers with Discovery, the registered addresses should be
 dialable by the intended peers or should be explicit relay-mediated addresses.
 
 ### N3: Relay Is Connectivity, Not Authority
@@ -452,8 +451,8 @@ is authorized. It only changes how peers connect.
 
 ### A1: Data Authority
 
-A participant is authoritative for the spatial data it produces unless a
-different authority model is explicitly required.
+A domain owner wallet controls the domain namespace. A peer can serve data for
+that domain when it controls the wallet or has a valid delegation.
 
 Offer metadata is not proof. Consumers may need signatures, allowlists,
 operator trust, or application policy before using a producer's data.
@@ -464,7 +463,7 @@ Open questions:
   lab deployments?
 - Is signing required in v1, or is it a later hardening layer?
 - How does a domain owner wallet delegate runtime management without creating a
-  cluster-wide Manager?
+  cluster-wide authority role?
 
 ### A2: Membership Authority
 
@@ -473,9 +472,9 @@ list.
 
 Open questions for future shared clusters:
 
-- Who admits participants?
-- Can a participant remove another participant?
-- What happens if the authority participant disappears?
+- Who admits peers?
+- Can a peer remove another peer?
+- What happens if the authority peer disappears?
 - Is membership required for this workflow, or is peer authorization enough?
 
 ## Observability Requirements
@@ -483,7 +482,7 @@ Open questions for future shared clusters:
 Logs/status should answer these without noisy frame-level output:
 
 - Am I discoverable?
-- What domain do I own or manage locally?
+- What domain do I serve or manage locally?
 - What am I advertising?
 - Which peers do I know about?
 - How did I learn about each peer?
@@ -547,8 +546,8 @@ new cluster authority model.
 
 ### S7: Shared Cluster Required Workflow
 
-Identify a real workflow that cannot be solved by participant-owned domains and
-peer relationships.
+Identify a real workflow that cannot be solved by declared domains and peer
+relationships.
 
 Questions:
 
@@ -569,7 +568,7 @@ Questions:
 
 ## Non-Goals For The V1 Foundation
 
-- Implementing a new Manager election algorithm.
+- Implementing a new shared-authority election algorithm.
 - Treating the current SDK cluster implementation as normative.
 - Requiring every peer to register with Discovery.
 - Requiring authoritative shared membership for peer-to-peer exchange.

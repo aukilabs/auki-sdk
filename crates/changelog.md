@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, 15:34 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — outbound heartbeat carriers restart after substream closure.** `NetworkRuntime` prunes completed outbound heartbeat tasks and reconciles them on the runtime tick, preventing stale task handles from blocking replacement `/auki/heartbeat/0.0.1` carriers and causing cluster split-brain while Discovery still has only Manager liveness.
+
 ### Nils's claude · May 20, 13:31 HKT, 2026
 
 **`auki-network-swift` left `crates/`** — relocated to [`bindings/swift/auki-network-swift`](../bindings/swift/auki-network-swift) under the per-language convention introduced for Python by #156. See [`../bindings/changelog.md`](../bindings/changelog.md) for the umbrella-level entry and [`../bindings/swift/auki-network-swift/changelog.md`](../bindings/swift/auki-network-swift/changelog.md) for the per-crate detail.

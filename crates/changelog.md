@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — native browser probe listener lands.** Added a WebRTC Direct `/auki/browser-probe/0.0.1` listener and example that use the SDK `PeerIdentity` and print browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs.
+
+### Nils's codex · May 19, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — browser probe protocol begins.** Added the shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate for the WebRTC Direct listener proof.
 
 ### Nils's codex · May 19, HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 19, HKT, 2026
 
+**Native browser probe listener lands.** Added `browser_probe::build_browser_probe_swarm` and `listen_and_serve`, plus a `browser_probe_listener` example that hosts `/auki/browser-probe/0.0.1` over WebRTC Direct from the SDK `PeerIdentity` and prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs.
+
+### Nils's codex · May 19, HKT, 2026
+
 **Browser probe protocol begins.** Added shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate that pulls in `libp2p-webrtc` for the upcoming browser-to-native WebRTC Direct listener.
 
 ### Dobby · May 17, HKT, 2026

@@ -1,0 +1,6 @@
+# XCFramework + generated Swift bindings — build output of
+# build-xcframework.sh. Not committed (the root .gitignore's `/target`
+# is root-anchored and doesn't cover this crate-local dir). The
+# distribution decision (committed SwiftPM package vs. downstream build
+# step) is tracked in parking_lot.md.
+target-xcframework/

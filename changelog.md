@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 20, 13:31 HKT, 2026
+
+**`auki-network-swift` relocated to [`bindings/swift/`](bindings/swift) under the per-language convention.** PR #156 moved the Python packages out of `crates/`; the Swift crate now follows. `git mv` preserved history. Workspace `members` updated, new `bindings/swift/{README,changelog,parking_lot}.md` mirror `bindings/python/`, `crates/README.md` and `crates/parking_lot.md` no longer list the swift crate, relative-path links inside the crate adjusted for the new depth. Package name / lib name / surface / runtime behavior unchanged; `cargo test -p auki-network-swift` 4/4 green. See [`bindings/changelog.md`](bindings/changelog.md) for the bindings-level entry.
+
+### Nils's claude · May 20, 11:43 HKT, 2026
+
+**`auki-network-swift` PR #152 — review-driven fixes.** Corrected the factually wrong claim that the iOS cross-compile used `aws-lc-rs`: it's actually **`ring 0.17`** via reqwest's `rustls-tls` default (the build worked because ring 0.17 has first-class iOS support now). Fixed a real bug in `build-xcframework.sh` (Swift glue was being packaged into the xcframework Headers dir; moved to a sibling `swift/` dir per the standard UniFFI iOS recipe). Documented `Eq` byte-equality semantics on FFI records and the deliberate `with_http` omission. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Domain clock source provenance renamed in the plan.** `DomainClockSource` now uses `backing_peer_id` instead of `manager_peer_id`, keeping the source descriptor tied to the peer that owns the backing clock rather than the Manager role. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
@@ -41,6 +49,10 @@ Latest entry on top.
 ### Nils's codex · May 20, HKT, 2026
 
 **Crate renamed `auki-time-transforms` → `auki-time`.** The package now names the SDK's broader timekeeping responsibility while retaining the current TimeTransform Log sampler. Live docs, plans, workspace metadata, and parking-lot summaries now point at [`crates/auki-time`](crates/auki-time). See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagated detail.
+
+### Nils's claude · May 19, 14:27 HKT, 2026
+
+**`auki-network-swift` iOS XCFramework validated.** `build-xcframework.sh` produces a well-formed device + simulator `AukiNetwork.xcframework` with correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so the historical CC/SDK sharp edge is obsolete. Build output gitignored; crypto-backend parking-lot item resolved. Unblocks the iosapp Discovery wiring. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026
 

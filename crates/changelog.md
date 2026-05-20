@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Python binding packages moved to [`bindings/python`](../bindings/python/changelog.md).** The `auki-*-py` package family left `crates/` with package names, Python module names, and runtime behavior preserved; `crates/` now reads as the Rust component workspace plus non-Python adapters.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.

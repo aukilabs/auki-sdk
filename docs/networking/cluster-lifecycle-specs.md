@@ -181,8 +181,8 @@ Define the validation path from runtime connection to spatial data exchange:
 
 #### Requirement
 
-A peer MAY participate in spatial-data exchange without declaring a local domain
-when it only consumes remote offers.
+A peer that only consumes remote offers MAY participate without declaring a
+local domain.
 
 A peer that serves offers, publishes spatial data, or asks a remote peer to
 accept it as serving a domain MUST declare that domain and MUST prove that it
@@ -192,7 +192,8 @@ A local domain is the authority boundary for spatial state served by the peer,
 including frames, clocks, sensors, streams, logs, maps, transforms, offers, and
 resources.
 
-A peer MAY own or maintain a local domain without advertising it.
+A peer MAY own or maintain a local domain without making that domain
+discoverable or exposing offers from it.
 
 When a peer chooses to advertise a domain, it MAY do so through Discovery,
 through peer-to-peer handshake or offer exchange, or through both. Discovery

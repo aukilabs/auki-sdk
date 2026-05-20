@@ -2,7 +2,7 @@
 
 Status: draft normative baseline.
 
-Last updated: 2026-05-19.
+Last updated: 2026-05-20.
 
 Related requirements draft:
 [`cluster-lifecycle-requirements.md`](cluster-lifecycle-requirements.md).
@@ -11,8 +11,7 @@ Related requirements draft:
 
 This document records cluster-lifecycle contracts that are stable enough to
 guide SDK design and review. It intentionally does not contain the full future
-architecture. Open product questions belong in the requirements document until
-they are resolved.
+architecture.
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", "MAY",
 and "OPTIONAL" are to be interpreted as described in RFC 2119.
@@ -21,10 +20,58 @@ and "OPTIONAL" are to be interpreted as described in RFC 2119.
 
 The SDK currently has code for shared cluster membership, Manager election, and
 Manager handoff. That implementation is not treated as the source of truth for
-this document. This document defines only the contracts we are prepared to rely
-on while requirements gathering continues.
+this document.
 
-## RFC-0001: Discovery Is Optional Rendezvous
+The v1 product baseline is smaller:
+
+- every participant owns and maintains its own domain;
+- participants can form peer-to-peer connectivity/session graphs;
+- participants exchange spatial knowledge directly after authorization;
+- Discovery helps peers find entrypoints but does not become authority.
+
+Shared domain clusters, Manager election, and Manager handoff MAY return as a
+future overlay, but they are not baseline requirements in this RFC.
+
+## RFC-0001: Every Participant Owns A Domain
+
+### Requirement
+
+Each participant MUST own and maintain its own domain.
+
+A participant-owned domain is the authority boundary for the participant's own
+spatial state, including frames, clocks, sensors, streams, logs, maps,
+transforms, offers, and resources.
+
+Connecting to another participant MUST NOT require either participant to
+abandon its own domain.
+
+Joining or forming a peer graph MUST NOT by itself create shared ownership over
+the connected participants' domains.
+
+### Cluster Meaning
+
+A cluster is a peer connectivity/session graph. It MAY be used to
+describe peers that know about each other, are connected, are authorized, or
+are exchanging data.
+
+A cluster MUST NOT be treated as authoritative for:
+
+- who controls a domain;
+- who owns or authored spatial data;
+- authorization to publish data;
+- authorization to consume data.
+
+### Consequences
+
+A participant can consume another participant's spatial data through a direct
+peer relationship. The participants do not need to merge their domains or share
+a common runtime authority.
+
+Failure of one participant SHOULD affect that participant's domain and peer
+relationships only; it SHOULD NOT invalidate unrelated participant-owned
+domains.
+
+## RFC-0002: Discovery Is Optional Entrypoint Rendezvous
 
 ### Requirement
 
@@ -45,30 +92,36 @@ RFC explicitly expands its authority.
 
 Discovery MUST NOT be treated as authoritative for:
 
-- domain ownership;
-- spatial-data ownership;
-- global cluster membership;
-- private participant existence;
+- who controls a domain;
+- who owns or authored spatial data;
+- cluster membership;
+- the complete set of participants, including private or non-advertised peers;
 - authorization to consume or publish data.
 
 ### Discovery Records
 
 A Discovery record SHOULD answer:
 
-- what domain or runtime presence is being advertised;
-- how that presence can be dialed;
-- enough metadata for a peer to decide whether to attempt connection.
+- what domain is being advertised;
+- how a peer can dial it;
+- coarse, non-authoritative metadata about data kinds that may be available;
+- how fresh the advertisement is.
 
-A Discovery record MAY advertise an entrypoint into a cluster peer graph rather
-than listing every participant in that graph.
+A Discovery record MAY advertise one or more entrypoints into a peer graph.
 
-After connecting to a Discovery-advertised entrypoint, a participant MAY learn
-about additional peers in that cluster graph through SDK peer-to-peer
-mechanisms. Those additional peers MAY each own their own domains and are not
-REQUIRED to have individual Discovery records.
+A Discovery record MUST NOT be assumed to list every peer in that graph.
 
-A Discovery record MAY be stale. Stale Discovery data MUST NOT invalidate
-existing peer-to-peer connections by itself.
+A Discovery record MAY be stale until its freshness window expires or the
+advertising participant refreshes, updates, or removes it.
+
+Discovery SHOULD attach freshness metadata to each record, such as `expires_at`,
+`ttl`, `last_seen_at`, or an equivalent value.
+
+Discovery SHOULD expire records that are not refreshed within their freshness
+window.
+
+Stale or expired Discovery data MUST NOT invalidate existing peer-to-peer
+connections by itself.
 
 ### Consequences
 
@@ -78,7 +131,7 @@ unavailable, assuming the underlying peer-to-peer transport remains healthy.
 SDK status/diagnostics SHOULD distinguish "Discovery presence degraded" from
 "peer relationship degraded".
 
-## RFC-0002: Private And Discoverable Participants
+## RFC-0003: Private And Discoverable Participants
 
 ### Requirement
 
@@ -101,7 +154,7 @@ exist.
 Peer authorization MUST NOT depend solely on whether the peer appeared in
 Discovery.
 
-## RFC-0003: Listen Addresses And Advertised Addresses Are Different
+## RFC-0004: Listen Addresses And Advertised Addresses Are Different
 
 ### Requirement
 
@@ -137,7 +190,7 @@ Apps SHOULD expose listen and advertised address configuration separately.
 SDK diagnostics SHOULD report the final advertised address set and identify
 whether each address was auto-detected, operator-supplied, or relay-mediated.
 
-## RFC-0004: Relay Is Connectivity, Not Authority
+## RFC-0005: Relay Is Connectivity, Not Authority
 
 ### Requirement
 
@@ -146,11 +199,10 @@ dialing fails or is unavailable.
 
 Relay support MUST NOT change:
 
-- domain ownership;
-- runtime management authority;
+- who controls a domain;
 - peer authorization;
-- spatial data ownership;
-- stream/resource semantics.
+- who owns or authored spatial data;
+- offer, get, subscribe, stream, or resource semantics.
 
 ### Consequences
 
@@ -160,7 +212,7 @@ remote peer identity, not as a different authority model.
 Discovery MAY advertise relay-mediated multiaddrs when direct addresses are not
 sufficient.
 
-## RFC-0005: Peer Connectivity State Is Tracked Per Remote Peer
+## RFC-0006: Peer Connectivity State Is Tracked Per Remote Peer
 
 ### Requirement
 
@@ -168,7 +220,7 @@ A participant SHOULD track connectivity and readiness state independently for
 each remote participant.
 
 Failure of one peer relationship MUST NOT force unrelated peer relationships to
-restart or become invalid unless a higher-level requirement explicitly says so.
+restart or become invalid.
 
 ### Candidate State Model
 
@@ -181,41 +233,102 @@ equivalent diagnostic information:
 - dialing;
 - connected;
 - authorized;
-- syncing resources;
+- loading offers;
 - ready;
 - degraded;
 - lost.
 
 ### Consequences
 
-Park losing one robot SHOULD NOT imply that Park lost all robots.
+A participant losing connectivity to one peer SHOULD NOT drop unrelated peer
+connections.
 
-A robot exiting SHOULD make that robot unavailable; it SHOULD NOT by itself
-invalidate other robots' domains or peer relationships.
+A participant exiting SHOULD make that peer unavailable to other peers. It
+SHOULD NOT by itself invalidate unrelated peer relationships or
+participant-owned domains.
 
-## RFC-0006: Peers Exchange Spatial Knowledge Directly
+## RFC-0007: Peers Exchange Spatial Knowledge With Offer / Get / Subscribe
 
 ### Requirement
+
+Each participant SHOULD maintain its own local spatial state.
 
 After discovery/configuration and authorization, participants SHOULD exchange
 spatial knowledge peer-to-peer.
 
-Each participant MAY maintain and expose its own local spatial state.
+A participant MAY choose not to expose spatial data, or MAY expose only a
+subset of its spatial data according to local policy.
 
-The SDK SHOULD provide peer-to-peer mechanisms for participants to:
+The minimum v1 exchange shape is:
 
-- identify each other;
-- understand what spatial data a remote peer can share;
-- request or subscribe to that data;
-- receive the data directly;
-- understand why an exchange failed.
+- `Offer`: a peer advertises named and typed spatial data it can share now.
+- `Get`: a peer fetches an offered data item once.
+- `Subscribe`: a peer receives ongoing updates from an offer.
+
+Discovery MAY help a participant find how to dial into a peer graph or cluster,
+and MAY include coarse, non-authoritative summary metadata about the kinds of
+data that may be available there.
+
+Participants MUST fetch offers from peers after connecting.
+
+Discovery MUST NOT be required as the transport for spatial data exchange,
+and MUST NOT be treated as the authoritative offer registry.
+
+### Offers
+
+An offer is a connected peer's declaration of one named and typed data
+item it is willing to serve.
+
+Offer ids are scoped to the producing participant's domain. They identify data
+the producer exposes from that domain, not global network objects.
+
+An offer SHOULD provide enough information for a consumer to decide whether it
+can use the data and whether to fetch it once or subscribe to it:
+
+- name and/or id;
+- data kind;
+- payload or schema type and version;
+- supported access mode: get, subscribe, or both;
+- spatial and temporal references needed to interpret the data, when relevant;
+- freshness or availability status.
+
+An offer MUST NOT by itself be treated as proof of authority, correctness, or
+trustworthiness. It is a reference to data exposed from a domain.
+
+### Get
+
+`Get` fetches an offered data item once.
+
+Get is for finite responses such as snapshots, descriptors, registry entries,
+transform edges, log ranges, or map fragments.
+
+A failed `Get` SHOULD explain whether the offer was unknown, unauthorized,
+stale, unavailable, unsupported, or failed at the transport/protocol layer.
+
+### Subscribe
+
+`Subscribe` SHOULD receive live updates from an offered data item. Examples
+include a camera stream, point-cloud stream, pose stream, audio stream, or
+future live map updates.
+
+A subscription failure SHOULD explain whether the offer was unknown,
+unauthorized, stale, unavailable, unsupported, or failed at the
+transport/protocol layer.
+
+### Current Implementation Mapping
+
+Current `/auki/resources/0.0.1` resource rows and `/auki/stream/0.1.0` typed
+streams are implementation examples.
+
+This RFC does not require those protocol names or exact wire shapes to be the
+final Offer / Get / Subscribe contract.
 
 ### Consequences
 
-Discovery MAY help locate an entrypoint, but Discovery MUST NOT be required as
-the transport for spatial data exchange.
+The SDK SHOULD support a peer learning what another peer can share by name or
+type before opening a stream or fetching data.
 
-## RFC-0007: Protocol Versions Are Compatibility Contracts
+## RFC-0008: Protocol Versions Are Compatibility Contracts
 
 ### Requirement
 
@@ -253,7 +366,7 @@ incompatible unless the reader can still handle frames without it.
 An incompatible version should instead use a new protocol ID such as
 `/auki/example/0.0.2`.
 
-## RFC-0008: Observability Must Explain State Transitions
+## RFC-0009: Observability Must Explain State Transitions
 
 ### Requirement
 
@@ -264,13 +377,15 @@ Diagnostics SHOULD answer:
 
 - whether this participant is discoverable;
 - what it is advertising;
+- which local domain it owns or manages;
 - which peers are known;
 - how each peer was learned;
 - whether each peer is dialable;
 - whether each peer is connected;
 - whether each peer is authorized;
-- what spatial data each peer claims it can share;
-- why a peer became degraded or lost.
+- what offers each peer claims it can share;
+- why a peer became degraded or lost;
+- whether Discovery is degraded independently from peer connectivity.
 
 ### Consequences
 
@@ -280,20 +395,256 @@ rate-limited or omitted by default.
 State transitions and failures SHOULD be logged once with enough context to
 debug the lifecycle.
 
+## RFC-0010: Peer Identity And Wallet Binding
+
+### Requirement
+
+A peer id is a runtime network identity. It identifies the peer participating
+in a peer-to-peer connection.
+
+A peer id MUST be bound to a wallet identity by a wallet-signed peer binding.
+
+### Wallets And Participants
+
+A wallet is a cryptographic identity. It is used for ownership, signing,
+delegation, and policy.
+
+A participant is an actor using the SDK. A participant MUST have a wallet
+identity.
+
+A participant MAY operate one or more peer identities, and MAY own or serve
+one or more domains.
+
+### Peer Binding
+
+A peer binding is a wallet-signed statement that binds a wallet public key to a
+libp2p peer id.
+
+A peer binding proves that the wallet recognizes the peer id as one of its
+runtime network identities.
+
+A peer binding MUST include:
+
+- wallet public key;
+- peer id;
+- signature by the wallet key.
+
+A peer binding SHOULD include an issued-at timestamp.
+
+A peer binding MAY include an expiry or purpose label.
+
+### Verification
+
+When a peer presents a peer binding, the receiver MUST verify that:
+
+- the connected libp2p peer id matches the bound peer id;
+- the signature verifies against the wallet public key.
+
+### Consequences
+
+A peer binding does not prove domain ownership, runtime authority for a domain,
+data correctness, or dialability at any advertised address. It prove the wallet recognizes this libp2p peer id as one of its runtime peers.
+
+Runtime authority for a domain still requires control of the domain owner
+wallet or a valid owner-signed delegation.
+
+## RFC-0011: Domain Identity And Ownership
+
+### Requirement
+
+A domain MUST have a stable identity that can be verified without Discovery,
+blockchain access, or any online registry.
+
+### Domain Owner Wallet
+
+A domain owner wallet is the wallet that controls one domain namespace.
+
+A domain id is derived from the domain owner wallet's public key:
+
+domain_id = hash(domain_owner_wallet_public_key)
+
+### Domain Ownership
+
+Domain ownership means authority over a domain namespace.
+
+The domain owner MAY authorize runtime peers to advertise, serve, or update
+data under that domain.
+
+Domain ownership MUST NOT by itself be treated as proof that associated spatial
+data is correct, canonical, complete, or trusted.
+
+### Runtime Authority
+
+A peer MAY serve a domain directly when the peer controls the domain owner
+wallet.
+
+A peer MAY serve a domain on behalf of the domain owner when it presents a
+valid owner-signed delegation.
+
+A valid delegation proves only the delegated authority it states.
+
+### External Bindings
+
+External registries, blockchain records, NFTs, or tokenomics systems MAY bind
+to a domain id.
+
+Such bindings MUST NOT be required to create, identify, or use a domain in
+peer-to-peer mode.
+
+### Consequences
+
+The same domain identity model supports local, LAN-only, offline, externally
+registered, and tokenomics-backed domains.
+
+Discovery may help locate peers that claim to serve a domain, but Discovery
+does not create domain ownership or prove runtime authority.
+
+## Future RFCs To Fill
+
+The following topics are required before a strong first implementation of this
+model. They are intentionally logged here as follow-up RFC work, not as
+decisions in this document.
+
+### Domain Delegation Schema
+
+Define the concrete delegation format used when a peer serves a domain on
+behalf of a domain owner:
+
+- required fields;
+- permitted actions or scopes;
+- validity windows;
+- revocation or replacement behavior;
+- how the delegation is presented during peer handshake.
+
+### Discovery Record Shape
+
+Define the concrete Discovery advertisement:
+
+- domain identity and optional display label;
+- peer id and dialable advertised addresses;
+- freshness fields such as `ttl`, `expires_at`, or `last_seen_at`;
+- coarse, non-authoritative data-kind hints;
+- refresh, update, remove, and expiry behavior.
+
+Discovery records MUST remain entrypoint advertisements, not authoritative
+offer catalogs.
+
+### Peer Handshake
+
+Define the first exchange after dialing:
+
+- peer identity;
+- local domain identity;
+- supported protocol versions;
+- authorization material;
+- offer-catalog fetch path;
+- liveness/status initialization.
+
+### Authorization Model
+
+Define the pragmatic v1 authorization model:
+
+- open/trusted-lab mode;
+- allowlist by peer id or wallet;
+- invite token or signed challenge, if needed;
+- per-offer policy hooks;
+- which parts are required in v1 and which are pluggable hardening.
+
+### Offer Catalog
+
+Define the concrete offer-catalog protocol:
+
+- request and response shape;
+- offer id/name scope;
+- data-kind vocabulary;
+- payload/schema versioning;
+- get/subscribe support flags;
+- frame and clock references;
+- freshness and availability;
+- offer removal and update behavior;
+- error shape.
+
+This is the likely replacement or evolution path for `/auki/resources/0.0.1`.
+
+### Get
+
+Define one-shot fetch semantics:
+
+- request by offer id;
+- optional parameters for ranges or small filters;
+- maximum response size and chunking rules;
+- snapshot consistency;
+- stale-offer behavior;
+- error shape.
+
+The first implementation should keep this narrow: descriptors, registry
+entries, transform edges, small snapshots, and possibly log ranges.
+
+### Subscribe
+
+Define live update semantics:
+
+- subscribe by offer id;
+- start response or manifest shape;
+- frame/message envelope;
+- end and error reasons;
+- backpressure or drop policy;
+- reconnect behavior;
+- payload compatibility rules.
+
+This is the likely replacement or evolution path for `/auki/stream/0.1.0`.
+
+### Minimum Offer Kinds
+
+Choose the first offer kinds for implementation. Candidate v1 set:
+
+- `sensor_stream`;
+- `transform_edge`;
+- `pose_stream` or `pose_log_range`;
+- `registry_entry`.
+
+Maps, generic spatial query, payment, booking, and canonical map authority
+should stay out of the first iteration unless a concrete milestone requires
+them.
+
+### Peer Graph Hints
+
+Define how a participant shares additional peer candidates after connection:
+
+- whether learned peers are dialed automatically or surfaced as candidates;
+- what metadata can be shared;
+- whether a peer may hide known peers;
+- how the exchange avoids becoming authoritative membership.
+
+The v1 default should treat learned peers as non-authoritative candidate
+dial targets or offer sources.
+
+### Status And Observability API
+
+Define the concrete status surface:
+
+- local domain identity;
+- Discovery advertisement state;
+- known peers and how they were learned;
+- per-peer lifecycle state;
+- loaded offers;
+- active gets/subscriptions;
+- last failure reason per peer and per offer.
+
 ## Explicitly Not Specified Yet
 
 The following are intentionally not normative in this document:
 
-- whether the baseline architecture is participant-owned domains or shared
-  domain clusters;
-- whether a domain owner and runtime Manager are always the same actor;
-- whether shared Manager handoff is required for v1;
-- whether Discovery ever stores authoritative membership snapshots;
-- whether `/auki/sensors/0.0.1` remains first-class or is replaced by
-  `/auki/resources/0.0.1`;
+- exact Offer / Get / Subscribe wire shape and protocol ids;
+- which offer kinds are required for the next implementation milestone;
+- authorization and signature requirements for producer-declared offers;
 - relay requirements for the current production milestone;
-- authority/signature requirements for producer-declared spatial resources.
+- whether `/auki/sensors/0.0.1` remains first-class or is replaced by an offer
+  catalog;
+- generic spatial query/filter language;
+- shared domain clusters, shared Manager election, and Manager handoff;
+- canonical shared map authority.
 
 Those topics remain in
 [`cluster-lifecycle-requirements.md`](cluster-lifecycle-requirements.md) until
-explicitly decided.
+explicitly decided by later RFCs.

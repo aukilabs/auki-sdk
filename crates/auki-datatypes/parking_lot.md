@@ -105,6 +105,6 @@ Revisit if (a) manifests start getting signed *and* canonical-protobuf tooling b
 
 **Decided 2026-05-07.** A new `auki-manifests` crate holds the SDK's manifest contract — the `build_*_log_manifest` builders, the manifest read-side parsers + validators, and the manifest-shape schemas (the JCS-JSON shapes currently documented in [`auki-registry/README.md`](../../auki-registry/README.md)). Symmetric with this crate: `auki-datatypes` owns segment payload shapes; `auki-manifests` owns manifest shapes. [`auki-logs`](../../auki-logs) stays pure generic framing; [`auki-registry`](../../auki-registry) stays identity-only; [`auki-session`](../../auki-session) stays path helpers + `Session::open` lifecycle.
 
-Sequenced as a **prep PR before migration step 1** — extract `build_sensor_log_manifest` and `build_pose_log_manifest` from `auki-registry`, `build_manifest` from `auki-time-transforms`, into the new crate. Pure refactor, no behaviour change. Keeps step 1 focused on the segment-encoder swap. See [`src/sprint.md`](src/sprint.md) Step 0.
+Sequenced as a **prep PR before migration step 1** — extract `build_sensor_log_manifest` and `build_pose_log_manifest` from `auki-registry`, `build_manifest` from `auki-time`, into the new crate. Pure refactor, no behaviour change. Keeps step 1 focused on the segment-encoder swap. See [`src/sprint.md`](src/sprint.md) Step 0.
 
 Naming: `auki-manifests` over `auki-logging` (idiom collision in Rust — "logging" reads as observability/tracing) and over `auki-log-manifests` (slightly long). Says exactly what the crate does.

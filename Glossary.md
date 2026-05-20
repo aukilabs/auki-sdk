@@ -72,7 +72,7 @@ The canonical scenegraph designated by a Domain Owner. The default served when a
 
 One of the SDK's two core operations. Translates a timestamp on one [clock](#clock-registry) into the equivalent timestamp on another, by interpolating the offset samples in a [TimeTransform Log](#timetransform-log) at the source timestamp. Lets a downstream consumer correlate data captured under different clocks (e.g. ROS 2 wall-clock, robot session-monotonic, peer-supplied UTC) without picking a "canonical" clock — every timestamp ships with a named clock identity, and `convert_time` is what bridges them.
 
-The producer side ships in [`auki-time-transforms`](crates/auki-time-transforms) (the sampler that writes the log); the consumer-side composition is pending.
+The producer side ships in [`auki-time`](crates/auki-time) (the sampler that writes the log); the consumer-side composition is pending.
 
 ## convert_pose
 
@@ -158,7 +158,7 @@ One of the [four logs](README.md). Stores per-frame detection outputs from extra
 
 ## TimeTransform Log
 
-One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `(from_clock_id, to_clock_id)` pair — flat `TimeTransformEntry { offset_ns, uncertainty_ns }` entries (`auki_datatypes::time_transform`, prost-encoded since Step 6, 2026-05-08). Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. The manifest carries the inline `TimeTransformSource` provenance tag (`LocalClockRead` ships today; mirrors `PoseSource`'s extension pattern). Discontinuity detection (was a per-entry bool pre-migration) is reader-side now — readers compute it against their own threshold. Producer side ships in [`auki-time-transforms`](crates/auki-time-transforms); the consumer-side `convert_time` operation is pending.
+One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `(from_clock_id, to_clock_id)` pair — flat `TimeTransformEntry { offset_ns, uncertainty_ns }` entries (`auki_datatypes::time_transform`, prost-encoded since Step 6, 2026-05-08). Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. The manifest carries the inline `TimeTransformSource` provenance tag (`LocalClockRead` ships today; mirrors `PoseSource`'s extension pattern). Discontinuity detection (was a per-entry bool pre-migration) is reader-side now — readers compute it against their own threshold. Producer side ships in [`auki-time`](crates/auki-time); the consumer-side `convert_time` operation is pending.
 
 ## Pose Source
 

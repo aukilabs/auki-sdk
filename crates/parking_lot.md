@@ -6,7 +6,7 @@ Cross-crate questions, plus a topic summary of per-crate parking lots.
 
 ## Schema versioning coordination
 
-Each crate that owns a wire format pins its own version: `auki-logs` segment format v1, `auki-registry` entry schema v1, `auki-time-transforms` payload v1. They're independent today. When any one bumps to v2, what's the coordination story for consumers? Does the manifest need a per-log version field separate from the entry schema, or is the segment-format version the single source of truth?
+Each crate that owns a wire format pins its own version: `auki-logs` segment format v1, `auki-registry` entry schema v1, `auki-time` payload v1. They're independent today. When any one bumps to v2, what's the coordination story for consumers? Does the manifest need a per-log version field separate from the entry schema, or is the segment-format version the single source of truth?
 
 ## src/sprint.md per-crate scaffolding missing
 
@@ -16,7 +16,7 @@ The convention specifies `src/sprint.md` per crate (current work + next steps). 
 
 ## Rust vs Python surface namespacing — pick one and converge _(filed by Dobby, 2026-05-08)_
 
-The [`auki-network-py`](auki-network-py) Python surface is namespaced into submodules: `auki_network.cluster.*` (`ClusterRuntime`, `ParticipantInfo`, `PinholeCameraLogEntry`, `PointCloudFrame`, `StreamDispatch`, …) and `auki_network.discovery.*` (`DiscoveryClient`). The corresponding Rust [`auki-network`](auki-network) surface is **flat** — every submodule (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `stream_protocol`, `stream_runtime`, `participant`, `swarm`, `app_instance`, `discovery_client`) is `pub mod`-published at the crate root, but the *types* themselves (`ParticipantInfo`, `Capability`, `PeerIdentity`, …) are re-exported flat at the crate root via `pub use`.
+The [`auki-network-py`](../bindings/python/auki-network-py) Python surface is namespaced into submodules: `auki_network.cluster.*` (`ClusterRuntime`, `ParticipantInfo`, `PinholeCameraLogEntry`, `PointCloudFrame`, `StreamDispatch`, …) and `auki_network.discovery.*` (`DiscoveryClient`). The corresponding Rust [`auki-network`](auki-network) surface is **flat** — every submodule (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `stream_protocol`, `stream_runtime`, `participant`, `swarm`, `app_instance`, `discovery_client`) is `pub mod`-published at the crate root, but the *types* themselves (`ParticipantInfo`, `Capability`, `PeerIdentity`, …) are re-exported flat at the crate root via `pub use`.
 
 A consumer reading the two side-by-side gets two different mental models of the same surface. `cluster_doc::ClusterDoc` in Rust vs `auki_network.cluster.ClusterDoc` in Python — same type, different access path. Doc effort is duplicated; consumer learning doesn't transfer. The May 2026 [Python bindings strategy decision](../parking_lot.md#python-bindings-strategy) (per-component naming, `auki-network-py` over umbrella `auki-py`) commits the workspace to multiple `*-py` crates over time — `auki-logs-py`, `auki-session-py`, `auki-registry-py`, etc. The longer this divergence sits, the more bindings will replicate the mismatch.
 
@@ -55,4 +55,4 @@ Python binding package summaries moved to [`../bindings/python/parking_lot.md`](
 - [`auki-layout/`](auki-layout/parking_lot.md) — TimeTransform log path encoding ambiguity; **crate renamed `auki-session` → `auki-layout` 2026-05-08** (resolved); **`detection_log_path` landed 2026-05-09** (closes [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2 jointly with `auki-manifests`)
 - [`auki-geometry/`](auki-geometry/parking_lot.md) — no open questions yet
 - [`auki-manifests/`](auki-manifests/parking_lot.md) — read-side parsers + validators (deferred until a second reader needs them); `PoseSource` graduation to a sibling registry (deferred until a real SLAM/odometry producer lands); manifest-schema versioning convention; **Pose Log + TimeTransform Log self-provenance gap** (filed 2026-05-08); **`DetectorRegistry` shape** (filed 2026-05-09 — what bytes go through the `detector_hash` hasher; lean: structured `DetectorRegistryEntry` symmetric with Sensor / Frame / Clock); **uniform `intent` field across every manifest builder** (filed 2026-05-09 — match-the-existing-builders shipped first for parity, uniform rollout deferred). Pose Log manifest reshape **resolved 2026-05-08** at Step 5; `build_detection_log_manifest` **landed 2026-05-09**.
-- [`auki-time-transforms/`](auki-time-transforms/parking_lot.md) — future `TimeTransformSource` variants
+- [`auki-time/`](auki-time/parking_lot.md) — future `TimeTransformSource` variants

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**`ClusterManager` session time now uses `auki_time::SessionClock`.** Create/join construction mints a peer-id rooted session clock from the local libp2p peer id and `DaemonInfo.session_id`. `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash` now come from that SDK clock in both the local accessor and `/auki/info/0.0.1` handler; caller-provided `DaemonInfo.session_clock_id/hash` remain accepted only as compatibility inputs. Added `auki-time` as a dependency and documented the timekeeping ownership/deferred heartbeat-sync boundary. Tests: `cargo test -p auki-domain cluster_manager::tests`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.

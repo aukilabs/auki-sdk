@@ -4,9 +4,9 @@ Current work and the migration sequence to bring real schemas into this crate. S
 
 ## Now
 
-**2026-05-08 migration complete (Step 7); Step 8 added the same day.** Every on-disk log payload type lives here. Steps 1–7 ran the migration that moved pre-existing types from [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms) into this crate; Step 8 added a new type (`DetectionLogEntry`) that closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md) and unblocks [`detectors`](https://github.com/aukilabs/detectors) phase 2's blocker #3. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time-transforms, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
+**2026-05-08 migration complete (Step 7); Step 8 added the same day.** Every on-disk log payload type lives here. Steps 1–7 ran the migration that moved pre-existing types from [`auki-registry`](../../auki-registry) and [`auki-time`](../../auki-time) into this crate; Step 8 added a new type (`DetectionLogEntry`) that closes the producer side of the [subscription-as-materialization keystone](../../../parking_lot.md) and unblocks [`detectors`](https://github.com/aukilabs/detectors) phase 2's blocker #3. The crate is the single source of truth for cross-language segment payload shapes; consumer crates (auki-registry, auki-time, auki-network, auki-ros-adapter, auki-network-py) all reference the prost-generated types from here.
 
-Pre-migration history (kept for context): six log payload types lived as drift in [`auki-registry`](../../auki-registry) and [`auki-time-transforms`](../../auki-time-transforms); each migration step **moved** a type from there to here, not just generating a new one. The sequence below is preserved as a record of what was moved when.
+Pre-migration history (kept for context): six log payload types lived as drift in [`auki-registry`](../../auki-registry) and [`auki-time`](../../auki-time); each migration step **moved** a type from there to here, not just generating a new one. The sequence below is preserved as a record of what was moved when.
 
 ## Migration sequence
 
@@ -14,12 +14,12 @@ Each step is its own PR with its own locked conformance vector. Each step also r
 
 0. **✓ Prep: extract `auki-manifests` crate** (landed 2026-05-08). Pure refactor; no behaviour change, no encoding change.
    - **Moved** `build_sensor_log_manifest` and `build_pose_log_manifest` from [`auki-registry`](../../auki-registry) → [`auki-manifests`](../../auki-manifests).
-   - **Moved** `build_manifest` from [`auki-time-transforms`](../../auki-time-transforms) → [`auki-manifests`](../../auki-manifests) (renamed `build_time_transform_log_manifest` for unambiguity vs siblings).
+   - **Moved** `build_manifest` from [`auki-time`](../../auki-time) → [`auki-manifests`](../../auki-manifests) (renamed `build_time_transform_log_manifest` for unambiguity vs siblings).
    - **Moved** `PoseSource` (inline pose-log producer identity) from [`auki-registry`](../../auki-registry) → [`auki-manifests`](../../auki-manifests) — it's manifest metadata, not a registry entry.
    - **Moved** locked vectors `ros2_tf_source_serializes_to_canonical_bytes` + `ros2_tf_source_hash_is_locked` (M1 example → JCS bytes + `f3d296341347589c72297a0cc7c81cd8`).
    - Manifest encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](../../auki-jcs).
-   - Per-folder docs seeded; workspace `Cargo.toml` updated; `auki-time-transforms` gains an `auki-manifests` dev-dep so the `Sampler` integration test still constructs a manifest.
-   - `cargo test -p auki-manifests` 6/6 passing; downstream tests pass workspace-wide (`auki-registry` 41 → 35 since 6 tests moved, `auki-time-transforms` 10 → 9 since 1 test moved).
+   - Per-folder docs seeded; workspace `Cargo.toml` updated; `auki-time` gains an `auki-manifests` dev-dep so the `Sampler` integration test still constructs a manifest.
+   - `cargo test -p auki-manifests` 6/6 passing; downstream tests pass workspace-wide (`auki-registry` 41 → 35 since 6 tests moved, `auki-time` 10 → 9 since 1 test moved).
 
 1. **✓ `auki.camera` — `PinholeCameraLogEntry`** (renamed from `SensorLogEntry`; landed 2026-05-08).
    - `proto/camera.proto` defines `PinholeCameraLogEntry { DynamicIntrinsics dynamic_intrinsics = 1; bytes frame = 2; }` + `DynamicIntrinsics { double fx, fy, cx, cy = 1..4; repeated double distortion_coefficients = 5; }`. Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 message-typed fields are `Option<T>` in prost) — non-autofocusing cameras pay only the message-tag overhead; autofocusing cameras populate per-frame. Promoting to a sibling intrinsics-update sub-stream remains possible without breaking on-disk readers.
@@ -60,11 +60,11 @@ Each step is its own PR with its own locked conformance vector. Each step also r
 
 6. **✓ `auki.time_transform` — `TimeTransformEntry`** (on-disk; landed 2026-05-08).
    - `proto/time_transform.proto` defines `TimeTransformEntry { int64 offset_ns = 1; uint32 uncertainty_ns = 2; }`. Per-step decisions resolved all three slop points: (a) `source` moved to manifest as a tagged-enum `TimeTransformSource` (mirrors `PoseSource`); (b) `discontinuous: bool` dropped — readers compute `|offset_ns - prev_offset_ns| ≥ reader_threshold` against their own tolerance; (c) `TimeTransformSource` kept as tagged enum at the manifest layer (Option 2 — matches `PoseSource`'s extension pattern with one variant today, `LocalClockRead`).
-   - **Moved** `TimeTransformEntry` out of [`auki-time-transforms`](../../auki-time-transforms) into this crate. **Moved** `TimeTransformSource` out of [`auki-time-transforms`](../../auki-time-transforms) into [`auki-manifests`](../../auki-manifests) (it's manifest metadata, not a per-entry field — same role as `PoseSource`).
+   - **Moved** `TimeTransformEntry` out of [`auki-time`](../../auki-time) into this crate. **Moved** `TimeTransformSource` out of [`auki-time`](../../auki-time) into [`auki-manifests`](../../auki-manifests) (it's manifest metadata, not a per-entry field — same role as `PoseSource`).
    - **Rewrote `build_time_transform_log_manifest`** in [`auki-manifests`](../../auki-manifests) to take `&TimeTransformSource`; the manifest gains a `"source"` field mirroring Pose Log's shape.
-   - **Simplified `tick()` and `Sampler::start`** in [`auki-time-transforms`](../../auki-time-transforms): no more `SamplerState`, no more `discontinuity_threshold` arg. The sampler is now a pure `clock → entry` pipeline; discontinuity detection is the reader's responsibility.
+   - **Simplified `tick()` and `Sampler::start`** in [`auki-time`](../../auki-time): no more `SamplerState`, no more `discontinuity_threshold` arg. The sampler is now a pure `clock → entry` pipeline; discontinuity detection is the reader's responsibility.
    - [`auki-logs`](../../auki-logs) needed no changes — encoder-agnostic since Step 1.
-   - **Dropped** `ciborium` + `serde` + `serde_json` deps from [`auki-time-transforms`](../../auki-time-transforms) — encoding is now prost in the new home, and the sampler is a thin wrapper that doesn't need them. Picked up `auki-datatypes` (for the prost type re-export) and `auki-manifests` (for `TimeTransformSource`).
+   - **Dropped** `ciborium` + `serde` + `serde_json` deps from [`auki-time`](../../auki-time) — encoding is now prost in the new home, and the sampler is a thin wrapper that doesn't need them. Picked up `auki-datatypes` (for the prost type re-export) and `auki-manifests` (for `TimeTransformSource`).
    - Locked conformance vectors pin both wire bytes (`08c0843d10fa01` for `offset_ns: 1_000_000, uncertainty_ns: 250`) and XXH3-128 hash (`b7e73628833419a7c299933d07cbe88c`); plus a JCS-canonical-bytes + hash vector for `TimeTransformSource::LocalClockRead` (`8dcea0b9b0b2219d651e0856f112cd65`).
 
 7. **✓ Remove placeholder** (landed 2026-05-08). Deleted `proto/placeholder.proto`, the `placeholder` module in `lib.rs`, the `placeholder_pipeline_check_round_trips` smoke test, and the corresponding line in `build.rs`. The seven real `.proto` packages serve as proof that the prost-build pipeline works; the placeholder no longer earned its keep. Test count: 32 → 31.

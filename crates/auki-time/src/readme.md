@@ -1,14 +1,15 @@
-# `auki-time-transforms/src/`
+# `auki-time/src/`
 
-1 Hz `local_clock_read` sampler producing `TimeTransformEntry` records. Schema spec: this crate's [outer `README.md`](../README.md).
+SDK time primitives and the 1 Hz `local_clock_read` sampler producing `TimeTransformEntry` records. Schema spec: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the data-type definitions out; this crate is now just the producer.
+A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the data-type definitions out; this crate now owns clock-reading primitives while re-exporting the canonical TimeTransform payload types.
 
-The crate has two composable layers:
-1. The **unit-testable primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
-2. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
+The crate has three composable layers:
+1. The **session clock** ([`SessionClock`]) — SDK-owned session-monotonic identity and reader. Clock ids are `<peer_id>/<session_id>/monotonic`; the first segment is the authoring peer id, and the registry entry's epoch marker is the session id.
+2. The **unit-testable TimeTransform primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
+3. The **production sampler thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
 
 ## Re-exports
 
@@ -31,6 +32,18 @@ pub trait Clock: Send + Sync {
 Production: `SystemClock` reads `CLOCK_MONOTONIC` (from-clock) and `CLOCK_REALTIME` (to-clock) via `libc::clock_gettime`.
 
 Tests: `ScriptedClock` (in `#[cfg(test)] mod tests`) pops pre-loaded readings off two queues, one per clock.
+
+## `SessionClock`
+
+```rust
+let clock = SessionClock::new(peer_id.to_string(), session_id, "monotonic");
+let now_ns = clock.now_ns();
+let clock_id = clock.clock_id();
+let clock_hash = clock.clock_hash();
+let registry_entry = clock.registry_entry();
+```
+
+`SessionClock` is deliberately peer-id anchored so another peer can understand the source from the registry id convention. `Scope::DeviceLocal` is correct because the monotonic zero point is local to one peer/session; cluster/domain clocks use a separate `DomainLocal` identity. Time sync should consume this primitive rather than constructing a heartbeat-only clock identity.
 
 ## The three-read protocol
 
@@ -76,10 +89,12 @@ impl Sampler {
 
 `stop` signals the thread, joins, and **returns the log back** so the caller can flush/drop it on the main thread (matters for fsync ordering during shutdown). Append failures are logged via `eprintln!` and the loop continues — a per-tick I/O hiccup shouldn't kill the sampler.
 
-## Tests (2 total)
+## Tests (4 total)
 
 | Test | Asserts |
 |------|---------|
+| `session_clock_builds_peer_anchored_registry_entry_with_epoch_marker` | `SessionClock` creates a peer-id rooted monotonic `ClockRegistryEntry` with `Scope::DeviceLocal`, session epoch marker, and matching hash. |
+| `session_clock_now_is_monotonic` | Session-clock readings do not move backwards. |
 | `tick_computes_offset_uncertainty_and_timestamp` | The math is right for one canned set of readings (offset, uncertainty, timestamp). |
 | `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries are written and stop cleanly via the join handle. |
 

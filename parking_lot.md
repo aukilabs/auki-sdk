@@ -23,7 +23,7 @@ Outer crate READMEs are `README.md` (uppercase). Inner per-crate implementation 
 
 ## Cross-language conformance vectors — coverage gaps
 
-Locked vectors now exist in `auki-hash` (XXH3-128), `auki-identity` (`derive_child("peer/v1")` pubkey + `sign_canonical_json`), `auki-network` (seed → libp2p PeerId, Vinland Discovery `register` signing, PointCloudFrame on-wire), and `auki-registry` (M1 sensor + M1 point cloud + Frame Registry M1 vector). See the table in [`README.md`](README.md). Not yet locked: `auki-jcs` (canonicalization end-to-end, beyond what `auki-identity` exercises in passing), `auki-logs` (segment file binary layout — the most-load-bearing schema with no cross-language reference yet), `auki-time-transforms` (TimeTransform Log payload). Worth adding when a second-language consumer (Park's browser side, or a future Python `auki-logs-py`) starts touching that on-disk shape — drift is silent until then.
+Locked vectors now exist in `auki-hash` (XXH3-128), `auki-identity` (`derive_child("peer/v1")` pubkey + `sign_canonical_json`), `auki-network` (seed → libp2p PeerId, Vinland Discovery `register` signing, PointCloudFrame on-wire), and `auki-registry` (M1 sensor + M1 point cloud + Frame Registry M1 vector). See the table in [`README.md`](README.md). Not yet locked: `auki-jcs` (canonicalization end-to-end, beyond what `auki-identity` exercises in passing), `auki-logs` (segment file binary layout — the most-load-bearing schema with no cross-language reference yet), `auki-time` (TimeTransform Log payload). Worth adding when a second-language consumer (Park's browser side, or a future Python `auki-logs-py`) starts touching that on-disk shape — drift is silent until then.
 
 ## Control API `PATCH /api/sensor_logs/<id>` — mutability scope
 
@@ -43,7 +43,7 @@ v0.0.23 spec has `started_after` / `started_before` query parameters compared pe
 
 ## Python bindings strategy
 
-**Resolved 2026-05-06 — per-component (a).** [`auki-identity-py`](crates/auki-identity-py) ships the identity primitives; [`auki-network-py`](crates/auki-network-py) ships `ClusterRuntime` + `Stream<T>` + `discovery_client`. Per-component naming over an umbrella `auki-py`. Future bindings (`auki-logs-py`, `auki-session-py`, `auki-registry-py`, `auki-time-transforms-py`) follow the same pattern when downstream consumers need them.
+**Resolved 2026-05-06 — per-component (a).** [`auki-identity-py`](crates/auki-identity-py) ships the identity primitives; [`auki-network-py`](crates/auki-network-py) ships `ClusterRuntime` + `Stream<T>` + `discovery_client`. Per-component naming over an umbrella `auki-py`. Future bindings (`auki-logs-py`, `auki-session-py`, `auki-registry-py`, `auki-time-py`) follow the same pattern when downstream consumers need them.
 
 ---
 
@@ -117,7 +117,7 @@ Resolved 2026-05-07: `Session.open(app_root, *, app_id, app_instance, session_id
 
 Why SDK-mints won: the "integrator-as-policy-boundary" framing didn't actually buy anything — every implementation mints its own UUIDs regardless, the policy "session ids are UUIDv4" is a doc-level claim either way. SDK-mints centralizes the one place that has to get UUIDv4 right and is strictly easier on callers. Cost is a `uuid` dep on `auki-session` (currently zero-dep — `uuid` v1 with the `v4` feature is tiny, no transitive deps).
 
-Docs to update when the Rust `Session` struct + `auki-session-py` first implementation land: (a) [`crates/auki-session/README.md`](crates/auki-session/README.md) — add a `Session` section and revise the "integrator generates a fresh UUIDv4 at boot" line; (b) [`crates/auki-registry/README.md`](crates/auki-registry/README.md) and [`crates/auki-time-transforms/README.md`](crates/auki-time-transforms/README.md) manifest tables — relax "minted by the integrator at app boot" to "minted by the integrator at app boot, or by `auki_session::Session::open`." Lives at root because it's cross-cutting between `auki-session` and `auki-session-py`; everything `auki-session-py`-specific lives in [`crates/auki-session-py/parking_lot.md`](crates/auki-session-py/parking_lot.md).
+Docs to update when the Rust `Session` struct + `auki-session-py` first implementation land: (a) [`crates/auki-session/README.md`](crates/auki-session/README.md) — add a `Session` section and revise the "integrator generates a fresh UUIDv4 at boot" line; (b) [`crates/auki-registry/README.md`](crates/auki-registry/README.md) and [`crates/auki-time/README.md`](crates/auki-time/README.md) manifest tables — relax "minted by the integrator at app boot" to "minted by the integrator at app boot, or by `auki_session::Session::open`." Lives at root because it's cross-cutting between `auki-session` and `auki-session-py`; everything `auki-session-py`-specific lives in [`crates/auki-session-py/parking_lot.md`](crates/auki-session-py/parking_lot.md).
 
 ---
 

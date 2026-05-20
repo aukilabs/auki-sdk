@@ -6,7 +6,7 @@ Current work and next steps. Spec: [outer `README.md`](../README.md).
 
 `build_detection_log_manifest` landed 2026-05-09 to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2 (Detector binding API). Mirrors the existing builders' shape; carries `(detector_id, detector_hash)` content-addressed producer identity plus `(input_log_id, input_sensor_id, input_sensor_hash)` for self-containedness. No `intent` field — match-the-existing-builders for v1; uniform `intent` rollout across every builder is filed below.
 
-Step 0 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) — pure refactor extracting builders + `PoseSource` from `auki-registry` and `auki-time-transforms`. No behavior change, no encoding change.
+Step 0 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) — pure refactor extracting builders + `PoseSource` from `auki-registry` and `auki-time`. No behavior change, no encoding change.
 
 ## Next, gated on the broader migration
 

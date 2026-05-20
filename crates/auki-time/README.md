@@ -1,13 +1,28 @@
-# auki-time-transforms
+# auki-time
 
-A TimeTransform Log captures the relationship between two clocks over time, sampled at 1 Hz. It's the primitive that `convert_time` will eventually consume to translate timestamps across clocks.
+Time primitives for the Auki SDK: clock reads, session-local clock identities, and the TimeTransform Log sampler that `convert_time` will eventually consume to translate timestamps across clocks.
 
 This crate provides:
+- `SessionClock`, the SDK-owned session-monotonic clock primitive with a peer-id anchored `ClockRegistryEntry`.
 - The 1 Hz `local_clock_read` sampler that produces `TimeTransformEntry` records.
 - The three-read sampling protocol (`m1, r, m2`) and its `uncertainty_ns` computation.
 - A `Clock` trait + `SystemClock` impl wired to `clock_gettime` for `CLOCK_MONOTONIC` / `CLOCK_REALTIME`.
 
 The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. One TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
+
+## SessionClock
+
+`SessionClock` is the shared SDK primitive for one peer's session-monotonic time. It owns a `ClockRegistryEntry`, a content hash for that entry, and the monotonic `now_ns()` / `now_i64_ns()` reader used by `auki-domain::ClusterManager` and future heartbeat time sync.
+
+SDK-minted session clock ids are anchored to the authoring peer id:
+
+```text
+<peer_id>/<session_id>/monotonic
+```
+
+The first path segment is expected to be the authoring `peer_id`. The older `<platform-tag>-<machine-id>/...` convention is stale for new SDK-minted session clocks. Because monotonic readings only make sense inside one process lifetime, the clock registry entry also records the session id as the monotonic epoch marker and uses `Scope::DeviceLocal`.
+
+Heartbeat time sync must consume `SessionClock` for timestamp identity and readings. It should not introduce a parallel heartbeat-specific clock abstraction.
 
 ## Where the types live
 

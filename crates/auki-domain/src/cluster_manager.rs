@@ -61,6 +61,7 @@ use auki_network::resources_protocol::{
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
 };
+use auki_time::SessionClock;
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
@@ -105,7 +106,7 @@ pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// [`ParticipantInfo`] on each call to `participant_info()` /
 /// inbound `/auki/info/0.0.1` request.
 ///
-/// Dynamic fields (`session_now_ns` from `session_started.elapsed()`,
+/// Dynamic fields (`session_now_ns` from the SDK-owned [`SessionClock`],
 /// `cluster_joined_at_ns` set lazily on first non-self peer
 /// observation) live on the ClusterManager — not on `DaemonInfo` —
 /// so daemons aren't responsible for keeping them fresh.
@@ -117,10 +118,12 @@ pub struct DaemonInfo {
     pub name: String,
     /// UUIDv4 minted at session boot.
     pub session_id: String,
-    /// Identifier of the session's monotonic clock in the clock
-    /// registry.
+    /// Compatibility input for older callers that still construct a
+    /// session-clock registry id. New `ParticipantInfo` values use the
+    /// SDK-owned peer-id anchored `SessionClock`.
     pub session_clock_id: String,
-    /// Content-addressed hash of the clock-registry entry.
+    /// Compatibility input for older callers that still construct a
+    /// session-clock registry hash.
     pub session_clock_hash: String,
     /// First non-loopback IEEE-administered MAC, lowercased hex
     /// without separators.
@@ -427,11 +430,10 @@ pub struct ClusterManager {
     /// `cluster_joined_at_ns`, `is_manager`, `manager_peer_id`,
     /// `peer_id`) when building a [`ParticipantInfo`].
     daemon_info: DaemonInfo,
-    /// Wall-clock `Instant` of session boot. The session clock is
-    /// monotonic with t=0 at this moment — so the SDK computes
-    /// `session_now_ns` as `(now - session_started).as_nanos()`
-    /// every time a `ParticipantInfo` is built.
-    session_started: Instant,
+    /// SDK-owned session-monotonic clock. Compatibility callers still pass
+    /// `DaemonInfo.session_clock_id/hash`, but ParticipantInfo is minted from
+    /// this peer-id anchored clock.
+    session_clock: SessionClock,
     /// Session-clock value at first observation of a peer other
     /// than ourselves. `None` while this daemon is alone in its
     /// cluster; set once and sticky thereafter. Mutated by
@@ -693,7 +695,11 @@ impl ClusterManager {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
-        let session_started = Instant::now();
+        let session_clock = SessionClock::new(
+            local_peer_id.to_string(),
+            daemon_info.session_id.clone(),
+            "monotonic",
+        );
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
         // 1. Atomic create on Discovery.
@@ -798,7 +804,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             daemon_info.clone(),
-            session_started,
+            session_clock.clone(),
             cluster_joined_at_ns.clone(),
         )));
 
@@ -846,7 +852,7 @@ impl ClusterManager {
             discovery,
             local_multiaddrs,
             daemon_info,
-            session_started,
+            session_clock,
             cluster_joined_at_ns,
             liveness_check_task,
             join_handler_task,
@@ -1017,8 +1023,8 @@ impl ClusterManager {
     /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
     /// stored daemon-side identity fields (passed at construction
     /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
-    /// (`session_now_ns` computed from
-    /// `session_started.elapsed()`, `cluster_joined_at_ns` set
+    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
+    /// `cluster_joined_at_ns` set
     /// lazily on first non-self peer observation), `is_manager` /
     /// `manager_peer_id` from cluster state, and the local
     /// `peer_id`.
@@ -1028,11 +1034,7 @@ impl ClusterManager {
     /// over `/auki/info/0.0.1`.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self
-            .session_started
-            .elapsed()
-            .as_nanos()
-            .min(u64::MAX as u128) as u64;
+        let session_now_ns = self.session_clock.now_ns();
 
         // Lazy `cluster_joined_at_ns`: set on first observation of
         // any peer other than ourselves (per ansuz D3 the local peer
@@ -1062,8 +1064,8 @@ impl ClusterManager {
             app: self.daemon_info.app.clone(),
             name: self.daemon_info.name.clone(),
             session_id: self.daemon_info.session_id.clone(),
-            session_clock_id: self.daemon_info.session_clock_id.clone(),
-            session_clock_hash: self.daemon_info.session_clock_hash.clone(),
+            session_clock_id: self.session_clock.clock_id().to_string(),
+            session_clock_hash: self.session_clock.clock_hash(),
             session_now_ns,
             cluster_joined_at_ns,
             peer_id: self.local_peer_id,
@@ -1358,7 +1360,11 @@ impl ClusterManager {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
-        let session_started = Instant::now();
+        let session_clock = SessionClock::new(
+            local_peer_id.to_string(),
+            daemon_info.session_id.clone(),
+            "monotonic",
+        );
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
 
         // 1. Look up the cluster in Discovery's directory.
@@ -1509,7 +1515,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             daemon_info.clone(),
-            session_started,
+            session_clock.clone(),
             cluster_joined_at_ns.clone(),
         )));
 
@@ -1557,7 +1563,7 @@ impl ClusterManager {
             discovery,
             local_multiaddrs,
             daemon_info,
-            session_started,
+            session_clock,
             cluster_joined_at_ns,
             liveness_check_task,
             join_handler_task,
@@ -2203,7 +2209,7 @@ fn spawn_info_handler(
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     daemon_info: DaemonInfo,
-    session_started: Instant,
+    session_clock: SessionClock,
     cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -2213,7 +2219,7 @@ fn spawn_info_handler(
                 local_peer_id,
                 &manager_peer_id,
                 &membership,
-                session_started,
+                &session_clock,
                 &cluster_joined_at_ns,
             );
             let json = match serde_json::to_string(&info) {
@@ -2240,11 +2246,11 @@ fn build_participant_info(
     local_peer_id: PeerId,
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
-    session_started: Instant,
+    session_clock: &SessionClock,
     cluster_joined_at_ns: &Arc<Mutex<Option<u64>>>,
 ) -> ParticipantInfo {
     let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
-    let session_now_ns = session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let session_now_ns = session_clock.now_ns();
     let cj = {
         let mut guard = cluster_joined_at_ns
             .lock()
@@ -2266,8 +2272,8 @@ fn build_participant_info(
         app: daemon.app.clone(),
         name: daemon.name.clone(),
         session_id: daemon.session_id.clone(),
-        session_clock_id: daemon.session_clock_id.clone(),
-        session_clock_hash: daemon.session_clock_hash.clone(),
+        session_clock_id: session_clock.clock_id().to_string(),
+        session_clock_hash: session_clock.clock_hash(),
         session_now_ns,
         cluster_joined_at_ns: cj,
         peer_id: local_peer_id,
@@ -2920,6 +2926,7 @@ fn now_unix_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_time::SessionClock;
 
     #[test]
     fn daemon_info_is_cheap_to_clone() {
@@ -2940,6 +2947,45 @@ mod tests {
         // Hagall rename (was 3s / 10s under the original
         // aukilabs/discovery#5 contract).
         assert_eq!(LIVENESS_CHECK_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn participant_info_uses_session_clock_primitive() {
+        let daemon = DaemonInfo {
+            app: "boosterapp".into(),
+            name: "bracketbot-060".into(),
+            session_id: "session-123".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "abc".into(),
+        };
+        let local = make_peer(1, 100);
+        let mut membership = ClusterMembership::new("foo");
+        membership.admit(local.clone());
+        let membership = Arc::new(Mutex::new(membership));
+        let manager_peer_id = Arc::new(Mutex::new(local.peer_id));
+        let cluster_joined_at_ns = Arc::new(Mutex::new(None));
+        let clock = SessionClock::new(
+            local.peer_id.to_string(),
+            daemon.session_id.clone(),
+            "monotonic",
+        );
+
+        let info = build_participant_info(
+            &daemon,
+            local.peer_id,
+            &manager_peer_id,
+            &membership,
+            &clock,
+            &cluster_joined_at_ns,
+        );
+
+        assert_eq!(
+            info.session_clock_id,
+            format!("{}/session-123/monotonic", local.peer_id)
+        );
+        assert_eq!(info.session_clock_hash, clock.clock_hash());
+        assert!(info.session_now_ns <= clock.now_ns());
     }
 
     #[test]

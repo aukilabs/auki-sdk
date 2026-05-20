@@ -50,8 +50,9 @@ fn unique_cluster_name(prefix: &str) -> String {
 
 /// Build a minimal `DaemonInfo` with the static fields populated.
 /// `session_now_ns` and `cluster_joined_at_ns` are no longer on
-/// `DaemonInfo` — the SDK computes them from `session_started` +
-/// observed membership.
+/// `DaemonInfo`; the SDK computes them from `SessionClock` plus
+/// observed membership. The clock id/hash fields remain compatibility
+/// inputs until callers stop supplying session clock identity.
 fn sample_daemon_info(name: &str) -> auki_domain::DaemonInfo {
     auki_domain::DaemonInfo {
         app: "test-daemon".into(),

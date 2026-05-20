@@ -6,6 +6,50 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source provenance renamed in the plan.** `DomainClockSource` now uses `backing_peer_id` instead of `manager_peer_id`, keeping the source descriptor tied to the peer that owns the backing clock rather than the Manager role. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source plan now uses cluster name.** The heartbeat time-sync plan uses `DomainClockSource.cluster_name` as the existing cluster/domain identity and derives the clock id as `<cluster-name>/domain-clock`, avoiding a separate `domain_id` concept. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source identity made explicit in the plan.** `DomainClockSource` now carries `domain_id` directly, and the clock id is derived as `<domain-id>/domain-clock` instead of being the only place the domain identity appears. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat runtime constructor plan corrected.** The plan now makes `HeartbeatTimestampSource` a required part of `NetworkRuntime::spawn(...)` and treats SDK-owned heartbeat timestamps as the default runtime contract. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat time-sync plan payload corrected.** The plan now keeps heartbeat frames sender-clock-only and puts domain-clock identity in `DomainClockSource` / future TimeTransform manifests, with Python binding paths refreshed for `bindings/python`. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Python bindings relocated under `bindings/python`.** The `auki-*-py` package family moved out of `crates/` with package names, Python module names, Cargo package names, and runtime behavior preserved. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat time-sync plan responsibility split corrected.** The plan now keeps NTP math/filtering/local TimeTransform production in `auki-time`, with `ClusterManager` limited to exposing the domain-clock source. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**SDK-owned session clocks landed.** `auki-time` now provides `SessionClock`, and `auki-domain::ClusterManager` uses it for `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash`. The peer-id rooted session clock becomes the shared substrate for future heartbeat time sync. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagated detail.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Crate renamed `auki-time-transforms` → `auki-time`.** The package now names the SDK's broader timekeeping responsibility while retaining the current TimeTransform Log sampler. Live docs, plans, workspace metadata, and parking-lot summaries now point at [`crates/auki-time`](crates/auki-time). See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagated detail.
+
+### Nils's codex · May 19, HKT, 2026
+
+**SDK timekeeping foundation plan captured.** Added a Superpowers implementation plan for introducing a reusable `SessionClock` primitive before heartbeat-based domain-clock synchronization. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Domain-clock heartbeat time-sync plan captured.** Added a Superpowers implementation plan for deriving live peer-session-clock → domain-clock `TimeTransformEntry` estimates from `/auki/heartbeat/0.0.1` NTP-style samples. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Retained Python log streams now have an SDK-owned producer source path.** Python producers can create `auki_logs.Log.stream_source(...)` and return `auki_network.cluster.StreamDecision.accept_source(source)`; the SDK builds stream manifests, tails retained bytes, decodes payloads, and dispatches to the typed stream runtime internally. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

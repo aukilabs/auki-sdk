@@ -154,7 +154,7 @@ This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migrat
 
 ## Consumers in this workspace
 
-- `auki-time-transforms` — `Log<TimeTransformEntry>` for the 1 Hz sampler
+- `auki-time` — `Log<TimeTransformEntry>` for the 1 Hz sampler
 - `auki-ros-adapter` — `Log<PinholeCameraLogEntry>` for the ring-buffered camera frame log (per Step 1 of the [migration](../../auki-datatypes/src/sprint.md))
 - `auki-datatypes` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically; ships `DetectionLogEntry` (Step 8) for the detector pipeline
 - `auki-renderer` — read-only consumer for the sensor log

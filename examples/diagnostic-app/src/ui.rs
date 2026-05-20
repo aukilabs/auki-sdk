@@ -1,0 +1,204 @@
+use crate::app_state::DiagnosticApp;
+use crate::flash::{
+    FLASH_ON, FLASH_PERIOD, FlashMode, flash_is_on, next_period_boundary_ns, utc_now_ns,
+};
+use crate::sdk_runtime::{Role, RuntimeCommand};
+
+pub fn render(ctx: &egui::Context, app: &mut DiagnosticApp) {
+    egui::SidePanel::left("sidebar")
+        .resizable(false)
+        .default_width(300.0)
+        .show(ctx, |ui| render_sidebar(ui, app));
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        render_status_strip(ui, app);
+        ui.add_space(12.0);
+        render_flash_panel(ui, app);
+        ui.add_space(12.0);
+        render_bottom_diagnostics(ui, app);
+    });
+}
+
+fn render_sidebar(ui: &mut egui::Ui, app: &mut DiagnosticApp) {
+    let snapshot = app.snapshot().clone();
+    ui.heading("Auki Diagnostics");
+    ui.separator();
+
+    ui.label("Peer self");
+    ui.monospace(
+        snapshot
+            .local_peer_suffix
+            .as_deref()
+            .unwrap_or("not started"),
+    );
+
+    ui.horizontal(|ui| {
+        ui.label("name:");
+        if ui
+            .text_edit_singleline(&mut app.display_name_input)
+            .changed()
+        {
+            app.send(RuntimeCommand::SetDisplayName(
+                app.display_name_input.clone(),
+            ));
+        }
+    });
+    ui.label(format!("role: {}", role_label(snapshot.role)));
+
+    ui.separator();
+    ui.label("Cluster");
+    if ui
+        .text_edit_singleline(&mut app.cluster_name_input)
+        .changed()
+    {
+        app.send(RuntimeCommand::SetClusterName(
+            app.cluster_name_input.clone(),
+        ));
+    }
+    ui.label(format!("peers: {}", snapshot.peer_count));
+    ui.label(format!(
+        "manager: {}",
+        snapshot.manager_suffix.as_deref().unwrap_or("none")
+    ));
+
+    if ui
+        .add_enabled(!snapshot.join_in_flight, egui::Button::new("Join / Create"))
+        .clicked()
+    {
+        app.send(RuntimeCommand::JoinOrCreate);
+    }
+    if ui
+        .add_enabled(
+            snapshot.role != Role::Unclustered,
+            egui::Button::new("Leave Cluster"),
+        )
+        .clicked()
+    {
+        app.send(RuntimeCommand::LeaveCluster);
+    }
+
+    ui.separator();
+    ui.label("Discovery URL");
+    if ui
+        .text_edit_singleline(&mut app.discovery_url_input)
+        .changed()
+    {
+        app.send(RuntimeCommand::SetDiscoveryUrl(
+            app.discovery_url_input.clone(),
+        ));
+    }
+}
+
+fn render_status_strip(ui: &mut egui::Ui, app: &DiagnosticApp) {
+    let snapshot = app.snapshot();
+    ui.horizontal(|ui| {
+        status_box(ui, "Networking", networking_label(snapshot.role));
+        status_box(ui, "Heartbeat", "unavailable");
+        status_box(ui, "Session -> domain", "unavailable");
+    });
+}
+
+fn render_flash_panel(ui: &mut egui::Ui, app: &DiagnosticApp) {
+    let snapshot = app.snapshot();
+    ui.horizontal(|ui| {
+        ui.label("Flash timing");
+        let utc_selected = snapshot.flash_mode == FlashMode::Utc;
+        if ui.selectable_label(utc_selected, "UTC").clicked() {
+            app.send(RuntimeCommand::SetFlashMode(FlashMode::Utc));
+        }
+
+        let domain_selected = snapshot.flash_mode == FlashMode::Domain;
+        if ui
+            .add_enabled_ui(snapshot.domain_mode_available, |ui| {
+                ui.selectable_label(domain_selected, "Domain")
+            })
+            .inner
+            .clicked()
+        {
+            app.send(RuntimeCommand::SetFlashMode(FlashMode::Domain));
+        }
+    });
+    ui.add_space(4.0);
+    ui.label(format!("mode: {}", flash_mode_label(snapshot.flash_mode)));
+    ui.label("baseline: no Auki correction");
+    ui.label(format!("period: {:.3}s", FLASH_PERIOD.as_secs_f32()));
+    if !snapshot.domain_mode_available {
+        ui.label("Domain unavailable: heartbeat sync API not implemented in this SDK build");
+    }
+
+    let now_ns = utc_now_ns();
+    let next_tick_ns = next_period_boundary_ns(now_ns, FLASH_PERIOD.as_nanos());
+    let next_tick_ms = next_tick_ns.saturating_sub(now_ns) as f64 / 1_000_000.0;
+    ui.label(format!("next UTC tick: {next_tick_ms:.0}ms"));
+
+    let on = match snapshot.flash_mode {
+        FlashMode::Utc => flash_is_on(now_ns, FLASH_PERIOD.as_nanos(), FLASH_ON.as_nanos()),
+        FlashMode::Domain => false,
+    };
+
+    let desired = egui::vec2(ui.available_width(), 380.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let bg = if on {
+        egui::Color32::from_rgb(250, 204, 21)
+    } else {
+        egui::Color32::from_rgb(15, 23, 42)
+    };
+    painter.rect_filled(rect, 8.0, bg);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        if on { "FLASH" } else { "waiting" },
+        egui::FontId::proportional(56.0),
+        if on {
+            egui::Color32::from_rgb(17, 24, 39)
+        } else {
+            egui::Color32::from_rgb(229, 231, 235)
+        },
+    );
+}
+
+fn render_bottom_diagnostics(ui: &mut egui::Ui, app: &DiagnosticApp) {
+    let snapshot = app.snapshot();
+    ui.columns(2, |columns| {
+        columns[0].heading("Peers");
+        for peer in &snapshot.peers {
+            columns[0].monospace(format!("{} {}", peer.suffix, role_label(peer.role)));
+        }
+
+        columns[1].heading("Events");
+        for event in snapshot.events.iter().rev().take(8) {
+            columns[1].monospace(event);
+        }
+    });
+}
+
+fn status_box(ui: &mut egui::Ui, label: &str, value: &str) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_min_width(180.0);
+        ui.label(label);
+        ui.heading(value);
+    });
+}
+
+fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::Unclustered => "Unclustered",
+        Role::Manager => "Manager",
+        Role::Member => "Member",
+    }
+}
+
+fn networking_label(role: Role) -> &'static str {
+    match role {
+        Role::Unclustered => "Not clustered",
+        Role::Manager | Role::Member => "Clustered",
+    }
+}
+
+fn flash_mode_label(mode: FlashMode) -> &'static str {
+    match mode {
+        FlashMode::Utc => "UTC",
+        FlashMode::Domain => "Domain",
+    }
+}

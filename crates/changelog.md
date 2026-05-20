@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Python binding packages moved to [`bindings/python`](../bindings/python/changelog.md).** The `auki-*-py` package family left `crates/` with package names, Python module names, and runtime behavior preserved; `crates/` now reads as the Rust component workspace plus non-Python adapters.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-owned session clocks.** `auki-time` adds `SessionClock`, a peer-id rooted session-monotonic `ClockRegistryEntry` plus monotonic reader. `ClusterManager` now mints one at create/join time and publishes its id/hash and `now_ns()` in `ParticipantInfo`, leaving `DaemonInfo.session_clock_id/hash` as compatibility inputs only.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — crate renamed from `auki-time-transforms`.** The crate now names the broader SDK timekeeping responsibility while retaining the existing TimeTransform Log sampler surface. Workspace metadata, live docs/plans, and parking-lot summaries now point at `auki-time`; historical changelog prose keeps the old name as context.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.

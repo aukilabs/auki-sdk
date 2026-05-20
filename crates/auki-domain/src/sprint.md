@@ -10,6 +10,7 @@ Current work and next steps for the Hagall cluster-lifecycle layer.
 - `ClusterManager::bootstrap` owns list/decide/create-or-join for headless daemons.
 - `create_cluster` and `join_cluster` take a Discovery URL, not a caller-built `DiscoveryClient`.
 - The manager owns Discovery liveness checks, join handling, membership gossip, peer liveness/election, info/catalog/registry request handlers, and stream openings.
+- `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash` are sourced from the SDK-owned `auki_time::SessionClock`, not caller-built `DaemonInfo` clock fields.
 
 The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan. Any docs or downstream code still mentioning `DomainHandle`, `init_domain`, `ClusterRuntime`, `cluster.json`, or Discovery SSE membership refresh are stale.
 
@@ -20,6 +21,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Add SDK-side relay-reservation support once LAN-only Hagall flows are stable and Park-from-home earns the work.
 - Keep `ClusterManager` and `auki-domain-py` APIs aligned as Python consumers adopt `ClusterTarget.bootstrap`.
 - Keep the sensor-catalog detail path thin: default catalog fetches stay lightweight, while `SensorsRequest::with_frame_entries()` is the opt-in path for Park-style consumers that want Sensor / Frame Registry JSON embedded by value.
+- Keep heartbeat time sync behind the shared `SessionClock` foundation; do not add a parallel heartbeat-specific clock identity.
 
 ## Decisions To Honor
 
@@ -30,6 +32,7 @@ The code has moved past the old Greenland `DomainIdentity` / `init_domain` plan.
 - Election chooses the earliest reachable member by `(join_ts_ns, peer_id)`.
 - App daemons should talk to `ClusterManager`, not manually compose Discovery + network runtime.
 - Stream providers should build accept manifests with `StreamManifestBuilder::from_registry` so spatial sensors commit to the exact `FrameRegistryEntry` hash declared by their sensor body.
+- SDK-minted session clock ids are peer-id rooted (`<peer_id>/<session_id>/monotonic`); the old machine-id clock naming convention is stale for new domain-owned participant info.
 
 ## Open Items
 

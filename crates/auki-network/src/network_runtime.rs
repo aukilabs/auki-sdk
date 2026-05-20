@@ -1360,6 +1360,16 @@ async fn run_task(
 
             _ = tick.tick() => {
                 drive_pending_dials(&mut swarm, &known_peers, &mut schedules);
+                reconcile_heartbeat_tasks(
+                    local_peer_id,
+                    &swarm,
+                    &known_peers,
+                    &inbound_control,
+                    &mut outbound_heartbeat_tasks,
+                    &heartbeat_targets,
+                    &liveness_tx,
+                    &lifeline_rx,
+                );
             }
 
             cmd = command_rx.recv() => {
@@ -1519,6 +1529,10 @@ fn prune_inbound_heartbeat_tasks(
     }
 }
 
+fn prune_finished_heartbeat_tasks(heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>) {
+    heartbeat_tasks.retain(|_, task| !task.is_finished());
+}
+
 /// Reconcile active outbound heartbeat tasks against the current
 /// carrier target set. The caller owns cluster semantics; the runtime
 /// only opens substreams to connected, allow-listed target peers.
@@ -1533,6 +1547,8 @@ fn reconcile_heartbeat_tasks(
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     lifeline_rx: &watch::Receiver<()>,
 ) {
+    prune_finished_heartbeat_tasks(outbound_heartbeat_tasks);
+
     let desired: HashSet<PeerId> = heartbeat_targets
         .iter()
         .copied()
@@ -2263,5 +2279,22 @@ mod tests {
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
         rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn finished_heartbeat_tasks_are_pruned_before_reconcile() {
+        let peer = PeerIdentity::from_seed(&[9u8; 32]).peer_id();
+        let finished = tokio::spawn(async {});
+        tokio::task::yield_now().await;
+        assert!(finished.is_finished());
+
+        let mut tasks = HashMap::from([(peer, finished)]);
+
+        prune_finished_heartbeat_tasks(&mut tasks);
+
+        assert!(
+            !tasks.contains_key(&peer),
+            "completed heartbeat task should not block opening a replacement carrier"
+        );
     }
 }

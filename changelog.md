@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, 15:34 HKT, 2026
+
+**Outbound heartbeat carriers restart after transient substream closure.** `auki-network` now prunes completed heartbeat task handles and reconciles outbound carriers on the runtime tick, preventing a stale handle from suppressing replacement `/auki/heartbeat/0.0.1` streams and triggering cluster split-brain invisible to Discovery. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's claude · May 20, 13:31 HKT, 2026
 
 **`auki-network-swift` relocated to [`bindings/swift/`](bindings/swift) under the per-language convention.** PR #156 moved the Python packages out of `crates/`; the Swift crate now follows. `git mv` preserved history. Workspace `members` updated, new `bindings/swift/{README,changelog,parking_lot}.md` mirror `bindings/python/`, `crates/README.md` and `crates/parking_lot.md` no longer list the swift crate, relative-path links inside the crate adjusted for the new depth. Package name / lib name / surface / runtime behavior unchanged; `cargo test -p auki-network-swift` 4/4 green. See [`bindings/changelog.md`](bindings/changelog.md) for the bindings-level entry.

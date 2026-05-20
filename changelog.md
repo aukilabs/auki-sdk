@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Python bindings relocated under `bindings/python`.** The `auki-*-py` package family moved out of `crates/` with package names, Python module names, Cargo package names, and runtime behavior preserved. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Retained Python log streams now have an SDK-owned producer source path.** Python producers can create `auki_logs.Log.stream_source(...)` and return `auki_network.cluster.StreamDecision.accept_source(source)`; the SDK builds stream manifests, tails retained bytes, decodes payloads, and dispatches to the typed stream runtime internally. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

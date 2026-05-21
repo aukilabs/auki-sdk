@@ -704,6 +704,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]

@@ -100,7 +100,7 @@ impl From<io::Error> for SeedError {
 ///
 /// let path = PathBuf::from("/tmp/auki/identity.seed");
 /// let seed = load_or_mint_seed(&path).expect("seed load/mint");
-/// let wallet = Wallet::from_seed(&seed);
+/// let wallet = Wallet::from_seed(seed.to_vec()).expect("32-byte seed");
 /// // Same seed file → same wallet → same peer id, every restart.
 /// ```
 pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError> {
@@ -292,8 +292,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("identity.seed");
         let seed = load_or_mint_seed(&path).unwrap();
-        let w1 = Wallet::from_seed(&seed);
-        let w2 = Wallet::from_seed(&load_or_mint_seed(&path).unwrap());
+        let w1 = Wallet::from_seed(seed.to_vec()).expect("32-byte seed");
+        let w2 = Wallet::from_seed(load_or_mint_seed(&path).unwrap().to_vec())
+            .expect("32-byte seed");
         assert_eq!(w1.public_key(), w2.public_key());
     }
 }

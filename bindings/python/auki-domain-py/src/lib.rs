@@ -2015,7 +2015,12 @@ async fn build_identity_and_swarm(
 )> {
     use auki_network::swarm::resolve_advertise_multiaddrs;
     use std::time::Duration;
-    let wallet = Wallet::from_seed(seed);
+    // `Wallet::from_seed` now takes `Vec<u8>` and returns `Result<Arc<Wallet>, _>`
+    // (UniFFI 0.31 constraint — no Lift impl for `[u8; 32]`). `seed` is a
+    // `&[u8; 32]` here, so the length precondition is structural; the
+    // expect is unreachable at runtime.
+    let wallet =
+        Wallet::from_seed(seed.to_vec()).expect("caller passes a 32-byte seed");
     let identity = PeerIdentity::from_wallet(&wallet);
     let cfg = SwarmConfig {
         listen_addresses: listen_multiaddrs,

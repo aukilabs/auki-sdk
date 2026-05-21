@@ -108,7 +108,16 @@ impl PeerIdentity {
     /// A backup of the wallet seed is sufficient to regenerate this.
     pub fn from_wallet(wallet: &Wallet) -> Self {
         let peer_wallet = wallet.derive_child(PEER_DERIVATION_LABEL);
-        Self::from_seed(&peer_wallet.seed())
+        // `Wallet::seed()` returns `Vec<u8>` after the UniFFI-driven signature
+        // change in auki-identity; `PeerIdentity::from_seed` still takes a
+        // fixed-size `&[u8; 32]` (it's not UniFFI-exposed at v0). The Vec
+        // length is structurally guaranteed by `derive_child`.
+        let seed_vec: Vec<u8> = peer_wallet.seed();
+        let seed_array: [u8; 32] = seed_vec
+            .as_slice()
+            .try_into()
+            .expect("Wallet::derive_child always produces a 32-byte seed");
+        Self::from_seed(&seed_array)
     }
 
     /// Construct directly from a 32-byte ed25519 seed. Same seed → same
@@ -249,7 +258,7 @@ mod tests {
 
     #[test]
     fn peer_identity_from_wallet_is_deterministic() {
-        let w = Wallet::from_seed(&[7u8; 32]);
+        let w = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
         let a = PeerIdentity::from_wallet(&w);
         let b = PeerIdentity::from_wallet(&w);
         assert_eq!(a.peer_id(), b.peer_id());
@@ -257,8 +266,8 @@ mod tests {
 
     #[test]
     fn peer_identity_differs_across_wallets() {
-        let w1 = Wallet::from_seed(&[1u8; 32]);
-        let w2 = Wallet::from_seed(&[2u8; 32]);
+        let w1 = Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
+        let w2 = Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed");
         let p1 = PeerIdentity::from_wallet(&w1);
         let p2 = PeerIdentity::from_wallet(&w2);
         assert_ne!(p1.peer_id(), p2.peer_id());
@@ -275,7 +284,7 @@ mod tests {
     /// version bump.
     #[test]
     fn locked_seed_to_peer_id_vector() {
-        let w = Wallet::from_seed(&[3u8; 32]);
+        let w = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
         let peer = PeerIdentity::from_wallet(&w);
         assert_eq!(
             peer.peer_id().to_string(),
@@ -288,10 +297,17 @@ mod tests {
     fn from_wallet_matches_from_seed_of_derived_child() {
         // The contract: `from_wallet(w)` is `from_seed(w.derive_child("peer/v1").seed())`.
         // Cross-language consumers can rely on this exact recipe.
-        let w = Wallet::from_seed(&[42u8; 32]);
+        let w = Wallet::from_seed(vec![42u8; 32]).expect("32-byte seed");
         let via_wallet = PeerIdentity::from_wallet(&w);
         let derived = w.derive_child(PEER_DERIVATION_LABEL);
-        let via_seed = PeerIdentity::from_seed(&derived.seed());
+        // `Wallet::seed()` now returns `Vec<u8>`; bridge back to the fixed
+        // array `PeerIdentity::from_seed` still expects.
+        let seed_vec: Vec<u8> = derived.seed();
+        let seed_array: [u8; 32] = seed_vec
+            .as_slice()
+            .try_into()
+            .expect("derive_child seed is 32 bytes");
+        let via_seed = PeerIdentity::from_seed(&seed_array);
         assert_eq!(via_wallet.peer_id(), via_seed.peer_id());
     }
 
@@ -316,7 +332,7 @@ mod tests {
         // Sanity: the libp2p public key wraps the same 32 ed25519 bytes
         // that the derived child wallet exposes. If this ever drifts, the
         // wallet ↔ peer relationship is broken.
-        let w = Wallet::from_seed(&[13u8; 32]);
+        let w = Wallet::from_seed(vec![13u8; 32]).expect("32-byte seed");
         let derived = w.derive_child(PEER_DERIVATION_LABEL);
         let peer = PeerIdentity::from_wallet(&w);
         let ed_pub = peer

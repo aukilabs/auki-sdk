@@ -76,7 +76,11 @@ use prost::Message;
 
 #[allow(dead_code)]
 fn _phantom() -> Option<Wallet> {
-    Some(Wallet::from_seed(&[0u8; 32]).derive_child(PEER_DERIVATION_LABEL))
+    Some(
+        Wallet::from_seed(vec![0u8; 32])
+            .expect("32-byte seed")
+            .derive_child(PEER_DERIVATION_LABEL),
+    )
 }
 
 // Wire-type re-exports — single source of truth lives in

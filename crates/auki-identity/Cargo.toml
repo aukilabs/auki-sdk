@@ -21,11 +21,15 @@ serde_json = "1"
 # `bindings/swift/auki-identity-swift/`. Default-off so non-Swift consumers
 # (Python sidecars, Rust daemons) don't pull uniffi into their dep graph.
 uniffi = { version = "0.31", features = ["tokio"], optional = true }
+# Optional — companion to uniffi. Used to derive the error type
+# (`IdentityError`) exposed across the FFI; gated by the same feature so
+# default builds don't pull thiserror into the dep graph.
+thiserror = { version = "2", optional = true }
 
 [features]
 # Enables UniFFI proc-macros on `Wallet` (and any future identity types
 # the Swift binding needs). When off, the crate compiles exactly as today.
-swift-bindings = ["dep:uniffi"]
+swift-bindings = ["dep:uniffi", "dep:thiserror"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -405,7 +405,8 @@ impl RuntimeWorker {
                 return;
             }
         };
-        let wallet = Wallet::from_seed(&seed);
+        let wallet = Wallet::from_seed(seed.to_vec())
+            .expect("load_or_mint_seed produces a 32-byte seed");
         let identity = PeerIdentity::from_wallet(&wallet);
 
         let mut swarm = match build_swarm(

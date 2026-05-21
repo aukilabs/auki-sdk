@@ -44,18 +44,77 @@
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
+// UniFFI scaffolding. The `uniffi::Object` proc-macro emits code that
+// references `crate::UniFfiTag`; that type only exists where
+// `setup_scaffolding!()` is invoked. Without this, building this crate
+// with `--features swift-bindings` fails before the binding crate ever
+// pulls it in. The setup is gated so default builds stay scaffolding-free.
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 #[cfg(not(target_arch = "wasm32"))]
 mod seed;
 #[cfg(not(target_arch = "wasm32"))]
 pub use seed::{SeedError, load_or_mint_seed};
+
+/// Errors that can occur constructing an identity primitive across the
+/// FFI boundary. The type is available in all builds (so the new
+/// `Wallet::from_seed` signature is buildable everywhere); the
+/// `uniffi::Error` / `thiserror::Error` derives only attach in
+/// `swift-bindings` builds, where the FFI surface uses them.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error("seed must be 32 bytes, got {actual}")]
+    InvalidSeedLength { actual: u32 },
+}
+
+/// Default-build mirror of [`IdentityError`] — same variants and `Display`
+/// impl, but without the uniffi/thiserror derives (those are
+/// feature-gated deps). Hand-rolled `Display` keeps the message identical
+/// across builds so error logs don't drift.
+#[cfg(not(feature = "swift-bindings"))]
+#[derive(Debug)]
+pub enum IdentityError {
+    InvalidSeedLength { actual: u32 },
+}
+
+#[cfg(not(feature = "swift-bindings"))]
+impl std::fmt::Display for IdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentityError::InvalidSeedLength { actual } => {
+                write!(f, "seed must be 32 bytes, got {actual}")
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "swift-bindings"))]
+impl std::error::Error for IdentityError {}
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
 /// An ed25519 keypair plus identity helpers. Holds the secret key — treat
 /// instances as sensitive material.
 #[derive(Clone)]
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 pub struct Wallet {
     signing_key: SigningKey,
+}
+
+// Hand-rolled `Debug` that elides the secret key bytes — used by the
+// `swift-bindings` regression tests' `panic!("…{other:?}")` formatter via
+// `Result<Arc<Wallet>, IdentityError>`. `SigningKey` doesn't implement
+// `Debug`, and we wouldn't want it to: dumping secret-key bytes into a
+// panic message would be a hazard. The placeholder mirrors how `auki-py`
+// formats sensitive seed wrappers downstream.
+impl std::fmt::Debug for Wallet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wallet")
+            .field("signing_key", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Public half of a wallet's keypair. 32 bytes, ed25519.
@@ -86,29 +145,74 @@ pub struct CreationCert {
 
 // ─── Wallet impl ─────────────────────────────────────────────────────────────
 
+// ─── Wallet impl — UniFFI-exposed surface ────────────────────────────────────
+//
+// Split from the rest of the impl below so the `swift-bindings` feature can
+// hang `#[uniffi::export]` on just the methods the Swift binding consumes.
+// Default builds compile the macros to nothing; semantics are unchanged for
+// upstream Rust callers (modulo the deliberate Vec<u8>/Result/Arc reshape of
+// `from_seed` and `seed` — UniFFI 0.31 doesn't implement Lower/Lift for
+// `[u8; 32]`, so the FFI types must be runtime-sized).
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
 impl Wallet {
     /// Generate a fresh wallet with a cryptographically random ed25519 keypair.
-    pub fn new() -> Self {
+    #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
+    pub fn new() -> std::sync::Arc<Self> {
         let mut csprng = rand_core::OsRng;
-        Self {
+        std::sync::Arc::new(Self {
             signing_key: SigningKey::generate(&mut csprng),
-        }
+        })
     }
 
     /// Construct a wallet from a 32-byte seed (the ed25519 secret key bytes).
     /// Same seed → same wallet, deterministically.
-    pub fn from_seed(seed: &[u8; 32]) -> Self {
-        Self {
-            signing_key: SigningKey::from_bytes(seed),
-        }
+    ///
+    /// Returns [`IdentityError::InvalidSeedLength`] if `seed` is not exactly
+    /// 32 bytes. The runtime-sized `Vec<u8>` parameter is a UniFFI 0.31
+    /// constraint (no `Lift` for `[u8; 32]`); upstream Rust callers can pass
+    /// `array.to_vec()`.
+    #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
+    pub fn from_seed(seed: Vec<u8>) -> Result<std::sync::Arc<Self>, IdentityError> {
+        let array: [u8; 32] = seed.as_slice().try_into().map_err(|_| {
+            IdentityError::InvalidSeedLength {
+                actual: seed.len() as u32,
+            }
+        })?;
+        Ok(std::sync::Arc::new(Self {
+            signing_key: SigningKey::from_bytes(&array),
+        }))
     }
 
     /// 32-byte seed (the ed25519 secret key bytes). Treat as sensitive — anyone
     /// holding these bytes can sign as this wallet.
-    pub fn seed(&self) -> [u8; 32] {
-        self.signing_key.to_bytes()
+    ///
+    /// Returns a `Vec<u8>` (runtime-sized) rather than `[u8; 32]` because
+    /// UniFFI 0.31 doesn't implement `Lower` for fixed-size arrays. The
+    /// length is structurally 32; callers that need an array can
+    /// `seed.as_slice().try_into().expect("32-byte seed")`.
+    pub fn seed(&self) -> Vec<u8> {
+        self.signing_key.to_bytes().to_vec()
     }
 
+    /// String form of [`Self::id`] for FFI callers — UniFFI 0.31 doesn't
+    /// derive `Record` on the wrapper `WalletId(String)`, so we expose the
+    /// inner string directly. Upstream Rust callers continue to use
+    /// [`Self::id`].
+    pub fn wallet_id_str(&self) -> String {
+        self.id().0
+    }
+}
+
+// ─── Wallet impl — Rust-only surface ─────────────────────────────────────────
+//
+// Methods below stay un-annotated. Either they're not consumed by the Swift
+// binding at v0, or their signatures use types UniFFI 0.31 can't lower
+// (e.g. `&serde_json::Value`, `[u8; N]` slices). Upstream Rust callers
+// continue to use them exactly as before.
+
+#[cfg(not(any()))] // always compiled; placeholder so future cfg gating is local
+impl Wallet {
     /// Public half of the wallet's keypair.
     pub fn public_key(&self) -> PublicKey {
         PublicKey(self.signing_key.verifying_key().to_bytes())
@@ -166,11 +270,18 @@ impl Wallet {
         buf.extend_from_slice(b"/expand");
         let second_half_hex = auki_hash::hash_jcs_bytes(&buf);
 
-        let mut seed = [0u8; 32];
+        let mut child_seed = [0u8; 32];
         // Each hex char is 4 bits; 32 chars = 16 bytes per hash output.
-        decode_hex(&first_half_hex, &mut seed[..16]).expect("auki-hash returns valid hex");
-        decode_hex(&second_half_hex, &mut seed[16..]).expect("auki-hash returns valid hex");
-        Wallet::from_seed(&seed)
+        decode_hex(&first_half_hex, &mut child_seed[..16]).expect("auki-hash returns valid hex");
+        decode_hex(&second_half_hex, &mut child_seed[16..]).expect("auki-hash returns valid hex");
+        // Inlined Wallet construction — the UniFFI-exposed `from_seed` now
+        // returns `Result<Arc<Self>, _>` (runtime-sized `Vec<u8>` for FFI),
+        // but inside the crate we already have a `[u8; 32]` and want a plain
+        // owned `Wallet`. Routing through the public constructor would force
+        // a Vec round-trip and `Arc::into_inner` for no gain.
+        Wallet {
+            signing_key: SigningKey::from_bytes(&child_seed),
+        }
     }
 
     /// Issue a signed creation cert vouching that `child` was created by /
@@ -203,7 +314,11 @@ impl Wallet {
 
 impl Default for Wallet {
     fn default() -> Self {
-        Self::new()
+        // `Wallet::new()` now returns `Arc<Self>` so its UniFFI constructor
+        // signature lines up with `uniffi::Object`. Inside the crate we
+        // already hold the only reference; unwrap is infallible.
+        std::sync::Arc::into_inner(Self::new())
+            .expect("freshly constructed Arc<Wallet> has refcount 1")
     }
 }
 
@@ -354,9 +469,9 @@ mod tests {
 
     #[test]
     fn from_seed_is_deterministic() {
-        let seed = [42u8; 32];
-        let a = Wallet::from_seed(&seed);
-        let b = Wallet::from_seed(&seed);
+        let seed = vec![42u8; 32];
+        let a = Wallet::from_seed(seed.clone()).expect("32-byte seed");
+        let b = Wallet::from_seed(seed).expect("32-byte seed");
         assert_eq!(a.public_key(), b.public_key());
         assert_eq!(a.seed(), b.seed());
     }
@@ -365,7 +480,7 @@ mod tests {
     fn seed_round_trip() {
         let original = Wallet::new();
         let seed = original.seed();
-        let restored = Wallet::from_seed(&seed);
+        let restored = Wallet::from_seed(seed).expect("32-byte seed");
         assert_eq!(original.public_key(), restored.public_key());
     }
 
@@ -396,7 +511,7 @@ mod tests {
 
     #[test]
     fn wallet_id_is_stable_for_same_pubkey() {
-        let w = Wallet::from_seed(&[7u8; 32]);
+        let w = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
         let id1 = w.id();
         let id2 = w.id();
         assert_eq!(id1, id2);
@@ -405,14 +520,14 @@ mod tests {
 
     #[test]
     fn wallet_id_differs_across_wallets() {
-        let a = Wallet::from_seed(&[1u8; 32]);
-        let b = Wallet::from_seed(&[2u8; 32]);
+        let a = Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
+        let b = Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed");
         assert_ne!(a.id(), b.id());
     }
 
     #[test]
     fn derive_child_is_deterministic() {
-        let parent = Wallet::from_seed(&[3u8; 32]);
+        let parent = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
         let c1 = parent.derive_child("peer/v1");
         let c2 = parent.derive_child("peer/v1");
         assert_eq!(c1.public_key(), c2.public_key());
@@ -429,7 +544,7 @@ mod tests {
     /// coordinated version bump.
     #[test]
     fn locked_derive_child_peer_v1_pubkey_vector() {
-        let parent = Wallet::from_seed(&[3u8; 32]);
+        let parent = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
         let derived = parent.derive_child("peer/v1");
         let expected: [u8; 32] = [
             0x10, 0x80, 0x63, 0x3b, 0xcb, 0x57, 0xba, 0xc0, 0x66, 0xcf, 0x84, 0x46, 0xe2, 0xb7,
@@ -445,7 +560,7 @@ mod tests {
 
     #[test]
     fn derive_child_differs_across_labels() {
-        let parent = Wallet::from_seed(&[4u8; 32]);
+        let parent = Wallet::from_seed(vec![4u8; 32]).expect("32-byte seed");
         let peer = parent.derive_child("peer/v1");
         let app = parent.derive_child("app/boosterapp");
         assert_ne!(peer.public_key(), app.public_key());
@@ -453,8 +568,8 @@ mod tests {
 
     #[test]
     fn derive_child_differs_across_parents() {
-        let p1 = Wallet::from_seed(&[5u8; 32]);
-        let p2 = Wallet::from_seed(&[6u8; 32]);
+        let p1 = Wallet::from_seed(vec![5u8; 32]).expect("32-byte seed");
+        let p2 = Wallet::from_seed(vec![6u8; 32]).expect("32-byte seed");
         let c1 = p1.derive_child("peer/v1");
         let c2 = p2.derive_child("peer/v1");
         assert_ne!(c1.public_key(), c2.public_key());
@@ -524,7 +639,7 @@ mod tests {
 
     #[test]
     fn sign_canonical_json_is_deterministic_for_same_input() {
-        let wallet = Wallet::from_seed(&[7u8; 32]);
+        let wallet = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
         let value = serde_json::json!({"a": 1, "b": [2, 3]});
         let (bytes1, sig1) = wallet.sign_canonical_json(&value);
         let (bytes2, sig2) = wallet.sign_canonical_json(&value);
@@ -538,7 +653,7 @@ mod tests {
         // must produce identical canonical bytes (and therefore identical
         // signatures). This is what makes the verifier-side check work
         // independent of how either side serialised the JSON originally.
-        let wallet = Wallet::from_seed(&[8u8; 32]);
+        let wallet = Wallet::from_seed(vec![8u8; 32]).expect("32-byte seed");
         let v1 = serde_json::json!({"a": 1, "b": 2, "c": 3});
         let v2 = serde_json::json!({"c": 3, "a": 1, "b": 2});
         let (bytes1, sig1) = wallet.sign_canonical_json(&v1);
@@ -549,7 +664,7 @@ mod tests {
 
     #[test]
     fn sign_canonical_json_verifier_rejects_tampered_field() {
-        let wallet = Wallet::from_seed(&[9u8; 32]);
+        let wallet = Wallet::from_seed(vec![9u8; 32]).expect("32-byte seed");
         let original = serde_json::json!({"cluster_name": "vinland", "n": 1});
         let tampered = serde_json::json!({"cluster_name": "vinland", "n": 2});
         let (_orig_bytes, signature) = wallet.sign_canonical_json(&original);
@@ -577,7 +692,7 @@ mod tests {
     /// key-sorting behaviour, not just byte-for-byte JSON serialisation.
     #[test]
     fn locked_sign_canonical_json_vector() {
-        let wallet = Wallet::from_seed(&[3u8; 32]);
+        let wallet = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
         let value = serde_json::json!({
             "cluster_name": "vinland",
             "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
@@ -605,5 +720,43 @@ mod tests {
             signature.0, expected_signature,
             "ed25519 signature drifted — see crate docs for the locked recipe"
         );
+    }
+}
+
+#[cfg(all(test, feature = "swift-bindings"))]
+mod swift_bindings_tests {
+    use super::*;
+
+    #[test]
+    fn wallet_id_str_is_deterministic_for_fixed_seed() {
+        let seed: Vec<u8> = vec![7u8; 32];
+        let w1 = Wallet::from_seed(seed.clone()).expect("32-byte seed");
+        let w2 = Wallet::from_seed(seed).expect("32-byte seed");
+        assert_eq!(w1.wallet_id_str(), w2.wallet_id_str());
+    }
+
+    #[test]
+    fn wallet_new_returns_distinct_wallets() {
+        let a = Wallet::new();
+        let b = Wallet::new();
+        assert_ne!(a.wallet_id_str(), b.wallet_id_str());
+    }
+
+    #[test]
+    fn seed_round_trips() {
+        let original = Wallet::new();
+        let seed = original.seed();
+        assert_eq!(seed.len(), 32);
+        let reconstructed = Wallet::from_seed(seed).expect("32-byte seed");
+        assert_eq!(original.wallet_id_str(), reconstructed.wallet_id_str());
+    }
+
+    #[test]
+    fn from_seed_rejects_wrong_length() {
+        let too_short: Vec<u8> = vec![0u8; 16];
+        match Wallet::from_seed(too_short) {
+            Err(IdentityError::InvalidSeedLength { actual }) => assert_eq!(actual, 16),
+            other => panic!("expected InvalidSeedLength, got {other:?}"),
+        }
     }
 }

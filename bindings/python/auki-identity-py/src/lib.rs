@@ -100,11 +100,16 @@ impl Wallet {
                 bytes.len()
             )));
         }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-        Ok(Wallet {
-            inner: RustWallet::from_seed(&arr),
-        })
+        // `RustWallet::from_seed` (in the swift-bindings-driven signature)
+        // takes `Vec<u8>` and returns `Result<Arc<RustWallet>, _>`. We've
+        // already validated the length above, so the inner `expect` is
+        // unreachable; `Arc::into_inner` succeeds because the Arc was just
+        // constructed and we hold the only reference.
+        let arc = RustWallet::from_seed(bytes.to_vec())
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = std::sync::Arc::into_inner(arc)
+            .expect("freshly constructed Arc<RustWallet> has refcount 1");
+        Ok(Wallet { inner })
     }
 
     /// Deterministic child derivation. Same parent + same label → same
@@ -138,8 +143,16 @@ impl Wallet {
     /// `PublicKey` → SHA-256 multihash → base58btc multibase.
     #[pyo3(text_signature = "($self, /)")]
     fn peer_id(&self) -> String {
-        let seed = self.inner.seed();
-        let peer = PeerIdentity::from_seed(&seed);
+        // `Wallet::seed()` returns `Vec<u8>` after the swift-bindings
+        // signature change; `PeerIdentity::from_seed` still takes
+        // `&[u8; 32]`. Bridge the two with try_into — the length is
+        // structurally guaranteed (signing key seed is 32 bytes).
+        let seed_vec: Vec<u8> = self.inner.seed();
+        let seed_array: [u8; 32] = seed_vec
+            .as_slice()
+            .try_into()
+            .expect("32-byte seed from Wallet::seed()");
+        let peer = PeerIdentity::from_seed(&seed_array);
         peer.peer_id().to_string()
     }
 
@@ -179,7 +192,10 @@ impl Wallet {
     /// this getter just makes them explicit.
     #[pyo3(text_signature = "($self, /)")]
     fn seed<'py>(&self, py: Python<'py>) -> Py<PyBytes> {
-        PyBytes::new_bound(py, &self.inner.seed()).unbind()
+        // `Wallet::seed()` returns `Vec<u8>` now; PyBytes accepts a slice
+        // either way.
+        let seed_vec: Vec<u8> = self.inner.seed();
+        PyBytes::new_bound(py, &seed_vec).unbind()
     }
 }
 

@@ -36,6 +36,10 @@ auki-identity = { path = "../../../crates/auki-identity", features = ["swift-bin
 # auki-time types in their fields.
 auki-time = { path = "../../../crates/auki-time" }
 
+# Registry entry types (SensorRegistryEntry, SensorBody, Camera, …) —
+# used directly in tests and available to the Swift surface as typed Records.
+auki-registry = { path = "../../../crates/auki-registry", features = ["swift-bindings"] }
+
 # Cross-crate UniFFI dep: `auki-network-swift` defines the StreamSubscription*
 # Swift surface, plus PeerLivenessListener / HeartbeatTimestampProvider /
 # SwiftStreamProvider callback-interface traits. We `pub use` those here.

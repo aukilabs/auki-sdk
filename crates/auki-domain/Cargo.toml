@@ -37,6 +37,8 @@ swift-bindings = [
     "dep:anyhow",
     "auki-identity/swift-bindings",
     "auki-network/swift-bindings",
+    "dep:auki-registry",
+    "auki-registry/swift-bindings",
 ]
 
 [dependencies]

@@ -123,4 +123,26 @@ mod tests {
         };
         assert_eq!(info.app, "test-app");
     }
+
+    #[test]
+    fn sensor_registry_entry_camera_variant() {
+        use auki_registry::{Camera, SensorBody, SensorRegistryEntry};
+        // Camera has no Default derive — construct with explicit field values.
+        let camera = Camera {
+            width: 640,
+            height: 480,
+            frame_rate_hz: 30,
+            pixel_format: "YUV_NV12".to_string(),
+            color_space: "BT.709".to_string(),
+            intrinsics_model: "pinhole".to_string(),
+            distortion_model: "plumb_bob".to_string(),
+            frame_id: "robot/cam_optical".to_string(),
+            frame_hash: "000000000000000000000000deadbeef".to_string(),
+        };
+        let entry = SensorRegistryEntry {
+            sensor_id: "cam-1".to_string(),
+            body: SensorBody::Camera(camera),
+        };
+        assert!(matches!(entry.body, SensorBody::Camera(_)));
+    }
 }

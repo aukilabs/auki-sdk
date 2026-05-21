@@ -726,6 +726,7 @@ dependencies = [
  "auki-identity",
  "auki-network",
  "auki-network-swift",
+ "auki-registry",
  "auki-time",
  "libp2p",
  "libp2p-identity",
@@ -952,6 +953,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]

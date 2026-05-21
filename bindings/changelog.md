@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Python `auki-uniffi-test` package root added.** See [`bindings/python`](python/changelog.md) for the UniFFI package layout and single generation/native-library build recipe.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Swift `auki-uniffi-test` package root added.** See [`bindings/swift`](swift/changelog.md) for the static SwiftPM package layout and generated iOS/macOS XCFramework location.
 
 ### Nils's codex · May 21, HKT, 2026

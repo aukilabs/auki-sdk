@@ -5,6 +5,7 @@ Python-facing SDK packages live here. The structure preserves the existing per-c
 | Package | What it does |
 |---|---|
 | [`auki-datatypes-py`](auki-datatypes-py) | Pure Python betterproto bindings for `auki-datatypes` protobuf schemas. |
+| [`auki-uniffi-test`](auki-uniffi-test) | UniFFI-generated Python package smoke path with bundled native libraries. |
 | [`auki-identity-py`](auki-identity-py) | Wallet primitives and per-machine identity helpers. |
 | [`auki-layout-py`](auki-layout-py) | Python wrappers for SDK-canonical path helpers. |
 | [`auki-logs-py`](auki-logs-py) | PyO3 wrapper for the segmented log framing primitive. |

@@ -43,4 +43,6 @@ Python binding generation also uses the root `justfile`:
 just generate-python-bindings auki-uniffi-test
 ```
 
-The generated Python module and host debug library land in `bindings/python/auki-uniffi-test/generated/`. That path is a generated smoke-test output, not a committed Python package root.
+The generated Python package lives at `bindings/python/auki-uniffi-test/`. The API is written to `auki_uniffi_test/__init__.py`, and native libraries live under `auki_uniffi_test/native/<rust-target>/`.
+
+The recipe also builds native libraries for the host and default Linux targets. Linux builds use `cross`, so Docker must be running.

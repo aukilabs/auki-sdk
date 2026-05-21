@@ -6,6 +6,12 @@ Append-only timeline of changes for the UniFFI proving crate. Latest entry on to
 
 ### Nils's codex · May 21, HKT, 2026
 
+Turned the generated Python output into a package root under `bindings/python/auki-uniffi-test`. The generated UniFFI API now lands in `auki_uniffi_test/__init__.py`, native libraries live under `auki_uniffi_test/native/<rust-target>/`, and the generated loader selects the current platform with override env vars. Added `just build-python-native-libs` and `just build-python-native-lib` recipes backed by `scripts/build-python-native-libs.sh`, using `cross` for Linux targets.
+
+Collapsed the public Python binding workflow back to one Just recipe. `just generate-python-bindings auki-uniffi-test` now orchestrates package generation first and native-library compilation/copying second; target selection is internal, with `AUKI_PYTHON_NATIVE_TARGETS` as a local override.
+
+### Nils's codex · May 21, HKT, 2026
+
 Added the root `just generate-python-bindings <crate>` workflow and `scripts/generate-python-bindings.sh`. Verified with `auki-uniffi-test`: UniFFI generates `auki_uniffi_test.py`, copies the host debug library to `bindings/python/auki-uniffi-test/generated/`, and the generated Python module smoke-tests sync functions, records/enums, objects, and async exports.
 
 ### Nils's codex · May 21, HKT, 2026

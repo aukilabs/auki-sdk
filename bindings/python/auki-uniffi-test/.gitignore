@@ -1,0 +1,5 @@
+build/
+*.egg-info/
+__pycache__/
+auki_uniffi_test/__pycache__/
+auki_uniffi_test/native/

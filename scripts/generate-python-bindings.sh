@@ -12,7 +12,10 @@ cd "$repo_root"
 crate="$1"
 lib_name="${crate//-/_}"
 package_dir="bindings/python/${crate}"
-generated_dir="${package_dir}/generated"
+module_dir="${package_dir}/${lib_name}"
+host_target="$(rustc -vV | sed -n 's/^host: //p')"
+generated_dir="$(mktemp -d "${TMPDIR:-/tmp}/${crate}.python-bindings.XXXXXX")"
+trap 'rm -rf "$generated_dir"' EXIT
 
 case "$(uname -s)" in
   Darwin) lib_ext="dylib" ;;
@@ -30,17 +33,69 @@ if [[ ! -f "$library" ]]; then
   exit 1
 fi
 
-mkdir -p "$generated_dir"
+mkdir -p "$module_dir/native/${host_target}"
 rm -f \
-  "$generated_dir/${lib_name}.py" \
-  "$generated_dir/${lib_name}.pyi" \
-  "$generated_dir/lib${lib_name}.${lib_ext}"
+  "$module_dir/__init__.py" \
+  "$module_dir/native/${host_target}/lib${lib_name}.${lib_ext}"
 
 cargo run -p "$crate" --features cli --bin uniffi-bindgen -- generate \
   --library "$library" \
   --language python \
   --out-dir "$generated_dir"
 
-cp "$library" "$generated_dir/"
+python3 scripts/patch-uniffi-python-loader.py "$generated_dir/${lib_name}.py" "$lib_name"
 
-echo "Generated Python bindings in $generated_dir"
+cp "$generated_dir/${lib_name}.py" "$module_dir/__init__.py"
+cp "$library" "$module_dir/native/${host_target}/"
+
+if [[ ! -f "$package_dir/pyproject.toml" ]]; then
+  cat > "$package_dir/pyproject.toml" <<EOF
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "${crate}"
+version = "0.0.0"
+description = "UniFFI-generated Python bindings for ${crate}."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Auki Labs Limited" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/aukilabs/auki-sdk"
+
+[tool.setuptools]
+packages = ["${lib_name}"]
+
+[tool.setuptools.package-data]
+${lib_name} = ["native/*/*"]
+EOF
+fi
+
+if [[ ! -f "$package_dir/setup.py" ]]; then
+  cat > "$package_dir/setup.py" <<EOF
+from setuptools import setup
+from setuptools.dist import Distribution
+
+
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self):
+        return True
+
+
+setup(distclass=BinaryDistribution, zip_safe=False)
+EOF
+fi
+
+echo "Generated Python package in $package_dir"
+echo "Included host library for $host_target"
+
+bash scripts/build-python-native-libs.sh "$crate"

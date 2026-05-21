@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Python UniFFI package now supports target-native libraries.** Generated Python output now becomes a package under `bindings/python/auki-uniffi-test`, loads native libraries from `native/<rust-target>/`, and the single `generate-python-bindings` recipe also runs `cross`-backed Linux target builds.
+
+### Nils's codex · May 21, HKT, 2026
+
 **[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Python UniFFI generation recipe added.** `just generate-python-bindings auki-uniffi-test` now builds the crate, runs its `cli` bindgen entry point with `--language python`, and writes generated glue plus the host debug library to `bindings/python/auki-uniffi-test/generated/`.
 
 ### Nils's codex · May 21, HKT, 2026

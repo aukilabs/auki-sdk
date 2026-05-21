@@ -15,11 +15,12 @@ Implementation status for [`auki-uniffi-test`](../README.md).
 - Async exported function: `delayed_greeting`.
 - UniFFI object: `Counter`, including async method `add_after`.
 - Rust-side tests cover all exported behavior.
-- Root `just generate-python-bindings auki-uniffi-test` workflow writes generated Python glue and the host debug library to `bindings/python/auki-uniffi-test/generated/`.
+- Root `just generate-python-bindings auki-uniffi-test` workflow writes the generated Python package and then builds/copies native libraries under `bindings/python/auki-uniffi-test/`.
 
 ## What does not work yet
 
-- No committed generated Python package.
+- No published Python wheels.
+- Default Linux native-library builds require Docker for `cross`.
 - No dependency on real SDK crates.
 
 Those omissions are intentional for this first proving crate.

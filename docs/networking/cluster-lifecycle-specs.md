@@ -428,7 +428,7 @@ The v1 delegation scopes are exactly:
 - `advertise`: the peer may announce the domain through Discovery,
   peer-discovery metadata, or equivalent reachability surfaces;
 - `serve`: the peer may declare the domain during handshake and serve offers
-  scoped to that domain;
+  or spatial data scoped to that domain;
 - `update`: the peer may publish or apply domain-scoped updates where a later
   RFC defines an update path.
 
@@ -454,9 +454,9 @@ canonical signed bytes before signature verification, and MUST ignore unknown
 fields after verification unless a later RFC defines them.
 
 An implementation MUST NOT normalize `domain_id`, `delegate_peer_id`,
-timestamps, scope order, drop unknown fields, or change base64url spelling
-before canonicalizing the signed bytes. The signature verifies the JSON values
-as presented, minus only the `signature` field.
+timestamps, `scopes` array order, drop unknown fields, or change base64url
+spelling before canonicalizing the signed bytes. The signature verifies the
+JSON values as presented, minus only the `signature` field.
 
 #### Verification
 
@@ -469,7 +469,7 @@ To verify a v1 domain delegation for a claimed action, a receiver MUST:
    `delegate_wallet_public_key`, and `signature`.
 4. Parse `delegate_peer_id` as a libp2p PeerId.
 5. Verify that `scopes` contains only v1 scopes, is non-empty, has no
-   duplicates, and is sorted lexicographically.
+   duplicates, and is in alphabetical string order.
 6. Verify that `valid_from` and `expires_at` form a valid time window.
 7. Recompute the canonical signed bytes.
 8. Verify `signature` against `domain_owner_public_key` over the canonical
@@ -561,6 +561,11 @@ wrong-domain delegation.
 
 A receiver MUST reject a delegation that does not authorize the claimed action.
 The v1 delegation scopes are `advertise`, `serve`, and `update`.
+
+For served-domain validation, the claimed action is `serve`. For Discovery,
+peer-discovery metadata, or equivalent reachability advertisement, the claimed
+action is `advertise`. The `update` scope is checked only by protocols that
+define domain-scoped update behavior.
 
 Domain authority validation answers whether the remote peer may serve under a
 domain. It does not decide whether the local application wants to consume that
@@ -788,6 +793,14 @@ A Discovery record SHOULD answer:
 
 A Discovery record MUST NOT be treated as an authoritative offer catalog.
 
+A peer that advertises a domain on behalf of another wallet MUST have a valid
+delegation with `advertise` scope. A peer that controls the domain owner wallet
+MAY advertise that domain directly.
+
+Receiving an advertisement MUST NOT by itself cause the receiver to accept the
+advertised peer as a server for that domain. Served-domain acceptance still
+requires peer-to-peer authority validation with `serve` authority.
+
 A Discovery record MAY advertise one or more entrypoints into a peer graph.
 
 A Discovery record MUST NOT be assumed to list every peer in that graph.
@@ -975,6 +988,25 @@ offers for that relationship.
 10. Park fetches Robot's offer catalog.
 11. Park may Get or Subscribe to offers scoped to the accepted served domain.
 
+#### Authority Examples
+
+Direct owner:
+
+1. Robot's verified peer binding wallet public key equals the domain owner
+   public key in the verified domain declaration.
+2. Park accepts Robot as directly authorized to serve the domain.
+3. Robot does not need to present a delegation for that domain.
+
+Delegated server:
+
+1. Robot's verified peer binding wallet public key differs from the domain
+   owner public key.
+2. Robot presents a delegation signed by the domain owner wallet.
+3. Park verifies that the delegation binds the domain id, domain owner public
+   key, Robot's wallet public key, Robot's transport-authenticated libp2p peer
+   id, a valid time window, and the `serve` scope.
+4. Park accepts the domain into Robot's served domain set.
+
 #### Failure Path Examples
 
 Identity failure:
@@ -1021,7 +1053,8 @@ The baseline peer authorization modes are:
 
 The default peer authorization mode for this experimental baseline is `all`.
 
-Non-experimental deployments SHOULD use `whitelisted-only` or `app-policy`.
+Deployments that need tighter peer admission SHOULD use `whitelisted-only` or
+`app-policy`.
 
 Peer authorization MUST NOT depend solely on Discovery presence.
 
@@ -1217,12 +1250,16 @@ Define how an offer is tied to a served domain:
 - required domain id field;
 - one offer belongs to exactly one domain in v1;
 - multi-domain offers are future work;
-- how an offer references delegation or served-domain validation;
+- how an offer references the accepted served domain set;
 - behavior when the served domain becomes rejected, expired, or removed;
 - how consumers distinguish producer-declared metadata from verified authority.
 
 An offer is usable only when its single domain id is in the accepted served
 domain set for that peer relationship.
+
+A v1 offer SHOULD NOT carry its own domain declaration or delegation unless a
+later RFC defines embedded authority proofs. Offer authority is derived from the
+peer relationship's accepted served domain set.
 
 ### RFC-0022: Spatial Message Envelope (To Fill)
 
@@ -1334,6 +1371,7 @@ Diagnostics SHOULD answer:
 - whether each peer is connected;
 - whether each peer is authorized;
 - what offers each peer claims it can share;
+- why any peer binding, domain declaration, or delegation was rejected;
 - why a peer became degraded or lost;
 - whether Discovery is degraded independently from peer connectivity.
 

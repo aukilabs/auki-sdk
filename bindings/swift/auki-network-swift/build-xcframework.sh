@@ -48,20 +48,37 @@ lipo -create \
 #    Generating against the *device* .a is fine: uniffi-bindgen reads
 #    arch-independent UNIFFI_META_* symbols via the `object` crate, so
 #    the resulting .swift/.h/.modulemap are correct for both slices.
-cargo run --release --features cli --bin uniffi-bindgen -- generate \
+cargo run --release --features cli -p auki-network-swift --bin uniffi-bindgen -- generate \
   --library "$DEVICE_LIB" \
   --language swift \
   --out-dir "$BINDINGS"
-# Xcode expects `module.modulemap`.
-if [ -f "$BINDINGS/${LIB_NAME}FFI.modulemap" ]; then
-  mv "$BINDINGS/${LIB_NAME}FFI.modulemap" "$BINDINGS/module.modulemap"
-fi
-# The Swift glue file is consumed at the SwiftPM-package level, not
-# embedded in the xcframework — move it out of $BINDINGS so step 4's
-# `-headers $BINDINGS` packages only the FFI header + modulemap.
+# Multi-namespace UniFFI output: with upstream crates each calling
+# `setup_scaffolding!()` behind the `swift-bindings` feature, uniffi-bindgen
+# emits one set of {.swift, *FFI.h, *FFI.modulemap} per namespace. The
+# binding crate's `setup_scaffolding!()` produces the cdylib entry-point
+# but its own namespace is mostly empty. Consolidate the modulemaps into
+# a single `module.modulemap` declaring all FFI modules so Xcode/SwiftPM
+# can find them as one umbrella module.
+{
+  for mm in "$BINDINGS"/*FFI.modulemap; do
+    [ -f "$mm" ] || continue
+    cat "$mm"
+    echo
+  done
+} > "$BINDINGS/module.modulemap.tmp"
+mv "$BINDINGS/module.modulemap.tmp" "$BINDINGS/module.modulemap"
+# Remove the now-merged per-namespace modulemaps.
+find "$BINDINGS" -name "*FFI.modulemap" -delete
+
+# All Swift glue files are consumed at the SwiftPM-package level, not
+# embedded in the xcframework — move every .swift out of $BINDINGS so
+# step 4's `-headers $BINDINGS` packages only the FFI .h + modulemap.
 SWIFT_OUT="$OUT/swift"
 mkdir -p "$SWIFT_OUT"
-mv "$BINDINGS/${LIB_NAME}.swift" "$SWIFT_OUT/${LIB_NAME}.swift"
+for sf in "$BINDINGS"/*.swift; do
+  [ -f "$sf" ] || continue
+  mv "$sf" "$SWIFT_OUT/"
+done
 
 # 4. Assemble the XCFramework (headers = the FFI .h + modulemap only).
 rm -rf "$OUT/AukiNetwork.xcframework"

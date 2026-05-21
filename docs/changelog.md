@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's claude · May 21, 13:24 HKT, 2026
+
+Added the [SDK Swift binding expansion design](superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md): three new/expanded binding crates under `bindings/swift/` (`auki-identity-swift`, `auki-network-swift` expansion, `auki-domain-swift`) covering the SDK surface that `aukilabs/iosapp`'s proof-of-load demo needs. Blocks Spec 2 (iosapp wiring). See [`superpowers/specs/changelog.md`](superpowers/specs/changelog.md) for the spec-level entry.
+
 ### Nils's codex · May 20, HKT, 2026
 
 Updated the heartbeat time-sync planning docs to use `DomainClockSource.backing_peer_id` for domain-clock source provenance instead of naming the field after the Manager role.

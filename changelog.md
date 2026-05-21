@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 13:24 HKT, 2026
+
+Added the [SDK Swift binding expansion design spec](docs/superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md): three binding crates under `bindings/swift/` (`auki-identity-swift` new, `auki-network-swift` expansion folding in Stage 2 streams, `auki-domain-swift` new at full `auki-domain-py` parity) that together let `aukilabs/iosapp` prove end-to-end use of the identity + networking SDK modules. Implementation will land as three sequential PRs (A: identity, B: network expansion, C: domain). Blocks Spec 2 (iosapp wiring + proof-of-load UI). See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Diagnostic domain-time flash demo is wired to heartbeat sync.** `ClusterManager` heartbeat timing now uses the SDK-owned `SessionClock`, and the diagnostic app reads explicit domain estimates/time before enabling Domain flash mode. See [`crates/changelog.md`](crates/changelog.md) and [`examples/changelog.md`](examples/changelog.md) for propagation.

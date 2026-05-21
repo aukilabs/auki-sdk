@@ -40,9 +40,56 @@ uniffi::custom_type!(Multiaddr, String, {
     lower: |m: Multiaddr| m.to_string(),
 });
 
-// Subsequent tasks (5+) add upstream type re-exports, orchestrator
-// functions (bootstrap_swift / create_cluster_swift / join_cluster_swift),
-// and additional Swift-side adapters.
+// ─── Upstream type re-exports ──────────────────────────────────────
+//
+// Swift consumers reach these via the AukiDomain framework's umbrella
+// module. The pub use re-exports keep Rust-side type paths short for
+// the binding-crate adapter functions in Tasks 21-23.
+
+pub use auki_domain_rs::cluster_manager::{
+    AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
+    DomainClockEstimateUnavailable, DomainTimeNowError, FetchParticipantInfoError,
+    FetchRegistryEntryError, FetchResourcesCatalogError, FetchSensorsCatalogError,
+    InboundDiagnosticMessage, JoinClusterError, ResourceCatalogProvider, SensorCatalogProvider,
+};
+pub use auki_domain_rs::cluster_membership::{ClusterMember, ClusterMembership};
+pub use auki_domain_rs::stream_manifest::BuildStreamManifestError;
+
+pub use auki_network::AllowedPeer;
+pub use auki_network::diagnostic_protocol::DiagnosticMessage;
+pub use auki_network::discovery_client::{
+    ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
+};
+pub use auki_network::network_runtime::{
+    BroadcastDiagnosticError, OpenStreamError, StreamError, StreamEntry,
+    StreamSubscriptionAudio, StreamSubscriptionCamera, StreamSubscriptionDetection,
+    StreamSubscriptionJointEncoders, StreamSubscriptionPointCloud,
+};
+pub use auki_network::resources_protocol::{
+    ResourceEntry, ResourcePinholeIntrinsics, ResourceQuat, ResourceSpatialTransform,
+    ResourceVec3, ResourcesRequest, ResourcesResponse, SensorStreamResource,
+    TransformEdgeResource,
+};
+pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
+pub use auki_network::ParticipantInfo;
+
+pub use auki_registry::{
+    Audio, AxisConvention, AxisDirection, Camera, ClockBody, ClockMeta, ClockRegistryEntry,
+    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness, JointEncoders, LengthUnit,
+    PointCloud, PointField, PointFieldDataType, Scope, SensorBody, SensorRegistryEntry,
+};
+
+pub use auki_time::{ClockTransformEstimate, DomainClockDescriptor, DomainClockEstimate};
+
+// Swift callback-interface traits + StreamSubscription Swift glue
+// re-exported from auki-network-swift (PR B). Swift consumers see them
+// under the AukiDomain umbrella via the cross-crate dep.
+pub use auki_network_swift::{
+    HeartbeatTimestampProvider, PeerLivenessListener, StreamItem, SwiftAudioSource,
+    SwiftCameraSource, SwiftDetectionSource, SwiftJointEncodersSource,
+    SwiftPeerLivenessEvent, SwiftPointCloudSource, SwiftSourceError, SwiftStreamDecision,
+    SwiftStreamProvider,
+};
 
 #[cfg(test)]
 mod tests {

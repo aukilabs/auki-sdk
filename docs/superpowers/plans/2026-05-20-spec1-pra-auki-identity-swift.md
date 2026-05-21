@@ -138,6 +138,12 @@ git commit -m "feat(auki-identity): add optional swift-bindings cargo feature"
 
 Annotate the `Wallet` struct as a UniFFI `Object`. Expose its constructors (`new`, `from_seed`) and a curated method set (`seed`, `wallet_id_str` — a new helper added in this task). Skip `public_key`, `id`, `sign`, `sign_canonical_json`, `derive_child` — out of PR A's scope per the spec's "Scope" section.
 
+**Architectural amendments captured during execution** (May 21, 2026):
+
+1. **`uniffi::setup_scaffolding!()` at the upstream crate root.** UniFFI 0.31 proc-macros expand to code referencing `crate::UniFfiTag`, a symbol created by `setup_scaffolding!()`. The macro needs to be invoked **in the upstream crate** (gated by `#[cfg(feature = "swift-bindings")]`) so that the proc-macro-annotated types compile when the upstream crate is built standalone with `--features swift-bindings`. Each crate's `UniFfiTag` is its own — the binding crate will *also* call `setup_scaffolding!()` (Task 6) for its own metadata aggregation; the two coexist. Standard UniFFI multi-crate pattern.
+
+2. **`Wallet::from_seed` and `Wallet::seed` switch to `Vec<u8>`.** UniFFI 0.31 does not implement `Lower`/`Lift` for fixed-size arrays like `[u8; 32]`, so the existing `pub fn from_seed(seed: &[u8; 32]) -> Self` and `pub fn seed(&self) -> [u8; 32]` can't auto-export. Rename canonical to `pub fn from_seed(seed: Vec<u8>) -> Result<Arc<Self>, IdentityError>` (with a length check; wrong-length returns `IdentityError::InvalidSeedLength { actual: u32 }`) and `pub fn seed(&self) -> Vec<u8>`. Internal callers (`Wallet::derive_child`'s internal `Self::from_seed(...)` call) updated to pass `Vec<u8>` and unwrap the Result with `.expect("derive_child output is always 32 bytes")` since the length is structurally guaranteed there. A new `IdentityError` enum is added under the same feature gate, derived `uniffi::Error` + `thiserror::Error`. The downstream call site in `crates/auki-network/src/lib.rs` (`PeerIdentity::from_wallet`) is fixed as part of Task 4, not Task 2 — Task 2 leaves a comment at the call site to keep the chain compiling temporarily (more detail in Step 3 below).
+
 - [ ] **Step 1: Add a feature-gated regression test**
 
 Append to `crates/auki-identity/src/lib.rs` (inside the existing `#[cfg(test)] mod tests` if present; otherwise add one at the bottom of the file):
@@ -435,6 +441,11 @@ annotate NetworkRuntime + stream surface."
 - Modify: `crates/auki-network/src/lib.rs`
 
 The `PeerIdentity` type and the `PEER_DERIVATION_LABEL = "peer/v1"` constant live around lines 80–135 of `crates/auki-network/src/lib.rs`. PR A annotates `PeerIdentity` as a UniFFI `Object` with constructor `from_wallet` and a new `peer_id_string()` helper returning the canonical libp2p peer-id string.
+
+**Architectural amendments captured during execution** (same pattern as Task 2):
+
+- Add a feature-gated `uniffi::setup_scaffolding!()` at the root of `crates/auki-network/src/lib.rs` so the proc-macros on `PeerIdentity` compile when the upstream crate is built standalone with `--features swift-bindings`. (Task 2's fix in the upstream `auki-identity` crate; same approach here.)
+- `PeerIdentity::from_seed(&[u8; 32])` stays as-is (not UniFFI-exposed at v0 per the plan's split-impl scheme), so no Vec<u8> migration needed here. The temporary `.try_into()` workaround Task 2 placed in `PeerIdentity::from_wallet` (to bridge `Wallet::seed() -> Vec<u8>` to `PeerIdentity::from_seed(&[u8; 32])`) stays in place — there is no scope creep into changing `PeerIdentity::from_seed`'s signature in PR A.
 
 - [ ] **Step 1: Add the feature-gated regression test**
 

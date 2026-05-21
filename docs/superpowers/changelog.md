@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+Added the stream naming cleanup design under [`specs/`](specs/2026-05-21-stream-naming-cleanup-design.md), specifying the no-compatibility rename to `CameraFrame`, `DetectionFrame`, and `SensorBody::Camera`.
+
 ### Nils's codex · May 20, HKT, 2026
 
 Renamed the heartbeat time-sync plan's `DomainClockSource.manager_peer_id` field to `backing_peer_id`, making the source record describe clock provenance instead of Manager role.

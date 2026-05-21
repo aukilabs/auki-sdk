@@ -336,6 +336,7 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
 /// [`ClusterTarget::join`], [`ClusterTarget::join_or_create`],
 /// [`ClusterTarget::most_recent_or_create`]) for ergonomics; the bare
 /// enum variants are exposed for pattern-matching only.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone)]
 pub enum ClusterTarget {
     /// Create a new cluster with this exact name. Errors with

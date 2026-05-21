@@ -212,4 +212,14 @@ mod tests {
         let e4 = JoinClusterError::NotFound("cluster-c".to_string());
         assert!(!e4.to_string().is_empty());
     }
+
+    #[test]
+    fn cluster_target_variants_construct() {
+        use auki_domain_rs::cluster_manager::*;
+        // All 4 static factories work; if any didn't exist, this wouldn't compile.
+        let _ = ClusterTarget::create("test".to_string());
+        let _ = ClusterTarget::join("test".to_string());
+        let _ = ClusterTarget::join_or_create("test".to_string());
+        let _ = ClusterTarget::most_recent_or_create("test".to_string());
+    }
 }

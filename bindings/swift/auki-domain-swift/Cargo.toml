@@ -1,0 +1,71 @@
+[package]
+name = "auki-domain-swift"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "UniFFI Swift bindings for `auki-domain` — exposes the cluster Manager surface (bootstrap / membership / catalogs / streams / clock sync / diagnostics) to native iOS (Swift) peers."
+
+[lib]
+# `staticlib` is the iOS-consumable artifact; `cdylib` lets library-mode
+# `uniffi-bindgen` introspect it on the host; `rlib` keeps in-workspace Rust
+# consumers working. Lib name distinct from `auki-domain`'s own lib name so
+# both can be direct deps in one workspace.
+name = "auki_domain_swift"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+# Enables the `uniffi-bindgen` helper binary (Swift codegen host tool).
+cli = ["uniffi/cli"]
+
+[dependencies]
+# Upstream domain crate, renamed via `package =` to avoid lib name collision.
+# The `swift-bindings` feature must be on for the UniFFI proc-macros to compile.
+auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain", features = ["swift-bindings"] }
+
+# auki-network for: building the swarm in bootstrap_swift; reaching the
+# StreamSubscription* objects annotated by PR B (re-exported via `pub use`).
+auki-network = { path = "../../../crates/auki-network", features = ["swift-bindings", "swarm", "discovery_client"] }
+
+# Wallet::from_seed — bootstrap_swift takes 32-byte wallet seeds.
+auki-identity = { path = "../../../crates/auki-identity", features = ["swift-bindings"] }
+
+# Time-transform records (DomainClockEstimate, ClockTransformEstimate) carry
+# auki-time types in their fields.
+auki-time = { path = "../../../crates/auki-time" }
+
+# Cross-crate UniFFI dep: `auki-network-swift` defines the StreamSubscription*
+# Swift surface, plus PeerLivenessListener / HeartbeatTimestampProvider /
+# SwiftStreamProvider callback-interface traits. We `pub use` those here.
+auki-network-swift = { path = "../auki-network-swift" }
+
+# `PeerId` / `Multiaddr` parsing on the Swift ↔ Rust seam.
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
+multiaddr = "0.18"
+
+# libp2p stack: bootstrap_swift constructs a `Swarm<Behaviour>` internally.
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
+
+# Process-wide multi-thread tokio runtime that UniFFI drives the
+# exported async fns on.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# UniFFI proc-macro mode (no UDL). `tokio` feature enables async exports.
+uniffi = { version = "0.31", features = ["tokio"] }
+
+# FFI error enum Display / std::error::Error impls.
+thiserror = "2"
+
+# Used by the `try_lift` arms of `uniffi::custom_type!` declarations.
+anyhow = "1"
+
+# JSON round-trip for ClusterMembership.to_json / from_json helpers.
+serde_json = "1"
+
+# Swift codegen helper. Gated on `cli`.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

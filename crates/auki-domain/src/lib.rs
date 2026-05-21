@@ -28,11 +28,11 @@ pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEn
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
-    DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
+    DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
     DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
-    FetchResourcesCatalogError, FetchSensorsCatalogError, JoinClusterError,
-    LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider, SensorEntry,
-    SensorsRequest, SensorsResponse, elect_successor,
+    FetchResourcesCatalogError, FetchSensorsCatalogError, InboundDiagnosticMessage,
+    JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
+    SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

@@ -1,5 +1,6 @@
 use crate::sdk_runtime::{RuntimeCommand, RuntimeSnapshot, SdkRuntime};
 use crate::sound::SoundEngine;
+use crate::tick_report::TickReport;
 
 const MAX_FLASH_EVENTS: usize = 12;
 
@@ -9,6 +10,7 @@ pub struct DiagnosticApp {
     flash_events: FlashEventLog,
     sound: SoundEngine,
     sound_enabled: bool,
+    simulated_utc_offset_ms: i64,
     pub(crate) discovery_url_input: String,
     pub(crate) cluster_name_input: String,
     pub(crate) display_name_input: String,
@@ -35,6 +37,7 @@ impl DiagnosticApp {
             flash_events: FlashEventLog::default(),
             sound,
             sound_enabled,
+            simulated_utc_offset_ms: 0,
         }
     }
 
@@ -62,6 +65,10 @@ impl DiagnosticApp {
         self.flash_events.events()
     }
 
+    pub fn publish_tick_report(&self, report: TickReport) {
+        self.send(RuntimeCommand::PublishTickReport(report));
+    }
+
     pub fn sound_enabled(&self) -> bool {
         self.sound_enabled
     }
@@ -76,6 +83,14 @@ impl DiagnosticApp {
 
     pub fn sound_unavailable_reason(&self) -> Option<&str> {
         self.sound.unavailable_reason()
+    }
+
+    pub fn simulated_utc_offset_ms(&self) -> i64 {
+        self.simulated_utc_offset_ms
+    }
+
+    pub fn set_simulated_utc_offset_ms(&mut self, offset_ms: i64) {
+        self.simulated_utc_offset_ms = offset_ms.clamp(-5_000, 5_000);
     }
 }
 

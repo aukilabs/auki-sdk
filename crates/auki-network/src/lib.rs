@@ -51,6 +51,9 @@ pub mod heartbeat_protocol;
 pub mod membership_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod diagnostic_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod info_protocol;
 
 #[cfg(feature = "swarm")]
@@ -64,11 +67,12 @@ pub mod registries_protocol;
 
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
-    AllowedPeer, BroadcastMembershipError, HeartbeatNtpSampleObservation, HeartbeatTimestampSource,
-    HeartbeatTimingObservation, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime,
-    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
-    RequestRegistryError, RequestResourcesError, RequestSensorsError, ResourcesRequestEvent,
-    SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
+    AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
+    HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
+    InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
+    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
+    RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
+    SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

@@ -628,6 +628,8 @@ dependencies = [
  "libp2p",
  "multiaddr",
  "rodio",
+ "serde",
+ "serde_json",
  "tokio",
  "uuid",
 ]

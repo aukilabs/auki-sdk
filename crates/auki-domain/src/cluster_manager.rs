@@ -67,16 +67,18 @@ use auki_time::SessionClock;
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
 // at the top of this module).
+pub use auki_network::diagnostic_protocol::DiagnosticMessage;
 pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::heartbeat_protocol::HEARTBEAT_TIMEOUT;
 use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
-    AllowedPeer, HeartbeatNtpSampleObservation, HeartbeatTimestampSource, InfoRequestEvent,
-    JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent, RegistryRequestEvent,
-    RequestInfoError, RequestRegistryError, RequestResourcesError, RequestSensorsError,
-    ResourcesRequestEvent, SendJoinRequestError, SensorsRequestEvent, SpawnError,
+    AllowedPeer, BroadcastDiagnosticError, DiagnosticEvent, HeartbeatNtpSampleObservation,
+    HeartbeatTimestampSource, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime,
+    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
+    RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
+    SensorsRequestEvent, SpawnError,
 };
 pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
 use auki_network::stream_protocol::STREAM_PROTOCOL;
@@ -604,6 +606,9 @@ pub struct ClusterManager {
     /// producer-local registry storage, and replies. Cancelled on
     /// `shutdown`.
     registry_handler_task: Mutex<Option<JoinHandle<()>>>,
+    /// Task that drains inbound best-effort app diagnostic messages.
+    diagnostic_handler_task: Mutex<Option<JoinHandle<()>>>,
+    diagnostic_messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
     /// [`Self::set_sensor_catalog_provider`]; the inbound handler
@@ -631,6 +636,15 @@ pub struct ClusterManager {
     /// last-observed state is harmless and lets consumers drain
     /// their final view.
     stopped: AtomicBool,
+}
+
+/// Best-effort diagnostic message received from a cluster peer.
+#[derive(Debug, Clone)]
+pub struct InboundDiagnosticMessage {
+    /// Authenticated sender peer id.
+    pub peer_id: PeerId,
+    /// Opaque app-level diagnostic topic and payload.
+    pub message: DiagnosticMessage,
 }
 
 impl ClusterManager {
@@ -873,6 +887,7 @@ impl ClusterManager {
             resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
+            diagnostic_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -987,6 +1002,11 @@ impl ClusterManager {
             registry_events_rx,
             registry_app_root.clone(),
         )));
+        let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
+        let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
+            diagnostic_events_rx,
+            diagnostic_messages.clone(),
+        )));
 
         Ok(Self {
             cluster_name,
@@ -1009,6 +1029,8 @@ impl ClusterManager {
             resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
+            diagnostic_handler_task,
+            diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
@@ -1030,6 +1052,24 @@ impl ClusterManager {
     /// pointed at).
     pub fn local_multiaddrs(&self) -> &[Multiaddr] {
         &self.local_multiaddrs
+    }
+
+    /// Broadcast one best-effort diagnostic message to connected cluster peers.
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        self.runtime.broadcast_diagnostic_message(message)
+    }
+
+    /// Drain diagnostic messages received since the previous call.
+    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
+        std::mem::take(
+            &mut *self
+                .diagnostic_messages
+                .lock()
+                .expect("diagnostic_messages lock"),
+        )
     }
 
     /// `true` if the local peer is currently the cluster's Manager.
@@ -1605,6 +1645,7 @@ impl ClusterManager {
             resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
+            diagnostic_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![AllowedPeer {
@@ -1778,6 +1819,11 @@ impl ClusterManager {
             registry_events_rx,
             registry_app_root.clone(),
         )));
+        let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
+        let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
+            diagnostic_events_rx,
+            diagnostic_messages.clone(),
+        )));
 
         Ok(Self {
             cluster_name,
@@ -1800,6 +1846,8 @@ impl ClusterManager {
             resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
+            diagnostic_handler_task,
+            diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
@@ -1905,6 +1953,14 @@ impl ClusterManager {
             .registry_handler_task
             .lock()
             .expect("registry_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .diagnostic_handler_task
+            .lock()
+            .expect("diagnostic_handler_task lock")
             .take()
         {
             task.abort();
@@ -3159,6 +3215,24 @@ fn spawn_registry_handler(
                 None => None,
             };
             let _ = ack.send(RegistryResponse { entry });
+        }
+    })
+}
+
+fn spawn_diagnostic_handler(
+    mut rx: mpsc::Receiver<DiagnosticEvent>,
+    messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(DiagnosticEvent { peer, message }) = rx.recv().await {
+            let mut messages = messages.lock().expect("diagnostic_messages lock");
+            messages.push(InboundDiagnosticMessage {
+                peer_id: peer,
+                message,
+            });
+            if messages.len() > 256 {
+                messages.remove(0);
+            }
         }
     })
 }

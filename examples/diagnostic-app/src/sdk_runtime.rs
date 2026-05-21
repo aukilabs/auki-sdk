@@ -1,4 +1,6 @@
 use crate::flash::FlashMode;
+use crate::tick_report::{PeerTickStats, TickReport, TickReportStore};
+use auki_domain::DiagnosticMessage;
 use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo};
 use auki_identity::{Wallet, load_or_mint_seed};
 use auki_network::PeerIdentity;
@@ -32,6 +34,7 @@ pub struct RuntimeSnapshot {
     pub domain_now_ns: Option<i64>,
     pub domain_offset_ns: Option<i64>,
     pub domain_uncertainty_ns: Option<u64>,
+    pub peer_tick_stats: Vec<PeerTickStats>,
     pub join_in_flight: bool,
 }
 
@@ -69,10 +72,13 @@ pub enum RuntimeCommand {
     JoinOrCreate,
     LeaveCluster,
     SetFlashMode(FlashMode),
+    PublishTickReport(TickReport),
     ClusterJoined(Box<ClusterSnapshot>),
     ClusterJoinFailed(String),
     ClusterLeft,
 }
+
+const TICK_REPORT_TOPIC: &str = "diagnostic.tick-report";
 
 impl RuntimeSnapshot {
     fn initial() -> Self {
@@ -93,6 +99,7 @@ impl RuntimeSnapshot {
             domain_now_ns: None,
             domain_offset_ns: None,
             domain_uncertainty_ns: None,
+            peer_tick_stats: Vec::new(),
             join_in_flight: false,
         }
     }
@@ -116,6 +123,7 @@ impl RuntimeSnapshot {
             domain_now_ns: None,
             domain_offset_ns: None,
             domain_uncertainty_ns: None,
+            peer_tick_stats: Vec::new(),
             join_in_flight: false,
         }
     }
@@ -133,6 +141,7 @@ impl RuntimeSnapshot {
                     self.events.push("domain flash unavailable".into());
                 }
             }
+            RuntimeCommand::PublishTickReport(_) => {}
             RuntimeCommand::JoinOrCreate => {
                 if !self.join_in_flight {
                     self.join_in_flight = true;
@@ -187,6 +196,7 @@ impl RuntimeSnapshot {
                 self.domain_now_ns = None;
                 self.domain_offset_ns = None;
                 self.domain_uncertainty_ns = None;
+                self.peer_tick_stats.clear();
                 if had_cluster_state {
                     self.events.push("cluster left".into());
                 }
@@ -208,10 +218,12 @@ struct RuntimeWorker {
     commands: mpsc::UnboundedReceiver<WorkerCommand>,
     join_generation: JoinGeneration,
     manager: Option<ClusterManager>,
+    tick_reports: TickReportStore,
 }
 
 enum WorkerCommand {
     JoinOrCreate { token: u64 },
+    PublishTickReport(TickReport),
     LeaveCluster,
     Shutdown,
 }
@@ -251,6 +263,7 @@ impl SdkRuntime {
                 commands: worker_commands,
                 join_generation: join_generation.clone(),
                 manager: None,
+                tick_reports: TickReportStore::default(),
             }
             .run(),
         );
@@ -291,6 +304,9 @@ impl SdkRuntime {
                 if self.commands.send(WorkerCommand::LeaveCluster).is_err() {
                     self.apply(RuntimeCommand::ClusterLeft);
                 }
+            }
+            RuntimeCommand::PublishTickReport(report) => {
+                let _ = self.commands.send(WorkerCommand::PublishTickReport(report));
             }
             RuntimeCommand::SetDiscoveryUrl(_)
             | RuntimeCommand::SetClusterName(_)
@@ -346,6 +362,7 @@ impl RuntimeWorker {
                 }
                 _ = refresh.tick() => {
                     self.refresh_cluster_snapshot();
+                    self.ingest_diagnostic_messages();
                 }
             }
         }
@@ -354,9 +371,12 @@ impl RuntimeWorker {
     async fn handle_command(&mut self, command: WorkerCommand) {
         match command {
             WorkerCommand::JoinOrCreate { token } => self.join_or_create(token).await,
+            WorkerCommand::PublishTickReport(report) => self.publish_tick_report(report),
             WorkerCommand::LeaveCluster => {
                 self.shutdown_manager().await;
                 self.apply(RuntimeCommand::ClusterLeft);
+                self.tick_reports = TickReportStore::default();
+                self.publish_tick_stats();
             }
             WorkerCommand::Shutdown => {
                 self.join_generation.invalidate();
@@ -458,6 +478,52 @@ impl RuntimeWorker {
                 manager,
             ))));
         }
+    }
+
+    fn ingest_diagnostic_messages(&mut self) {
+        let Some(manager) = &self.manager else {
+            return;
+        };
+        for inbound in manager.drain_diagnostic_messages() {
+            if inbound.message.topic != TICK_REPORT_TOPIC {
+                continue;
+            }
+            match serde_json::from_str::<TickReport>(&inbound.message.payload_json) {
+                Ok(report) => self.tick_reports.record_remote(report),
+                Err(error) => {
+                    eprintln!(
+                        "tick report decode failed from {}: {error}",
+                        inbound.peer_id
+                    );
+                }
+            }
+        }
+        self.publish_tick_stats();
+    }
+
+    fn publish_tick_report(&mut self, report: TickReport) {
+        self.tick_reports.record_local(report.clone());
+        if let Some(manager) = &self.manager {
+            match serde_json::to_string(&report) {
+                Ok(payload_json) => {
+                    let _ = manager.broadcast_diagnostic_message(DiagnosticMessage {
+                        topic: TICK_REPORT_TOPIC.into(),
+                        payload_json,
+                    });
+                }
+                Err(error) => {
+                    eprintln!("tick report encode failed: {error}");
+                }
+            }
+        }
+        self.publish_tick_stats();
+    }
+
+    fn publish_tick_stats(&self) {
+        self.snapshot
+            .lock()
+            .expect("runtime snapshot lock")
+            .peer_tick_stats = self.tick_reports.peer_stats();
     }
 
     fn apply(&self, command: RuntimeCommand) {

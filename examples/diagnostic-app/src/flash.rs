@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const FLASH_PERIOD: Duration = Duration::from_secs(3);
 pub const FLASH_ON: Duration = Duration::from_millis(180);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub enum FlashMode {
     Utc,
     Domain,
@@ -47,6 +47,15 @@ pub fn flash_is_on_i64(now_ns: i64, period_ns: u128, flash_on_ns: u128) -> bool 
     flash_is_on(now_ns, period_ns, flash_on_ns)
 }
 
+pub fn apply_simulated_utc_offset_ns(now_ns: u128, offset_ms: i64) -> u128 {
+    let offset_ns = i128::from(offset_ms) * 1_000_000;
+    if offset_ns >= 0 {
+        now_ns.saturating_add(offset_ns as u128)
+    } else {
+        now_ns.saturating_sub(offset_ns.unsigned_abs())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +87,18 @@ mod tests {
     fn flash_is_on_i64_rejects_negative_domain_time() {
         assert!(!flash_is_on_i64(-1, 3_000, 180));
         assert!(flash_is_on_i64(6_050, 3_000, 180));
+    }
+
+    #[test]
+    fn simulated_utc_offset_adds_positive_milliseconds() {
+        assert_eq!(
+            apply_simulated_utc_offset_ns(1_000_000_000, 250),
+            1_250_000_000
+        );
+    }
+
+    #[test]
+    fn simulated_utc_offset_saturates_negative_milliseconds_at_zero() {
+        assert_eq!(apply_simulated_utc_offset_ns(100_000_000, -250), 0);
     }
 }

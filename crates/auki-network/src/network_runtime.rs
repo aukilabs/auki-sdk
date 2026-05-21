@@ -31,6 +31,9 @@
 //! - Successor tokens, election rules, gossip. Same — those are
 //!   `auki-domain` concerns.
 
+use crate::diagnostic_protocol::{
+    DIAGNOSTIC_PROTOCOL, DiagnosticMessage, read_diagnostic_message, write_diagnostic_message,
+};
 use crate::heartbeat_protocol::{
     HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, Heartbeat, HeartbeatDomainClock, HeartbeatEcho,
     read_heartbeat, write_heartbeat,
@@ -495,6 +498,13 @@ pub struct MembershipEvent {
     pub update: MembershipUpdate,
 }
 
+/// Inbound `/auki/diagnostic/0.0.1` event surfaced by the runtime.
+#[derive(Debug)]
+pub struct DiagnosticEvent {
+    pub peer: PeerId,
+    pub message: DiagnosticMessage,
+}
+
 /// Errors from [`NetworkRuntime::broadcast_membership`] /
 /// [`NetworkRuntimeHandle::broadcast_membership`]. Per-peer write
 /// failures are logged (not collected into this error) since gossip
@@ -504,6 +514,13 @@ pub enum BroadcastMembershipError {
     /// `membership_json` exceeded the protocol's frame cap. Indicates
     /// an unreasonably large membership document.
     #[error("membership_json is too large for the gossip frame")]
+    PayloadTooLarge,
+}
+
+/// Errors from diagnostic message broadcast.
+#[derive(Debug, thiserror::Error)]
+pub enum BroadcastDiagnosticError {
+    #[error("diagnostic message is too large for the frame")]
     PayloadTooLarge,
 }
 
@@ -657,6 +674,14 @@ impl NetworkRuntimeHandle {
             membership_json,
         )
     }
+
+    /// Same semantics as [`NetworkRuntime::broadcast_diagnostic_message`].
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        broadcast_diagnostic_impl(&self.stream_control, &self.connected, message)
+    }
 }
 
 impl NetworkRuntime {
@@ -706,6 +731,7 @@ impl NetworkRuntime {
             mpsc::Receiver<ResourcesRequestEvent>,
             mpsc::Receiver<SensorsRequestEvent>,
             mpsc::Receiver<RegistryRequestEvent>,
+            mpsc::Receiver<DiagnosticEvent>,
         ),
         SpawnError,
     > {
@@ -726,6 +752,7 @@ impl NetworkRuntime {
         let (resources_events_tx, resources_events_rx) = mpsc::channel::<ResourcesRequestEvent>(16);
         let (sensors_events_tx, sensors_events_rx) = mpsc::channel::<SensorsRequestEvent>(16);
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
+        let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -744,6 +771,7 @@ impl NetworkRuntime {
             resources_events_tx,
             sensors_events_tx,
             registry_events_tx,
+            diagnostic_events_tx,
         ));
         Ok((
             Self {
@@ -763,6 +791,7 @@ impl NetworkRuntime {
             resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
+            diagnostic_events_rx,
         ))
     }
 
@@ -1046,6 +1075,14 @@ impl NetworkRuntime {
         )
     }
 
+    /// Broadcast one best-effort diagnostic message to connected peers.
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        broadcast_diagnostic_impl(&self.stream_control, &self.connected, message)
+    }
+
     /// Snapshot of currently-connected peers.
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.connected
@@ -1172,6 +1209,7 @@ async fn run_task(
     resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
     sensors_events_tx: mpsc::Sender<SensorsRequestEvent>,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
+    diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -1286,6 +1324,16 @@ async fn run_task(
     let mut incoming_registries: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(registries_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/diagnostic/0.0.1` substream acceptance.
+    let diagnostic_proto = StreamProtocol::try_from_owned(DIAGNOSTIC_PROTOCOL.to_string())
+        .expect("DIAGNOSTIC_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_diagnostics: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(diagnostic_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -1437,6 +1485,16 @@ async fn run_task(
                 }
                 let tx = registry_events_tx.clone();
                 tokio::spawn(handle_inbound_registry_substream(peer, substream, tx));
+            }
+
+            diagnostic = incoming_diagnostics.next() => {
+                let Some((peer, substream)) = diagnostic else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = diagnostic_events_tx.clone();
+                tokio::spawn(handle_inbound_diagnostic_substream(peer, substream, tx));
             }
 
             _ = tick.tick() => {
@@ -2321,6 +2379,28 @@ async fn handle_inbound_registry_substream(
     }
 }
 
+/// Reads exactly one diagnostic message and forwards it to the owner.
+async fn handle_inbound_diagnostic_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
+) {
+    match read_diagnostic_message(&mut substream).await {
+        Ok(message) => {
+            if diagnostic_events_tx
+                .send(DiagnosticEvent { peer, message })
+                .await
+                .is_err()
+            {
+                // Receiver dropped — owner is gone.
+            }
+        }
+        Err(e) => {
+            eprintln!("auki-network: diagnostic substream from {peer}: read failed: {e}");
+        }
+    }
+}
+
 /// Shared implementation of `broadcast_membership` reachable from both
 /// [`NetworkRuntime::broadcast_membership`] and
 /// [`NetworkRuntimeHandle::broadcast_membership`]. Spawns one fire-
@@ -2371,6 +2451,47 @@ fn broadcast_membership_impl(
     Ok(())
 }
 
+fn broadcast_diagnostic_impl(
+    stream_control: &Control,
+    connected: &Arc<Mutex<HashSet<PeerId>>>,
+    message: DiagnosticMessage,
+) -> Result<(), BroadcastDiagnosticError> {
+    if message.topic.len() + message.payload_json.len()
+        > crate::diagnostic_protocol::MAX_DIAGNOSTIC_FRAME_BYTES as usize
+    {
+        return Err(BroadcastDiagnosticError::PayloadTooLarge);
+    }
+    let peers: Vec<PeerId> = connected
+        .lock()
+        .expect("connected set mutex poisoned")
+        .iter()
+        .copied()
+        .collect();
+    for peer in peers {
+        let mut control = stream_control.clone();
+        let message = message.clone();
+        tokio::spawn(async move {
+            let proto = StreamProtocol::try_from_owned(DIAGNOSTIC_PROTOCOL.to_string())
+                .expect("DIAGNOSTIC_PROTOCOL is a valid libp2p stream protocol id");
+            match control.open_stream(peer, proto).await {
+                Ok(mut substream) => {
+                    if let Err(e) = write_diagnostic_message(&mut substream, &message).await {
+                        eprintln!(
+                            "auki-network: diagnostic broadcast to {peer}: write failed: {e}"
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "auki-network: diagnostic broadcast to {peer}: open_stream failed: {e}"
+                    );
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
 fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {
     let sched = schedules.entry(peer_id).or_insert(PeerSchedule {
         next_dial_at: None,
@@ -2408,6 +2529,7 @@ mod tests {
             _resources_events,
             _sensors_events,
             _registry_events,
+            _diagnostic_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -2437,6 +2559,7 @@ mod tests {
             _resources_events,
             _sensors_events,
             _registry_events,
+            _diagnostic_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -2464,6 +2587,7 @@ mod tests {
             _resources_events,
             _sensors_events,
             _registry_events,
+            _diagnostic_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![

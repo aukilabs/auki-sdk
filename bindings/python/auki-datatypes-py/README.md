@@ -10,15 +10,15 @@ Filed as [Step 9 of the `auki-datatypes` migration sprint](../../../crates/auki-
 import auki_datatypes as adt
 
 # Step 1 — Pinhole camera log entry
-frame = adt.camera.PinholeCameraLogEntry(
+frame = adt.camera.CameraFrame(
     dynamic_intrinsics=adt.camera.DynamicIntrinsics(fx=1234.5, fy=1234.5, cx=272.0, cy=244.0, distortion_coefficients=[]),
     frame=camera_bytes,
 )
 on_disk = bytes(frame)
-decoded = adt.camera.PinholeCameraLogEntry().parse(on_disk)
+decoded = adt.camera.CameraFrame().parse(on_disk)
 
 # Step 8 — Detection log entry (the ESL detector's output type)
-det = adt.detection.DetectionLogEntry(data=esl_payload_bytes)
+det = adt.detection.DetectionFrame(data=esl_payload_bytes)
 on_disk = bytes(det)
 
 # Step 5 — Pose
@@ -53,12 +53,12 @@ output = auki_logs.Log.open(output_path, output_manifest)
 # Detector loop:
 input_path = auki_layout.sensorlog_path(session, input_log_id)
 for entry in auki_logs.Log.tail(input_path):
-    # Decode the input log's PinholeCameraLogEntry from opaque bytes
-    camera_frame = adt.camera.PinholeCameraLogEntry().parse(entry.payload)
+    # Decode the input log's CameraFrame from opaque bytes
+    camera_frame = adt.camera.CameraFrame().parse(entry.payload)
     # Run the ESL detector on the camera bytes
     detections = run_esl(camera_frame.frame)
-    # Encode the detector output as a DetectionLogEntry
-    payload = bytes(adt.detection.DetectionLogEntry(data=serialize(detections)))
+    # Encode the detector output as a DetectionFrame
+    payload = bytes(adt.detection.DetectionFrame(data=serialize(detections)))
     output.append(entry.timestamp_ns, payload)
 ```
 

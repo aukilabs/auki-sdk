@@ -32,14 +32,14 @@ pub struct SensorRegistryEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SensorBody {
-    RgbCamera(RgbCamera),
+    Camera(Camera),
     PointCloud(PointCloud),
     Audio(Audio),
     JointEncoders(JointEncoders),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RgbCamera {
+pub struct Camera {
     pub width: u32,
     pub height: u32,
     pub frame_rate_hz: u32,
@@ -162,7 +162,7 @@ pub struct Audio {
 /// future analyses), not the producer. The producer ships angle floats
 /// and just enough deserialization metadata (`joint_count`) for the
 /// consumer to read the bytes correctly. Mirrors the layering of
-/// [`RgbCamera`] / [`PointCloud`] / [`Audio`]: producer ships
+/// [`Camera`] / [`PointCloud`] / [`Audio`]: producer ships
 /// raw measurements, consumer holds the schema-for-interpretation.
 ///
 /// Joint ordering is producer-defined and immutable per log; mapping
@@ -187,7 +187,7 @@ pub struct JointEncoders {
     pub joint_count: u32,
     /// Expected publish rate in Hz, observed at sensor bootstrap.
     /// Sizing hint for segment duration / consumer buffers; not part
-    /// of identity logic. Same role as [`RgbCamera::frame_rate_hz`]
+    /// of identity logic. Same role as [`Camera::frame_rate_hz`]
     /// and [`PointCloud::frame_rate_hz`].
     pub frame_rate_hz: u32,
 }
@@ -204,7 +204,7 @@ impl SensorRegistryEntry {
 
 // ─── Sensor Log payload ──────────────────────────────────────────────────────
 
-// `SensorLogEntry` (renamed `PinholeCameraLogEntry`) and `DynamicIntrinsics`
+// `SensorLogEntry` (renamed `CameraFrame`) and `DynamicIntrinsics`
 // moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera`
 // `.proto` package in Step 1 of the migration. Encoding switched from CBOR
 // to protobuf; segment payload bytes are no longer self-describing
@@ -473,7 +473,7 @@ impl FrameRegistryEntry {
 /// element vector (`["aruco"]`). A detector that emits several (e.g.
 /// the QR_Reader that emits both `portal` and `portal_corner`) lists
 /// them all. Each `type` value should match what the detector sets on
-/// `DetectionLogEntry.type` (Cuba T12) for the entries it produces.
+/// `DetectionFrame.type` (Cuba T12) for the entries it produces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectorRegistryEntry {
     pub detector_id: String,
@@ -761,7 +761,7 @@ fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry)
 
 fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
     match body {
-        SensorBody::RgbCamera(b) => Some((&b.frame_id, &b.frame_hash)),
+        SensorBody::Camera(b) => Some((&b.frame_id, &b.frame_hash)),
         SensorBody::PointCloud(b) => Some((&b.frame_id, &b.frame_hash)),
         SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
     }
@@ -807,7 +807,7 @@ mod tests {
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
             sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
-            body: SensorBody::RgbCamera(RgbCamera {
+            body: SensorBody::Camera(Camera {
                 width: 544,
                 height: 488,
                 frame_rate_hz: 20,
@@ -863,7 +863,7 @@ mod tests {
         // Keys sorted by RFC 8785 §3.2.3 (lexicographic UTF-16 code units).
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb_camera","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"camera","width":544}"#
         );
     }
 
@@ -887,11 +887,11 @@ mod tests {
 
     /// Locks the XXH3-128 hex of the M1 sensor entry. Catches drift in
     /// entry shape, canonicalization, or hashing. Recomputed when
-    /// `frame_hash` was added to RgbCamera to pin the exact Frame
-    /// Registry entry version.
+    /// `frame_hash` was added to Camera to pin the exact Frame
+    /// Registry entry version, and when the camera tag was renamed.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "69f37478490cf1c0b226dbb86d3454fc");
+        assert_eq!(m1_sensor_entry().hash(), "5559c9648e31eee2410b692fef393489");
     }
 
     #[test]
@@ -969,12 +969,12 @@ mod tests {
         // Match (not `if let`): exhaustiveness means a future SensorBody variant
         // becomes a compile error pointing the author here.
         match &mut entry.body {
-            SensorBody::RgbCamera(cam) => {
+            SensorBody::Camera(cam) => {
                 cam.width = 1920;
                 cam.height = 1080;
             }
             SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
-                panic!("test was set up for RgbCamera")
+                panic!("test was set up for Camera")
             }
         }
         let second_hash = entry.hash();
@@ -1164,9 +1164,9 @@ mod tests {
         write_m1_optical_frame(dir.path());
         let mut entry = m1_sensor_entry();
         match &mut entry.body {
-            SensorBody::RgbCamera(cam) => cam.frame_hash.clear(),
+            SensorBody::Camera(cam) => cam.frame_hash.clear(),
             SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
-                panic!("test was set up for RgbCamera")
+                panic!("test was set up for Camera")
             }
         }
         let err = write_sensor(dir.path(), &entry).unwrap_err();

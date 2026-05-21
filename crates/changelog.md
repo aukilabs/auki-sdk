@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**SDK crates standardize stream and sensor camera vocabulary.** `auki-datatypes`, `auki-registry`, `auki-network`, `auki-domain`, and `auki-ros-adapter` now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag across active Rust surfaces.
+
+### Nils's codex · May 21, HKT, 2026
+
 **[`auki-domain`](auki-domain/changelog.md) — heartbeat domain timing now uses SDK-owned `SessionClock`.** `ClusterManager` feeds its peer-id rooted `SessionClock` into heartbeat timestamps, initial domain-clock metadata, and promoted-Manager domain-clock advertisements instead of the compatibility `DaemonInfo.session_clock_id/hash` fields.
 
 ### Nils's codex · May 20, HKT, 2026

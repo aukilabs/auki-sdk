@@ -33,6 +33,6 @@ protoc-bin-vendored = "3"
 # match both values.
 auki-hash = { path = "../auki-hash" }
 # Segment round-trip test exercises the prost ↔ LogPayload ↔ auki-logs
-# encoder seam end-to-end through a real `Log<PinholeCameraLogEntry>`.
+# encoder seam end-to-end through a real `Log<CameraFrame>`.
 serde_json = "1"
 tempfile = "3"

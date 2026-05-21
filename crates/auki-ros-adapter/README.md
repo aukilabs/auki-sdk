@@ -29,9 +29,9 @@ From `sensor_msgs/CameraInfo`:
 
 | ROS2 field                      | Goes to                                                          |
 | ------------------------------- | ---------------------------------------------------------------- |
-| `width`                         | `SensorRegistryEntry.body.RgbCamera.width`                       |
-| `height`                        | `SensorRegistryEntry.body.RgbCamera.height`                      |
-| `distortion_model`              | `SensorRegistryEntry.body.RgbCamera.distortion_model`            |
+| `width`                         | `SensorRegistryEntry.body.Camera.width`                       |
+| `height`                        | `SensorRegistryEntry.body.Camera.height`                      |
+| `distortion_model`              | `SensorRegistryEntry.body.Camera.distortion_model`            |
 | `k[0]`, `k[4]`, `k[2]`, `k[5]`  | `DynamicIntrinsics.fx`, `fy`, `cx`, `cy` (row-major K matrix)    |
 | `d`                             | `DynamicIntrinsics.distortion_coefficients`                      |
 

@@ -6,17 +6,17 @@ Current work and next steps. Spec: [outer `README.md`](../README.md).
 
 `auki-logs-py` landed 2026-05-09 to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4 at the bytes level. The Python surface is the smallest viable wrapper around `auki_logs::Log<T>` monomorphized to opaque bytes — `Log.open`, `append`, `flush`, `set_retention`, `read`, `tail` (blocking iterator) + `try_next` (non-blocking) all map cleanly. GIL released on every blocking call. Errors mapped to `OSError` / `ValueError` per the rest of the SDK's Python conventions.
 
-Closes blocker #4 for ESL **at the bytes level**. The detector author hand-rolls prost or builds a small inline encoder for `DetectionLogEntry` and `PinholeCameraLogEntry` until the `betterproto` Python codegen lands.
+Closes blocker #4 for ESL **at the bytes level**. The detector author hand-rolls prost or builds a small inline encoder for `DetectionFrame` and `CameraFrame` until the `betterproto` Python codegen lands.
 
 ## Next
 
-1. **`betterproto` codegen for `auki-datatypes`** (Step 9 of the migration sprint). Lets Python consumers `from auki_datatypes import DetectionLogEntry` and skip hand-rolling prost. The detector loop becomes:
+1. **`betterproto` codegen for `auki-datatypes`** (Step 9 of the migration sprint). Lets Python consumers `from auki_datatypes import DetectionFrame` and skip hand-rolling prost. The detector loop becomes:
    ```python
-   from auki_datatypes import DetectionLogEntry, PinholeCameraLogEntry
+   from auki_datatypes import DetectionFrame, CameraFrame
    for entry in auki_logs.Log.tail(input_path):
-       camera_frame = PinholeCameraLogEntry().parse(entry.payload)
+       camera_frame = CameraFrame().parse(entry.payload)
        detections = run_esl(camera_frame)
-       output.append(entry.timestamp_ns, bytes(DetectionLogEntry(data=serialize(detections))))
+       output.append(entry.timestamp_ns, bytes(DetectionFrame(data=serialize(detections))))
    ```
    Lives in a new `auki-datatypes-py` crate per the [per-component naming decision](../../parking_lot.md). Locked-vector cross-language test: betterproto encoder produces byte-identical bytes to Rust prost for a fixed input.
 

@@ -24,7 +24,7 @@ package auki.detection;
 //
 // Closes the producer-side of the [subscription-as-materialization
 // keystone](../../../parking_lot.md): a Detection Log is `Log<T>` with
-// `T = DetectionLogEntry`, lifecycle inherited from the sensor-log
+// `T = DetectionFrame`, lifecycle inherited from the sensor-log
 // primitive. No "DetectionLog" abstraction.
 //
 // Cuba additions (2026-05-16):
@@ -46,11 +46,11 @@ package auki.detection;
 //   fall back to a debug / skip path).
 //
 // Field number ledger (never reuse, never renumber):
-//   DetectionLogEntry.data        = 1
-//   DetectionLogEntry.sensor_hash = 2   ← Cuba T5
-//   DetectionLogEntry.type        = 3   ← Cuba T12
+//   DetectionFrame.data        = 1
+//   DetectionFrame.sensor_hash = 2   ← Cuba T5
+//   DetectionFrame.type        = 3   ← Cuba T12
 
-message DetectionLogEntry {
+message DetectionFrame {
   bytes data = 1;
   string sensor_hash = 2;
   string type = 3;

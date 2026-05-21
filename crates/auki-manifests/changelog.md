@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Manifest docs now describe `CameraFrame` payloads.** Active examples and comments follow the SDK-wide stream payload vocabulary cleanup; manifest schema behavior is unchanged.
+
 ### broodsugar's claude · May 9, 12:40 HKT, 2026
 
 **`build_detection_log_manifest` lands** to close [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2 (Detector binding API). Mirrors the existing builders' shape — JCS-canonical JSON via [`auki-jcs`](../auki-jcs), 11 args:

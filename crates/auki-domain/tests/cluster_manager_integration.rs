@@ -899,7 +899,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
     let b_catalog = vec![SensorEntry {
         sensor_id: "K1-FAKE/head_cam".into(),
         sensor_hash: "abc".into(),
-        kind: "rgb_camera".into(),
+        kind: "camera".into(),
         sensor_entry_json: None,
         frame_entry_json: None,
     }];

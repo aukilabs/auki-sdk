@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**SDK stream naming cleanup implemented.** Active SDK crates and Python bindings now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag with no compatibility aliases. See [`crates/changelog.md`](crates/changelog.md), [`bindings/changelog.md`](bindings/changelog.md), and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Stream naming cleanup implementation plan added.** The plan sequences the approved breaking rename across SDK datatypes, registry, network, bindings, domain, ROS adapter, docs, and Park. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Stream naming cleanup design added.** The Superpowers design spec locks the breaking no-compatibility rename to `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Diagnostic domain-time flash demo is wired to heartbeat sync.** `ClusterManager` heartbeat timing now uses the SDK-owned `SessionClock`, and the diagnostic app reads explicit domain estimates/time before enabling Domain flash mode. See [`crates/changelog.md`](crates/changelog.md) and [`examples/changelog.md`](examples/changelog.md) for propagation.
 
 ### Nils's codex · May 21, HKT, 2026

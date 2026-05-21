@@ -7,7 +7,7 @@
 //! invokes per inbound substream. The callable returns a [`StreamDispatch`]
 //! variant that pairs the typed source-stream with the [`StreamManifest`],
 //! or [`StreamDispatch::Decline`] with a typed reason. The
-//! dispatch enum is *closed* over the SDK-supported `T`s (`PinholeCameraLogEntry`,
+//! dispatch enum is *closed* over the SDK-supported `T`s (`CameraFrame`,
 //! `PointCloudFrame` today; new variants added per coordinated
 //! SDK + consumer release). Each substream is mono-`T`; the producer's
 //! callback decides which `T` based on `request.sensor_id`.
@@ -32,9 +32,9 @@
 //!
 //! ## Per-call `T` on the producer side (Dagaz D1)
 //!
-//! grimsby v1 pinned `T = PinholeCameraLogEntry` at `NetworkRuntime::spawn` time —
-//! the producer's callback was `StreamProvider<PinholeCameraLogEntry>`, returning
-//! `StreamDecision<PinholeCameraLogEntry>`. Dagaz lifts that pinning so a single
+//! grimsby v1 pinned `T = CameraFrame` at `NetworkRuntime::spawn` time —
+//! the producer's callback was `StreamProvider<CameraFrame>`, returning
+//! `StreamDecision<CameraFrame>`. Dagaz lifts that pinning so a single
 //! daemon can serve multiple `T`s (camera + pointcloud, today). The
 //! producer dispatches on `request.sensor_id` and returns a
 //! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
@@ -43,11 +43,11 @@
 
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
-    AudioFrame, DeclineReason, EndReason, JointEncodersFrame, PinholeCameraLogEntry,
-    PointCloudFrame, STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest,
-    StreamMessage, StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
+    AudioFrame, CameraFrame, DeclineReason, EndReason, JointEncodersFrame, PointCloudFrame,
+    STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
+    StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
 };
-use auki_datatypes::detection::DetectionLogEntry;
+use auki_datatypes::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::OpenStreamError as Libp2pOpenStreamError;
@@ -85,7 +85,7 @@ pub struct StreamItem<T> {
 pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, String>> + Send>>;
 
 /// Producer's accept/decline decision for a single inbound request.
-/// Closed over the `T`s the SDK supports today: `PinholeCameraLogEntry` (grimsby v1),
+/// Closed over the `T`s the SDK supports today: `CameraFrame` (grimsby v1),
 /// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2),
 /// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
 /// byte-identical to the on-disk `JointEncodersLogEntry`), and
@@ -100,15 +100,15 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// substream closes. On [`StreamDispatch::Decline`], the SDK writes
 /// `Decline { reason }` and closes the substream.
 ///
-/// SDK-supported `T`s: `PinholeCameraLogEntry`, `PointCloudFrame`,
-/// `JointEncodersFrame`, `AudioFrame`, and (Cuba T8) `DetectionLogEntry`.
+/// SDK-supported `T`s: `CameraFrame`, `PointCloudFrame`,
+/// `JointEncodersFrame`, `AudioFrame`, and (Cuba T8) `DetectionFrame`.
 pub enum StreamDispatch {
     /// Accept the request with a Camera source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
     /// as every other `T`.
     AcceptCamera {
         manifest: StreamManifest,
-        source: SourceStream<PinholeCameraLogEntry>,
+        source: SourceStream<CameraFrame>,
     },
     /// Accept the request with a PointCloud source-Stream — Dagaz's new
     /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
@@ -142,7 +142,7 @@ pub enum StreamDispatch {
         source: SourceStream<AudioFrame>,
     },
     /// Accept the request with a Detection source-Stream — Cuba T8.
-    /// Each [`DetectionLogEntry`] is the same on-disk Detection Log
+    /// Each [`DetectionFrame`] is the same on-disk Detection Log
     /// payload reused on the wire — `bytes data` (opaque per-detector
     /// schema, decoded via the `type=<vocab>` discriminator), plus
     /// `sensor_hash` (the bound input frame's sensor, Cuba T5) and
@@ -158,7 +158,7 @@ pub enum StreamDispatch {
     /// exchange (Cuba T4).
     AcceptDetection {
         manifest: StreamManifest,
-        source: SourceStream<DetectionLogEntry>,
+        source: SourceStream<DetectionFrame>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -383,7 +383,7 @@ impl NetworkRuntime {
 /// concrete `T` matching the [`StreamDispatch`] variant.
 ///
 /// 1. Read [`StreamMessage::Request`] (the Request variant carries no
-///    `T`-dependent data, so we read it as `StreamMessage<PinholeCameraLogEntry>`
+///    `T`-dependent data, so we read it as `StreamMessage<CameraFrame>`
 ///    — any concrete `T` works for the Request shape).
 /// 2. Invoke `provider(request) -> StreamDispatch`.
 /// 3. Match the dispatch variant; for Accept variants, hand off to
@@ -427,7 +427,7 @@ pub(crate) async fn handle_inbound_substream(
             let _ = write_message(&mut substream, &msg).await;
         }
         StreamDispatch::AcceptCamera { manifest, source } => {
-            pump_typed::<PinholeCameraLogEntry>(substream, manifest, source, shutdown_rx).await;
+            pump_typed::<CameraFrame>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptPointCloud { manifest, source } => {
             pump_typed::<PointCloudFrame>(substream, manifest, source, shutdown_rx).await;
@@ -439,7 +439,7 @@ pub(crate) async fn handle_inbound_substream(
             pump_typed::<AudioFrame>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptDetection { manifest, source } => {
-            pump_typed::<DetectionLogEntry>(substream, manifest, source, shutdown_rx).await;
+            pump_typed::<DetectionFrame>(substream, manifest, source, shutdown_rx).await;
         }
     }
 }
@@ -454,7 +454,7 @@ pub(crate) async fn handle_inbound_substream(
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
-/// (`PinholeCameraLogEntry`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
+/// (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
 /// variant means adding a new monomorphization plus extending
 /// [`StreamDispatch`].
 async fn pump_typed<T>(
@@ -574,17 +574,17 @@ async fn consumer_reader_task<T>(
 }
 
 // Type alias re-exports for ergonomics — consumers reading
-// `auki_network::stream_runtime::*` get `PinholeCameraLogEntry` here without the
+// `auki_network::stream_runtime::*` get `CameraFrame` here without the
 // extra `stream_protocol::` hop.
-pub use crate::stream_protocol::PinholeCameraLogEntry as _PinholeCameraLogEntryReExport;
+pub use crate::stream_protocol::CameraFrame as _CameraFrameReExport;
 #[allow(unused_imports)]
-use _PinholeCameraLogEntryReExport as _;
+use _CameraFrameReExport as _;
 
-// Static check that `PinholeCameraLogEntry` and `PointCloudFrame` satisfy the
+// Static check that `CameraFrame` and `PointCloudFrame` satisfy the
 // bounds the runtime expects for `T`.
 const _: fn() = || {
     fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
-    assert_message_send_static::<PinholeCameraLogEntry>();
+    assert_message_send_static::<CameraFrame>();
     assert_message_send_static::<PointCloudFrame>();
 };
 
@@ -671,21 +671,21 @@ mod tests {
             let frames = vec![
                 Ok(StreamItem {
                     timestamp_ns: 1_000,
-                    payload: PinholeCameraLogEntry {
+                    payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: vec![0xff, 0xd8, 0x01],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 2_000,
-                    payload: PinholeCameraLogEntry {
+                    payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: vec![0xff, 0xd8, 0x02],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 3_000,
-                    payload: PinholeCameraLogEntry {
+                    payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: vec![0xff, 0xd8, 0x03],
                     },
@@ -712,7 +712,7 @@ mod tests {
                     manifest: manifest("exists", "h", "c", "ch", "exists/frame", "fh"),
                     source: Box::pin(stream::iter(vec![Ok(StreamItem {
                         timestamp_ns: 1,
-                        payload: PinholeCameraLogEntry {
+                        payload: CameraFrame {
                             dynamic_intrinsics: None,
                             frame: vec![0xff],
                         },
@@ -731,7 +731,7 @@ mod tests {
             let items = vec![
                 Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: PinholeCameraLogEntry {
+                    payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: vec![0xaa],
                     },
@@ -833,7 +833,7 @@ mod tests {
                 ),
                 source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: PinholeCameraLogEntry {
+                    payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: vec![0xff, 0xd8, 0xab],
                     },
@@ -931,7 +931,7 @@ mod tests {
         // LibP2p; we accept either.
         let result = tokio::time::timeout(
             Duration::from_secs(35),
-            consumer.open_stream::<PinholeCameraLogEntry>(
+            consumer.open_stream::<CameraFrame>(
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "anything".into(),
@@ -1000,7 +1000,7 @@ mod tests {
         .await;
         assert!(connected, "consumer did not connect to producer within 15s");
 
-        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
+        let sub: StreamSubscription<CameraFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1086,7 +1086,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let result: Result<StreamSubscription<PinholeCameraLogEntry>, OpenStreamError> = consumer
+        let result: Result<StreamSubscription<CameraFrame>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1144,7 +1144,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
+        let sub: StreamSubscription<CameraFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1194,13 +1194,12 @@ mod tests {
         let provider: StreamProvider = Arc::new(|_peer, _req| {
             let first = stream::iter(vec![Ok(StreamItem {
                 timestamp_ns: 1_000,
-                payload: PinholeCameraLogEntry {
+                payload: CameraFrame {
                     dynamic_intrinsics: None,
                     frame: vec![0xff, 0xd8, 0x99],
                 },
             })]);
-            let then_pending =
-                stream::pending::<Result<StreamItem<PinholeCameraLogEntry>, String>>();
+            let then_pending = stream::pending::<Result<StreamItem<CameraFrame>, String>>();
             StreamDispatch::AcceptCamera {
                 manifest: manifest(
                     "shutdown/cam",
@@ -1242,7 +1241,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<PinholeCameraLogEntry> = consumer
+        let sub: StreamSubscription<CameraFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1300,7 +1299,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(35),
-            consumer.open_stream::<PinholeCameraLogEntry>(
+            consumer.open_stream::<CameraFrame>(
                 id_unreachable.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
@@ -1522,7 +1521,7 @@ mod tests {
         assert!(connected);
 
         // Substream 1: Camera.
-        let sub_camera: StreamSubscription<PinholeCameraLogEntry> = consumer
+        let sub_camera: StreamSubscription<CameraFrame> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1530,7 +1529,7 @@ mod tests {
                 },
             )
             .await
-            .expect("open_stream<PinholeCameraLogEntry> camera");
+            .expect("open_stream<CameraFrame> camera");
         assert_eq!(sub_camera.manifest.sensor_id, "camera");
         assert_eq!(sub_camera.manifest.sensor_hash, "cam-hash");
         let mut camera_entries = sub_camera.entries;
@@ -1554,7 +1553,7 @@ mod tests {
         assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
 
         // Substream 3: unknown sensor → Decline.
-        let unknown: Result<StreamSubscription<PinholeCameraLogEntry>, OpenStreamError> = consumer
+        let unknown: Result<StreamSubscription<CameraFrame>, OpenStreamError> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {

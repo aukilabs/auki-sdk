@@ -8,7 +8,7 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 ## `.proto` package naming convention
 
-Real packages use dot-separated, lowercase names under `auki.*`: `auki.camera` (PinholeCameraLogEntry), `auki.point_cloud` (PointCloudLogEntry), `auki.audio` (AudioLogEntry), `auki.pose` (SpatialTransform), `auki.time_transform` (TimeTransformEntry), `auki.point_cloud_stream` (PointCloudFrame for libp2p), and sibling stream packages for stream-only wire types. The dotted form maps to a Rust nested module path (`auki_datatypes::camera` via the `include!` in `src/lib.rs`), which is fine. Lean: snake_case singular nouns under the `auki.` umbrella, one package per logical message group. Camera streams deliberately reuse `auki.camera.PinholeCameraLogEntry` instead of a stream-only camera wrapper package so robot log payload bytes and Park stream payload bytes can match at the record level. Open: should future libp2p stream wire types share packages with their on-disk siblings when record identity matters, or get stream-specific packages when the wire and disk records truly evolve independently?
+Real packages use dot-separated, lowercase names under `auki.*`: `auki.camera` (CameraFrame), `auki.point_cloud` (PointCloudLogEntry), `auki.audio` (AudioLogEntry), `auki.pose` (SpatialTransform), `auki.time_transform` (TimeTransformEntry), `auki.point_cloud_stream` (PointCloudFrame for libp2p), and sibling stream packages for stream-only wire types. The dotted form maps to a Rust nested module path (`auki_datatypes::camera` via the `include!` in `src/lib.rs`), which is fine. Lean: snake_case singular nouns under the `auki.` umbrella, one package per logical message group. Camera streams deliberately reuse `auki.camera.CameraFrame` instead of a stream-only camera wrapper package so robot log payload bytes and Park stream payload bytes can match at the record level. Open: should future libp2p stream wire types share packages with their on-disk siblings when record identity matters, or get stream-specific packages when the wire and disk records truly evolve independently?
 
 ## Field number allocation strategy
 
@@ -29,10 +29,10 @@ This crate has split precedent for log payload shapes. Pinning the principle wou
 **Opaque-bytes-only (`bytes data = 1`):**
 - `PointCloudLogEntry` (Step 3, 2026-05-08) — interpretation via `SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id }`.
 - `AudioLogEntry` (Step 4, 2026-05-08) — interpretation via `SensorBody::Audio { sample_format, channels, sample_rate_hz, ... }` (renamed from `Microphone` 2026-05-14).
-- `DetectionLogEntry` (Step 8, 2026-05-08) — per-Detector schema; the SDK does not interpret detector-specific fields.
+- `DetectionFrame` (Step 8, 2026-05-08) — per-Detector schema; the SDK does not interpret detector-specific fields.
 
 **Structured prost fields:**
-- `PinholeCameraLogEntry { DynamicIntrinsics dynamic_intrinsics; bytes frame }` (Step 1, 2026-05-08) — structured intrinsics inline-optional + opaque JPEG bytes.
+- `CameraFrame { DynamicIntrinsics dynamic_intrinsics; bytes frame }` (Step 1, 2026-05-08) — structured intrinsics inline-optional + opaque JPEG bytes.
 - `SpatialTransform { Vec3 translation; Quat orientation }` (Step 5, 2026-05-08) — fully structured.
 - `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }` (Step 6, 2026-05-08) — fully structured.
 - `JointEncodersLogEntry { repeated float angles_rad }` ([#77](https://github.com/aukilabs/auki-sdk/pull/77), 2026-05-09) — fully structured.
@@ -42,11 +42,11 @@ This crate has split precedent for log payload shapes. Pinning the principle wou
 - **Structured if** the bytes have a SINGLE canonical interpretation that holds across all instances of the sensor type. Examples: every pose has a translation and orientation; every time-transform sample is `(offset_ns, uncertainty_ns)`; every joint-encoder reading is `f32[joint_count]`; every pinhole camera intrinsics block is `(fx, fy, cx, cy, distortion[])`. The schema is universal; structured prost gives free language portability and field-level forward/backward compat.
 - **Opaque-bytes-only if** the bytes have MULTIPLE possible layouts a producer must specify, OR the schema is owned by a downstream consumer outside the SDK. Examples: point cloud's variable `fields` (XYZ vs XYZRGB vs XYZRGBL...) requires per-stream metadata in `SensorBody::PointCloud`; audio's `sample_format` knob requires `SensorBody::Audio`; detection schemas are per-Detector and the SDK explicitly doesn't interpret them. Layout knowledge lives in the registry-side body type (or, for detection, with the Detector); the segment payload is just bytes.
 
-**Edge case — mixed (structured envelope + opaque bytes):** `PinholeCameraLogEntry`. The intrinsics block is structured (universal across pinhole cameras) but the frame is opaque JPEG bytes (multiple possible image-format choices). Both halves follow the principle independently.
+**Edge case — mixed (structured envelope + opaque bytes):** `CameraFrame`. The intrinsics block is structured (universal across pinhole cameras) but the frame is opaque JPEG bytes (multiple possible image-format choices). Both halves follow the principle independently.
 
 **Forward path:** pin this as a section in [`src/readme.md`](src/readme.md) alongside the migration documentation, and reference it from each new prost type's per-step decision. Each future payload type designer can then either match the principle or document why they're departing. Defer the actual writeup until a future payload-type design needs to reference it — filing here so the principle is captured before another PR relitigates it.
 
-**Confidence: medium.** The principle is descriptive of the existing types but isn't tested against weird future cases (e.g. a detector that emits structured prost on the wire because two consumers want field-level access — does it become a sibling registry-backed body, like cameras? would that make `DetectionLogEntry` un-opaque case-by-case?). Revisit when a real future case stretches it.
+**Confidence: medium.** The principle is descriptive of the existing types but isn't tested against weird future cases (e.g. a detector that emits structured prost on the wire because two consumers want field-level access — does it become a sibling registry-backed body, like cameras? would that make `DetectionFrame` un-opaque case-by-case?). Revisit when a real future case stretches it.
 
 ---
 
@@ -72,9 +72,9 @@ All three slop points adjudicated and landed at Step 6:
 
 Resolved + propagated in the same step's PR — no Propagate tasks carry over.
 
-### ✓ Resolved 2026-05-08 — `DetectionLogEntry` is opaque-bytes-only (Step 8)
+### ✓ Resolved 2026-05-08 — `DetectionFrame` is opaque-bytes-only (Step 8)
 
-Adjudicated in favour of opaque-bytes-only: `auki.detection.DetectionLogEntry { bytes data = 1; }`. Same stance as Steps 3 (point cloud) and 4 (audio); the detection schema is defined per-Detector, not by the SDK. Carrying detector-specific fields on the prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales. Resolved + propagated in the same step's PR — no Propagate task carries over.
+Adjudicated in favour of opaque-bytes-only: `auki.detection.DetectionFrame { bytes data = 1; }`. Same stance as Steps 3 (point cloud) and 4 (audio); the detection schema is defined per-Detector, not by the SDK. Carrying detector-specific fields on the prost type would either lock the SDK into knowing every detector's schema or force a degenerate `oneof` of every shipped detector — neither scales. Resolved + propagated in the same step's PR — no Propagate task carries over.
 
 The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a sibling shape that lives in [`auki-registry`](../../auki-registry) when needed, not in this crate. File when subscription / discovery for detection logs needs it.
 

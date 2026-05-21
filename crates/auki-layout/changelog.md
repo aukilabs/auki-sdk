@@ -8,6 +8,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Detector log references now use `DetectionFrame`.** Active docs/comments follow the SDK-wide detection payload rename; layout paths and hashing behavior are unchanged.
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **`detector_entry_path(app_root, detector_id, hash) -> PathBuf` lands** as the sibling of `sensor_entry_path` / `clock_entry_path` / `frame_entry_path`. Resolves to `<app_root>/registries/detectors/<detector_id>/<hash>.json`, with the standard `/` → `__` id substitution. New `DETECTORS_DIR = "detectors"` constant; layout doc gains the row.

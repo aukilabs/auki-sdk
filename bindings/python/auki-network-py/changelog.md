@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Python stream bindings now align with the final camera frame vocabulary.** The PyO3 stream surface imports `CameraFrame` from datatypes, retained-source decoding expects `camera_frame`, and tests continue to assert no legacy camera payload alias exists.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-network-py`.** The Python package moved from `crates/auki-network-py` to `bindings/python/auki-network-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

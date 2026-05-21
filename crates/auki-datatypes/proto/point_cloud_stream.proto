@@ -6,7 +6,7 @@ package auki.point_cloud_stream;
 // producer forwards a CDR-encoded `sensor_msgs/PointCloud2` ROS message
 // verbatim; consumers (Park, future Sentinel) parse CDR on their side.
 // The SDK doesn't decode or interpret these bytes; the shape mirrors
-// `PinholeCameraLogEntry { frame }` for symmetry.
+// `CameraFrame { frame }` for symmetry.
 //
 // Per-frame layout (`row_step`, `height`, `width`, `is_dense`) rides
 // inside the CDR payload. Sensor bootstrap-time fields (`fields[]`,

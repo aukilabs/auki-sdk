@@ -70,8 +70,8 @@ def test_camera_frame_carries_frame_and_intrinsics() -> None:
     assert "CameraFrame" in repr(f)
 
 
-def test_no_pinhole_camera_log_entry_python_alias() -> None:
-    assert not hasattr(cluster, "PinholeCameraLogEntry")
+def test_no_camera_frame_python_alias() -> None:
+    assert not hasattr(cluster, "CameraFrame")
 
 
 def test_pointcloud_frame_carries_bytes() -> None:
@@ -286,7 +286,7 @@ def test_stream_decision_accept_source_keeps_camera_name_clean(tmp_path) -> None
     decision = cluster.StreamDecision.accept_source(source)
 
     assert decision.kind == "accept_camera"
-    assert not hasattr(cluster, "PinholeCameraLogEntry")
+    assert not hasattr(cluster, "CameraFrame")
 
 
 # ─── Cross-`.so` bridge for sibling PyO3 wrapper crates ─────────────────────

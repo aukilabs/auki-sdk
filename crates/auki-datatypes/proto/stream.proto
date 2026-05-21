@@ -16,7 +16,7 @@ package auki.stream;
 // Sensor Registry to learn which payload type `StreamEntry.payload` carries.
 // The SDK runtime decodes `StreamEntry.payload` (a length-bounded `bytes`
 // field) as the matching prost type from `auki-datatypes` (e.g.
-// `PinholeCameraLogEntry`, `PointCloudFrame`).
+// `CameraFrame`, `PointCloudFrame`).
 //
 // Field number ledger (never reuse, never renumber):
 //   StreamRequest.sensor_id    = 1

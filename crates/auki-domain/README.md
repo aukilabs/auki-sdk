@@ -74,7 +74,7 @@ Useful methods:
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |
 | `shutdown()` | Idempotent shared-reference shutdown |
 
-Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `RgbCamera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
+Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `Camera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
 
 `DaemonInfo.session_clock_id` and `DaemonInfo.session_clock_hash` are compatibility inputs while older callers still construct those fields. `ClusterManager` publishes the SDK-minted `SessionClock` id/hash in `ParticipantInfo`, anchors it as `<peer_id>/<session_id>/monotonic`, and uses that same primitive for heartbeat timestamps and domain-clock backing metadata.
 

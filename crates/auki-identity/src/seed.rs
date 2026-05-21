@@ -293,8 +293,8 @@ mod tests {
         let path = dir.path().join("identity.seed");
         let seed = load_or_mint_seed(&path).unwrap();
         let w1 = Wallet::from_seed(seed.to_vec()).expect("32-byte seed");
-        let w2 = Wallet::from_seed(load_or_mint_seed(&path).unwrap().to_vec())
-            .expect("32-byte seed");
+        let w2 =
+            Wallet::from_seed(load_or_mint_seed(&path).unwrap().to_vec()).expect("32-byte seed");
         assert_eq!(w1.public_key(), w2.public_key());
     }
 }

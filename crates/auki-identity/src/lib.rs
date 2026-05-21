@@ -174,11 +174,12 @@ impl Wallet {
     /// `array.to_vec()`.
     #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
     pub fn from_seed(seed: Vec<u8>) -> Result<std::sync::Arc<Self>, IdentityError> {
-        let array: [u8; 32] = seed.as_slice().try_into().map_err(|_| {
-            IdentityError::InvalidSeedLength {
-                actual: seed.len() as u32,
-            }
-        })?;
+        let array: [u8; 32] =
+            seed.as_slice()
+                .try_into()
+                .map_err(|_| IdentityError::InvalidSeedLength {
+                    actual: seed.len() as u32,
+                })?;
         Ok(std::sync::Arc::new(Self {
             signing_key: SigningKey::from_bytes(&array),
         }))

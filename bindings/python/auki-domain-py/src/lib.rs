@@ -2019,8 +2019,7 @@ async fn build_identity_and_swarm(
     // (UniFFI 0.31 constraint — no Lift impl for `[u8; 32]`). `seed` is a
     // `&[u8; 32]` here, so the length precondition is structural; the
     // expect is unreachable at runtime.
-    let wallet =
-        Wallet::from_seed(seed.to_vec()).expect("caller passes a 32-byte seed");
+    let wallet = Wallet::from_seed(seed.to_vec()).expect("caller passes a 32-byte seed");
     let identity = PeerIdentity::from_wallet(&wallet);
     let cfg = SwarmConfig {
         listen_addresses: listen_multiaddrs,

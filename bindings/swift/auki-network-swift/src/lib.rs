@@ -143,6 +143,24 @@ impl SwiftPeerLivenessEvent {
     }
 }
 
+// ─── Peer liveness listener (Swift callback interface) ─────────────
+
+/// Swift consumers implement this trait to receive peer liveness
+/// events from the network runtime. Wrapped in `Arc<dyn ...>` and
+/// passed into [`spawn_for_swift`]; the runtime's drain task calls
+/// `on_event` for each forwardable upstream event.
+///
+/// `Send + Sync` per UniFFI callback-interface contract — Swift
+/// implementations must be safe to call from a Rust tokio worker
+/// thread. Swift compiler enforces this when adopting the protocol.
+#[uniffi::export(callback_interface)]
+pub trait PeerLivenessListener: Send + Sync {
+    /// Invoked once per peer liveness event observed by the runtime.
+    /// The drain task in `spawn_for_swift` runs on a tokio worker; long
+    /// blocking work here will stall delivery of subsequent events.
+    fn on_event(&self, event: SwiftPeerLivenessEvent);
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -472,5 +490,21 @@ mod tests {
         let heartbeat_closed = PeerLivenessEvent::HeartbeatStreamClosed { peer_id: pid };
         let s = SwiftPeerLivenessEvent::from_upstream(&heartbeat_closed);
         assert!(matches!(s, SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }));
+    }
+
+    /// Smoke test: a no-op `PeerLivenessListener` impl compiles and can be
+    /// stored as `Arc<dyn PeerLivenessListener>`. Real wire-up tested in
+    /// the Task 10 spawn_for_swift smoke test.
+    #[test]
+    fn peer_liveness_listener_is_object_safe() {
+        struct NoopListener;
+        impl PeerLivenessListener for NoopListener {
+            fn on_event(&self, _event: SwiftPeerLivenessEvent) {}
+        }
+        let listener: Arc<dyn PeerLivenessListener> = Arc::new(NoopListener);
+        // Use it once so the binding isn't dead code.
+        listener.on_event(SwiftPeerLivenessEvent::HeartbeatStreamClosed {
+            peer_id: "irrelevant".to_string(),
+        });
     }
 }

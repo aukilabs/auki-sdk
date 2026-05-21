@@ -8,6 +8,26 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Swift binding recipes now delegate to root scripts.** The `just` command names remain unchanged, while the larger shell bodies moved into `scripts/generate-swift-bindings.sh` and `scripts/build-swift-xcframework.sh`.
+
+### Nils's codex · May 21, HKT, 2026
+
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Swift package smoke path covers iOS and macOS.** The static package root remains under `bindings/swift/auki-uniffi-test/`, while `just build-swift-xcframework auki-uniffi-test` refreshes generated Swift glue, headers, and the device/simulator/macOS XCFramework under `generated/`.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Swift binding package layout corrected.** `bindings/swift/<crate>/` is now the Swift package root, generated Swift/headers/binaries land under `generated/`, and `just build-swift-xcframework <crate>` builds iOS XCFramework output. Verified with `auki-uniffi-test` and Xcode generic iOS build.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Swift binding generation recipe added.** The root `justfile` now has `generate-swift-bindings <crate>`, verified with `auki-uniffi-test`, writing generated Swift output to `bindings/swift/<crate>/`.
+
+### Nils's codex · May 21, HKT, 2026
+
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — standalone UniFFI proving crate added.** The crate lives under `crates/` and exports sync functions, a record, enum, typed error, async function, object, and async object method so Swift binding mechanics can be tested before binding production SDK components.
+
+### Nils's codex · May 21, HKT, 2026
+
 **SDK crates standardize stream and sensor camera vocabulary.** `auki-datatypes`, `auki-registry`, `auki-network`, `auki-domain`, and `auki-ros-adapter` now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag across active Rust surfaces.
 
 ### Nils's codex · May 21, HKT, 2026

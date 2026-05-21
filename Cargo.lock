@@ -954,6 +954,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-uniffi-test"
+version = "0.0.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

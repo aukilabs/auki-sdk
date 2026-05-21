@@ -4,6 +4,7 @@ members = [
     "crates/auki-hash",
     "crates/auki-geometry",
     "crates/auki-identity",
+    "crates/auki-uniffi-test",
     "bindings/python/auki-identity-py",
     "crates/auki-jcs",
     "crates/auki-logs",

@@ -1,0 +1,7 @@
+module auki_uniffi_testFFI {
+    header "auki_uniffi_testFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

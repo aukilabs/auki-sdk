@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Swift `auki-uniffi-test` package root added.** See [`bindings/swift`](swift/changelog.md) for the static SwiftPM package layout and generated iOS/macOS XCFramework location.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Python bindings updated for the SDK stream naming cleanup.** See [`bindings/python`](python/changelog.md) for package-level propagation of the `CameraFrame` / `DetectionFrame` / `Camera` vocabulary.
 
 ### Nils's claude · May 20, 13:31 HKT, 2026

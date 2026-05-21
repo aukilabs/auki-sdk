@@ -8,6 +8,26 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Swift binding recipes extracted into root scripts.** The root `justfile` now delegates Swift generation to `scripts/generate-swift-bindings.sh` and `scripts/build-swift-xcframework.sh`, keeping the public `just` interface unchanged. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Swift `auki-uniffi-test` package now targets iOS and macOS.** The static SwiftPM package root lives at `bindings/swift/auki-uniffi-test/`, and generated Swift glue, headers, and the iOS device/simulator plus macOS XCFramework live under `generated/`. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Swift binding package layout corrected.** Generated artifacts now live under `bindings/swift/<crate>/generated/`, while `bindings/swift/<crate>/` is a local Swift package root; `just build-swift-xcframework <crate>` creates the iOS XCFramework used by that package. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Swift binding generation recipe added.** `just generate-swift-bindings <crate>` builds a UniFFI crate and writes generated Swift files to `bindings/swift/<crate>/`; the path is verified with `auki-uniffi-test`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Standalone UniFFI proving crate added.** `auki-uniffi-test` now lives under `crates/` with sync, async, record, enum, error, and object exports for testing Swift binding mechanics before production SDK crates are bound. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **SDK stream naming cleanup implemented.** Active SDK crates and Python bindings now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag with no compatibility aliases. See [`crates/changelog.md`](crates/changelog.md), [`bindings/changelog.md`](bindings/changelog.md), and [`docs/changelog.md`](docs/changelog.md) for propagation.
 
 ### Nils's codex · May 21, HKT, 2026

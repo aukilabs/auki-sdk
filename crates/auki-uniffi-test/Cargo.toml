@@ -1,0 +1,29 @@
+[package]
+name = "auki-uniffi-test"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Small UniFFI test crate for proving Swift binding generation patterns before binding SDK components."
+
+[lib]
+name = "auki_uniffi_test"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+uniffi = { version = "0.31", features = ["tokio"] }
+thiserror = "2"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

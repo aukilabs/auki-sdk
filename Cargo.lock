@@ -992,12 +992,14 @@ dependencies = [
 name = "auki-time"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "auki-datatypes",
  "auki-logs",
  "auki-manifests",
  "auki-registry",
  "libc",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]

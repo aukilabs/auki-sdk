@@ -126,6 +126,11 @@ pub use network_runtime::{
     SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
 };
 
+#[cfg(all(feature = "swarm", feature = "swift-bindings"))]
+pub use network_runtime::{
+    OpenStreamError, StreamEntry, StreamError, StreamSubscriptionAudio,
+};
+
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
 

@@ -1244,6 +1244,185 @@ impl Drop for NetworkRuntime {
     }
 }
 
+// ─── UniFFI-exposed stream surface ──────────────────────────────────────────
+
+/// Shared cross-FFI stream entry shape. The opaque `payload_bytes` is
+/// prost-encoded against the per-payload `.proto` (`AudioFrame.proto`,
+/// `CameraFrame.proto`, …); Swift consumers decode via swift-protobuf.
+/// Type-distinguishability lives at the `StreamSubscription*` /
+/// `open_*_stream` level.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Record, Debug, Clone)]
+pub struct StreamEntry {
+    pub timestamp_ns: i64,
+    pub seq: u64,
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Cross-FFI stream-error variants. Flattened from
+/// `stream_runtime::StreamError`; non-FFI variants surface as Display'd
+/// `message: String`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error("end of stream: {reason}")]
+    EndOfStream { reason: String },
+    #[error("connection lost")]
+    ConnectionLost,
+    #[error("protocol error: {message}")]
+    Protocol { message: String },
+}
+
+#[cfg(feature = "swift-bindings")]
+impl From<crate::stream_runtime::StreamError> for StreamError {
+    fn from(e: crate::stream_runtime::StreamError) -> Self {
+        match e {
+            crate::stream_runtime::StreamError::EndOfStream { reason } => Self::EndOfStream {
+                reason: format!("{reason:?}"),
+            },
+            crate::stream_runtime::StreamError::ConnectionLost => Self::ConnectionLost,
+            crate::stream_runtime::StreamError::Protocol(p) => Self::Protocol {
+                message: p.to_string(),
+            },
+        }
+    }
+}
+
+/// Cross-FFI open-stream-error variants. Flattened.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum OpenStreamError {
+    #[error("declined: {reason}")]
+    Declined { reason: String },
+    #[error("libp2p open failed: {message}")]
+    LibP2p { message: String },
+    #[error("protocol error: {message}")]
+    Protocol { message: String },
+    #[error("open timed out after {ms} ms")]
+    Timeout { ms: u64 },
+}
+
+#[cfg(feature = "swift-bindings")]
+impl From<crate::stream_runtime::OpenStreamError> for OpenStreamError {
+    fn from(e: crate::stream_runtime::OpenStreamError) -> Self {
+        use crate::stream_runtime::OpenStreamError as Up;
+        match e {
+            Up::Declined { reason } => Self::Declined {
+                reason: format!("{reason:?}"),
+            },
+            Up::LibP2p(err) => Self::LibP2p {
+                message: err.to_string(),
+            },
+            Up::Protocol(err) => Self::Protocol {
+                message: err.to_string(),
+            },
+            Up::Timeout(d) => Self::Timeout {
+                ms: d.as_millis() as u64,
+            },
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<AudioFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionAudio {
+    inner: tokio::sync::Mutex<
+        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>>,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionAudio {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionAudio {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+// ─── UniFFI-exposed async stream-open surface ────────────────────────────────
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl NetworkRuntime {
+    /// Open an outbound audio stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionAudio` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_audio_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionAudio>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::AudioFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionAudio::from_inner(sub))
+    }
+}
+
 // ─── Driver task ───────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]

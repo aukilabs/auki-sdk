@@ -1342,6 +1342,45 @@ mod tests {
         assert!(rust_stream.next().await.is_none(), "source ended");
     }
 
+    #[tokio::test]
+    async fn stream_subscription_audio_wraps_typed_subscription() {
+        use auki_network_rs::stream_protocol::{AudioFrame, StreamManifest};
+        use auki_network_rs::stream_runtime::StreamSubscription;
+        use futures::stream;
+
+        let manifest = StreamManifest::default();
+        let entries = stream::iter(vec![
+            Ok(auki_network_rs::stream_runtime::StreamEntry {
+                timestamp_ns: 1,
+                seq: 0,
+                payload: AudioFrame {
+                    data: vec![1, 2, 3],
+                    ..Default::default()
+                },
+            }),
+            Ok(auki_network_rs::stream_runtime::StreamEntry {
+                timestamp_ns: 2,
+                seq: 1,
+                payload: AudioFrame {
+                    data: vec![4, 5],
+                    ..Default::default()
+                },
+            }),
+        ]);
+        let sub = StreamSubscription {
+            manifest,
+            entries: Box::pin(entries),
+        };
+        let wrapped = auki_network_rs::StreamSubscriptionAudio::from_inner(sub);
+
+        let first = wrapped.next_entry().await.expect("ok").expect("some");
+        assert_eq!(first.seq, 0);
+        let second = wrapped.next_entry().await.expect("ok").expect("some");
+        assert_eq!(second.seq, 1);
+        let third = wrapped.next_entry().await.expect("ok");
+        assert!(third.is_none(), "stream ended");
+    }
+
     /// `SwiftStreamDecision::Decline` constructs and matches.
     #[test]
     fn swift_stream_decision_decline_variant() {

@@ -1,6 +1,8 @@
 use auki_identity::Wallet;
 use auki_network::PeerIdentity;
 #[cfg(feature = "browser_libp2p")]
+mod browser_full_peer;
+#[cfg(feature = "browser_libp2p")]
 use auki_network::browser_session_protocol::{
     BrowserMediaPresence, BrowserRosterSnapshot, BrowserSessionClientMessage,
     BrowserSessionParticipant, BrowserSessionSensor,
@@ -46,6 +48,7 @@ fn peer_identity_from_seed_bytes(seed: &[u8; 32]) -> PeerIdentity {
 pub struct BrowserDomainSession {
     inner: auki_domain::browser_session::BrowserDomainSession,
     state: Rc<BrowserDomainSessionState>,
+    full_peer: Rc<browser_full_peer::BrowserFullPeer>,
 }
 
 #[cfg(feature = "browser_libp2p")]
@@ -216,12 +219,36 @@ impl BrowserDomainSession {
             peer_identity_from_seed_bytes(&seed),
         );
         let state = Rc::new(BrowserDomainSessionState::new(inner.peer_id()));
-        Ok(Self { inner, state })
+        let full_peer =
+            browser_full_peer::BrowserFullPeer::new(inner.identity(), state.local_participant());
+        Ok(Self {
+            inner,
+            state,
+            full_peer,
+        })
     }
 
     #[wasm_bindgen(js_name = peerId)]
     pub fn peer_id(&self) -> String {
         self.state.peer_id.clone()
+    }
+
+    #[wasm_bindgen(js_name = debugState)]
+    pub fn debug_state(&self) -> Result<JsValue, JsValue> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            uses_browser_session: bool,
+            advertised_multiaddrs: Vec<String>,
+            membership_peer_count: usize,
+        }
+        let state = self.full_peer.debug_state();
+        serde_wasm_bindgen::to_value(&Wire {
+            uses_browser_session: state.uses_browser_session,
+            advertised_multiaddrs: state.advertised_multiaddrs,
+            membership_peer_count: state.membership_peer_count,
+        })
+        .map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
     #[wasm_bindgen(js_name = createDomain)]
@@ -293,6 +320,8 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.metadata.replace(metadata);
         let participant = self.state.local_participant();
+        self.full_peer
+            .update_local_participant(participant.clone());
         let _ = self
             .state
             .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
@@ -306,6 +335,8 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.sensors.replace(sensors);
         let participant = self.state.local_participant();
+        self.full_peer
+            .update_local_participant(participant.clone());
         let _ = self
             .state
             .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
@@ -327,6 +358,7 @@ impl BrowserDomainSession {
             media.mic_available = true;
             media.mic_publication_enabled = enabled;
             media.mic_capture_healthy = enabled;
+            self.full_peer.set_local_media(media.clone());
         }
         let _ = self
             .state
@@ -349,6 +381,7 @@ impl BrowserDomainSession {
             media.listening_to_peer_id = Some(peer_id.clone());
             media.listening_to_sensor_id = Some(sensor_id.clone());
             media.selected_remote_stream_state = "connecting".to_string();
+            self.full_peer.set_local_media(media.clone());
         }
         let _ = self
             .state
@@ -374,6 +407,7 @@ impl BrowserDomainSession {
                 media.listening_to_peer_id = None;
                 media.listening_to_sensor_id = None;
                 media.selected_remote_stream_state = "off".to_string();
+                self.full_peer.set_local_media(media.clone());
             }
         }
         let _ = self

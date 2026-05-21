@@ -2,7 +2,7 @@
 
 Status: draft terminology baseline.
 
-Last updated: 2026-05-20.
+Last updated: 2026-05-21.
 
 This glossary defines terms used by the networking RFCs. The goal is stable
 protocol wording: each term should name one concept, and each concept should
@@ -32,6 +32,11 @@ In this RFC set, a peer id is a libp2p peer id.
 ### Peer Binding
 
 A wallet-signed statement that binds a wallet public key to a libp2p peer id.
+
+### Peer Authorization
+
+The peer-level allow or deny decision for one peer relationship after peer
+binding verification.
 
 ### Peer Relationship
 
@@ -102,6 +107,13 @@ domain.
 An authorization, signed by the domain owner wallet, that allows a peer to act
 for a domain within a specific scope.
 
+### Domain Access Policy
+
+Local or application policy deciding whether to consume or use an otherwise
+valid remote domain.
+
+Domain access policy is not proof of domain ownership or runtime authority.
+
 ### External Binding
 
 A reference from an external registry, blockchain record, NFT, or tokenomics
@@ -170,6 +182,11 @@ The identifier used to request a specific offer from the producing peer.
 ### Offer Catalog
 
 The protocol surface a peer uses to list current offers.
+
+### Offer Policy
+
+Local or application policy deciding whether to load, display, Get, or
+Subscribe to a specific offer.
 
 ### Spatial Message Envelope
 

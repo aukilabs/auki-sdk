@@ -4,7 +4,7 @@ Status: non-normative working backlog.
 
 Owner: TBD.
 
-Last updated: 2026-05-20.
+Last updated: 2026-05-21.
 
 Related protocol spec:
 [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md).
@@ -109,6 +109,9 @@ Deliverables:
   baseline actions.
 - Define delegation validity windows, expiry handling, replacement behavior,
   and any baseline revocation mechanism.
+- Define the future external-binding authority model for transferable
+  NFT-backed domains, including controller resolution and chain-finality
+  assumptions.
 - Provide test vectors for valid and invalid peer bindings, domain
   declarations, delegations, and domain id derivation.
 
@@ -196,13 +199,9 @@ Spec slot:
 
 Deliverables:
 
-- Define baseline authorization modes: open/trusted-lab, allowlist by peer id,
-  allowlist by wallet public key, invite token, signed challenge, or
-  app-provided policy.
-- Pick the required minimum authorization mode for the first implementation.
-- Define the default behavior when no authorization policy is configured.
-- Define whether authorization happens before, after, or during domain
-  validation.
+- Harden authorization beyond the experimental baseline modes: `all`,
+  `whitelisted-only`, and `app-policy`.
+- Define invite token or signed challenge behavior, if needed.
 - Define whether authorization is peer-level, domain-level, offer-level, or a
   combination.
 - Define whether per-offer policy hooks are in the baseline or reserved for a

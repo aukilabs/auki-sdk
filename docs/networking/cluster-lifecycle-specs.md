@@ -2,7 +2,7 @@
 
 Status: draft normative baseline.
 
-Last updated: 2026-05-20.
+Last updated: 2026-05-21.
 
 Related RFC backlog:
 [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md).
@@ -134,10 +134,20 @@ to a domain id.
 Such bindings MUST NOT be required to create, identify, or use a domain in
 peer-to-peer mode.
 
+The native domain id model in this version is wallet-rooted. It fits local,
+private, non-transferable, and explicitly delegated domains.
+
+Transferable NFT-backed domains are a future external-binding authority model.
+In that model, an external registry, NFT, or token record may identify the
+current controller wallet for a domain id. The concrete ownership-transfer,
+controller-resolution, revocation, and chain-finality rules are out of scope
+for this baseline.
+
 #### Consequences
 
-The same domain id model supports local, LAN-only, offline, externally
-registered, and tokenomics-backed domains.
+The same wallet-rooted domain id model supports local, LAN-only, offline, and
+externally referenced domains. Transferable token-backed domains require a later
+external-binding authority model.
 
 Discovery may help locate peers that claim to serve a domain, but Discovery
 does not create domain ownership or prove runtime authority.
@@ -163,17 +173,86 @@ behalf of a domain owner wallet:
 - revocation or replacement behavior;
 - how the delegation is presented during peer handshake.
 
-### RFC-0006: Authority Chain Validation (To Fill)
+### RFC-0006: Authority Chain Validation
 
-Define the validation path from runtime connection to spatial data exchange:
+#### Requirement
 
-- connected libp2p peer id;
-- peer binding and wallet public key;
-- domain declaration;
-- delegation, when the peer does not control the domain owner wallet;
-- accepted served domain set;
-- offer catalog entries scoped to served domains;
-- failure reasons when any link in the chain is missing or invalid.
+After a transport connection is established, each peer MUST validate the remote
+peer's authority chain before treating any remote offer as usable.
+
+Authority-chain validation MUST run in this order:
+
+1. Verify that the transport-authenticated libp2p peer id matches the peer id
+   in the remote peer binding.
+2. Verify that the peer binding signature is valid for the bound wallet public
+   key.
+3. Reject an expired peer binding when the peer binding includes an expiry.
+4. Run peer authorization for the verified peer identity.
+5. Validate each declared domain independently.
+6. Compute the accepted served domain set for the peer relationship.
+7. Accept only offer catalog entries whose domain is in the accepted served
+   domain set.
+
+Peer authorization is defined in `RFC-0016`. In the authority-chain validation
+path, peer authorization runs after peer binding verification and before served
+domains are accepted.
+
+Domain validation MUST verify the domain declaration for each declared domain.
+The receiver MUST recompute the domain id from the declared domain owner wallet
+public key and nonce, verify the declaration signature, and reject the declared
+domain if the recomputed domain id does not match.
+
+A declared domain is directly accepted when the verified peer wallet is the
+domain owner wallet.
+
+A declared domain is accepted through delegation when the peer presents a valid
+delegation from the domain owner wallet that authorizes the verified peer
+identity to serve that domain. A receiver MUST reject an expired, malformed, or
+wrong-domain delegation.
+
+Domain authority validation answers whether the remote peer may serve under a
+domain. It does not decide whether the local application wants to consume that
+domain or any offer from it.
+
+After domain authority validates, domain access policy MAY still reject the
+domain with `policy.domain_rejected`.
+
+Validating one declared domain MUST NOT cause another declared domain from the
+same peer to be accepted. Each declared domain needs its own valid authority
+chain.
+
+#### Failure Codes
+
+Lifecycle, authority, offer-loading, Get, and Subscribe diagnostics SHOULD use
+stable string failure codes in `category.reason` form.
+
+Baseline failure codes:
+
+- `protocol.unsupported_version`
+- `identity.missing_peer_binding`
+- `identity.peer_id_mismatch`
+- `identity.invalid_signature`
+- `identity.expired_binding`
+- `domain.invalid_declaration`
+- `domain.id_mismatch`
+- `domain.missing_delegation`
+- `domain.invalid_delegation`
+- `domain.expired_delegation`
+- `authorization.peer_rejected`
+- `policy.domain_rejected`
+- `offer.domain_not_served`
+- `offer.load_failed`
+- `transport.failed`
+
+#### Consequences
+
+Authority-chain validation proves only that a connected peer is authorized to
+serve the accepted domains it declared. It does not prove that the peer's data
+is correct, canonical, complete, or trusted.
+
+Invalid identity material is a peer-level failure. Invalid domain authority is
+a domain-level failure unless peer authorization or local policy chooses to
+reject the whole peer relationship.
 
 ## Peer And Domain Model
 
@@ -228,25 +307,65 @@ merge their domains or share a common runtime authority.
 Failure of one peer SHOULD affect that peer's served domains and peer
 relationships only; it SHOULD NOT invalidate unrelated domains.
 
-### RFC-0008: Served Domain Set (To Fill)
+### RFC-0008: Served Domain Set
 
-Define how a peer records which remote domains are accepted for one peer
-relationship.
+#### Requirement
 
-A served domain set is computed from the remote peer's declared domains after
-domain declaration and delegation validation. It is used to decide which offers
-the remote peer may expose in that relationship.
+Each peer relationship MUST track the set of remote domains the local peer has
+accepted the remote peer to serve.
+
+The served domain set is computed from the remote peer's declared domains after
+peer binding validation, peer authorization, domain declaration validation, and
+delegation validation.
 
 A peer relationship MAY have an empty served domain set when the remote peer is
 only consuming local offers or when none of its declared domains are accepted.
+An empty served domain set MUST NOT by itself close the connection or mark the
+peer relationship as degraded.
 
-- declared domains presented during handshake;
-- validation result for each declared domain;
-- whether a peer may add or remove served domains after handshake;
-- whether offers for domains outside the served domain set are rejected,
-  ignored, or treated as degraded;
-- how served-domain changes affect existing offers, gets, and subscriptions;
-- diagnostics for rejected or degraded served domains.
+Partial domain acceptance is allowed. If a remote peer declares multiple domains
+and only some validate, the receiver SHOULD accept the valid domains, reject the
+invalid domains, and keep diagnostics for each rejected domain.
+
+The served domain set is scoped to one peer relationship. Accepting a domain for
+one remote peer MUST NOT imply that another peer is accepted to serve the same
+domain.
+
+#### Offer Interaction
+
+The served domain set is the authority filter for remote offers.
+
+An offer whose domain is in the accepted served domain set MAY be loaded,
+displayed, requested by Get, or requested by Subscribe, subject to local
+domain access policy and offer policy.
+
+An offer whose domain is not in the accepted served domain set MUST NOT be
+treated as usable. Implementations SHOULD reject or ignore such offers with
+`offer.domain_not_served`.
+
+If offer loading fails for an accepted served domain, the peer relationship MAY
+remain ready while reporting `offer.load_failed` for that offer-loading path.
+
+#### Dynamic Updates (To Fill)
+
+Future protocol work should define how a peer adds, removes, refreshes, or
+replaces served domains during an active peer relationship.
+
+Any dynamic served-domain update MUST rerun the same authority-chain validation
+rules used during the initial handshake.
+
+Until a dynamic update protocol is defined, implementations SHOULD treat served
+domain changes as requiring a reconnect or fresh handshake.
+
+#### Diagnostics
+
+Diagnostics SHOULD report:
+
+- each declared domain id;
+- whether the declared domain was accepted or rejected;
+- the failure code for each rejected domain;
+- whether the peer relationship has an empty served domain set;
+- which loaded offers are scoped to each accepted served domain.
 
 ### RFC-0009: Private And Discoverable Peers
 
@@ -416,29 +535,117 @@ sufficient.
 
 ## Connection Lifecycle
 
-### RFC-0015: Peer Handshake (To Fill)
+### RFC-0015: Peer Handshake
 
-Define the first exchange after dialing:
+#### Requirement
 
-- peer id and peer binding;
+After dialing and establishing a transport connection, peers MUST run a
+symmetric handshake before loading offers or exchanging spatial data.
+
+The handshake is symmetric because either peer may be a producer, consumer, or
+both. Each side MUST be able to present identity, supported protocol versions,
+authorization material, and any domains it claims to serve.
+
+Each handshake side MUST include:
+
+- supported lifecycle protocol versions;
+- peer binding;
+- peer authorization material, when required by local policy;
 - declared domains, domain declarations, and delegations, when the peer claims
   to serve domains;
-- authority-chain validation result;
+- offer-catalog fetch path, when the peer exposes offers;
+- liveness or status initialization data, when supported.
+
+The transport-authenticated libp2p peer id is the source of truth for the
+remote peer id. Any peer id carried inside handshake material is a claim that
+MUST be checked against the transport-authenticated peer id. It MUST NOT
+override the transport-authenticated peer id.
+
+Each side MUST choose the highest mutually supported lifecycle protocol version.
+If no compatible lifecycle protocol version exists, the peer relationship MUST
+fail with `protocol.unsupported_version`.
+
+A peer that only consumes remote offers MAY send no declared domains and no
+offer-catalog fetch path.
+
+A peer that exposes a domain-scoped offer catalog MUST declare the domains whose
+offers may appear in that catalog.
+
+The receiver MUST NOT treat offers from that catalog as usable unless each
+offer's domain is in the accepted served domain set.
+
+#### Handshake Result
+
+For each remote peer relationship, the handshake MUST produce:
+
+- selected lifecycle protocol version;
+- verified peer id and wallet public key;
+- peer authorization result;
+- validation result for each declared domain;
 - accepted served domain set;
-- supported protocol versions;
-- authorization material;
-- offer-catalog fetch path;
-- liveness/status initialization.
+- offer-catalog fetch path, if the remote peer exposes one;
+- initial lifecycle state;
+- stable failure codes for any rejected identity, domain, authorization, or
+  offer-loading step.
 
-### RFC-0016: Authorization Model (To Fill)
+The connection MUST NOT load remote offers before peer identity is verified,
+peer authorization succeeds, and the served domain set is computed.
 
-Define the pragmatic authorization model:
+The connection MAY become ready with an empty remote served domain set. In that
+case, the remote peer is connected and authorized but exposes no usable remote
+offers for that relationship.
 
-- open/trusted-lab mode;
-- allowlist by peer id or wallet public key;
-- invite token or signed challenge, if needed;
-- per-offer policy hooks;
-- which parts are required in the baseline and which are pluggable hardening.
+#### Happy Path Example
+
+1. Park dials Robot.
+2. Park and Robot exchange supported lifecycle protocol versions.
+3. Robot presents a peer binding.
+4. Robot declares a served domain and presents the domain declaration.
+5. Robot presents a delegation if Robot's verified wallet is not the domain
+   owner wallet.
+6. Park verifies Robot's peer binding against Robot's transport-authenticated
+   libp2p peer id.
+7. Park authorizes Robot under peer authorization mode `all`.
+8. Park validates Robot's declared domain authority.
+9. Park accepts the domain into Robot's served domain set.
+10. Park fetches Robot's offer catalog.
+11. Park may Get or Subscribe to offers scoped to the accepted served domain.
+
+### RFC-0016: Authorization Model
+
+#### Requirement
+
+Peer authorization is the peer-level allow or deny decision for one peer
+relationship after peer binding verification.
+
+The baseline peer authorization modes are:
+
+- `all`: accept any peer with a valid peer binding;
+- `whitelisted-only`: accept only configured peer ids or wallet public keys;
+- `app-policy`: defer the allow or deny decision to application policy.
+
+The default peer authorization mode for this experimental baseline is `all`.
+
+Non-experimental deployments SHOULD use `whitelisted-only` or `app-policy`.
+
+Peer authorization MUST NOT depend solely on Discovery presence.
+
+#### Domain And Offer Policy
+
+Domain authority validation decides whether a remote peer may serve under a
+domain.
+
+Domain access policy decides whether the local application wants to consume or
+use an otherwise valid remote domain.
+
+Offer policy decides whether the local application wants to load, display, Get,
+or Subscribe to a specific offer.
+
+Domain access policy and offer policy MAY be application-defined. They MUST NOT
+replace domain authority validation.
+
+Invite tokens, signed challenges, and per-offer policy hooks are optional
+hardening layers for future RFC work.
 
 ### RFC-0017: Peer Connectivity State Is Tracked Per Remote Peer
 
@@ -455,16 +662,32 @@ restart or become invalid.
 The following states are non-normative names, but the SDK SHOULD expose
 equivalent diagnostic information:
 
-- unknown;
-- discovered;
-- configured;
-- dialing;
-- connected;
-- authorized;
-- loading offers;
-- ready;
-- degraded;
-- lost.
+- `unknown`: the peer relationship has no known discovery, configuration, or
+  connection state;
+- `discovered`: the peer was learned through Discovery or an equivalent index;
+- `configured`: the peer was learned through explicit configuration,
+  invitation, direct address exchange, or another non-Discovery mechanism;
+- `dialing`: the local peer is attempting to establish a transport connection;
+- `connected`: the transport connection exists, but handshake and peer
+  authorization are not complete;
+- `authorized`: peer identity is verified and peer authorization has succeeded;
+- `loading offers`: the peer relationship is loading remote offers for accepted
+  served domains;
+- `ready`: handshake and peer authorization are complete, and any required
+  initial offer-loading attempt has completed;
+- `degraded`: the peer relationship remains usable but has a recoverable
+  problem, such as Discovery freshness loss, offer-loading failure, or a
+  rejected domain;
+- `lost`: the transport connection or peer relationship is no longer available.
+
+A peer relationship MAY reach `ready` with an empty remote served domain set.
+In that case, the relationship is ready for peer-level interaction but exposes
+no usable remote offers.
+
+A rejected declared domain MUST NOT by itself force `degraded` when other
+declared domains are accepted or when an empty served domain set is allowed by
+local policy. Implementations SHOULD expose the rejected-domain diagnostics
+without changing unrelated peer relationships.
 
 #### Consequences
 

@@ -336,6 +336,121 @@ async fn drain_liveness_events(
     }
 }
 
+// ─── Swift stream provider + source traits ─────────────────────────
+
+/// One source-stream item. The opaque `payload_bytes` is prost-encoded
+/// against the per-payload-type proto file (`AudioFrame.proto`,
+/// `CameraFrame.proto`, etc.); Swift consumers decode via swift-protobuf.
+///
+/// Shared shape across all 5 payload types — type-distinguishability
+/// lives at the trait level (which `Swift*Source` you implement) and
+/// the `StreamSubscription*` consumer side, not in the byte payload
+/// representation.
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct StreamItem {
+    pub timestamp_ns: i64,
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Swift-implemented audio source. Returns the next `StreamItem`
+/// containing prost-encoded `AudioFrame` bytes, `Ok(None)` for clean
+/// end-of-source, or `Err(detail)` for producer error.
+#[uniffi::export(callback_interface)]
+pub trait SwiftAudioSource: Send + Sync {
+    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+}
+
+/// Swift-implemented camera source.
+#[uniffi::export(callback_interface)]
+pub trait SwiftCameraSource: Send + Sync {
+    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+}
+
+/// Swift-implemented point-cloud source.
+#[uniffi::export(callback_interface)]
+pub trait SwiftPointCloudSource: Send + Sync {
+    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+}
+
+/// Swift-implemented joint-encoders source.
+#[uniffi::export(callback_interface)]
+pub trait SwiftJointEncodersSource: Send + Sync {
+    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+}
+
+/// Swift-implemented detection source.
+#[uniffi::export(callback_interface)]
+pub trait SwiftDetectionSource: Send + Sync {
+    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+}
+
+/// Producer's accept/decline decision for one inbound stream request.
+/// Each Accept variant names the payload type and carries the prost-
+/// encoded manifest bytes only. The source-stream itself is supplied
+/// by a follow-up call on the `SwiftStreamProvider`.
+///
+/// UniFFI 0.31 can't ship callback-interface trait objects inside Enum
+/// variants (no `Lower<UniFfiTag>` for `Box<dyn T>` where T is a
+/// callback interface), so we split provider into a two-call protocol:
+/// `dispatch_decision` first, then the matching `*_source` method.
+#[derive(uniffi::Enum)]
+pub enum SwiftStreamDecision {
+    AcceptAudio { manifest_bytes: Vec<u8> },
+    AcceptCamera { manifest_bytes: Vec<u8> },
+    AcceptPointCloud { manifest_bytes: Vec<u8> },
+    AcceptJointEncoders { manifest_bytes: Vec<u8> },
+    AcceptDetection { manifest_bytes: Vec<u8> },
+    Decline { reason_bytes: Vec<u8> },
+}
+
+/// Swift-implemented stream provider. Two-call protocol per inbound
+/// request: the runtime calls `dispatch_decision` to learn the payload
+/// type + manifest, then (on Accept) calls the matching `*_source`
+/// method to retrieve the source-stream trait object.
+///
+/// The Swift implementation must keep `dispatch_decision` and the
+/// subsequent `*_source` call consistent for the same `(peer_id,
+/// request_bytes)` pair. The runtime only invokes the `*_source`
+/// method matching the Accept variant `dispatch_decision` returned.
+#[uniffi::export(callback_interface)]
+pub trait SwiftStreamProvider: Send + Sync {
+    /// Decide whether to accept (and which payload type) or decline.
+    /// Called once per inbound stream request.
+    fn dispatch_decision(&self, peer_id: String, request_bytes: Vec<u8>) -> SwiftStreamDecision;
+
+    /// Provide the audio source for an accepted request. Called
+    /// immediately after `dispatch_decision` returns `AcceptAudio`.
+    fn audio_source(&self, peer_id: String, request_bytes: Vec<u8>) -> Box<dyn SwiftAudioSource>;
+
+    /// Provide the camera source for an accepted request.
+    fn camera_source(
+        &self,
+        peer_id: String,
+        request_bytes: Vec<u8>,
+    ) -> Box<dyn SwiftCameraSource>;
+
+    /// Provide the point-cloud source for an accepted request.
+    fn point_cloud_source(
+        &self,
+        peer_id: String,
+        request_bytes: Vec<u8>,
+    ) -> Box<dyn SwiftPointCloudSource>;
+
+    /// Provide the joint-encoders source for an accepted request.
+    fn joint_encoders_source(
+        &self,
+        peer_id: String,
+        request_bytes: Vec<u8>,
+    ) -> Box<dyn SwiftJointEncodersSource>;
+
+    /// Provide the detection source for an accepted request.
+    fn detection_source(
+        &self,
+        peer_id: String,
+        request_bytes: Vec<u8>,
+    ) -> Box<dyn SwiftDetectionSource>;
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -747,6 +862,92 @@ mod tests {
         assert!(rt.connected_peer_id_strings().is_empty());
 
         rt.shutdown();
+    }
+
+    /// All 5 source traits + the provider trait compile and are object-
+    /// safe.
+    #[test]
+    fn swift_stream_provider_object_safety() {
+        struct NoopProvider;
+        impl SwiftStreamProvider for NoopProvider {
+            fn dispatch_decision(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> SwiftStreamDecision {
+                SwiftStreamDecision::Decline {
+                    reason_bytes: vec![],
+                }
+            }
+            fn audio_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftAudioSource> {
+                unreachable!("test never accepts")
+            }
+            fn camera_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftCameraSource> {
+                unreachable!("test never accepts")
+            }
+            fn point_cloud_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftPointCloudSource> {
+                unreachable!("test never accepts")
+            }
+            fn joint_encoders_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftJointEncodersSource> {
+                unreachable!("test never accepts")
+            }
+            fn detection_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftDetectionSource> {
+                unreachable!("test never accepts")
+            }
+        }
+        let _p: Box<dyn SwiftStreamProvider> = Box::new(NoopProvider);
+    }
+
+    /// `SwiftStreamDecision::Decline` constructs and matches.
+    #[test]
+    fn swift_stream_decision_decline_variant() {
+        let d = SwiftStreamDecision::Decline {
+            reason_bytes: b"reason".to_vec(),
+        };
+        match d {
+            SwiftStreamDecision::Decline { reason_bytes } => assert_eq!(reason_bytes, b"reason"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    /// Each `Accept*` variant constructs cleanly with only manifest bytes.
+    #[test]
+    fn swift_stream_decision_accept_variants() {
+        let _ = SwiftStreamDecision::AcceptAudio {
+            manifest_bytes: vec![1, 2, 3],
+        };
+        let _ = SwiftStreamDecision::AcceptCamera {
+            manifest_bytes: vec![4, 5, 6],
+        };
+        let _ = SwiftStreamDecision::AcceptPointCloud {
+            manifest_bytes: vec![],
+        };
+        let _ = SwiftStreamDecision::AcceptJointEncoders {
+            manifest_bytes: vec![],
+        };
+        let _ = SwiftStreamDecision::AcceptDetection {
+            manifest_bytes: vec![],
+        };
     }
 
     /// Smoke test: a `HeartbeatTimestampProvider` impl can be converted

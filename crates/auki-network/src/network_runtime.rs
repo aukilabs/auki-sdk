@@ -524,6 +524,8 @@ pub enum BroadcastMembershipError {
 }
 
 /// Errors from diagnostic message broadcast.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, thiserror::Error)]
 pub enum BroadcastDiagnosticError {
     #[error("diagnostic message is too large for the frame")]

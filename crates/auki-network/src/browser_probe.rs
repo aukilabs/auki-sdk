@@ -20,6 +20,7 @@ pub fn responder_label(identity: &PeerIdentity) -> String {
 #[derive(NetworkBehaviour)]
 pub struct BrowserProbeBehaviour {
     pub probe: json::Behaviour<BrowserProbeRequest, BrowserProbeResponse>,
+    pub stream: libp2p_stream::Behaviour,
 }
 
 #[derive(Debug, Error)]
@@ -60,6 +61,7 @@ pub fn build_browser_probe_swarm(
                 )],
                 request_response::Config::default(),
             ),
+            stream: libp2p_stream::Behaviour::new(),
         })
         .map_err(|err| BrowserProbeError::Transport(err.to_string()))
         .map(|builder| builder.build())

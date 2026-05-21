@@ -8,6 +8,7 @@ Implementation status for [`auki-network`](../README.md).
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
 - [`browser_probe_protocol.rs`](browser_probe_protocol.rs) - shared `/auki/browser-probe/0.0.1` request/response structs for the browser WebRTC probe.
 - [`browser_probe.rs`](browser_probe.rs) - native-only WebRTC Direct probe listener for proving browser peers can open SDK-owned request/response streams.
+- [`browser_session_protocol.rs`](browser_session_protocol.rs) - `/auki/browser-session/0.0.1` framed JSON browser roster/media presence control plane.
 - [`swarm.rs`](swarm.rs) - libp2p `Swarm<Behaviour>` builder, relay support, advertise-address helpers.
 - [`network_runtime.rs`](network_runtime.rs) - task-owned swarm driver, allowed-peer updates, heartbeat carrier targets/events, join/info/resources/sensors/registries/membership helpers, idempotent shutdown.
 - [`join_protocol.rs`](join_protocol.rs) - `/auki/join/0.0.1` framed JSON request/response.

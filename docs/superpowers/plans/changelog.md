@@ -4,6 +4,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Created the browser roster presence control-plane implementation plan, scoped to a Manager-pushed browser session stream so two Park browser peers can see each other and media presence calls can return `ok` before real audio bytes stream.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Updated the browser Domain peer adapter first-tranche implementation plan so its TypeScript contract uses the current SDK sensor-kind and stream-state vocabulary Park expects.

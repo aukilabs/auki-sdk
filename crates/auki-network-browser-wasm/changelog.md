@@ -4,6 +4,12 @@ Append-only timeline of changes for the browser/WASM networking probe. Latest en
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+`BrowserDomainSession.joinDomain()` now keeps a live browser session control-plane stream after the join handshake. The wasm session exposes participant metadata/sensor declaration observers, publishes local media presence intent to the Manager, consumes pushed browser roster snapshots, and returns `ok` for mic publish/listen intent after join. The two-browser Park acceptance smoke now passes: both browser peers see each other and media publish/listen calls succeed.
+
+Tests: `cargo test -p auki-network-browser-wasm local_browser_participant --features browser_libp2p -- --nocapture`, `cargo check -p auki-network-browser-wasm --target wasm32-unknown-unknown --features browser_libp2p`, `wasm-pack build crates/auki-network-browser-wasm --target web --out-dir pkg-web -- --features browser_libp2p`, `node crates/auki-network-browser-wasm/scripts/smoke_park_two_browser_acceptance.mjs ... http://127.0.0.1:7880`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 Added the browser-to-native WebRTC probe smoke harness. `scripts/browser_probe_smoke.html` loads `pkg-web` and calls `dialBrowserProbe`; `scripts/smoke_browser_probe.mjs` serves the crate locally, launches Chrome through `playwright-core`, and asserts the `/auki/browser-probe/0.0.1` payload round-trip. Verified against the native `browser_probe_listener`: `ok 12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar`.
@@ -31,3 +37,19 @@ Added the canonical `peerIdFromSeed(seed)` wasm export. The Rust test pins seed 
 ### Nils's codex · May 19, HKT, 2026
 
 Created the `auki-network-browser-wasm` crate scaffold for the rust-libp2p browser transport spike. The crate starts as an importable wasm shell; identity and libp2p browser feature probes follow in separate commits.
+
+### Nils's codex · May 21, HKT, 2026
+
+Added browser `/auki/join/0.0.1` transport support behind `browser_libp2p`. The wasm package can now fetch Discovery from `BrowserDomainSession.joinDomain()`, choose the Manager's WebRTC multiaddr, open the shared join protocol over `libp2p-stream`, and return `ok` or a typed browser Domain error. Added low-level and class-level Playwright smoke scripts.
+
+### Nils's codex · May 21, HKT, 2026
+
+Added a Park end-to-end browser join smoke script. It opens the live Park web-peer page, verifies Park's bundled SDK adapter installs `window.aukiBrowserPeer`, serves a CORS-enabled fake Discovery directory, and asserts the page-created browser peer can join a native WebRTC join listener.
+
+### Nils's codex · May 21, HKT, 2026
+
+`BrowserDomainSession.joinDomain()` now returns join metadata on success: domain name, Manager peer id, and Manager-supplied membership JSON. The Park end-to-end smoke script now checks that Park emits a visible joined snapshot, not just that join returned `ok`.
+
+### Nils's codex · May 21, HKT, 2026
+
+Improved browser join diagnostics by extracting `.message` from JavaScript `Error`/`TypeError` objects crossing the wasm boundary. Browser fetch failures now surface their real message instead of collapsing to `unknown JavaScript error`.

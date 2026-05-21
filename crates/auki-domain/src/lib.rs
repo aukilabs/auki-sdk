@@ -15,17 +15,26 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "browser_runtime")]
+pub mod browser_session;
+#[cfg(feature = "native_runtime")]
 pub mod cluster_manager;
 pub mod cluster_membership;
+#[cfg(feature = "native_runtime")]
 pub mod stream_manifest;
 
+#[cfg(feature = "native_runtime")]
 pub use auki_network::registries_protocol::RegistryKind;
+#[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{
     ResourceEntry, ResourceKind, ResourcePinholeIntrinsics, ResourceQuat, ResourceSpatialTransform,
     ResourceVec3, ResourcesRequest, ResourcesResponse, SensorStreamResource, TransformEdgeResource,
 };
+#[cfg(feature = "native_runtime")]
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+#[cfg(feature = "native_runtime")]
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
+#[cfg(feature = "native_runtime")]
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
@@ -35,4 +44,5 @@ pub use cluster_manager::{
     SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
+#[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Browser Park two-peer control plane is green.** `auki-network` adds `/auki/browser-session/0.0.1` and the native smoke Manager pushes symmetric browser roster snapshots; `auki-network-browser-wasm` keeps that session live after join; `auki-domain-browser` updates media presence fallback snapshots. The two-browser Park acceptance smoke passes with A seeing B, B seeing A, and publish/listen returning `ok`.
+
 ### Nils's claude · May 21, 15:41 HKT, 2026
 
 **[`auki-identity`](auki-identity/changelog.md) + [`auki-network`](auki-network/changelog.md) — new optional `swift-bindings` cargo feature.** Additive, feature-gated UniFFI proc-macros on `Wallet` + `PeerIdentity` (with two UniFFI 0.31 type-system-forced upstream signature changes: `Wallet::{from_seed, seed}` switch to `Vec<u8>` + `Arc<Self>`; `PeerIdentity::from_wallet` takes `Arc<Wallet>`). Default builds unchanged. Consumed by the new [`auki-identity-swift`](../bindings/swift/auki-identity-swift/changelog.md) binding crate (Spec 1 PR A).
@@ -685,3 +689,19 @@ API-surface review walkthrough — six items filed across `auki-session` (1), `a
 ### broodsugar's claude · May 1, 15:22 HKT, 2026
 
 Per-crate changelogs bootstrapped — all seven crates now have their own `changelog.md`. Resolved the matching parking-lot item.
+
+### Nils's codex · May 21, HKT, 2026
+
+`auki-network`, `auki-domain`, `auki-network-browser-wasm`: browser Domain join now uses the shared `/auki/join/0.0.1` protocol over WebRTC/libp2p-stream, with Discovery lookup wired through `BrowserDomainSession.joinDomain()` and smoke coverage at both the low-level transport and public wasm class layers.
+
+### Nils's codex · May 21, HKT, 2026
+
+`auki-network-browser-wasm`: added a Park end-to-end smoke script that drives the live Park page through `window.aukiBrowserPeer` and verifies browser Domain join against a native WebRTC join listener.
+
+### Nils's codex · May 21, HKT, 2026
+
+`auki-domain-browser`, `auki-network-browser-wasm`: browser joins now surface visible participant state. The wasm session returns join metadata, and the TypeScript facade converts it into Park-compatible `observeParticipants()` snapshots.
+
+### Nils's codex · May 21, HKT, 2026
+
+`auki-network-browser-wasm`: browser join diagnostics now preserve JavaScript error messages, so fetch/CORS failures surface as actionable text instead of `unknown JavaScript error`.

@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Browser session control-plane protocol added.** New `/auki/browser-session/0.0.1` framed JSON messages carry browser participant metadata, sensor declarations, mic publication intent, subscribe/unsubscribe intent, and Manager-pushed roster snapshots. The native `browser_join_listener` smoke Manager now accepts browser session streams, keeps an in-memory browser roster, and pushes symmetric snapshots so two Park browser peers can see each other.
+
+Tests: `cargo test -p auki-network browser_session_protocol --features join_protocol -- --nocapture`, `cargo test -p auki-network --example browser_join_listener browser_roster_state --features browser_probe,join_protocol -- --nocapture`.
+
 ### Nils's claude · May 21, 15:41 HKT, 2026
 
 **Added optional `swift-bindings` cargo feature; annotated `PeerIdentity` (PR A's slice).** Same additive pattern as `auki-identity`'s new feature. PR A's surface: `PeerIdentity::{from_wallet, peer_id_string}`. `from_wallet`'s parameter changed from `&Wallet` to `Arc<Wallet>` (UniFFI 0.31 doesn't impl `LiftRef` for foreign-crate Objects); workspace callers (auki-network's own tests, swarm.rs doctest, examples/diagnostic-app, bindings/python/auki-domain-py) adapted. `from_wallet`'s body bridges `Wallet::seed()`'s new `Vec<u8>` back to `PeerIdentity::from_seed`'s still-existing `&[u8; 32]` via `.try_into().expect(...)`. `peer_id_string()` returns the canonical libp2p peer-id `String` so PR A doesn't yet need the `PeerId`-as-`String` UniFFI custom type (that lands in PR B). Feature-gated `uniffi::setup_scaffolding!()` at the crate root.
@@ -753,3 +759,7 @@ M1a landed — libp2p `Swarm` builder behind the `swarm` feature. Composes `libp
 ### broodsugar's claude · May 2, 16:10 HKT, 2026
 
 Crate created — Layer 1 of the Reid milestone-2 networking stack. Ships the data types only: `PeerIdentity` (libp2p ed25519 keypair derived from a wallet via `derive_child("peer/v1")`, with `peer_id()` / `public_key()` / `keypair()` accessors), `ReachabilityRecord` (peer id + multiaddrs + capabilities + last-seen, JSON-serializable wire shape for peer discovery), and `Capability` (namespaced-string newtype with the four canonical `networking:*` constants from the Reid milestone-2 architecture: `MESSAGE_FORWARDING`, `BULK_DATA_CHANNEL`, `TURN`, `SFU`). 11 tests covering determinism of derivation, the public `from_wallet ≡ from_seed(derive_child("peer/v1").seed())` contract, JSON round-trips, and capability namespace extraction. WASM-friendly (`libp2p-identity` + `multiaddr` both compile to WASM); deliberately split from M1's libp2p `Swarm` so Console can derive a peer id from an in-browser wallet without pulling in the transport stack. Built on `auki-identity`, `libp2p-identity` 0.2 (`ed25519` + `peerid` + `serde` features, `default-features = false`), and `multiaddr` 0.18 (with a small local serde adapter — `multiaddr` 0.18 dropped its serde feature). M1 will add the libp2p `Swarm` (TCP/QUIC + Noise + Yamux + Circuit Relay v2) on top of these primitives. Parking-lot items: mDNS coexistence (`_p2p._udp.local.` vs `_auki._tcp.local.`); Wallet→peer-key derivation label evolution; Park-from-home access pattern; off-by-default relay-server plumbing; `ReachabilityRecord` extensibility / versioning. No tag yet — wait until M1 lands or the Relay app earns it.
+
+### Nils's codex · May 21, HKT, 2026
+
+Split the `/auki/join/0.0.1` wire helpers into a browser-usable `join_protocol` feature and added a browser join listener smoke example. The listener now reuses the known-good WebRTC probe swarm with an added `libp2p-stream` behaviour, and accepts join substreams by spawning per-stream handlers so the swarm keeps polling while request/response framing runs.

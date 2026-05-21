@@ -67,9 +67,9 @@ uniffi::custom_type!(PeerId, String, {
     lower: |p: PeerId| p.to_string(),
 });
 
-/// Cross-FFI representation: canonical `/ip4/.../tcp/...` multiaddr
-/// string. Parse failures surface as Rust `anyhow::Error`. `remote`
-/// keyword for the same reason as the `PeerId` registration above.
+// Cross-FFI representation: canonical `/ip4/.../tcp/...` multiaddr
+// string. Parse failures surface as Rust `anyhow::Error`. `remote`
+// keyword for the same reason as the `PeerId` registration above.
 uniffi::custom_type!(Multiaddr, String, {
     remote,
     try_lift: |s: String| {
@@ -356,5 +356,20 @@ mod tests {
         let s = addr.to_string();
         let back: Multiaddr = s.parse().expect("canonical multiaddr parses");
         assert_eq!(back, addr);
+    }
+
+    /// `AllowedPeer` is constructible from canonical PeerId + multiaddr
+    /// strings via UniFFI's auto-derived constructor. Exercises the
+    /// custom-type lowering chain (String → PeerId → Vec<Multiaddr>).
+    #[test]
+    fn allowed_peer_constructs_with_string_inputs() {
+        let pid = test_peer_id();
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let ap = auki_network_rs::AllowedPeer {
+            peer_id: pid,
+            multiaddrs: vec![addr.clone()],
+        };
+        assert_eq!(ap.peer_id, pid);
+        assert_eq!(ap.multiaddrs, vec![addr]);
     }
 }

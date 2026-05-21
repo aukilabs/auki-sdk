@@ -106,6 +106,11 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(60);
 pub const RECONNECT_TICK: Duration = Duration::from_millis(500);
 
 /// One entry in the runtime's allow-list / auto-dial schedule.
+///
+/// `swift-bindings`: derived as a UniFFI Record. `peer_id` and
+/// `multiaddrs` cross the FFI as canonical strings via the
+/// custom-type registrations in `auki-network-swift`.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedPeer {
     /// libp2p peer-id of this peer.

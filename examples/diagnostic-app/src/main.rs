@@ -1,6 +1,7 @@
 mod app_state;
 mod flash;
 mod sdk_runtime;
+mod sound;
 mod ui;
 
 use app_state::DiagnosticApp;

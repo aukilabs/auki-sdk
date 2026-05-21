@@ -13,12 +13,13 @@ The app defaults to:
 - Discovery URL: `http://127.0.0.1:8080`
 - Cluster name: `hagall-test`
 - Flash mode: `UTC`
+- Sound: enabled when the host audio backend is available
 
 ## Timing Modes
 
-`UTC` mode flashes every three seconds on host UTC wall-clock boundaries and applies no Auki correction. Use this first to eyeball whether two machines have visibly different UTC time.
+`UTC` mode flashes and beeps every three seconds on host UTC wall-clock boundaries and applies no Auki correction. Use this first to eyeball whether two machines have visibly different UTC time. Use the `Sound` checkbox in the flash panel to silence or re-enable the beep.
 
-`Domain` mode is reserved for heartbeat domain-clock sync. In this SDK build, the domain sync snapshot API is not implemented yet, so the app shows Domain mode as unavailable rather than faking corrected timing.
+`Domain` mode is reserved for heartbeat domain-clock sync. When available, the same flash and optional beep follow the domain timing. In this SDK build, the domain sync snapshot API is not implemented yet, so the app shows Domain mode as unavailable rather than faking corrected timing.
 
 ## Two-Laptop Test
 

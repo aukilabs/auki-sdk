@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's claude · May 21, 14:10 HKT, 2026
+
+Added the [Spec 1 PR A implementation plan](superpowers/plans/2026-05-20-spec1-pra-auki-identity-swift.md) for `auki-identity-swift`. Eleven tasks covering: optional `swift-bindings` cargo feature on `crates/auki-identity` + `crates/auki-network`, UniFFI proc-macros on `Wallet` and `PeerIdentity` (with small `wallet_id_str` / `peer_id_string` helpers), new `bindings/swift/auki-identity-swift/` scaffolding host, per-component doc files, indices + changelog propagation, end-to-end iOS XCFramework validation. Plans for PR B (network expansion) and PR C (auki-domain-swift) follow once PR A lands.
+
 ### Nils's claude · May 21, 13:38 HKT, 2026
 
 Rewrote the [SDK Swift binding expansion design](superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md) (revision 2) — pivoted to upstream UniFFI proc-macros under a new `swift-bindings` cargo feature on each of `crates/auki-{identity,network,domain}`. Binding crates under `bindings/swift/` become thin scaffolding hosts; UniFFI introspects upstream types directly, hand-wrapping near-eliminated. See [`superpowers/specs/changelog.md`](superpowers/specs/changelog.md).

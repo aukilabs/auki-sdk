@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 14:10 HKT, 2026
+
+Added [Spec 1 PR A implementation plan](docs/superpowers/plans/2026-05-20-spec1-pra-auki-identity-swift.md) for `auki-identity-swift`: feature-flagged UniFFI proc-macros on upstream `Wallet`/`PeerIdentity`, new `bindings/swift/auki-identity-swift/` scaffolding host, end-to-end XCFramework validation. PR B/C plans land once PR A merges. See [`docs/changelog.md`](docs/changelog.md).
+
 ### Nils's claude · May 21, 13:38 HKT, 2026
 
 Rewrote the [SDK Swift binding expansion design spec](docs/superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md) (revision 2): pivoted from hand-written binding-crate wrappers to upstream `#[uniffi::*]` proc-macros gated behind a new `swift-bindings` cargo feature on `crates/auki-{identity,network,domain}`. Binding crates under `bindings/swift/` become thin scaffolding hosts. See [`docs/changelog.md`](docs/changelog.md).

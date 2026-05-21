@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 21, HKT, 2026
 
+Added the Superpowers implementation plan for the SDK-wide stream naming cleanup.
+
+### Nils's codex · May 21, HKT, 2026
+
 Added the Superpowers stream naming cleanup design spec for the SDK-wide full rename of camera, detection, and camera registry vocabulary.
 
 ### Nils's codex · May 20, HKT, 2026

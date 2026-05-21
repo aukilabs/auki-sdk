@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Stream naming cleanup implementation plan added.** The plan sequences the approved breaking rename across SDK datatypes, registry, network, bindings, domain, ROS adapter, docs, and Park. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Stream naming cleanup design added.** The Superpowers design spec locks the breaking no-compatibility rename to `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 21, HKT, 2026

@@ -1,6 +1,7 @@
 use crate::app_state::DiagnosticApp;
 use crate::flash::{
-    FLASH_ON, FLASH_PERIOD, FlashMode, flash_is_on, next_period_boundary_ns, utc_now_ns,
+    FLASH_ON, FLASH_PERIOD, FlashMode, flash_is_on, flash_is_on_i64, next_period_boundary_ns,
+    utc_now_ns,
 };
 use crate::sdk_runtime::{Role, RuntimeCommand};
 
@@ -93,8 +94,12 @@ fn render_status_strip(ui: &mut egui::Ui, app: &DiagnosticApp) {
     let snapshot = app.snapshot();
     ui.horizontal(|ui| {
         status_box(ui, "Networking", networking_label(snapshot.role));
-        status_box(ui, "Heartbeat", "unavailable");
-        status_box(ui, "Session -> domain", "unavailable");
+        status_box(ui, "Heartbeat", heartbeat_label(snapshot.role));
+        status_box(
+            ui,
+            "Session -> domain",
+            domain_status_label(&snapshot.domain_status),
+        );
     });
 }
 
@@ -120,20 +125,43 @@ fn render_flash_panel(ui: &mut egui::Ui, app: &mut DiagnosticApp) {
     });
     ui.add_space(4.0);
     ui.label(format!("mode: {}", flash_mode_label(snapshot.flash_mode)));
-    ui.label("baseline: no Auki correction");
+    if snapshot.flash_mode == FlashMode::Domain {
+        ui.label("baseline: domain clock estimate");
+    } else {
+        ui.label("baseline: local UTC");
+    }
     ui.label(format!("period: {:.3}s", FLASH_PERIOD.as_secs_f32()));
     if !snapshot.domain_mode_available {
-        ui.label("Domain unavailable: heartbeat sync API not implemented in this SDK build");
+        ui.label(format!("Domain unavailable: {}", snapshot.domain_status));
+    } else {
+        if let Some(offset) = snapshot.domain_offset_ns {
+            ui.label(format!("domain offset: {offset}ns"));
+        }
+        if let Some(uncertainty) = snapshot.domain_uncertainty_ns {
+            ui.label(format!("uncertainty: {uncertainty}ns"));
+        }
     }
 
     let now_ns = utc_now_ns();
     let next_tick_ns = next_period_boundary_ns(now_ns, FLASH_PERIOD.as_nanos());
     let next_tick_ms = next_tick_ns.saturating_sub(now_ns) as f64 / 1_000_000.0;
     ui.label(format!("next UTC tick: {next_tick_ms:.0}ms"));
+    if let Some(domain_now_ns) = snapshot
+        .domain_now_ns
+        .and_then(|ns| u128::try_from(ns).ok())
+    {
+        let next_domain_tick_ns = next_period_boundary_ns(domain_now_ns, FLASH_PERIOD.as_nanos());
+        let next_domain_tick_ms =
+            next_domain_tick_ns.saturating_sub(domain_now_ns) as f64 / 1_000_000.0;
+        ui.label(format!("next domain tick: {next_domain_tick_ms:.0}ms"));
+    }
 
     let on = match snapshot.flash_mode {
         FlashMode::Utc => flash_is_on(now_ns, FLASH_PERIOD.as_nanos(), FLASH_ON.as_nanos()),
-        FlashMode::Domain => false,
+        FlashMode::Domain => snapshot
+            .domain_now_ns
+            .map(|now| flash_is_on_i64(now, FLASH_PERIOD.as_nanos(), FLASH_ON.as_nanos()))
+            .unwrap_or(false),
     };
     app.record_flash_state(on, now_ns);
 
@@ -199,6 +227,21 @@ fn networking_label(role: Role) -> &'static str {
     match role {
         Role::Unclustered => "Not clustered",
         Role::Manager | Role::Member => "Clustered",
+    }
+}
+
+fn heartbeat_label(role: Role) -> &'static str {
+    match role {
+        Role::Unclustered => "inactive",
+        Role::Manager | Role::Member => "active",
+    }
+}
+
+fn domain_status_label(status: &str) -> &str {
+    match status {
+        "synced" => "synced",
+        "not clustered" => "not clustered",
+        _ => "waiting",
     }
 }
 

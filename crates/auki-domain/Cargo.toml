@@ -20,6 +20,24 @@ native_runtime = [
     "dep:tokio",
 ]
 browser_runtime = ["dep:getrandom"]
+# Enables UniFFI proc-macros on ClusterManager, ClusterTarget, all errors, all
+# value records on the public surface (DaemonInfo, ClusterMember, ClusterMembership,
+# ParticipantInfo, SensorEntry, registry-entry trees, etc.), and the two catalog-
+# provider traits (SensorCatalogProvider, ResourceCatalogProvider) as callback
+# interfaces. When off (default), the crate compiles exactly as today — no
+# UniFFI dep in the graph.
+#
+# Propagates to auki-identity and auki-network because the bootstrap signatures
+# accept PeerIdentity (auki-network) which is constructed from Wallet
+# (auki-identity), and several method signatures cross-reference annotated
+# types defined in those crates (PR A annotated Wallet/PeerIdentity; PR B
+# annotated NetworkRuntime/StreamSubscription*/DiscoveryClient/etc.).
+swift-bindings = [
+    "dep:uniffi",
+    "dep:anyhow",
+    "auki-identity/swift-bindings",
+    "auki-network/swift-bindings",
+]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -48,6 +66,9 @@ tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
 # requiring callers to dep on auki-network.
 prost = { version = "0.13", optional = true }
 getrandom = { version = "0.2", features = ["js"], optional = true }
+# Optional — pulled in only when the `swift-bindings` feature is on.
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
+anyhow = { version = "1", optional = true }
 
 [dev-dependencies]
 auki-layout = { path = "../auki-layout" }

@@ -14,250 +14,300 @@ Related glossary:
 
 ## Purpose
 
-Track the gaps that must be resolved before the first minimal peer-to-peer
-cluster protocol can be implemented confidently.
+Track the remaining work needed before a clean-room SDK implementer can build
+the currently specified v1 protocol from the spec alone.
 
 The protocol baseline lives in
 [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md). This backlog is
 not normative.
 
-## Current Baseline
+## Implementability Verdict
 
-The current baseline is a bootstrapping protocol: peers use wallet-bound
-runtime identities, declare served domains when exposing domain-scoped data,
-discover or configure reachable peers, authorize connections, and exchange
-spatial data through Offer / Get / Subscribe.
+Authority, identity, domain validation, handshake message shape, offer objects,
+spatial envelopes, and status objects are implementable now.
 
-## Suggested Finish Order
+The currently specified v1 protocol is not fully implementable end to end yet.
+The blocker is the post-handshake path layer: Offer Catalog, Get, and Subscribe
+have object shapes, but Get and Subscribe do not yet have concrete protocol IDs
+or path-binding rules, and common JSON framing/exchange mechanics are not
+mechanical enough.
 
-1. Figure out the existing SDK NTP or clock-sync protocol and decide how it
-   maps into the RFC set.
-2. Add the missing time-sync RFC text and any needed failure/status fields.
-3. Update the glossary so it matches the filled spec language.
-4. Add compatibility fixtures, signed-object test vectors, and validation
-   scenarios.
-5. Run a final AI/expert review pass for consistency, business logic, and RFC
-   writing quality.
-6. Leave Discovery record shape, Discovery data-type hints, and peer graph
-   hints for later unless they become blockers for the first implementation.
+Configured/private peer-to-peer connectivity is the currently specified path.
+Concrete Discovery records are v1 To Fill work and do not block that path.
 
-## Remaining Deliverables
+## Work Order
 
-Use this section as the implementation-ready checklist for work that remains
-after the core v1 lifecycle, authority, Offer, Get, Subscribe, and status
-sections have been filled.
+1. Define post-handshake path binding and framing.
+2. Define registry-reference hash format.
+3. Tighten deterministic failure mapping where interop needs exact outcomes.
+4. Tighten payload-type matching.
+5. Decide minimum offer-kind payload semantics.
+6. Re-run final consistency and implementability review.
+7. Start Interop/Test work.
 
-### SDK NTP / Clock-Sync Protocol
+## Start Here: Spec Blockers
 
-Spec slots:
+### P0-1: Post-Handshake Path Binding And Framing
 
-- New RFC slot, likely near `RFC-0022: Spatial Message Envelope` or after
-  `RFC-0025: Minimum Offer Kinds`.
-- Existing clock and timestamp references in `RFC-0020`, `RFC-0022`,
-  `RFC-0023`, `RFC-0024`, and `RFC-0028`.
+Slots:
 
-Deliverables:
+- `RFC-0002: V1 JSON Wire Conventions`
+- `RFC-0019: Peer Handshake`
+- `RFC-0024: Offer Catalog`
+- `RFC-0029: Get`
+- `RFC-0030: Subscribe`
+- `RFC-0032: Protocol Versions Are Compatibility Contracts`
 
-- Reverse-engineer the current SDK NTP or clock-sync protocol from the SDK.
-- Document the message flow, request/response fields, timestamp fields, offset
-  calculation, delay calculation, sampling behavior, retry behavior, and failure
-  handling.
-- Decide whether the protocol is required for v1, optional diagnostics, or a
-  later temporal-accuracy layer.
-- Define how clock-sync results relate to `timestamp_ns`, `generated_at`, clock
-  registry references, Subscribe sequencing, and status diagnostics.
-- Define whether clock-sync state is local-only diagnostic state or something
-  peers may advertise.
-- Define any needed failure codes, status fields, and glossary terms.
-- Preserve the rule that clock sync does not prove domain authority, data
-  correctness, or timestamp truth by itself.
+Problem:
 
-Acceptance checks:
+The spec defines the handshake protocol ID and offer-catalog protocol ID, but
+not the concrete Get/Subscribe protocol IDs or path descriptors. It also does
+not fully define JSON object framing and message ordering for lifecycle paths.
 
-- An implementer can reproduce the SDK clock-sync behavior from the RFC text or
-  intentionally replace it with a documented v1 behavior.
-- A receiver can distinguish producer event time, producer wall-clock metadata,
-  local receive time, and estimated peer clock offset.
-- Clock-sync failure is observable without making Offer / Get / Subscribe
-  unusable unless local policy requires time synchronization.
+Patch:
 
-### Glossary Update
+- Define the JSON object framing rule for lifecycle, Offer Catalog, Get, and
+  Subscribe.
+- Define how the handshake exchange runs over
+  `/auki/cluster-lifecycle/0.0.1`.
+- Define Offer Catalog request/response exchange over
+  `/auki/offer-catalog/0.0.1`.
+- Define fixed v1 protocol IDs or offer-declared path descriptors for Get and
+  Subscribe.
+- Define Get request/response ordering.
+- Define Subscribe request, accept, reject, data, end, and close ordering.
+- Define where structured errors appear when a path fails.
+- Keep current SDK protocol paths outside the normative spec.
 
-Spec slots:
+Done when:
 
-- [`glossary.md`](glossary.md)
-- All filled RFC sections in [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md)
+- A clean-room implementer can handshake, fetch offers, run Get, and run
+  Subscribe without reading SDK code.
+- An offer that advertises `get` or `subscribe` gives the consumer enough
+  information to open the correct path.
 
-Deliverables:
+### P0-2: Registry Reference Hash Format
 
-- Add terms introduced or sharpened during the spec pass, including status
-  snapshot, failure record, peer binding freshness, domain declaration, domain
-  delegation, accepted served domain set, offer catalog, payload descriptor,
-  registry reference, Get request, Subscribe accept start result, Subscribe end
-  message, sequence gap, and clock-sync terms.
-- Remove or rewrite glossary wording that no longer matches the filled RFCs.
-- Keep glossary text descriptive and non-normative.
+Slots:
 
-Acceptance checks:
+- `RFC-0024: Offer Catalog`
+- `RFC-0027: Spatial Message Envelope`
 
-- Every recurring term in the filled RFCs has one glossary meaning.
-- Glossary terms do not add requirements that are missing from the RFC text.
+Problem:
 
-### Compatibility Fixtures And Test Vectors
+Registry references include `hash`, and inline `canonical_json` verification
+depends on it, but the hash algorithm and string encoding are not defined.
 
-Spec slots:
+Patch:
 
-- `RFC-0002: Peer Binding Schema`
-- `RFC-0004: Domain Declaration Schema`
-- `RFC-0005: Domain Delegation Schema`
-- `RFC-0020: Offer Catalog`
-- `RFC-0022: Spatial Message Envelope`
-- `RFC-0023: Get`
-- `RFC-0024: Subscribe`
-- `RFC-0028: Status And Observability API`
+- Define the v1 registry-reference hash algorithm.
+- Define the v1 hash string encoding.
+- State exactly what bytes are hashed for `canonical_json`.
 
-Deliverables:
+Done when:
 
-- Define compatibility fixtures for every accepted wire shape.
-- Define locked field-name tests for signed objects and protocol messages.
-- Provide valid and invalid vectors for peer bindings, domain declarations,
-  delegations, domain id derivation, Offer Catalog, Get, Subscribe, envelopes,
-  errors, and status snapshots.
-- Define upgrade rules for additive fields, removed fields, renamed fields,
-  required fields, unknown fields, and semantic changes.
+- Two implementations can verify the same inline registry entry and produce the
+  same `hash`.
+- A consumer can reject a mismatched `canonical_json` deterministically.
 
-Acceptance checks:
+## Should Fix Before V1
 
-- A compatibility test can prove that old valid messages still decode.
-- Two independent implementations can produce the same domain id from the same
-  owner public key and nonce.
-- Expired, malformed, wrong-peer, wrong-domain, wrong-signature, unsupported
-  kind, unsupported payload, and stale-offer examples produce deterministic
-  failure codes.
+### P1-1: Deterministic Failure Mapping
 
-### Validation Scenarios And Failure Paths
+Slots:
 
-Spec slots:
+- `RFC-0010: Failure Code Registry`
+- `RFC-0019: Peer Handshake`
+- `RFC-0024: Offer Catalog`
+- `RFC-0027: Spatial Message Envelope`
+- `RFC-0028: Get And Subscribe Common Path Rules`
+- `RFC-0029: Get`
+- `RFC-0030: Subscribe`
+- `RFC-0034: Status And Observability API`
 
-- All filled lifecycle and spatial-data RFCs.
+Patch:
 
-Deliverables:
+- Decide which malformed, unsupported, unauthorized, oversized, and stale cases
+  need exact failure codes.
+- Upgrade only those mappings that must be deterministic for interop.
+- Keep advisory diagnostics advisory.
 
-- Turn the scenarios below into concrete transcripts or high-level message
-  sequences.
-- Add at least one success and one failure variant per scenario.
-- Include expected served-domain-set result, offer usability result, Get or
-  Subscribe behavior, lifecycle state, status snapshot fields, and stable
-  failure codes.
+Done when:
 
-Acceptance checks:
+- Common bad inputs produce predictable failure codes without forcing every
+  diagnostic path to be normative.
 
-- Operators can tell whether a failure is in Discovery, dialing, identity,
-  domain validation, authorization, offer loading, Get, Subscribe, envelope
-  validation, payload validation, clock sync, or local policy.
-- Diagnostics expose enough state to debug the Park/robot scenarios without
-  relying on noisy per-frame logs.
+### P1-2: Payload-Type Matching
 
-### Final AI / Expert Review
+Slots:
 
-Spec slots:
+- `RFC-0024: Offer Catalog`
+- `RFC-0027: Spatial Message Envelope`
+- `RFC-0028: Get And Subscribe Common Path Rules`
+- `RFC-0029: Get`
+- `RFC-0030: Subscribe`
+
+Patch:
+
+- Define whether `accepted_payload_types` matches `payload.type` by exact string
+  equality.
+- Define how responders choose a payload type when more than one is possible.
+- Clarify how Get response payloads and Subscribe data-message payloads relate
+  to offer and Subscribe accept payload descriptors.
+
+Done when:
+
+- A responder can decide whether it can satisfy `accepted_payload_types`.
+- A receiver can reject an unexpected payload family deterministically.
+
+### P1-3: Minimum Offer-Kind Payload Semantics
+
+Slot:
+
+- `RFC-0031: Minimum Offer Kinds`
+
+Patch:
+
+- Decide whether `sensor_stream`, `transform_edge`, and `registry_entry` need
+  minimum v1 payload schemas.
+- If they do not, state that payload schemas are offer-defined or
+  application-defined unless a later kind RFC defines them.
+- Keep large maps, log ranges, replay, resume, and large object transfer out of
+  the current baseline.
+
+Done when:
+
+- A clean-room implementer knows whether to implement concrete payload schemas
+  or only the transport and envelope layer.
+
+### P1-4: Final Consistency Review
+
+Slots:
 
 - [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md)
 - [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md)
 - [`glossary.md`](glossary.md)
 
-Deliverables:
+Patch:
 
-- Run a final consistency review across the spec, backlog, and glossary.
-- Check RFC writing quality: normative keyword use, stable terminology, field
-  naming, versioning, failure-code consistency, and duplicate requirements.
-- Check business logic: authority boundaries, offline validation, local policy,
-  Discovery non-authority, Offer / Get / Subscribe semantics, and clock-sync
-  assumptions.
-- Check implementability: whether a clean-room implementer can build v1 without
-  reading existing SDK code except where explicitly referenced by the NTP task.
+- Re-run implementability review after P0/P1 patches.
+- Check stale owner names, RFC numbers, failure-code references, glossary terms,
+  and To Fill boundaries.
+- Confirm the backlog only lists unresolved work.
 
-Acceptance checks:
+Done when:
 
-- No unresolved duplicate deliverables remain in this backlog.
-- Discovery is clearly marked as later work and not a blocker for the core v1
-  peer-to-peer spatial exchange.
-- The remaining TODOs are either clock-sync, glossary, fixtures, validation
-  scenarios, or explicitly later Discovery/peer-graph work.
+- No required currently specified v1 path is blocked by a To Fill section.
+- No implementation-specific SDK path is required by the normative spec.
+- A clean-room implementer can build configured/private peer-to-peer v1 from
+  the spec alone.
 
-## Later Deliverables
+## Parked V1 To Fill Work
 
-### Discovery And Reachability
+These are in v1 scope but do not block the currently specified
+configured/private peer-to-peer path.
 
-Discovery record shape, Discovery data-type hints, peer graph hints, DHT-style
-discovery, and relay milestone scope are later work unless they block the first
-implementation.
+### Dynamic Served-Domain Updates
 
-Spec slots:
+Slot: `RFC-0012: Served Domain Set`, `Dynamic Updates (To Fill)`.
 
-- `RFC-0011: Discovery Record Shape`
-- `RFC-0012: Discovery Data-Type Hints`
-- `RFC-0018: Peer Graph Hints`
+Current baseline: served-domain changes require reconnect or fresh handshake.
 
-Acceptance checks for the later pass:
+Fill later: update message shape, validation trigger, authority-chain reuse,
+new delegation scope if needed, cached-offer behavior, active-subscription
+behavior, and failure mapping.
 
-- A private peer can connect through explicit configuration without registering
-  in Discovery.
-- An expired Discovery record does not invalidate an already healthy
-  peer-to-peer connection.
-- A client can explain whether a dial failure came from Discovery freshness,
-  advertised address reachability, relay availability, or authorization.
+### Discovery Record Shape
 
-## Validation Scenarios
+Slot: `RFC-0015: Discovery Record Shape`.
 
-Each scenario should be filled with:
+Current baseline: Discovery is optional rendezvous/presence infrastructure.
+Configured/private peer-to-peer connectivity does not require a concrete
+Discovery record.
 
-- initial peer, wallet, domain, Discovery, and authorization configuration;
-- expected handshake transcript or high-level message sequence;
-- expected served-domain-set result;
-- expected offer, Get, and Subscribe behavior when relevant;
-- expected lifecycle states and diagnostics;
-- at least one failure variant.
+Fill later: concrete fields, dial address semantics, relay semantics, freshness
+and expiry behavior, and non-authoritative metadata boundaries.
 
-### Park Finds One Robot
+### Discovery Data-Type Hints
 
-Given a robot advertises an entrypoint, Park should discover or be configured
-with that entrypoint, dial it, authorize, fetch offers, and subscribe to a
-stream.
+Slot: `RFC-0016: Discovery Data-Type Hints`.
 
-This must not require Park to register in Discovery.
+Fill later: hint vocabulary, relationship between hints and offers, and
+handling for missing, stale, or unsupported hints.
 
-### Park Finds Many Robots
+### Peer Graph Hints
 
-Given several robots are discoverable or configured, Park should track each
-peer relationship independently.
+Slot: `RFC-0022: Peer Graph Hints`.
 
-One robot failure must not affect other robot relationships.
+Fill later: candidate-peer sharing shape, candidate handling rules, and
+non-authoritative membership boundaries.
 
-### Robot Exists Without Park
+### Concrete SDK NTP / Clock-Sync Protocol
 
-Given Park is offline, a robot should continue serving its declared domain and,
-if configured, advertising itself.
+Slot: `RFC-0035: Time And Clock Semantics` plus a future concrete clock-sync
+message RFC.
 
-### Private Peer Connects To Discoverable Peer
+Current baseline: `RFC-0035` owns timestamp and clock semantics. A concrete
+clock-sync protocol is not required for Offer, Get, or Subscribe.
 
-Given a peer is not registered with Discovery but knows a discoverable peer's
-address, it should be able to connect if authorized.
+Fill later: message flow, fields, offset calculation, delay calculation,
+sampling, retry, failure behavior, status fields, and any needed failure codes.
 
-Authorization must not depend solely on Discovery presence.
+## Interop/Test Work
 
-### Peer Learns Additional Peers After Entrypoint Dial
+Do this after the blocker patches and final consistency review.
 
-Given a peer dials one entrypoint, it may learn about additional peers through
-peer-to-peer exchange.
+### Compatibility Fixtures And Test Vectors
 
-Learned peers are candidate dial targets or offer sources, not authoritative
-membership.
+Create fixtures and vectors for:
 
-### Offer / Get / Subscribe
+- JSON wire conventions and signed-object canonicalization;
+- peer bindings, domain declarations, domain delegations, and domain id
+  derivation;
+- Offer Catalog, Get, Subscribe, envelopes, errors, status snapshots, and time
+  fields;
+- additive fields, removed fields, renamed fields, required fields, unknown
+  fields, and semantic changes.
 
-Given two connected and authorized peers, Peer A should fetch Peer B's offers,
-choose one, and either fetch a snapshot or subscribe to updates.
+### Validation Scenarios And Failure Paths
 
-The same shape should support live streams, transform edges, pose/path replay,
-and future map fragments through peer-to-peer exchange.
+Create success and failure transcripts for:
+
+- Park finds one robot;
+- Park finds many robots;
+- Robot exists without Park;
+- private peer connects to discoverable peer;
+- peer learns additional peers after entrypoint dial;
+- peer fetches offers, performs Get, and performs Subscribe.
+
+Each scenario should include expected served-domain-set result, offer usability
+result, Get or Subscribe behavior, lifecycle state, status fields, and stable
+failure codes.
+
+## Later / Product-Scope Work
+
+Keep these parked unless product scope pulls them forward:
+
+- DHT-style discovery.
+- Relay milestone expansion beyond `RFC-0017` and `RFC-0018`.
+- Future offer kinds beyond the `RFC-0031` minimum set, such as `pose_stream`,
+  `pose_log_range`, `time_transform`, `detection_stream`, `map_fragment`, and
+  `spatial_query`.
+- Chunking, replay, resume, reliable history, large object transfer, and map
+  queries.
+- Non-normative migration notes mapping current SDK protocol paths such as
+  `/auki/resources/0.0.1`, `/auki/registries/0.0.1`, and
+  `/auki/stream/0.1.0` to the final v1 contract.
+
+## Recently Solved
+
+- Minimal handshake schema is specified in `RFC-0019`.
+- Discovery no longer blocks configured/private peer-to-peer connectivity.
+- To Fill sections have been cleaned of normative protocol requirements.
+- Time and clock semantics are owned by `RFC-0035`.
+- Stale owner references and stale RFC slots have been repaired.
+- Size-limit semantics are normalized across `RFC-0028`, `RFC-0029`, and
+  `RFC-0030`.
+- Future offer kinds are non-normative planning context.
+- Current SDK protocol paths have been removed from the normative spec.
+- Glossary alignment was expanded for current recurring terms.

@@ -1,0 +1,39 @@
+[package]
+name = "auki-identity-swift"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "UniFFI Swift bindings for `auki-identity` (Wallet) and the identity-shaped pieces of `auki-network` (PeerIdentity). Thin scaffolding host: the actual UniFFI annotations live on the upstream types behind the `swift-bindings` cargo feature."
+
+[lib]
+# `staticlib` is the iOS-consumable artifact; `cdylib` lets host
+# uniffi-bindgen introspect it; `rlib` keeps in-workspace Rust consumers
+# working. Distinct lib name so the crate coexists with auki-identity's
+# default `auki_identity` lib in one workspace, same trick auki-network-py
+# uses (`auki_network_py`).
+name = "auki_identity_swift"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+# Enables the host `uniffi-bindgen` helper binary. Default-off so a plain
+# `cargo build`/`cargo test` of the library doesn't pull the UniFFI CLI.
+cli = ["uniffi/cli"]
+
+[dependencies]
+# Renamed via `package =` so the upstream crate's name doesn't collide
+# with our own lib name. The `swift-bindings` feature enables the
+# UniFFI proc-macros on Wallet (see crates/auki-identity/Cargo.toml).
+auki-identity-rs = { package = "auki-identity", path = "../../../crates/auki-identity", features = ["swift-bindings"] }
+# PeerIdentity lives in auki-network's lib.rs; PR A enables only the
+# `swift-bindings` feature (not `swarm`/`discovery_client`) so this crate
+# stays off the libp2p iOS-link sharp edges.
+auki-network-rs = { package = "auki-network", path = "../../../crates/auki-network", features = ["swift-bindings"] }
+uniffi = { version = "0.31", features = ["tokio"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

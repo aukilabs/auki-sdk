@@ -719,6 +719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-identity-swift"
+version = "0.0.0"
+dependencies = [
+ "auki-identity",
+ "auki-network",
+ "uniffi",
+]
+
+[[package]]
 name = "auki-jcs"
 version = "0.0.0"
 dependencies = [

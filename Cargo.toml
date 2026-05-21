@@ -13,6 +13,7 @@ members = [
     "crates/auki-network",
     "bindings/python/auki-network-py",
     "bindings/swift/auki-network-swift",
+    "bindings/swift/auki-identity-swift",
     "crates/auki-datatypes",
     "crates/auki-domain",
     "bindings/python/auki-domain-py",

@@ -15,7 +15,14 @@ default = []
 # types (PeerIdentity in PR A; NetworkRuntime + the stream surface in
 # PR B). When off, the crate compiles exactly as today — no UniFFI dep
 # in the graph.
-swift-bindings = ["dep:uniffi"]
+#
+# Propagates to `auki-identity/swift-bindings` because PR A's
+# `PeerIdentity::from_wallet(wallet: Arc<Wallet>)` accepts a UniFFI
+# Object defined in the identity crate; without the upstream feature
+# enabled there's no `FfiConverterArc<UT>` for `Wallet` and the
+# `uniffi::export` here fails to compile. `use_remote_type!` (in
+# `src/lib.rs`) reuses that upstream impl.
+swift-bindings = ["dep:uniffi", "auki-identity/swift-bindings"]
 # Stream protocol wire types live in `auki-datatypes` (Step 2 of the
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed

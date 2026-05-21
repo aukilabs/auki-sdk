@@ -57,7 +57,7 @@
 //! # use auki_identity::Wallet;
 //! # use auki_network::{PeerIdentity, swarm::{build_swarm, SwarmConfig}};
 //! let wallet = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
-//! let identity = PeerIdentity::from_wallet(&wallet);
+//! let identity = PeerIdentity::from_wallet(wallet);
 //! let swarm = build_swarm(&identity, SwarmConfig {
 //!     listen_addresses: vec![
 //!         "/ip4/0.0.0.0/tcp/0".parse().unwrap(),

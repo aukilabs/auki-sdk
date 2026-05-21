@@ -20,6 +20,21 @@ use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
+// UniFFI scaffolding. The `uniffi::Object` proc-macro emits code that
+// references `crate::UniFfiTag`; that type only exists where
+// `setup_scaffolding!()` is invoked. Without this, building this crate
+// with `--features swift-bindings` fails before the binding crate ever
+// pulls it in. The setup is gated so default builds stay scaffolding-free.
+//
+// `auki-identity/swift-bindings` is propagated as a feature dependency
+// (see `Cargo.toml`) so that `Wallet` carries its `uniffi::Object`-derived
+// `impl<UT> FfiConverterArc<UT> for Wallet` blanket impl. That impl is
+// generic over `UT`, so `PeerIdentity::from_wallet(wallet: Arc<Wallet>)`
+// resolves through `crate::UniFfiTag` here without any `use_remote_type!`
+// forwarding shim.
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 pub mod participant;
 pub use participant::ParticipantInfo;
 
@@ -97,16 +112,32 @@ pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 /// path. [`PeerIdentity::from_seed`] is provided for tooling that already
 /// has the derived peer seed in hand (e.g. a key store that cached it
 /// instead of re-deriving from the wallet each session).
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 #[derive(Clone)]
 pub struct PeerIdentity {
     keypair: Keypair,
 }
 
+// ─── PeerIdentity impl — UniFFI-exposed surface ──────────────────────────────
+//
+// Split from the rest of the impl below so the `swift-bindings` feature can
+// hang `#[uniffi::export]` on just the methods the Swift binding consumes at
+// PR A. Default builds compile the macros to nothing; semantics are unchanged
+// for upstream Rust callers.
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
 impl PeerIdentity {
     /// Derive the peer identity from `wallet`. Equivalent to
     /// `PeerIdentity::from_seed(&wallet.derive_child("peer/v1").seed())`.
     /// A backup of the wallet seed is sufficient to regenerate this.
-    pub fn from_wallet(wallet: &Wallet) -> Self {
+    ///
+    /// Takes `Arc<Wallet>` rather than `&Wallet`: UniFFI 0.31 only
+    /// implements `LiftRef<UniFfiTag>` for `Arc<T>` over a foreign-crate
+    /// `uniffi::Object`, not for plain references. Upstream Rust callers
+    /// already hold `Arc<Wallet>` (the type `Wallet::from_seed` returns
+    /// after Task 2's signature change), so this is a no-op for them; the
+    /// `&Wallet` argument form moves to PR B if/when needed.
+    #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
+    pub fn from_wallet(wallet: std::sync::Arc<Wallet>) -> Self {
         let peer_wallet = wallet.derive_child(PEER_DERIVATION_LABEL);
         // `Wallet::seed()` returns `Vec<u8>` after the UniFFI-driven signature
         // change in auki-identity; `PeerIdentity::from_seed` still takes a
@@ -120,6 +151,26 @@ impl PeerIdentity {
         Self::from_seed(&seed_array)
     }
 
+    /// Canonical libp2p peer-id string (`12D3KooW…`). The Swift side
+    /// consumes this as a plain `String`; PR B introduces the
+    /// `PeerId`-as-`String` UniFFI custom type that auto-exposes peer-id
+    /// arguments and return values across the rest of auki-network's
+    /// methods. PR A only needs this one getter, so we expose it as a
+    /// pre-stringified helper rather than dragging in the custom-type
+    /// registration here.
+    pub fn peer_id_string(&self) -> String {
+        self.keypair.public().to_peer_id().to_string()
+    }
+}
+
+// ─── PeerIdentity impl — Rust-only surface ───────────────────────────────────
+//
+// Methods below stay un-annotated. Either they're not consumed by the Swift
+// binding at PR A, or their signatures use types UniFFI 0.31 can't lower
+// (e.g. `&[u8; 32]`, libp2p `Keypair` / `PublicKey` / `PeerId`). Upstream Rust
+// callers continue to use them exactly as before. PR B may lift these up as
+// needed.
+impl PeerIdentity {
     /// Construct directly from a 32-byte ed25519 seed. Same seed → same
     /// keypair → same `PeerId`. The seed is consumed (zeroized) by
     /// `libp2p-identity`'s ed25519 constructor; we copy first so the
@@ -259,8 +310,8 @@ mod tests {
     #[test]
     fn peer_identity_from_wallet_is_deterministic() {
         let w = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
-        let a = PeerIdentity::from_wallet(&w);
-        let b = PeerIdentity::from_wallet(&w);
+        let a = PeerIdentity::from_wallet(w.clone());
+        let b = PeerIdentity::from_wallet(w);
         assert_eq!(a.peer_id(), b.peer_id());
     }
 
@@ -268,8 +319,8 @@ mod tests {
     fn peer_identity_differs_across_wallets() {
         let w1 = Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
         let w2 = Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed");
-        let p1 = PeerIdentity::from_wallet(&w1);
-        let p2 = PeerIdentity::from_wallet(&w2);
+        let p1 = PeerIdentity::from_wallet(w1);
+        let p2 = PeerIdentity::from_wallet(w2);
         assert_ne!(p1.peer_id(), p2.peer_id());
     }
 
@@ -285,7 +336,7 @@ mod tests {
     #[test]
     fn locked_seed_to_peer_id_vector() {
         let w = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
-        let peer = PeerIdentity::from_wallet(&w);
+        let peer = PeerIdentity::from_wallet(w);
         assert_eq!(
             peer.peer_id().to_string(),
             "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
@@ -298,7 +349,7 @@ mod tests {
         // The contract: `from_wallet(w)` is `from_seed(w.derive_child("peer/v1").seed())`.
         // Cross-language consumers can rely on this exact recipe.
         let w = Wallet::from_seed(vec![42u8; 32]).expect("32-byte seed");
-        let via_wallet = PeerIdentity::from_wallet(&w);
+        let via_wallet = PeerIdentity::from_wallet(w.clone());
         let derived = w.derive_child(PEER_DERIVATION_LABEL);
         // `Wallet::seed()` now returns `Vec<u8>`; bridge back to the fixed
         // array `PeerIdentity::from_seed` still expects.
@@ -334,7 +385,7 @@ mod tests {
         // wallet ↔ peer relationship is broken.
         let w = Wallet::from_seed(vec![13u8; 32]).expect("32-byte seed");
         let derived = w.derive_child(PEER_DERIVATION_LABEL);
-        let peer = PeerIdentity::from_wallet(&w);
+        let peer = PeerIdentity::from_wallet(w);
         let ed_pub = peer
             .public_key()
             .try_into_ed25519()
@@ -399,5 +450,30 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: Capability = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
+    }
+}
+
+#[cfg(all(test, feature = "swift-bindings"))]
+mod swift_bindings_tests {
+    use super::*;
+    use auki_identity::Wallet;
+
+    /// Deterministic: same wallet seed → same PeerId string.
+    #[test]
+    fn peer_id_string_is_deterministic_for_fixed_seed() {
+        let wallet = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
+        let p1 = PeerIdentity::from_wallet(wallet.clone());
+        let p2 = PeerIdentity::from_wallet(wallet);
+        assert_eq!(p1.peer_id_string(), p2.peer_id_string());
+        // Spot-check: canonical libp2p PeerId strings start with "12D3KooW".
+        assert!(p1.peer_id_string().starts_with("12D3KooW"));
+    }
+
+    /// Distinct wallets → distinct peer ids.
+    #[test]
+    fn distinct_wallets_yield_distinct_peer_ids() {
+        let a = PeerIdentity::from_wallet(Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed"));
+        let b = PeerIdentity::from_wallet(Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed"));
+        assert_ne!(a.peer_id_string(), b.peer_id_string());
     }
 }

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Diagnostic domain-time flash demo is wired to heartbeat sync.** `ClusterManager` heartbeat timing now uses the SDK-owned `SessionClock`, and the diagnostic app reads explicit domain estimates/time before enabling Domain flash mode. See [`crates/changelog.md`](crates/changelog.md) and [`examples/changelog.md`](examples/changelog.md) for propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Heartbeat timing now uses the SDK-owned SessionClock after merging latest develop.** The heartbeat/domain-clock sync branch now composes with the latest `develop` SessionClock foundation: `ClusterManager` uses its peer-id rooted session clock for heartbeat timestamps, initial domain-clock backing metadata, and promoted-Manager domain-clock advertisement instead of the compatibility `DaemonInfo.session_clock_id/hash` fields. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 20, 15:34 HKT, 2026

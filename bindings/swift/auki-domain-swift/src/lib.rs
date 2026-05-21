@@ -311,6 +311,15 @@ pub async fn join_cluster_swift(
     Ok(std::sync::Arc::new(manager))
 }
 
+/// List clusters from Discovery, sorted by created_ns desc. Mirrors
+/// `auki-domain-py`'s static `ClusterManager.list_clusters`.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn list_clusters(
+    discovery_url: String,
+) -> Result<Vec<ClusterEntry>, DiscoveryError> {
+    ClusterManager::list_clusters(discovery_url).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,163 +28,178 @@ runtime identities, declare served domains when exposing domain-scoped data,
 discover or configure reachable peers, authorize connections, and exchange
 spatial data through Offer / Get / Subscribe.
 
-## Suggested Fill Order
+## Suggested Finish Order
 
-1. Fill the end-to-end lifecycle, handshake, authority-chain validation, and
-   served-domain-set behavior first.
-2. Fill the signed object schemas and test vectors.
-3. Fill the authorization model.
-4. Fill the offer catalog, spatial message envelope, Get, Subscribe, and
-   minimum offer kinds.
-5. Fill Discovery record details, data-type hints, peer graph hints, and relay
-   milestone scope.
-6. Fill compatibility fixtures, observability API, diagnostics, and validation
+1. Figure out the existing SDK NTP or clock-sync protocol and decide how it
+   maps into the RFC set.
+2. Add the missing time-sync RFC text and any needed failure/status fields.
+3. Update the glossary so it matches the filled spec language.
+4. Add compatibility fixtures, signed-object test vectors, and validation
    scenarios.
+5. Run a final AI/expert review pass for consistency, business logic, and RFC
+   writing quality.
+6. Leave Discovery record shape, Discovery data-type hints, and peer graph
+   hints for later unless they become blockers for the first implementation.
 
-## Deliverables To Fill
+## Remaining Deliverables
 
-Use this section as the implementation-ready checklist for the first minimal
-protocol. Each deliverable should result in concrete normative text in
-[`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md), plus at least one
-success example and one failure example when the behavior has observable
-failure modes.
+Use this section as the implementation-ready checklist for work that remains
+after the core v1 lifecycle, authority, Offer, Get, Subscribe, and status
+sections have been filled.
 
-### End-To-End Lifecycle Contract
+### SDK NTP / Clock-Sync Protocol
 
 Spec slots:
 
-- `RFC-0006: Authority Chain Validation`
-- `RFC-0008: Served Domain Set`
-- `RFC-0015: Peer Handshake`
-- `RFC-0017: Peer Connectivity State Is Tracked Per Remote Peer`
+- New RFC slot, likely near `RFC-0022: Spatial Message Envelope` or after
+  `RFC-0025: Minimum Offer Kinds`.
+- Existing clock and timestamp references in `RFC-0020`, `RFC-0022`,
+  `RFC-0023`, `RFC-0024`, and `RFC-0028`.
 
 Deliverables:
 
-- Define the lifecycle state machine from discovered or configured peer to
-  ready peer relationship.
-- Define the handshake order: protocol negotiation, peer binding, declared
-  domains, domain declarations, delegations, authorization material, accepted
-  served domain set, offer-catalog path, and liveness/status initialization.
-- Define which handshake fields are required, optional, repeatable, or
-  extensible.
-- Define whether a peer relationship may continue with zero accepted served
-  domains, one accepted served domain, or partial acceptance across many
-  declared domains.
-- Define state transition triggers for `discovered`, `configured`, `dialing`,
-  `connected`, `authorized`, `loading offers`, `ready`, `degraded`, and `lost`.
-- Define the canonical failure taxonomy shared by handshake, authority-chain
-  validation, authorization, offer loading, Get, and Subscribe.
+- Reverse-engineer the current SDK NTP or clock-sync protocol from the SDK.
+- Document the message flow, request/response fields, timestamp fields, offset
+  calculation, delay calculation, sampling behavior, retry behavior, and failure
+  handling.
+- Decide whether the protocol is required for v1, optional diagnostics, or a
+  later temporal-accuracy layer.
+- Define how clock-sync results relate to `timestamp_ns`, `generated_at`, clock
+  registry references, Subscribe sequencing, and status diagnostics.
+- Define whether clock-sync state is local-only diagnostic state or something
+  peers may advertise.
+- Define any needed failure codes, status fields, and glossary terms.
+- Preserve the rule that clock sync does not prove domain authority, data
+  correctness, or timestamp truth by itself.
 
 Acceptance checks:
 
-- An implementer can read a handshake transcript and determine whether to keep
-  the connection, reject it, degrade it, or continue with partial domains.
-- A failed connection produces one stable failure code instead of an ambiguous
-  log message.
-- One peer relationship can fail without changing the lifecycle state of
-  unrelated peer relationships.
+- An implementer can reproduce the SDK clock-sync behavior from the RFC text or
+  intentionally replace it with a documented v1 behavior.
+- A receiver can distinguish producer event time, producer wall-clock metadata,
+  local receive time, and estimated peer clock offset.
+- Clock-sync failure is observable without making Offer / Get / Subscribe
+  unusable unless local policy requires time synchronization.
 
-### Identity, Domain, And Delegation Schemas
+### Glossary Update
+
+Spec slots:
+
+- [`glossary.md`](glossary.md)
+- All filled RFC sections in [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md)
+
+Deliverables:
+
+- Add terms introduced or sharpened during the spec pass, including status
+  snapshot, failure record, peer binding freshness, domain declaration, domain
+  delegation, accepted served domain set, offer catalog, payload descriptor,
+  registry reference, Get request, Subscribe accept start result, Subscribe end
+  message, sequence gap, and clock-sync terms.
+- Remove or rewrite glossary wording that no longer matches the filled RFCs.
+- Keep glossary text descriptive and non-normative.
+
+Acceptance checks:
+
+- Every recurring term in the filled RFCs has one glossary meaning.
+- Glossary terms do not add requirements that are missing from the RFC text.
+
+### Compatibility Fixtures And Test Vectors
 
 Spec slots:
 
 - `RFC-0002: Peer Binding Schema`
 - `RFC-0004: Domain Declaration Schema`
 - `RFC-0005: Domain Delegation Schema`
-- `RFC-0006: Authority Chain Validation`
+- `RFC-0020: Offer Catalog`
+- `RFC-0022: Spatial Message Envelope`
+- `RFC-0023: Get`
+- `RFC-0024: Subscribe`
+- `RFC-0028: Status And Observability API`
 
 Deliverables:
 
-- Define the exact peer-binding wire shape.
-- Define the exact domain-declaration wire shape.
-- Define the exact delegation wire shape.
-- Define canonical signed bytes for each signed object.
-- Define wallet public key encoding, peer id encoding, domain id encoding,
-  nonce size, timestamp encoding, expiry encoding, and signature encoding.
-- Preserve the v1 peer-binding rule that bindings may be reused across sessions,
-  `issued_at` is recommended, the recommended maximum accepted binding age is
-  1 hour, and receivers may accept older bindings by local policy.
-- Define hash function, domain-separation prefixes, and canonical hash input
-  for domain ids.
-- Define required fields, optional fields, unknown-field handling, and version
-  field behavior.
-- Use v1 delegation scopes `advertise`, `serve`, and `update`.
-- Define delegation validity windows, expiry handling, and replacement behavior.
-- Preserve the v1 rule that authority validation does not require online
-  revocation, registry, blockchain, Discovery access, or other online lookup.
-- Define the future external-binding authority model for transferable
-  NFT-backed domains, including controller resolution and chain-finality
-  assumptions.
-- Provide test vectors for valid and invalid peer bindings, domain
-  declarations, delegations, and domain id derivation.
+- Define compatibility fixtures for every accepted wire shape.
+- Define locked field-name tests for signed objects and protocol messages.
+- Provide valid and invalid vectors for peer bindings, domain declarations,
+  delegations, domain id derivation, Offer Catalog, Get, Subscribe, envelopes,
+  errors, and status snapshots.
+- Define upgrade rules for additive fields, removed fields, renamed fields,
+  required fields, unknown fields, and semantic changes.
 
 Acceptance checks:
 
+- A compatibility test can prove that old valid messages still decode.
 - Two independent implementations can produce the same domain id from the same
   owner public key and nonce.
-- A receiver can validate or reject every signed object without Discovery,
-  blockchain access, or an online registry.
-- Expired, malformed, wrong-peer, wrong-domain, and wrong-signature examples
-  have deterministic failure reasons.
+- Expired, malformed, wrong-peer, wrong-domain, wrong-signature, unsupported
+  kind, unsupported payload, and stale-offer examples produce deterministic
+  failure codes.
 
-### Served Domain Set And Offer Authority
+### Validation Scenarios And Failure Paths
 
 Spec slots:
 
-- `RFC-0008: Served Domain Set`
-- `RFC-0020: Offer Catalog`
-- `RFC-0021: Offer Domain Scope And Authority`
+- All filled lifecycle and spatial-data RFCs.
 
 Deliverables:
 
-- Define how declared domains become accepted, rejected, or degraded served
-  domains for one peer relationship.
-- Define direct-owner validation versus delegated-authority validation.
-- Define whether served domains can be added, removed, refreshed, or replaced
-  after the initial handshake.
-- Define what happens to offers, active Gets, and active subscriptions when a
-  served domain expires, is removed, is replaced, or becomes invalid.
-- Define whether offers outside the served domain set are rejected, ignored, or
-  surfaced as degraded diagnostics.
-- Preserve the v1 rule that one offer belongs to exactly one domain.
-- Define how consumers distinguish verified authority fields from
-  producer-declared metadata.
+- Turn the scenarios below into concrete transcripts or high-level message
+  sequences.
+- Add at least one success and one failure variant per scenario.
+- Include expected served-domain-set result, offer usability result, Get or
+  Subscribe behavior, lifecycle state, status snapshot fields, and stable
+  failure codes.
 
 Acceptance checks:
 
-- An offer cannot become usable unless its domain is in the accepted served
-  domain set for that peer relationship.
-- A delegation expiry produces a deterministic result for loaded offers and
-  active subscriptions.
-- Partial acceptance of declared domains is either explicitly supported or
-  explicitly forbidden.
+- Operators can tell whether a failure is in Discovery, dialing, identity,
+  domain validation, authorization, offer loading, Get, Subscribe, envelope
+  validation, payload validation, clock sync, or local policy.
+- Diagnostics expose enough state to debug the Park/robot scenarios without
+  relying on noisy per-frame logs.
+
+### Final AI / Expert Review
+
+Spec slots:
+
+- [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md)
+- [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md)
+- [`glossary.md`](glossary.md)
+
+Deliverables:
+
+- Run a final consistency review across the spec, backlog, and glossary.
+- Check RFC writing quality: normative keyword use, stable terminology, field
+  naming, versioning, failure-code consistency, and duplicate requirements.
+- Check business logic: authority boundaries, offline validation, local policy,
+  Discovery non-authority, Offer / Get / Subscribe semantics, and clock-sync
+  assumptions.
+- Check implementability: whether a clean-room implementer can build v1 without
+  reading existing SDK code except where explicitly referenced by the NTP task.
+
+Acceptance checks:
+
+- No unresolved duplicate deliverables remain in this backlog.
+- Discovery is clearly marked as later work and not a blocker for the core v1
+  peer-to-peer spatial exchange.
+- The remaining TODOs are either clock-sync, glossary, fixtures, validation
+  scenarios, or explicitly later Discovery/peer-graph work.
+
+## Later Deliverables
 
 ### Discovery And Reachability
+
+Discovery record shape, Discovery data-type hints, peer graph hints, DHT-style
+discovery, and relay milestone scope are later work unless they block the first
+implementation.
 
 Spec slots:
 
 - `RFC-0011: Discovery Record Shape`
 - `RFC-0012: Discovery Data-Type Hints`
-- `RFC-0013: Listen Addresses And Advertised Addresses Are Different`
-- `RFC-0014: Relay Is Connectivity, Not Authority`
 - `RFC-0018: Peer Graph Hints`
 
-Deliverables:
-
-- Define the exact Discovery record wire shape.
-- Define required and optional Discovery fields: domain id, display label, peer
-  id, advertised addresses, freshness fields, data-type hints, and entrypoint
-  hints.
-- Define refresh, update, remove, expiry, and stale-record behavior.
-- Define the baseline data-type hint vocabulary and whether custom hints are
-  allowed.
-- Define how clients treat missing, stale, unknown, or unsupported hints.
-- Define how peers share additional peer candidates after entrypoint dial.
-- Decide whether DHT-style peer discovery is in scope for the first baseline.
-- Decide whether relay support is required for the next production milestone
-  or remains optional.
-
-Acceptance checks:
+Acceptance checks for the later pass:
 
 - A private peer can connect through explicit configuration without registering
   in Discovery.
@@ -192,101 +207,6 @@ Acceptance checks:
   peer-to-peer connection.
 - A client can explain whether a dial failure came from Discovery freshness,
   advertised address reachability, relay availability, or authorization.
-
-### Authorization Model
-
-Spec slot:
-
-- `RFC-0016: Authorization Model`
-
-Deliverables:
-
-- Harden authorization beyond the experimental baseline modes: `all`,
-  `whitelisted-only`, and `app-policy`.
-- Define invite token or signed challenge behavior, if needed.
-- Define whether authorization is peer-level, domain-level, offer-level, or a
-  combination.
-- Define whether per-offer policy hooks are in the baseline or reserved for a
-  later hardening layer.
-- Define authorization failure codes separately from identity, domain, and
-  transport failure codes.
-
-Acceptance checks:
-
-- Trusted lab deployments have a minimal path that does not require external
-  infrastructure.
-- A peer rejected by policy is distinguishable from a peer with invalid
-  identity material.
-- Authorization never depends solely on Discovery presence.
-
-### Spatial Data Exchange
-
-Spec slots:
-
-- `RFC-0020: Offer Catalog`
-- `RFC-0021: Offer Domain Scope And Authority`
-- `RFC-0022: Spatial Message Envelope`
-- `RFC-0023: Get`
-- `RFC-0024: Subscribe`
-- `RFC-0025: Minimum Offer Kinds`
-
-Deliverables:
-
-- Define protocol ids for offer catalog, Get, Subscribe, and any shared
-  envelope version.
-- Define the offer-catalog request, response, update, removal, and error
-  shapes.
-- Define offer id scope, domain id scope, data-kind vocabulary,
-  payload/schema versioning, access-mode flags, frame references, clock
-  references, freshness, and availability status.
-- Define the common spatial message envelope shared by Get responses and
-  Subscribe updates.
-- Define Get request parameters, maximum response size, chunking rules,
-  snapshot consistency, stale-offer behavior, and error shape.
-- Define Subscribe start response, update message shape, sequencing,
-  end-of-stream reasons, error reasons, backpressure or drop policy,
-  reconnect behavior, and payload compatibility rules.
-- Choose the minimum offer kinds required for the next Park/robot milestone.
-- Decide what replaces, preserves, or deprecates `/auki/resources/0.0.1`,
-  `/auki/stream/0.1.0`, and `/auki/sensors/0.0.1`.
-
-Acceptance checks:
-
-- A consumer can fetch offers before opening a stream.
-- A consumer can distinguish unknown offer, unauthorized offer, stale offer,
-  unavailable producer, unsupported payload, and transport/protocol failure.
-- Subscribe behavior is deterministic under slow consumers, dropped messages,
-  reconnects, and producer-side stream end.
-
-### Compatibility, Fixtures, And Observability
-
-Spec slots:
-
-- `RFC-0026: Protocol Versions Are Compatibility Contracts`
-- `RFC-0027: Observability Must Explain State Transitions`
-- `RFC-0028: Status And Observability API`
-
-Deliverables:
-
-- Define compatibility fixtures for every accepted wire shape.
-- Define locked field-name tests for signed objects and protocol messages.
-- Define upgrade rules for additive fields, removed fields, renamed fields,
-  required fields, unknown fields, and semantic changes.
-- Define the concrete status API for local domain state, Discovery state, known
-  peers, per-peer lifecycle state, served-domain validation, loaded offers,
-  active Gets, active subscriptions, and last failure reasons.
-- Define which lifecycle transitions must emit diagnostics and which
-  high-volume events should be rate-limited or omitted by default.
-- Define a stable set of diagnostic reason codes shared by logs, status APIs,
-  and conformance tests.
-
-Acceptance checks:
-
-- A compatibility test can prove that old valid messages still decode.
-- Operators can tell whether a failure is in Discovery, dialing, identity,
-  domain validation, authorization, offer loading, Get, or Subscribe.
-- Diagnostics expose enough state to debug the Park/robot validation scenarios
-  without relying on noisy per-frame logs.
 
 ## Validation Scenarios
 

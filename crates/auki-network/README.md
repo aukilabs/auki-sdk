@@ -38,6 +38,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | Protocol | Module | Purpose |
 |---|---|---|
 | `/auki/join/0.0.1` | `join_protocol` | Non-member asks the current Manager to admit it; response carries membership JSON + successor token |
+| `/auki/browser-session/0.0.1` | `browser_session_protocol` | Browser leaf peers publish participant/media presence to a native Manager and receive pushed roster snapshots |
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames with sender-clock timestamps, optional NTP echo fields, and optional domain-clock source metadata; cluster liveness semantics live in `auki-domain` |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips its peer id plus fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |

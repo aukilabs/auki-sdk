@@ -7,16 +7,27 @@ repository.workspace = true
 authors.workspace = true
 description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
 
+[features]
+default = ["native_runtime"]
+native_runtime = [
+    "dep:auki-hash",
+    "dep:auki-jcs",
+    "auki-network/discovery_client",
+    "auki-network/swarm",
+    "dep:auki-registry",
+    "dep:auki-time",
+    "dep:prost",
+    "dep:tokio",
+]
+browser_runtime = ["dep:getrandom"]
+
 [dependencies]
 auki-identity = { path = "../auki-identity" }
-auki-hash = { path = "../auki-hash" }
-auki-jcs = { path = "../auki-jcs" }
-# `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
-# the cluster manager drives; `discovery_client` brings the HTTP
-# client. Both required for `ClusterManager::create_cluster`.
-auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
-auki-registry = { path = "../auki-registry" }
-auki-time = { path = "../auki-time" }
+auki-hash = { path = "../auki-hash", optional = true }
+auki-jcs = { path = "../auki-jcs", optional = true }
+auki-network = { path = "../auki-network", default-features = false }
+auki-registry = { path = "../auki-registry", optional = true }
+auki-time = { path = "../auki-time", optional = true }
 # `ClusterMembership` carries libp2p `PeerId`s on the wire; the
 # `serde` feature pins their canonical string form so the JSON
 # document is interoperable across languages.
@@ -30,12 +41,13 @@ serde_json = "1"
 thiserror = "2"
 # `tokio::spawn` + `tokio::time::interval` drive the Manager-side
 # Discovery heartbeat tick.
-tokio = { version = "1", features = ["rt", "time", "macros"] }
+tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
 # `prost::Message` trait bound on `ClusterManager::open_stream<T>` —
 # the same bound `NetworkRuntime::open_stream` carries on `T`. Pulled
 # directly so the public method signature can name it without
 # requiring callers to dep on auki-network.
-prost = "0.13"
+prost = { version = "0.13", optional = true }
+getrandom = { version = "0.2", features = ["js"], optional = true }
 
 [dev-dependencies]
 auki-layout = { path = "../auki-layout" }

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Camera sensor registry bodies now use `Camera` and the `"camera"` tag.** `SensorBody::Camera(Camera)` replaces the legacy RGB-camera body vocabulary, and the locked canonical JSON/hash fixtures intentionally pin the new registry tag.
+
 ### Arshak's claude · May 16, HKT, 2026
 
 **Detector Registry lands — `DetectorRegistryEntry { detector_id, body, output_types }`.** Closes Cuba **T4** + **T16** together. Mirrors `SensorRegistryEntry`: stable `detector_id` + typed `body` (`DetectorBody::{Aruco, Qr, Esl}`) + content-addressed hash via `canonicalize` → `auki_hash::hash_jcs_bytes`. The new `output_types: Vec<String>` field (T16) is the capability-discovery axis — *advertise what you detect, not which implementation you're running* — and its values must match `DetectionLogEntry.type` (Cuba T12) for the entries the detector emits.

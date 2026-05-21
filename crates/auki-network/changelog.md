@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Stream protocol payload names now match the final SDK vocabulary.** Camera streams use `CameraFrame`, detection streams use `DetectionFrame`, and the stream/resource protocol docs and tests use the `"camera"` sensor tag. Dispatch variant names (`AcceptCamera`, `AcceptDetection`, etc.) remain unchanged.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Heartbeat frames can carry optional domain-clock source metadata.** `Heartbeat` now has an optional `domain_clock` object with cluster name, stable domain-clock id/hash, backing peer id, backing clock id/hash, and `backing_to_domain_offset_ns`. `HeartbeatTimestampSource` exposes a callback for this metadata, and `run_heartbeat_pair` copies the current value into each outbound frame.

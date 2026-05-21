@@ -41,11 +41,10 @@ Sensor registry JSON tags:
 
 ## Renames
 
-- `JpegFrame` becomes `CameraFrame`.
-- `PinholeCameraLogEntry` becomes `CameraFrame`.
-- `DetectionLogEntry` becomes `DetectionFrame`.
-- `RgbCamera` becomes `Camera`.
-- The sensor registry tag `"rgb_camera"` becomes `"camera"`.
+- Legacy JPEG/camera log-entry payload identifiers are consolidated into `CameraFrame`.
+- Legacy detection log-entry payload identifiers are consolidated into `DetectionFrame`.
+- Legacy RGB-camera registry body identifiers are consolidated into `Camera`.
+- The sensor registry tag is `"camera"`.
 
 The old names may remain only in append-only changelog history. They should not remain in current public API, active docs, examples, tests, generated binding surfaces, or Park integration code.
 
@@ -74,5 +73,5 @@ Implementation is complete only when:
 - Python binding tests for affected generated/binding surfaces pass where available.
 - Locked wire-byte tests are updated intentionally, not accidentally.
 - Locked registry JSON/hash tests now pin `"camera"`.
-- A repository-wide search finds no active `JpegFrame`, `PinholeCameraLogEntry`, `DetectionLogEntry`, `RgbCamera`, or `"rgb_camera"` occurrences outside append-only changelog history.
+- A repository-wide search finds no active legacy camera/detection payload names or RGB-camera registry names outside append-only changelog history.
 - Park builds against the renamed SDK surface after its dependency is moved to the fixed SDK revision/tag.

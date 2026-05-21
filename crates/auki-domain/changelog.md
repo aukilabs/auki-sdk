@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Domain resource metadata now follows the final camera stream vocabulary.** Cluster resource lifting and stream manifests use `camera_frame` payload metadata with the `"camera"` sensor tag, matching the renamed datatypes, registry, and network surfaces.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Heartbeat timestamps and domain-clock backing now use `ClusterManager`'s `SessionClock`.** `create_cluster` and `join_cluster` pass the SDK-owned peer-id rooted `SessionClock` into `HeartbeatTimestampSource`, initial domain-clock metadata, and promoted-Manager domain-clock advertisement. `DaemonInfo.session_clock_id/hash` remain compatibility inputs for old callers but no longer define heartbeat timing or the backing clock identity used for domain time.
 
 Tests: `cargo test -p auki-domain cluster_manager::tests -- --nocapture`.

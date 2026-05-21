@@ -33,12 +33,11 @@ use auki_logs_py_rs::{
 };
 use auki_logs_rs::{Error as RustLogError, Log as RustLog};
 use auki_network_rs::stream_protocol::{
-    AudioFrame as RustAudioFrame, DeclineReason as RustDeclineReason,
-    DynamicIntrinsics as RustDynamicIntrinsics, EndReason as RustEndReason,
-    JointEncodersFrame as RustJointEncodersFrame,
-    PinholeCameraLogEntry as RustPinholeCameraLogEntry, PointCloudFrame as RustPointCloudFrame,
-    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest, decline_reason,
-    end_reason,
+    AudioFrame as RustAudioFrame, CameraFrame as RustCameraFrame,
+    DeclineReason as RustDeclineReason, DynamicIntrinsics as RustDynamicIntrinsics,
+    EndReason as RustEndReason, JointEncodersFrame as RustJointEncodersFrame,
+    PointCloudFrame as RustPointCloudFrame, StreamManifest as RustStreamManifest,
+    StreamRequest as RustStreamRequest, decline_reason, end_reason,
 };
 use auki_network_rs::stream_runtime::{
     OpenStreamError as RustOpenStreamError, SourceStream, StreamDispatch as RustStreamDispatch,
@@ -245,12 +244,12 @@ impl PyDynamicIntrinsics {
 
 /// Camera stream payload `T`. Python exposes this as `CameraFrame`; internally
 /// it is the same protobuf record as the on-disk
-/// `auki.camera.PinholeCameraLogEntry`, so the bytes inside
+/// `auki.camera.CameraFrame`, so the bytes inside
 /// `StreamEntry.payload` can match the camera Sensor Log entry exactly.
 #[pyclass(name = "CameraFrame", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyCameraFrame {
-    pub(crate) inner: RustPinholeCameraLogEntry,
+    pub(crate) inner: RustCameraFrame,
 }
 
 #[pymethods]
@@ -259,7 +258,7 @@ impl PyCameraFrame {
     #[pyo3(signature = (frame, /, dynamic_intrinsics=None))]
     fn new(frame: Bound<'_, PyBytes>, dynamic_intrinsics: Option<PyDynamicIntrinsics>) -> Self {
         Self {
-            inner: RustPinholeCameraLogEntry {
+            inner: RustCameraFrame {
                 dynamic_intrinsics: dynamic_intrinsics.map(|i| i.inner),
                 frame: frame.as_bytes().to_vec(),
             },
@@ -721,13 +720,11 @@ impl PyStreamItem {
 }
 
 impl PyStreamItem {
-    /// Convert to a `RustStreamItem<RustPinholeCameraLogEntry>`. Errors with a
+    /// Convert to a `RustStreamItem<RustCameraFrame>`. Errors with a
     /// human-readable detail if the payload is `PointCloud`. Used by
     /// the producer-side source-stream pump for an `AcceptCamera`
     /// dispatch.
-    pub(crate) fn to_rust_camera(
-        &self,
-    ) -> Result<RustStreamItem<RustPinholeCameraLogEntry>, String> {
+    pub(crate) fn to_rust_camera(&self) -> Result<RustStreamItem<RustCameraFrame>, String> {
         match &self.payload {
             StreamPayload::Camera(f) => Ok(RustStreamItem {
                 timestamp_ns: self.timestamp_ns,
@@ -852,7 +849,7 @@ impl PyStreamEntry {
 }
 
 impl PyStreamEntry {
-    fn from_rust_camera(frame: RustStreamEntry<RustPinholeCameraLogEntry>) -> Self {
+    fn from_rust_camera(frame: RustStreamEntry<RustCameraFrame>) -> Self {
         Self {
             timestamp_ns: frame.timestamp_ns,
             seq: frame.seq,
@@ -923,7 +920,7 @@ pub(crate) enum DecisionInner {
     },
     AcceptCameraRetained {
         manifest: PyStreamManifest,
-        source: SourceStream<RustPinholeCameraLogEntry>,
+        source: SourceStream<RustCameraFrame>,
     },
     AcceptPointCloud {
         manifest: PyStreamManifest,
@@ -1175,7 +1172,7 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                 },
                 Ok(DecisionInner::AcceptCamera { manifest, source }) => {
                     let source_stream =
-                        python_iter_into_source_stream::<RustPinholeCameraLogEntry>(source, |pf| {
+                        python_iter_into_source_stream::<RustCameraFrame>(source, |pf| {
                             pf.to_rust_camera()
                         });
                     RustStreamDispatch::AcceptCamera {
@@ -1355,8 +1352,8 @@ struct RetainedSourceState {
     tail: Option<auki_logs_rs::TailIter<RustRawLogBytes>>,
 }
 
-fn decode_retained_camera(bytes: Vec<u8>) -> Result<RustPinholeCameraLogEntry, String> {
-    RustPinholeCameraLogEntry::decode(&*bytes).map_err(|e| e.to_string())
+fn decode_retained_camera(bytes: Vec<u8>) -> Result<RustCameraFrame, String> {
+    RustCameraFrame::decode(&*bytes).map_err(|e| e.to_string())
 }
 
 fn decode_retained_pointcloud(bytes: Vec<u8>) -> Result<RustPointCloudFrame, String> {
@@ -1491,12 +1488,8 @@ impl Drop for SourceStreamGuard {
 
 // ─── StreamSubscription + StreamEntryIterator ──────────────────────────────────────
 
-type RustPinholeCameraLogEntryStream = Pin<
-    Box<
-        dyn Stream<Item = Result<RustStreamEntry<RustPinholeCameraLogEntry>, RustStreamError>>
-            + Send,
-    >,
->;
+type RustCameraFrameStream =
+    Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustCameraFrame>, RustStreamError>> + Send>>;
 type RustPointCloudFrameStream = Pin<
     Box<dyn Stream<Item = Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>> + Send>,
 >;
@@ -1511,7 +1504,7 @@ type RustAudioFrameStream =
 /// variant is fixed at `open_stream` time and never changes for the
 /// lifetime of the subscription.
 enum EntryStreamKind {
-    Camera(RustPinholeCameraLogEntryStream),
+    Camera(RustCameraFrameStream),
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
@@ -1569,7 +1562,7 @@ impl PyStreamSubscription {
 }
 
 impl PyStreamSubscription {
-    pub fn from_rust_camera(rust_sub: RustStreamSubscription<RustPinholeCameraLogEntry>) -> Self {
+    pub fn from_rust_camera(rust_sub: RustStreamSubscription<RustCameraFrame>) -> Self {
         Self {
             manifest: PyStreamManifest {
                 inner: rust_sub.manifest,
@@ -1623,7 +1616,7 @@ pub struct PyStreamEntryIterator {
 /// closure and convert to a [`PyStreamEntry`] with the GIL held
 /// afterwards.
 enum EntryNext {
-    Camera(Result<RustStreamEntry<RustPinholeCameraLogEntry>, RustStreamError>),
+    Camera(Result<RustStreamEntry<RustCameraFrame>, RustStreamError>),
     PointCloud(Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
@@ -1887,7 +1880,7 @@ pub(crate) fn invalid_arg<S: Into<String>>(msg: S) -> PyErr {
 mod tests {
     use super::*;
     use auki_datatypes::audio::AudioLogEntry;
-    use auki_datatypes::camera::PinholeCameraLogEntry;
+    use auki_datatypes::camera::CameraFrame;
     use auki_datatypes::joint_encoders::JointEncodersLogEntry;
     use auki_datatypes::point_cloud::PointCloudLogEntry;
     use auki_logs_rs::Log as RawLog;
@@ -1978,7 +1971,7 @@ mod tests {
     }
 
     #[test]
-    fn pinhole_camera_log_entry_round_trips_through_pybytes() {
+    fn camera_frame_round_trips_through_pybytes() {
         Python::with_gil(|py| {
             let payload = PyBytes::new_bound(py, &[0xff, 0xd8, 0x01, 0x02, 0x03]);
             let intrinsics =
@@ -1995,7 +1988,7 @@ mod tests {
     #[test]
     fn retained_camera_source_decodes_historical_log_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = PinholeCameraLogEntry {
+        let entry = CameraFrame {
             dynamic_intrinsics: None,
             frame: b"jpeg".to_vec(),
         };
@@ -2265,7 +2258,7 @@ mod tests {
             let rust_frame = RustStreamEntry {
                 timestamp_ns: 9_999,
                 seq: 17,
-                payload: RustPinholeCameraLogEntry {
+                payload: RustCameraFrame {
                     dynamic_intrinsics: None,
                     frame: vec![0xff, 0xd8, 0xee],
                 },

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Retained-source docs now name camera payloads as `CameraFrame`.** The Python logs binding keeps the same opaque-byte bridge and source lifecycle; this is a documentation/surface vocabulary alignment.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-logs-py`.** The Python package moved from `crates/auki-logs-py` to `bindings/python/auki-logs-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

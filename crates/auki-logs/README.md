@@ -1,6 +1,6 @@
 # auki-logs
 
-Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-datatypes`](../auki-datatypes) for `PinholeCameraLogEntry` since 2026-05-08, [`auki-time`](../auki-time) for `TimeTransformEntry` until Step 6 of the [migration](../auki-datatypes/src/sprint.md)).
+Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-datatypes`](../auki-datatypes) for `CameraFrame` since 2026-05-08, [`auki-time`](../auki-time) for `TimeTransformEntry` until Step 6 of the [migration](../auki-datatypes/src/sprint.md)).
 
 Payload encoding is the consumer's choice via the [`LogPayload`](src/lib.rs) trait — this crate handles framing only. Prost types in [`auki-datatypes`](../auki-datatypes) get a blanket impl through the `impl_log_payload!` macro; mid-migration CBOR types implement it directly.
 

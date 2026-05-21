@@ -1,5 +1,5 @@
 //! ROS2 → Auki translation: `sensor_msgs/CameraInfo` + `sensor_msgs/Image`
-//! into `SensorRegistryEntry` + `DynamicIntrinsics` + `PinholeCameraLogEntry`.
+//! into `SensorRegistryEntry` + `DynamicIntrinsics` + `CameraFrame`.
 //!
 //! Sensor Log payload schema: see [`auki-datatypes`](../../auki-datatypes/README.md).
 //! Translation contract: [`../README.md`](../README.md).
@@ -91,7 +91,7 @@ pub struct PointFieldMsg {
 // (now opaque-bytes-only). Re-exported here so existing call sites stay
 // short.
 
-pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
+pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
 pub use auki_datatypes::point_cloud::PointCloudLogEntry;
 
 // ─── Translation functions ──────────────────────────────────────────────────
@@ -126,7 +126,7 @@ pub struct StaticCameraMetadata<'a> {
     pub frame_rate_hz: u32,
     pub intrinsics_model: &'a str,
     /// Frame Registry id for the camera optical frame. Threaded into
-    /// `RgbCamera.frame_id` so consumers can resolve a
+    /// `Camera.frame_id` so consumers can resolve a
     /// `FrameRegistryEntry` for the camera's coordinate system.
     /// Conventionally REP-103 optical (`X right, Y down, Z forward`).
     pub frame_id: &'a str,
@@ -136,15 +136,15 @@ pub struct StaticCameraMetadata<'a> {
 }
 
 /// Build a `SensorRegistryEntry` from a bootstrap `CameraInfo` + integrator-
-/// supplied static metadata. Currently only emits `RgbCamera` bodies.
-pub fn build_rgb_camera_registry_entry(
+/// supplied static metadata. Currently only emits `Camera` bodies.
+pub fn build_camera_registry_entry(
     sensor_id: impl Into<String>,
     info: &CameraInfoMsg,
     meta: &StaticCameraMetadata<'_>,
 ) -> auki_registry::SensorRegistryEntry {
     auki_registry::SensorRegistryEntry {
         sensor_id: sensor_id.into(),
-        body: auki_registry::SensorBody::RgbCamera(auki_registry::RgbCamera {
+        body: auki_registry::SensorBody::Camera(auki_registry::Camera {
             width: info.width,
             height: info.height,
             frame_rate_hz: meta.frame_rate_hz,
@@ -158,14 +158,11 @@ pub fn build_rgb_camera_registry_entry(
     }
 }
 
-/// Build a `PinholeCameraLogEntry` from the latest `CameraInfo` snapshot + an
+/// Build a `CameraFrame` from the latest `CameraInfo` snapshot + an
 /// Image. Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
-pub fn build_sensor_log_entry(
-    info: &CameraInfoMsg,
-    image: &ImageMsg,
-) -> (i64, PinholeCameraLogEntry) {
+pub fn build_sensor_log_entry(info: &CameraInfoMsg, image: &ImageMsg) -> (i64, CameraFrame) {
     let timestamp_ns = stamp_to_ns(image.stamp);
-    let entry = PinholeCameraLogEntry {
+    let entry = CameraFrame {
         dynamic_intrinsics: Some(dynamic_intrinsics_from(info)),
         frame: image.data.clone(),
     };
@@ -875,9 +872,9 @@ mod tests {
     }
 
     #[test]
-    fn build_rgb_camera_registry_entry_matches_m1_example_hash() {
+    fn build_camera_registry_entry_matches_m1_example_hash() {
         // The auki-registry test suite locks the M1 example sensor entry's
-        // hash. Driving build_rgb_camera_registry_entry with a CameraInfo
+        // hash. Driving build_camera_registry_entry with a CameraInfo
         // whose width/height/distortion_model match should produce the same
         // entry — same canonical bytes, same hash.
         let info = CameraInfoMsg {
@@ -888,7 +885,7 @@ mod tests {
             k: [0.0; 9], // unused by the registry side
             d: vec![],   // unused by the registry side
         };
-        let entry = build_rgb_camera_registry_entry(
+        let entry = build_camera_registry_entry(
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
@@ -900,9 +897,10 @@ mod tests {
                 frame_hash: K1_HEAD_LEFT_CAM_OPTICAL_HASH,
             },
         );
-        // Recomputed when `frame_hash` was added to RgbCamera.
+        // Recomputed when `frame_hash` was added to Camera and when
+        // the camera registry tag was renamed.
         // Same hash as auki-registry's `sensor_entry_hash_is_locked`.
-        assert_eq!(entry.hash(), "69f37478490cf1c0b226dbb86d3454fc");
+        assert_eq!(entry.hash(), "5559c9648e31eee2410b692fef393489");
     }
 
     #[test]
@@ -973,7 +971,7 @@ mod tests {
     fn end_to_end_translation_from_subscription_to_log_entry() {
         let mut sub = MockCameraSubscriber::new().with_bootstrap_ok(k1_bootstrap_camera_info());
         let info = sub.bootstrap(Duration::from_secs(5)).unwrap();
-        let registry_entry = build_rgb_camera_registry_entry(
+        let registry_entry = build_camera_registry_entry(
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
@@ -985,8 +983,9 @@ mod tests {
                 frame_hash: K1_HEAD_LEFT_CAM_OPTICAL_HASH,
             },
         );
-        // Recomputed when `frame_hash` was added to RgbCamera.
-        assert_eq!(registry_entry.hash(), "69f37478490cf1c0b226dbb86d3454fc");
+        // Recomputed when `frame_hash` was added to Camera and when
+        // the camera registry tag was renamed.
+        assert_eq!(registry_entry.hash(), "5559c9648e31eee2410b692fef393489");
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {

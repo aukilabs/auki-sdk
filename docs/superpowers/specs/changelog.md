@@ -6,6 +6,10 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+Refined the stream naming cleanup design spec to describe the already-renamed final vocabulary without reintroducing legacy identifiers into active docs.
+
+### Nils's codex · May 21, HKT, 2026
+
 Added the stream naming cleanup design spec, locking the breaking full rename to `CameraFrame`, `DetectionFrame`, and `SensorBody::Camera` with no compatibility aliases or legacy registry tags.
 
 ### Nils's codex · May 19, HKT, 2026

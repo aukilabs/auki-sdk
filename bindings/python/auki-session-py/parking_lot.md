@@ -12,7 +12,7 @@ Resolved 2026-05-07: segment payloads on disk are **protobuf-encoded**. The orig
 
 The natural split that falls out: manifests + registry entries + signing payloads stay JCS-canonical JSON via [`auki-jcs`](../../../crates/auki-jcs) (curl-debuggable, signed, hashed); segment payloads (the bulk data) become protobuf. Two encodings, no overlap on the wire — different files, different concerns.
 
-When this crate's first implementation lands (after `auki-datatypes` migrates at least `PinholeCameraLogEntry`), propagate by: (a) wiring `betterproto` codegen through maturin's pre-build hook; (b) typing `SensorLog.append(ts_ns, entry: PinholeCameraLogEntry)` with the betterproto-generated dataclass (not raw `bytes`); (c) cross-language locked-vector test pinning that the Python encoder produces byte-identical bytes to the Rust prost encoder for a fixed input. See [`auki-datatypes/src/sprint.md`](../../../crates/auki-datatypes/src/sprint.md) for the Rust-side migration sequence this propagation depends on.
+When this crate's first implementation lands (after `auki-datatypes` migrates at least `CameraFrame`), propagate by: (a) wiring `betterproto` codegen through maturin's pre-build hook; (b) typing `SensorLog.append(ts_ns, entry: CameraFrame)` with the betterproto-generated dataclass (not raw `bytes`); (c) cross-language locked-vector test pinning that the Python encoder produces byte-identical bytes to the Rust prost encoder for a fixed input. See [`auki-datatypes/src/sprint.md`](../../../crates/auki-datatypes/src/sprint.md) for the Rust-side migration sequence this propagation depends on.
 
 ## libp2p control-plane protocols — design timing
 

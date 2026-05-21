@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Camera and detection payloads now use the final frame names.** `auki.camera` exports `CameraFrame`, `auki.detection` exports `DetectionFrame`, and the Rust `LogPayload` impls/tests now pin those names directly. The wire bytes stay structurally identical; this is a breaking source/API cleanup with no legacy aliases.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **Camera streams now reuse `auki.camera.PinholeCameraLogEntry` directly.** The stream-only `auki.frame_stream.JpegFrame` package is retired: `proto/frame_stream.proto` is deleted, `build.rs` no longer generates it, and `src/lib.rs` no longer exports a `frame_stream` module. `/auki/stream/0.1.0` camera entries now carry the same prost record bytes as camera Sensor Logs, so "robot log == Park stream" holds at the payload-record level.

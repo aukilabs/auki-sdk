@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+Refined the stream naming cleanup Superpowers artifacts so active plans/specs describe the final `CameraFrame`, `DetectionFrame`, and `Camera` vocabulary without mechanical self-renames.
+
+### Nils's codex · May 21, HKT, 2026
+
 Added the stream naming cleanup implementation plan under [`plans/`](plans/2026-05-21-stream-naming-cleanup.md), sequencing the full no-compatibility rename across datatypes, registry, network, bindings, domain, ROS adapter, docs, and Park.
 
 ### Nils's codex · May 21, HKT, 2026

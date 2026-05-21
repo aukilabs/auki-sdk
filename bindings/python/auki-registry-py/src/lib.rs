@@ -133,7 +133,7 @@ fn point_field(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (*, sensor_id, width, height, frame_rate_hz, pixel_format, color_space, intrinsics_model, distortion_model, frame_id, frame_hash))]
-fn rgb_camera_sensor_entry(
+fn camera_sensor_entry(
     py: Python<'_>,
     sensor_id: &str,
     width: u32,
@@ -148,7 +148,7 @@ fn rgb_camera_sensor_entry(
 ) -> PyResult<PyObject> {
     let entry = registry::SensorRegistryEntry {
         sensor_id: sensor_id.to_string(),
-        body: registry::SensorBody::RgbCamera(registry::RgbCamera {
+        body: registry::SensorBody::Camera(registry::Camera {
             width,
             height,
             frame_rate_hz,
@@ -379,7 +379,7 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(frame_unity, m)?)?;
     m.add_function(wrap_pyfunction!(frame_entry, m)?)?;
     m.add_function(wrap_pyfunction!(point_field, m)?)?;
-    m.add_function(wrap_pyfunction!(rgb_camera_sensor_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(camera_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(point_cloud_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(audio_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(joint_encoders_sensor_entry, m)?)?;

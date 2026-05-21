@@ -153,7 +153,7 @@ pub struct SensorStreamResource {
     /// Content-addressed Sensor Registry hash.
     pub sensor_hash: String,
     /// Sensor kind - the `SensorBody` serde tag carried through as an
-    /// open string (`"rgb_camera"`, `"point_cloud"`, ...).
+    /// open string (`"camera"`, `"point_cloud"`, ...).
     pub sensor_kind: String,
     /// Protocol used to open the stream.
     pub stream_protocol: String,
@@ -394,9 +394,9 @@ mod tests {
                     id: "K1-LIVE01/head_left_cam".into(),
                     sensor_id: "K1-LIVE01/head_left_cam".into(),
                     sensor_hash: "sensorhash".into(),
-                    sensor_kind: "rgb_camera".into(),
+                    sensor_kind: "camera".into(),
                     stream_protocol: "/auki/stream/0.1.0".into(),
-                    payload: "pinhole_camera_log_entry".into(),
+                    payload: "camera_frame".into(),
                     pinhole_intrinsics: Some(ResourcePinholeIntrinsics {
                         fx: 400.0,
                         fy: 401.0,

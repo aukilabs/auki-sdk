@@ -4,7 +4,7 @@
 
 **Goal:** Add an SDK-owned producer source path so Python apps accept retained log streams with `Log.stream_source(...)` and `StreamDecision.accept_source(source)`.
 
-**Architecture:** `auki-logs-py` creates a first-class retained stream source object that owns log path, stream manifest metadata, and payload kind. `auki-network-py` consumes that source through a named PyCapsule bridge, decodes retained log bytes into the typed stream payload internally, and maps to the existing runtime dispatch arms as implementation detail. The public Python app surface uses `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, and `AudioFrame`; no app-facing `PinholeCameraLogEntry` name is added.
+**Architecture:** `auki-logs-py` creates a first-class retained stream source object that owns log path, stream manifest metadata, and payload kind. `auki-network-py` consumes that source through a named PyCapsule bridge, decodes retained log bytes into the typed stream payload internally, and maps to the existing runtime dispatch arms as implementation detail. The public Python app surface uses `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, and `AudioFrame`; no retained-log entry alias is added.
 
 **Tech Stack:** Rust, PyO3, auki-logs segmented tail iterator, prost payload decoding, auki-network stream runtime, pytest.
 
@@ -43,7 +43,7 @@ Expected: PASS for the new source-shape tests.
 
 - [ ] **Step 1: Write failing tests**
 
-Add tests proving `StreamDecision.accept_source(source)` exists, returns `kind == "accept_camera"` for a camera source, and keeps `cluster.PinholeCameraLogEntry` absent from the Python surface.
+Add tests proving `StreamDecision.accept_source(source)` exists, returns `kind == "accept_camera"` for a camera source, and keeps legacy retained-log entry aliases absent from the Python surface.
 
 - [ ] **Step 2: Run red test**
 

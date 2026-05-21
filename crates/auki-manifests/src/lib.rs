@@ -286,10 +286,10 @@ pub fn build_pose_log_manifest(
 ///
 /// Closes blocker #2 of [`detectors`](https://github.com/aukilabs/detectors)
 /// phase 2 — the read side ([`auki-logs::Log<T>::tail`](../../auki-logs))
-/// and the segment payload type ([`auki_datatypes::detection::DetectionLogEntry`](../../auki-datatypes))
+/// and the segment payload type ([`auki_datatypes::detection::DetectionFrame`](../../auki-datatypes))
 /// landed in sibling PRs. The detector loop the integrator writes is
 /// `for entry in tail(input_path)? { detector.process(...); output.append(...); }`,
-/// where `output` is the `Log<DetectionLogEntry>` opened with this
+/// where `output` is the `Log<DetectionFrame>` opened with this
 /// manifest at [`auki_layout::detection_log_path`](../../auki-layout).
 ///
 /// Carries:

@@ -50,7 +50,7 @@ pub struct SensorLogEntry {
 ```rust
 pub fn stamp_to_ns(stamp: StampMsg) -> i64;
 pub fn dynamic_intrinsics_from(info: &CameraInfoMsg) -> DynamicIntrinsics;
-pub fn build_rgb_camera_registry_entry(
+pub fn build_camera_registry_entry(
     sensor_id: impl Into<String>,
     info: &CameraInfoMsg,
     meta: &StaticCameraMetadata<'_>,
@@ -156,7 +156,7 @@ The struct + trait impl exist so the feature compiles on a Linux+ROS2 box. The a
 | `dynamic_intrinsics_extracts_correct_indices` | K[0]/K[4]/K[2]/K[5] → fx/fy/cx/cy |
 | `dynamic_intrinsics_passes_distortion_through_unchanged` | D vector preserved verbatim |
 | `dynamic_intrinsics_accepts_empty_distortion_for_none_model` | Empty D is allowed |
-| `build_rgb_camera_registry_entry_matches_m1_example_hash` | Output hash matches the locked M1 example (`69f37478490cf1c0b226dbb86d3454fc`) |
+| `build_camera_registry_entry_matches_m1_example_hash` | Output hash matches the locked M1 example (`69f37478490cf1c0b226dbb86d3454fc`) |
 | `build_sensor_log_entry_combines_info_and_image` | Frame timestamp from image, intrinsics from info |
 | `mock_subscriber_returns_scripted_bootstrap_then_drains_events` | Mock semantics |
 | `mock_subscriber_bootstrap_timeout_when_unscripted` | Default mock returns `Timeout` |

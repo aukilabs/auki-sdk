@@ -4,7 +4,7 @@
 
 **Goal:** Rename the SDK stream, log-payload, and sensor registry vocabulary to `CameraFrame`, `DetectionFrame`, and `Camera` with no compatibility aliases or legacy tags.
 
-**Architecture:** The proto payload schemas remain structurally identical but their message names become the public domain names. Registry JSON changes from `"rgb_camera"` to `"camera"` by renaming `SensorBody::RgbCamera` to `SensorBody::Camera`. Network and Python binding stream APIs expose only the new names while keeping the existing dispatch variant names.
+**Architecture:** The proto payload schemas remain structurally identical but their message names become the public domain names. Registry JSON uses `"camera"` via `SensorBody::Camera` and the `Camera` registry body. Network and Python binding stream APIs expose only the new names while keeping the existing dispatch variant names.
 
 **Tech Stack:** Rust workspace crates (`auki-datatypes`, `auki-registry`, `auki-network`, `auki-domain`, `auki-ros-adapter`), prost-generated protobuf code, PyO3 Python bindings, committed pure-Python generated datatypes, Cargo tests, pytest where available.
 
@@ -12,18 +12,18 @@
 
 ## File Structure
 
-- `crates/auki-datatypes/proto/camera.proto`: rename `PinholeCameraLogEntry` to `CameraFrame`.
-- `crates/auki-datatypes/proto/detection.proto`: rename `DetectionLogEntry` to `DetectionFrame`.
+- `crates/auki-datatypes/proto/camera.proto`: ensure the public camera stream/log payload is `CameraFrame`.
+- `crates/auki-datatypes/proto/detection.proto`: ensure the public detection stream/log payload is `DetectionFrame`.
 - `crates/auki-datatypes/src/lib.rs`: update generated-module references, log-payload impls, locked vector tests.
 - `bindings/python/auki-datatypes-py/auki_datatypes/auki/{camera,detection}.py`: update generated class names or regenerate.
-- `crates/auki-registry/src/lib.rs`: rename `RgbCamera` struct and enum variant to `Camera`; update locked JSON tag to `"camera"`.
-- `bindings/python/auki-registry-py/src/lib.rs`: expose `Camera` / `"camera"` instead of `RgbCamera` / `"rgb_camera"`.
+- `crates/auki-registry/src/lib.rs`: use the `Camera` struct and `SensorBody::Camera`; update locked JSON tag to `"camera"`.
+- `bindings/python/auki-registry-py/src/lib.rs`: expose `Camera` / `"camera"` and no legacy RGB-camera registry name.
 - `crates/auki-network/src/{stream_protocol,stream_runtime,sensors_protocol,resources_protocol}.rs`: expose `CameraFrame` and `DetectionFrame`; update tests and docs.
 - `bindings/python/auki-network-py/src/{lib,stream_types}.rs` plus `python_tests`: remove old Rust names and expose only `CameraFrame`.
 - `crates/auki-domain/src/{cluster_manager,stream_manifest}.rs`: adjust sensor-kind and registry-body matching to `"camera"` / `SensorBody::Camera`.
 - `crates/auki-ros-adapter/src/lib.rs`: builders return/register `CameraFrame` and `Camera`.
 - Active `README.md`, `src/readme.md`, `src/sprint.md`, and component docs: replace current vocabulary; leave append-only changelog history intact.
-- Park branch after SDK commit/tag/rev is usable: update Park imports and UI routing from `JpegFrame` / `PinholeCameraLogEntry` / `"rgb_camera"` to `CameraFrame` / `"camera"`.
+- Park branch after SDK commit/tag/rev is usable: update Park imports and UI routing to `CameraFrame` / `"camera"` and remove legacy camera names/tags.
 
 ## Task 1: Datatypes Proto Payload Renames
 
@@ -74,7 +74,7 @@ Expected: fail before implementation because `CameraFrame` / `DetectionFrame` ar
 
 - [ ] **Step 3: Rename proto message names and Rust references**
 
-In `camera.proto`, rename `message PinholeCameraLogEntry` to `message CameraFrame` and update comments/field ledger. In `detection.proto`, rename `message DetectionLogEntry` to `message DetectionFrame`. Update `src/lib.rs` imports, `impl_log_payload!`, helper names, and tests from the old names to the new names.
+Ensure `camera.proto` defines `message CameraFrame` and `detection.proto` defines `message DetectionFrame`, then update comments, field ledgers, `src/lib.rs` imports, `impl_log_payload!`, helper names, and tests to use those names everywhere.
 
 - [ ] **Step 4: Update committed Python datatypes**
 
@@ -107,15 +107,15 @@ Update Rust construction sites to use `SensorBody::Camera(Camera { ... })`.
 
 Run: `cargo test -p auki-registry sensor_registry_entry_json_is_locked -- --nocapture`
 
-Expected: fail before implementation because serialization still emits `"rgb_camera"`.
+Expected: fail before implementation because serialization still emits the legacy RGB-camera registry tag.
 
 - [ ] **Step 3: Rename registry types and JSON tag**
 
-Rename `RgbCamera` to `Camera` and `SensorBody::RgbCamera` to `SensorBody::Camera`. Keep `#[serde(tag = "type", rename_all = "snake_case")]`; the renamed variant should serialize as `"camera"` without a compatibility override.
+Use `Camera` and `SensorBody::Camera` only. Keep `#[serde(tag = "type", rename_all = "snake_case")]`; the variant should serialize as `"camera"` without a compatibility override.
 
 - [ ] **Step 4: Update Python registry binding surface**
 
-Expose `Camera` and accept/return `"camera"` in `auki-registry-py`. Remove `RgbCamera` from current public docs/tests.
+Expose `Camera` and accept/return `"camera"` in `auki-registry-py`. Remove legacy RGB-camera names from current public docs/tests.
 
 - [ ] **Step 5: Run registry verification**
 
@@ -135,7 +135,7 @@ Expected: all registry tests pass and locked JSON/hash fixtures intentionally up
 
 - [ ] **Step 1: Write failing network vocabulary tests**
 
-Update stream-protocol tests to use `CameraFrame` and `DetectionFrame`; update Python tests to assert `hasattr(cluster, "CameraFrame")` and `not hasattr(cluster, "PinholeCameraLogEntry")`.
+Update stream-protocol tests to use `CameraFrame` and `DetectionFrame`; update Python tests to assert `hasattr(cluster, "CameraFrame")` and that legacy camera payload aliases are absent.
 
 - [ ] **Step 2: Run focused network test and verify failure**
 
@@ -149,7 +149,7 @@ Expected: fail before implementation because `CameraFrame` is not exported by `s
 
 - [ ] **Step 4: Update sensor/resource catalog strings**
 
-Replace active `"rgb_camera"` with `"camera"` in sensor catalog docs, fixtures, and resource examples. Keep `"point_cloud"`, `"audio"`, and `"joint_encoders"` unchanged.
+Use `"camera"` in sensor catalog docs, fixtures, and resource examples. Keep `"point_cloud"`, `"audio"`, and `"joint_encoders"` unchanged.
 
 - [ ] **Step 5: Update Python network binding**
 
@@ -171,7 +171,7 @@ Expected: all network tests pass with the new stream names.
 
 - [ ] **Step 1: Update domain and adapter compile surfaces**
 
-Replace `SensorBody::RgbCamera` with `SensorBody::Camera`, `"rgb_camera"` with `"camera"`, `PinholeCameraLogEntry` with `CameraFrame`, and `DetectionLogEntry` with `DetectionFrame`.
+Replace legacy camera registry names/tags and legacy log-entry payload names with `SensorBody::Camera`, `"camera"`, `CameraFrame`, and `DetectionFrame`.
 
 - [ ] **Step 2: Run compile-focused tests**
 
@@ -181,7 +181,7 @@ Expected: both crates compile and tests pass after upstream tasks.
 
 - [ ] **Step 3: Update active docs**
 
-Run: `rg "JpegFrame|PinholeCameraLogEntry|DetectionLogEntry|RgbCamera|rgb_camera" README.md crates bindings examples docs -n`
+Run the forbidden-name search from the completion checklist across active docs, crates, bindings, and examples.
 
 Update active specs/status docs, examples, and non-history tests. Leave append-only changelog historical entries untouched.
 
@@ -211,7 +211,7 @@ After the SDK implementation commit is available from a Git ref, update Park's S
 
 - [ ] **Step 2: Update Park imports and routing**
 
-Replace `JpegFrame` / `PinholeCameraLogEntry` with `CameraFrame`; replace `"rgb_camera"` with `"camera"` in active UI routing and docs. Keep point cloud, audio, joint encoders, and world behavior unchanged.
+Replace legacy camera payload names with `CameraFrame`; use `"camera"` in active UI routing and docs. Keep point cloud, audio, joint encoders, and world behavior unchanged.
 
 - [ ] **Step 3: Run Park verification**
 

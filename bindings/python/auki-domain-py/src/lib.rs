@@ -35,8 +35,8 @@ use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::stream_protocol::{
-    AudioFrame as RustAudioFrame, JointEncodersFrame as RustJointEncodersFrame,
-    PinholeCameraLogEntry as RustPinholeCameraLogEntry, PointCloudFrame as RustPointCloudFrame,
+    AudioFrame as RustAudioFrame, CameraFrame as RustCameraFrame,
+    JointEncodersFrame as RustJointEncodersFrame, PointCloudFrame as RustPointCloudFrame,
     StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
@@ -89,7 +89,7 @@ fn generic_stream_payload_kind_for_resource(
     resource: &RustSensorStreamResource,
 ) -> Option<GenericStreamPayloadKind> {
     match resource.payload.as_str() {
-        "pinhole_camera_log_entry" => Some(GenericStreamPayloadKind::Camera),
+        "camera_frame" => Some(GenericStreamPayloadKind::Camera),
         "point_cloud_frame" => Some(GenericStreamPayloadKind::PointCloud),
         "joint_encoders_frame" => Some(GenericStreamPayloadKind::JointEncoders),
         "audio_frame" => Some(GenericStreamPayloadKind::Audio),
@@ -1058,7 +1058,7 @@ impl PyStreamManifestBuilder {
     /// Build an `auki_network.cluster.StreamManifest` from local
     /// Sensor / Frame registry entries.
     ///
-    /// Spatial sensor bodies (`RgbCamera`, `PointCloud`) must carry a
+    /// Spatial sensor bodies (`Camera`, `PointCloud`) must carry a
     /// non-empty `frame_id` + `frame_hash`, and the exact frame entry
     /// must exist on disk. Non-spatial bodies (`Audio`,
     /// `JointEncoders`) return empty frame fields.
@@ -1545,7 +1545,7 @@ impl PyClusterManager {
         peer_id: &str,
         sensor_id: &str,
     ) -> PyResult<PyStreamSubscription> {
-        self.open_typed_stream::<RustPinholeCameraLogEntry>(py, peer_id, sensor_id, |sub| {
+        self.open_typed_stream::<RustCameraFrame>(py, peer_id, sensor_id, |sub| {
             PyStreamSubscription::from_rust_camera(sub)
         })
     }
@@ -1614,10 +1614,11 @@ impl PyClusterManager {
         sensor_id: &str,
     ) -> PyResult<PyStreamSubscription> {
         match self.resolve_stream_payload_kind(py, peer_id, sensor_id)? {
-            GenericStreamPayloadKind::Camera => self
-                .open_typed_stream::<RustPinholeCameraLogEntry>(py, peer_id, sensor_id, |sub| {
+            GenericStreamPayloadKind::Camera => {
+                self.open_typed_stream::<RustCameraFrame>(py, peer_id, sensor_id, |sub| {
                     PyStreamSubscription::from_rust_camera(sub)
-                }),
+                })
+            }
             GenericStreamPayloadKind::PointCloud => {
                 self.open_typed_stream::<RustPointCloudFrame>(py, peer_id, sensor_id, |sub| {
                     PyStreamSubscription::from_rust_pointcloud(sub)
@@ -2281,9 +2282,9 @@ mod tests {
                 id: "camera".into(),
                 sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
                 sensor_hash: "camera-hash".into(),
-                sensor_kind: "rgb_camera".into(),
+                sensor_kind: "camera".into(),
                 stream_protocol: "/auki/stream/0.1.0".into(),
-                payload: "pinhole_camera_log_entry".into(),
+                payload: "camera_frame".into(),
                 pinhole_intrinsics: None,
                 sensor_entry_json: None,
                 frame_entry_json: None,
@@ -2331,7 +2332,7 @@ mod tests {
                 id: "camera-bad-payload".into(),
                 sensor_id: "robot/camera".into(),
                 sensor_hash: "camera-hash".into(),
-                sensor_kind: "rgb_camera".into(),
+                sensor_kind: "camera".into(),
                 stream_protocol: "/auki/stream/0.1.0".into(),
                 payload: "custom_camera_frame".into(),
                 pinhole_intrinsics: None,

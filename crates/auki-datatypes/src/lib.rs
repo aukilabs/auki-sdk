@@ -42,7 +42,7 @@ pub mod camera {
     include!(concat!(env!("OUT_DIR"), "/auki.camera.rs"));
 }
 
-impl_log_payload!(camera::PinholeCameraLogEntry);
+impl_log_payload!(camera::CameraFrame);
 
 /// `auki.point_cloud` — opaque-bytes point-cloud log payload (Sensor Log
 /// family). Migration Step 3. Layout fields (`fields`, `point_step`,
@@ -88,14 +88,14 @@ impl_log_payload!(audio::AudioLogEntry);
 /// family). Migration Step 8. The detection schema is defined by the
 /// Detector — the SDK does not interpret detector-specific fields.
 /// Closes the producer side of the subscription-as-materialization
-/// keystone: a Detection Log is `Log<T>` with `T = DetectionLogEntry`,
+/// keystone: a Detection Log is `Log<T>` with `T = DetectionFrame`,
 /// lifecycle inherited from the sensor-log primitive. The frame
 /// timestamp rides in the auki-logs framing's `timestamp_ns`.
 pub mod detection {
     include!(concat!(env!("OUT_DIR"), "/auki.detection.rs"));
 }
 
-impl_log_payload!(detection::DetectionLogEntry);
+impl_log_payload!(detection::DetectionFrame);
 
 /// `auki.pose` — Pose Log segment payload (Migration Step 5). Flat
 /// `SpatialTransform` per entry — no `PoseLogEntry { transforms: Vec<…> }`
@@ -249,8 +249,8 @@ pub mod stream {
 mod tests {
     use super::audio::AudioLogEntry;
     use super::audio_stream::AudioFrame;
-    use super::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
-    use super::detection::DetectionLogEntry;
+    use super::camera::{CameraFrame, DynamicIntrinsics};
+    use super::detection::DetectionFrame;
     use super::joint_encoders::JointEncodersLogEntry;
     use super::joint_encoders_stream::JointEncodersFrame;
     use super::point_cloud::PointCloudLogEntry;
@@ -260,8 +260,8 @@ mod tests {
 
     // ─── auki.camera locked vectors ──────────────────────────────────────────
 
-    fn m1_pinhole_camera_log_entry() -> PinholeCameraLogEntry {
-        PinholeCameraLogEntry {
+    fn m1_camera_frame() -> CameraFrame {
+        CameraFrame {
             dynamic_intrinsics: Some(DynamicIntrinsics {
                 fx: 1234.5,
                 fy: 1234.5,
@@ -278,8 +278,8 @@ mod tests {
     /// Sentinel ports) MUST produce these exact bytes for the same
     /// input — joins the workspace's locked conformance set.
     #[test]
-    fn pinhole_camera_log_entry_serializes_to_locked_wire_bytes() {
-        let bytes = m1_pinhole_camera_log_entry().encode_to_vec();
+    fn camera_frame_serializes_to_locked_wire_bytes() {
+        let bytes = m1_camera_frame().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(
             hex,
@@ -292,8 +292,8 @@ mod tests {
     /// Locks the XXH3-128 of those wire bytes. Trips if either prost-build
     /// or `auki-hash` drifts.
     #[test]
-    fn pinhole_camera_log_entry_hash_is_locked() {
-        let bytes = m1_pinhole_camera_log_entry().encode_to_vec();
+    fn camera_frame_hash_is_locked() {
+        let bytes = m1_camera_frame().encode_to_vec();
         assert_eq!(
             auki_hash::hash_jcs_bytes(&bytes),
             "0496e1f71a03e00877fc68bf16190026"
@@ -301,10 +301,10 @@ mod tests {
     }
 
     #[test]
-    fn pinhole_camera_log_entry_round_trips() {
-        let entry = m1_pinhole_camera_log_entry();
+    fn camera_frame_round_trips() {
+        let entry = m1_camera_frame();
         let bytes = entry.encode_to_vec();
-        let decoded = PinholeCameraLogEntry::decode(&*bytes).expect("decode");
+        let decoded = CameraFrame::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -313,11 +313,11 @@ mod tests {
     /// `decode` calls. Locks the trait wiring against accidental
     /// regression.
     #[test]
-    fn pinhole_camera_log_entry_log_payload_round_trips() {
+    fn camera_frame_log_payload_round_trips() {
         use auki_logs::LogPayload;
-        let entry = m1_pinhole_camera_log_entry();
+        let entry = m1_camera_frame();
         let bytes = LogPayload::encode(&entry);
-        let decoded = <PinholeCameraLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        let decoded = <CameraFrame as LogPayload>::decode(&bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -325,22 +325,22 @@ mod tests {
     /// optional encoding pays only the message-tag overhead when
     /// `dynamic_intrinsics` is `None`.
     #[test]
-    fn pinhole_camera_log_entry_without_intrinsics_round_trips() {
-        let entry = PinholeCameraLogEntry {
+    fn camera_frame_without_intrinsics_round_trips() {
+        let entry = CameraFrame {
             dynamic_intrinsics: None,
             frame: vec![0xff; 16],
         };
         let bytes = entry.encode_to_vec();
-        let decoded = PinholeCameraLogEntry::decode(&*bytes).expect("decode");
+        let decoded = CameraFrame::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
-    /// End-to-end seam test: open a real `auki_logs::Log<PinholeCameraLogEntry>`,
+    /// End-to-end seam test: open a real `auki_logs::Log<CameraFrame>`,
     /// append two entries (one with intrinsics, one without), close, re-read,
     /// assert order + payload byte-equality. Catches any regression in the
     /// `LogPayload` macro wiring or the segment-framing path.
     #[test]
-    fn pinhole_camera_log_entry_segment_round_trip() {
+    fn camera_frame_segment_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "segment_duration_ns": 1_000_000_000i64,
@@ -348,24 +348,24 @@ mod tests {
             "kind": "test"
         });
         {
-            let mut log: auki_logs::Log<PinholeCameraLogEntry> =
+            let mut log: auki_logs::Log<CameraFrame> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
-            log.append(100, &m1_pinhole_camera_log_entry()).unwrap();
+            log.append(100, &m1_camera_frame()).unwrap();
             log.append(
                 200,
-                &PinholeCameraLogEntry {
+                &CameraFrame {
                     dynamic_intrinsics: None,
                     frame: vec![0xab; 8],
                 },
             )
             .unwrap();
         }
-        let reader: auki_logs::LogReader<PinholeCameraLogEntry> =
-            auki_logs::Log::<PinholeCameraLogEntry>::read(dir.path()).unwrap();
+        let reader: auki_logs::LogReader<CameraFrame> =
+            auki_logs::Log::<CameraFrame>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
-        assert_eq!(entries[0].payload, m1_pinhole_camera_log_entry());
+        assert_eq!(entries[0].payload, m1_camera_frame());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.dynamic_intrinsics, None);
         assert_eq!(entries[1].payload.frame, vec![0xab; 8]);
@@ -872,11 +872,11 @@ mod tests {
     /// the exact contents don't matter beyond reproducibility. The
     /// per-detector schema (QR corners, ESL bbox, person bbox, …) sits
     /// inside these bytes; the SDK doesn't decode it.
-    fn step8_detection_log_entry() -> DetectionLogEntry {
+    fn step8_detection_frame() -> DetectionFrame {
         // Pre-Cuba shape: only `data` set; `sensor_hash` / `type` defaulted.
         // Proto3 elides default-valued fields on the wire, so the locked
         // hex below is unchanged across the Cuba field additions.
-        DetectionLogEntry {
+        DetectionFrame {
             data: (0..12u8).collect(),
             sensor_hash: String::new(),
             r#type: String::new(),
@@ -888,8 +888,8 @@ mod tests {
     /// the same input. Field 1 length-delimited: tag 0x0a, varint
     /// length 0x0c (12), then the 12 payload bytes.
     #[test]
-    fn detection_log_entry_serializes_to_locked_wire_bytes() {
-        let bytes = step8_detection_log_entry().encode_to_vec();
+    fn detection_frame_serializes_to_locked_wire_bytes() {
+        let bytes = step8_detection_frame().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(hex, "0a0c000102030405060708090a0b");
     }
@@ -898,8 +898,8 @@ mod tests {
     /// conformance set so future drift in either prost-build or
     /// auki-hash trips the test.
     #[test]
-    fn detection_log_entry_hash_is_locked() {
-        let bytes = step8_detection_log_entry().encode_to_vec();
+    fn detection_frame_hash_is_locked() {
+        let bytes = step8_detection_frame().encode_to_vec();
         assert_eq!(
             auki_hash::hash_jcs_bytes(&bytes),
             "94f8efe6be63d3dc5e045ab08d538a15"
@@ -907,10 +907,10 @@ mod tests {
     }
 
     #[test]
-    fn detection_log_entry_round_trips() {
-        let entry = step8_detection_log_entry();
+    fn detection_frame_round_trips() {
+        let entry = step8_detection_frame();
         let bytes = entry.encode_to_vec();
-        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        let decoded = DetectionFrame::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -918,11 +918,11 @@ mod tests {
     /// the same prost path as direct `Message::encode_to_vec` /
     /// `decode` calls.
     #[test]
-    fn detection_log_entry_log_payload_round_trips() {
+    fn detection_frame_log_payload_round_trips() {
         use auki_logs::LogPayload;
-        let entry = step8_detection_log_entry();
+        let entry = step8_detection_frame();
         let bytes = LogPayload::encode(&entry);
-        let decoded = <DetectionLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        let decoded = <DetectionFrame as LogPayload>::decode(&bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -934,42 +934,42 @@ mod tests {
     /// frame and saw nothing" record; the entry's empty `data` is the
     /// per-detector schema's choice of how to express that.
     #[test]
-    fn detection_log_entry_empty_data_round_trips() {
-        let entry = DetectionLogEntry {
+    fn detection_frame_empty_data_round_trips() {
+        let entry = DetectionFrame {
             data: vec![],
             sensor_hash: String::new(),
             r#type: String::new(),
         };
         let bytes = entry.encode_to_vec();
         assert_eq!(bytes.len(), 0);
-        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        let decoded = DetectionFrame::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// Cuba T5 + T12 — sensor_hash and type round-trip when populated.
-    /// Locked-bytes test for `step8_detection_log_entry` proves the
+    /// Locked-bytes test for `step8_detection_frame` proves the
     /// pre-Cuba empty-string defaults are wire-elided; this test proves
     /// populated values survive a full encode/decode cycle.
     #[test]
-    fn detection_log_entry_cuba_fields_round_trip() {
-        let entry = DetectionLogEntry {
+    fn detection_frame_cuba_fields_round_trip() {
+        let entry = DetectionFrame {
             data: vec![0xAA, 0xBB],
             sensor_hash: "abcdef0123456789".to_string(),
             r#type: "aruco".to_string(),
         };
         let bytes = entry.encode_to_vec();
-        let decoded = DetectionLogEntry::decode(&*bytes).expect("decode");
+        let decoded = DetectionFrame::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
         assert_eq!(decoded.sensor_hash, "abcdef0123456789");
         assert_eq!(decoded.r#type, "aruco");
     }
 
-    /// End-to-end seam test: open a real `auki_logs::Log<DetectionLogEntry>`,
+    /// End-to-end seam test: open a real `auki_logs::Log<DetectionFrame>`,
     /// append two entries (one populated, one empty), close, re-read,
     /// assert order + payload byte-equality. Catches any regression in the
     /// `LogPayload` macro wiring or the segment-framing path.
     #[test]
-    fn detection_log_entry_segment_round_trip() {
+    fn detection_frame_segment_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "segment_duration_ns": 1_000_000_000i64,
@@ -977,12 +977,12 @@ mod tests {
             "kind": "test"
         });
         {
-            let mut log: auki_logs::Log<DetectionLogEntry> =
+            let mut log: auki_logs::Log<DetectionFrame> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
-            log.append(100, &step8_detection_log_entry()).unwrap();
+            log.append(100, &step8_detection_frame()).unwrap();
             log.append(
                 200,
-                &DetectionLogEntry {
+                &DetectionFrame {
                     data: vec![],
                     sensor_hash: String::new(),
                     r#type: String::new(),
@@ -990,12 +990,12 @@ mod tests {
             )
             .unwrap();
         }
-        let reader: auki_logs::LogReader<DetectionLogEntry> =
-            auki_logs::Log::<DetectionLogEntry>::read(dir.path()).unwrap();
+        let reader: auki_logs::LogReader<DetectionFrame> =
+            auki_logs::Log::<DetectionFrame>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
-        assert_eq!(entries[0].payload, step8_detection_log_entry());
+        assert_eq!(entries[0].payload, step8_detection_frame());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }

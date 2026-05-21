@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**SDK stream naming cleanup implemented.** Active SDK crates and Python bindings now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag with no compatibility aliases. See [`crates/changelog.md`](crates/changelog.md), [`bindings/changelog.md`](bindings/changelog.md), and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Stream naming cleanup implementation plan added.** The plan sequences the approved breaking rename across SDK datatypes, registry, network, bindings, domain, ROS adapter, docs, and Park. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 21, HKT, 2026

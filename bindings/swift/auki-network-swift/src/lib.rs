@@ -67,6 +67,18 @@ uniffi::custom_type!(PeerId, String, {
     lower: |p: PeerId| p.to_string(),
 });
 
+/// Cross-FFI representation: canonical `/ip4/.../tcp/...` multiaddr
+/// string. Parse failures surface as Rust `anyhow::Error`. `remote`
+/// keyword for the same reason as the `PeerId` registration above.
+uniffi::custom_type!(Multiaddr, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<Multiaddr>()
+            .map_err(|e| anyhow::anyhow!("invalid multiaddr {s:?}: {e}"))
+    },
+    lower: |m: Multiaddr| m.to_string(),
+});
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -335,5 +347,14 @@ mod tests {
         let s = pid.to_string();
         let back: PeerId = s.parse().expect("canonical PeerId string parses");
         assert_eq!(back, pid);
+    }
+
+    /// `Multiaddr` round-trips through its UniFFI custom-type registration.
+    #[test]
+    fn multiaddr_custom_type_round_trips() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let s = addr.to_string();
+        let back: Multiaddr = s.parse().expect("canonical multiaddr parses");
+        assert_eq!(back, addr);
     }
 }

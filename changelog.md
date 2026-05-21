@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 13:38 HKT, 2026
+
+Rewrote the [SDK Swift binding expansion design spec](docs/superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md) (revision 2): pivoted from hand-written binding-crate wrappers to upstream `#[uniffi::*]` proc-macros gated behind a new `swift-bindings` cargo feature on `crates/auki-{identity,network,domain}`. Binding crates under `bindings/swift/` become thin scaffolding hosts. See [`docs/changelog.md`](docs/changelog.md).
+
 ### Nils's claude · May 21, 13:24 HKT, 2026
 
 Added the [SDK Swift binding expansion design spec](docs/superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md): three binding crates under `bindings/swift/` (`auki-identity-swift` new, `auki-network-swift` expansion folding in Stage 2 streams, `auki-domain-swift` new at full `auki-domain-py` parity) that together let `aukilabs/iosapp` prove end-to-end use of the identity + networking SDK modules. Implementation will land as three sequential PRs (A: identity, B: network expansion, C: domain). Blocks Spec 2 (iosapp wiring + proof-of-load UI). See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

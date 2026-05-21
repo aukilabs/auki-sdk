@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's claude · May 21, 13:38 HKT, 2026
+
+Rewrote the [SDK Swift binding expansion design](superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md) (revision 2) — pivoted to upstream UniFFI proc-macros under a new `swift-bindings` cargo feature on each of `crates/auki-{identity,network,domain}`. Binding crates under `bindings/swift/` become thin scaffolding hosts; UniFFI introspects upstream types directly, hand-wrapping near-eliminated. See [`superpowers/specs/changelog.md`](superpowers/specs/changelog.md).
+
 ### Nils's claude · May 21, 13:24 HKT, 2026
 
 Added the [SDK Swift binding expansion design](superpowers/specs/2026-05-20-sdk-swift-binding-expansion-design.md): three new/expanded binding crates under `bindings/swift/` (`auki-identity-swift`, `auki-network-swift` expansion, `auki-domain-swift`) covering the SDK surface that `aukilabs/iosapp`'s proof-of-load demo needs. Blocks Spec 2 (iosapp wiring). See [`superpowers/specs/changelog.md`](superpowers/specs/changelog.md) for the spec-level entry.

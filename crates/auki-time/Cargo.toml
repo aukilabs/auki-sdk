@@ -1,11 +1,11 @@
 [package]
-name = "auki-time-transforms"
+name = "auki-time"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "TimeTransform Log specialization + 1 Hz local-clock-read sampler."
+description = "TimeTransform math, NTP-style clock samples, and the local-clock-read sampler."
 
 [dependencies]
 auki-logs = { path = "../auki-logs" }

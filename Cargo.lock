@@ -237,9 +237,11 @@ version = "0.0.0"
 dependencies = [
  "auki-hash",
  "auki-identity",
+ "auki-jcs",
  "auki-layout",
  "auki-network",
  "auki-registry",
+ "auki-time",
  "futures",
  "libp2p",
  "libp2p-identity",
@@ -381,6 +383,7 @@ dependencies = [
  "auki-datatypes",
  "auki-identity",
  "auki-jcs",
+ "auki-time",
  "base64",
  "eventsource-stream",
  "futures",
@@ -478,7 +481,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-time-transforms"
+name = "auki-time"
 version = "0.0.0"
 dependencies = [
  "auki-datatypes",

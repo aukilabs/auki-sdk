@@ -25,12 +25,14 @@ pub use auki_network::resources_protocol::{
     ResourceVec3, ResourcesRequest, ResourcesResponse, SensorStreamResource, TransformEdgeResource,
 };
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
-    DiscoveryClientError, DiscoveryClusterEntry, FetchParticipantInfoError,
-    FetchRegistryEntryError, FetchResourcesCatalogError, FetchSensorsCatalogError,
-    JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
-    SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
+    DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
+    DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
+    FetchResourcesCatalogError, FetchSensorsCatalogError, JoinClusterError,
+    LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider, SensorEntry,
+    SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

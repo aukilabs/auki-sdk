@@ -6,6 +6,38 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames can carry optional domain-clock source metadata.** `Heartbeat` now has an optional `domain_clock` object with cluster name, stable domain-clock id/hash, backing peer id, backing clock id/hash, and `backing_to_domain_offset_ns`. `HeartbeatTimestampSource` exposes a callback for this metadata, and `run_heartbeat_pair` copies the current value into each outbound frame.
+
+This is still only carrier plumbing: `auki-network` does not validate the domain-clock declaration, compare generations, store learned sources, or decide whether a peer has domain time.
+
+Tests: `cargo test -p auki-network heartbeat_wire_shape_includes_domain_clock_fields --features swarm -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat echoes now produce raw `auki-time` NTP samples.** `run_heartbeat_pair` remembers the last 64 outbound heartbeat sequence/send-clock pairs. When a received heartbeat echoes one of those sequences, the runtime combines the remembered local send time, peer receive time, peer send time, and local receive time into an `auki_time::NtpSample`, surfaced as `PeerLivenessEvent::HeartbeatNtpSampleObserved`.
+
+This is still not domain-clock sync. The event is a raw `local session clock -> peer session clock` measurement with both clock ids/hashes attached; selecting the cluster domain-clock backing source and maintaining transforms remains above this crate.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat receive events now surface raw timing observations.** `PeerLivenessEvent::HeartbeatReceived` carries a `HeartbeatTimingObservation` containing the peer id, full received `Heartbeat`, local receive timestamp, and local clock id/hash. `run_heartbeat_pair` reads the local receive timestamp once and uses that same value both for the next heartbeat echo and for the observation sent upward.
+
+This remains transport-level plumbing: `auki-network` still does not compute NTP samples, pick a domain clock, or produce transforms. It exposes the facts that `auki-time` can consume later.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames now carry explicit sender-clock timing for future `convert_time` samples.** `Heartbeat` grows `clock_id`, `clock_hash`, `sequence`, `sent_at_clock_ns`, and optional `echo { sequence, received_at_clock_ns }` alongside legacy/debug `sent_at_unix_ns`. `NetworkRuntime::spawn` now requires a `HeartbeatTimestampSource` instead of inventing a timestamp clock internally; heartbeat writers use that caller-provided source for send timestamps and for receive-time echoes.
+
+The frame still does not carry the domain clock id. Consumers compare the sender clock identity against whatever domain-clock source they are tracking, keeping `/auki/heartbeat/0.0.1` as a carrier rather than the owner of domain-clock semantics.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
 ### Dobby · May 17, HKT, 2026
 
 **Parking-lot purged: `ClusterRuntime`-era items deleted.** Three blocks describing the deleted `ClusterRuntime` runtime were removed: the "Vinland D6 — `discovery_client::subscribe` pre-implementation decisions" block (53 lines, self-marked "✓ Implemented 2026-05-09" and the subject itself was deleted with `ClusterRuntime`); the "stream-runtime integration tests deleted" block was rewritten as a leaner "Restore the 6 deleted producer/consumer stream tests against `NetworkRuntime::spawn`" entry; and "`ClusterRuntime` should own its Discovery SSE subscription internally" was removed (subject deleted). Six `/auki/message/0.0.1` design blocks (log ownership, substream lifecycle, crate placement, envelope typing, message log topology, ack semantics) were removed — the protocol never shipped and the questions can be re-filed when the messaging primitive becomes live work. Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. The substantive design-space items (relay-reservation v2 helper with its six sub-questions, `DiscoveryRuntime`, TLS knobs, peer-key derivation label evolution, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, `BuildError::Transport`, JSON-encoding-for-binary-T, libp2p-stream pin, DCUtR, cluster.json graduation and signing, operator UX, `app_instance` containers/multi-NIC/stable-id, `Capability` open-string, `PEER_DERIVATION_LABEL` wrong-crate, `StreamDispatch` README disclosure, stream-subscribers visibility) all retained, with `ClusterRuntime` references in the stream-subscribers item updated to `NetworkRuntime`. Net: 385 → 266 lines.

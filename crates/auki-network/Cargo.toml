@@ -15,7 +15,7 @@ default = []
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
 # under swarm — protobuf handles binary natively.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:prost"]
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -65,6 +65,8 @@ futures = { version = "0.3", default-features = false, optional = true }
 # moves these from this crate's hand-rolled serde structs to
 # auki-datatypes-owned prost types.
 auki-datatypes = { path = "../auki-datatypes", optional = true }
+# NTP-style samples derived from heartbeat echoes.
+auki-time = { path = "../auki-time", optional = true }
 # Encode/decode prost messages on the substream wire.
 prost = { version = "0.13", optional = true }
 

@@ -1,13 +1,76 @@
-# auki-time-transforms
+# auki-time
 
-A TimeTransform Log captures the relationship between two clocks over time, sampled at 1 Hz. It's the primitive that `convert_time` will eventually consume to translate timestamps across clocks.
+`auki-time` owns the SDK's time-transform primitives. A TimeTransform Log captures the relationship between two clocks over time, sampled at 1 Hz. `convert_time` will eventually consume these transforms to translate timestamps across clocks.
 
 This crate provides:
+- Pure `TimeTransform` math for converting timestamps from one named clock to another.
+- NTP-style `NtpExchange` / `NtpSample` helpers for estimating the offset between two independent clocks.
+- `ClockSyncState` / `ClockSyncHandle` for retaining heartbeat-derived NTP samples and producing best current peer-clock transform estimates.
+- `DomainClockDescriptor` / `DomainClockEstimate` helpers for composing peer-clock estimates into `cluster_name/domain-clock` transforms.
 - The 1 Hz `local_clock_read` sampler that produces `TimeTransformEntry` records.
 - The three-read sampling protocol (`m1, r, m2`) and its `uncertainty_ns` computation.
 - A `Clock` trait + `SystemClock` impl wired to `clock_gettime` for `CLOCK_MONOTONIC` / `CLOCK_REALTIME`.
 
 The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. One TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
+
+## Pure transforms
+
+`TimeTransform` is an affine transform from `from_clock_id` to `to_clock_id`:
+
+```
+to_timestamp_ns = from_timestamp_ns + offset_ns
+```
+
+The offset is stored as `to_clock - from_clock`, with `uncertainty_ns` and the `observed_at_clock_ns` reading from the source clock. This crate does not discipline or rewrite system clocks; it produces values consumers can keep as local transforms.
+
+## NTP-style samples
+
+`compute_ntp_sample(NtpExchange { local_send_ns, remote_receive_ns, remote_send_ns, local_receive_ns })` returns an `NtpSample` whose `offset_ns` is `remote_clock - local_clock`.
+
+```
+offset_ns      = ((remote_receive_ns - local_send_ns)
+               +  (remote_send_ns - local_receive_ns)) / 2
+uncertainty_ns = (local_receive_ns - local_send_ns)
+               - (remote_send_ns - remote_receive_ns)
+```
+
+The formula is valid for independent monotonic epochs because it estimates the transform between the two clock readings, not the absolute time-of-day of either clock. `select_best_ntp_sample` picks the lowest-uncertainty sample, breaking ties by the newest local observation.
+
+## Peer-clock sync state
+
+`ClockSyncState` is the first policy layer above raw heartbeat timing. Callers feed it `ClockSyncObservation` values containing:
+
+- local clock id/hash
+- remote clock id/hash
+- one `NtpSample`
+
+The state is keyed by ordered local/remote clock pair. It keeps a bounded sample window, rejects samples above `ClockSyncConfig::max_uncertainty_ns`, prunes samples older than `max_sample_age_ns`, clears a pair's window when either clock hash changes, and returns a `ClockTransformEstimate` for `local_clock -> remote_clock`.
+
+`ClockTransformEstimate` carries clock ids/hashes, the selected offset and uncertainty, the local observation timestamp, and the retained sample count. Its `time_transform()` helper returns the corresponding `TimeTransform`. `ClockTransformEstimate::identity(clock_id, clock_hash, observed_at_clock_ns)` builds the exact zero-offset transform used when a peer's local session clock is also the domain-clock backing clock.
+
+`ClockSyncHandle` wraps the state in a cloneable shared handle for runtime/event tasks. Clones share the same sample windows, and callers can read one estimate with `estimate(local_clock_id, remote_clock_id)` or snapshot all current estimates with `estimates()`.
+
+This is intentionally peer-local state. `auki-network` can emit heartbeat-derived samples, but it does not own selection policy. `auki-domain` can provide domain-clock context, but it does not become the NTP service.
+
+## Domain-clock composition
+
+`DomainClockDescriptor` describes the stable cluster domain clock from the domain layer:
+
+- `cluster_name`
+- domain clock id/hash
+- backing peer id
+- backing clock id/hash
+- `backing_to_domain_offset_ns`
+
+`estimate_domain_clock(local_to_backing, descriptor)` validates that `local_to_backing.to_clock_*` matches the descriptor's backing clock, then composes:
+
+```
+local_clock -> domain_clock =
+    local_clock -> backing_clock
+  + backing_clock -> domain_clock
+```
+
+The returned `DomainClockEstimate` carries both component offsets and the composed `total_offset_ns`; uncertainty is inherited from the peer-clock estimate. This is pure composition only. It does not decide which peer is backing the domain clock, nor when a cluster should change that backing source.
 
 ## Where the types live
 

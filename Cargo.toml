@@ -22,7 +22,7 @@ members = [
     "crates/auki-layout",
     "bindings/python/auki-layout-py",
     "bindings/python/auki-session-py",
-    "crates/auki-time-transforms",
+    "crates/auki-time",
 ]
 
 [workspace.package]

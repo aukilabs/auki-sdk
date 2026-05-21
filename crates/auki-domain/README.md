@@ -43,6 +43,10 @@ Operator-driven UIs can call the explicit primitives:
 - A `NetworkRuntime` that drives libp2p.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
 - Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events, while raw carrier close waits for the heartbeat timeout before election or eviction.
+- The heartbeat timestamp source passed to `auki-network`: `DaemonInfo.session_clock_id`, `DaemonInfo.session_clock_hash`, and elapsed nanoseconds from the local session monotonic clock.
+- Initial Managers advertise the cluster domain-clock source on heartbeat frames as `<cluster_name>/domain-clock` backed by their own session clock with offset `0`. Joiners advertise no domain clock at first; if later promoted to Manager, they advertise their own session clock only after `domain_clock_estimate()` proves the inherited domain offset.
+- Heartbeat domain-clock metadata received from the backing peer is retained as a local fact. `domain_clock_estimate()` composes that source with `auki-time`'s peer-clock estimate and returns an explicit unavailable reason when either fact is missing; `domain_time_now()` converts this peer's current session-clock reading through that estimate. There is no wall-clock fallback.
+- Heartbeat timing observations are treated as liveness facts here; raw NTP sample events from `auki-network` are forwarded into `auki-time`'s peer-clock sync state and exposed as read-only `local_clock -> remote_clock` estimates.
 - Background tasks for join admission, peer liveness, membership gossip, info requests, resource catalog requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:
@@ -53,6 +57,10 @@ Useful methods:
 | `is_manager()` / `manager_peer_id()` | Current role view |
 | `membership()` / `peer_count()` | Current cluster membership snapshot |
 | `participant_info()` | Fresh SDK-owned `/api/info` payload |
+| `clock_sync_estimate(local_clock_id, remote_clock_id)` | Read the best heartbeat-derived peer-clock estimate for one ordered clock pair |
+| `clock_sync_estimates()` | Read all current heartbeat-derived peer-clock estimates |
+| `domain_clock_estimate()` | Read the best current local session clock -> cluster domain clock estimate, or a typed unavailable reason |
+| `domain_time_now()` | Convert the current local session-clock reading into cluster domain time, or return a typed unavailable/overflow reason |
 | `fetch_participant_info(peer_id)` | Fetch a peer's `ParticipantInfo` over `/auki/info/0.0.1` |
 | `set_resource_catalog_provider(provider)` | Install producer-owned resources beyond auto-lifted sensor streams, starting with rigid transform edges |
 | `fetch_resources_catalog(peer_id)` | Fetch a peer's resource catalog over `/auki/resources/0.0.1` |

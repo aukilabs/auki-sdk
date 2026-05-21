@@ -42,4 +42,4 @@ The two locked vectors are regression guards: if the upstream `xxhash-rust` crat
 ## Consumers in this workspace
 
 - `auki-registry` — hashes JCS-canonical Sensor + Clock entries to produce on-disk filenames (`<id>/<hash>.json`)
-- `auki-time-transforms` (transitively) — manifests reference clock registry entries by hash
+- `auki-time` (transitively) — manifests reference clock registry entries by hash

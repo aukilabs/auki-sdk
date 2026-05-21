@@ -8,6 +8,54 @@ Latest entry on top.
 
 ### Nils's codex · May 20, HKT, 2026
 
+**[`auki-domain`](auki-domain/changelog.md) — `ClusterManager` can now return domain time now.** `domain_time_now()` converts the peer's current session monotonic reading into `<cluster_name>/domain-clock` through the existing explicit domain-clock estimate and returns typed unavailable/overflow errors without wall-clock fallback.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — live regression pins domain-clock continuity through Manager handoff.** A new ignored integration test proves B can receive A-backed domain metadata, compute domain time, survive A's loss, promote, and expose B's own session clock as the new domain backing source.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — promoted Managers advertise domain time only when their inherited offset is proven.** The handoff path now updates outbound heartbeat `domain_clock` metadata to the promoted peer's session clock after composing local -> domain time; missing source or missing backing sync leaves the peer silent instead of falling back.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) + [`auki-time`](auki-time/changelog.md) — `ClusterManager` can now report domain-clock availability explicitly.** Heartbeat domain-clock metadata is retained locally and composed with `auki-time` peer-clock estimates into a local session clock -> cluster domain-clock estimate; missing metadata or missing backing-clock sync returns typed unavailable errors, with no wall-clock fallback.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — heartbeat frames can advertise the initial domain-clock backing source.** `/auki/heartbeat/0.0.1` carries optional domain-clock source metadata, and initial `ClusterManager` creators publish `<cluster_name>/domain-clock` backed by their own session clock at offset `0`; joiners omit it until a continuity path computes their inherited offset.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — domain-clock composition added as pure time math.** `DomainClockDescriptor` plus `estimate_domain_clock(...)` now compose `local_clock -> backing_clock` peer estimates with `backing_clock -> cluster_name/domain-clock` offsets, validating backing clock id/hash and preserving uncertainty.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — heartbeat NTP samples now feed peer-clock estimates.** `auki-time` exposes a cloneable `ClockSyncHandle`, and `ClusterManager` forwards `HeartbeatNtpSampleObserved` events into it while exposing read-only clock-sync estimate snapshots.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — peer-clock sync state added above raw heartbeat NTP samples.** `ClockSyncState` now owns bounded per-clock-pair sample retention, uncertainty filtering, stale-sample pruning, clock-hash reset behavior, and `ClockTransformEstimate` production for `local_clock -> remote_clock`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — heartbeat echoes can produce raw `auki-time` NTP samples.** The runtime remembers recent outbound heartbeat send times and emits `HeartbeatNtpSampleObserved` when a peer echo matches; `ClusterManager` ignores those events until a domain-clock transform collector exists.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — heartbeat receive events surface raw timing observations.** `HeartbeatReceived` now carries the received frame plus local receive clock details; `ClusterManager` still treats it only as liveness, leaving NTP transform calculation to `auki-time`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — `auki-time-transforms` renamed and expanded with pure NTP/time-transform math.** The crate now owns `TimeTransform`, NTP exchange/sample helpers, offset calculation, and best-sample selection alongside the existing local-clock-read sampler.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — heartbeat frames are ready to carry NTP-style peer-clock samples.** `/auki/heartbeat/0.0.1` now includes sender clock identity, sender monotonic timestamp, sequence, and optional echo fields, while `ClusterManager` supplies those timestamps from each peer's `DaemonInfo` session clock.
+
+### Nils's codex · May 20, HKT, 2026
+
 **Python binding packages moved to [`bindings/python`](../bindings/python/changelog.md).** The `auki-*-py` package family left `crates/` with package names, Python module names, and runtime behavior preserved; `crates/` now reads as the Rust component workspace plus non-Python adapters.
 
 ### Nils's codex · May 19, HKT, 2026

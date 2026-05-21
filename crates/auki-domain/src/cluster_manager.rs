@@ -254,7 +254,8 @@ type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomai
 /// Application-supplied source of truth for "which sensors am I
 /// currently publishing". The producer daemon (Booster, future
 /// robotics SDK consumers) installs an implementation via
-/// [`ClusterManager::set_sensor_catalog_provider`] right after
+/// [`ClusterManager::set_sensor_catalog_provider`] (FFI) or
+/// [`ClusterManager::set_sensor_catalog_provider_arc`] (Rust) right after
 /// constructing the manager; the SDK reads it in the inbound
 /// `/auki/sensors/0.0.1` handler and returns the snapshot to the
 /// requesting cluster peer.
@@ -629,7 +630,8 @@ pub struct ClusterManager {
     diagnostic_messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
-    /// [`Self::set_sensor_catalog_provider`]; the inbound handler
+    /// [`Self::set_sensor_catalog_provider`] (FFI) /
+    /// [`Self::set_sensor_catalog_provider_arc`] (Rust); the inbound handler
     /// returns an empty `sensors: []` response while `None`.
     /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
     /// and the handler task can read concurrently.
@@ -1073,24 +1075,6 @@ impl ClusterManager {
         &self.local_multiaddrs
     }
 
-    /// Broadcast one best-effort diagnostic message to connected cluster peers.
-    pub fn broadcast_diagnostic_message(
-        &self,
-        message: DiagnosticMessage,
-    ) -> Result<(), BroadcastDiagnosticError> {
-        self.runtime.broadcast_diagnostic_message(message)
-    }
-
-    /// Drain diagnostic messages received since the previous call.
-    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
-        std::mem::take(
-            &mut *self
-                .diagnostic_messages
-                .lock()
-                .expect("diagnostic_messages lock"),
-        )
-    }
-
     /// Canonical peer-id of whoever the cluster currently agrees is
     /// the Manager. May be the local peer.
     pub fn manager_peer_id(&self) -> PeerId {
@@ -1134,24 +1118,6 @@ impl ClusterManager {
         self.runtime.open_stream::<T>(peer_id, request).await
     }
 
-    /// Best current peer-clock transform estimate for an ordered
-    /// local/remote clock pair, if heartbeat NTP samples have
-    /// produced one. This is a read-only view over `auki-time`'s
-    /// sync state; `ClusterManager` does not own sample policy.
-    pub fn clock_sync_estimate(
-        &self,
-        local_clock_id: &str,
-        remote_clock_id: &str,
-    ) -> Option<ClockTransformEstimate> {
-        self.clock_sync.estimate(local_clock_id, remote_clock_id)
-    }
-
-    /// Snapshot all current heartbeat-derived peer-clock transform
-    /// estimates known to this manager.
-    pub fn clock_sync_estimates(&self) -> Vec<ClockTransformEstimate> {
-        self.clock_sync.estimates()
-    }
-
     fn session_clock_now_ns(&self) -> i64 {
         self.session_clock.now_i64_ns()
     }
@@ -1173,43 +1139,11 @@ impl ClusterManager {
         )
     }
 
-    /// Best current transform estimate from this peer's session
-    /// clock into the cluster's stable domain clock.
-    ///
-    /// Returns an explicit unavailable reason when the domain-clock
-    /// source has not been advertised yet, or when this peer has not
-    /// yet measured its session clock against that source's backing
-    /// clock. No wall-clock fallback is used.
-    pub fn domain_clock_estimate(
-        &self,
-    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
-        self.domain_clock_estimate_at(self.session_clock_now_ns())
-    }
-
-    /// Current local reading converted into the cluster's stable
-    /// domain clock.
-    ///
-    /// This is the convenience form of [`Self::domain_clock_estimate`]
-    /// for callers that need "domain time now" rather than the full
-    /// transform estimate. It returns typed unavailable errors until
-    /// the domain source and any required peer-clock transform are
-    /// known. No wall-clock fallback is used.
-    pub fn domain_time_now(&self) -> Result<i64, DomainTimeNowError> {
-        let session_now_ns = self.session_clock_now_ns();
-        let estimate = self.domain_clock_estimate_at(session_now_ns)?;
-        convert_session_now_to_domain_time(&estimate, session_now_ns)
-    }
-
     /// Register (or replace) the application-supplied
-    /// [`SensorCatalogProvider`]. Called by the producer daemon
-    /// after constructing the `ClusterManager` — and again any
-    /// time the daemon wants to swap in a different provider.
-    ///
-    /// Inbound `/auki/sensors/0.0.1` requests received before this
-    /// call answer with an empty `sensors: []`. After this call,
-    /// each inbound request invokes [`SensorCatalogProvider::snapshot`]
-    /// on the registered provider.
-    pub fn set_sensor_catalog_provider(&self, provider: Arc<dyn SensorCatalogProvider>) {
+    /// [`SensorCatalogProvider`]. Arc-taking variant for Rust callers.
+    /// The FFI-facing Box variant is `set_sensor_catalog_provider` in the
+    /// annotated sync impl block.
+    pub fn set_sensor_catalog_provider_arc(&self, provider: Arc<dyn SensorCatalogProvider>) {
         *self
             .sensor_catalog_provider
             .lock()
@@ -1217,14 +1151,10 @@ impl ClusterManager {
     }
 
     /// Register (or replace) the application-supplied
-    /// [`ResourceCatalogProvider`]. Sensor streams are already lifted
-    /// from [`SensorCatalogProvider`]; use this for transform edges
-    /// and future non-sensor resources.
-    ///
-    /// Inbound `/auki/resources/0.0.1` requests received before this
-    /// call still include sensor streams when a sensor provider is
-    /// installed. Additional resource kinds appear after this call.
-    pub fn set_resource_catalog_provider(&self, provider: Arc<dyn ResourceCatalogProvider>) {
+    /// [`ResourceCatalogProvider`]. Arc-taking variant for Rust callers.
+    /// The FFI-facing Box variant is `set_resource_catalog_provider` in the
+    /// annotated sync impl block.
+    pub fn set_resource_catalog_provider_arc(&self, provider: Arc<dyn ResourceCatalogProvider>) {
         *self
             .resource_catalog_provider
             .lock()
@@ -1678,6 +1608,132 @@ impl ClusterManager {
     }
 }
 
+// ─── UniFFI-exposed sync surface: clock-sync, diagnostics, providers ─────────
+//
+// Separate annotated block from the identity/simple surface block above because
+// the methods here depend on types (`ClockTransformEstimate`, `DiagnosticMessage`,
+// callback-interface Box providers) that profit from explicit doc commentary.
+//
+// `clock_sync_estimate` takes `&str` in the un-annotated impl; the UniFFI export
+// takes `String` (UniFFI requires owned types in exported signatures). The body
+// passes `.as_str()` to the underlying `ClockSyncHandle::estimate`.
+//
+// Provider setters: UniFFI 0.31 callback-interface contract requires `Box<dyn Trait>`.
+// The un-annotated impl has `set_sensor_catalog_provider_arc` / `set_resource_catalog_provider_arc`
+// for Rust callers (takes `Arc<dyn ...>`). The FFI-exported names here are the
+// canonical ones: `set_sensor_catalog_provider` / `set_resource_catalog_provider`.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl ClusterManager {
+    /// Broadcast one best-effort diagnostic message to connected cluster peers.
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        self.runtime.broadcast_diagnostic_message(message)
+    }
+
+    /// Drain diagnostic messages received since the previous call.
+    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
+        std::mem::take(
+            &mut *self
+                .diagnostic_messages
+                .lock()
+                .expect("diagnostic_messages lock"),
+        )
+    }
+
+    /// Best current peer-clock transform estimate for an ordered
+    /// local/remote clock pair, if heartbeat NTP samples have
+    /// produced one. This is a read-only view over `auki-time`'s
+    /// sync state; `ClusterManager` does not own sample policy.
+    ///
+    /// `local_clock_id` and `remote_clock_id` are the stable clock-id
+    /// strings (same strings stored in `ParticipantInfo::session_clock_id`).
+    pub fn clock_sync_estimate(
+        &self,
+        local_clock_id: String,
+        remote_clock_id: String,
+    ) -> Option<ClockTransformEstimate> {
+        self.clock_sync
+            .estimate(local_clock_id.as_str(), remote_clock_id.as_str())
+    }
+
+    /// Snapshot all current heartbeat-derived peer-clock transform
+    /// estimates known to this manager.
+    pub fn clock_sync_estimates(&self) -> Vec<ClockTransformEstimate> {
+        self.clock_sync.estimates()
+    }
+
+    /// Best current transform estimate from this peer's session
+    /// clock into the cluster's stable domain clock.
+    ///
+    /// Returns an explicit unavailable reason when the domain-clock
+    /// source has not been advertised yet, or when this peer has not
+    /// yet measured its session clock against that source's backing
+    /// clock. No wall-clock fallback is used.
+    pub fn domain_clock_estimate(
+        &self,
+    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
+        self.domain_clock_estimate_at(self.session_clock_now_ns())
+    }
+
+    /// Current local reading converted into the cluster's stable
+    /// domain clock.
+    ///
+    /// This is the convenience form of [`Self::domain_clock_estimate`]
+    /// for callers that need "domain time now" rather than the full
+    /// transform estimate. It returns typed unavailable errors until
+    /// the domain source and any required peer-clock transform are
+    /// known. No wall-clock fallback is used.
+    pub fn domain_time_now(&self) -> Result<i64, DomainTimeNowError> {
+        let session_now_ns = self.session_clock_now_ns();
+        let estimate = self.domain_clock_estimate_at(session_now_ns)?;
+        convert_session_now_to_domain_time(&estimate, session_now_ns)
+    }
+
+    /// Register (or replace) the application-supplied
+    /// [`SensorCatalogProvider`]. Called by the producer daemon
+    /// after constructing the `ClusterManager` — and again any
+    /// time the daemon wants to swap in a different provider.
+    ///
+    /// Inbound `/auki/sensors/0.0.1` requests received before this
+    /// call answer with an empty `sensors: []`. After this call,
+    /// each inbound request invokes [`SensorCatalogProvider::snapshot`]
+    /// on the registered provider.
+    ///
+    /// Rust callers that already hold an `Arc<dyn SensorCatalogProvider>`
+    /// may use `set_sensor_catalog_provider_arc` in the un-annotated impl
+    /// to avoid the Box→Arc conversion.
+    pub fn set_sensor_catalog_provider(&self, provider: Box<dyn SensorCatalogProvider>) {
+        let provider: Arc<dyn SensorCatalogProvider> = Arc::from(provider);
+        *self
+            .sensor_catalog_provider
+            .lock()
+            .expect("sensor_catalog_provider lock") = Some(provider);
+    }
+
+    /// Register (or replace) the application-supplied
+    /// [`ResourceCatalogProvider`]. Sensor streams are already lifted
+    /// from [`SensorCatalogProvider`]; use this for transform edges
+    /// and future non-sensor resources.
+    ///
+    /// Inbound `/auki/resources/0.0.1` requests received before this
+    /// call still include sensor streams when a sensor provider is
+    /// installed. Additional resource kinds appear after this call.
+    ///
+    /// Rust callers that already hold an `Arc<dyn ResourceCatalogProvider>`
+    /// may use `set_resource_catalog_provider_arc` in the un-annotated impl
+    /// to avoid the Box→Arc conversion.
+    pub fn set_resource_catalog_provider(&self, provider: Box<dyn ResourceCatalogProvider>) {
+        let provider: Arc<dyn ResourceCatalogProvider> = Arc::from(provider);
+        *self
+            .resource_catalog_provider
+            .lock()
+            .expect("resource_catalog_provider lock") = Some(provider);
+    }
+}
+
 // ─── UniFFI-exposed async surface ────────────────────────────────────────────
 //
 // All methods in this block must be callable from Swift via async/await.
@@ -2101,6 +2157,106 @@ impl ClusterManager {
         //    `NetworkRuntime::shutdown` is `&self` + idempotent.
         self.runtime.shutdown();
         result
+    }
+}
+
+// ─── UniFFI-exposed async surface: per-payload streams ───────────────────────
+//
+// Five typed `open_*_stream` wrappers. Each is a thin delegator to the
+// identically-named method on `NetworkRuntime` (added in PR B). The
+// ClusterManager surface is the natural consumer-facing entry point;
+// callers should not need to reach into the runtime directly.
+//
+// `request_bytes` is a prost-encoded `auki.stream.StreamRequest`. The runtime
+// method decodes it and re-encodes the frame type, so this layer is truly
+// zero-logic.
+//
+// The entire impl block is gated by `#[cfg(feature = "swift-bindings")]`
+// (not just the export attribute) because the delegated `NetworkRuntime`
+// methods (`open_audio_stream`, …) are also only compiled under that feature.
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl ClusterManager {
+    /// Open an outbound audio stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionAudio` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_audio_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionAudio>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime.open_audio_stream(peer_id, request_bytes).await
+    }
+
+    /// Open an outbound camera stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionCamera` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_camera_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionCamera>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime.open_camera_stream(peer_id, request_bytes).await
+    }
+
+    /// Open an outbound point-cloud stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionPointCloud` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_pointcloud_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionPointCloud>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_pointcloud_stream(peer_id, request_bytes)
+            .await
+    }
+
+    /// Open an outbound joint-encoders stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionJointEncoders` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_joint_encoders_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionJointEncoders>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_joint_encoders_stream(peer_id, request_bytes)
+            .await
+    }
+
+    /// Open an outbound detection stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionDetection` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_detection_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionDetection>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_detection_stream(peer_id, request_bytes)
+            .await
     }
 }
 

@@ -42,8 +42,7 @@ Concrete Discovery records are v1 To Fill work and do not block that path.
 3. Tighten deterministic failure mapping where interop needs exact outcomes.
 4. Tighten payload-type matching.
 5. Decide minimum offer-kind payload semantics.
-6. Re-run final consistency and implementability review.
-7. Start Interop/Test work.
+6. Start Interop/Test work.
 
 ## Start Here: Spec Blockers
 
@@ -180,28 +179,6 @@ Done when:
 - A clean-room implementer knows whether to implement concrete payload schemas
   or only the transport and envelope layer.
 
-### P1-4: Final Consistency Review
-
-Slots:
-
-- [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md)
-- [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md)
-- [`glossary.md`](glossary.md)
-
-Patch:
-
-- Re-run implementability review after P0/P1 patches.
-- Check stale owner names, RFC numbers, failure-code references, glossary terms,
-  and To Fill boundaries.
-- Confirm the backlog only lists unresolved work.
-
-Done when:
-
-- No required currently specified v1 path is blocked by a To Fill section.
-- No implementation-specific SDK path is required by the normative spec.
-- A clean-room implementer can build configured/private peer-to-peer v1 from
-  the spec alone.
-
 ## Parked V1 To Fill Work
 
 These are in v1 scope but do not block the currently specified
@@ -255,11 +232,11 @@ sampling, retry, failure behavior, status fields, and any needed failure codes.
 
 ## Interop/Test Work
 
-Do this after the blocker patches and final consistency review.
+Do this after the blocker patches.
 
-### Compatibility Fixtures And Test Vectors
+### Compatibility Examples And Expected Results
 
-Create fixtures and vectors for:
+Create canonical example inputs and expected outputs for:
 
 - JSON wire conventions and signed-object canonicalization;
 - peer bindings, domain declarations, domain delegations, and domain id
@@ -298,16 +275,3 @@ Keep these parked unless product scope pulls them forward:
 - Non-normative migration notes mapping current SDK protocol paths such as
   `/auki/resources/0.0.1`, `/auki/registries/0.0.1`, and
   `/auki/stream/0.1.0` to the final v1 contract.
-
-## Recently Solved
-
-- Minimal handshake schema is specified in `RFC-0019`.
-- Discovery no longer blocks configured/private peer-to-peer connectivity.
-- To Fill sections have been cleaned of normative protocol requirements.
-- Time and clock semantics are owned by `RFC-0035`.
-- Stale owner references and stale RFC slots have been repaired.
-- Size-limit semantics are normalized across `RFC-0028`, `RFC-0029`, and
-  `RFC-0030`.
-- Future offer kinds are non-normative planning context.
-- Current SDK protocol paths have been removed from the normative spec.
-- Glossary alignment was expanded for current recurring terms.

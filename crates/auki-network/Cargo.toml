@@ -11,6 +11,11 @@ description = "Networking substrate for the Auki SDK — peer identity (derived 
 # Default-off so M0 stays WASM-friendly (Console derives peer-id without
 # pulling in libp2p's transport stack). Daemons opt in.
 default = []
+# Enables UniFFI proc-macros on a curated subset of auki-network's public
+# types (PeerIdentity in PR A; NetworkRuntime + the stream surface in
+# PR B). When off, the crate compiles exactly as today — no UniFFI dep
+# in the graph.
+swift-bindings = ["dep:uniffi"]
 # Stream protocol wire types live in `auki-datatypes` (Step 2 of the
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
@@ -35,6 +40,12 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Optional — pulled in only when the `swift-bindings` feature is on.
+# Carries the UniFFI proc-macros for `bindings/swift/auki-network-swift`.
+# Default-off so non-Swift consumers (Python sidecars, Rust daemons) don't
+# pull uniffi into their dep graph.
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }

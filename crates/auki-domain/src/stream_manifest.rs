@@ -90,6 +90,8 @@ fn spatial_frame_fields(
 }
 
 /// Errors returned while building a registry-backed stream manifest.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, thiserror::Error)]
 pub enum BuildStreamManifestError {
     /// The exact sensor entry requested by the producer is not present.

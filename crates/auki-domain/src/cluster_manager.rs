@@ -2848,6 +2848,8 @@ fn heartbeat_timestamp_source(
 }
 
 /// Errors from [`ClusterManager::fetch_participant_info`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchParticipantInfoError {
     /// libp2p / wire / timeout failure during the request.
@@ -2864,6 +2866,8 @@ pub enum FetchParticipantInfoError {
 }
 
 /// Errors from [`ClusterManager::fetch_sensors_catalog`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchSensorsCatalogError {
     /// libp2p / wire / timeout failure during the request.
@@ -2872,6 +2876,8 @@ pub enum FetchSensorsCatalogError {
 }
 
 /// Errors from [`ClusterManager::fetch_resources_catalog`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchResourcesCatalogError {
     /// libp2p / wire / timeout failure during the request.
@@ -2880,6 +2886,8 @@ pub enum FetchResourcesCatalogError {
 }
 
 /// Errors from `ClusterManager::fetch_*_entry`.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchRegistryEntryError {
     /// libp2p / wire / timeout failure during the request.

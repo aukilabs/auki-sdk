@@ -14,10 +14,12 @@ The crate exists as a small UniFFI proving surface under `crates/`. It validates
 - `uniffi-bindgen` helper binary behind a `cli` feature
 - root `just generate-swift-bindings auki-uniffi-test` workflow that writes generated Swift files to `bindings/swift/auki-uniffi-test/generated/`
 - root `just build-swift-xcframework auki-uniffi-test` workflow that writes an iOS + macOS XCFramework to `bindings/swift/auki-uniffi-test/generated/` and leaves `bindings/swift/auki-uniffi-test/` as a static Swift package root
+- root `just generate-python-bindings auki-uniffi-test` workflow that writes generated Python glue and the host debug library to `bindings/python/auki-uniffi-test/generated/`
 
 ## Next
 
-If this crate becomes the template for production Swift bindings:
+If this crate becomes the template for production UniFFI bindings:
 
 1. Add the `just generate-swift-bindings` and `just build-swift-xcframework` checks to CI on macOS.
-2. Keep the surface small so failures point at UniFFI mechanics, not SDK logic.
+2. Add the `just generate-python-bindings` check to CI on a host with Python available.
+3. Keep the surface small so failures point at UniFFI mechanics, not SDK logic.

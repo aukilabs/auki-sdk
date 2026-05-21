@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Python UniFFI generation recipe added.** `just generate-python-bindings auki-uniffi-test` now builds the crate, runs its `cli` bindgen entry point with `--language python`, and writes generated glue plus the host debug library to `bindings/python/auki-uniffi-test/generated/`.
+
+### Nils's codex · May 21, HKT, 2026
+
 **[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Swift binding recipes now delegate to root scripts.** The `just` command names remain unchanged, while the larger shell bodies moved into `scripts/generate-swift-bindings.sh` and `scripts/build-swift-xcframework.sh`.
 
 ### Nils's codex · May 21, HKT, 2026

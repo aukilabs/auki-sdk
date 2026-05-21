@@ -36,3 +36,11 @@ just build-swift-xcframework auki-uniffi-test
 ```
 
 That writes `bindings/swift/auki-uniffi-test/generated/auki_uniffi_test.xcframework` for iOS device, iOS simulator, and macOS. The static `Package.swift` lives at `bindings/swift/auki-uniffi-test/`; the recipe only refreshes files under `generated/`.
+
+Python binding generation also uses the root `justfile`:
+
+```bash
+just generate-python-bindings auki-uniffi-test
+```
+
+The generated Python module and host debug library land in `bindings/python/auki-uniffi-test/generated/`. That path is a generated smoke-test output, not a committed Python package root.

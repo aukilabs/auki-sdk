@@ -15,11 +15,11 @@ Implementation status for [`auki-uniffi-test`](../README.md).
 - Async exported function: `delayed_greeting`.
 - UniFFI object: `Counter`, including async method `add_after`.
 - Rust-side tests cover all exported behavior.
+- Root `just generate-python-bindings auki-uniffi-test` workflow writes generated Python glue and the host debug library to `bindings/python/auki-uniffi-test/generated/`.
 
 ## What does not work yet
 
-- No XCFramework script.
-- No committed generated Swift bindings.
+- No committed generated Python package.
 - No dependency on real SDK crates.
 
 Those omissions are intentional for this first proving crate.

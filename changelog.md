@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**Python UniFFI generation recipe added.** `just generate-python-bindings <crate>` now delegates to `scripts/generate-python-bindings.sh`, mirroring the Swift generation entry point for `auki-uniffi-test` and writing generated Python artifacts under `bindings/python/<crate>/generated/`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
 **Swift binding recipes extracted into root scripts.** The root `justfile` now delegates Swift generation to `scripts/generate-swift-bindings.sh` and `scripts/build-swift-xcframework.sh`, keeping the public `just` interface unchanged. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 21, HKT, 2026

@@ -6,6 +6,10 @@ Append-only timeline of changes for the UniFFI proving crate. Latest entry on to
 
 ### Nils's codex · May 21, HKT, 2026
 
+Added the root `just generate-python-bindings <crate>` workflow and `scripts/generate-python-bindings.sh`. Verified with `auki-uniffi-test`: UniFFI generates `auki_uniffi_test.py`, copies the host debug library to `bindings/python/auki-uniffi-test/generated/`, and the generated Python module smoke-tests sync functions, records/enums, objects, and async exports.
+
+### Nils's codex · May 21, HKT, 2026
+
 Extracted the Swift binding generation shell bodies from the root `justfile` into root-level scripts. The public `just generate-swift-bindings auki-uniffi-test` and `just build-swift-xcframework auki-uniffi-test` commands stay unchanged.
 
 ### Nils's codex · May 21, HKT, 2026

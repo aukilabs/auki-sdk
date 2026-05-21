@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Active log documentation now names camera records as `CameraFrame`.** The retained-log docs now align with the SDK-wide camera/detection frame naming cleanup; no log file format changed.
+
 ### broodsugar's claude · May 8, 19:46 HKT, 2026
 
 **`Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../../parking_lot.md).** New `pub fn Log::<T>::tail(root: &Path) -> Result<TailIter<T>>` returns an iterator that yields newly-appended entries as they become readable. Starts at the **current EOF** of the log (existing entries are not replayed; use `read().entries()` for historical). `Iterator::next` blocks at the configurable poll cadence (default 10ms); `TailIter::try_next` is non-blocking. Drop the iterator to stop tailing.

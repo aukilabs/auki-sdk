@@ -1,0 +1,24 @@
+[package]
+name = "auki-manifests-py"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PyO3 bindings for `auki-manifests`'s manifest builders — pure-function wrappers around `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, and `build_detection_log_manifest`. Lets a Python consumer construct SDK-canonical log manifest dicts without re-implementing the field shapes — drift risk if Python users hand-roll the dicts and the field order or naming changes Rust-side."
+
+[lib]
+name = "auki_manifests"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+auki-manifests-rs = { package = "auki-manifests", path = "../../../crates/auki-manifests" }
+serde_json = "1"
+pyo3 = { version = "0.22", features = ["abi3-py38"] }
+
+[dev-dependencies]
+pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

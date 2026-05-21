@@ -6,6 +6,78 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Domain resource metadata now follows the final camera stream vocabulary.** Cluster resource lifting and stream manifests use `camera_frame` payload metadata with the `"camera"` sensor tag, matching the renamed datatypes, registry, and network surfaces.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Heartbeat timestamps and domain-clock backing now use `ClusterManager`'s `SessionClock`.** `create_cluster` and `join_cluster` pass the SDK-owned peer-id rooted `SessionClock` into `HeartbeatTimestampSource`, initial domain-clock metadata, and promoted-Manager domain-clock advertisement. `DaemonInfo.session_clock_id/hash` remain compatibility inputs for old callers but no longer define heartbeat timing or the backing clock identity used for domain time.
+
+Tests: `cargo test -p auki-domain cluster_manager::tests -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager now exposes domain time now.** Added `ClusterManager::domain_time_now()`, which reads the local session monotonic clock once, composes the current cluster domain-clock estimate, and converts that reading into `<cluster_name>/domain-clock`. The method returns typed unavailable errors from `domain_clock_estimate()` and a typed overflow error if the affine conversion exceeds `i64`; it never falls back to wall time.
+
+Tests: `cargo test -p auki-domain domain_time_now -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Live regression pins domain-clock continuity through Manager handoff.** Added an ignored `cluster_manager_integration` test where A creates a cluster, B joins, B receives A-backed heartbeat domain-clock metadata plus NTP samples until `domain_clock_estimate()` is available, A drops, and B promotes. The test verifies B's post-promotion domain estimate is backed by B's own session clock with the inherited domain offset.
+
+Tests: `cargo test -p auki-domain --test cluster_manager_integration domain_clock_metadata_survives_manager_handoff -- --ignored --nocapture --test-threads=1` against `http://192.168.9.130:8080`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Promoted Managers advertise domain time only after proving their inherited offset.** The Manager-loss promotion path now tries to compose the promoted peer's local session clock into the cluster domain clock using the stored heartbeat domain source and the current `auki-time` peer-clock estimate. If that succeeds, the promoted peer switches its outbound heartbeat `domain_clock` metadata to itself as backing source with `backing_to_domain_offset_ns = local_session_clock -> domain_clock`. If the source or NTP estimate is missing, it remains silent and keeps returning explicit unavailable state.
+
+Tests: `cargo test -p auki-domain promoted_manager_ -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager now exposes explicit domain-clock availability.** Heartbeat `domain_clock` metadata from the backing peer is stored as a local fact, and `domain_clock_estimate()` composes it with the current `auki-time` peer-clock estimate to return a local session clock -> `<cluster_name>/domain-clock` estimate. Initial Managers use an exact local identity transform; followers return `SourceUnavailable` before receiving domain-clock metadata and `BackingEstimateUnavailable` before their local -> backing NTP estimate exists. No wall-clock fallback is used.
+
+Tests: `cargo test -p auki-domain domain_clock_estimate_ -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Initial Managers now advertise the cluster domain-clock source on heartbeat frames.** `ClusterManager::create_cluster` seeds heartbeat metadata declaring `<cluster_name>/domain-clock` with a deterministic hash, backed by the creator peer's session clock id/hash at offset `0`. `join_cluster` leaves the metadata absent, so followers do not pretend to have domain time until a later continuity path computes and publishes their inherited offset.
+
+No follower-side storage or domain-clock estimate surface changes in this slice; `ClusterManager` still forwards timing samples to `auki-time` and leaves transform math there.
+
+Tests: `cargo test -p auki-domain heartbeat_source_ -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat NTP sample events now feed `auki-time` peer-clock estimates.** `ClusterManager` owns a cloneable `ClockSyncHandle`, forwards `PeerLivenessEvent::HeartbeatNtpSampleObserved` into it, and exposes read-only `clock_sync_estimate(...)` / `clock_sync_estimates()` accessors. Sample retention, uncertainty filtering, hash-reset behavior, and best-sample selection remain in `auki-time`; the domain layer only adapts event flow.
+
+Tests: `cargo test -p auki-domain heartbeat_ntp_sample_event_updates_clock_sync_handle -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager ignores raw heartbeat NTP sample events for now.** `PeerLivenessEvent` now has `HeartbeatNtpSampleObserved` for matched heartbeat echo samples. The liveness handler explicitly ignores that variant so `ClusterManager` remains responsible for topology/liveness only; a future transform collector will decide how to use samples inside a cluster.
+
+Tests: `cargo test -p auki-domain`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager accepts heartbeat timing observations without owning NTP math.** The liveness handler now matches the expanded `PeerLivenessEvent::HeartbeatReceived { peer_id, observation }` shape and continues to use it only as a watched-peer-alive signal. The raw timing observation remains available above `auki-network`; transform calculation stays reserved for `auki-time`.
+
+Tests: `cargo test -p auki-domain`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager supplies heartbeat timestamps from the daemon's session clock.** `create_cluster` and `join_cluster` now build the required `HeartbeatTimestampSource` from `DaemonInfo.session_clock_id`, `DaemonInfo.session_clock_hash`, and `session_started.elapsed()` so `/auki/heartbeat/0.0.1` frames identify the sender's concrete monotonic clock without falling back to an invented or best-effort system source.
+
+This keeps heartbeat time provenance tied to the peer's session clock while leaving domain-clock semantics in `auki-domain`: the Manager remains the source of the domain-clock backing clock, and later time-sync code can produce transforms from peer monotonic clocks toward that stable cluster clock.
+
+Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**`ClusterManager` session time now uses `auki_time::SessionClock`.** Create/join construction mints a peer-id rooted session clock from the local libp2p peer id and `DaemonInfo.session_id`. `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash` now come from that SDK clock in both the local accessor and `/auki/info/0.0.1` handler; caller-provided `DaemonInfo.session_clock_id/hash` remain accepted only as compatibility inputs. Added `auki-time` as a dependency and documented the timekeeping ownership/deferred heartbeat-sync boundary. Tests: `cargo test -p auki-domain cluster_manager::tests`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Manager election now excludes the peer that heartbeat timed out.** When a non-Manager detects the current Manager as lost, `ClusterManager` no longer lets stale libp2p transport state re-elect that dead Manager just because `NetworkRuntime::connected_peers()` has not observed `ConnectionClosed` yet. The handoff path filters the heartbeat-lost peer out of both the connected set and membership snapshot before running the deterministic successor election, so battery-pull / QUIC-idle-timeout cases can still promote the earliest surviving member and rotate Discovery.

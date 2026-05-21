@@ -41,8 +41,13 @@ Operator-driven UIs can call the explicit primitives:
 - A `ClusterMembership` document: cluster name plus ordered `ClusterMember` rows.
 - The local peer id, local advertised multiaddrs, current Manager peer id, and Manager/member role state.
 - A `NetworkRuntime` that drives libp2p.
+- An SDK-owned `auki_time::SessionClock` for `ParticipantInfo.session_now_ns` plus the peer-id anchored session clock id/hash published to other peers.
 - Discovery client calls for create, list, liveness, Manager rotation, and final deregistration.
 - Manager-star heartbeat topology and timeout/loss semantics; `auki-network` only carries `/auki/heartbeat/0.0.1` frames and reports carrier events, while raw carrier close waits for the heartbeat timeout before election or eviction.
+- The heartbeat timestamp source passed to `auki-network`: the SDK-owned `SessionClock` id/hash plus monotonic nanoseconds from that same clock.
+- Initial Managers advertise the cluster domain-clock source on heartbeat frames as `<cluster_name>/domain-clock` backed by their own session clock with offset `0`. Joiners advertise no domain clock at first; if later promoted to Manager, they advertise their own session clock only after `domain_clock_estimate()` proves the inherited domain offset.
+- Heartbeat domain-clock metadata received from the backing peer is retained as a local fact. `domain_clock_estimate()` composes that source with `auki-time`'s peer-clock estimate and returns an explicit unavailable reason when either fact is missing; `domain_time_now()` converts this peer's current session-clock reading through that estimate. There is no wall-clock fallback.
+- Heartbeat timing observations are treated as liveness facts here; raw NTP sample events from `auki-network` are forwarded into `auki-time`'s peer-clock sync state and exposed as read-only `local_clock -> remote_clock` estimates.
 - Background tasks for join admission, peer liveness, membership gossip, info requests, resource catalog requests, sensor catalog requests, registry entry requests, and Manager liveness checks.
 
 Useful methods:
@@ -53,6 +58,10 @@ Useful methods:
 | `is_manager()` / `manager_peer_id()` | Current role view |
 | `membership()` / `peer_count()` | Current cluster membership snapshot |
 | `participant_info()` | Fresh SDK-owned `/api/info` payload |
+| `clock_sync_estimate(local_clock_id, remote_clock_id)` | Read the best heartbeat-derived peer-clock estimate for one ordered clock pair |
+| `clock_sync_estimates()` | Read all current heartbeat-derived peer-clock estimates |
+| `domain_clock_estimate()` | Read the best current local session clock -> cluster domain clock estimate, or a typed unavailable reason |
+| `domain_time_now()` | Convert the current local session-clock reading into cluster domain time, or return a typed unavailable/overflow reason |
 | `fetch_participant_info(peer_id)` | Fetch a peer's `ParticipantInfo` over `/auki/info/0.0.1` |
 | `set_resource_catalog_provider(provider)` | Install producer-owned resources beyond auto-lifted sensor streams, starting with rigid transform edges |
 | `fetch_resources_catalog(peer_id)` | Fetch a peer's resource catalog over `/auki/resources/0.0.1` |
@@ -65,7 +74,9 @@ Useful methods:
 | `open_stream::<T>(peer_id, request)` | Open a typed stream through the cluster handle |
 | `shutdown()` | Idempotent shared-reference shutdown |
 
-Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `RgbCamera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
+Producer-side stream providers can use `StreamManifestBuilder::from_registry(app_root, sensor_id, sensor_hash, clock_id, clock_hash)` to build an accept manifest from the local registry. For `Camera` and `PointCloud` sensors it copies `frame_id` + `frame_hash` from the sensor body and verifies the exact frame entry exists; for `Audio` and `JointEncoders` it leaves frame fields empty.
+
+`DaemonInfo.session_clock_id` and `DaemonInfo.session_clock_hash` are compatibility inputs while older callers still construct those fields. `ClusterManager` publishes the SDK-minted `SessionClock` id/hash in `ParticipantInfo`, anchors it as `<peer_id>/<session_id>/monotonic`, and uses that same primitive for heartbeat timestamps and domain-clock backing metadata.
 
 `/auki/resources/0.0.1` is the primary live discovery surface. `ClusterManager` auto-lifts the registered `SensorCatalogProvider` into `sensor_stream` resource rows, and `ResourceCatalogProvider` supplies additional resource rows such as `transform_edge`. Producers that have live camera calibration can override an auto-lifted sensor row with a `sensor_stream` row carrying `ResourcePinholeIntrinsics`. When the requester asks for embedded registry details and the producer has called `set_registry_app_root(app_root)`, the resources handler attaches the exact Sensor / Frame Registry JSON after hash checks.
 
@@ -94,6 +105,7 @@ Admission order is preserved. Election sorts by `(join_ts_ns, peer_id)` and choo
 ## Relationship To Other Crates
 
 - [`auki-network`](../auki-network) provides the swarm, protocols, typed stream runtime, and Discovery HTTP client. This crate owns the lifecycle policy using those primitives.
+- [`auki-time`](../auki-time) provides the `SessionClock` used for SDK-owned session time and clock identity.
 - [`auki-domain-py`](../auki-domain-py) mirrors this crate for Python daemons.
 - [`auki-identity`](../auki-identity) supplies wallets; `PeerIdentity` is still derived in `auki-network`.
 

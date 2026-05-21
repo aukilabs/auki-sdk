@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**ROS camera translation now emits `CameraFrame` and `Camera` registry entries.** The adapter re-exports the renamed camera payload type, builds `SensorBody::Camera`, and refreshes the locked camera registry hashes for the `"camera"` tag.
+
 ### Nils's codex · May 16, 17:53 HKT, 2026
 
 **Frame hashes thread through the ROS registry builders.** `StaticCameraMetadata` gains `frame_hash: &'a str`, and `build_point_cloud_registry_entry(sensor_id, msg, frame_rate_hz, frame_id, frame_hash)` now writes both frame fields into the `auki-registry` body. The adapter stays pure translation: it does not scan registries or infer hashes; integrators pass the exact `FrameRegistryEntry` hash they wrote.

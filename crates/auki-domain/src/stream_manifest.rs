@@ -23,7 +23,7 @@ pub struct StreamManifestBuilder;
 impl StreamManifestBuilder {
     /// Build a [`StreamManifest`] from the producer's local registry.
     ///
-    /// `RgbCamera` and `PointCloud` sensor bodies copy their committed
+    /// `Camera` and `PointCloud` sensor bodies copy their committed
     /// `frame_id` / `frame_hash` into the manifest after verifying the exact
     /// frame entry exists. `Audio` and `JointEncoders` are non-spatial and
     /// produce empty frame fields.
@@ -45,7 +45,7 @@ impl StreamManifestBuilder {
         })?;
 
         let (frame_id, frame_hash) = match entry.body {
-            SensorBody::RgbCamera(b) => {
+            SensorBody::Camera(b) => {
                 spatial_frame_fields(sensor_id.clone(), b.frame_id, b.frame_hash)?
             }
             SensorBody::PointCloud(b) => {

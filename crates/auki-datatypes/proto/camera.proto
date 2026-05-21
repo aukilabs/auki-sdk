@@ -3,7 +3,7 @@ syntax = "proto3";
 package auki.camera;
 
 // Per-frame camera log payload — the segment payload for a Sensor Log
-// whose registry entry has body kind `rgb_camera`. The frame timestamp
+// whose registry entry has body kind `camera`. The frame timestamp
 // rides in the auki-logs framing's `timestamp_ns`, not here.
 //
 // `dynamic_intrinsics` is inline-optional per the Step 1 decision in
@@ -14,8 +14,8 @@ package auki.camera;
 // number reserved, add a sibling log.
 //
 // Field number ledger (never reuse, never renumber):
-//   PinholeCameraLogEntry.dynamic_intrinsics = 1
-//   PinholeCameraLogEntry.frame              = 2
+//   CameraFrame.dynamic_intrinsics = 1
+//   CameraFrame.frame              = 2
 //   DynamicIntrinsics.fx                     = 1
 //   DynamicIntrinsics.fy                     = 2
 //   DynamicIntrinsics.cx                     = 3
@@ -30,7 +30,7 @@ message DynamicIntrinsics {
   repeated double distortion_coefficients = 5;
 }
 
-message PinholeCameraLogEntry {
+message CameraFrame {
   DynamicIntrinsics dynamic_intrinsics = 1;
   bytes frame = 2;
 }

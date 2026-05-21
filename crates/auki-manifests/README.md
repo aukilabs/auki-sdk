@@ -87,7 +87,7 @@ Every manifest extends `auki-logs`'s required base (`segment_duration_ns`, `rete
 | `frame_id`            | string? | Optional Frame Registry ID for spatial sensor samples            |
 | `frame_hash`          | string? | Optional XXH3-128 hex of the frame's registry entry              |
 
-The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`PinholeCameraLogEntry`, `PointCloudLogEntry`, `JointEncodersLogEntry`, `AudioLogEntry`). Spatial sensors also pin their sample convention through the optional `(frame_id, frame_hash)` pair; both fields must be present together or omitted together.
+The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auki-registry) whose `body` variant tells a reader which payload type the segments hold (`CameraFrame`, `PointCloudLogEntry`, `JointEncodersLogEntry`, `AudioLogEntry`). Spatial sensors also pin their sample convention through the optional `(frame_id, frame_hash)` pair; both fields must be present together or omitted together.
 
 ### Pose Log
 
@@ -141,7 +141,7 @@ The `(from_frame_id, to_frame_id)` pair mirrors the TimeTransform Log's `(from_c
 | `clock_id`            | string          | Same clock as the input log                                                                                  |
 | `clock_hash`          | string          | Same clock-hash as the input log                                                                             |
 
-The detection log opens with [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs)'s on-disk shape `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring how Sensor Logs and Pose Logs map a log identity to a directory. Segment payloads are [`auki_datatypes::detection::DetectionLogEntry`](../auki-datatypes/src/lib.rs) (Step 8 of the migration, 2026-05-08).
+The detection log opens with [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs)'s on-disk shape `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring how Sensor Logs and Pose Logs map a log identity to a directory. Segment payloads are [`auki_datatypes::detection::DetectionFrame`](../auki-datatypes/src/lib.rs) (Step 8 of the migration, 2026-05-08).
 
 **No `intent` field** — the keystone's `buffer | intent_recording` dimension applies to every log but is not yet plumbed through the existing builders. Match-the-existing-builders for v1; uniform rollout is a separate PR.
 
@@ -151,4 +151,4 @@ Schema version is **1** for all four manifest shapes (Sensor Log family, Pose Lo
 
 ## Status
 
-Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time-transforms` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`. Step 6 (2026-05-08) added `&TimeTransformSource` as a `build_time_transform_log_manifest` argument and brought `TimeTransformSource` over from [`auki-time-transforms`](../auki-time-transforms) — it's manifest metadata, not a per-entry field, mirroring `PoseSource`.
+Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`. Step 6 (2026-05-08) added `&TimeTransformSource` as a `build_time_transform_log_manifest` argument and brought `TimeTransformSource` over from [`auki-time`](../auki-time) — it's manifest metadata, not a per-entry field, mirroring `PoseSource`.

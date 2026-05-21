@@ -52,6 +52,7 @@ use auki_network::ParticipantInfo;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
+use auki_network::heartbeat_protocol::HeartbeatDomainClock;
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
@@ -61,29 +62,37 @@ use auki_network::resources_protocol::{
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
 };
+use auki_time::SessionClock;
 
 // Re-exports so app code can stay scoped to `auki_domain` imports
 // (per the "ClusterManager is the single SDK entry point" contract
 // at the top of this module).
+pub use auki_network::diagnostic_protocol::DiagnosticMessage;
 pub use auki_network::discovery_client::ClusterEntry as DiscoveryClusterEntry;
 pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::heartbeat_protocol::HEARTBEAT_TIMEOUT;
 use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
 use auki_network::network_runtime::{
-    AllowedPeer, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, PeerLivenessEvent,
-    RegistryRequestEvent, RequestInfoError, RequestRegistryError, RequestResourcesError,
-    RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError, SensorsRequestEvent,
-    SpawnError,
+    AllowedPeer, BroadcastDiagnosticError, DiagnosticEvent, HeartbeatNtpSampleObservation,
+    HeartbeatTimestampSource, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime,
+    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
+    RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
+    SensorsRequestEvent, SpawnError,
 };
 pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
 use auki_network::stream_protocol::STREAM_PROTOCOL;
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
+use auki_time::{
+    ClockSyncHandle, ClockSyncObservation, ClockTransformEstimate, DomainClockDescriptor,
+    DomainClockEstimate,
+};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -105,7 +114,7 @@ pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// [`ParticipantInfo`] on each call to `participant_info()` /
 /// inbound `/auki/info/0.0.1` request.
 ///
-/// Dynamic fields (`session_now_ns` from `session_started.elapsed()`,
+/// Dynamic fields (`session_now_ns` from the SDK-owned [`SessionClock`],
 /// `cluster_joined_at_ns` set lazily on first non-self peer
 /// observation) live on the ClusterManager — not on `DaemonInfo` —
 /// so daemons aren't responsible for keeping them fresh.
@@ -117,15 +126,125 @@ pub struct DaemonInfo {
     pub name: String,
     /// UUIDv4 minted at session boot.
     pub session_id: String,
-    /// Identifier of the session's monotonic clock in the clock
-    /// registry.
+    /// Compatibility input for older callers that still construct a
+    /// session-clock registry id. New `ParticipantInfo` values use the
+    /// SDK-owned peer-id anchored `SessionClock`.
     pub session_clock_id: String,
-    /// Content-addressed hash of the clock-registry entry.
+    /// Compatibility input for older callers that still construct a
+    /// session-clock registry hash.
     pub session_clock_hash: String,
     /// First non-loopback IEEE-administered MAC, lowercased hex
     /// without separators.
     pub app_instance: String,
 }
+
+/// Why this cluster handle cannot currently produce a local
+/// session-clock to cluster-domain-clock estimate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainClockEstimateUnavailable {
+    /// No heartbeat has advertised a domain-clock source for this
+    /// cluster, and this peer did not create the cluster as initial
+    /// Manager.
+    SourceUnavailable {
+        /// Cluster whose domain clock was requested.
+        cluster_name: String,
+    },
+    /// A domain-clock source is known, but the local peer does not
+    /// yet have a heartbeat-derived transform into that source's
+    /// concrete backing clock.
+    BackingEstimateUnavailable {
+        /// Local session clock id.
+        local_clock_id: String,
+        /// Concrete backing clock required by the domain source.
+        backing_clock_id: String,
+    },
+    /// The known source metadata and the peer-clock estimate are
+    /// inconsistent, or their composed offset overflowed.
+    InvalidSource(auki_time::DomainClockEstimateError),
+}
+
+impl fmt::Display for DomainClockEstimateUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SourceUnavailable { cluster_name } => {
+                write!(
+                    f,
+                    "domain clock source unavailable for cluster {cluster_name:?}"
+                )
+            }
+            Self::BackingEstimateUnavailable {
+                local_clock_id,
+                backing_clock_id,
+            } => write!(
+                f,
+                "peer-clock estimate unavailable from {local_clock_id:?} to backing clock {backing_clock_id:?}"
+            ),
+            Self::InvalidSource(err) => write!(f, "invalid domain clock source: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for DomainClockEstimateUnavailable {}
+
+/// Why this cluster handle cannot convert the current local session
+/// clock reading into cluster-domain time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainTimeNowError {
+    /// The cluster-domain clock estimate is not available yet.
+    Unavailable(DomainClockEstimateUnavailable),
+    /// Applying the estimated offset to the current local session
+    /// clock reading would overflow the SDK's signed nanosecond
+    /// timestamp representation.
+    ConversionOutOfRange {
+        /// Current reading of the local session monotonic clock.
+        session_now_ns: i64,
+        /// Offset from the local session clock into the cluster
+        /// domain clock.
+        offset_ns: i64,
+    },
+}
+
+impl From<DomainClockEstimateUnavailable> for DomainTimeNowError {
+    fn from(err: DomainClockEstimateUnavailable) -> Self {
+        Self::Unavailable(err)
+    }
+}
+
+impl fmt::Display for DomainTimeNowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable(err) => write!(f, "{err}"),
+            Self::ConversionOutOfRange {
+                session_now_ns,
+                offset_ns,
+            } => write!(
+                f,
+                "domain time conversion out of range: session_now_ns {session_now_ns} + offset_ns {offset_ns}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DomainTimeNowError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DomainClockSourceKey {
+    cluster_name: String,
+    backing_peer_id: String,
+    backing_clock_id: String,
+}
+
+impl DomainClockSourceKey {
+    fn from_source(source: &HeartbeatDomainClock) -> Self {
+        Self {
+            cluster_name: source.cluster_name.clone(),
+            backing_peer_id: source.backing_peer_id.clone(),
+            backing_clock_id: source.backing_clock_id.clone(),
+        }
+    }
+}
+
+type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomainClock>>>;
 
 /// Application-supplied source of truth for "which sensors am I
 /// currently publishing". The producer daemon (Booster, future
@@ -427,17 +546,25 @@ pub struct ClusterManager {
     /// `cluster_joined_at_ns`, `is_manager`, `manager_peer_id`,
     /// `peer_id`) when building a [`ParticipantInfo`].
     daemon_info: DaemonInfo,
-    /// Wall-clock `Instant` of session boot. The session clock is
-    /// monotonic with t=0 at this moment — so the SDK computes
-    /// `session_now_ns` as `(now - session_started).as_nanos()`
-    /// every time a `ParticipantInfo` is built.
-    session_started: Instant,
+    /// SDK-owned session-monotonic clock. Compatibility callers still pass
+    /// `DaemonInfo.session_clock_id/hash`, but ParticipantInfo is minted from
+    /// this peer-id anchored clock.
+    session_clock: SessionClock,
     /// Session-clock value at first observation of a peer other
     /// than ourselves. `None` while this daemon is alone in its
     /// cluster; set once and sticky thereafter. Mutated by
     /// `spawn_info_handler` lazily on each `participant_info()`
     /// build.
     cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
+    /// Peer-local clock sync estimates produced from heartbeat NTP
+    /// sample events. `auki-time` owns the retention/selection
+    /// policy; `ClusterManager` only forwards events and exposes
+    /// read-only snapshots.
+    clock_sync: ClockSyncHandle,
+    /// Domain-clock source declarations received on heartbeat frames,
+    /// plus the initial Manager's own declaration when this peer
+    /// creates the cluster.
+    domain_clock_sources: DomainClockSources,
     /// Manager-side Discovery liveness-check task. Wrapped in
     /// `Arc<Mutex<Option<_>>>` so the liveness handler can spawn it
     /// on Manager-promotion (SDK-T7 handoff). `Some` while this peer
@@ -479,6 +606,9 @@ pub struct ClusterManager {
     /// producer-local registry storage, and replies. Cancelled on
     /// `shutdown`.
     registry_handler_task: Mutex<Option<JoinHandle<()>>>,
+    /// Task that drains inbound best-effort app diagnostic messages.
+    diagnostic_handler_task: Mutex<Option<JoinHandle<()>>>,
+    diagnostic_messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
     /// [`Self::set_sensor_catalog_provider`]; the inbound handler
@@ -506,6 +636,15 @@ pub struct ClusterManager {
     /// last-observed state is harmless and lets consumers drain
     /// their final view.
     stopped: AtomicBool,
+}
+
+/// Best-effort diagnostic message received from a cluster peer.
+#[derive(Debug, Clone)]
+pub struct InboundDiagnosticMessage {
+    /// Authenticated sender peer id.
+    pub peer_id: PeerId,
+    /// Opaque app-level diagnostic topic and payload.
+    pub message: DiagnosticMessage,
 }
 
 impl ClusterManager {
@@ -693,8 +832,24 @@ impl ClusterManager {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
-        let session_started = Instant::now();
+        let session_clock = SessionClock::new(
+            local_peer_id.to_string(),
+            daemon_info.session_id.clone(),
+            "monotonic",
+        );
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
+        let clock_sync = ClockSyncHandle::default();
+        let domain_clock_sources = domain_clock_source_store();
+        let initial_domain_clock =
+            initial_domain_clock_source(&cluster_name, local_peer_id, &session_clock);
+        observe_heartbeat_domain_clock_source(
+            &domain_clock_sources,
+            &cluster_name,
+            local_peer_id,
+            Some(initial_domain_clock.clone()),
+        );
+        let advertised_domain_clock_source = Arc::new(Mutex::new(Some(initial_domain_clock)));
 
         // 1. Atomic create on Discovery.
         match discovery
@@ -732,7 +887,16 @@ impl ClusterManager {
             resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
-        ) = NetworkRuntime::spawn(swarm, vec![], stream_provider)?;
+            diagnostic_events_rx,
+        ) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            stream_provider,
+            heartbeat_timestamp_source(
+                session_clock.clone(),
+                advertised_domain_clock_source.clone(),
+            ),
+        )?;
         runtime
             .set_heartbeat_targets(vec![])
             .await
@@ -745,8 +909,6 @@ impl ClusterManager {
                 cluster_name.clone(),
                 membership.clone(),
             ))));
-
-        let manager_peer_id = Arc::new(Mutex::new(local_peer_id));
 
         // 5. Drain inbound `/auki/join/0.0.1` events.
         let join_handler_task = Mutex::new(Some(spawn_join_handler(
@@ -773,6 +935,10 @@ impl ClusterManager {
             runtime.handle(),
             discovery.clone(),
             liveness_check_task.clone(),
+            clock_sync.clone(),
+            domain_clock_sources.clone(),
+            advertised_domain_clock_source.clone(),
+            session_clock.clone(),
         )));
 
         // 7. Drain inbound /auki/membership/0.0.1 gossip events. As
@@ -798,7 +964,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             daemon_info.clone(),
-            session_started,
+            session_clock.clone(),
             cluster_joined_at_ns.clone(),
         )));
 
@@ -836,6 +1002,11 @@ impl ClusterManager {
             registry_events_rx,
             registry_app_root.clone(),
         )));
+        let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
+        let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
+            diagnostic_events_rx,
+            diagnostic_messages.clone(),
+        )));
 
         Ok(Self {
             cluster_name,
@@ -846,8 +1017,10 @@ impl ClusterManager {
             discovery,
             local_multiaddrs,
             daemon_info,
-            session_started,
+            session_clock,
             cluster_joined_at_ns,
+            clock_sync,
+            domain_clock_sources,
             liveness_check_task,
             join_handler_task,
             liveness_handler_task,
@@ -856,6 +1029,8 @@ impl ClusterManager {
             resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
+            diagnostic_handler_task,
+            diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
@@ -877,6 +1052,24 @@ impl ClusterManager {
     /// pointed at).
     pub fn local_multiaddrs(&self) -> &[Multiaddr] {
         &self.local_multiaddrs
+    }
+
+    /// Broadcast one best-effort diagnostic message to connected cluster peers.
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        self.runtime.broadcast_diagnostic_message(message)
+    }
+
+    /// Drain diagnostic messages received since the previous call.
+    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
+        std::mem::take(
+            &mut *self
+                .diagnostic_messages
+                .lock()
+                .expect("diagnostic_messages lock"),
+        )
     }
 
     /// `true` if the local peer is currently the cluster's Manager.
@@ -997,7 +1190,7 @@ impl ClusterManager {
     /// `/auki/stream/0.1.0` trust-boundary resolution 2026-05-13 —
     /// non-cluster substreams are silently dropped).
     ///
-    /// `T` is the typed payload the substream carries (`PinholeCameraLogEntry`,
+    /// `T` is the typed payload the substream carries (`CameraFrame`,
     /// `PointCloudFrame`, `JointEncodersFrame`); the consumer
     /// statically knows which `T` to expect per call.
     pub async fn open_stream<T>(
@@ -1017,8 +1210,8 @@ impl ClusterManager {
     /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
     /// stored daemon-side identity fields (passed at construction
     /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
-    /// (`session_now_ns` computed from
-    /// `session_started.elapsed()`, `cluster_joined_at_ns` set
+    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
+    /// `cluster_joined_at_ns` set
     /// lazily on first non-self peer observation), `is_manager` /
     /// `manager_peer_id` from cluster state, and the local
     /// `peer_id`.
@@ -1028,11 +1221,7 @@ impl ClusterManager {
     /// over `/auki/info/0.0.1`.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self
-            .session_started
-            .elapsed()
-            .as_nanos()
-            .min(u64::MAX as u128) as u64;
+        let session_now_ns = self.session_clock.now_ns();
 
         // Lazy `cluster_joined_at_ns`: set on first observation of
         // any peer other than ourselves (per ansuz D3 the local peer
@@ -1062,8 +1251,8 @@ impl ClusterManager {
             app: self.daemon_info.app.clone(),
             name: self.daemon_info.name.clone(),
             session_id: self.daemon_info.session_id.clone(),
-            session_clock_id: self.daemon_info.session_clock_id.clone(),
-            session_clock_hash: self.daemon_info.session_clock_hash.clone(),
+            session_clock_id: self.session_clock.clock_id().to_string(),
+            session_clock_hash: self.session_clock.clock_hash(),
             session_now_ns,
             cluster_joined_at_ns,
             peer_id: self.local_peer_id,
@@ -1071,6 +1260,72 @@ impl ClusterManager {
             is_manager: manager_peer_id == self.local_peer_id,
             manager_peer_id: manager_peer_id.to_string(),
         }
+    }
+
+    /// Best current peer-clock transform estimate for an ordered
+    /// local/remote clock pair, if heartbeat NTP samples have
+    /// produced one. This is a read-only view over `auki-time`'s
+    /// sync state; `ClusterManager` does not own sample policy.
+    pub fn clock_sync_estimate(
+        &self,
+        local_clock_id: &str,
+        remote_clock_id: &str,
+    ) -> Option<ClockTransformEstimate> {
+        self.clock_sync.estimate(local_clock_id, remote_clock_id)
+    }
+
+    /// Snapshot all current heartbeat-derived peer-clock transform
+    /// estimates known to this manager.
+    pub fn clock_sync_estimates(&self) -> Vec<ClockTransformEstimate> {
+        self.clock_sync.estimates()
+    }
+
+    fn session_clock_now_ns(&self) -> i64 {
+        self.session_clock.now_i64_ns()
+    }
+
+    fn domain_clock_estimate_at(
+        &self,
+        session_now_ns: i64,
+    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
+        let preferred_backing_peer_id = self.manager_peer_id().to_string();
+        let session_clock_hash = self.session_clock.clock_hash();
+        estimate_cluster_domain_clock(
+            &self.clock_sync,
+            &self.domain_clock_sources,
+            &self.cluster_name,
+            Some(&preferred_backing_peer_id),
+            self.session_clock.clock_id(),
+            &session_clock_hash,
+            session_now_ns,
+        )
+    }
+
+    /// Best current transform estimate from this peer's session
+    /// clock into the cluster's stable domain clock.
+    ///
+    /// Returns an explicit unavailable reason when the domain-clock
+    /// source has not been advertised yet, or when this peer has not
+    /// yet measured its session clock against that source's backing
+    /// clock. No wall-clock fallback is used.
+    pub fn domain_clock_estimate(
+        &self,
+    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
+        self.domain_clock_estimate_at(self.session_clock_now_ns())
+    }
+
+    /// Current local reading converted into the cluster's stable
+    /// domain clock.
+    ///
+    /// This is the convenience form of [`Self::domain_clock_estimate`]
+    /// for callers that need "domain time now" rather than the full
+    /// transform estimate. It returns typed unavailable errors until
+    /// the domain source and any required peer-clock transform are
+    /// known. No wall-clock fallback is used.
+    pub fn domain_time_now(&self) -> Result<i64, DomainTimeNowError> {
+        let session_now_ns = self.session_clock_now_ns();
+        let estimate = self.domain_clock_estimate_at(session_now_ns)?;
+        convert_session_now_to_domain_time(&estimate, session_now_ns)
     }
 
     /// Fetch a cluster peer's [`ParticipantInfo`] over the
@@ -1358,8 +1613,15 @@ impl ClusterManager {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
-        let session_started = Instant::now();
+        let session_clock = SessionClock::new(
+            local_peer_id.to_string(),
+            daemon_info.session_id.clone(),
+            "monotonic",
+        );
         let cluster_joined_at_ns: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let domain_clock_sources = domain_clock_source_store();
+        let advertised_domain_clock_source: Arc<Mutex<Option<HeartbeatDomainClock>>> =
+            Arc::new(Mutex::new(None));
 
         // 1. Look up the cluster in Discovery's directory.
         let clusters = discovery.list_clusters().await?;
@@ -1383,6 +1645,7 @@ impl ClusterManager {
             resources_events_rx,
             sensors_events_rx,
             registry_events_rx,
+            diagnostic_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![AllowedPeer {
@@ -1390,6 +1653,10 @@ impl ClusterManager {
                 multiaddrs: manager_multiaddrs.clone(),
             }],
             stream_provider,
+            heartbeat_timestamp_source(
+                session_clock.clone(),
+                advertised_domain_clock_source.clone(),
+            ),
         )?;
 
         // 3. Wait until the runtime has dialed the Manager and the
@@ -1456,6 +1723,7 @@ impl ClusterManager {
 
         let membership = Arc::new(Mutex::new(membership));
         let manager_peer_id = Arc::new(Mutex::new(manager_peer));
+        let clock_sync = ClockSyncHandle::default();
 
         // 6. Drain inbound join events. As a non-Manager our handler
         //    always rejects with "not the manager"; once an election
@@ -1486,6 +1754,10 @@ impl ClusterManager {
             runtime.handle(),
             discovery.clone(),
             liveness_check_task.clone(),
+            clock_sync.clone(),
+            domain_clock_sources.clone(),
+            advertised_domain_clock_source.clone(),
+            session_clock.clone(),
         )));
 
         // 8. Drain inbound /auki/membership/0.0.1 gossip events.
@@ -1509,7 +1781,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             daemon_info.clone(),
-            session_started,
+            session_clock.clone(),
             cluster_joined_at_ns.clone(),
         )));
 
@@ -1547,6 +1819,11 @@ impl ClusterManager {
             registry_events_rx,
             registry_app_root.clone(),
         )));
+        let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
+        let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
+            diagnostic_events_rx,
+            diagnostic_messages.clone(),
+        )));
 
         Ok(Self {
             cluster_name,
@@ -1557,8 +1834,10 @@ impl ClusterManager {
             discovery,
             local_multiaddrs,
             daemon_info,
-            session_started,
+            session_clock,
             cluster_joined_at_ns,
+            clock_sync,
+            domain_clock_sources,
             liveness_check_task,
             join_handler_task,
             liveness_handler_task,
@@ -1567,6 +1846,8 @@ impl ClusterManager {
             resources_handler_task,
             sensors_handler_task,
             registry_handler_task,
+            diagnostic_handler_task,
+            diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
@@ -1672,6 +1953,14 @@ impl ClusterManager {
             .registry_handler_task
             .lock()
             .expect("registry_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .diagnostic_handler_task
+            .lock()
+            .expect("diagnostic_handler_task lock")
             .take()
         {
             task.abort();
@@ -1815,11 +2104,15 @@ async fn handle_domain_peer_lost(
     cluster_name: &str,
     local_peer_id: PeerId,
     local_multiaddrs: &[Multiaddr],
+    session_clock: &SessionClock,
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
     runtime: &auki_network::NetworkRuntimeHandle,
     discovery: &DiscoveryClient,
     liveness_check_task: &Arc<Mutex<Option<JoinHandle<()>>>>,
+    advertised_domain_clock_source: &Arc<Mutex<Option<HeartbeatDomainClock>>>,
+    clock_sync: &ClockSyncHandle,
+    domain_clock_sources: &DomainClockSources,
     handled_manager_losses: &mut HashSet<PeerId>,
     lost_pid: PeerId,
 ) {
@@ -1846,6 +2139,22 @@ async fn handle_domain_peer_lost(
         if winner == Some(local_peer_id) {
             // Become Manager.
             *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+
+            let local_clock_now_ns = session_clock.now_i64_ns();
+            if let Err(e) = advertise_promoted_domain_clock_source(
+                advertised_domain_clock_source,
+                clock_sync,
+                domain_clock_sources,
+                cluster_name,
+                local_peer_id,
+                session_clock,
+                local_clock_now_ns,
+            ) {
+                eprintln!(
+                    "auki-domain: cluster {cluster_name:?}: promoted Manager \
+                    {local_peer_id} cannot advertise domain clock yet: {e}"
+                );
+            }
 
             // Tell Discovery about the rotation.
             if let Err(e) = discovery
@@ -1995,6 +2304,10 @@ fn spawn_liveness_handler(
     runtime: auki_network::NetworkRuntimeHandle,
     discovery: DiscoveryClient,
     liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    clock_sync: ClockSyncHandle,
+    domain_clock_sources: DomainClockSources,
+    advertised_domain_clock_source: Arc<Mutex<Option<HeartbeatDomainClock>>>,
+    session_clock: SessionClock,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_heartbeat_at: HashMap<PeerId, Instant> = HashMap::new();
@@ -2024,13 +2337,26 @@ fn spawn_liveness_handler(
                         heartbeat_watchlist_for(local_peer_id, manager, &m)
                     };
                     match evt {
-                        PeerLivenessEvent::Connected { peer_id }
-                        | PeerLivenessEvent::HeartbeatReceived { peer_id } => {
+                        PeerLivenessEvent::Connected { peer_id } => {
                             note_watched_peer_alive(
                                 &watched,
                                 &mut last_heartbeat_at,
                                 &mut lost_already,
                                 peer_id,
+                            );
+                        }
+                        PeerLivenessEvent::HeartbeatReceived { peer_id, observation } => {
+                            note_watched_peer_alive(
+                                &watched,
+                                &mut last_heartbeat_at,
+                                &mut lost_already,
+                                peer_id,
+                            );
+                            observe_heartbeat_domain_clock_source(
+                                &domain_clock_sources,
+                                &cluster_name,
+                                peer_id,
+                                observation.heartbeat.domain_clock,
                             );
                         }
                         PeerLivenessEvent::Disconnected { peer_id }
@@ -2040,6 +2366,9 @@ fn spawn_liveness_handler(
                                 &mut last_heartbeat_at,
                                 peer_id,
                             );
+                        }
+                        PeerLivenessEvent::HeartbeatNtpSampleObserved { observation, .. } => {
+                            observe_heartbeat_ntp_sample(&clock_sync, observation);
                         }
                     }
                 }
@@ -2060,11 +2389,15 @@ fn spawn_liveness_handler(
                             &cluster_name,
                             local_peer_id,
                             &local_multiaddrs,
+                            &session_clock,
                             &manager_peer_id,
                             &membership,
                             &runtime,
                             &discovery,
                             &liveness_check_task,
+                            &advertised_domain_clock_source,
+                            &clock_sync,
+                            &domain_clock_sources,
                             &mut handled_manager_losses,
                             peer_id,
                         )
@@ -2074,6 +2407,27 @@ fn spawn_liveness_handler(
             }
         }
     })
+}
+
+fn observe_heartbeat_ntp_sample(
+    clock_sync: &ClockSyncHandle,
+    observation: HeartbeatNtpSampleObservation,
+) -> Option<ClockTransformEstimate> {
+    let HeartbeatNtpSampleObservation {
+        peer_id: _,
+        local_clock_id,
+        local_clock_hash,
+        remote_clock_id,
+        remote_clock_hash,
+        sample,
+    } = observation;
+    clock_sync.observe(ClockSyncObservation::new(
+        local_clock_id,
+        local_clock_hash,
+        remote_clock_id,
+        remote_clock_hash,
+        sample,
+    ))
 }
 
 /// Spawn a task that drains inbound `/auki/membership/0.0.1` gossip
@@ -2203,7 +2557,7 @@ fn spawn_info_handler(
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     daemon_info: DaemonInfo,
-    session_started: Instant,
+    session_clock: SessionClock,
     cluster_joined_at_ns: Arc<Mutex<Option<u64>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -2213,7 +2567,7 @@ fn spawn_info_handler(
                 local_peer_id,
                 &manager_peer_id,
                 &membership,
-                session_started,
+                &session_clock,
                 &cluster_joined_at_ns,
             );
             let json = match serde_json::to_string(&info) {
@@ -2240,11 +2594,11 @@ fn build_participant_info(
     local_peer_id: PeerId,
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
-    session_started: Instant,
+    session_clock: &SessionClock,
     cluster_joined_at_ns: &Arc<Mutex<Option<u64>>>,
 ) -> ParticipantInfo {
     let manager = *manager_peer_id.lock().expect("manager_peer_id lock");
-    let session_now_ns = session_started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+    let session_now_ns = session_clock.now_ns();
     let cj = {
         let mut guard = cluster_joined_at_ns
             .lock()
@@ -2266,14 +2620,216 @@ fn build_participant_info(
         app: daemon.app.clone(),
         name: daemon.name.clone(),
         session_id: daemon.session_id.clone(),
-        session_clock_id: daemon.session_clock_id.clone(),
-        session_clock_hash: daemon.session_clock_hash.clone(),
+        session_clock_id: session_clock.clock_id().to_string(),
+        session_clock_hash: session_clock.clock_hash(),
         session_now_ns,
         cluster_joined_at_ns: cj,
         peer_id: local_peer_id,
         app_instance: daemon.app_instance.clone(),
         is_manager: manager == local_peer_id,
         manager_peer_id: manager.to_string(),
+    }
+}
+
+fn domain_clock_id(cluster_name: &str) -> String {
+    format!("{cluster_name}/domain-clock")
+}
+
+fn domain_clock_source_store() -> DomainClockSources {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+fn domain_clock_hash(cluster_name: &str) -> String {
+    let declaration = serde_json::json!({
+        "cluster_name": cluster_name,
+        "domain_clock_id": domain_clock_id(cluster_name),
+        "kind": "domain_clock",
+        "schema_version": 1,
+    });
+    let bytes = auki_jcs::canonicalize(&declaration);
+    auki_hash::hash_jcs_bytes(&bytes)
+}
+
+fn initial_domain_clock_source(
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    session_clock: &SessionClock,
+) -> HeartbeatDomainClock {
+    HeartbeatDomainClock {
+        cluster_name: cluster_name.to_string(),
+        domain_clock_id: domain_clock_id(cluster_name),
+        domain_clock_hash: domain_clock_hash(cluster_name),
+        backing_peer_id: local_peer_id.to_string(),
+        backing_clock_id: session_clock.clock_id().to_string(),
+        backing_clock_hash: session_clock.clock_hash(),
+        backing_to_domain_offset_ns: 0,
+    }
+}
+
+fn observe_heartbeat_domain_clock_source(
+    sources: &DomainClockSources,
+    cluster_name: &str,
+    peer_id: PeerId,
+    source: Option<HeartbeatDomainClock>,
+) {
+    let Some(source) = source else {
+        return;
+    };
+    if source.cluster_name != cluster_name || source.backing_peer_id != peer_id.to_string() {
+        return;
+    }
+    sources
+        .lock()
+        .expect("domain clock source lock poisoned")
+        .insert(DomainClockSourceKey::from_source(&source), source);
+}
+
+fn select_domain_clock_source(
+    sources: &DomainClockSources,
+    cluster_name: &str,
+    preferred_backing_peer_id: Option<&str>,
+) -> Option<HeartbeatDomainClock> {
+    let mut matches = sources
+        .lock()
+        .expect("domain clock source lock poisoned")
+        .values()
+        .filter(|source| source.cluster_name == cluster_name)
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by(|a, b| {
+        a.backing_peer_id
+            .cmp(&b.backing_peer_id)
+            .then_with(|| a.backing_clock_id.cmp(&b.backing_clock_id))
+    });
+    if let Some(preferred) = preferred_backing_peer_id {
+        if let Some(source) = matches
+            .iter()
+            .find(|source| source.backing_peer_id == preferred)
+            .cloned()
+        {
+            return Some(source);
+        }
+    }
+    matches.into_iter().next()
+}
+
+fn descriptor_from_heartbeat_domain_clock(source: &HeartbeatDomainClock) -> DomainClockDescriptor {
+    DomainClockDescriptor::new(
+        source.cluster_name.clone(),
+        source.domain_clock_id.clone(),
+        source.domain_clock_hash.clone(),
+        source.backing_peer_id.clone(),
+        source.backing_clock_id.clone(),
+        source.backing_clock_hash.clone(),
+        source.backing_to_domain_offset_ns,
+    )
+}
+
+fn estimate_cluster_domain_clock(
+    clock_sync: &ClockSyncHandle,
+    sources: &DomainClockSources,
+    cluster_name: &str,
+    preferred_backing_peer_id: Option<&str>,
+    local_clock_id: &str,
+    local_clock_hash: &str,
+    local_clock_now_ns: i64,
+) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
+    let source = select_domain_clock_source(sources, cluster_name, preferred_backing_peer_id)
+        .ok_or_else(|| DomainClockEstimateUnavailable::SourceUnavailable {
+            cluster_name: cluster_name.to_string(),
+        })?;
+
+    let local_to_backing = if source.backing_clock_id == local_clock_id
+        && source.backing_clock_hash == local_clock_hash
+    {
+        ClockTransformEstimate::identity(local_clock_id, local_clock_hash, local_clock_now_ns)
+    } else {
+        clock_sync
+            .estimate(local_clock_id, &source.backing_clock_id)
+            .ok_or_else(
+                || DomainClockEstimateUnavailable::BackingEstimateUnavailable {
+                    local_clock_id: local_clock_id.to_string(),
+                    backing_clock_id: source.backing_clock_id.clone(),
+                },
+            )?
+    };
+
+    auki_time::estimate_domain_clock(
+        local_to_backing,
+        descriptor_from_heartbeat_domain_clock(&source),
+    )
+    .map_err(DomainClockEstimateUnavailable::InvalidSource)
+}
+
+fn convert_session_now_to_domain_time(
+    estimate: &DomainClockEstimate,
+    session_now_ns: i64,
+) -> Result<i64, DomainTimeNowError> {
+    estimate.time_transform().convert_ns(session_now_ns).ok_or(
+        DomainTimeNowError::ConversionOutOfRange {
+            session_now_ns,
+            offset_ns: estimate.total_offset_ns,
+        },
+    )
+}
+
+fn advertise_promoted_domain_clock_source(
+    advertised_domain_clock_source: &Arc<Mutex<Option<HeartbeatDomainClock>>>,
+    clock_sync: &ClockSyncHandle,
+    sources: &DomainClockSources,
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    session_clock: &SessionClock,
+    local_clock_now_ns: i64,
+) -> Result<HeartbeatDomainClock, DomainClockEstimateUnavailable> {
+    let session_clock_hash = session_clock.clock_hash();
+    let estimate = estimate_cluster_domain_clock(
+        clock_sync,
+        sources,
+        cluster_name,
+        None,
+        session_clock.clock_id(),
+        &session_clock_hash,
+        local_clock_now_ns,
+    )?;
+    let source = HeartbeatDomainClock {
+        cluster_name: cluster_name.to_string(),
+        domain_clock_id: estimate.domain_clock_id,
+        domain_clock_hash: estimate.domain_clock_hash,
+        backing_peer_id: local_peer_id.to_string(),
+        backing_clock_id: session_clock.clock_id().to_string(),
+        backing_clock_hash: session_clock_hash,
+        backing_to_domain_offset_ns: estimate.total_offset_ns,
+    };
+
+    observe_heartbeat_domain_clock_source(
+        sources,
+        cluster_name,
+        local_peer_id,
+        Some(source.clone()),
+    );
+    *advertised_domain_clock_source
+        .lock()
+        .expect("advertised domain clock source lock poisoned") = Some(source.clone());
+    Ok(source)
+}
+
+fn heartbeat_timestamp_source(
+    session_clock: SessionClock,
+    advertised_domain_clock_source: Arc<Mutex<Option<HeartbeatDomainClock>>>,
+) -> HeartbeatTimestampSource {
+    let clock_id = session_clock.clock_id().to_string();
+    let clock_hash = session_clock.clock_hash();
+    HeartbeatTimestampSource {
+        clock_id,
+        clock_hash,
+        now_ns: Arc::new(move || session_clock.now_i64_ns()),
+        domain_clock: Arc::new(move || {
+            advertised_domain_clock_source
+                .lock()
+                .expect("advertised domain clock source lock poisoned")
+                .clone()
+        }),
     }
 }
 
@@ -2418,7 +2974,7 @@ fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, 
 
 fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
     match body {
-        SensorBody::RgbCamera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
+        SensorBody::Camera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
         SensorBody::PointCloud(point_cloud) => {
             Some((&point_cloud.frame_id, &point_cloud.frame_hash))
         }
@@ -2446,7 +3002,7 @@ fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
 
 fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
     match kind {
-        "rgb_camera" => "pinhole_camera_log_entry",
+        "camera" => "camera_frame",
         "point_cloud" => "point_cloud_frame",
         "joint_encoders" => "joint_encoders_frame",
         "audio" => "audio_frame",
@@ -2659,6 +3215,24 @@ fn spawn_registry_handler(
                 None => None,
             };
             let _ = ack.send(RegistryResponse { entry });
+        }
+    })
+}
+
+fn spawn_diagnostic_handler(
+    mut rx: mpsc::Receiver<DiagnosticEvent>,
+    messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(DiagnosticEvent { peer, message }) = rx.recv().await {
+            let mut messages = messages.lock().expect("diagnostic_messages lock");
+            messages.push(InboundDiagnosticMessage {
+                peer_id: peer,
+                message,
+            });
+            if messages.len() > 256 {
+                messages.remove(0);
+            }
         }
     })
 }
@@ -2920,6 +3494,7 @@ fn now_unix_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_time::SessionClock;
 
     #[test]
     fn daemon_info_is_cheap_to_clone() {
@@ -2935,11 +3510,421 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_source_uses_session_clock_for_initial_manager_domain_clock_metadata() {
+        let peer = auki_network::PeerIdentity::from_seed(&[11u8; 32]).peer_id();
+        let daemon = DaemonInfo {
+            app: "boosterapp".into(),
+            name: "booster".into(),
+            session_id: "session-123".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "instance".into(),
+        };
+        let session_clock =
+            SessionClock::new(peer.to_string(), daemon.session_id.clone(), "monotonic");
+        let advertised = Arc::new(Mutex::new(Some(initial_domain_clock_source(
+            "cluster-a",
+            peer,
+            &session_clock,
+        ))));
+        let source = heartbeat_timestamp_source(session_clock.clone(), advertised);
+
+        let domain_clock =
+            (source.domain_clock)().expect("initial Manager advertises domain clock");
+
+        assert_eq!(source.clock_id, session_clock.clock_id());
+        assert_eq!(source.clock_hash, session_clock.clock_hash());
+        assert_eq!(domain_clock.cluster_name, "cluster-a");
+        assert_eq!(domain_clock.domain_clock_id, "cluster-a/domain-clock");
+        assert_eq!(
+            domain_clock.domain_clock_hash,
+            domain_clock_hash("cluster-a")
+        );
+        assert_eq!(domain_clock.backing_peer_id, peer.to_string());
+        assert_eq!(domain_clock.backing_clock_id, session_clock.clock_id());
+        assert_eq!(domain_clock.backing_clock_hash, session_clock.clock_hash());
+        assert_eq!(domain_clock.backing_to_domain_offset_ns, 0);
+    }
+
+    #[test]
+    fn heartbeat_source_omits_domain_clock_when_not_advertised() {
+        let daemon = DaemonInfo {
+            app: "park".into(),
+            name: "park".into(),
+            session_id: "session-456".into(),
+            session_clock_id: "peer/12D3Follower/session-456/monotonic".into(),
+            session_clock_hash: "follower-clock-hash".into(),
+            app_instance: "instance".into(),
+        };
+        let session_clock =
+            SessionClock::new("12D3Follower", daemon.session_id.clone(), "monotonic");
+        let advertised = Arc::new(Mutex::new(None));
+        let source = heartbeat_timestamp_source(session_clock, advertised);
+
+        assert!((source.domain_clock)().is_none());
+    }
+
+    #[test]
+    fn domain_clock_estimate_is_unavailable_without_source_metadata() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+
+        let err = estimate_cluster_domain_clock(
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            None,
+            "peer/follower/session-456/monotonic",
+            "follower-clock-hash",
+            10_000,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            DomainClockEstimateUnavailable::SourceUnavailable {
+                cluster_name: "cluster-a".into()
+            }
+        );
+    }
+
+    #[test]
+    fn domain_clock_estimate_is_unavailable_without_peer_clock_estimate() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+        let peer = auki_network::PeerIdentity::from_seed(&[12u8; 32]).peer_id();
+        let source = HeartbeatDomainClock {
+            cluster_name: "cluster-a".into(),
+            domain_clock_id: "cluster-a/domain-clock".into(),
+            domain_clock_hash: domain_clock_hash("cluster-a"),
+            backing_peer_id: peer.to_string(),
+            backing_clock_id: "peer/manager/session-123/monotonic".into(),
+            backing_clock_hash: "manager-clock-hash".into(),
+            backing_to_domain_offset_ns: 0,
+        };
+        observe_heartbeat_domain_clock_source(&sources, "cluster-a", peer, Some(source.clone()));
+
+        let err = estimate_cluster_domain_clock(
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            None,
+            "peer/follower/session-456/monotonic",
+            "follower-clock-hash",
+            10_000,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            DomainClockEstimateUnavailable::BackingEstimateUnavailable {
+                local_clock_id: "peer/follower/session-456/monotonic".into(),
+                backing_clock_id: source.backing_clock_id,
+            }
+        );
+    }
+
+    #[test]
+    fn domain_clock_estimate_composes_stored_source_with_peer_clock_estimate() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+        let peer = auki_network::PeerIdentity::from_seed(&[13u8; 32]).peer_id();
+        let source = HeartbeatDomainClock {
+            cluster_name: "cluster-a".into(),
+            domain_clock_id: "cluster-a/domain-clock".into(),
+            domain_clock_hash: domain_clock_hash("cluster-a"),
+            backing_peer_id: peer.to_string(),
+            backing_clock_id: "peer/manager/session-123/monotonic".into(),
+            backing_clock_hash: "manager-clock-hash".into(),
+            backing_to_domain_offset_ns: 250,
+        };
+        observe_heartbeat_domain_clock_source(&sources, "cluster-a", peer, Some(source));
+        clock_sync.observe(ClockSyncObservation::new(
+            "peer/follower/session-456/monotonic",
+            "follower-clock-hash",
+            "peer/manager/session-123/monotonic",
+            "manager-clock-hash",
+            auki_time::NtpSample {
+                offset_ns: 1_000_000,
+                uncertainty_ns: 20,
+                round_trip_ns: 50,
+                remote_processing_ns: 30,
+                observed_at_clock_ns: 10_000,
+            },
+        ));
+
+        let estimate = estimate_cluster_domain_clock(
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            None,
+            "peer/follower/session-456/monotonic",
+            "follower-clock-hash",
+            10_000,
+        )
+        .unwrap();
+
+        assert_eq!(estimate.cluster_name, "cluster-a");
+        assert_eq!(
+            estimate.local_clock_id,
+            "peer/follower/session-456/monotonic"
+        );
+        assert_eq!(estimate.domain_clock_id, "cluster-a/domain-clock");
+        assert_eq!(estimate.peer_to_backing_offset_ns, 1_000_000);
+        assert_eq!(estimate.backing_to_domain_offset_ns, 250);
+        assert_eq!(estimate.total_offset_ns, 1_000_250);
+        assert_eq!(estimate.uncertainty_ns, 20);
+    }
+
+    #[test]
+    fn domain_clock_estimate_for_initial_manager_uses_local_identity_transform() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+        let peer = auki_network::PeerIdentity::from_seed(&[14u8; 32]).peer_id();
+        let daemon = DaemonInfo {
+            app: "boosterapp".into(),
+            name: "booster".into(),
+            session_id: "session-123".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "instance".into(),
+        };
+        let session_clock =
+            SessionClock::new(peer.to_string(), daemon.session_id.clone(), "monotonic");
+        let source = initial_domain_clock_source("cluster-a", peer, &session_clock);
+        observe_heartbeat_domain_clock_source(&sources, "cluster-a", peer, Some(source));
+
+        let estimate = estimate_cluster_domain_clock(
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            None,
+            session_clock.clock_id(),
+            &session_clock.clock_hash(),
+            12_345,
+        )
+        .unwrap();
+
+        assert_eq!(estimate.local_clock_id, session_clock.clock_id());
+        assert_eq!(estimate.domain_clock_id, "cluster-a/domain-clock");
+        assert_eq!(estimate.total_offset_ns, 0);
+        assert_eq!(estimate.uncertainty_ns, 0);
+        assert_eq!(estimate.observed_at_clock_ns, 12_345);
+    }
+
+    #[test]
+    fn promoted_manager_advertises_domain_clock_when_offset_is_proven() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+        let old_manager = auki_network::PeerIdentity::from_seed(&[15u8; 32]).peer_id();
+        let promoted = auki_network::PeerIdentity::from_seed(&[16u8; 32]).peer_id();
+        let advertised = Arc::new(Mutex::new(None));
+        let daemon = DaemonInfo {
+            app: "park".into(),
+            name: "park".into(),
+            session_id: "session-456".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "instance".into(),
+        };
+        let session_clock =
+            SessionClock::new(promoted.to_string(), daemon.session_id.clone(), "monotonic");
+        observe_heartbeat_domain_clock_source(
+            &sources,
+            "cluster-a",
+            old_manager,
+            Some(HeartbeatDomainClock {
+                cluster_name: "cluster-a".into(),
+                domain_clock_id: "cluster-a/domain-clock".into(),
+                domain_clock_hash: domain_clock_hash("cluster-a"),
+                backing_peer_id: old_manager.to_string(),
+                backing_clock_id: "peer/old-manager/session-123/monotonic".into(),
+                backing_clock_hash: "old-manager-clock-hash".into(),
+                backing_to_domain_offset_ns: 250,
+            }),
+        );
+        let session_clock_hash = session_clock.clock_hash();
+        clock_sync.observe(ClockSyncObservation::new(
+            session_clock.clock_id(),
+            &session_clock_hash,
+            "peer/old-manager/session-123/monotonic",
+            "old-manager-clock-hash",
+            auki_time::NtpSample {
+                offset_ns: 1_000_000,
+                uncertainty_ns: 20,
+                round_trip_ns: 50,
+                remote_processing_ns: 30,
+                observed_at_clock_ns: 10_000,
+            },
+        ));
+
+        let source = advertise_promoted_domain_clock_source(
+            &advertised,
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            promoted,
+            &session_clock,
+            12_345,
+        )
+        .expect("promoted Manager should prove inherited domain offset");
+
+        assert_eq!(source.cluster_name, "cluster-a");
+        assert_eq!(source.domain_clock_id, "cluster-a/domain-clock");
+        assert_eq!(source.domain_clock_hash, domain_clock_hash("cluster-a"));
+        assert_eq!(source.backing_peer_id, promoted.to_string());
+        assert_eq!(source.backing_clock_id, session_clock.clock_id());
+        assert_eq!(source.backing_clock_hash, session_clock.clock_hash());
+        assert_eq!(source.backing_to_domain_offset_ns, 1_000_250);
+        assert_eq!(*advertised.lock().unwrap(), Some(source.clone()));
+
+        let estimate = estimate_cluster_domain_clock(
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            Some(&promoted.to_string()),
+            session_clock.clock_id(),
+            &session_clock_hash,
+            12_345,
+        )
+        .unwrap();
+        assert_eq!(estimate.backing_peer_id, promoted.to_string());
+        assert_eq!(estimate.total_offset_ns, 1_000_250);
+    }
+
+    #[test]
+    fn promoted_manager_does_not_advertise_without_proven_offset() {
+        let sources = domain_clock_source_store();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+        let old_manager = auki_network::PeerIdentity::from_seed(&[17u8; 32]).peer_id();
+        let promoted = auki_network::PeerIdentity::from_seed(&[18u8; 32]).peer_id();
+        let advertised = Arc::new(Mutex::new(None));
+        let daemon = DaemonInfo {
+            app: "park".into(),
+            name: "park".into(),
+            session_id: "session-456".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "instance".into(),
+        };
+        let session_clock =
+            SessionClock::new(promoted.to_string(), daemon.session_id.clone(), "monotonic");
+        let source = HeartbeatDomainClock {
+            cluster_name: "cluster-a".into(),
+            domain_clock_id: "cluster-a/domain-clock".into(),
+            domain_clock_hash: domain_clock_hash("cluster-a"),
+            backing_peer_id: old_manager.to_string(),
+            backing_clock_id: "peer/old-manager/session-123/monotonic".into(),
+            backing_clock_hash: "old-manager-clock-hash".into(),
+            backing_to_domain_offset_ns: 0,
+        };
+        observe_heartbeat_domain_clock_source(&sources, "cluster-a", old_manager, Some(source));
+
+        let err = advertise_promoted_domain_clock_source(
+            &advertised,
+            &clock_sync,
+            &sources,
+            "cluster-a",
+            promoted,
+            &session_clock,
+            12_345,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            DomainClockEstimateUnavailable::BackingEstimateUnavailable { .. }
+        ));
+        assert!(advertised.lock().unwrap().is_none());
+    }
+
+    fn domain_time_estimate(total_offset_ns: i64) -> DomainClockEstimate {
+        DomainClockEstimate {
+            cluster_name: "cluster-a".into(),
+            local_clock_id: "peer/local/session-123/monotonic".into(),
+            local_clock_hash: "local-clock-hash".into(),
+            domain_clock_id: "cluster-a/domain-clock".into(),
+            domain_clock_hash: domain_clock_hash("cluster-a"),
+            backing_peer_id: "peer/local".into(),
+            backing_clock_id: "peer/local/session-123/monotonic".into(),
+            backing_clock_hash: "local-clock-hash".into(),
+            peer_to_backing_offset_ns: 0,
+            backing_to_domain_offset_ns: total_offset_ns,
+            total_offset_ns,
+            uncertainty_ns: 0,
+            observed_at_clock_ns: 12_345,
+        }
+    }
+
+    #[test]
+    fn domain_time_now_conversion_adds_estimated_offset() {
+        let estimate = domain_time_estimate(250);
+
+        let domain_now = convert_session_now_to_domain_time(&estimate, 10_000).unwrap();
+
+        assert_eq!(domain_now, 10_250);
+    }
+
+    #[test]
+    fn domain_time_now_conversion_reports_overflow() {
+        let estimate = domain_time_estimate(1);
+
+        let err = convert_session_now_to_domain_time(&estimate, i64::MAX).unwrap_err();
+
+        assert_eq!(
+            err,
+            DomainTimeNowError::ConversionOutOfRange {
+                session_now_ns: i64::MAX,
+                offset_ns: 1,
+            }
+        );
+    }
+
+    #[test]
     fn liveness_check_interval_matches_v1_contract() {
         // 1s liveness check / 3s sweep — matches the 2026-05-14
         // Hagall rename (was 3s / 10s under the original
         // aukilabs/discovery#5 contract).
         assert_eq!(LIVENESS_CHECK_INTERVAL, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn participant_info_uses_session_clock_primitive() {
+        let daemon = DaemonInfo {
+            app: "boosterapp".into(),
+            name: "bracketbot-060".into(),
+            session_id: "session-123".into(),
+            session_clock_id: "legacy/stale/session-clock".into(),
+            session_clock_hash: "legacy-hash".into(),
+            app_instance: "abc".into(),
+        };
+        let local = make_peer(1, 100);
+        let mut membership = ClusterMembership::new("foo");
+        membership.admit(local.clone());
+        let membership = Arc::new(Mutex::new(membership));
+        let manager_peer_id = Arc::new(Mutex::new(local.peer_id));
+        let cluster_joined_at_ns = Arc::new(Mutex::new(None));
+        let clock = SessionClock::new(
+            local.peer_id.to_string(),
+            daemon.session_id.clone(),
+            "monotonic",
+        );
+
+        let info = build_participant_info(
+            &daemon,
+            local.peer_id,
+            &manager_peer_id,
+            &membership,
+            &clock,
+            &cluster_joined_at_ns,
+        );
+
+        assert_eq!(
+            info.session_clock_id,
+            format!("{}/session-123/monotonic", local.peer_id)
+        );
+        assert_eq!(info.session_clock_hash, clock.clock_hash());
+        assert!(info.session_now_ns <= clock.now_ns());
     }
 
     #[test]
@@ -3092,7 +4077,7 @@ mod tests {
         let resource = sensor_resource_from_entry(SensorEntry {
             sensor_id: "K1-FAKE/head_left_cam".into(),
             sensor_hash: "abc123".into(),
-            kind: "rgb_camera".into(),
+            kind: "camera".into(),
             sensor_entry_json: None,
             frame_entry_json: None,
         });
@@ -3103,9 +4088,9 @@ mod tests {
         assert_eq!(sensor.id, "K1-FAKE/head_left_cam");
         assert_eq!(sensor.sensor_id, "K1-FAKE/head_left_cam");
         assert_eq!(sensor.sensor_hash, "abc123");
-        assert_eq!(sensor.sensor_kind, "rgb_camera");
+        assert_eq!(sensor.sensor_kind, "camera");
         assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
-        assert_eq!(sensor.payload, "pinhole_camera_log_entry");
+        assert_eq!(sensor.payload, "camera_frame");
     }
 
     #[test]
@@ -3299,6 +4284,43 @@ mod tests {
 
         assert!(last_heartbeat_at.contains_key(&peer));
         assert!(!lost_already.contains(&peer));
+    }
+
+    #[test]
+    fn heartbeat_ntp_sample_event_updates_clock_sync_handle() {
+        let peer_id = auki_network::PeerIdentity::from_seed(&[10u8; 32]).peer_id();
+        let clock_sync = auki_time::ClockSyncHandle::default();
+
+        let estimate = observe_heartbeat_ntp_sample(
+            &clock_sync,
+            auki_network::network_runtime::HeartbeatNtpSampleObservation {
+                peer_id,
+                local_clock_id: "peer/local/session-1/monotonic".into(),
+                local_clock_hash: "local-hash".into(),
+                remote_clock_id: "peer/remote/session-7/monotonic".into(),
+                remote_clock_hash: "remote-hash".into(),
+                sample: auki_time::NtpSample {
+                    offset_ns: 250_000,
+                    uncertainty_ns: 20,
+                    round_trip_ns: 50,
+                    remote_processing_ns: 30,
+                    observed_at_clock_ns: 10_000,
+                },
+            },
+        )
+        .expect("heartbeat NTP sample should produce a transform estimate");
+
+        assert_eq!(estimate.from_clock_id(), "peer/local/session-1/monotonic");
+        assert_eq!(estimate.to_clock_id(), "peer/remote/session-7/monotonic");
+        assert_eq!(estimate.offset_ns, 250_000);
+
+        let stored = clock_sync
+            .estimate(
+                "peer/local/session-1/monotonic",
+                "peer/remote/session-7/monotonic",
+            )
+            .expect("estimate should be retained in shared clock sync handle");
+        assert_eq!(stored, estimate);
     }
 
     #[test]

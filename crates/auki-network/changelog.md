@@ -6,6 +6,42 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Stream protocol payload names now match the final SDK vocabulary.** Camera streams use `CameraFrame`, detection streams use `DetectionFrame`, and the stream/resource protocol docs and tests use the `"camera"` sensor tag. Dispatch variant names (`AcceptCamera`, `AcceptDetection`, etc.) remain unchanged.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames can carry optional domain-clock source metadata.** `Heartbeat` now has an optional `domain_clock` object with cluster name, stable domain-clock id/hash, backing peer id, backing clock id/hash, and `backing_to_domain_offset_ns`. `HeartbeatTimestampSource` exposes a callback for this metadata, and `run_heartbeat_pair` copies the current value into each outbound frame.
+
+This is still only carrier plumbing: `auki-network` does not validate the domain-clock declaration, compare generations, store learned sources, or decide whether a peer has domain time.
+
+Tests: `cargo test -p auki-network heartbeat_wire_shape_includes_domain_clock_fields --features swarm -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat echoes now produce raw `auki-time` NTP samples.** `run_heartbeat_pair` remembers the last 64 outbound heartbeat sequence/send-clock pairs. When a received heartbeat echoes one of those sequences, the runtime combines the remembered local send time, peer receive time, peer send time, and local receive time into an `auki_time::NtpSample`, surfaced as `PeerLivenessEvent::HeartbeatNtpSampleObserved`.
+
+This is still not domain-clock sync. The event is a raw `local session clock -> peer session clock` measurement with both clock ids/hashes attached; selecting the cluster domain-clock backing source and maintaining transforms remains above this crate.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat receive events now surface raw timing observations.** `PeerLivenessEvent::HeartbeatReceived` carries a `HeartbeatTimingObservation` containing the peer id, full received `Heartbeat`, local receive timestamp, and local clock id/hash. `run_heartbeat_pair` reads the local receive timestamp once and uses that same value both for the next heartbeat echo and for the observation sent upward.
+
+This remains transport-level plumbing: `auki-network` still does not compute NTP samples, pick a domain clock, or produce transforms. It exposes the facts that `auki-time` can consume later.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames now carry explicit sender-clock timing for future `convert_time` samples.** `Heartbeat` grows `clock_id`, `clock_hash`, `sequence`, `sent_at_clock_ns`, and optional `echo { sequence, received_at_clock_ns }` alongside legacy/debug `sent_at_unix_ns`. `NetworkRuntime::spawn` now requires a `HeartbeatTimestampSource` instead of inventing a timestamp clock internally; heartbeat writers use that caller-provided source for send timestamps and for receive-time echoes.
+
+The frame still does not carry the domain clock id. Consumers compare the sender clock identity against whatever domain-clock source they are tracking, keeping `/auki/heartbeat/0.0.1` as a carrier rather than the owner of domain-clock semantics.
+
+Tests: `cargo test -p auki-network --features swarm`.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **Native browser probe listener lands.** Added `browser_probe::build_browser_probe_swarm` and `listen_and_serve`, plus a `browser_probe_listener` example that hosts `/auki/browser-probe/0.0.1` over WebRTC Direct from the SDK `PeerIdentity` and prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs.
@@ -14,9 +50,6 @@ Latest entry on top.
 
 **Browser probe protocol begins.** Added shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate that pulls in `libp2p-webrtc` for the upcoming browser-to-native WebRTC Direct listener.
 
-### Dobby · May 17, HKT, 2026
-
-**Parking-lot purged: `ClusterRuntime`-era items deleted.** Three blocks describing the deleted `ClusterRuntime` runtime were removed: the "Vinland D6 — `discovery_client::subscribe` pre-implementation decisions" block (53 lines, self-marked "✓ Implemented 2026-05-09" and the subject itself was deleted with `ClusterRuntime`); the "stream-runtime integration tests deleted" block was rewritten as a leaner "Restore the 6 deleted producer/consumer stream tests against `NetworkRuntime::spawn`" entry; and "`ClusterRuntime` should own its Discovery SSE subscription internally" was removed (subject deleted). Six `/auki/message/0.0.1` design blocks (log ownership, substream lifecycle, crate placement, envelope typing, message log topology, ack semantics) were removed — the protocol never shipped and the questions can be re-filed when the messaging primitive becomes live work. Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. The substantive design-space items (relay-reservation v2 helper with its six sub-questions, `DiscoveryRuntime`, TLS knobs, peer-key derivation label evolution, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, `BuildError::Transport`, JSON-encoding-for-binary-T, libp2p-stream pin, DCUtR, cluster.json graduation and signing, operator UX, `app_instance` containers/multi-NIC/stable-id, `Capability` open-string, `PEER_DERIVATION_LABEL` wrong-crate, `StreamDispatch` README disclosure, stream-subscribers visibility) all retained, with `ClusterRuntime` references in the stream-subscribers item updated to `NetworkRuntime`. Net: 385 → 266 lines.
 ### Nils's codex · May 18, HKT, 2026
 
 **Camera streams carry `PinholeCameraLogEntry` payloads instead of `JpegFrame`.** `stream_protocol` now re-exports `auki_datatypes::camera::{PinholeCameraLogEntry, DynamicIntrinsics}` and the locked camera stream vector pins the actual camera-log prost bytes (`frame` field tag `0x12`) rather than a stream-only bytes wrapper. `StreamDispatch::AcceptJpeg` becomes `AcceptCamera`, with producer sources typed as `SourceStream<PinholeCameraLogEntry>` and consumer examples/tests opening `open_stream::<PinholeCameraLogEntry>`.
@@ -28,6 +61,10 @@ The stream README now calls out the closed-`StreamDispatch` stability model, and
 **Membership gossip now carries the Manager peer id explicitly.** `/auki/membership/0.0.1` `MembershipUpdate` grows `manager_peer_id` alongside `membership_json`, and `NetworkRuntime::broadcast_membership` now requires the Manager id that authored the update. This makes handoff broadcasts self-describing: receivers no longer have to infer the Manager solely from their local election path, which matters when multiple surviving peers are converging after the old Manager disappears.
 
 Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-network --features swarm membership_protocol -- --nocapture`.
+
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purged: `ClusterRuntime`-era items deleted.** Three blocks describing the deleted `ClusterRuntime` runtime were removed: the "Vinland D6 — `discovery_client::subscribe` pre-implementation decisions" block (53 lines, self-marked "✓ Implemented 2026-05-09" and the subject itself was deleted with `ClusterRuntime`); the "stream-runtime integration tests deleted" block was rewritten as a leaner "Restore the 6 deleted producer/consumer stream tests against `NetworkRuntime::spawn`" entry; and "`ClusterRuntime` should own its Discovery SSE subscription internally" was removed (subject deleted). Six `/auki/message/0.0.1` design blocks (log ownership, substream lifecycle, crate placement, envelope typing, message log topology, ack semantics) were removed — the protocol never shipped and the questions can be re-filed when the messaging primitive becomes live work. Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. The substantive design-space items (relay-reservation v2 helper with its six sub-questions, `DiscoveryRuntime`, TLS knobs, peer-key derivation label evolution, `ReachabilityRecord` extensibility, `SwarmConfig` minimalism, `BuildError::Transport`, JSON-encoding-for-binary-T, libp2p-stream pin, DCUtR, cluster.json graduation and signing, operator UX, `app_instance` containers/multi-NIC/stable-id, `Capability` open-string, `PEER_DERIVATION_LABEL` wrong-crate, `StreamDispatch` README disclosure, stream-subscribers visibility) all retained, with `ClusterRuntime` references in the stream-subscribers item updated to `NetworkRuntime`. Net: 385 → 266 lines.
 
 ### Nils's codex · May 17, HKT, 2026
 
@@ -61,6 +98,18 @@ Tests: `cargo check -p auki-network --features swarm`, `cargo test -p auki-netwo
 
 `NetworkRuntime::request_sensors_catalog_with(peer_id, request)` is the explicit request path; existing `request_sensors_catalog(peer_id)` remains catalog-only. Tests pin default `{}` serialization, detail flag serialization, embedded JSON round-trips, unknown-field tolerance, and oversize-frame rejection.
 
+### Nils's codex · May 16, 13:28 HKT, 2026
+
+**`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.
+
+`NetworkRuntime::spawn` now returns a seventh receiver: `mpsc::Receiver<RegistryRequestEvent>`. Inbound `/auki/registries/0.0.1` substreams are cluster-trust gated identically to `/auki/info/0.0.1` and `/auki/sensors/0.0.1` (silent-drop non-allow-list peers). Outbound `NetworkRuntime::request_registry_entry(peer_id, request)` opens the substream, writes the request, reads the response, and times out after `REGISTRIES_REQUEST_TIMEOUT`.
+
+Tests: registry protocol wire round-trips for present and missing entries, frame-size rejection, field-name pinning; existing network runtime tests updated for the new receiver.
+
+### Nils's codex · May 16, 12:31 HKT, 2026
+
+**Stream accept path now carries a full `StreamDescriptor`.** `/auki/stream/0.1.0` re-exports `StreamDescriptor` from `auki-datatypes`; producer dispatch variants now use `descriptor: StreamDescriptor` instead of `info: AcceptInfo`, and consumer `StreamSubscription<T>` exposes `descriptor`. The runtime writes `StreamMessage::Accept(descriptor)` before frames and tests now assert the accepted descriptor includes the requested `sensor_id` plus spatial `frame_id` / `frame_hash` when present. This makes the live stream handshake self-describing enough for Park to resolve the producer's sensor, clock, and coordinate convention without a separate manifest. `cargo test -p auki-network --features swarm` passes.
+
 ### Arshak's claude · May 16, HKT, 2026 — Commit 5/6
 
 **`StreamDispatch::AcceptDetection` lands** as the fifth `Accept*` variant. Closes Cuba **T8** on the producer side. Each [`DetectionLogEntry`](../auki-datatypes/proto/detection.proto) carries the same `data` / `sensor_hash` / `type` shape as the on-disk Detection Log payload — wire and disk are content-identical by construction (both sides `prost::Message::encode_to_vec` the same struct).
@@ -78,18 +127,6 @@ Consumer side is already generic — `NetworkRuntime::open_stream::<T>` works fo
 **`RegistryKind::Detector` extends `/auki/registries/0.0.1`.** Fourth variant on the request enum alongside `Sensor` / `Clock` / `Frame`. Wire shape is the same `{ kind, id, hash }` request → `Option<RegistryEntryEnvelope>` response — Cuba's Detector Registry rides the existing protocol; no new substream or wire format. `as_str` returns `"detector"`. Closes Cuba T7 at the protocol level: Park enumerates a peer's detectors via the same libp2p path it already uses for sensors, no HTTP shim required (Cuba T6 dropped).
 
 **Context**: Commit 4/6 of the Cuba v0.0.45 SDK migration. ClusterManager-side dispatch (`read_registry_envelope`, `envelope_for_detector`, `fetch_detector_entry`) lands in `auki-domain` on the same date.
-
-### Nils's codex · May 16, 13:28 HKT, 2026
-
-**`/auki/registries/0.0.1` registry-entry exchange lands.** New `registries_protocol` module defines a generic request-response protocol for hash-pinned registry metadata: `RegistryRequest { kind, id, hash }` and `RegistryResponse { entry: Option<RegistryEntryEnvelope> }`, where an envelope carries `{ kind, id, hash, canonical_json }`. `entry: None` is the explicit "peer understood the protocol but does not have that exact `(kind, id, hash)`" response; transport/decode/timeouts remain request errors. The inner `canonical_json` string is the UTF-8 JCS JSON whose bytes hash to `hash` — consumers verify before decoding typed Sensor / Clock / Frame entries.
-
-`NetworkRuntime::spawn` now returns a seventh receiver: `mpsc::Receiver<RegistryRequestEvent>`. Inbound `/auki/registries/0.0.1` substreams are cluster-trust gated identically to `/auki/info/0.0.1` and `/auki/sensors/0.0.1` (silent-drop non-allow-list peers). Outbound `NetworkRuntime::request_registry_entry(peer_id, request)` opens the substream, writes the request, reads the response, and times out after `REGISTRIES_REQUEST_TIMEOUT`.
-
-Tests: registry protocol wire round-trips for present and missing entries, frame-size rejection, field-name pinning; existing network runtime tests updated for the new receiver.
-
-### Nils's codex · May 16, 12:31 HKT, 2026
-
-**Stream accept path now carries a full `StreamDescriptor`.** `/auki/stream/0.1.0` re-exports `StreamDescriptor` from `auki-datatypes`; producer dispatch variants now use `descriptor: StreamDescriptor` instead of `info: AcceptInfo`, and consumer `StreamSubscription<T>` exposes `descriptor`. The runtime writes `StreamMessage::Accept(descriptor)` before frames and tests now assert the accepted descriptor includes the requested `sensor_id` plus spatial `frame_id` / `frame_hash` when present. This makes the live stream handshake self-describing enough for Park to resolve the producer's sensor, clock, and coordinate convention without a separate manifest. `cargo test -p auki-network --features swarm` passes.
 
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
@@ -233,14 +270,6 @@ Outbound: `NetworkRuntime::request_participant_info(peer_id) -> Result<InfoRespo
 
 `apply_peer_update` retroactively inserts a newly-allow-listed peer into the `connected` set if libp2p already has an active connection to them — fixes the gossip case where a joiner's connection to the Manager exists pre-allow-list (open by default per PR #106) but the Manager's `connected` set never registered it because `handle_event`'s ConnectionEstablished branch only adds known peers.
 
-### Nils's claude · May 13, 12:25 HKT, 2026
-
-**`/auki/stream/0.1.0` cluster trust boundary on the accept path resolved — server-side gate (option A) + silent-drop on non-members.** Decision (Nils, 2026-05-13): before invoking the consumer's `StreamProvider`, `stream_runtime::handle_inbound_substream` checks whether the requesting peer is in the runtime's allow-list (the same allow-list `NetworkRuntime` already maintains via `set_allowed_peers` from `ClusterManager`'s membership updates). If not a cluster member, the substream is silently dropped — symmetric with the prior `cluster_runtime` pattern of dropping outsider `ParticipantInfo` exchanges (cf. the deleted `participant_from_outsider_is_dropped` test). No `StreamProvider` signature change. No typed `Decline { reason: NotInCluster }` variant — silent-drop denies a hostile peer a probe signal.
-
-Rationale: matches Hagall constraint #6 ("NO FALLBACKS — we have to be able to test exactly what we are building"); the cluster IS the trust boundary, no per-consumer policy hooks to forget. Cost: a node cannot deliberately stream to non-members (no audit sidecar, no public broadcaster) without a separate, deliberate API expansion. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). The same shape applies to `/auki/message/0.0.1` once it lands (per the message-protocol pre-implementation calls in [parking_lot.md](parking_lot.md)).
-
-Implementation surface: `stream_runtime::handle_inbound_substream`'s `_peer: PeerId` argument becomes `peer: PeerId`; the function consults shared allow-list state (likely via `NetworkRuntimeHandle::connected_peers` or a sibling accessor over the same `Arc<RwLock<HashSet<PeerId>>>`) before invoking the provider closure. Non-members: the function returns early without writing a response. Lands as a sub-task of SDK-T11.
-
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **SDK-T5 — `/auki/heartbeat/0.0.1` peer-side heartbeat protocol + `PeerLivenessEvent` plumbing.** New `heartbeat_protocol` module: `pub const HEARTBEAT_PROTOCOL = "/auki/heartbeat/0.0.1"`, `Heartbeat { sent_at_unix_ns: i64 }`, 500ms cadence, 1500ms timeout (3 missed). Length-prefixed JSON framing (1 KiB cap). 5 wire-format unit tests including locked field names.
@@ -265,25 +294,13 @@ New `join_protocol` module: `pub const JOIN_PROTOCOL: &str = "/auki/join/0.0.1"`
 
 Net deltas: +1 module (`join_protocol`, ~370 LOC including 6 wire-format tests), `network_runtime` gains ~150 LOC for the join plumbing, `swarm.rs` flips ~10 LOC for `BlockedPeers` + test cleanup.
 
-### Nils's claude · May 13, 11:15 HKT, 2026
+### Nils's claude · May 13, 12:25 HKT, 2026
 
-**`ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** The previous commit deleted `participant.rs` along with the Greenland `/auki/cluster/0.0.1` protocol that used it. Per the [SDK plan's BA-Q3 resolution](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) (Nils, 2026-05-13), `ParticipantInfo` is the canonical SDK-provided shape every daemon (BoosterApp, Park, Sentinel) serializes verbatim on its Control API `GET /api/info` — daemons don't define their own handler logic. The libp2p protocol coupling is gone (no more `/auki/cluster/0.0.1`); the HTTP-wire role survives. Fields restored verbatim: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`. New Hagall-aware fields: `is_manager: bool` + `manager_peer_id: String` (canonical libp2p peer-id string), populated from the cluster runtime by the Manager state machine (SDK-T2). 5 unit tests including a wire-shape-locked field-name pin (cross-daemon tooling reads `/api/info` by these JSON keys; a rename breaks every consumer).
+**`/auki/stream/0.1.0` cluster trust boundary on the accept path resolved — server-side gate (option A) + silent-drop on non-members.** Decision (Nils, 2026-05-13): before invoking the consumer's `StreamProvider`, `stream_runtime::handle_inbound_substream` checks whether the requesting peer is in the runtime's allow-list (the same allow-list `NetworkRuntime` already maintains via `set_allowed_peers` from `ClusterManager`'s membership updates). If not a cluster member, the substream is silently dropped — symmetric with the prior `cluster_runtime` pattern of dropping outsider `ParticipantInfo` exchanges (cf. the deleted `participant_from_outsider_is_dropped` test). No `StreamProvider` signature change. No typed `Decline { reason: NotInCluster }` variant — silent-drop denies a hostile peer a probe signal.
 
-### Nils's claude · May 13, 11:00 HKT, 2026
+Rationale: matches Hagall constraint #6 ("NO FALLBACKS — we have to be able to test exactly what we are building"); the cluster IS the trust boundary, no per-consumer policy hooks to forget. Cost: a node cannot deliberately stream to non-members (no audit sidecar, no public broadcaster) without a separate, deliberate API expansion. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). The same shape applies to `/auki/message/0.0.1` once it lands (per the message-protocol pre-implementation calls in [parking_lot.md](parking_lot.md)).
 
-**Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** `cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant` modules removed (5 files, ~3300 LOC). New `network_runtime` module replaces `ClusterRuntime` with a focused minimal driver: `NetworkRuntime::spawn(swarm, Vec<AllowedPeer>, stream_provider)`; `connected_peers() -> Vec<PeerId>`, `set_allowed_peers(...) -> Result<UpdateReport, UpdateError>`, `shutdown()`, `local_peer_id()`. Allow-list is the cluster trust boundary — populated on spawn, rewritten on `set_allowed_peers`; libp2p refuses handshakes from non-listed peers at the `NetworkBehaviour` layer. Auto-dial with per-peer exponential backoff (1s → cap 60s) survives; `stream_provider` plumbing survives. Greenland's participant-info exchange (the `/auki/cluster/0.0.1` request-response), heartbeat protocol, and registry-broadcast protocol all gone — Hagall's equivalents land separately when the Manager state machine + join protocol arrive.
-
-**`swarm::Behaviour` slimmed.** Stripped the `cluster: cluster_protocol::Behaviour` and `heartbeat: heartbeat_protocol::Behaviour` fields; kept `identify`, `ping`, `allow_list`, `relay_client`, `relay` (optional), `stream`. The auto-derived `BehaviourEvent` enum loses two variants — anything pattern-matching on those breaks at compile, which is the intended signal.
-
-**`stream_runtime` adapted.** Method block moved from `impl ClusterRuntime` to `impl NetworkRuntime`; protocol logic unchanged. 6 multi-runtime integration tests deleted — they depended on the old fixture (`ClusterDoc` + `participant_provider`); port plan filed in [`parking_lot.md`](parking_lot.md) for SDK-T11. 7 stream-protocol wire-shape unit tests survive and cover the on-wire format.
-
-Net: ~3300 LOC deleted, ~500 LOC added. Workspace builds clean; all unit + doctest green; live Discovery integration test passes against `192.168.9.130:8080`.
-
-### Nils's claude · May 13, 10:30 HKT, 2026
-
-**`discovery_client` rewritten against Hagall v1 — wire to a live Discovery now works end-to-end.** [aukilabs/discovery#5](https://github.com/aukilabs/discovery/pull/5) shipped the v1 directory service 2026-05-13; the SDK's old `DiscoveryClient` targeted endpoints that no longer exist (`POST /clusters/{name}/peers`, signed mutations) and compiled-but-couldn't-function. This rewrite replaces it. Surface: `DiscoveryClient::new(base_url)` + `list_clusters` / `create_cluster` / `heartbeat` / `rotate_manager` / `deregister`. Wire shape: `ClusterEntry { name, manager_peer_id: PeerId, manager_multiaddrs: Vec<Multiaddr>, peer_count: u32, created_ns: i64, last_heartbeat_ns: i64 }` (parsed at the boundary; consumers see typed values). `CreateClusterOutcome::{Created(ClusterEntry), AlreadyExists}` collapses the 201/409 race-loss into typed return. No crypto in v1 — endpoints accept by shape, per the locked Hagall v1 contract. Stripped from the crate's `discovery_client` dep stack: `auki-jcs`, `base64`, `eventsource-stream`, `percent-encoding` (no signing, no SSE in v1, cluster names are simple `[A-Za-z0-9_-]{1,64}` so no path encoding). Old `tests/discovery_integration.rs` (450 LOC of signed-Greenland wire roundtrips) replaced with a 100-line `#[ignore]` test that roundtrips against a live Discovery at `$DISCOVERY_URL` (default `http://192.168.9.130:8080`); verified the full lifecycle (list → create → 409 dup → heartbeat → rotate → deregister → list) against the running deployment. 6 new unit tests pin the wire shape (field-name locks against both directions). 1375 LOC discovery_client.rs → 384 LOC.
-
-**Greenland code (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant`) survives as dead modules in this commit.** Nothing in the SDK's Hagall path reaches them; they're orphaned compile-only. Deletion lands in the next PR alongside the new network runtime that drives the swarm + allow-list from `ClusterMembership` (the type that landed in SDK-T1) instead of `ClusterDoc`.
+Implementation surface: `stream_runtime::handle_inbound_substream`'s `_peer: PeerId` argument becomes `peer: PeerId`; the function consults shared allow-list state (likely via `NetworkRuntimeHandle::connected_peers` or a sibling accessor over the same `Arc<RwLock<HashSet<PeerId>>>`) before invoking the provider closure. Non-members: the function returns early without writing a response. Lands as a sub-task of SDK-T11.
 
 ### broodsugar's claude · May 13, 11:21 HKT, 2026
 
@@ -312,6 +329,26 @@ Net: ~3300 LOC deleted, ~500 LOC added. Workspace builds clean; all unit + docte
 
 **Filed follow-up:** `auki-domain-py` PyO3 wrapper for `init_domain`. Required before Python consumers (BoosterApp sidecar) can resume runtime construction post-PR-B. Currently un-tracked — surface as a parking-lot entry in `auki-network-py` when filed.
 
+### Nils's claude · May 13, 11:15 HKT, 2026
+
+**`ParticipantInfo` restored as the SDK-provided `/api/info` wire shape; extended with `is_manager: bool` + `manager_peer_id: String`.** The previous commit deleted `participant.rs` along with the Greenland `/auki/cluster/0.0.1` protocol that used it. Per the [SDK plan's BA-Q3 resolution](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) (Nils, 2026-05-13), `ParticipantInfo` is the canonical SDK-provided shape every daemon (BoosterApp, Park, Sentinel) serializes verbatim on its Control API `GET /api/info` — daemons don't define their own handler logic. The libp2p protocol coupling is gone (no more `/auki/cluster/0.0.1`); the HTTP-wire role survives. Fields restored verbatim: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`. New Hagall-aware fields: `is_manager: bool` + `manager_peer_id: String` (canonical libp2p peer-id string), populated from the cluster runtime by the Manager state machine (SDK-T2). 5 unit tests including a wire-shape-locked field-name pin (cross-daemon tooling reads `/api/info` by these JSON keys; a rename breaks every consumer).
+
+### Nils's claude · May 13, 11:00 HKT, 2026
+
+**Greenland runtime + protocols deleted; new `NetworkRuntime` ships.** `cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant` modules removed (5 files, ~3300 LOC). New `network_runtime` module replaces `ClusterRuntime` with a focused minimal driver: `NetworkRuntime::spawn(swarm, Vec<AllowedPeer>, stream_provider)`; `connected_peers() -> Vec<PeerId>`, `set_allowed_peers(...) -> Result<UpdateReport, UpdateError>`, `shutdown()`, `local_peer_id()`. Allow-list is the cluster trust boundary — populated on spawn, rewritten on `set_allowed_peers`; libp2p refuses handshakes from non-listed peers at the `NetworkBehaviour` layer. Auto-dial with per-peer exponential backoff (1s → cap 60s) survives; `stream_provider` plumbing survives. Greenland's participant-info exchange (the `/auki/cluster/0.0.1` request-response), heartbeat protocol, and registry-broadcast protocol all gone — Hagall's equivalents land separately when the Manager state machine + join protocol arrive.
+
+**`swarm::Behaviour` slimmed.** Stripped the `cluster: cluster_protocol::Behaviour` and `heartbeat: heartbeat_protocol::Behaviour` fields; kept `identify`, `ping`, `allow_list`, `relay_client`, `relay` (optional), `stream`. The auto-derived `BehaviourEvent` enum loses two variants — anything pattern-matching on those breaks at compile, which is the intended signal.
+
+**`stream_runtime` adapted.** Method block moved from `impl ClusterRuntime` to `impl NetworkRuntime`; protocol logic unchanged. 6 multi-runtime integration tests deleted — they depended on the old fixture (`ClusterDoc` + `participant_provider`); port plan filed in [`parking_lot.md`](parking_lot.md) for SDK-T11. 7 stream-protocol wire-shape unit tests survive and cover the on-wire format.
+
+Net: ~3300 LOC deleted, ~500 LOC added. Workspace builds clean; all unit + doctest green; live Discovery integration test passes against `192.168.9.130:8080`.
+
+### Nils's claude · May 13, 10:30 HKT, 2026
+
+**`discovery_client` rewritten against Hagall v1 — wire to a live Discovery now works end-to-end.** [aukilabs/discovery#5](https://github.com/aukilabs/discovery/pull/5) shipped the v1 directory service 2026-05-13; the SDK's old `DiscoveryClient` targeted endpoints that no longer exist (`POST /clusters/{name}/peers`, signed mutations) and compiled-but-couldn't-function. This rewrite replaces it. Surface: `DiscoveryClient::new(base_url)` + `list_clusters` / `create_cluster` / `heartbeat` / `rotate_manager` / `deregister`. Wire shape: `ClusterEntry { name, manager_peer_id: PeerId, manager_multiaddrs: Vec<Multiaddr>, peer_count: u32, created_ns: i64, last_heartbeat_ns: i64 }` (parsed at the boundary; consumers see typed values). `CreateClusterOutcome::{Created(ClusterEntry), AlreadyExists}` collapses the 201/409 race-loss into typed return. No crypto in v1 — endpoints accept by shape, per the locked Hagall v1 contract. Stripped from the crate's `discovery_client` dep stack: `auki-jcs`, `base64`, `eventsource-stream`, `percent-encoding` (no signing, no SSE in v1, cluster names are simple `[A-Za-z0-9_-]{1,64}` so no path encoding). Old `tests/discovery_integration.rs` (450 LOC of signed-Greenland wire roundtrips) replaced with a 100-line `#[ignore]` test that roundtrips against a live Discovery at `$DISCOVERY_URL` (default `http://192.168.9.130:8080`); verified the full lifecycle (list → create → 409 dup → heartbeat → rotate → deregister → list) against the running deployment. 6 new unit tests pin the wire shape (field-name locks against both directions). 1375 LOC discovery_client.rs → 384 LOC.
+
+**Greenland code (`cluster_doc`, `cluster_protocol`, `cluster_runtime`, `heartbeat_protocol`, `registry_protocol`, `participant`) survives as dead modules in this commit.** Nothing in the SDK's Hagall path reaches them; they're orphaned compile-only. Deletion lands in the next PR alongside the new network runtime that drives the swarm + allow-list from `ClusterMembership` (the type that landed in SDK-T1) instead of `ClusterDoc`.
+
 ### broodsugar's claude · May 12, 12:30 HKT, 2026
 
 **Kill mDNS + wire `libp2p-allow-block-list` at the swarm layer — cluster trust boundary enforced at the libp2p plane (PR A of the resolution filed in [parking_lot.md](parking_lot.md)).** Nils's "peers should only be visible within their cluster, no fallback" decision lands the first half of the implementation: mDNS removed, allow-list wired. `cluster.json` static-config removal is PR B.
@@ -335,6 +372,7 @@ Net: ~3300 LOC deleted, ~500 LOC added. Workspace builds clean; all unit + docte
 **SwarmConfig wire change** — `enable_mdns: bool` field gone. Daemons that explicitly set `enable_mdns: false` (every test, `auki-network-py`) need a one-line diff to drop the field. Daemons that set `enable_mdns: true` (production BoosterApp / Park / Sentinel today) get a "no field named enable_mdns" compile error and must rebuild with the new Cargo manifest — intentional. Per-daemon cascade tracked in each daemon repo.
 
 **`auki-network-py` `cluster.spawn(...)`** — removed the `enable_mdns: bool` kwarg. Python consumers updating to this tag drop one kwarg from their call site.
+
 ### broodsugar's claude · May 12, 11:30 HKT, 2026
 
 **Filed two parking-lot items on `/auki/stream/0.1.0` after Nils surfaced a cluster-trust-boundary bypass.** Park's libp2p mDNS auto-discovered K1 #1's peer-id + addresses on the LAN; `runtime.open_stream(...)` happily dialed; K1's `/auki/stream/0.1.0` accept-handler accepted the substream because the stream plane doesn't check cluster membership. The control plane (`cluster_runtime`) already enforces a ClusterDoc trust boundary — outsiders are dropped silently and never surface in `peers()` — but `stream_runtime::handle_inbound_substream` takes the requesting `PeerId` as `_peer` (intentionally discarded) and the `StreamProvider` closure only sees `sensor_id`. Net effect: any libp2p-reachable peer subscribes regardless of membership.
@@ -446,6 +484,7 @@ This is real architectural expansion — the question wasn't in [PR #85](https:/
 **Wire/disk symmetry locked.** `auki.joint_encoders_stream.JointEncodersFrame` is byte-identical to `auki.joint_encoders.JointEncodersLogEntry` (the Sensor Log on-disk payload from sawslin Phase 1 / [PR #77](https://github.com/aukilabs/auki-sdk/pull/77)) — same `repeated float angles_rad = 1` field; the two messages exist in different proto packages purely so wire and disk dispatch on distinct Rust types. `auki-datatypes`'s existing `joint_encoders_disk_wire_byte_identical` test enforces this; producers (BoosterApp) can prost-encode once and use the bytes for both disk and wire.
 
 **Tests:** `auki-network` 88 → 91 lib tests (+3, all the `joint_encoders` ones above). `cargo test -p auki-network --features swarm` clean.
+
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **Filed five `/auki/message/0.0.1` design questions in [`parking_lot.md`](parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR. All five carry leans:
@@ -688,6 +727,7 @@ Locked cross-language conformance vector for `PeerIdentity::from_wallet(&Wallet:
 ### broodsugar's claude · May 4, 16:30 HKT, 2026
 
 `app_instance::derive()` landed — implementation of ansuz #5, the per-machine identifier that distinguishes two daemons of the same `app` running on different hardware. New `auki_network::app_instance` module behind a default-off `app_instance` feature (non-WASM by design — depends on the `mac_address` crate, which uses platform syscalls `getifaddrs` / `GetAdaptersAddresses`). Recipe locked per ansuz D4: enumerate interfaces, skip loopback (all-zero MAC) and locally-administered MACs (U/L bit `0x02` on the first octet), sort the remaining MACs lexicographically by raw bytes, render the smallest as 12 lowercase hex chars without separators (`aabbccddeeff`). Sorting (rather than relying on OS interface enumeration order) gives a stable selection across platforms and reboots for a fixed hardware set. `DeriveError` enum: `NoNetworkInterfaces` (empty enumeration), `NoSuitableMac` (everything filtered — typical in containers), `Io(std::io::Error)` (syscall failure). Public API: `derive() -> Result<String, DeriveError>` for production; `derive_from(macs: &[[u8; 6]]) -> Result<String, DeriveError>` as the testing seam (pure, no side effects). 9 new tests covering the locked `[0x00,0x16,0x3e,0xab,0xcd,0xef]` → `"00163eabcdef"` cross-language vector, schema (12 lowercase hex), `NoNetworkInterfaces` on empty, `NoSuitableMac` on loopback-only / locally-administered-only, IEEE selection skipping each filtered category, lexicographic-first ordering across multiple IEEE MACs, and the U/L-bit logic in isolation. The value this function returns is what PR #25's `/api/info` redesign will carry in its new `app_instance` field; the two PRs are independent. Stability caveats documented (containers, VMs, multi-NIC, MAC randomization) — fragile in those environments by ansuz acceptance; a stable-id alternative (wallet-derived, persisted) is parked for after ansuz. New parking-lot items: container/Docker handling, multi-NIC tiebreaker semantics, eventual stable-id options.
+
 ### broodsugar's claude · May 4, 16:00 HKT, 2026
 
 `ParticipantInfo` landed (ansuz networking-demo deliverable #2b) — the wire shape every Auki participant exchanges to introduce itself. New `auki_network::participant` module exposes `ParticipantInfo { app, name, session_id, session_clock_id, session_clock_hash, session_now_ns, cluster_joined_at_ns: Option<u64>, peer_id: PeerId, app_instance }`, re-exported at the crate root. **One schema, two transports**: `GET /api/info` (HTTP, redesigned in [PR #25](https://github.com/aukilabs/auki-sdk/pull/25)) and the `/auki/cluster/0.0.1` libp2p participant protocol (ansuz deliverable #3, separate work) carry exactly the same JSON. Serde uses snake-case field names directly (the struct's Rust names already match the spec'd JSON keys); `cluster_joined_at_ns` serializes as explicit `null` when `None`; `peer_id` rides through `libp2p-identity`'s `serde` feature as the canonical multibase-base58 string (`12D3KooW…`). Lives on the M0 path (no `swarm` feature required) so Park / Console can construct and parse it without pulling in libp2p's transport stack — `libp2p-identity` is already in the default-features set. 8 new tests: round-trip with `Some` and with `None`, snake-case key verification, locked golden-bytes (fixture serializes to exactly the spec'd JSON, with the peer-id derived from a fixed ed25519 seed for reproducibility), explicit-rejection of missing field / wrong type / invalid peer-id string, and a pin on the explicit-`null` vs field-omission distinction. No new dependencies. No parking-lot items raised — the `peer_id` JSON shape (string vs bytes) is settled by both libp2p convention and the spec'd `/api/info` example. Implements ansuz milestone-plan deliverable #2b; the Notion plan is at https://www.notion.so/3565c8e96592809fb674f769d826c1de (D1–D6 all RESOLVED, did not re-resolve).

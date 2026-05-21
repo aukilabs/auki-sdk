@@ -26,7 +26,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 | Crate | What it does |
 |---|---|
 | [`auki-layout`](auki-layout) | Path helpers for the on-disk session shape — single source of truth for app/session/recording layout. |
-| [`auki-time-transforms`](auki-time-transforms) | Clock sampler primitives for the TimeTransform Log. The infrastructure underneath `convert_time`. |
+| [`auki-time`](auki-time) | Session-clock, pure time-transform math, NTP-style clock samples, and sampler primitives for the TimeTransform Log. The infrastructure underneath `convert_time`. |
 | [`auki-geometry`](auki-geometry) | Pure spatial math: convention conversion for points, vectors, directions, and `SpatialTransform` poses. The convention-only layer underneath future `convert_pose`. |
 | [`auki-domain`](auki-domain) | App-facing cluster lifecycle: Discovery bootstrap, membership, Manager election, liveness checks, peer info/resource catalog exchange, transform-edge discovery, stream opening. |
 
@@ -44,15 +44,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 
 ## Python bindings
 
-PyO3 wrappers, one per Rust component (no umbrella `auki-py`).
-
-| Crate | What it does |
-|---|---|
-| [`auki-identity-py`](auki-identity-py) | Wallet primitives + per-machine identity for Python sidecars (BoosterApp's K1 capture). |
-| [`auki-registry-py`](auki-registry-py) | Dict-oriented Sensor / Clock / Frame Registry constructors plus canonical JSON/hash and hash-pinned read/write helpers for Python producers. |
-| [`auki-network-py`](auki-network-py) | Discovery client pyclasses plus shared stream pyclasses for Python (`StreamDecision`, payload frames, subscriptions). |
-| [`auki-domain-py`](auki-domain-py) | Python daemon facade for `ClusterManager`: bootstrap/create/join, role/membership accessors, peer info/resource catalog exchange, registry serving root registration, stream provider and stream openers. |
-| [`auki-session-py`](auki-session-py) | Transport-neutral session lifecycle surface — opening sessions, registering sensors and clocks, writing and listing logs. The HTTP Control API and the forthcoming libp2p control protocols are thin wrappers over this. |
+Python packages live in [`../bindings/python`](../bindings/python), preserving the same per-component package names while keeping this directory focused on Rust crates.
 
 ## Swift bindings
 

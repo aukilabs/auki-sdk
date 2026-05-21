@@ -50,8 +50,9 @@ fn unique_cluster_name(prefix: &str) -> String {
 
 /// Build a minimal `DaemonInfo` with the static fields populated.
 /// `session_now_ns` and `cluster_joined_at_ns` are no longer on
-/// `DaemonInfo` — the SDK computes them from `session_started` +
-/// observed membership.
+/// `DaemonInfo`; the SDK computes them from `SessionClock` plus
+/// observed membership. The clock id/hash fields remain compatibility
+/// inputs until callers stop supplying session clock identity.
 fn sample_daemon_info(name: &str) -> auki_domain::DaemonInfo {
     auki_domain::DaemonInfo {
         app: "test-daemon".into(),
@@ -424,6 +425,142 @@ async fn manager_failover_when_a_dies_b_takes_over() {
     );
 }
 
+/// Domain-clock continuity across Manager handoff:
+///
+/// 1. A creates the cluster and advertises A/session-clock as the
+///    domain-clock backing source at offset 0.
+/// 2. B joins, receives A's heartbeat domain-clock metadata, and
+///    accumulates heartbeat NTP samples until `B.domain_clock_estimate()`
+///    becomes available.
+/// 3. A dies.
+/// 4. B promotes to Manager and advertises B/session-clock as the
+///    new domain-clock backing source with B's inherited domain offset.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn domain_clock_metadata_survives_manager_handoff() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-domain-clock-handoff-it");
+
+    // --- Peer A: creates the cluster and starts as domain backing source. ---
+    let id_a = PeerIdentity::from_seed(&[151u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-domain-clock-handoff-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+    let daemon_a = sample_daemon_info("domain-A");
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        daemon_a.clone(),
+    )
+    .await
+    .expect("create_cluster A");
+
+    let initial_domain = manager_a
+        .domain_clock_estimate()
+        .expect("initial Manager has identity domain clock");
+    assert_eq!(initial_domain.backing_peer_id, pid_a.to_string());
+    assert_eq!(initial_domain.backing_clock_id, daemon_a.session_clock_id);
+    assert_eq!(initial_domain.total_offset_ns, 0);
+
+    // --- Peer B: joins and learns A-backed domain time from heartbeat. ---
+    let id_b = PeerIdentity::from_seed(&[152u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-domain-clock-handoff-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+    let daemon_b = sample_daemon_info("domain-B");
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        daemon_b.clone(),
+    )
+    .await
+    .expect("join_cluster B");
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+    assert_eq!(manager_b.manager_peer_id(), pid_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    let b_domain_before = loop {
+        if let Ok(estimate) = manager_b.domain_clock_estimate() {
+            break estimate;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "B did not acquire A-backed domain time within 6s"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(b_domain_before.backing_peer_id, pid_a.to_string());
+    assert_eq!(b_domain_before.backing_clock_id, daemon_a.session_clock_id);
+    assert_eq!(b_domain_before.local_clock_id, daemon_b.session_clock_id);
+
+    // --- A dies; B should promote and republish itself as backing source. ---
+    eprintln!("A=({pid_a}) dropping after B has domain time…");
+    drop(manager_a);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    while std::time::Instant::now() < deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B did not become Manager within 6s after A died"
+    );
+    assert_eq!(manager_b.manager_peer_id(), pid_b);
+
+    let b_domain_after = manager_b
+        .domain_clock_estimate()
+        .expect("promoted B should still have domain time");
+    assert_eq!(b_domain_after.backing_peer_id, pid_b.to_string());
+    assert_eq!(b_domain_after.backing_clock_id, daemon_b.session_clock_id);
+    assert_eq!(
+        b_domain_after.total_offset_ns, b_domain_after.backing_to_domain_offset_ns,
+        "B-backed estimate should be identity into its new backing source plus inherited source offset"
+    );
+
+    manager_b.shutdown().await.expect("B shutdown");
+    let after = discovery.list_clusters().await.expect("list after");
+    if after.iter().any(|c| c.name == cluster_name) {
+        discovery
+            .deregister(&cluster_name)
+            .await
+            .expect("explicit cleanup deregister");
+    }
+
+    eprintln!(
+        "Domain-clock handoff OK against {}: A={pid_a} → B={pid_b}",
+        discovery_url()
+    );
+}
+
 /// Three-peer membership convergence via `/auki/membership/0.0.1`:
 /// A creates cluster, B joins, then C joins. After all joins settle,
 /// peer B's local membership must contain A + B + C — proving the
@@ -762,7 +899,7 @@ async fn cluster_peers_fetch_each_other_sensors_catalog_over_libp2p() {
     let b_catalog = vec![SensorEntry {
         sensor_id: "K1-FAKE/head_cam".into(),
         sensor_hash: "abc".into(),
-        kind: "rgb_camera".into(),
+        kind: "camera".into(),
         sensor_entry_json: None,
         frame_entry_json: None,
     }];

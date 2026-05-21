@@ -6,7 +6,19 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+Refined the stream naming cleanup design spec to describe the already-renamed final vocabulary without reintroducing legacy identifiers into active docs.
+
+### Nils's codex · May 21, HKT, 2026
+
+Added the stream naming cleanup design spec, locking the breaking full rename to `CameraFrame`, `DetectionFrame`, and `SensorBody::Camera` with no compatibility aliases or legacy registry tags.
+
+### Nils's codex · May 21, HKT, 2026
+
 Updated the browser Domain peer adapter spec language to name the first browser sensor as an SDK `audio` sensor backed by microphone capture, not a separate microphone sensor kind.
+
+### Nils's codex · May 19, HKT, 2026
+
+Added the native Auki pointcloud design spec, capturing the approved breaking refactor from ROS CDR pointcloud streams to a shared `auki.point_cloud.PointCloudFrame { point_count, data }` record for logs and streams.
 
 ### Nils's codex · May 19, HKT, 2026
 
@@ -15,7 +27,3 @@ Added the wasm libp2p browser transport spike spec, narrowing Park's browser-pee
 ### Nils's codex · May 19, HKT, 2026
 
 Added the browser Domain peer adapter design spec for Park Milestone 0, defining the `auki-domain-browser` package shape, SDK-owned networking rule, identity/Discovery/roster first slice, and transport blockers before audio.
-
-### Nils's codex · May 19, HKT, 2026
-
-Added the native Auki pointcloud design spec, capturing the approved breaking refactor from ROS CDR pointcloud streams to a shared `auki.point_cloud.PointCloudFrame { point_count, data }` record for logs and streams.

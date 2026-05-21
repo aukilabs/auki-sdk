@@ -286,10 +286,10 @@ pub fn build_pose_log_manifest(
 ///
 /// Closes blocker #2 of [`detectors`](https://github.com/aukilabs/detectors)
 /// phase 2 — the read side ([`auki-logs::Log<T>::tail`](../../auki-logs))
-/// and the segment payload type ([`auki_datatypes::detection::DetectionLogEntry`](../../auki-datatypes))
+/// and the segment payload type ([`auki_datatypes::detection::DetectionFrame`](../../auki-datatypes))
 /// landed in sibling PRs. The detector loop the integrator writes is
 /// `for entry in tail(input_path)? { detector.process(...); output.append(...); }`,
-/// where `output` is the `Log<DetectionLogEntry>` opened with this
+/// where `output` is the `Log<DetectionFrame>` opened with this
 /// manifest at [`auki_layout::detection_log_path`](../../auki-layout).
 ///
 /// Carries:
@@ -405,17 +405,17 @@ pub fn build_time_transform_log_manifest(
 /// mirrors [`PoseSource`]'s shape for future producer variants.
 ///
 /// Step 6 of the [`auki-datatypes` migration] (2026-05-08) moved this
-/// type from its pre-migration home in [`auki-time-transforms`](../../auki-time-transforms)
+/// type from its pre-migration home in [`auki-time`](../../auki-time)
 /// (where it was a per-sample field on `TimeTransformEntry`) to here.
 /// One variant ships today (`LocalClockRead` — the 1 Hz sampler in
-/// [`auki-time-transforms`](../../auki-time-transforms) reading
+/// [`auki-time`](../../auki-time) reading
 /// `CLOCK_MONOTONIC` and `CLOCK_REALTIME` via `clock_gettime`); the
 /// extension point is the same as `PoseSource`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TimeTransformSource {
     /// The 1 Hz `clock_gettime`-based sampler in
-    /// [`auki-time-transforms`](../../auki-time-transforms). The only
+    /// [`auki-time`](../../auki-time). The only
     /// producer that ships today.
     LocalClockRead,
     // future: NtpSynced { server }, SyncedTo { peer_id }, ...

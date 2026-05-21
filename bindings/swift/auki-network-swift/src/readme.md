@@ -15,7 +15,7 @@ Implementation status for [`auki-network-swift`](../README.md). Honest about wha
 
 ### Swift-side types
 
-- **`SwiftPeerLivenessEvent`** — 3-variant v0 UniFFI Enum (Connected, Disconnected, HeartbeatAlive). The two heartbeat-detail upstream variants (HeartbeatReceived, HeartbeatNtpSampleObserved) are dropped by the drain task inside `spawn_for_swift`.
+- **`SwiftPeerLivenessEvent`** — 3-variant v0 UniFFI Enum (Connected, Disconnected, HeartbeatStreamClosed). The two heartbeat-detail upstream variants (HeartbeatReceived, HeartbeatNtpSampleObserved) are dropped by the drain task inside `spawn_for_swift`.
 - **`PeerLivenessListener`** — UniFFI callback-interface trait; one method `on_event(event: SwiftPeerLivenessEvent)`.
 - **`HeartbeatTimestampProvider`** — UniFFI callback-interface trait; 4 methods: `clock_id()`, `clock_hash()`, `now_ns()`, `domain_clock_bytes()`. Note: `HeartbeatDomainClock` is JSON-encoded (lives in `auki_network::heartbeat_protocol`); `domain_clock_bytes` carries `serde_json`-encoded bytes.
 - **`SwiftStreamDecision`** — UniFFI Enum; 6 variants: `AcceptAudio(manifestBytes)`, `AcceptCamera(manifestBytes)`, `AcceptPointCloud(manifestBytes)`, `AcceptJointEncoders(manifestBytes)`, `AcceptDetection(manifestBytes)`, `Decline(reasonBytes)`.

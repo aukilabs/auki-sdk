@@ -1,30 +1,49 @@
 //! UniFFI Swift bindings for `auki-network`.
 //!
-//! ## Scope (Stage 1)
+//! ## Scope (v0 — post PR B)
 //!
-//! This crate mirrors the **root Discovery surface** of
-//! [`auki-network-py`](../../../python/auki-network-py): `DiscoveryClient` plus the
-//! `ClusterEntry` / `CreateClusterOutcome` value types. The stream
-//! (audio) surface is Stage 2 and cluster lifecycle / peer enumeration
-//! is a future `auki-domain-swift`, exactly mirroring the
+//! Full v0 networking surface for native iOS / Swift consumers:
+//!
+//! - **Discovery HTTP client** (`DiscoveryClient`, `ClusterEntry`,
+//!   `CreateClusterOutcome`, `DiscoveryError`) — re-exported from the
+//!   upstream-annotated `auki_network_rs::discovery_client`.
+//! - **`NetworkRuntime`** + the [`spawn_for_swift`] orchestrator that
+//!   builds the libp2p swarm and wires it to Swift callback interfaces.
+//! - **Peer-liveness observation** via [`PeerLivenessListener`]
+//!   (3-variant v0 surface — `Connected` / `Disconnected` /
+//!   `HeartbeatStreamClosed`; the upstream heartbeat-detail variants are
+//!   filtered out by `SwiftPeerLivenessEvent::is_v0_forwardable`).
+//! - **Heartbeat source** via [`HeartbeatTimestampProvider`].
+//! - **5-payload stream surface** — `StreamSubscriptionAudio` / …Camera
+//!   / …PointCloud / …JointEncoders / …Detection upstream Objects
+//!   plus matching `NetworkRuntime.open_*_stream` async methods. Producer
+//!   side via the [`SwiftStreamProvider`] callback interface with a
+//!   **two-call protocol**: `dispatch_decision` returns a
+//!   [`SwiftStreamDecision`] (no trait-object fields — UniFFI 0.31
+//!   constraint); on Accept, the runtime calls the matching `*_source`
+//!   method to retrieve the per-payload `Box<dyn Swift*Source>`.
+//!
+//! Cluster lifecycle / peer enumeration (`ClusterManager` etc.) is the
+//! future `auki-domain-swift` (PR C), mirroring the
 //! `auki-network` / `auki-domain` split the Python bindings already
-//! follow (see `src/sprint.md`).
+//! follow. PR A's `auki-identity-swift` ships `Wallet` and `PeerIdentity`.
 //!
 //! ## API shape
 //!
-//! Unlike `auki-network-py` (which is deliberately sync-shaped because
-//! Python callers live in a GIL world), this crate exports **async**
-//! methods. Swift consumers get real `async`/`await`, and on iOS the
-//! calling thread (often the main thread) must never block on network
-//! I/O. UniFFI drives the exported futures on a tokio runtime via
-//! `#[uniffi::export(async_runtime = "tokio")]`; `reqwest` (the
-//! Discovery HTTP transport) gets its reactor that way. This
-//! async-vs-sync divergence from the `-py` precedent is intentional but
-//! flagged for human confirmation in `parking_lot.md`.
+//! Async. Unlike `auki-network-py` (which is deliberately sync-shaped
+//! because Python callers live in a GIL world), this crate exports
+//! `async`/`await` methods. UniFFI drives the exported futures on a
+//! process-wide multi-thread tokio runtime via
+//! `#[uniffi::export(async_runtime = "tokio")]`.
 //!
-//! `PeerId` and `Multiaddr` cross the FFI as their canonical string
-//! forms; the binding parses/validates at the seam so Swift never sees
-//! a libp2p type. Errors are flattened into [`DiscoveryError`].
+//! `PeerId` and `Multiaddr` cross the FFI as their canonical strings via
+//! `uniffi::custom_type!` registrations with the `remote` keyword (see
+//! below). All prost-generated wire types (`StreamRequest`,
+//! `StreamManifest`, `AudioFrame`, etc.) cross as opaque `Data`; Swift
+//! decodes via swift-protobuf against `crates/auki-datatypes/proto/`.
+//! Errors are typed `uniffi::Error` enums; the upstream
+//! `auki_network::stream_runtime::StreamError`/`OpenStreamError`
+//! variants that wrap non-FFI types are flattened to `message: String`.
 
 pub use auki_network_rs::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,

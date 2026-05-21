@@ -87,7 +87,7 @@ Each `Swift*Source` trait exposes a single `nextItem() -> Result<StreamItem?, Sw
 | `StreamEntry` | `{ timestampNs, seq, payloadBytes }` record |
 | `StreamError` | flattened stream consumer error |
 | `OpenStreamError` | flattened open-stream error |
-| `SwiftPeerLivenessEvent` | 3-variant v0 enum (Connected, Disconnected, HeartbeatAlive) |
+| `SwiftPeerLivenessEvent` | 3-variant v0 enum (Connected, Disconnected, HeartbeatStreamClosed) |
 | `SpawnSwiftError` | `{ SwarmBuild, RuntimeSpawn }` |
 
 Callback-interface traits: `PeerLivenessListener`, `HeartbeatTimestampProvider`, `SwiftStreamProvider`, `SwiftAudioSource`, `SwiftCameraSource`, `SwiftPointCloudSource`, `SwiftJointEncodersSource`, `SwiftDetectionSource`.

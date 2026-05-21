@@ -39,9 +39,9 @@ Use when the child must be **a separate, independent keypair** that the parent v
 
 ```rust
 // Generate / load
-pub fn Wallet::new() -> Wallet                 // fresh random
-pub fn Wallet::from_seed(&[u8; 32]) -> Wallet  // deterministic from seed
-pub fn wallet.seed() -> [u8; 32]               // backup material; sensitive
+pub fn Wallet::new() -> Arc<Self>                                       // fresh random
+pub fn Wallet::from_seed(seed: Vec<u8>) -> Result<Arc<Self>, IdentityError> // deterministic from seed
+pub fn wallet.seed() -> Vec<u8>                                         // backup material; sensitive
 
 // Identity
 pub fn wallet.public_key() -> PublicKey        // 32 bytes
@@ -66,7 +66,7 @@ Public types are serde-serializable. Bytes fields use `serde_bytes` so JSON and 
 
 ## load_or_mint_seed
 
-Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind the SDK's stable peer-key guarantee: `auki-network::PeerIdentity::from_wallet(&wallet)` derives the same peer id every time, and `auki-domain::ClusterManager` can safely advertise that peer id to Discovery and other cluster members across daemon restarts as long as the wallet seed is persisted somewhere.
+Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind the SDK's stable peer-key guarantee: `auki-network::PeerIdentity::from_wallet(wallet: Arc<Wallet>)` derives the same peer id every time, and `auki-domain::ClusterManager` can safely advertise that peer id to Discovery and other cluster members across daemon restarts as long as the wallet seed is persisted somewhere.
 
 ```rust
 pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>;

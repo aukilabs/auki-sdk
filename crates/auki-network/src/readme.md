@@ -31,7 +31,7 @@ pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 
 pub struct PeerIdentity { /* libp2p ed25519 keypair */ }
 impl PeerIdentity {
-    pub fn from_wallet(wallet: &auki_identity::Wallet) -> Self;
+    pub fn from_wallet(wallet: Arc<auki_identity::Wallet>) -> Self;
     pub fn from_seed(seed: &[u8; 32]) -> Self;
     pub fn keypair(&self) -> &libp2p_identity::Keypair;
     pub fn public_key(&self) -> libp2p_identity::PublicKey;

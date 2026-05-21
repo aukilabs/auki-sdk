@@ -135,7 +135,7 @@ impl Wallet {
     /// pid = peer.peer_id()
     /// ```
     ///
-    /// This matches `auki_network::PeerIdentity::from_wallet(&w).peer_id()`
+    /// This matches `auki_network::PeerIdentity::from_wallet(Arc::clone(&w)).peer_id()`
     /// byte-for-byte: that function is sugar for
     /// `from_seed(w.derive_child("peer/v1").seed()).peer_id()`.
     ///
@@ -416,7 +416,7 @@ mod tests {
     fn locked_peer_id_vector() {
         // Cross-language locked vector. The same string must come out
         // of the parallel-agent's locked Rust test
-        // (`PeerIdentity::from_wallet(&Wallet::from_seed(&[3u8; 32])).peer_id().to_string()`).
+        // (`PeerIdentity::from_wallet(Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed")).peer_id().to_string()`).
         // If both pass, the bindings agree byte-for-byte with the Rust
         // crate.
         //

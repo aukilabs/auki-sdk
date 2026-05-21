@@ -24,13 +24,13 @@ That's it. No `sign`, no `verify`, no creation certs, no Swarm. The libp2p / asy
 | Python | Rust |
 |---|---|
 | `load_or_mint_seed(path)` | `auki_identity::load_or_mint_seed(&Path)` |
-| `Wallet.from_seed(seed)` | `auki_identity::Wallet::from_seed(&[u8; 32])` |
+| `Wallet.from_seed(seed)` | `auki_identity::Wallet::from_seed(Vec<u8>) -> Result<Arc<Self>, IdentityError>` |
 | `Wallet.derive_child(label)` | `auki_identity::Wallet::derive_child(&str)` |
 | `Wallet.peer_id()` | `auki_network::PeerIdentity::from_seed(&wallet.seed()).peer_id().to_string()` |
-| `Wallet.seed()` | `auki_identity::Wallet::seed(&self) -> [u8; 32]` |
+| `Wallet.seed()` | `auki_identity::Wallet::seed(&self) -> Vec<u8>` |
 | `app_instance.derive()` | `auki_network::app_instance::derive()` (requires `app_instance` feature) |
 
-`Wallet.peer_id()` does **not** implicitly `derive_child("peer/v1")` — the caller does. This matches the upstream Rust contract: `PeerIdentity::from_wallet(&w)` is sugar for `from_seed(w.derive_child("peer/v1").seed())`, and the Python equivalent is `w.derive_child("peer/v1").peer_id()`. Documented on the method docstring.
+`Wallet.peer_id()` does **not** implicitly `derive_child("peer/v1")` — the caller does. This matches the upstream Rust contract: `PeerIdentity::from_wallet(Arc::clone(&w))` is sugar for `from_seed(w.derive_child("peer/v1").seed())`, and the Python equivalent is `w.derive_child("peer/v1").peer_id()`. Documented on the method docstring.
 
 ## Error mapping
 

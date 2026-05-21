@@ -14,7 +14,6 @@ members = [
     "crates/auki-network",
     "crates/auki-network-browser-wasm",
     "bindings/python/auki-network-py",
-    "bindings/swift/auki-network-swift",
     "crates/auki-datatypes",
     "crates/auki-domain",
     "bindings/python/auki-domain-py",

@@ -551,48 +551,49 @@ void ffi_auki_uniffi_test_rust_future_complete_void(uint64_t handle, RustCallSta
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_ADD
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_ADD
 uint16_t uniffi_auki_uniffi_test_checksum_func_add(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_DELAYED_GREETING
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_DELAYED_GREETING
 uint16_t uniffi_auki_uniffi_test_checksum_func_delayed_greeting(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_HELLO
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_HELLO
 uint16_t uniffi_auki_uniffi_test_checksum_func_hello(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_MAKE_GREETING
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_FUNC_MAKE_GREETING
 uint16_t uniffi_auki_uniffi_test_checksum_func_make_greeting(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_METHOD_COUNTER_ADD_AFTER
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_METHOD_COUNTER_ADD_AFTER
 uint16_t uniffi_auki_uniffi_test_checksum_method_counter_add_after(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_METHOD_COUNTER_VALUE
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_METHOD_COUNTER_VALUE
 uint16_t uniffi_auki_uniffi_test_checksum_method_counter_value(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_CONSTRUCTOR_COUNTER_NEW
 #define UNIFFI_FFIDEF_UNIFFI_AUKI_UNIFFI_TEST_CHECKSUM_CONSTRUCTOR_COUNTER_NEW
 uint16_t uniffi_auki_uniffi_test_checksum_constructor_counter_new(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_AUKI_UNIFFI_TEST_UNIFFI_CONTRACT_VERSION
 #define UNIFFI_FFIDEF_FFI_AUKI_UNIFFI_TEST_UNIFFI_CONTRACT_VERSION
 uint32_t ffi_auki_uniffi_test_uniffi_contract_version(void
-
+    
 );
 #endif
+

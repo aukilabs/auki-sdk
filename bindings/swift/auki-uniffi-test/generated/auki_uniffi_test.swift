@@ -352,7 +352,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles.
+// Initial value and increment amount for handles. 
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -493,11 +493,11 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 public protocol CounterProtocol: AnyObject, Sendable {
-
+    
     func addAfter(delta: Int32, delayMs: UInt32) async throws  -> Int32
-
+    
     func value()  -> Int32
-
+    
 }
 open class Counter: CounterProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -557,9 +557,9 @@ public convenience init(initial: Int32) {
         try! rustCall { uniffi_auki_uniffi_test_fn_free_counter(handle, $0) }
     }
 
+    
 
-
-
+    
 open func addAfter(delta: Int32, delayMs: UInt32)async throws  -> Int32  {
     return
         try  await uniffiRustCallAsync(
@@ -576,7 +576,7 @@ open func addAfter(delta: Int32, delayMs: UInt32)async throws  -> Int32  {
             errorHandler: FfiConverterTypeTestError_lift
         )
 }
-
+    
 open func value() -> Int32  {
     return try!  FfiConverterInt32.lift(try! rustCall() {
     uniffi_auki_uniffi_test_fn_method_counter_value(
@@ -584,9 +584,9 @@ open func value() -> Int32  {
     )
 })
 }
+    
 
-
-
+    
 }
 
 
@@ -646,9 +646,9 @@ public struct Greeting: Equatable, Hashable {
         self.style = style
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -662,8 +662,8 @@ public struct FfiConverterTypeGreeting: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Greeting {
         return
             try Greeting(
-                message: FfiConverterString.read(from: &buf),
-                nameLength: FfiConverterUInt32.read(from: &buf),
+                message: FfiConverterString.read(from: &buf), 
+                nameLength: FfiConverterUInt32.read(from: &buf), 
                 style: FfiConverterTypeGreetingStyle.read(from: &buf)
         )
     }
@@ -694,7 +694,7 @@ public func FfiConverterTypeGreeting_lower(_ value: Greeting) -> RustBuffer {
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum GreetingStyle: Equatable, Hashable {
-
+    
     case casual
     case formal
 
@@ -717,26 +717,26 @@ public struct FfiConverterTypeGreetingStyle: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GreetingStyle {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-
+        
         case 1: return .casual
-
+        
         case 2: return .formal
-
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: GreetingStyle, into buf: inout [UInt8]) {
         switch value {
-
-
+        
+        
         case .casual:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case .formal:
             writeInt(&buf, Int32(2))
-
+        
         }
     }
 }
@@ -760,21 +760,21 @@ public func FfiConverterTypeGreetingStyle_lower(_ value: GreetingStyle) -> RustB
 
 public enum TestError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-
-
+    
+    
     case EmptyName
     case DelayTooLarge(maxMs: UInt32
     )
 
+    
 
+    
 
-
-
-
+    
     public var errorDescription: String? {
         String(reflecting: self)
     }
-
+    
 }
 
 #if compiler(>=6)
@@ -791,9 +791,9 @@ public struct FfiConverterTypeTestError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
+        
 
-
-
+        
         case 1: return .EmptyName
         case 2: return .DelayTooLarge(
             maxMs: try FfiConverterUInt32.read(from: &buf)
@@ -806,18 +806,18 @@ public struct FfiConverterTypeTestError: FfiConverterRustBuffer {
     public static func write(_ value: TestError, into buf: inout [UInt8]) {
         switch value {
 
+        
 
-
-
-
+        
+        
         case .EmptyName:
             writeInt(&buf, Int32(1))
-
-
+        
+        
         case let .DelayTooLarge(maxMs):
             writeInt(&buf, Int32(2))
             FfiConverterUInt32.write(maxMs, into: &buf)
-
+            
         }
     }
 }

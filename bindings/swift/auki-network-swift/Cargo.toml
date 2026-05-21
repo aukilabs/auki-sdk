@@ -25,6 +25,8 @@ default = []
 cli = ["uniffi/cli"]
 
 [dependencies]
+# Used by the `try_lift` arms of `uniffi::custom_type!` declarations.
+anyhow = "1"
 # Renamed via `package =` so the upstream crate's name doesn't collide
 # with our own lib name, exactly as `auki-network-py` does. PR A added
 # `swift-bindings`; PR B enables `swarm` (for NetworkRuntime + the

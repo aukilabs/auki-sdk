@@ -37,6 +37,36 @@ use std::sync::Arc;
 
 uniffi::setup_scaffolding!();
 
+// ─── Custom-type registrations ─────────────────────────────────────
+//
+// `PeerId` and `Multiaddr` are libp2p types defined in external crates
+// (`libp2p-identity`, `multiaddr`); we can't annotate them directly. UniFFI's
+// `custom_type!` with the `remote` keyword registers the conversion at the
+// binding-crate level, anchored on this crate's `UniFfiTag` to satisfy the
+// orphan rule. Every upstream `auki-network` method that takes or returns
+// `PeerId` / `Multiaddr` is auto-exposed with `String` at the seam.
+//
+// `auki-domain-swift` (PR C) will pick up these registrations via its dep on
+// this crate — no need to redeclare there.
+
+// Cross-FFI representation: canonical libp2p peer-id string (`12D3KooW…`).
+// Parse failures surface as a Rust `anyhow::Error` — UniFFI propagates the
+// message to Swift as a thrown error on the affected method.
+//
+// The `remote` keyword is critical. Without it, the macro emits
+// `impl<UT> FfiConverter<UT> for PeerId` which fails the orphan rule
+// (PeerId and FfiConverter are both foreign). With `remote`, the impl
+// becomes `impl FfiConverter<crate::UniFfiTag> for PeerId` — the
+// binding crate's local UniFfiTag is the anchor.
+uniffi::custom_type!(PeerId, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<PeerId>()
+            .map_err(|e| anyhow::anyhow!("invalid peer-id {s:?}: {e}"))
+    },
+    lower: |p: PeerId| p.to_string(),
+});
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -295,5 +325,15 @@ mod tests {
         // A well-formed peer-id round-trips.
         let pid = test_peer_id().to_string();
         assert_eq!(parse_peer_id(&pid).unwrap().to_string(), pid);
+    }
+
+    /// `PeerId` round-trips through its UniFFI custom-type registration:
+    /// canonical string in → `PeerId` → canonical string out (identical).
+    #[test]
+    fn peer_id_custom_type_round_trips() {
+        let pid = test_peer_id();
+        let s = pid.to_string();
+        let back: PeerId = s.parse().expect("canonical PeerId string parses");
+        assert_eq!(back, pid);
     }
 }

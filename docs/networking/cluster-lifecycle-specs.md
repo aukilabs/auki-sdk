@@ -56,9 +56,21 @@ A peer binding MUST include:
 
 - wallet public key;
 - peer id;
-- signature by the wallet key.
+- issued_at timestamp;
+- signature by the wallet authority key.
 
-A peer binding SHOULD include an `issued_at` timestamp.
+The wallet authority key and the libp2p peer key are separate protocol roles.
+The libp2p peer key authenticates the transport connection. The wallet
+authority key signs the peer binding that authorizes that runtime peer id.
+
+A peer binding signature MUST be verified against the wallet public key, not
+against the libp2p peer public key derived from the connection. A libp2p peer
+signature MUST NOT be accepted as a substitute for a wallet-signed peer binding.
+
+Deployments SHOULD use distinct key material for wallet authority and libp2p
+peer identity. A deployment that intentionally reuses key material loses that
+key-compromise separation, but the protocol still treats the two roles
+separately.
 
 A peer binding MAY include a metadata label.
 
@@ -86,8 +98,10 @@ A receiver MAY accept older peer bindings according to local policy.
 
 When a peer presents a peer binding, the receiver MUST verify that:
 
+- the peer binding is well-formed;
+- the signature verifies against the wallet public key;
 - the connected libp2p peer id matches the bound peer id;
-- the signature verifies against the wallet public key.
+- `issued_at` satisfies local freshness policy.
 
 #### Consequences
 
@@ -97,17 +111,116 @@ peer id as one of its runtime peers.
 A peer binding MUST NOT be treated as proof of domain ownership, runtime
 authority, data correctness, or dialability at any advertised address.
 
-### RFC-0002: Peer Binding Schema (To Fill)
+### RFC-0002: Peer Binding Schema
 
-Define the concrete peer binding format:
+#### Requirement
 
-- canonical signed bytes;
-- wallet public key encoding;
-- peer id encoding;
-- signature encoding;
-- `issued_at` and metadata-label fields;
-- local-policy behavior for bindings without `issued_at` or older than a
-  maximum accepted binding age.
+A v1 peer binding is a JSON object.
+
+A v1 peer binding MUST include:
+
+- `type`: string, exactly `auki.peer_binding.v1`;
+- `wallet_signature_scheme`: string, exactly `ed25519`;
+- `wallet_public_key`: base64url without padding, containing the raw 32-byte
+  Ed25519 wallet public key;
+- `peer_id`: string, containing a standard libp2p PeerId text representation;
+- `issued_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `signature`: base64url without padding, containing the raw 64-byte Ed25519
+  signature.
+
+A v1 peer binding MAY include:
+
+- `label`: string, for operator metadata only.
+
+The `label` field has no identity, authority, delegation, reachability, or
+policy semantics.
+
+#### Signed Bytes
+
+The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
+whole peer binding object with only the `signature` field removed.
+
+The `type` field is part of the signed bytes and is the domain separator for
+v1 peer bindings.
+
+Unknown fields MAY be present. A receiver MUST include unknown fields in the
+canonical signed bytes before signature verification, and MUST ignore unknown
+fields after verification unless a later RFC defines them.
+
+An implementation MUST NOT normalize the `peer_id` string, reformat
+`issued_at`, drop unknown fields, or change base64url spelling before
+canonicalizing the signed bytes. The signature verifies the JSON values as
+presented, minus only the `signature` field.
+
+#### Peer Id Encoding
+
+The `peer_id` field MUST be parsed as a libp2p PeerId. Receivers MUST support
+the standard libp2p PeerId text forms required by libp2p, including legacy
+base58btc multihash form and CID/multibase form.
+
+Peer id comparison MUST use parsed libp2p PeerId equality, not string equality.
+
+Auki v1 does not define custom libp2p peer id derivation, custom libp2p key
+types, or custom Identify-protocol authority rules. Implementations MUST rely
+on their libp2p stack for libp2p peer id parsing and connection identity.
+
+#### Verification
+
+To verify a v1 peer binding, a receiver MUST:
+
+1. Decode the JSON object and verify all required fields are present and
+   well-formed.
+2. Verify that `type` and `wallet_signature_scheme` are supported.
+3. Decode `wallet_public_key` and `signature`.
+4. Recompute the canonical signed bytes.
+5. Verify `signature` against `wallet_public_key` over the canonical signed
+   bytes.
+6. Parse `peer_id` as a libp2p PeerId.
+7. Verify that the parsed `peer_id` equals the transport-authenticated remote
+   libp2p peer id for the connection.
+8. Apply local freshness policy to `issued_at`.
+
+The transport-authenticated remote libp2p peer id is the authority for the
+connected peer id. A peer id carried in a peer binding is a signed claim that
+MUST match the transport-authenticated peer id; it MUST NOT override it.
+
+The peer binding signature is a wallet authority signature. It is not the
+libp2p secure-channel signature, and it MUST NOT be verified against the
+remote libp2p public key unless that same key is explicitly the declared wallet
+public key.
+
+#### Freshness
+
+The `issued_at` timestamp is required in v1 peer bindings.
+
+Receivers MAY enforce a maximum accepted binding age from `issued_at`. The
+recommended default maximum accepted binding age is 1 hour.
+
+When a receiver enforces a maximum accepted binding age, it MUST reject a
+binding older than that age with `identity.binding_too_old`.
+
+Receivers SHOULD reject bindings whose `issued_at` is in the future beyond
+local clock-skew tolerance with `identity.binding_from_future`. The recommended
+default future tolerance is 5 minutes.
+
+Refreshing a peer binding requires a new wallet authority signature over a
+binding for the same wallet public key and peer id with a newer `issued_at`.
+Possession of the libp2p peer private key alone is not sufficient to refresh a
+peer binding.
+
+#### Failure Mapping
+
+A receiver SHOULD fail malformed peer bindings with
+`identity.invalid_peer_binding`. This includes missing required fields,
+unsupported `type`, unsupported wallet signature scheme, malformed base64url,
+wrong public-key or signature length for the declared scheme, malformed
+`issued_at`, or an unparsable `peer_id`.
+
+A receiver SHOULD fail a binding whose signature does not verify with
+`identity.invalid_signature`.
+
+A receiver SHOULD fail a binding whose parsed peer id does not match the
+transport-authenticated remote libp2p peer id with `identity.peer_id_mismatch`.
 
 ### RFC-0003: Domain Identity And Ownership
 
@@ -207,16 +320,17 @@ peer's authority chain before treating any remote offer as usable.
 
 Authority-chain validation MUST run in this order:
 
-1. Verify that the transport-authenticated libp2p peer id matches the peer id
-   in the remote peer binding.
+1. Verify that the remote peer binding is well-formed.
 2. Verify that the peer binding signature is valid for the bound wallet public
    key.
-3. Apply local policy for peer bindings without `issued_at` or older than the
-   maximum accepted binding age.
-4. Run peer authorization for the verified peer identity.
-5. Validate each declared domain independently.
-6. Compute the accepted served domain set for the peer relationship.
-7. Accept only offer catalog entries whose domain is in the accepted served
+3. Verify that the transport-authenticated libp2p peer id matches the peer id
+   in the remote peer binding.
+4. Apply local freshness policy for `issued_at`, including maximum accepted
+   binding age and future-timestamp tolerance.
+5. Run peer authorization for the verified peer identity.
+6. Validate each declared domain independently.
+7. Compute the accepted served domain set for the peer relationship.
+8. Accept only offer catalog entries whose domain is in the accepted served
    domain set.
 
 Peer authorization is defined in `RFC-0016`. In the authority-chain validation
@@ -264,9 +378,11 @@ Baseline failure codes:
 
 - `protocol.unsupported_version`
 - `identity.missing_peer_binding`
+- `identity.invalid_peer_binding`
 - `identity.peer_id_mismatch`
 - `identity.invalid_signature`
 - `identity.binding_too_old`
+- `identity.binding_from_future`
 - `domain.invalid_declaration`
 - `domain.id_mismatch`
 - `domain.missing_delegation`
@@ -594,6 +710,11 @@ The transport-authenticated libp2p peer id is the source of truth for the
 remote peer id. Any peer id carried inside handshake material is a claim that
 MUST be checked against the transport-authenticated peer id. It MUST NOT
 override the transport-authenticated peer id.
+
+The libp2p Identify protocol MAY provide peer metadata such as public keys,
+agent versions, and listen addresses. Identify metadata MUST NOT override the
+transport-authenticated remote peer id and MUST NOT satisfy the wallet-signed
+peer binding requirement.
 
 Each side MUST choose the highest mutually supported lifecycle protocol version.
 If no compatible lifecycle protocol version exists, the peer relationship MUST

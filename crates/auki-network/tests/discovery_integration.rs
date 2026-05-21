@@ -61,7 +61,7 @@ async fn roundtrip_against_live_discovery() {
     let manager_multiaddrs: Vec<Multiaddr> = vec!["/ip4/127.0.0.1/tcp/40010".parse().unwrap()];
 
     let outcome = client
-        .create_cluster(&name, &manager_peer_id, &manager_multiaddrs)
+        .create_cluster(name.clone(), manager_peer_id, manager_multiaddrs.clone())
         .await
         .expect("create_cluster succeeds");
     let entry = match outcome {
@@ -85,7 +85,7 @@ async fn roundtrip_against_live_discovery() {
 
     // 3. Second create → AlreadyExists.
     let dup = client
-        .create_cluster(&name, &manager_peer_id, &manager_multiaddrs)
+        .create_cluster(name.clone(), manager_peer_id, manager_multiaddrs.clone())
         .await
         .expect("create_cluster (duplicate) returns Ok with AlreadyExists");
     assert!(
@@ -95,7 +95,7 @@ async fn roundtrip_against_live_discovery() {
 
     // 4. Liveness check — bumps peer_count + last_liveness_check_ns.
     let beat = client
-        .liveness_check(&name, 3)
+        .liveness_check(name.clone(), 3)
         .await
         .expect("liveness_check succeeds");
     assert_eq!(beat.peer_count, 3, "liveness_check updates peer_count");
@@ -109,7 +109,7 @@ async fn roundtrip_against_live_discovery() {
     let new_peer_id = new_identity.peer_id();
     let new_multiaddrs: Vec<Multiaddr> = vec!["/ip4/127.0.0.1/tcp/40011".parse().unwrap()];
     let rotated = client
-        .rotate_manager(&name, &new_peer_id, &new_multiaddrs)
+        .rotate_manager(name.clone(), new_peer_id, new_multiaddrs.clone())
         .await
         .expect("rotate_manager succeeds");
     assert_eq!(
@@ -122,7 +122,7 @@ async fn roundtrip_against_live_discovery() {
     );
 
     // 6. Deregister + verify gone.
-    client.deregister(&name).await.expect("deregister succeeds");
+    client.deregister(name.clone()).await.expect("deregister succeeds");
     let after = client.list_clusters().await.expect("list_clusters after");
     assert!(
         !after.iter().any(|c| c.name == name),

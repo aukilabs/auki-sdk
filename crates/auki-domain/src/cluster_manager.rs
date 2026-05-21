@@ -539,7 +539,7 @@ pub struct ClusterManager {
     /// liveness handler when an election promotes the local peer.
     manager_peer_id: Arc<Mutex<PeerId>>,
     runtime: NetworkRuntime,
-    discovery: DiscoveryClient,
+    discovery: Arc<DiscoveryClient>,
     local_multiaddrs: Vec<Multiaddr>,
     /// Static daemon-side identity fields. Stored at construction;
     /// combined with dynamic SDK-tracked fields (`session_now_ns`,
@@ -853,7 +853,7 @@ impl ClusterManager {
 
         // 1. Atomic create on Discovery.
         match discovery
-            .create_cluster(&cluster_name, &local_peer_id, &local_multiaddrs)
+            .create_cluster(cluster_name.clone(), local_peer_id, local_multiaddrs.clone())
             .await?
         {
             CreateClusterOutcome::Created(_entry) => { /* proceed */ }
@@ -1973,7 +1973,7 @@ impl ClusterManager {
             *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
         let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
         let result = if was_manager && am_last {
-            self.discovery.deregister(&self.cluster_name).await
+            self.discovery.deregister(self.cluster_name.clone()).await
         } else {
             Ok(())
         };
@@ -2108,7 +2108,7 @@ async fn handle_domain_peer_lost(
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
     runtime: &auki_network::NetworkRuntimeHandle,
-    discovery: &DiscoveryClient,
+    discovery: &Arc<DiscoveryClient>,
     liveness_check_task: &Arc<Mutex<Option<JoinHandle<()>>>>,
     advertised_domain_clock_source: &Arc<Mutex<Option<HeartbeatDomainClock>>>,
     clock_sync: &ClockSyncHandle,
@@ -2158,7 +2158,7 @@ async fn handle_domain_peer_lost(
 
             // Tell Discovery about the rotation.
             if let Err(e) = discovery
-                .rotate_manager(cluster_name, &local_peer_id, local_multiaddrs)
+                .rotate_manager(cluster_name.to_string(), local_peer_id, local_multiaddrs.to_vec())
                 .await
             {
                 eprintln!(
@@ -2302,7 +2302,7 @@ fn spawn_liveness_handler(
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
-    discovery: DiscoveryClient,
+    discovery: Arc<DiscoveryClient>,
     liveness_check_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     clock_sync: ClockSyncHandle,
     domain_clock_sources: DomainClockSources,
@@ -3356,7 +3356,7 @@ fn elect_successor_excluding_lost(
 }
 
 fn spawn_manager_liveness_check(
-    discovery: DiscoveryClient,
+    discovery: Arc<DiscoveryClient>,
     cluster_name: String,
     membership: Arc<Mutex<ClusterMembership>>,
 ) -> JoinHandle<()> {
@@ -3377,7 +3377,7 @@ fn spawn_manager_liveness_check(
             // Discovery hiccup shouldn't kill the cluster. Discovery
             // sweeps after 3s of no liveness check (3 missed at 1s
             // cadence), so persistent failures self-resolve.
-            if let Err(e) = discovery.liveness_check(&cluster_name, peer_count).await {
+            if let Err(e) = discovery.liveness_check(cluster_name.clone(), peer_count).await {
                 eprintln!(
                     "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
                 );

@@ -123,6 +123,21 @@ fn render_flash_panel(ui: &mut egui::Ui, app: &mut DiagnosticApp) {
             app.send(RuntimeCommand::SetFlashMode(FlashMode::Domain));
         }
     });
+    ui.horizontal(|ui| {
+        let mut sound_enabled = app.sound_enabled();
+        if ui
+            .add_enabled(
+                app.sound_available(),
+                egui::Checkbox::new(&mut sound_enabled, "Sound"),
+            )
+            .changed()
+        {
+            app.set_sound_enabled(sound_enabled);
+        }
+        if let Some(reason) = app.sound_unavailable_reason() {
+            ui.label(format!("sound unavailable: {reason}"));
+        }
+    });
     ui.add_space(4.0);
     ui.label(format!("mode: {}", flash_mode_label(snapshot.flash_mode)));
     if snapshot.flash_mode == FlashMode::Domain {

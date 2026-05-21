@@ -1,4 +1,5 @@
 use crate::sdk_runtime::{RuntimeCommand, RuntimeSnapshot, SdkRuntime};
+use crate::sound::SoundEngine;
 
 const MAX_FLASH_EVENTS: usize = 12;
 
@@ -6,6 +7,8 @@ pub struct DiagnosticApp {
     runtime: SdkRuntime,
     snapshot: RuntimeSnapshot,
     flash_events: FlashEventLog,
+    sound: SoundEngine,
+    sound_enabled: bool,
     pub(crate) discovery_url_input: String,
     pub(crate) cluster_name_input: String,
     pub(crate) display_name_input: String,
@@ -21,6 +24,8 @@ impl DiagnosticApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let runtime = SdkRuntime::spawn();
         let snapshot = runtime.snapshot();
+        let sound = SoundEngine::new();
+        let sound_enabled = sound.is_available();
         Self {
             discovery_url_input: snapshot.discovery_url.clone(),
             cluster_name_input: snapshot.cluster_name.clone(),
@@ -28,6 +33,8 @@ impl DiagnosticApp {
             runtime,
             snapshot,
             flash_events: FlashEventLog::default(),
+            sound,
+            sound_enabled,
         }
     }
 
@@ -43,12 +50,32 @@ impl DiagnosticApp {
         &self.snapshot
     }
 
-    pub fn record_flash_state(&mut self, on: bool, now_ns: u128) {
-        self.flash_events.record(on, now_ns);
+    pub fn record_flash_state(&mut self, on: bool, now_ns: u128) -> bool {
+        let started = self.flash_events.record(on, now_ns);
+        if started && self.sound_enabled {
+            self.sound.beep();
+        }
+        started
     }
 
     pub fn flash_events(&self) -> &[String] {
         self.flash_events.events()
+    }
+
+    pub fn sound_enabled(&self) -> bool {
+        self.sound_enabled
+    }
+
+    pub fn set_sound_enabled(&mut self, enabled: bool) {
+        self.sound_enabled = enabled;
+    }
+
+    pub fn sound_available(&self) -> bool {
+        self.sound.is_available()
+    }
+
+    pub fn sound_unavailable_reason(&self) -> Option<&str> {
+        self.sound.unavailable_reason()
     }
 }
 
@@ -61,8 +88,9 @@ impl eframe::App for DiagnosticApp {
 }
 
 impl FlashEventLog {
-    fn record(&mut self, on: bool, now_ns: u128) {
-        if on && !self.last_on {
+    fn record(&mut self, on: bool, now_ns: u128) -> bool {
+        let started = on && !self.last_on;
+        if started {
             self.events
                 .push(format!("flash UTC {}", format_utc_time_of_day(now_ns)));
             if self.events.len() > MAX_FLASH_EVENTS {
@@ -70,6 +98,7 @@ impl FlashEventLog {
             }
         }
         self.last_on = on;
+        started
     }
 
     fn events(&self) -> &[String] {
@@ -132,8 +161,8 @@ mod tests {
     fn flash_event_logs_on_rising_edge() {
         let mut state = FlashEventLog::default();
 
-        state.record(false, 11_999_900_000);
-        state.record(true, 12_000_000_000);
+        assert!(!state.record(false, 11_999_900_000));
+        assert!(state.record(true, 12_000_000_000));
 
         assert_eq!(state.events(), &["flash UTC 00:00:12.000"]);
     }
@@ -142,8 +171,8 @@ mod tests {
     fn flash_event_does_not_repeat_while_flash_stays_on() {
         let mut state = FlashEventLog::default();
 
-        state.record(true, 12_000_000_000);
-        state.record(true, 12_000_050_000);
+        assert!(state.record(true, 12_000_000_000));
+        assert!(!state.record(true, 12_000_050_000));
 
         assert_eq!(state.events().len(), 1);
     }

@@ -590,6 +590,12 @@ struct PeerSchedule {
 /// `/auki/stream/0.1.0` (handed off to the `stream_provider`),
 /// reconnecting on disconnect with exponential backoff. See the
 /// module-level docs for the design rationale.
+///
+/// `swift-bindings`: derived as a UniFFI Object. The curated FFI
+/// surface for v0: `local_peer_id_string`, `connected_peer_id_strings`,
+/// `set_allowed_peers`, `shutdown`, and the 5 `open_*_stream` methods
+/// added in Tasks 14-18.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 pub struct NetworkRuntime {
     local_peer_id: PeerId,
     connected: Arc<Mutex<HashSet<PeerId>>>,
@@ -1111,6 +1117,96 @@ impl NetworkRuntime {
             .collect()
     }
 
+    /// Replace the peers this runtime should actively open
+    /// `/auki/heartbeat/0.0.1` substreams to.
+    ///
+    /// This is intentionally carrier-level. The runtime does not know
+    /// which peer is Manager, which topology is correct, or when a
+    /// heartbeat timeout should become a cluster-level loss. It merely
+    /// keeps outbound heartbeat substreams open to these allow-listed,
+    /// connected targets and reports frame/closure events upward.
+    pub async fn set_heartbeat_targets(&self, peers: Vec<PeerId>) -> Result<(), UpdateError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.command_tx
+            .send(RuntimeCmd::SetHeartbeatTargets { peers, ack: ack_tx })
+            .await
+            .map_err(|_| UpdateError::RuntimeUnavailable)?;
+        ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
+    }
+
+    fn cleanup(&self) {
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        if let Some(task) = self
+            .task
+            .lock()
+            .expect("NetworkRuntime task lock poisoned")
+            .take()
+        {
+            task.abort();
+        }
+    }
+}
+
+// ─── UniFFI-exposed surface ──────────────────────────────────────────────────
+//
+// Methods Swift consumes. The `_string` / `_strings` suffix on the peer-id
+// accessors is the same pattern PR A established for `Wallet::wallet_id_str` —
+// explicit so the FFI seam shape is visible at the call site.
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl NetworkRuntime {
+    /// Canonical libp2p peer-id string for this runtime's local peer.
+    pub fn local_peer_id_string(&self) -> String {
+        self.local_peer_id.to_string()
+    }
+
+    /// Snapshot of currently-connected peer-ids as canonical libp2p
+    /// strings. Mutates as connections open / close in the driver task.
+    pub fn connected_peer_id_strings(&self) -> Vec<String> {
+        self.connected
+            .lock()
+            .expect("connected set mutex poisoned")
+            .iter()
+            .map(|p| p.to_string())
+            .collect()
+    }
+
+    /// Signal the driver task to shut down. Inbound substream tasks
+    /// have [`SHUTDOWN_GRACE`] to flush their final typed
+    /// `EndOfStream` before the swarm tears down. Unclean exit (`Drop`
+    /// without an explicit `shutdown` call, panic) skips the grace —
+    /// consumers see `ConnectionLost` instead of the typed reason.
+    ///
+    /// Idempotent: the first call broadcasts the grace signal and
+    /// aborts the driver task; subsequent calls find `shutdown_tx` /
+    /// `task` already taken and no-op. Safe to call from multiple
+    /// threads concurrently.
+    pub fn shutdown(&self) {
+        let _ = self.inbound_shutdown_tx.send(true);
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+    }
+}
+
+// ─── UniFFI-exposed async surface ────────────────────────────────────────────
+//
+// `set_allowed_peers` is async and needs the tokio async runtime annotation.
+// Kept in a separate impl block so the non-async UniFFI block above stays
+// clean and the annotation is explicit at the seam.
+#[cfg_attr(feature = "swift-bindings", uniffi::export(async_runtime = "tokio"))]
+impl NetworkRuntime {
     /// Replace the allow-list with `new_peers`. The runtime diffs:
     ///
     /// - peer-ids in `new_peers` but not the old list are added to
@@ -1135,64 +1231,6 @@ impl NetworkRuntime {
             .await
             .map_err(|_| UpdateError::RuntimeUnavailable)?;
         ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
-    }
-
-    /// Replace the peers this runtime should actively open
-    /// `/auki/heartbeat/0.0.1` substreams to.
-    ///
-    /// This is intentionally carrier-level. The runtime does not know
-    /// which peer is Manager, which topology is correct, or when a
-    /// heartbeat timeout should become a cluster-level loss. It merely
-    /// keeps outbound heartbeat substreams open to these allow-listed,
-    /// connected targets and reports frame/closure events upward.
-    pub async fn set_heartbeat_targets(&self, peers: Vec<PeerId>) -> Result<(), UpdateError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.command_tx
-            .send(RuntimeCmd::SetHeartbeatTargets { peers, ack: ack_tx })
-            .await
-            .map_err(|_| UpdateError::RuntimeUnavailable)?;
-        ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
-    }
-
-    /// Signal the driver task to shut down. Inbound substream tasks
-    /// have [`SHUTDOWN_GRACE`] to flush their final typed
-    /// `EndOfStream` before the swarm tears down. Unclean exit (`Drop`
-    /// without an explicit `shutdown` call, panic) skips the grace —
-    /// consumers see `ConnectionLost` instead of the typed reason.
-    ///
-    /// Idempotent: the first call broadcasts the grace signal and
-    /// aborts the driver task; subsequent calls find `shutdown_tx` /
-    /// `task` already taken and no-op. Safe to call from multiple
-    /// threads concurrently.
-    pub fn shutdown(&self) {
-        let _ = self.inbound_shutdown_tx.send(true);
-        if let Some(tx) = self
-            .shutdown_tx
-            .lock()
-            .expect("NetworkRuntime shutdown_tx lock poisoned")
-            .take()
-        {
-            let _ = tx.send(());
-        }
-    }
-
-    fn cleanup(&self) {
-        if let Some(tx) = self
-            .shutdown_tx
-            .lock()
-            .expect("NetworkRuntime shutdown_tx lock poisoned")
-            .take()
-        {
-            let _ = tx.send(());
-        }
-        if let Some(task) = self
-            .task
-            .lock()
-            .expect("NetworkRuntime task lock poisoned")
-            .take()
-        {
-            task.abort();
-        }
     }
 }
 

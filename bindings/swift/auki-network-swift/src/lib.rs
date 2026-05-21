@@ -570,6 +570,15 @@ mod tests {
         });
     }
 
+    /// `NetworkRuntime` exposes its annotated method set. We can't spawn one
+    /// here (needs a real tokio runtime + swarm), but we can confirm the
+    /// types compile.
+    #[test]
+    fn network_runtime_is_uniffi_object() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<auki_network_rs::NetworkRuntime>();
+    }
+
     /// Smoke test: a `HeartbeatTimestampProvider` impl can be converted
     /// into an upstream `HeartbeatTimestampSource` via the adapter.
     #[test]

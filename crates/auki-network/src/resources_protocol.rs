@@ -32,6 +32,7 @@ pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 /// Default `{}` asks for every resource kind the peer is willing to
 /// advertise. `kinds` is an open-string filter; unknown kinds simply
 /// return no rows from peers that do not produce them.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourcesRequest {
     /// Optional open-string resource kind filter. Examples:

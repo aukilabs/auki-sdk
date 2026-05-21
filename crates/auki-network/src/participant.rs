@@ -69,6 +69,7 @@ use serde::{Deserialize, Serialize};
 /// Identity card a daemon serves over `GET /api/info`. Constructed by
 /// the SDK (with cluster-aware fields populated from the runtime) and
 /// serialized verbatim by the daemon.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParticipantInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, …). Same

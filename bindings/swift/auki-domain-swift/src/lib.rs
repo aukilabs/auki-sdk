@@ -64,4 +64,17 @@ mod tests {
         let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
         assert_eq!(addr.to_string().parse::<Multiaddr>().unwrap(), addr);
     }
+
+    #[test]
+    fn daemon_info_record_constructs() {
+        let info = auki_domain_rs::cluster_manager::DaemonInfo {
+            app: "test-app".to_string(),
+            name: "test-name".to_string(),
+            session_id: "session-1".to_string(),
+            session_clock_id: "clock-1".to_string(),
+            session_clock_hash: "hash-1".to_string(),
+            app_instance: "instance-1".to_string(),
+        };
+        assert_eq!(info.app, "test-app");
+    }
 }

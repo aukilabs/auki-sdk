@@ -118,6 +118,7 @@ pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// `cluster_joined_at_ns` set lazily on first non-self peer
 /// observation) live on the ClusterManager — not on `DaemonInfo` —
 /// so daemons aren't responsible for keeping them fresh.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct DaemonInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, `"park"`).

@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 /// to elect the next Manager when the current one dies. Insertion order
 /// is preserved across serde round-trips so the order observed by every
 /// peer agrees.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClusterMembership {
     /// The cluster's name. The wire/disk filename is
@@ -43,6 +44,7 @@ pub struct ClusterMembership {
 }
 
 /// One peer entry in a [`ClusterMembership`] document.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClusterMember {
     /// libp2p peer-id. Stable across daemon restarts when the peer

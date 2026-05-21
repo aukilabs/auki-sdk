@@ -23,6 +23,37 @@
 #[cfg(feature = "swift-bindings")]
 uniffi::setup_scaffolding!();
 
+// UniFFI custom-type registrations for foreign types used in exported
+// Record structs within auki-domain. `ClusterMember` carries `PeerId`
+// and `Multiaddr` fields, so this crate's own `UniFfiTag` needs its own
+// FfiConverter impls for those types — the ones in auki-network are
+// anchored on `auki_network::UniFfiTag` and do not satisfy the trait
+// bounds here.
+#[cfg(feature = "swift-bindings")]
+use libp2p_identity::PeerId;
+#[cfg(feature = "swift-bindings")]
+use multiaddr::Multiaddr;
+
+#[cfg(feature = "swift-bindings")]
+uniffi::custom_type!(PeerId, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<PeerId>()
+            .map_err(|e| anyhow::anyhow!("invalid peer-id {s:?}: {e}"))
+    },
+    lower: |p: PeerId| p.to_string(),
+});
+
+#[cfg(feature = "swift-bindings")]
+uniffi::custom_type!(Multiaddr, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<Multiaddr>()
+            .map_err(|e| anyhow::anyhow!("invalid multiaddr {s:?}: {e}"))
+    },
+    lower: |m: Multiaddr| m.to_string(),
+});
+
 #[cfg(feature = "browser_runtime")]
 pub mod browser_session;
 #[cfg(feature = "native_runtime")]

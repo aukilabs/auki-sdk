@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Matt's Agent · May 21, 11:55 HKT, 2026
+
+**Cluster lifecycle RFC audit added without rewriting the specs.** The audit records stale RFC slots, To Fill normative leakage, glossary gaps, duplicate owner rules, and backlog cleanup candidates after the Shared Rules restructure. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **New crate `auki-network-swift` — UniFFI Swift bindings for `auki-network` (Stage 1).** Discovery HTTP client surface for native iOS (`aukilabs/iosapp`), async via UniFFI/tokio, mirroring `auki-network-py`. Host `cargo build`/`cargo test` green; iOS XCFramework scripted but unvalidated; stream/audio (Stage 2) and `auki-domain-swift` (Stage 3) scoped. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

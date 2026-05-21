@@ -334,6 +334,17 @@ async fn drain_liveness_events(
 
 // ─── Swift stream provider + source traits ─────────────────────────
 
+/// Error type for Swift source-stream callbacks. UniFFI 0.31 doesn't
+/// accept a raw `String` as the throw type on exported methods — error
+/// values must be a typed `uniffi::Error`. This single-variant error
+/// carries the producer-supplied detail message through to the runtime,
+/// which maps it to `EndReason::ProducerError { detail }` on the wire.
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum SwiftSourceError {
+    #[error("producer error: {message}")]
+    Producer { message: String },
+}
+
 /// One source-stream item. The opaque `payload_bytes` is prost-encoded
 /// against the per-payload-type proto file (`AudioFrame.proto`,
 /// `CameraFrame.proto`, etc.); Swift consumers decode via swift-protobuf.
@@ -353,31 +364,31 @@ pub struct StreamItem {
 /// end-of-source, or `Err(detail)` for producer error.
 #[uniffi::export(callback_interface)]
 pub trait SwiftAudioSource: Send + Sync {
-    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+    fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError>;
 }
 
 /// Swift-implemented camera source.
 #[uniffi::export(callback_interface)]
 pub trait SwiftCameraSource: Send + Sync {
-    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+    fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError>;
 }
 
 /// Swift-implemented point-cloud source.
 #[uniffi::export(callback_interface)]
 pub trait SwiftPointCloudSource: Send + Sync {
-    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+    fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError>;
 }
 
 /// Swift-implemented joint-encoders source.
 #[uniffi::export(callback_interface)]
 pub trait SwiftJointEncodersSource: Send + Sync {
-    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+    fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError>;
 }
 
 /// Swift-implemented detection source.
 #[uniffi::export(callback_interface)]
 pub trait SwiftDetectionSource: Send + Sync {
-    fn next_item(&self) -> Result<Option<StreamItem>, String>;
+    fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError>;
 }
 
 /// Producer's accept/decline decision for one inbound stream request.
@@ -493,7 +504,7 @@ pub(crate) fn audio_source_to_stream(
                     }
                 }
                 Ok(None) => break,
-                Err(detail) => {
+                Err(SwiftSourceError::Producer { message: detail }) => {
                     let _ = tx.send(Err(detail)).await;
                     break;
                 }
@@ -544,7 +555,7 @@ pub(crate) fn camera_source_to_stream(
                     }
                 }
                 Ok(None) => break,
-                Err(detail) => {
+                Err(SwiftSourceError::Producer { message: detail }) => {
                     let _ = tx.send(Err(detail)).await;
                     break;
                 }
@@ -592,7 +603,7 @@ pub(crate) fn point_cloud_source_to_stream(
                     }
                 }
                 Ok(None) => break,
-                Err(detail) => {
+                Err(SwiftSourceError::Producer { message: detail }) => {
                     let _ = tx.send(Err(detail)).await;
                     break;
                 }
@@ -640,7 +651,7 @@ pub(crate) fn joint_encoders_source_to_stream(
                     }
                 }
                 Ok(None) => break,
-                Err(detail) => {
+                Err(SwiftSourceError::Producer { message: detail }) => {
                     let _ = tx.send(Err(detail)).await;
                     break;
                 }
@@ -686,7 +697,7 @@ pub(crate) fn detection_source_to_stream(
                     }
                 }
                 Ok(None) => break,
-                Err(detail) => {
+                Err(SwiftSourceError::Producer { message: detail }) => {
                     let _ = tx.send(Err(detail)).await;
                     break;
                 }
@@ -1075,7 +1086,7 @@ mod tests {
             counter: std::sync::Mutex<u8>,
         }
         impl SwiftAudioSource for ThreeItems {
-            fn next_item(&self) -> Result<Option<StreamItem>, String> {
+            fn next_item(&self) -> Result<Option<StreamItem>, SwiftSourceError> {
                 let mut c = self.counter.lock().unwrap();
                 if *c >= 3 {
                     return Ok(None);

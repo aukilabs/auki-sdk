@@ -21,7 +21,7 @@
 set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$CRATE_DIR/../.." && pwd)"
+WORKSPACE_ROOT="$(cd "$CRATE_DIR/../../.." && pwd)"
 LIB_NAME="auki_network_swift"
 OUT="$CRATE_DIR/target-xcframework"
 BINDINGS="$OUT/bindings"

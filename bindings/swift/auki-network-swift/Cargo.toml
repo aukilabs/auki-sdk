@@ -55,11 +55,20 @@ thiserror = "2"
 # HeartbeatDomainClock uses JSON (length-prefixed JSON is the heartbeat
 # wire format), so serde_json is the correct decoder — not prost.
 serde_json = "1"
+# Prost decode in Swift→Rust source-stream adapters: each `SwiftXSource`
+# delivers opaque payload_bytes; adapters decode to the matching prost type.
+prost = "0.13"
+# Prost-generated frame types re-exported by stream_protocol; also hosts
+# `DetectionFrame` in `auki_datatypes::detection`.
+auki-datatypes = { path = "../../../crates/auki-datatypes" }
 
 [dev-dependencies]
 # `spawn_for_swift_smoke` uses `Wallet::from_seed` to construct a
 # `PeerIdentity` without a hardcoded 32-byte seed array.
 auki-identity = { path = "../../../crates/auki-identity" }
+# `audio_source_adapter_drains_three_items` drives the SourceStream via
+# `futures::StreamExt::next()`.
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 
 # Swift codegen helper. Gated on `cli` so a plain library build/test
 # doesn't require the UniFFI CLI; the build script enables the feature.

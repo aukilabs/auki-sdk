@@ -451,6 +451,255 @@ pub trait SwiftStreamProvider: Send + Sync {
     ) -> Box<dyn SwiftDetectionSource>;
 }
 
+// ─── Source-stream adapters: Swift trait → upstream SourceStream<T> ─
+
+/// Adapter: wraps a Swift `SwiftAudioSource` as an upstream
+/// `SourceStream<AudioFrame>`. Spawns a tokio task that polls the trait
+/// and pushes prost-decoded items onto an mpsc; returns a
+/// `ReceiverStream` wrapper. Cancellation: when the runtime drops the
+/// `SourceStream` (e.g. substream closed), the receiver drops, the
+/// mpsc send fails, and the task exits.
+pub(crate) fn audio_source_to_stream(
+    source: Box<dyn SwiftAudioSource>,
+) -> auki_network_rs::stream_runtime::SourceStream<
+    auki_network_rs::stream_protocol::AudioFrame,
+> {
+    let source: Arc<dyn SwiftAudioSource> = Arc::from(source);
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Result<
+            auki_network_rs::stream_runtime::StreamItem<
+                auki_network_rs::stream_protocol::AudioFrame,
+            >,
+            String,
+        >,
+    >(16);
+    tokio::spawn(async move {
+        loop {
+            match source.next_item() {
+                Ok(Some(item)) => {
+                    use prost::Message;
+                    let frame =
+                        match auki_network_rs::stream_protocol::AudioFrame::decode(
+                            item.payload_bytes.as_slice(),
+                        ) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                let _ = tx.send(Err(format!("AudioFrame decode: {e}"))).await;
+                                break;
+                            }
+                        };
+                    let upstream_item = auki_network_rs::stream_runtime::StreamItem {
+                        timestamp_ns: item.timestamp_ns,
+                        payload: frame,
+                    };
+                    if tx.send(Ok(upstream_item)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(detail) => {
+                    let _ = tx.send(Err(detail)).await;
+                    break;
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Adapter: `SwiftCameraSource` → `SourceStream<CameraFrame>`. Same
+/// pattern as [`audio_source_to_stream`] with the prost decode target
+/// swapped to `CameraFrame`.
+pub(crate) fn camera_source_to_stream(
+    source: Box<dyn SwiftCameraSource>,
+) -> auki_network_rs::stream_runtime::SourceStream<
+    auki_network_rs::stream_protocol::CameraFrame,
+> {
+    let source: Arc<dyn SwiftCameraSource> = Arc::from(source);
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Result<
+            auki_network_rs::stream_runtime::StreamItem<
+                auki_network_rs::stream_protocol::CameraFrame,
+            >,
+            String,
+        >,
+    >(16);
+    tokio::spawn(async move {
+        loop {
+            match source.next_item() {
+                Ok(Some(item)) => {
+                    use prost::Message;
+                    let frame =
+                        match auki_network_rs::stream_protocol::CameraFrame::decode(
+                            item.payload_bytes.as_slice(),
+                        ) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                let _ = tx.send(Err(format!("CameraFrame decode: {e}"))).await;
+                                break;
+                            }
+                        };
+                    let upstream_item = auki_network_rs::stream_runtime::StreamItem {
+                        timestamp_ns: item.timestamp_ns,
+                        payload: frame,
+                    };
+                    if tx.send(Ok(upstream_item)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(detail) => {
+                    let _ = tx.send(Err(detail)).await;
+                    break;
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Adapter: `SwiftPointCloudSource` → `SourceStream<PointCloudFrame>`.
+pub(crate) fn point_cloud_source_to_stream(
+    source: Box<dyn SwiftPointCloudSource>,
+) -> auki_network_rs::stream_runtime::SourceStream<
+    auki_network_rs::stream_protocol::PointCloudFrame,
+> {
+    let source: Arc<dyn SwiftPointCloudSource> = Arc::from(source);
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Result<
+            auki_network_rs::stream_runtime::StreamItem<
+                auki_network_rs::stream_protocol::PointCloudFrame,
+            >,
+            String,
+        >,
+    >(16);
+    tokio::spawn(async move {
+        loop {
+            match source.next_item() {
+                Ok(Some(item)) => {
+                    use prost::Message;
+                    let frame = match auki_network_rs::stream_protocol::PointCloudFrame::decode(
+                        item.payload_bytes.as_slice(),
+                    ) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("PointCloudFrame decode: {e}"))).await;
+                            break;
+                        }
+                    };
+                    let upstream_item = auki_network_rs::stream_runtime::StreamItem {
+                        timestamp_ns: item.timestamp_ns,
+                        payload: frame,
+                    };
+                    if tx.send(Ok(upstream_item)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(detail) => {
+                    let _ = tx.send(Err(detail)).await;
+                    break;
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Adapter: `SwiftJointEncodersSource` → `SourceStream<JointEncodersFrame>`.
+pub(crate) fn joint_encoders_source_to_stream(
+    source: Box<dyn SwiftJointEncodersSource>,
+) -> auki_network_rs::stream_runtime::SourceStream<
+    auki_network_rs::stream_protocol::JointEncodersFrame,
+> {
+    let source: Arc<dyn SwiftJointEncodersSource> = Arc::from(source);
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Result<
+            auki_network_rs::stream_runtime::StreamItem<
+                auki_network_rs::stream_protocol::JointEncodersFrame,
+            >,
+            String,
+        >,
+    >(16);
+    tokio::spawn(async move {
+        loop {
+            match source.next_item() {
+                Ok(Some(item)) => {
+                    use prost::Message;
+                    let frame = match auki_network_rs::stream_protocol::JointEncodersFrame::decode(
+                        item.payload_bytes.as_slice(),
+                    ) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("JointEncodersFrame decode: {e}"))).await;
+                            break;
+                        }
+                    };
+                    let upstream_item = auki_network_rs::stream_runtime::StreamItem {
+                        timestamp_ns: item.timestamp_ns,
+                        payload: frame,
+                    };
+                    if tx.send(Ok(upstream_item)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(detail) => {
+                    let _ = tx.send(Err(detail)).await;
+                    break;
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
+/// Adapter: `SwiftDetectionSource` → `SourceStream<DetectionFrame>`.
+/// `DetectionFrame` lives in `auki_datatypes::detection`, not in
+/// `auki_network`'s stream_protocol module.
+pub(crate) fn detection_source_to_stream(
+    source: Box<dyn SwiftDetectionSource>,
+) -> auki_network_rs::stream_runtime::SourceStream<auki_datatypes::detection::DetectionFrame> {
+    let source: Arc<dyn SwiftDetectionSource> = Arc::from(source);
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Result<
+            auki_network_rs::stream_runtime::StreamItem<auki_datatypes::detection::DetectionFrame>,
+            String,
+        >,
+    >(16);
+    tokio::spawn(async move {
+        loop {
+            match source.next_item() {
+                Ok(Some(item)) => {
+                    use prost::Message;
+                    let frame = match auki_datatypes::detection::DetectionFrame::decode(
+                        item.payload_bytes.as_slice(),
+                    ) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("DetectionFrame decode: {e}"))).await;
+                            break;
+                        }
+                    };
+                    let upstream_item = auki_network_rs::stream_runtime::StreamItem {
+                        timestamp_ns: item.timestamp_ns,
+                        payload: frame,
+                    };
+                    if tx.send(Ok(upstream_item)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(detail) => {
+                    let _ = tx.send(Err(detail)).await;
+                    break;
+                }
+            }
+        }
+    });
+    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -916,6 +1165,52 @@ mod tests {
             }
         }
         let _p: Box<dyn SwiftStreamProvider> = Box::new(NoopProvider);
+    }
+
+    use futures::StreamExt;
+
+    /// `audio_source_to_stream` drains a Swift source that produces 3
+    /// prost-encoded `AudioFrame`s then ends-of-source. Rust side reads
+    /// back 3 items + `None`.
+    #[tokio::test]
+    async fn audio_source_adapter_drains_three_items() {
+        use auki_network_rs::stream_protocol::AudioFrame;
+        use prost::Message;
+
+        struct ThreeItems {
+            counter: std::sync::Mutex<u8>,
+        }
+        impl SwiftAudioSource for ThreeItems {
+            fn next_item(&self) -> Result<Option<StreamItem>, String> {
+                let mut c = self.counter.lock().unwrap();
+                if *c >= 3 {
+                    return Ok(None);
+                }
+                *c += 1;
+                let frame = AudioFrame {
+                    data: vec![*c],
+                    ..Default::default()
+                };
+                Ok(Some(StreamItem {
+                    timestamp_ns: *c as i64,
+                    payload_bytes: frame.encode_to_vec(),
+                }))
+            }
+        }
+        let source: Box<dyn SwiftAudioSource> = Box::new(ThreeItems {
+            counter: Default::default(),
+        });
+        let mut rust_stream = audio_source_to_stream(source);
+        for expected in 1u8..=3 {
+            let item = rust_stream
+                .next()
+                .await
+                .expect("stream has more items")
+                .expect("item is Ok");
+            assert_eq!(item.timestamp_ns, expected as i64);
+            assert_eq!(item.payload.data, vec![expected]);
+        }
+        assert!(rust_stream.next().await.is_none(), "source ended");
     }
 
     /// `SwiftStreamDecision::Decline` constructs and matches.

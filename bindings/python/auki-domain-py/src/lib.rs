@@ -1681,7 +1681,11 @@ impl PyClusterManager {
     fn set_sensor_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PySensorCatalogProvider { callable });
         self.with_inner(|m| {
-            m.set_sensor_catalog_provider(provider);
+            // PR C renamed the Arc-taking method to `_arc` and added a
+            // Box-taking variant for UniFFI callback-interface compatibility.
+            // Python's PyO3 binding constructs an Arc directly; keep using
+            // the _arc variant.
+            m.set_sensor_catalog_provider_arc(provider);
             Ok(())
         })
     }
@@ -1695,7 +1699,9 @@ impl PyClusterManager {
     fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PyResourceCatalogProvider { callable });
         self.with_inner(|m| {
-            m.set_resource_catalog_provider(provider);
+            // PR C renamed the Arc-taking method to `_arc` (see
+            // set_sensor_catalog_provider above for rationale).
+            m.set_resource_catalog_provider_arc(provider);
             Ok(())
         })
     }

@@ -223,6 +223,94 @@ pub async fn bootstrap_swift(
     Ok(std::sync::Arc::new(manager))
 }
 
+/// Swift entry point for creating a new cluster. Mirrors
+/// `auki-domain-py`'s `ClusterManager.create_cluster` static method.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn create_cluster_swift(
+    cluster_name: String,
+    wallet_seed: Vec<u8>,
+    discovery_url: String,
+    listen_addresses: Vec<String>,
+    agent_version: String,
+    daemon_info: DaemonInfo,
+    stream_provider: Option<Box<dyn SwiftStreamProvider>>,
+    external_addresses: Option<Vec<String>>,
+) -> Result<std::sync::Arc<ClusterManager>, CreateClusterError> {
+    let (identity, listen_multiaddrs, swarm) = build_swarm_and_identity(
+        wallet_seed,
+        listen_addresses,
+        external_addresses,
+        agent_version,
+    )
+    .await
+    .map_err(|e| CreateClusterError::Discovery(
+        auki_network::discovery_client::DiscoveryError::InvalidPeerId(e.to_string()),
+    ))?;
+
+    let stream_provider_closure = match stream_provider {
+        Some(p) => {
+            let p: std::sync::Arc<dyn SwiftStreamProvider> = std::sync::Arc::from(p);
+            auki_network_swift::swift_provider_to_upstream(p)
+        }
+        None => auki_network::stream_runtime::decline_all_streams(),
+    };
+
+    let manager = ClusterManager::create_cluster(
+        cluster_name,
+        identity,
+        listen_multiaddrs,
+        discovery_url,
+        swarm,
+        stream_provider_closure,
+        daemon_info,
+    )
+    .await?;
+    Ok(std::sync::Arc::new(manager))
+}
+
+/// Swift entry point for joining an existing cluster. Mirrors
+/// `auki-domain-py`'s `ClusterManager.join_cluster` static method.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn join_cluster_swift(
+    cluster_name: String,
+    wallet_seed: Vec<u8>,
+    discovery_url: String,
+    listen_addresses: Vec<String>,
+    agent_version: String,
+    daemon_info: DaemonInfo,
+    stream_provider: Option<Box<dyn SwiftStreamProvider>>,
+    external_addresses: Option<Vec<String>>,
+) -> Result<std::sync::Arc<ClusterManager>, JoinClusterError> {
+    let (identity, listen_multiaddrs, swarm) = build_swarm_and_identity(
+        wallet_seed,
+        listen_addresses,
+        external_addresses,
+        agent_version,
+    )
+    .await
+    .map_err(|e| JoinClusterError::NotFound(e.to_string()))?;
+
+    let stream_provider_closure = match stream_provider {
+        Some(p) => {
+            let p: std::sync::Arc<dyn SwiftStreamProvider> = std::sync::Arc::from(p);
+            auki_network_swift::swift_provider_to_upstream(p)
+        }
+        None => auki_network::stream_runtime::decline_all_streams(),
+    };
+
+    let manager = ClusterManager::join_cluster(
+        cluster_name,
+        identity,
+        listen_multiaddrs,
+        discovery_url,
+        swarm,
+        stream_provider_closure,
+        daemon_info,
+    )
+    .await?;
+    Ok(std::sync::Arc::new(manager))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +520,30 @@ mod tests {
     fn cluster_manager_is_uniffi_object() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<auki_domain_rs::cluster_manager::ClusterManager>();
+    }
+
+    #[tokio::test]
+    async fn create_cluster_swift_swarm_construction_succeeds() {
+        let result = create_cluster_swift(
+            "test-cluster".to_string(),
+            vec![2u8; 32],
+            "http://127.0.0.1:9".to_string(),
+            vec!["/ip4/127.0.0.1/tcp/0".to_string()],
+            "test-agent/0.0".to_string(),
+            DaemonInfo {
+                app: "test-app".to_string(),
+                name: "test-instance".to_string(),
+                session_id: "session-2".to_string(),
+                session_clock_id: "clock-2".to_string(),
+                session_clock_hash: "hash-2".to_string(),
+                app_instance: "instance-2".to_string(),
+            },
+            None,
+            None,
+        ).await;
+
+        // Expect Discovery failure (no server)
+        assert!(matches!(result, Err(CreateClusterError::Discovery(_))));
     }
 
     #[tokio::test]

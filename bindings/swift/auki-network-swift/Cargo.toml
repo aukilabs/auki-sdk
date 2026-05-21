@@ -25,25 +25,50 @@ default = []
 cli = ["uniffi/cli"]
 
 [dependencies]
+# Used by the `try_lift` arms of `uniffi::custom_type!` declarations.
+anyhow = "1"
 # Renamed via `package =` so the upstream crate's name doesn't collide
-# with our own lib name, exactly as `auki-network-py` does. Stage 1
-# only needs `discovery_client` (the async reqwest HTTP client) — NOT
-# `swarm`, so this crate stays off the libp2p iOS-link sharp edges
-# until the Stage 2 stream surface lands.
-auki-network-rs = { package = "auki-network", path = "../../../crates/auki-network", features = ["discovery_client"] }
+# with our own lib name, exactly as `auki-network-py` does. PR A added
+# `swift-bindings`; PR B enables `swarm` (for NetworkRuntime + the
+# stream surface) and keeps `discovery_client` (for the Discovery HTTP client
+# we're now consuming as upstream-annotated types). All three are independent
+# features on the upstream crate; combined here.
+auki-network-rs = { package = "auki-network", path = "../../../crates/auki-network", features = ["swift-bindings", "swarm", "discovery_client"] }
 # `PeerId` / `Multiaddr` parsing on the Swift ↔ Rust seam (they cross
 # the FFI as their canonical string forms).
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
 # Process-wide multi-thread tokio runtime that UniFFI drives the
 # exported async fns on (reqwest needs a reactor). See lib.rs.
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Swift→Rust source-stream adapter wraps `tokio::sync::mpsc::Receiver`s in
+# `tokio_stream::wrappers::ReceiverStream` to satisfy the upstream
+# `SourceStream<T> = Pin<Box<dyn Stream<Item=...> + Send>>` shape.
+tokio-stream = { version = "0.1", default-features = false }
 # UniFFI proc-macro mode (no UDL). `tokio` feature enables
 # `#[uniffi::export(async_runtime = "tokio")]`. ≥0.30 is required for
 # Rust 2024-edition crates (edition-2024 scaffolding fix).
 uniffi = { version = "0.31", features = ["tokio"] }
 # FFI error enum Display / std::error::Error impls.
 thiserror = "2"
+# For decoding `HeartbeatDomainClock` bytes from the Swift provider.
+# HeartbeatDomainClock uses JSON (length-prefixed JSON is the heartbeat
+# wire format), so serde_json is the correct decoder — not prost.
+serde_json = "1"
+# Prost decode in Swift→Rust source-stream adapters: each `SwiftXSource`
+# delivers opaque payload_bytes; adapters decode to the matching prost type.
+prost = "0.13"
+# Prost-generated frame types re-exported by stream_protocol; also hosts
+# `DetectionFrame` in `auki_datatypes::detection`.
+auki-datatypes = { path = "../../../crates/auki-datatypes" }
+
+[dev-dependencies]
+# `spawn_for_swift_smoke` uses `Wallet::from_seed` to construct a
+# `PeerIdentity` without a hardcoded 32-byte seed array.
+auki-identity = { path = "../../../crates/auki-identity" }
+# `audio_source_adapter_drains_three_items` drives the SourceStream via
+# `futures::StreamExt::next()`.
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 
 # Swift codegen helper. Gated on `cli` so a plain library build/test
 # doesn't require the UniFFI CLI; the build script enables the feature.

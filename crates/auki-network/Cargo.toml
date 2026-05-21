@@ -22,7 +22,7 @@ default = []
 # enabled there's no `FfiConverterArc<UT>` for `Wallet` and the
 # `uniffi::export` here fails to compile. `use_remote_type!` (in
 # `src/lib.rs`) reuses that upstream impl.
-swift-bindings = ["dep:uniffi", "auki-identity/swift-bindings"]
+swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings"]
 # Join protocol wire types/framing are shared by native and browser runtimes.
 # Keeping this separate from `swarm` lets wasm/browser packaging reuse the
 # canonical `/auki/join/0.0.1` shapes without pulling in native Tokio transport.
@@ -60,6 +60,10 @@ serde_json = "1"
 # Default-off so non-Swift consumers (Python sidecars, Rust daemons) don't
 # pull uniffi into their dep graph.
 uniffi = { version = "0.31", features = ["tokio"], optional = true }
+# Used by the `try_lift` arms of `uniffi::custom_type!` declarations when
+# `swift-bindings` is enabled. Error handling for the custom types that cross
+# the FFI boundary.
+anyhow = { version = "1", optional = true }
 
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }

@@ -197,7 +197,11 @@ impl PyCreateClusterOutcome {
 /// HTTP client for a Discovery service instance.
 #[pyclass(name = "DiscoveryClient")]
 pub struct PyDiscoveryClient {
-    inner: RustDiscoveryClient,
+    // Stored as `Arc<RustDiscoveryClient>` because `RustDiscoveryClient::new`
+    // returns `Arc<Self>` post-Spec-1-PR-B's UniFFI annotation. The Arc
+    // wrapping is needed for the `inner.clone()` pattern below — Arc clones
+    // cheaply for the per-call `py.allow_threads(...)` capture.
+    inner: std::sync::Arc<RustDiscoveryClient>,
 }
 
 #[pymethods]
@@ -212,7 +216,7 @@ impl PyDiscoveryClient {
     }
 
     #[getter]
-    fn base_url(&self) -> &str {
+    fn base_url(&self) -> String {
         self.inner.base_url()
     }
 
@@ -243,7 +247,7 @@ impl PyDiscoveryClient {
         let name = name.to_string();
         py.allow_threads(|| {
             let outcome = cluster_tokio_runtime()
-                .block_on(client.create_cluster(&name, &peer_id, &multiaddrs))
+                .block_on(client.create_cluster(name, peer_id, multiaddrs))
                 .map_err(map_discovery_error)?;
             Ok(match outcome {
                 RustCreateClusterOutcome::Created(e) => PyCreateClusterOutcome {
@@ -270,7 +274,7 @@ impl PyDiscoveryClient {
         let name = name.to_string();
         py.allow_threads(|| {
             cluster_tokio_runtime()
-                .block_on(client.liveness_check(&name, peer_count))
+                .block_on(client.liveness_check(name, peer_count))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
         })
@@ -291,7 +295,7 @@ impl PyDiscoveryClient {
         let name = name.to_string();
         py.allow_threads(|| {
             cluster_tokio_runtime()
-                .block_on(client.rotate_manager(&name, &peer_id, &multiaddrs))
+                .block_on(client.rotate_manager(name, peer_id, multiaddrs))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
         })
@@ -303,7 +307,7 @@ impl PyDiscoveryClient {
         let name = name.to_string();
         py.allow_threads(|| {
             cluster_tokio_runtime()
-                .block_on(client.deregister(&name))
+                .block_on(client.deregister(name))
                 .map_err(map_discovery_error)
         })
     }

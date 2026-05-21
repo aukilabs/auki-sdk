@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+Spec 1 PR B landed: `bindings/swift/auki-network-swift` expanded from Stage 1's Discovery-only surface to full v0 networking — `NetworkRuntime` + `spawn_for_swift` + 5-payload stream surface (Audio, Camera, PointCloud, JointEncoders, Detection) + `PeerLivenessListener` / `HeartbeatTimestampProvider` / `SwiftStreamProvider` (two-call protocol) callback interfaces. Stage 1's hand-wrapped Discovery types replaced by upstream-annotated re-exports. `auki-network` upstream picks up the matching UniFFI annotations under the existing `swift-bindings` feature. Unblocks Spec 1 PR C (`auki-domain-swift`).
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Browser Park two-peer control plane is green.** Browser peers now keep a Manager-backed browser session after joining, receive pushed roster snapshots, and return `ok` for media presence publish/listen intent; the two-browser Park acceptance smoke passes. See [`crates/changelog.md`](crates/changelog.md), [`crates/auki-network/changelog.md`](crates/auki-network/changelog.md), [`crates/auki-network-browser-wasm/changelog.md`](crates/auki-network-browser-wasm/changelog.md), and [`crates/auki-domain-browser/changelog.md`](crates/auki-domain-browser/changelog.md).

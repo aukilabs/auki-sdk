@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+`auki-network` — UniFFI-annotated the full PR B surface (`NetworkRuntime`, 5 `StreamSubscription*` Objects, 5 `open_*_stream` methods, error types, Discovery types). See [`auki-network/changelog.md`](auki-network/changelog.md).
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Browser Park two-peer control plane is green.** `auki-network` adds `/auki/browser-session/0.0.1` and the native smoke Manager pushes symmetric browser roster snapshots; `auki-network-browser-wasm` keeps that session live after join; `auki-domain-browser` updates media presence fallback snapshots. The two-browser Park acceptance smoke passes with A seeing B, B seeing A, and publish/listen returning `ok`.

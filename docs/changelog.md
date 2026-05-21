@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+Added the [Spec 1 PR B implementation plan](superpowers/plans/2026-05-22-spec1-prb-auki-network-swift.md) for `auki-network-swift` expansion. 26 tasks covering: PeerId/Multiaddr custom types (with the `remote` keyword), `NetworkRuntime` annotation + spawn orchestrator + Swift callback interfaces (liveness, heartbeat, stream provider with two-call protocol, 5 source traits), 5 concretized `open_*_stream` methods + `StreamSubscription*` Objects, Discovery surface rewrite, end-to-end XCFramework validation. Plan C (`auki-domain-swift`) follows once PR B lands.
+
 ### Nils's claude · May 21, 14:10 HKT, 2026
 
 Added the [Spec 1 PR A implementation plan](superpowers/plans/2026-05-20-spec1-pra-auki-identity-swift.md) for `auki-identity-swift`. Eleven tasks covering: optional `swift-bindings` cargo feature on `crates/auki-identity` + `crates/auki-network`, UniFFI proc-macros on `Wallet` and `PeerIdentity` (with small `wallet_id_str` / `peer_id_string` helpers), new `bindings/swift/auki-identity-swift/` scaffolding host, per-component doc files, indices + changelog propagation, end-to-end iOS XCFramework validation. Plans for PR B (network expansion) and PR C (auki-domain-swift) follow once PR A lands.

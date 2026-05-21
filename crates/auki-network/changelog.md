@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+PR B — UniFFI-annotated the full `swift-bindings`-gated surface needed by `bindings/swift/auki-network-swift`'s expansion. `NetworkRuntime` becomes a `uniffi::Object` with a curated v0 method set (`local_peer_id_string`, `connected_peer_id_strings`, `set_allowed_peers`, `shutdown`). Adds 5 `StreamSubscription*` Objects + 5 `open_*_stream` async methods (one per SDK-supported payload type: `AudioFrame`, `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `DetectionFrame`). Annotates `AllowedPeer`, `SpawnError`, `UpdateError`, `UpdateReport` and the Discovery surface (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `DiscoveryError`). DiscoveryClient methods switched to owned argument types (`String`, `PeerId`, `Vec<Multiaddr>`) for UniFFI 0.31 compatibility; cascading caller updates in `auki-domain` and `bindings/python/auki-network-py`. Shared `StreamEntry { timestamp_ns, seq, payload_bytes: Vec<u8> }` record + flattened `StreamError` / `OpenStreamError` enums. Wire types stay prost-encoded `Vec<u8>` at the FFI seam.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Browser session control-plane protocol added.** New `/auki/browser-session/0.0.1` framed JSON messages carry browser participant metadata, sensor declarations, mic publication intent, subscribe/unsubscribe intent, and Manager-pushed roster snapshots. The native `browser_join_listener` smoke Manager now accepts browser session streams, keeps an in-memory browser roster, and pushes symmetric snapshots so two Park browser peers can see each other.

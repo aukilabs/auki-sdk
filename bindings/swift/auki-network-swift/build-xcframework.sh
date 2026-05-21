@@ -12,16 +12,19 @@
 # ring 0.17.x has first-class iOS cross-compile support so no CC/SDK
 # env intervention is required.
 #
-# Heads-up for Stage 2: when the `swarm` feature gets pulled (libp2p),
-# the consuming Xcode target may need to link `SystemConfiguration.
-# framework` if if-watch symbols surface; not the case at Stage 1.
+# `swarm` feature is pulled (libp2p) as of PR B. Validated under
+# ring 0.17 + reqwest's rustls-tls default that the iOS cross-compile
+# does NOT surface `SystemConfiguration.framework` link requirements
+# in the consuming Xcode target (no if-watch symbols leak through).
+# If a future libp2p / reqwest bump changes that, document it here and
+# in the consuming-app's link-flags note.
 #
 # Prereqs:
 #   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$CRATE_DIR/../.." && pwd)"
+WORKSPACE_ROOT="$(cd "$CRATE_DIR/../../.." && pwd)"
 LIB_NAME="auki_network_swift"
 OUT="$CRATE_DIR/target-xcframework"
 BINDINGS="$OUT/bindings"

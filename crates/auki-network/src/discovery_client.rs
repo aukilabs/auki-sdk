@@ -38,6 +38,7 @@ use multiaddr::Multiaddr;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::sync::Arc;
 use thiserror::Error;
 
 // ─── Public types ──────────────────────────────────────────────────
@@ -52,6 +53,7 @@ use thiserror::Error;
 /// `last_liveness_check_ns` is the unix-ns of the Manager's most recent
 /// liveness check (`0` if the cluster was just created and the Manager
 /// hasn't pushed one yet).
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterEntry {
     /// The cluster's name. Discovery enforces `^[A-Za-z0-9_-]{1,64}$`.
@@ -73,7 +75,8 @@ pub struct ClusterEntry {
 }
 
 /// Outcome of [`DiscoveryClient::create_cluster`].
-#[derive(Debug)]
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateClusterOutcome {
     /// `201 Created` — the caller is the new cluster's initial Manager.
     Created(ClusterEntry),
@@ -84,6 +87,8 @@ pub enum CreateClusterOutcome {
 }
 
 /// Failure modes for [`DiscoveryClient`] calls.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
     /// HTTP transport or connection failure.
@@ -115,35 +120,54 @@ pub enum DiscoveryError {
 ///
 /// Construct with a base URL like `http://192.168.9.130:8080`. Methods
 /// are async; the caller drives a tokio runtime.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 #[derive(Debug, Clone)]
 pub struct DiscoveryClient {
     base_url: String,
     http: reqwest::Client,
 }
 
+// ─── Sync methods (exported as the primary constructor + accessor) ──
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
 impl DiscoveryClient {
     /// Construct against `base_url` with a default `reqwest::Client`.
     /// Trailing `/` on `base_url` is stripped.
-    pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_http(base_url, reqwest::Client::new())
+    ///
+    /// Returns `Arc<Self>` to satisfy the UniFFI 0.31 object-constructor
+    /// contract. Rust callers that need a plain `DiscoveryClient` should
+    /// use [`Self::with_http`] instead.
+    #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
+    pub fn new(base_url: String) -> Arc<Self> {
+        Arc::new(Self::with_http(base_url, reqwest::Client::new()))
     }
 
+    /// The base URL this client was constructed against (trailing `/`
+    /// stripped).
+    pub fn base_url(&self) -> String {
+        self.base_url.clone()
+    }
+}
+
+impl DiscoveryClient {
     /// Construct against `base_url` with a caller-provided
     /// `reqwest::Client`. Use this to set custom timeouts, proxies,
     /// custom TLS roots, etc.
+    ///
+    /// Returns `Self` (not `Arc<Self>`) — use this from Rust callers
+    /// that store or clone the client directly.
     pub fn with_http(base_url: impl Into<String>, http: reqwest::Client) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             http,
         }
     }
+}
 
-    /// The base URL this client was constructed against (trailing `/`
-    /// stripped).
-    pub fn base_url(&self) -> &str {
-        &self.base_url
-    }
+// ─── Async methods (exported with tokio runtime) ────────────────────
 
+#[cfg_attr(feature = "swift-bindings", uniffi::export(async_runtime = "tokio"))]
+impl DiscoveryClient {
     /// Snapshot of Discovery's directory, sorted by `created_ns` desc
     /// (newest cluster first).
     pub async fn list_clusters(&self) -> Result<Vec<ClusterEntry>, DiscoveryError> {
@@ -166,9 +190,9 @@ impl DiscoveryClient {
     /// join the existing cluster.
     pub async fn create_cluster(
         &self,
-        name: &str,
-        manager_peer_id: &PeerId,
-        manager_multiaddrs: &[Multiaddr],
+        name: String,
+        manager_peer_id: PeerId,
+        manager_multiaddrs: Vec<Multiaddr>,
     ) -> Result<CreateClusterOutcome, DiscoveryError> {
         let url = format!("{}/clusters/{}", self.base_url, name);
         let body = WireManagerRequest {
@@ -194,7 +218,7 @@ impl DiscoveryClient {
     /// (`LIVENESS_REQUIREMENT_NS`). Returns the updated `ClusterEntry`.
     pub async fn liveness_check(
         &self,
-        name: &str,
+        name: String,
         peer_count: u32,
     ) -> Result<ClusterEntry, DiscoveryError> {
         let url = format!("{}/clusters/{}/liveness", self.base_url, name);
@@ -208,9 +232,9 @@ impl DiscoveryClient {
     /// Returns the updated `ClusterEntry`.
     pub async fn rotate_manager(
         &self,
-        name: &str,
-        manager_peer_id: &PeerId,
-        manager_multiaddrs: &[Multiaddr],
+        name: String,
+        manager_peer_id: PeerId,
+        manager_multiaddrs: Vec<Multiaddr>,
     ) -> Result<ClusterEntry, DiscoveryError> {
         let url = format!("{}/clusters/{}/manager", self.base_url, name);
         let body = WireManagerRequest {
@@ -223,7 +247,7 @@ impl DiscoveryClient {
 
     /// Graceful deregistration. Called by the last cluster member on
     /// clean exit. v1 = trust-the-claim; any HTTP caller succeeds.
-    pub async fn deregister(&self, name: &str) -> Result<(), DiscoveryError> {
+    pub async fn deregister(&self, name: String) -> Result<(), DiscoveryError> {
         let url = format!("{}/clusters/{}", self.base_url, name);
         let resp = self.http.delete(&url).send().await?;
         let status = resp.status();
@@ -359,8 +383,8 @@ mod tests {
 
     #[test]
     fn client_trims_trailing_slash_from_base_url() {
-        let a = DiscoveryClient::new("http://example.com:8080");
-        let b = DiscoveryClient::new("http://example.com:8080/");
+        let a = DiscoveryClient::new("http://example.com:8080".to_string());
+        let b = DiscoveryClient::new("http://example.com:8080/".to_string());
         assert_eq!(a.base_url(), b.base_url());
         assert_eq!(a.base_url(), "http://example.com:8080");
     }

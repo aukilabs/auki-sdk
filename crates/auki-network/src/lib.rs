@@ -35,6 +35,34 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "swift-bindings")]
 uniffi::setup_scaffolding!();
 
+// UniFFI custom-type registrations for foreign types used in exported
+// Record structs. These registrations make PeerId and Multiaddr
+// available to the Record derive proc-macro when swift-bindings is enabled.
+//
+// Cross-FFI representation: canonical libp2p peer-id string (`12D3KooW…`).
+// Parse failures surface as a Rust `anyhow::Error`.
+// Cross-FFI representation: canonical `/ip4/.../tcp/...` multiaddr string.
+// Parse failures surface as Rust `anyhow::Error`.
+#[cfg(feature = "swift-bindings")]
+uniffi::custom_type!(PeerId, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<PeerId>()
+            .map_err(|e| anyhow::anyhow!("invalid peer-id {s:?}: {e}"))
+    },
+    lower: |p: PeerId| p.to_string(),
+});
+
+#[cfg(feature = "swift-bindings")]
+uniffi::custom_type!(Multiaddr, String, {
+    remote,
+    try_lift: |s: String| {
+        s.parse::<Multiaddr>()
+            .map_err(|e| anyhow::anyhow!("invalid multiaddr {s:?}: {e}"))
+    },
+    lower: |m: Multiaddr| m.to_string(),
+});
+
 pub mod participant;
 pub use participant::ParticipantInfo;
 
@@ -99,6 +127,12 @@ pub use network_runtime::{
     PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
     RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
     SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
+};
+
+#[cfg(all(feature = "swarm", feature = "swift-bindings"))]
+pub use network_runtime::{
+    OpenStreamError, StreamEntry, StreamError, StreamSubscriptionAudio, StreamSubscriptionCamera,
+    StreamSubscriptionDetection, StreamSubscriptionJointEncoders, StreamSubscriptionPointCloud,
 };
 
 #[cfg(feature = "app_instance")]

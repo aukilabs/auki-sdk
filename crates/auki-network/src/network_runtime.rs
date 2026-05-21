@@ -106,6 +106,11 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(60);
 pub const RECONNECT_TICK: Duration = Duration::from_millis(500);
 
 /// One entry in the runtime's allow-list / auto-dial schedule.
+///
+/// `swift-bindings`: derived as a UniFFI Record. `peer_id` and
+/// `multiaddrs` cross the FFI as canonical strings via the
+/// custom-type registrations in `auki-network-swift`.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedPeer {
     /// libp2p peer-id of this peer.
@@ -177,6 +182,7 @@ pub struct HeartbeatNtpSampleObservation {
 }
 
 /// Errors from [`NetworkRuntime::spawn`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
 #[derive(Debug, thiserror::Error)]
 pub enum SpawnError {
     /// Constructor was called outside a tokio runtime context — the
@@ -532,6 +538,10 @@ pub enum BroadcastDiagnosticError {
 /// dropped their connections and removed them from the allow-list.
 /// Peers in both keep their existing connection; their addresses are
 /// refreshed for future redials.
+///
+/// `swift-bindings`: UniFFI Record. All fields cross the FFI via the
+/// custom-type registrations in scope (PeerId → String).
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct UpdateReport {
     /// Peer-ids newly added to the allow-list.
@@ -540,7 +550,15 @@ pub struct UpdateReport {
     pub removed: Vec<PeerId>,
 }
 
-/// Errors from [`NetworkRuntime::set_allowed_peers`].
+/// Errors from [`NetworkRuntime::set_allowed_peers`] /
+/// [`NetworkRuntime::set_heartbeat_targets`].
+///
+/// `swift-bindings`: flattened — variants that wrap non-FFI inner
+/// errors are surfaced as Display'd strings; UniFFI consumers see one
+/// tagged-enum case per variant with a `message: String` field where
+/// the wrapped error was.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     /// The runtime task isn't accepting commands — typically because
@@ -572,6 +590,12 @@ struct PeerSchedule {
 /// `/auki/stream/0.1.0` (handed off to the `stream_provider`),
 /// reconnecting on disconnect with exponential backoff. See the
 /// module-level docs for the design rationale.
+///
+/// `swift-bindings`: derived as a UniFFI Object. The curated FFI
+/// surface for v0: `local_peer_id_string`, `connected_peer_id_strings`,
+/// `set_allowed_peers`, `shutdown`, and the 5 `open_*_stream` methods
+/// added in Tasks 14-18.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 pub struct NetworkRuntime {
     local_peer_id: PeerId,
     connected: Arc<Mutex<HashSet<PeerId>>>,
@@ -1093,6 +1117,96 @@ impl NetworkRuntime {
             .collect()
     }
 
+    /// Replace the peers this runtime should actively open
+    /// `/auki/heartbeat/0.0.1` substreams to.
+    ///
+    /// This is intentionally carrier-level. The runtime does not know
+    /// which peer is Manager, which topology is correct, or when a
+    /// heartbeat timeout should become a cluster-level loss. It merely
+    /// keeps outbound heartbeat substreams open to these allow-listed,
+    /// connected targets and reports frame/closure events upward.
+    pub async fn set_heartbeat_targets(&self, peers: Vec<PeerId>) -> Result<(), UpdateError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.command_tx
+            .send(RuntimeCmd::SetHeartbeatTargets { peers, ack: ack_tx })
+            .await
+            .map_err(|_| UpdateError::RuntimeUnavailable)?;
+        ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
+    }
+
+    fn cleanup(&self) {
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        if let Some(task) = self
+            .task
+            .lock()
+            .expect("NetworkRuntime task lock poisoned")
+            .take()
+        {
+            task.abort();
+        }
+    }
+}
+
+// ─── UniFFI-exposed surface ──────────────────────────────────────────────────
+//
+// Methods Swift consumes. The `_string` / `_strings` suffix on the peer-id
+// accessors is the same pattern PR A established for `Wallet::wallet_id_str` —
+// explicit so the FFI seam shape is visible at the call site.
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl NetworkRuntime {
+    /// Canonical libp2p peer-id string for this runtime's local peer.
+    pub fn local_peer_id_string(&self) -> String {
+        self.local_peer_id.to_string()
+    }
+
+    /// Snapshot of currently-connected peer-ids as canonical libp2p
+    /// strings. Mutates as connections open / close in the driver task.
+    pub fn connected_peer_id_strings(&self) -> Vec<String> {
+        self.connected
+            .lock()
+            .expect("connected set mutex poisoned")
+            .iter()
+            .map(|p| p.to_string())
+            .collect()
+    }
+
+    /// Signal the driver task to shut down. Inbound substream tasks
+    /// have [`SHUTDOWN_GRACE`] to flush their final typed
+    /// `EndOfStream` before the swarm tears down. Unclean exit (`Drop`
+    /// without an explicit `shutdown` call, panic) skips the grace —
+    /// consumers see `ConnectionLost` instead of the typed reason.
+    ///
+    /// Idempotent: the first call broadcasts the grace signal and
+    /// aborts the driver task; subsequent calls find `shutdown_tx` /
+    /// `task` already taken and no-op. Safe to call from multiple
+    /// threads concurrently.
+    pub fn shutdown(&self) {
+        let _ = self.inbound_shutdown_tx.send(true);
+        if let Some(tx) = self
+            .shutdown_tx
+            .lock()
+            .expect("NetworkRuntime shutdown_tx lock poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+    }
+}
+
+// ─── UniFFI-exposed async surface ────────────────────────────────────────────
+//
+// `set_allowed_peers` is async and needs the tokio async runtime annotation.
+// Kept in a separate impl block so the non-async UniFFI block above stays
+// clean and the annotation is explicit at the seam.
+#[cfg_attr(feature = "swift-bindings", uniffi::export(async_runtime = "tokio"))]
+impl NetworkRuntime {
     /// Replace the allow-list with `new_peers`. The runtime diffs:
     ///
     /// - peer-ids in `new_peers` but not the old list are added to
@@ -1118,64 +1232,6 @@ impl NetworkRuntime {
             .map_err(|_| UpdateError::RuntimeUnavailable)?;
         ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
     }
-
-    /// Replace the peers this runtime should actively open
-    /// `/auki/heartbeat/0.0.1` substreams to.
-    ///
-    /// This is intentionally carrier-level. The runtime does not know
-    /// which peer is Manager, which topology is correct, or when a
-    /// heartbeat timeout should become a cluster-level loss. It merely
-    /// keeps outbound heartbeat substreams open to these allow-listed,
-    /// connected targets and reports frame/closure events upward.
-    pub async fn set_heartbeat_targets(&self, peers: Vec<PeerId>) -> Result<(), UpdateError> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.command_tx
-            .send(RuntimeCmd::SetHeartbeatTargets { peers, ack: ack_tx })
-            .await
-            .map_err(|_| UpdateError::RuntimeUnavailable)?;
-        ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
-    }
-
-    /// Signal the driver task to shut down. Inbound substream tasks
-    /// have [`SHUTDOWN_GRACE`] to flush their final typed
-    /// `EndOfStream` before the swarm tears down. Unclean exit (`Drop`
-    /// without an explicit `shutdown` call, panic) skips the grace —
-    /// consumers see `ConnectionLost` instead of the typed reason.
-    ///
-    /// Idempotent: the first call broadcasts the grace signal and
-    /// aborts the driver task; subsequent calls find `shutdown_tx` /
-    /// `task` already taken and no-op. Safe to call from multiple
-    /// threads concurrently.
-    pub fn shutdown(&self) {
-        let _ = self.inbound_shutdown_tx.send(true);
-        if let Some(tx) = self
-            .shutdown_tx
-            .lock()
-            .expect("NetworkRuntime shutdown_tx lock poisoned")
-            .take()
-        {
-            let _ = tx.send(());
-        }
-    }
-
-    fn cleanup(&self) {
-        if let Some(tx) = self
-            .shutdown_tx
-            .lock()
-            .expect("NetworkRuntime shutdown_tx lock poisoned")
-            .take()
-        {
-            let _ = tx.send(());
-        }
-        if let Some(task) = self
-            .task
-            .lock()
-            .expect("NetworkRuntime task lock poisoned")
-            .take()
-        {
-            task.abort();
-        }
-    }
 }
 
 impl Drop for NetworkRuntime {
@@ -1185,6 +1241,576 @@ impl Drop for NetworkRuntime {
         // against prior `shutdown()` and tears the driver task down
         // without the EndOfStream flush window.
         self.cleanup();
+    }
+}
+
+// ─── UniFFI-exposed stream surface ──────────────────────────────────────────
+
+/// Shared cross-FFI stream entry shape. The opaque `payload_bytes` is
+/// prost-encoded against the per-payload `.proto` (`AudioFrame.proto`,
+/// `CameraFrame.proto`, …); Swift consumers decode via swift-protobuf.
+/// Type-distinguishability lives at the `StreamSubscription*` /
+/// `open_*_stream` level.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Record, Debug, Clone)]
+pub struct StreamEntry {
+    pub timestamp_ns: i64,
+    pub seq: u64,
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Cross-FFI stream-error variants. Flattened from
+/// `stream_runtime::StreamError`; non-FFI variants surface as Display'd
+/// `message: String`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error("end of stream: {reason}")]
+    EndOfStream { reason: String },
+    #[error("connection lost")]
+    ConnectionLost,
+    #[error("protocol error: {message}")]
+    Protocol { message: String },
+}
+
+#[cfg(feature = "swift-bindings")]
+impl From<crate::stream_runtime::StreamError> for StreamError {
+    fn from(e: crate::stream_runtime::StreamError) -> Self {
+        match e {
+            crate::stream_runtime::StreamError::EndOfStream { reason } => Self::EndOfStream {
+                reason: format!("{reason:?}"),
+            },
+            crate::stream_runtime::StreamError::ConnectionLost => Self::ConnectionLost,
+            crate::stream_runtime::StreamError::Protocol(p) => Self::Protocol {
+                message: p.to_string(),
+            },
+        }
+    }
+}
+
+/// Cross-FFI open-stream-error variants. Flattened.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum OpenStreamError {
+    #[error("declined: {reason}")]
+    Declined { reason: String },
+    #[error("libp2p open failed: {message}")]
+    LibP2p { message: String },
+    #[error("protocol error: {message}")]
+    Protocol { message: String },
+    #[error("open timed out after {ms} ms")]
+    Timeout { ms: u64 },
+}
+
+#[cfg(feature = "swift-bindings")]
+impl From<crate::stream_runtime::OpenStreamError> for OpenStreamError {
+    fn from(e: crate::stream_runtime::OpenStreamError) -> Self {
+        use crate::stream_runtime::OpenStreamError as Up;
+        match e {
+            Up::Declined { reason } => Self::Declined {
+                reason: format!("{reason:?}"),
+            },
+            Up::LibP2p(err) => Self::LibP2p {
+                message: err.to_string(),
+            },
+            Up::Protocol(err) => Self::Protocol {
+                message: err.to_string(),
+            },
+            Up::Timeout(d) => Self::Timeout {
+                ms: d.as_millis() as u64,
+            },
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<AudioFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionAudio {
+    inner: tokio::sync::Mutex<
+        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>>,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionAudio {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionAudio {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<CameraFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionCamera {
+    inner: tokio::sync::Mutex<
+        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::CameraFrame>>,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionCamera {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::CameraFrame>,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionCamera {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<PointCloudFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionPointCloud {
+    inner: tokio::sync::Mutex<
+        Option<
+            crate::stream_runtime::StreamSubscription<crate::stream_protocol::PointCloudFrame>,
+        >,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionPointCloud {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::PointCloudFrame>,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionPointCloud {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<JointEncodersFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionJointEncoders {
+    inner: tokio::sync::Mutex<
+        Option<
+            crate::stream_runtime::StreamSubscription<
+                crate::stream_protocol::JointEncodersFrame,
+            >,
+        >,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionJointEncoders {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<
+            crate::stream_protocol::JointEncodersFrame,
+        >,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionJointEncoders {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Swift-friendly wrapper around `StreamSubscription<DetectionFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The payload type is `auki_datatypes::detection::DetectionFrame`
+/// (opaque-bytes detection payload, Cuba T8).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionDetection {
+    inner: tokio::sync::Mutex<
+        Option<
+            crate::stream_runtime::StreamSubscription<auki_datatypes::detection::DetectionFrame>,
+        >,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionDetection {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<
+            auki_datatypes::detection::DetectionFrame,
+        >,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionDetection {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
+// ─── UniFFI-exposed async stream-open surface ────────────────────────────────
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl NetworkRuntime {
+    /// Open an outbound audio stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionAudio` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_audio_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionAudio>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::AudioFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionAudio::from_inner(sub))
+    }
+
+    /// Open an outbound camera stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionCamera` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_camera_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionCamera>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::CameraFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionCamera::from_inner(sub))
+    }
+
+    /// Open an outbound point-cloud stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionPointCloud` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_pointcloud_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionPointCloud>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::PointCloudFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionPointCloud::from_inner(sub))
+    }
+
+    /// Open an outbound joint-encoders stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionJointEncoders` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_joint_encoders_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionJointEncoders>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::JointEncodersFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionJointEncoders::from_inner(sub))
+    }
+
+    /// Open an outbound detection stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionDetection` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_detection_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionDetection>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<auki_datatypes::detection::DetectionFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionDetection::from_inner(sub))
     }
 }
 

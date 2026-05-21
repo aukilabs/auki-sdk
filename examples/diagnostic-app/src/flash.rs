@@ -40,6 +40,13 @@ pub fn flash_is_on(now_ns: u128, period_ns: u128, flash_on_ns: u128) -> bool {
     elapsed_in_period_ns(now_ns, period_ns) < flash_on_ns
 }
 
+pub fn flash_is_on_i64(now_ns: i64, period_ns: u128, flash_on_ns: u128) -> bool {
+    let Ok(now_ns) = u128::try_from(now_ns) else {
+        return false;
+    };
+    flash_is_on(now_ns, period_ns, flash_on_ns)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +72,11 @@ mod tests {
     fn flash_is_on_inside_opening_window() {
         assert!(flash_is_on(6_050, 3_000, 180));
         assert!(!flash_is_on(6_250, 3_000, 180));
+    }
+
+    #[test]
+    fn flash_is_on_i64_rejects_negative_domain_time() {
+        assert!(!flash_is_on_i64(-1, 3_000, 180));
+        assert!(flash_is_on_i64(6_050, 3_000, 180));
     }
 }

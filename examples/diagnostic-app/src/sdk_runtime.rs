@@ -28,6 +28,10 @@ pub struct RuntimeSnapshot {
     pub events: Vec<String>,
     pub flash_mode: FlashMode,
     pub domain_mode_available: bool,
+    pub domain_status: String,
+    pub domain_now_ns: Option<i64>,
+    pub domain_offset_ns: Option<i64>,
+    pub domain_uncertainty_ns: Option<u64>,
     pub join_in_flight: bool,
 }
 
@@ -51,6 +55,10 @@ pub struct ClusterSnapshot {
     pub peer_count: usize,
     pub manager_suffix: Option<String>,
     pub peers: Vec<PeerRow>,
+    pub domain_status: String,
+    pub domain_now_ns: Option<i64>,
+    pub domain_offset_ns: Option<i64>,
+    pub domain_uncertainty_ns: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -81,6 +89,10 @@ impl RuntimeSnapshot {
             events: vec!["app started".into()],
             flash_mode: FlashMode::Utc,
             domain_mode_available: false,
+            domain_status: "not clustered".into(),
+            domain_now_ns: None,
+            domain_offset_ns: None,
+            domain_uncertainty_ns: None,
             join_in_flight: false,
         }
     }
@@ -100,6 +112,10 @@ impl RuntimeSnapshot {
             events: Vec::new(),
             flash_mode: FlashMode::Utc,
             domain_mode_available: false,
+            domain_status: "not clustered".into(),
+            domain_now_ns: None,
+            domain_offset_ns: None,
+            domain_uncertainty_ns: None,
             join_in_flight: false,
         }
     }
@@ -137,6 +153,11 @@ impl RuntimeSnapshot {
                 self.peer_count = cluster.peer_count;
                 self.manager_suffix = cluster.manager_suffix;
                 self.peers = cluster.peers;
+                self.domain_status = cluster.domain_status;
+                self.domain_now_ns = cluster.domain_now_ns;
+                self.domain_offset_ns = cluster.domain_offset_ns;
+                self.domain_uncertainty_ns = cluster.domain_uncertainty_ns;
+                self.domain_mode_available = self.domain_now_ns.is_some();
                 if was_unclustered || was_joining {
                     self.events.push("cluster joined".into());
                 }
@@ -151,7 +172,9 @@ impl RuntimeSnapshot {
                     || self.role != Role::Unclustered
                     || self.peer_count != 0
                     || self.manager_suffix.is_some()
-                    || !self.peers.is_empty();
+                    || !self.peers.is_empty()
+                    || self.domain_mode_available
+                    || self.domain_now_ns.is_some();
                 self.join_in_flight = false;
                 self.local_peer_id = None;
                 self.local_peer_suffix = None;
@@ -159,6 +182,11 @@ impl RuntimeSnapshot {
                 self.peer_count = 0;
                 self.manager_suffix = None;
                 self.peers.clear();
+                self.domain_mode_available = false;
+                self.domain_status = "not clustered".into();
+                self.domain_now_ns = None;
+                self.domain_offset_ns = None;
+                self.domain_uncertainty_ns = None;
                 if had_cluster_state {
                     self.events.push("cluster left".into());
                 }
@@ -301,7 +329,7 @@ impl Drop for SdkRuntime {
 
 impl RuntimeWorker {
     async fn run(mut self) {
-        let mut refresh = tokio::time::interval(Duration::from_millis(250));
+        let mut refresh = tokio::time::interval(Duration::from_millis(50));
 
         loop {
             tokio::select! {
@@ -465,6 +493,24 @@ fn cluster_snapshot(manager: &ClusterManager) -> ClusterSnapshot {
     let local_peer_id = manager.local_peer_id();
     let manager_peer_id = manager.manager_peer_id();
     let membership = manager.membership();
+    let (domain_status, domain_now_ns, domain_offset_ns, domain_uncertainty_ns) =
+        match manager.domain_clock_estimate() {
+            Ok(estimate) => match manager.domain_time_now() {
+                Ok(now_ns) => (
+                    "synced".to_string(),
+                    Some(now_ns),
+                    Some(estimate.total_offset_ns),
+                    Some(estimate.uncertainty_ns),
+                ),
+                Err(error) => (
+                    error.to_string(),
+                    None,
+                    Some(estimate.total_offset_ns),
+                    Some(estimate.uncertainty_ns),
+                ),
+            },
+            Err(error) => (error.to_string(), None, None, None),
+        };
     let peers = membership
         .peers
         .iter()
@@ -488,6 +534,10 @@ fn cluster_snapshot(manager: &ClusterManager) -> ClusterSnapshot {
         peer_count: manager.peer_count(),
         manager_suffix: Some(crate::flash::peer_suffix(&manager_peer_id.to_string())),
         peers,
+        domain_status,
+        domain_now_ns,
+        domain_offset_ns,
+        domain_uncertainty_ns,
     }
 }
 
@@ -513,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_keeps_domain_mode_disabled_without_sync_api() {
+    fn runtime_keeps_domain_mode_disabled_without_domain_time() {
         let runtime = SdkRuntime::spawn();
 
         runtime.send(RuntimeCommand::SetFlashMode(FlashMode::Domain));
@@ -522,6 +572,47 @@ mod tests {
         assert_eq!(snapshot.flash_mode, FlashMode::Utc);
         assert!(!snapshot.domain_mode_available);
         assert_eq!(snapshot.events.last().unwrap(), "domain flash unavailable");
+    }
+
+    #[test]
+    fn cluster_joined_updates_domain_time_snapshot() {
+        let mut snapshot = RuntimeSnapshot::default_for_tests();
+
+        snapshot.apply_command(RuntimeCommand::ClusterJoined(Box::new(ClusterSnapshot {
+            local_peer_id: "12D3KooWabcdef".into(),
+            role: Role::Member,
+            peer_count: 2,
+            manager_suffix: Some("...manager".into()),
+            peers: Vec::new(),
+            domain_status: "synced".into(),
+            domain_now_ns: Some(42_000),
+            domain_offset_ns: Some(1_500),
+            domain_uncertainty_ns: Some(25),
+        })));
+
+        assert!(snapshot.domain_mode_available);
+        assert_eq!(snapshot.domain_status, "synced");
+        assert_eq!(snapshot.domain_now_ns, Some(42_000));
+        assert_eq!(snapshot.domain_offset_ns, Some(1_500));
+        assert_eq!(snapshot.domain_uncertainty_ns, Some(25));
+    }
+
+    #[test]
+    fn cluster_left_clears_domain_time_snapshot() {
+        let mut snapshot = RuntimeSnapshot::default_for_tests();
+        snapshot.domain_mode_available = true;
+        snapshot.domain_status = "synced".into();
+        snapshot.domain_now_ns = Some(42_000);
+        snapshot.domain_offset_ns = Some(1_500);
+        snapshot.domain_uncertainty_ns = Some(25);
+
+        snapshot.apply_command(RuntimeCommand::ClusterLeft);
+
+        assert!(!snapshot.domain_mode_available);
+        assert_eq!(snapshot.domain_status, "not clustered");
+        assert_eq!(snapshot.domain_now_ns, None);
+        assert_eq!(snapshot.domain_offset_ns, None);
+        assert_eq!(snapshot.domain_uncertainty_ns, None);
     }
 
     #[test]
@@ -541,6 +632,10 @@ mod tests {
                 suffix: "...abcdef".into(),
                 role: Role::Manager,
             }],
+            domain_status: "synced".into(),
+            domain_now_ns: Some(12_345),
+            domain_offset_ns: Some(0),
+            domain_uncertainty_ns: Some(0),
         })));
 
         assert!(!snapshot.join_in_flight);
@@ -550,6 +645,8 @@ mod tests {
         assert_eq!(snapshot.peer_count, 1);
         assert_eq!(snapshot.manager_suffix.as_deref(), Some("...abcdef"));
         assert_eq!(snapshot.peers.len(), 1);
+        assert!(snapshot.domain_mode_available);
+        assert_eq!(snapshot.domain_now_ns, Some(12_345));
 
         snapshot.apply_command(RuntimeCommand::ClusterLeft);
         assert!(!snapshot.join_in_flight);
@@ -559,6 +656,8 @@ mod tests {
         assert_eq!(snapshot.peer_count, 0);
         assert_eq!(snapshot.manager_suffix, None);
         assert!(snapshot.peers.is_empty());
+        assert!(!snapshot.domain_mode_available);
+        assert_eq!(snapshot.domain_now_ns, None);
     }
 
     #[test]

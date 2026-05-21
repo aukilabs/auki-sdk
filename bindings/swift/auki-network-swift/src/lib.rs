@@ -1382,6 +1382,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_subscription_joint_encoders_wraps_typed_subscription() {
+        use auki_network_rs::stream_protocol::{JointEncodersFrame, StreamManifest};
+        use auki_network_rs::stream_runtime::StreamSubscription;
+        use futures::stream;
+
+        let manifest = StreamManifest::default();
+        let entries = stream::iter(vec![Ok(auki_network_rs::stream_runtime::StreamEntry {
+            timestamp_ns: 7,
+            seq: 0,
+            payload: JointEncodersFrame::default(),
+        })]);
+        let sub = StreamSubscription {
+            manifest,
+            entries: Box::pin(entries),
+        };
+        let wrapped = auki_network_rs::StreamSubscriptionJointEncoders::from_inner(sub);
+        let first = wrapped.next_entry().await.expect("ok").expect("some");
+        assert_eq!(first.timestamp_ns, 7);
+        assert!(wrapped.next_entry().await.expect("ok").is_none());
+    }
+
+    #[tokio::test]
     async fn stream_subscription_pointcloud_wraps_typed_subscription() {
         use auki_network_rs::stream_protocol::{PointCloudFrame, StreamManifest};
         use auki_network_rs::stream_runtime::StreamSubscription;

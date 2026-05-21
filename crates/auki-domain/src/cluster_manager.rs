@@ -267,6 +267,7 @@ type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomai
 /// the inbound handler returns an empty `sensors: []` — "I have a
 /// catalog and it's empty" is a valid producer state (a daemon
 /// that's started but hasn't mounted any sensors yet).
+#[cfg_attr(feature = "swift-bindings", uniffi::export(callback_interface))]
 pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// Snapshot the producer's currently-published sensors.
     /// Called once per inbound `/auki/sensors/0.0.1` request. Keep
@@ -274,26 +275,26 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// 2 s to respond before closing the substream.
     fn snapshot(&self) -> Vec<SensorEntry>;
 
-    /// Snapshot the catalog for a concrete request. The default
-    /// implementation preserves the lightweight catalog path for
-    /// existing providers, and enriches rows from the producer's
-    /// registered app root only when the requester asks for embedded
-    /// registry entries.
-    fn snapshot_for_request(
-        &self,
-        request: &SensorsRequest,
-        registry_app_root: Option<&Path>,
-    ) -> Vec<SensorEntry> {
-        let mut sensors = self.snapshot();
-        if !request.include_registry_entries && !request.include_frame_entries {
-            return sensors;
-        }
-        let Some(app_root) = registry_app_root else {
-            return sensors;
-        };
-        enrich_sensor_entries(&mut sensors, request, app_root);
-        sensors
+}
+
+/// Snapshot the sensor catalog for a concrete request. Moved out of
+/// [`SensorCatalogProvider`] so the trait can be exported as a UniFFI
+/// callback interface (which requires all trait methods to be abstract).
+/// The logic is identical to the former default implementation.
+fn sensor_catalog_snapshot_for_request(
+    provider: &dyn SensorCatalogProvider,
+    request: &SensorsRequest,
+    registry_app_root: Option<&Path>,
+) -> Vec<SensorEntry> {
+    let mut sensors = provider.snapshot();
+    if !request.include_registry_entries && !request.include_frame_entries {
+        return sensors;
     }
+    let Some(app_root) = registry_app_root else {
+        return sensors;
+    };
+    enrich_sensor_entries(&mut sensors, request, app_root);
+    sensors
 }
 
 /// Application-supplied source of truth for non-sensor resources the
@@ -301,6 +302,7 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
 /// lifted from the registered [`SensorCatalogProvider`] into
 /// `/auki/resources/0.0.1`; install this provider for additional
 /// resources such as rigid transform edges.
+#[cfg_attr(feature = "swift-bindings", uniffi::export(callback_interface))]
 pub trait ResourceCatalogProvider: Send + Sync + 'static {
     /// Snapshot currently-advertised resources. Called once per
     /// inbound `/auki/resources/0.0.1` request. Keep it cheap — the
@@ -308,22 +310,23 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
     /// before closing the substream.
     fn snapshot(&self) -> Vec<ResourceEntry>;
 
-    /// Snapshot resources for a concrete request. The default
-    /// implementation filters by requested open-string kind and
-    /// enriches rows from the producer's registered app root when the
-    /// requester asks for embedded registry entries.
-    fn snapshot_for_request(
-        &self,
-        request: &ResourcesRequest,
-        registry_app_root: Option<&Path>,
-    ) -> Vec<ResourceEntry> {
-        let mut resources = self.snapshot();
-        filter_resource_entries(&mut resources, request);
-        if let Some(app_root) = registry_app_root {
-            enrich_resource_entries(&mut resources, request, app_root);
-        }
-        resources
+}
+
+/// Snapshot the resource catalog for a concrete request. Moved out of
+/// [`ResourceCatalogProvider`] so the trait can be exported as a UniFFI
+/// callback interface (which requires all trait methods to be abstract).
+/// The logic is identical to the former default implementation.
+fn resource_catalog_snapshot_for_request(
+    provider: &dyn ResourceCatalogProvider,
+    request: &ResourcesRequest,
+    registry_app_root: Option<&Path>,
+) -> Vec<ResourceEntry> {
+    let mut resources = provider.snapshot();
+    filter_resource_entries(&mut resources, request);
+    if let Some(app_root) = registry_app_root {
+        enrich_resource_entries(&mut resources, request, app_root);
     }
+    resources
 }
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
@@ -3153,7 +3156,7 @@ fn spawn_resources_handler(
                         .lock()
                         .expect("sensor_catalog_provider lock");
                     match guard.as_ref() {
-                        Some(p) => p.snapshot_for_request(&sensors_request, root.as_deref()),
+                        Some(p) => sensor_catalog_snapshot_for_request(p.as_ref(), &sensors_request, root.as_deref()),
                         None => Vec::new(),
                     }
                 };
@@ -3165,7 +3168,7 @@ fn spawn_resources_handler(
                     .lock()
                     .expect("resource_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(p) => resource_catalog_snapshot_for_request(p.as_ref(), &request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
@@ -3202,7 +3205,7 @@ fn spawn_sensors_handler(
             let sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(p) => sensor_catalog_snapshot_for_request(p.as_ref(), &request, root.as_deref()),
                     None => Vec::new(),
                 }
             };

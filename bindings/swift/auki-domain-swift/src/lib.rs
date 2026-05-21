@@ -222,4 +222,30 @@ mod tests {
         let _ = ClusterTarget::join_or_create("test".to_string());
         let _ = ClusterTarget::most_recent_or_create("test".to_string());
     }
+
+    #[test]
+    fn sensor_catalog_provider_is_object_safe() {
+        use auki_domain_rs::cluster_manager::SensorCatalogProvider;
+        use auki_network::sensors_protocol::SensorEntry;
+        struct NoopProvider;
+        impl SensorCatalogProvider for NoopProvider {
+            fn snapshot(&self) -> Vec<SensorEntry> {
+                vec![]
+            }
+        }
+        let _p: Box<dyn SensorCatalogProvider> = Box::new(NoopProvider);
+    }
+
+    #[test]
+    fn resource_catalog_provider_is_object_safe() {
+        use auki_domain_rs::cluster_manager::ResourceCatalogProvider;
+        use auki_network::resources_protocol::ResourceEntry;
+        struct NoopProvider;
+        impl ResourceCatalogProvider for NoopProvider {
+            fn snapshot(&self) -> Vec<ResourceEntry> {
+                vec![]
+            }
+        }
+        let _p: Box<dyn ResourceCatalogProvider> = Box::new(NoopProvider);
+    }
 }

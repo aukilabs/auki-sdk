@@ -1103,87 +1103,6 @@ impl ClusterManager {
         self.membership.lock().expect("membership lock").peers.len()
     }
 
-    /// Admit a new peer to the cluster. Manager-only — other peers
-    /// route join requests to the Manager.
-    ///
-    /// On success the membership document gains a new
-    /// [`ClusterMember`] entry, the runtime's allow-list is
-    /// extended, and the new entry is returned. In v1 the successor
-    /// token is an empty byte vec — signature verification is
-    /// disabled per the Discovery v1 contract, so the bytes don't
-    /// need to mean anything yet. SDK-T4 (when it lands) replaces
-    /// this with a signed token.
-    pub async fn admit_peer(
-        &self,
-        peer_id: PeerId,
-        multiaddrs: Vec<Multiaddr>,
-    ) -> Result<ClusterMember, AdmitError> {
-        if self.stopped.load(Ordering::SeqCst) {
-            return Err(AdmitError::Stopped);
-        }
-        // Manager check.
-        let manager = self.manager_peer_id();
-        if manager != self.local_peer_id {
-            return Err(AdmitError::NotManager {
-                cluster: self.cluster_name.clone(),
-                manager,
-            });
-        }
-
-        // Build the new member entry, then take the lock briefly to
-        // append. Releasing the lock before the (async) runtime
-        // call avoids holding it across .await.
-        let member = ClusterMember {
-            peer_id,
-            multiaddrs: multiaddrs.clone(),
-            join_ts_ns: now_unix_nanos(),
-            successor_token: Some(Vec::new()),
-        };
-
-        let new_allow_list: Vec<AllowedPeer> = {
-            let mut membership = self.membership.lock().expect("membership lock");
-            if membership.peers.iter().any(|p| p.peer_id == peer_id) {
-                return Err(AdmitError::AlreadyMember(peer_id));
-            }
-            membership.admit(member.clone());
-            // Build the allow-list from membership, excluding our
-            // own peer-id (the runtime doesn't dial itself).
-            membership
-                .peers
-                .iter()
-                .filter(|p| p.peer_id != self.local_peer_id)
-                .map(|p| AllowedPeer {
-                    peer_id: p.peer_id,
-                    multiaddrs: p.multiaddrs.clone(),
-                })
-                .collect()
-        };
-
-        // Push the updated allow-list to the runtime.
-        self.runtime.set_allowed_peers(new_allow_list).await?;
-        sync_heartbeat_targets(
-            &self.runtime.handle(),
-            self.local_peer_id,
-            &self.manager_peer_id,
-            &self.membership,
-            &self.cluster_name,
-        )
-        .await;
-
-        // Gossip the updated membership to every connected peer so
-        // existing members learn about the new joiner (the joiner
-        // itself already has the same JSON in the `JoinResponse::Accept`
-        // it just received). Fire-and-forget; per-peer errors are
-        // logged inside the broadcast tasks.
-        broadcast_current_membership(
-            &self.runtime.handle(),
-            &self.manager_peer_id,
-            &self.membership,
-        );
-
-        Ok(member)
-    }
-
     /// Open an outbound stream subscription on `peer_id` for the
     /// named sensor. Thin delegator over
     /// [`NetworkRuntime::open_stream`] — the cluster handle is the
@@ -1281,26 +1200,6 @@ impl ClusterManager {
         convert_session_now_to_domain_time(&estimate, session_now_ns)
     }
 
-    /// Fetch a cluster peer's [`ParticipantInfo`] over the
-    /// `/auki/info/0.0.1` libp2p protocol. The target peer's
-    /// `ClusterManager` builds its own `ParticipantInfo` from its
-    /// stored state and serializes it over the wire.
-    ///
-    /// `peer_id` must be a current cluster member — the runtime
-    /// allow-list gates the outbound substream. Returns the
-    /// parsed `ParticipantInfo` ready for HTTP serialization.
-    pub async fn fetch_participant_info(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
-        if self.stopped.load(Ordering::SeqCst) {
-            return Err(FetchParticipantInfoError::Stopped);
-        }
-        let response = self.runtime.request_participant_info(peer_id).await?;
-        let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
-        Ok(info)
-    }
-
     /// Register (or replace) the application-supplied
     /// [`SensorCatalogProvider`]. Called by the producer daemon
     /// after constructing the `ClusterManager` — and again any
@@ -1345,167 +1244,6 @@ impl ClusterManager {
             .registry_app_root
             .lock()
             .expect("registry_app_root lock") = Some(app_root.into());
-    }
-
-    /// Fetch a cluster peer's current sensor catalog over the
-    /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
-    /// `ClusterManager` snapshots its registered
-    /// [`SensorCatalogProvider`] (or returns an empty list if the
-    /// daemon hasn't installed one yet) and serializes the catalog
-    /// over the wire.
-    ///
-    /// `peer_id` must be a current cluster member — the runtime
-    /// allow-list gates the outbound substream. Returns the parsed
-    /// [`SensorsResponse`] ready for consumers (Park's chip row,
-    /// Sentinel's status board).
-    pub async fn fetch_sensors_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
-        let response = self.runtime.request_sensors_catalog(peer_id).await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's sensor catalog with explicit request
-    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
-    /// consumer wants the producer to embed Sensor / Frame Registry
-    /// JSON by value and avoid per-row registry fetch round trips.
-    pub async fn fetch_sensors_catalog_with(
-        &self,
-        peer_id: PeerId,
-        request: SensorsRequest,
-    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
-        let response = self
-            .runtime
-            .request_sensors_catalog_with(peer_id, request)
-            .await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's current generalized resource catalog
-    /// over `/auki/resources/0.0.1`. This is the canonical discovery
-    /// path for sensor streams, transform edges, and future resource
-    /// kinds.
-    pub async fn fetch_resources_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
-        let response = self.runtime.request_resources_catalog(peer_id).await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's generalized resource catalog with an
-    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
-    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
-    /// when a consumer wants embedded registry JSON by value.
-    pub async fn fetch_resources_catalog_with(
-        &self,
-        peer_id: PeerId,
-        request: ResourcesRequest,
-    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
-        let response = self
-            .runtime
-            .request_resources_catalog_with(peer_id, request)
-            .await?;
-        Ok(response)
-    }
-
-    /// Fetch and verify a peer's `SensorRegistryEntry` by exact
-    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
-    ///
-    /// The SDK verifies the returned canonical JSON bytes hash to the
-    /// requested hash before decoding, then checks the decoded
-    /// `sensor_id` matches the requested id.
-    pub async fn fetch_sensor_entry(
-        &self,
-        peer_id: PeerId,
-        sensor_id: impl Into<String>,
-        sensor_hash: impl Into<String>,
-    ) -> Result<SensorRegistryEntry, FetchRegistryEntryError> {
-        let id = sensor_id.into();
-        let hash = sensor_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Sensor, id.clone(), hash.clone())
-            .await?;
-        let entry: SensorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.sensor_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded sensor_id mismatch: expected {:?}, found {:?}",
-                id, entry.sensor_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `ClockRegistryEntry` by exact
-    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
-    pub async fn fetch_clock_entry(
-        &self,
-        peer_id: PeerId,
-        clock_id: impl Into<String>,
-        clock_hash: impl Into<String>,
-    ) -> Result<ClockRegistryEntry, FetchRegistryEntryError> {
-        let id = clock_id.into();
-        let hash = clock_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Clock, id.clone(), hash.clone())
-            .await?;
-        let entry: ClockRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.clock_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded clock_id mismatch: expected {:?}, found {:?}",
-                id, entry.clock_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `FrameRegistryEntry` by exact
-    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
-    pub async fn fetch_frame_entry(
-        &self,
-        peer_id: PeerId,
-        frame_id: impl Into<String>,
-        frame_hash: impl Into<String>,
-    ) -> Result<FrameRegistryEntry, FetchRegistryEntryError> {
-        let id = frame_id.into();
-        let hash = frame_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Frame, id.clone(), hash.clone())
-            .await?;
-        let entry: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.frame_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded frame_id mismatch: expected {:?}, found {:?}",
-                id, entry.frame_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
-    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
-    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
-    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
-    pub async fn fetch_detector_entry(
-        &self,
-        peer_id: PeerId,
-        detector_id: impl Into<String>,
-        detector_hash: impl Into<String>,
-    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
-        let id = detector_id.into();
-        let hash = detector_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
-            .await?;
-        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.detector_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded detector_id mismatch: expected {:?}, found {:?}",
-                id, entry.detector_id
-            )));
-        }
-        Ok(entry)
     }
 
     async fn fetch_registry_envelope(
@@ -1808,134 +1546,6 @@ impl ClusterManager {
         })
     }
 
-    /// Shutdown — cancels all background tasks, deregisters the
-    /// cluster from Discovery **only if we're the last member**,
-    /// and shuts down the runtime.
-    ///
-    /// **Manager handoff on graceful exit.** Per the Hagall quest
-    /// design ("graceful and ungraceful Manager exits are the same
-    /// code path — peers detect the loss + run the election +
-    /// rotate"): if the Manager calls `shutdown` while other peers
-    /// are in the cluster, we do NOT deregister. The surviving peers
-    /// detect our libp2p disconnection, run the cluster-internal
-    /// election, and the winner calls `rotate_manager` on Discovery.
-    /// Deregistering on the way out would 404 the winner's rotation
-    /// and orphan the cluster. Only when we are the last member
-    /// (`membership.peers.len() <= 1`) do we deregister, since there
-    /// is no successor to take over.
-    ///
-    /// Callable from `&self` so daemon callers holding the manager
-    /// behind an `Arc` (Park's stream-consumer pattern, Boosterapp's
-    /// stream-provider closure) can shut down without first uniquely
-    /// owning the handle. Idempotent: subsequent calls find the
-    /// `stopped` flag set, observe the empty `Mutex<Option<_>>`s,
-    /// and return `Ok(())` without re-issuing the Discovery
-    /// DELETE.
-    ///
-    /// After this returns, pub I/O methods on this handle
-    /// (`admit_peer`, `fetch_participant_info`) fast-fail with a
-    /// `Stopped` error variant. Snapshot accessors continue to
-    /// return their last-observed state.
-    pub async fn shutdown(&self) -> Result<(), DiscoveryError> {
-        // 0. Claim the shutdown — the AtomicBool exchange picks one
-        //    caller as the deregistration owner; concurrent / repeat
-        //    callers observe `true` and short-circuit.
-        if self.stopped.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-
-        // 1. Cancel background tasks FIRST so we stop touching
-        //    Discovery / membership between teardown steps.
-        if let Some(task) = self
-            .liveness_check_task
-            .lock()
-            .expect("liveness_check_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .join_handler_task
-            .lock()
-            .expect("join_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .liveness_handler_task
-            .lock()
-            .expect("liveness_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .membership_handler_task
-            .lock()
-            .expect("membership_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .info_handler_task
-            .lock()
-            .expect("info_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .resources_handler_task
-            .lock()
-            .expect("resources_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .sensors_handler_task
-            .lock()
-            .expect("sensors_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .registry_handler_task
-            .lock()
-            .expect("registry_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(task) = self
-            .diagnostic_handler_task
-            .lock()
-            .expect("diagnostic_handler_task lock")
-            .take()
-        {
-            task.abort();
-        }
-
-        // 2. Deregister from Discovery only if we're the last
-        //    member. Otherwise leave the cluster alive for the
-        //    survivors' election + handoff (see fn doc).
-        let was_manager =
-            *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
-        let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
-        let result = if was_manager && am_last {
-            self.discovery.deregister(self.cluster_name.clone()).await
-        } else {
-            Ok(())
-        };
-
-        // 3. Shut down the runtime regardless of Discovery's result.
-        //    `NetworkRuntime::shutdown` is `&self` + idempotent.
-        self.runtime.shutdown();
-        result
-    }
 }
 
 // ─── UniFFI-exposed sync surface ─────────────────────────────────────────────
@@ -2065,6 +1675,432 @@ impl ClusterManager {
             .registry_app_root
             .lock()
             .expect("registry_app_root lock") = Some(app_root.into());
+    }
+}
+
+// ─── UniFFI-exposed async surface ────────────────────────────────────────────
+//
+// All methods in this block must be callable from Swift via async/await.
+// The `async_runtime = "tokio"` attribute tells UniFFI to drive each
+// `async fn` on the Tokio runtime that was already started by the host
+// app (Park / Sentinel / iosapp all own a Tokio runtime). A separate
+// sync impl block is used for the non-async surface (see above) because
+// UniFFI requires the `async_runtime` annotation on the entire impl —
+// mixing sync and async methods in one annotated block is not supported.
+//
+// Methods with `impl Into<String>` parameters in the un-annotated impl
+// are changed to concrete `String` here because UniFFI requires concrete
+// types. Rust callers that passed `String` continue to work unchanged;
+// callers that passed `&str` need `.to_string()` — the integration tests
+// already did this (`frame.frame_id.clone()`, `"deadbeef".to_string()`).
+//
+// `fetch_registry_envelope` is a private async helper; it stays in the
+// un-annotated block and is reachable from the new annotated block
+// because all blocks share the same `ClusterManager` type.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export(async_runtime = "tokio"))]
+impl ClusterManager {
+    /// Admit a new peer to the cluster. Manager-only — other peers
+    /// route join requests to the Manager.
+    ///
+    /// On success the membership document gains a new
+    /// [`ClusterMember`] entry, the runtime's allow-list is
+    /// extended, and the new entry is returned. In v1 the successor
+    /// token is an empty byte vec — signature verification is
+    /// disabled per the Discovery v1 contract, so the bytes don't
+    /// need to mean anything yet. SDK-T4 (when it lands) replaces
+    /// this with a signed token.
+    pub async fn admit_peer(
+        &self,
+        peer_id: PeerId,
+        multiaddrs: Vec<Multiaddr>,
+    ) -> Result<ClusterMember, AdmitError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(AdmitError::Stopped);
+        }
+        // Manager check.
+        let manager = self.manager_peer_id();
+        if manager != self.local_peer_id {
+            return Err(AdmitError::NotManager {
+                cluster: self.cluster_name.clone(),
+                manager,
+            });
+        }
+
+        // Build the new member entry, then take the lock briefly to
+        // append. Releasing the lock before the (async) runtime
+        // call avoids holding it across .await.
+        let member = ClusterMember {
+            peer_id,
+            multiaddrs: multiaddrs.clone(),
+            join_ts_ns: now_unix_nanos(),
+            successor_token: Some(Vec::new()),
+        };
+
+        let new_allow_list: Vec<AllowedPeer> = {
+            let mut membership = self.membership.lock().expect("membership lock");
+            if membership.peers.iter().any(|p| p.peer_id == peer_id) {
+                return Err(AdmitError::AlreadyMember(peer_id));
+            }
+            membership.admit(member.clone());
+            // Build the allow-list from membership, excluding our
+            // own peer-id (the runtime doesn't dial itself).
+            membership
+                .peers
+                .iter()
+                .filter(|p| p.peer_id != self.local_peer_id)
+                .map(|p| AllowedPeer {
+                    peer_id: p.peer_id,
+                    multiaddrs: p.multiaddrs.clone(),
+                })
+                .collect()
+        };
+
+        // Push the updated allow-list to the runtime.
+        self.runtime.set_allowed_peers(new_allow_list).await?;
+        sync_heartbeat_targets(
+            &self.runtime.handle(),
+            self.local_peer_id,
+            &self.manager_peer_id,
+            &self.membership,
+            &self.cluster_name,
+        )
+        .await;
+
+        // Gossip the updated membership to every connected peer so
+        // existing members learn about the new joiner (the joiner
+        // itself already has the same JSON in the `JoinResponse::Accept`
+        // it just received). Fire-and-forget; per-peer errors are
+        // logged inside the broadcast tasks.
+        broadcast_current_membership(
+            &self.runtime.handle(),
+            &self.manager_peer_id,
+            &self.membership,
+        );
+
+        Ok(member)
+    }
+
+    /// Fetch a cluster peer's [`ParticipantInfo`] over the
+    /// `/auki/info/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` builds its own `ParticipantInfo` from its
+    /// stored state and serializes it over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the
+    /// parsed `ParticipantInfo` ready for HTTP serialization.
+    pub async fn fetch_participant_info(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FetchParticipantInfoError::Stopped);
+        }
+        let response = self.runtime.request_participant_info(peer_id).await?;
+        let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
+        Ok(info)
+    }
+
+    /// Fetch a cluster peer's current sensor catalog over the
+    /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` snapshots its registered
+    /// [`SensorCatalogProvider`] (or returns an empty list if the
+    /// daemon hasn't installed one yet) and serializes the catalog
+    /// over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the parsed
+    /// [`SensorsResponse`] ready for consumers (Park's chip row,
+    /// Sentinel's status board).
+    pub async fn fetch_sensors_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self.runtime.request_sensors_catalog(peer_id).await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's sensor catalog with explicit request
+    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
+    /// consumer wants the producer to embed Sensor / Frame Registry
+    /// JSON by value and avoid per-row registry fetch round trips.
+    pub async fn fetch_sensors_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: SensorsRequest,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self
+            .runtime
+            .request_sensors_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's current generalized resource catalog
+    /// over `/auki/resources/0.0.1`. This is the canonical discovery
+    /// path for sensor streams, transform edges, and future resource
+    /// kinds.
+    pub async fn fetch_resources_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self.runtime.request_resources_catalog(peer_id).await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's generalized resource catalog with an
+    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
+    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
+    /// when a consumer wants embedded registry JSON by value.
+    pub async fn fetch_resources_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequest,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self
+            .runtime
+            .request_resources_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// Fetch and verify a peer's `SensorRegistryEntry` by exact
+    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// The SDK verifies the returned canonical JSON bytes hash to the
+    /// requested hash before decoding, then checks the decoded
+    /// `sensor_id` matches the requested id.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_sensor_entry(
+        &self,
+        peer_id: PeerId,
+        sensor_id: String,
+        sensor_hash: String,
+    ) -> Result<SensorRegistryEntry, FetchRegistryEntryError> {
+        let id = sensor_id;
+        let hash = sensor_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Sensor, id.clone(), hash.clone())
+            .await?;
+        let entry: SensorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.sensor_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded sensor_id mismatch: expected {:?}, found {:?}",
+                id, entry.sensor_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `ClockRegistryEntry` by exact
+    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_clock_entry(
+        &self,
+        peer_id: PeerId,
+        clock_id: String,
+        clock_hash: String,
+    ) -> Result<ClockRegistryEntry, FetchRegistryEntryError> {
+        let id = clock_id;
+        let hash = clock_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Clock, id.clone(), hash.clone())
+            .await?;
+        let entry: ClockRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.clock_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded clock_id mismatch: expected {:?}, found {:?}",
+                id, entry.clock_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `FrameRegistryEntry` by exact
+    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_frame_entry(
+        &self,
+        peer_id: PeerId,
+        frame_id: String,
+        frame_hash: String,
+    ) -> Result<FrameRegistryEntry, FetchRegistryEntryError> {
+        let id = frame_id;
+        let hash = frame_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Frame, id.clone(), hash.clone())
+            .await?;
+        let entry: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.frame_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded frame_id mismatch: expected {:?}, found {:?}",
+                id, entry.frame_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
+    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
+    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
+    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_detector_entry(
+        &self,
+        peer_id: PeerId,
+        detector_id: String,
+        detector_hash: String,
+    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
+        let id = detector_id;
+        let hash = detector_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
+            .await?;
+        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.detector_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded detector_id mismatch: expected {:?}, found {:?}",
+                id, entry.detector_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Shutdown — cancels all background tasks, deregisters the
+    /// cluster from Discovery **only if we're the last member**,
+    /// and shuts down the runtime.
+    ///
+    /// **Manager handoff on graceful exit.** Per the Hagall quest
+    /// design ("graceful and ungraceful Manager exits are the same
+    /// code path — peers detect the loss + run the election +
+    /// rotate"): if the Manager calls `shutdown` while other peers
+    /// are in the cluster, we do NOT deregister. The surviving peers
+    /// detect our libp2p disconnection, run the cluster-internal
+    /// election, and the winner calls `rotate_manager` on Discovery.
+    /// Deregistering on the way out would 404 the winner's rotation
+    /// and orphan the cluster. Only when we are the last member
+    /// (`membership.peers.len() <= 1`) do we deregister, since there
+    /// is no successor to take over.
+    ///
+    /// Callable from `&self` so daemon callers holding the manager
+    /// behind an `Arc` (Park's stream-consumer pattern, Boosterapp's
+    /// stream-provider closure) can shut down without first uniquely
+    /// owning the handle. Idempotent: subsequent calls find the
+    /// `stopped` flag set, observe the empty `Mutex<Option<_>>`s,
+    /// and return `Ok(())` without re-issuing the Discovery
+    /// DELETE.
+    ///
+    /// After this returns, pub I/O methods on this handle
+    /// (`admit_peer`, `fetch_participant_info`) fast-fail with a
+    /// `Stopped` error variant. Snapshot accessors continue to
+    /// return their last-observed state.
+    pub async fn shutdown(&self) -> Result<(), DiscoveryError> {
+        // 0. Claim the shutdown — the AtomicBool exchange picks one
+        //    caller as the deregistration owner; concurrent / repeat
+        //    callers observe `true` and short-circuit.
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // 1. Cancel background tasks FIRST so we stop touching
+        //    Discovery / membership between teardown steps.
+        if let Some(task) = self
+            .liveness_check_task
+            .lock()
+            .expect("liveness_check_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .join_handler_task
+            .lock()
+            .expect("join_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .liveness_handler_task
+            .lock()
+            .expect("liveness_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .membership_handler_task
+            .lock()
+            .expect("membership_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .info_handler_task
+            .lock()
+            .expect("info_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .resources_handler_task
+            .lock()
+            .expect("resources_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .sensors_handler_task
+            .lock()
+            .expect("sensors_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .registry_handler_task
+            .lock()
+            .expect("registry_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .diagnostic_handler_task
+            .lock()
+            .expect("diagnostic_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+
+        // 2. Deregister from Discovery only if we're the last
+        //    member. Otherwise leave the cluster alive for the
+        //    survivors' election + handoff (see fn doc).
+        let was_manager =
+            *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
+        let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
+        let result = if was_manager && am_last {
+            self.discovery.deregister(self.cluster_name.clone()).await
+        } else {
+            Ok(())
+        };
+
+        // 3. Shut down the runtime regardless of Discovery's result.
+        //    `NetworkRuntime::shutdown` is `&self` + idempotent.
+        self.runtime.shutdown();
+        result
     }
 }
 

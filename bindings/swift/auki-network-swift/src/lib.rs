@@ -30,6 +30,7 @@ use auki_network_rs::discovery_client::{
     ClusterEntry as RustClusterEntry, CreateClusterOutcome as RustCreateClusterOutcome,
     DiscoveryClient as RustDiscoveryClient, DiscoveryError as RustDiscoveryError,
 };
+use auki_network_rs::HeartbeatTimestampSource;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use std::str::FromStr;
@@ -159,6 +160,67 @@ pub trait PeerLivenessListener: Send + Sync {
     /// The drain task in `spawn_for_swift` runs on a tokio worker; long
     /// blocking work here will stall delivery of subsequent events.
     fn on_event(&self, event: SwiftPeerLivenessEvent);
+}
+
+// ─── Heartbeat timestamp provider (Swift callback interface) ───────
+
+/// Swift consumers implement this trait to supply the heartbeat-source
+/// timestamp readings and clock identity the runtime needs. Wrapped in
+/// `Arc<dyn ...>`; the adapter [`heartbeat_source_from_provider`]
+/// converts it into the upstream `HeartbeatTimestampSource` shape.
+///
+/// `clock_id` and `clock_hash` are read once at runtime spawn (they're
+/// stable for the lifetime of the runtime). `now_ns` is invoked on
+/// every outbound heartbeat frame; `domain_clock_bytes` is invoked the
+/// same way and returns the JSON-encoded
+/// `auki_network::heartbeat_protocol::HeartbeatDomainClock` or `None`.
+///
+/// Note: `HeartbeatDomainClock` uses JSON encoding (the heartbeat wire
+/// format is length-prefixed JSON), so `domain_clock_bytes` must
+/// carry a valid JSON object matching that struct's serde shape, or
+/// `None` to signal "no domain clock to advertise".
+#[uniffi::export(callback_interface)]
+pub trait HeartbeatTimestampProvider: Send + Sync {
+    /// Clock Registry id for the heartbeat `sent_at_clock_ns` values.
+    /// Read once at spawn.
+    fn clock_id(&self) -> String;
+    /// Content-addressed hash of `clock_id`'s Clock Registry entry.
+    /// Read once at spawn.
+    fn clock_hash(&self) -> String;
+    /// Current reading of `clock_id` in nanoseconds. Called per
+    /// outbound heartbeat frame; must be fast (<1 ms).
+    fn now_ns(&self) -> i64;
+    /// JSON-encoded `auki_network::heartbeat_protocol::HeartbeatDomainClock`
+    /// describing the domain clock this peer is currently advertising,
+    /// or `None`. Called per outbound heartbeat frame.
+    fn domain_clock_bytes(&self) -> Option<Vec<u8>>;
+}
+
+/// Adapter: build an upstream `HeartbeatTimestampSource` from a Swift
+/// `HeartbeatTimestampProvider`. The closures wrap the trait-object
+/// method calls; `domain_clock_bytes` results are decoded as
+/// JSON-encoded `HeartbeatDomainClock` values (decode failure → `None`,
+/// treated as "no domain clock to advertise").
+pub(crate) fn heartbeat_source_from_provider(
+    provider: Arc<dyn HeartbeatTimestampProvider>,
+) -> HeartbeatTimestampSource {
+    let clock_id = provider.clock_id();
+    let clock_hash = provider.clock_hash();
+    let p_for_now = provider.clone();
+    let p_for_dc = provider.clone();
+    HeartbeatTimestampSource {
+        clock_id,
+        clock_hash,
+        now_ns: Arc::new(move || p_for_now.now_ns()),
+        domain_clock: Arc::new(move || {
+            p_for_dc.domain_clock_bytes().and_then(|bytes| {
+                serde_json::from_slice::<auki_network_rs::heartbeat_protocol::HeartbeatDomainClock>(
+                    &bytes,
+                )
+                .ok()
+            })
+        }),
+    }
 }
 
 // ─── Value types ───────────────────────────────────────────────────
@@ -506,5 +568,32 @@ mod tests {
         listener.on_event(SwiftPeerLivenessEvent::HeartbeatStreamClosed {
             peer_id: "irrelevant".to_string(),
         });
+    }
+
+    /// Smoke test: a `HeartbeatTimestampProvider` impl can be converted
+    /// into an upstream `HeartbeatTimestampSource` via the adapter.
+    #[test]
+    fn heartbeat_timestamp_provider_adapter() {
+        struct WallClockProvider;
+        impl HeartbeatTimestampProvider for WallClockProvider {
+            fn clock_id(&self) -> String {
+                "test-clock".to_string()
+            }
+            fn clock_hash(&self) -> String {
+                "test-hash".to_string()
+            }
+            fn now_ns(&self) -> i64 {
+                42
+            }
+            fn domain_clock_bytes(&self) -> Option<Vec<u8>> {
+                None
+            }
+        }
+        let provider: Arc<dyn HeartbeatTimestampProvider> = Arc::new(WallClockProvider);
+        let src = heartbeat_source_from_provider(provider);
+        assert_eq!(src.clock_id, "test-clock");
+        assert_eq!(src.clock_hash, "test-hash");
+        assert_eq!((src.now_ns)(), 42);
+        assert!((src.domain_clock)().is_none());
     }
 }

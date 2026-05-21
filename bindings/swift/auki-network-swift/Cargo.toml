@@ -51,6 +51,10 @@ tokio-stream = { version = "0.1", default-features = false }
 uniffi = { version = "0.31", features = ["tokio"] }
 # FFI error enum Display / std::error::Error impls.
 thiserror = "2"
+# For decoding `HeartbeatDomainClock` bytes from the Swift provider.
+# HeartbeatDomainClock uses JSON (length-prefixed JSON is the heartbeat
+# wire format), so serde_json is the correct decoder — not prost.
+serde_json = "1"
 
 # Swift codegen helper. Gated on `cli` so a plain library build/test
 # doesn't require the UniFFI CLI; the build script enables the feature.

@@ -4,6 +4,10 @@ Append-only timeline of changes for the browser Domain peer adapter. Latest entr
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+Aligned the browser Domain contract with the current SDK stream vocabulary. `SensorKind` now uses `camera`, `point_cloud`, `joint_encoders`, `audio`, `detection`, and `unknown`; `StreamState` now uses `off`, `idle`, `connecting`, `connected`, `reconnecting`, `declined`, and `error`; exported constants and tests pin the vocabulary for Park.
+
 ### Nils's codex · May 19, HKT, 2026
 
 Hardened the browser package after code review. The emitted ESM entry now imports correctly under NodeNext semantics, `npm run smoke:import` verifies the built package entry, Discovery malformed-payload errors are classified as `domain_list_failed`, and all transport-backed peer methods are pinned to fail closed until browser transport exists.

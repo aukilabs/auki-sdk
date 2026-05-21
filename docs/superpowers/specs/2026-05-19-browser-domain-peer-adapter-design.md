@@ -185,7 +185,7 @@ Milestone 0 proves the SDK peer can both produce and consume sensor streams. Mic
 
 Target sensor behavior:
 
-- declare local microphone sensor
+- declare local audio sensor backed by browser microphone capture
 - enable/disable local publication
 - enumerate remote peer sensors
 - subscribe/unsubscribe to one selected remote sensor
@@ -221,7 +221,7 @@ Acceptance tests:
 - both use the SDK browser adapter
 - both join or create the same Domain through Discovery
 - each sees itself and the other as stable `park` participants
-- each sees the other's microphone sensor and media presence
+- each sees the other's audio sensor and media presence
 - both can publish and subscribe to audio with full open duplex
 
 ## Documentation

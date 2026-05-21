@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Browser Domain contract vocabulary now matches Park's current SDK names.** `auki-domain-browser` replaced stale browser-only `microphone` / `rgb_camera` / `joint_pose` contract names with the current SDK sensor-kind set and exported tested constants for Park to pin against. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Browser/native SDK drift plan corrected.** The browser Domain plan now makes browser support a wasm target/facade over shared Rust `auki-network` and `auki-domain` logic, not a parallel browser implementation. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

@@ -321,7 +321,22 @@ export type DomainSummary = {
   peerCount?: number;
 };
 
-export type SensorKind = "microphone" | "rgb_camera" | "point_cloud" | "joint_pose" | "unknown";
+export type SensorKind =
+  | "camera"
+  | "point_cloud"
+  | "joint_encoders"
+  | "audio"
+  | "detection"
+  | "unknown";
+
+export const SDK_SENSOR_KINDS = [
+  "camera",
+  "point_cloud",
+  "joint_encoders",
+  "audio",
+  "detection",
+  "unknown",
+] as const satisfies readonly SensorKind[];
 
 export type SensorSummary = {
   id: SensorId;
@@ -333,11 +348,22 @@ export type SensorSummary = {
 
 export type StreamState =
   | "off"
+  | "idle"
   | "connecting"
   | "connected"
   | "reconnecting"
-  | "failed"
-  | "stalled";
+  | "declined"
+  | "error";
+
+export const SDK_STREAM_STATES = [
+  "off",
+  "idle",
+  "connecting",
+  "connected",
+  "reconnecting",
+  "declined",
+  "error",
+] as const satisfies readonly StreamState[];
 
 export type MediaPresence = {
   micAvailable: boolean;

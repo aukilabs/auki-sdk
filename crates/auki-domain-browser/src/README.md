@@ -5,7 +5,7 @@ Implementation status for the browser Domain peer adapter.
 Currently implemented:
 
 - package scaffold
-- Park-compatible contract types
+- Park-compatible contract types, including the current `camera` / `point_cloud` / `joint_encoders` / `audio` / `detection` sensor-kind vocabulary
 - global installer
 - structured result helpers
 - browser identity seed storage seam

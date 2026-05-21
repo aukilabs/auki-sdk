@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+Updated the browser Domain adapter planning docs so Park and the browser SDK package use the same current SDK vocabulary: `audio`, `camera`, `point_cloud`, `joint_encoders`, `detection`, plus UI stream states `declined` and `error`.
+
 ### Nils's codex · May 20, HKT, 2026
 
 Updated the browser Domain plan to prevent browser/native SDK drift: browser crates are now bindings/facades over shared Rust `auki-network` and `auki-domain` logic, with runtime-specific code limited to concrete wasm/browser constraints.

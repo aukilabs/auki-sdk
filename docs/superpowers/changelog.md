@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+Updated the browser Domain adapter plan/spec under [`plans/`](plans/changelog.md) and [`specs/`](specs/changelog.md) so the browser contract cannot drift from the current SDK sensor-kind and stream-state vocabulary.
+
 ### Nils's codex · May 20, HKT, 2026
 
 Updated the browser Domain peer symmetry plan under [`plans/`](plans/changelog.md) so `auki-network-browser-wasm` and `auki-domain-browser` are bindings/facades over shared Rust SDK logic rather than parallel browser implementations.

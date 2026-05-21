@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — browser contract vocabulary follows current SDK stream names.** Replaced stale `microphone` / `rgb_camera` / `joint_pose` browser contract types with `audio` / `camera` / `joint_encoders` plus the full current sensor-kind set, and pinned UI stream states with exported constants and tests.
+
 ### Nils's codex · May 19, HKT, 2026
 
 **[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser WebRTC probe smoke passes.** Added the browser smoke page/script and verified Chrome can call wasm `dialBrowserProbe` against the native `browser_probe_listener`, returning `ok 12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar`.

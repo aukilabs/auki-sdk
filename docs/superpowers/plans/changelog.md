@@ -4,6 +4,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+Updated the browser Domain peer adapter first-tranche implementation plan so its TypeScript contract uses the current SDK sensor-kind and stream-state vocabulary Park expects.
+
 ### Nils's codex · May 20, HKT, 2026
 
 Revised the browser Domain peer symmetry plan to prevent SDK drift: browser support is now framed as wasm-targeting the same `auki-network` and `auki-domain` Rust logic, with TypeScript kept as facade glue and runtime-specific code limited to concrete browser constraints.

@@ -49,6 +49,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resource_entry_variants_construct() {
+        use auki_network::resources_protocol::{
+            ResourceEntry, ResourcePinholeIntrinsics, ResourceQuat, ResourceSpatialTransform,
+            ResourceVec3, SensorStreamResource,
+        };
+        // Construct a SensorStream variant with explicit field values
+        // (SensorStreamResource does not impl Default due to required String fields).
+        let stream_resource = ResourceEntry::SensorStream(SensorStreamResource {
+            id: "test-id".to_string(),
+            sensor_id: "test-sensor".to_string(),
+            sensor_hash: "abc123".to_string(),
+            sensor_kind: "camera".to_string(),
+            stream_protocol: "/auki/stream/0.1.0".to_string(),
+            payload: "camera_frame".to_string(),
+            pinhole_intrinsics: Some(ResourcePinholeIntrinsics {
+                fx: 400.0,
+                fy: 401.0,
+                cx: 272.5,
+                cy: 244.5,
+            }),
+            sensor_entry_json: None,
+            frame_entry_json: None,
+        });
+        assert!(matches!(stream_resource, ResourceEntry::SensorStream(_)));
+
+        // Also verify TransformEdge variant constructs with source as Option<String>.
+        use auki_network::resources_protocol::TransformEdgeResource;
+        let edge_resource = ResourceEntry::TransformEdge(TransformEdgeResource {
+            id: "frame_a->frame_b".to_string(),
+            from_frame_id: "frame_a".to_string(),
+            from_frame_hash: "fromhash".to_string(),
+            to_frame_id: "frame_b".to_string(),
+            to_frame_hash: "tohash".to_string(),
+            writer_mode: "rigid".to_string(),
+            source: Some(r#"{"kind":"ros2_tf"}"#.to_string()),
+            transform: ResourceSpatialTransform {
+                translation: ResourceVec3 { x: 0.0, y: 0.0, z: 0.0 },
+                orientation: ResourceQuat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+            },
+            from_frame_entry_json: None,
+            to_frame_entry_json: None,
+        });
+        assert!(matches!(edge_resource, ResourceEntry::TransformEdge(_)));
+    }
+
+    #[test]
     fn peer_id_custom_type_round_trips() {
         let pid = libp2p_identity::Keypair::ed25519_from_bytes([5u8; 32])
             .expect("valid ed25519 seed")

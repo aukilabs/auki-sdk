@@ -4119,10 +4119,10 @@ mod tests {
             to_frame_id: to.frame_id.clone(),
             to_frame_hash: to_hash,
             writer_mode: "rigid".into(),
-            source: Some(serde_json::json!({
-                "kind": "ros2_tf",
-                "publishers": ["robot_state_publisher"]
-            })),
+            source: Some(
+                serde_json::json!({"kind": "ros2_tf", "publishers": ["robot_state_publisher"]})
+                    .to_string(),
+            ),
             transform: ResourceSpatialTransform {
                 translation: ResourceVec3 {
                     x: 0.0,

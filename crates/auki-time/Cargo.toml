@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Auki SDK time primitives: clock reads, session clocks, and TimeTransform Log sampling."
+description = "Auki SDK time primitives: session clocks, time transforms, NTP-style samples, and TimeTransform Log sampling."
 
 [dependencies]
 auki-registry = { path = "../auki-registry" }

@@ -10,6 +10,7 @@ description = "Cluster lifecycle for the Auki SDK — cluster membership documen
 [dependencies]
 auki-identity = { path = "../auki-identity" }
 auki-hash = { path = "../auki-hash" }
+auki-jcs = { path = "../auki-jcs" }
 # `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
 # the cluster manager drives; `discovery_client` brings the HTTP
 # client. Both required for `ClusterManager::create_cluster`.

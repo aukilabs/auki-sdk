@@ -183,16 +183,18 @@ impl DiscoveryClient {
     ) -> Result<CreateClusterOutcome, DiscoveryError> {
         let peer_id = parse_peer_id(&manager_peer_id)?;
         let addrs = parse_multiaddrs(&manager_multiaddrs)?;
-        Ok(match self.inner.create_cluster(&name, &peer_id, &addrs).await? {
-            RustCreateClusterOutcome::Created(e) => CreateClusterOutcome {
-                already_exists: false,
-                entry: Some(e.into()),
+        Ok(
+            match self.inner.create_cluster(&name, &peer_id, &addrs).await? {
+                RustCreateClusterOutcome::Created(e) => CreateClusterOutcome {
+                    already_exists: false,
+                    entry: Some(e.into()),
+                },
+                RustCreateClusterOutcome::AlreadyExists => CreateClusterOutcome {
+                    already_exists: true,
+                    entry: None,
+                },
             },
-            RustCreateClusterOutcome::AlreadyExists => CreateClusterOutcome {
-                already_exists: true,
-                entry: None,
-            },
-        })
+        )
     }
 
     /// Manager liveness push; resets Discovery's sweep window. Returns

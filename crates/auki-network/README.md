@@ -17,7 +17,7 @@ The `swarm` feature adds native libp2p support:
 
 - `swarm::build_swarm(identity, SwarmConfig)` builds TCP + QUIC + Noise + Yamux, always with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour used by SDK protocols.
 - `swarm::collect_routable_listen_addrs` and `resolve_advertise_multiaddrs` are the SDK path for deciding which listen addresses a daemon advertises to Discovery.
-- `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider)` owns the swarm event loop and exposes small methods for updating peers, opening streams, sending join requests, requesting peer info/resource catalogs, broadcasting membership, and shutting down.
+- `NetworkRuntime::spawn(swarm, allowed_peers, stream_provider, heartbeat_timestamps)` owns the swarm event loop and exposes small methods for updating peers, opening streams, sending join requests, requesting peer info/resource catalogs, broadcasting membership, and shutting down. The caller must provide the sender clock id/hash, monotonic timestamp callback, and optional domain-clock source metadata callback used in heartbeat frames.
 
 The `discovery_client` feature adds `DiscoveryClient`, the HTTP client for [`aukilabs/discovery`](https://github.com/aukilabs/discovery):
 
@@ -38,7 +38,7 @@ All cluster peer-to-peer protocols ride on the same libp2p swarm. The runtime ke
 | Protocol | Module | Purpose |
 |---|---|---|
 | `/auki/join/0.0.1` | `join_protocol` | Non-member asks the current Manager to admit it; response carries membership JSON + successor token |
-| `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames; cluster liveness semantics live in `auki-domain` |
+| `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Bidirectional heartbeat carrier frames with sender-clock timestamps, optional NTP echo fields, and optional domain-clock source metadata; cluster liveness semantics live in `auki-domain` |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager gossips its peer id plus fresh membership JSON to members |
 | `/auki/info/0.0.1` | `info_protocol` | Cluster peer asks another peer for its `ParticipantInfo` |
 | `/auki/resources/0.0.1` | `resources_protocol` | Cluster peer asks another peer what resources it can provide now; v0 rows are `sensor_stream` (optionally with pinhole intrinsics) and `transform_edge` |
@@ -54,7 +54,7 @@ The connection layer is not the main trust boundary anymore. The swarm uses a bl
 
 - `/auki/join/0.0.1` intentionally accepts first contact from non-members.
 - `/auki/stream/0.1.0`, `/auki/info/0.0.1`, `/auki/resources/0.0.1`, `/auki/sensors/0.0.1`, `/auki/registries/0.0.1`, heartbeat, and membership paths are gated against the runtime's current allowed-peer set and silently drop outsiders where appropriate.
-- Heartbeat carrier opening is steered by the domain layer via `set_heartbeat_targets`: the runtime opens `/auki/heartbeat/0.0.1` only to the explicit peers it is given and reports frame/closure events upward.
+- Heartbeat carrier opening is steered by the domain layer via `set_heartbeat_targets`: the runtime opens `/auki/heartbeat/0.0.1` only to the explicit peers it is given and reports frame/closure events upward. `HeartbeatReceived` includes a raw `HeartbeatTimingObservation` with the received frame, local receive timestamp, and both clock identities. When a peer echo matches one of this runtime's recent outbound heartbeat sequences, `HeartbeatNtpSampleObserved` carries an `auki-time::NtpSample` for later transform handling. If the caller supplies `domain_clock` metadata, the runtime copies it into outbound heartbeat frames without validating, storing, or interpreting the cluster clock.
 - `auki-domain::ClusterManager` owns the membership document, heartbeat topology, heartbeat timeout/loss decisions, election, Discovery liveness checks, and updates to the runtime's allowed-peer set.
 
 ## Not Here

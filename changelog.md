@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Heartbeat timing now uses the SDK-owned SessionClock after merging latest develop.** The heartbeat/domain-clock sync branch now composes with the latest `develop` SessionClock foundation: `ClusterManager` uses its peer-id rooted session clock for heartbeat timestamps, initial domain-clock backing metadata, and promoted-Manager domain-clock advertisement instead of the compatibility `DaemonInfo.session_clock_id/hash` fields. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 20, 15:34 HKT, 2026
 
 **Outbound heartbeat carriers restart after transient substream closure.** `auki-network` now prunes completed heartbeat task handles and reconciles outbound carriers on the runtime tick, preventing a stale handle from suppressing replacement `/auki/heartbeat/0.0.1` streams and triggering cluster split-brain invisible to Discovery. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
@@ -37,6 +41,54 @@ Latest entry on top.
 ### Nils's codex · May 20, HKT, 2026
 
 **Heartbeat time-sync plan payload corrected.** The plan now keeps heartbeat frames sender-clock-only and puts domain-clock identity in `DomainClockSource` / future TimeTransform manifests, with Python binding paths refreshed for `bindings/python`. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**ClusterManager now has a domain-time-now helper.** `auki-domain` exposes `domain_time_now()` to convert a peer's current session monotonic reading into cluster domain time through the existing explicit estimate, returning typed unavailable/overflow errors and no wall-clock fallback. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Live test now pins domain-clock continuity through Manager handoff.** The ignored `auki-domain` integration suite verifies a follower can acquire A-backed domain time, survive A's loss, promote, and report itself as the new domain-clock backing source with inherited offset. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Promoted Managers now advertise domain time only after proving their inherited offset.** On Manager handoff, the SDK updates heartbeat `domain_clock` metadata to the promoted peer's session clock only when local -> domain time can be composed; otherwise the promoted Manager remains explicit that domain time is unavailable. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Cluster peers now report domain-clock availability explicitly.** `ClusterManager` stores heartbeat domain-clock metadata, composes it with `auki-time` peer-clock estimates, and returns typed unavailable errors until the required source and local-to-backing estimate exist. No wall-clock fallback is used. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames can now advertise the initial domain-clock backing source.** The heartbeat payload has optional domain-clock source metadata, and initial cluster Managers publish `<cluster_name>/domain-clock` backed by their own session clock at offset `0`; joiners omit it until their domain offset is explicitly known. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain-clock composition now lives in `auki-time`.** The SDK can compose a heartbeat-derived `local_clock -> backing_clock` peer estimate with a `backing_clock -> cluster_name/domain-clock` descriptor, validating backing clock id/hash and preserving uncertainty. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat NTP samples now feed peer-clock estimates.** `auki-time` provides a cloneable clock-sync handle, and `auki-domain::ClusterManager` forwards raw heartbeat NTP sample events into it while exposing read-only `local_clock -> remote_clock` estimate snapshots. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Peer-clock sync state now lives in `auki-time`.** The SDK can retain heartbeat-derived NTP samples per local/remote clock pair, filter noisy samples, reset on clock-hash changes, and expose a best current `local_clock -> remote_clock` transform estimate without expanding `ClusterManager` into an NTP service. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat echoes now generate raw NTP samples.** `auki-network` remembers recent outbound heartbeat send times and emits `HeartbeatNtpSampleObserved` when a peer echo matches, while `auki-domain` ignores those samples until the domain-clock transform collector exists. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat receive events now expose raw timing observations.** `auki-network` surfaces the received heartbeat frame plus local receive clock details, while `auki-domain` keeps using the event only for liveness so NTP transform calculation remains an `auki-time` concern. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**`auki-time` now owns pure time-transform math.** The former `auki-time-transforms` crate is renamed to `auki-time` and now includes `TimeTransform`, NTP exchange/sample helpers, offset calculation, and best-sample selection alongside the existing local-clock-read sampler. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat frames now carry explicit peer-clock timing samples.** `/auki/heartbeat/0.0.1` includes sender clock identity, sender monotonic timestamp, sequence, and optional echo fields; `auki-domain::ClusterManager` supplies those values from each daemon's session clock instead of letting the network layer invent a clock. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 20, HKT, 2026
 

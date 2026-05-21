@@ -26,7 +26,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 | Crate | What it does |
 |---|---|
 | [`auki-layout`](auki-layout) | Path helpers for the on-disk session shape — single source of truth for app/session/recording layout. |
-| [`auki-time`](auki-time) | Session-clock and clock sampler primitives for the TimeTransform Log. The infrastructure underneath `convert_time`. |
+| [`auki-time`](auki-time) | Session-clock, pure time-transform math, NTP-style clock samples, and sampler primitives for the TimeTransform Log. The infrastructure underneath `convert_time`. |
 | [`auki-geometry`](auki-geometry) | Pure spatial math: convention conversion for points, vectors, directions, and `SpatialTransform` poses. The convention-only layer underneath future `convert_pose`. |
 | [`auki-domain`](auki-domain) | App-facing cluster lifecycle: Discovery bootstrap, membership, Manager election, liveness checks, peer info/resource catalog exchange, transform-edge discovery, stream opening. |
 
@@ -42,6 +42,14 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 |---|---|
 | [`auki-ros-adapter`](auki-ros-adapter) | Translation from ROS2 sensor messages into Auki SDK types. Lets a ROS2 node mint registry entries and write Sensor Logs without knowing the SDK's on-disk format. |
 
-## Language bindings
+## Python bindings
 
-Non-Rust bindings live in [`../bindings`](../bindings) — Python at [`../bindings/python`](../bindings/python), Swift at [`../bindings/swift`](../bindings/swift). Per-component package names are preserved; this directory stays focused on Rust crates.
+Python packages live in [`../bindings/python`](../bindings/python), preserving the same per-component package names while keeping this directory focused on Rust crates.
+
+## Swift bindings
+
+UniFFI wrappers for native iOS (`aukilabs/iosapp`), one per Rust component, same per-component rule as the Python bindings (no umbrella `auki-swift`).
+
+| Crate | What it does |
+|---|---|
+| [`auki-network-swift`](auki-network-swift) | Discovery HTTP client for Swift (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`), async via UniFFI/tokio. Stage 1; stream/audio types and a future `auki-domain-swift` (cluster/peer enumeration) are scoped in its `src/sprint.md`. |

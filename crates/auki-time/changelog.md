@@ -14,6 +14,40 @@ Latest entry on top.
 
 **Crate renamed `auki-time-transforms` → `auki-time`.** The old name described the TimeTransform Log sampler only; the new name leaves room for the cleaner SDK timekeeping foundation (`SessionClock`, local clock reads, and future `convert_time` support) while keeping the existing sampler APIs in the same crate. Mechanical scope: directory rename (`crates/auki-time-transforms/` → `crates/auki-time/`), Cargo package/workspace/Cargo.lock rename, Rust crate import path rename (`auki_time_transforms` → `auki_time`), live docs/plan/path references, and parking-lot summaries. Historical changelog entries retain the old crate name as context.
 
+### Nils's codex · May 20, HKT, 2026
+
+**Clock transform estimates can now represent exact local identity.** `ClockTransformEstimate::identity(clock_id, clock_hash, observed_at_clock_ns)` creates the zero-offset, zero-uncertainty estimate used when a peer's local session clock is itself the domain-clock backing clock. This keeps initial Manager domain-clock composition on the same `estimate_domain_clock(...)` path as follower estimates.
+
+Tests: `cargo test -p auki-time clock_transform_estimate_identity_has_zero_offset_and_uncertainty -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain-clock composition added as pure `auki-time` math.** New `DomainClockDescriptor`, `DomainClockEstimate`, `DomainClockEstimateError`, and `estimate_domain_clock(...)` compose a `local_clock -> backing_clock` peer estimate with a `backing_clock -> cluster_name/domain-clock` descriptor. The function validates backing clock id/hash before composition, preserves the peer-estimate uncertainty, and rejects `i64` offset overflow.
+
+Tests: `cargo test -p auki-time domain_clock_estimate -- --nocapture`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Cloneable peer-clock sync handle added.** `ClockSyncState::estimates()` now returns every current ordered clock-pair estimate, and `ClockSyncHandle` wraps the state in a cloneable shared handle for runtime/event tasks that receive heartbeat-derived samples. This gives domain/runtime layers a narrow adapter surface without moving sample retention policy out of `auki-time`.
+
+Tests: `cargo test -p auki-time`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Peer-clock sync state added above raw NTP samples.** `ClockSyncState` now accepts clock-id/hash-tagged `ClockSyncObservation` values, retains bounded sample windows per ordered local/remote clock pair, rejects samples over the configured uncertainty limit, prunes stale samples, clears a pair when clock hashes change, and returns `ClockTransformEstimate` values for `local_clock -> remote_clock`.
+
+This keeps selection policy in `auki-time`: `auki-network` can provide heartbeat-derived samples and `auki-domain` can provide domain-clock context without either becoming the NTP service.
+
+Tests: `cargo test -p auki-time`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Crate renamed to `auki-time` and pure NTP/time-transform math added.** The package and folder moved from `auki-time-transforms` to `auki-time` so the crate can own timekeeping primitives more broadly than log production. Existing `Clock`, `SystemClock`, `tick`, `Sampler`, `TimeTransformEntry`, and `TimeTransformSource` surfaces are preserved under the new crate name.
+
+New pure-math surface: `TimeTransform` stores an affine `from_clock -> to_clock` offset, `NtpExchange` captures the four timestamps from a heartbeat-style exchange, `compute_ntp_sample` / `compute_ntp_offset` estimate `remote_clock - local_clock`, and `select_best_ntp_sample` chooses the lowest-uncertainty sample with newest-observation tie break. These functions do not rewrite system clocks; they produce local transforms for `convert_time` consumers.
+
+Tests: `cargo test -p auki-time`.
+
 ### broodsugar's claude · May 8, 12:43 HKT, 2026
 
 **`TimeTransformEntry` + `TimeTransformSource` departed at Step 6 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md).** `TimeTransformEntry` moved to [`auki-datatypes`](../auki-datatypes) under the `auki.time_transform` `.proto` package — protobuf via prost, two fields only (`offset_ns: i64`, `uncertainty_ns: u32`). `TimeTransformSource` moved to [`auki-manifests`](../auki-manifests) — manifest metadata, mirrors `PoseSource`. Both re-exported here for short call sites.

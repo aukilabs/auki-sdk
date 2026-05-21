@@ -88,12 +88,47 @@ pub struct AllowedPeer {
     pub multiaddrs: Vec<multiaddr::Multiaddr>,
 }
 
+pub struct HeartbeatTimestampSource {
+    pub clock_id: String,
+    pub clock_hash: String,
+    pub now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+    pub domain_clock: Arc<dyn Fn() -> Option<heartbeat_protocol::HeartbeatDomainClock> + Send + Sync>,
+}
+
+pub struct HeartbeatDomainClock {
+    pub cluster_name: String,
+    pub domain_clock_id: String,
+    pub domain_clock_hash: String,
+    pub backing_peer_id: String,
+    pub backing_clock_id: String,
+    pub backing_clock_hash: String,
+    pub backing_to_domain_offset_ns: i64,
+}
+
+pub struct HeartbeatTimingObservation {
+    pub peer_id: libp2p_identity::PeerId,
+    pub heartbeat: heartbeat_protocol::Heartbeat,
+    pub received_at_clock_ns: i64,
+    pub local_clock_id: String,
+    pub local_clock_hash: String,
+}
+
+pub struct HeartbeatNtpSampleObservation {
+    pub peer_id: libp2p_identity::PeerId,
+    pub local_clock_id: String,
+    pub local_clock_hash: String,
+    pub remote_clock_id: String,
+    pub remote_clock_hash: String,
+    pub sample: auki_time::NtpSample,
+}
+
 pub struct NetworkRuntime { /* task-owned swarm */ }
 impl NetworkRuntime {
     pub fn spawn(
         swarm: libp2p::Swarm<swarm::Behaviour>,
         allowed_peers: Vec<AllowedPeer>,
         stream_provider: stream_runtime::StreamProvider,
+        heartbeat_timestamps: HeartbeatTimestampSource,
     ) -> Result<Self, SpawnError>;
 
     pub async fn set_allowed_peers(&self, peers: Vec<AllowedPeer>) -> Result<UpdateReport, UpdateError>;
@@ -111,6 +146,10 @@ impl NetworkRuntime {
     pub fn broadcast_membership(manager_peer_id, membership_json);
 }
 ```
+
+Heartbeat frames carry `sent_at_unix_ns`, sender `clock_id` / `clock_hash`, a sequence number, `sent_at_clock_ns`, an optional echo of the last peer heartbeat as `(sequence, received_at_clock_ns)`, and optional `domain_clock` source metadata. The runtime does not invent a timestamp clock; `auki-domain` supplies the session monotonic clock from daemon info. The runtime only copies optional domain-clock metadata into outbound frames; it does not decide whether a peer has domain time.
+
+`PeerLivenessEvent::HeartbeatReceived` carries a `HeartbeatTimingObservation`. If the received heartbeat echoes one of this runtime's remembered outbound heartbeat sequences, the runtime also emits `PeerLivenessEvent::HeartbeatNtpSampleObserved` with a raw `auki-time::NtpSample`. The runtime still does not choose a domain clock or produce cluster transforms.
 
 Stream payloads and dispatch:
 

@@ -13,4 +13,3 @@ Python-facing SDK packages live here. The structure preserves the existing per-c
 | [`auki-domain-py`](auki-domain-py) | Python daemon facade for `ClusterManager`. |
 | [`auki-registry-py`](auki-registry-py) | Python constructors and IO helpers for Sensor / Clock / Frame registries. |
 | [`auki-session-py`](auki-session-py) | Scaffolded transport-neutral session lifecycle surface. |
-

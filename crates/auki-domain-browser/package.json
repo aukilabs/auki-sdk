@@ -1,0 +1,19 @@
+{
+  "name": "@aukilabs/auki-domain-browser",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "smoke:import": "node -e \"import('./dist/index.js')\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "happy-dom": "^20.9.0"
+  }
+}

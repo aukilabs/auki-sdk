@@ -1,0 +1,57 @@
+[package]
+name = "auki-network-browser-wasm"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Browser/WASM libp2p transport probe for the Auki SDK."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+browser_libp2p = [
+    "dep:futures",
+    "dep:libp2p",
+    "dep:serde",
+    "dep:serde-wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+
+[dependencies]
+auki-identity = { path = "../auki-identity" }
+auki-network = { path = "../auki-network" }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+# Enables browser RNG support for transitive `getrandom` users when this crate
+# is built for `wasm32-unknown-unknown`. The SDK identity path currently pulls
+# 0.2, while libp2p/yamux pulls 0.3.
+getrandom = { version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+libp2p = { version = "0.56", default-features = false, optional = true, features = [
+    "ed25519",
+    "identify",
+    "json",
+    "macros",
+    "noise",
+    "ping",
+    "request-response",
+    "wasm-bindgen",
+    "webrtc-websys",
+    "websocket-websys",
+    "webtransport-websys",
+    "yamux",
+] }
+futures = { version = "0.3", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Window"], optional = true }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

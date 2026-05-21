@@ -79,6 +79,70 @@ uniffi::custom_type!(Multiaddr, String, {
     lower: |m: Multiaddr| m.to_string(),
 });
 
+// ─── Liveness events ───────────────────────────────────────────────
+//
+// `auki_network::PeerLivenessEvent` has 5 variants; two carry rich
+// `Heartbeat*Observation` structs that aren't useful at v0 (iosapp's
+// proof-bar UI only needs connect/disconnect/heartbeat-stream-closed).
+// Translate to a 3-variant Swift-facing enum here and skip the two
+// heartbeat-detail variants in the binding adapter — Rust callers
+// continue to see the full upstream enum.
+
+/// Peer connection-level liveness events surfaced to Swift consumers.
+/// Each variant carries the affected peer-id as a canonical string.
+#[derive(uniffi::Enum, Debug, Clone, PartialEq, Eq)]
+pub enum SwiftPeerLivenessEvent {
+    /// A known peer connected at the libp2p connection layer.
+    Connected { peer_id: String },
+    /// A known peer disconnected at the libp2p connection layer.
+    Disconnected { peer_id: String },
+    /// A heartbeat substream closed or could not be opened. Useful for
+    /// observers that want to distinguish transport-level disconnects
+    /// from heartbeat-protocol failures.
+    HeartbeatStreamClosed { peer_id: String },
+}
+
+impl SwiftPeerLivenessEvent {
+    /// Translate an upstream `PeerLivenessEvent` into the Swift-facing
+    /// 3-variant subset. The two heartbeat-detail upstream variants
+    /// (`HeartbeatReceived`, `HeartbeatNtpSampleObserved`) get folded
+    /// into `HeartbeatStreamClosed` as a placeholder; production callers
+    /// of this function should pre-filter via `is_v0_forwardable` so
+    /// those variants never reach this function.
+    pub fn from_upstream(e: &auki_network_rs::PeerLivenessEvent) -> Self {
+        use auki_network_rs::PeerLivenessEvent;
+        match e {
+            PeerLivenessEvent::Connected { peer_id } => Self::Connected {
+                peer_id: peer_id.to_string(),
+            },
+            PeerLivenessEvent::Disconnected { peer_id } => Self::Disconnected {
+                peer_id: peer_id.to_string(),
+            },
+            PeerLivenessEvent::HeartbeatStreamClosed { peer_id } => Self::HeartbeatStreamClosed {
+                peer_id: peer_id.to_string(),
+            },
+            PeerLivenessEvent::HeartbeatReceived { peer_id, .. }
+            | PeerLivenessEvent::HeartbeatNtpSampleObserved { peer_id, .. } => {
+                Self::HeartbeatStreamClosed {
+                    peer_id: peer_id.to_string(),
+                }
+            }
+        }
+    }
+
+    /// True for upstream variants that should be forwarded to Swift
+    /// listeners at v0 (filters out the two heartbeat-detail variants).
+    pub fn is_v0_forwardable(upstream: &auki_network_rs::PeerLivenessEvent) -> bool {
+        use auki_network_rs::PeerLivenessEvent;
+        matches!(
+            upstream,
+            PeerLivenessEvent::Connected { .. }
+                | PeerLivenessEvent::Disconnected { .. }
+                | PeerLivenessEvent::HeartbeatStreamClosed { .. }
+        )
+    }
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -388,5 +452,25 @@ mod tests {
         use auki_network_rs::UpdateError;
         let e = UpdateError::RuntimeUnavailable;
         assert!(!e.to_string().is_empty());
+    }
+
+    /// `SwiftPeerLivenessEvent::from_upstream` translates each upstream
+    /// variant to the right Swift variant.
+    #[test]
+    fn swift_peer_liveness_event_translation() {
+        use auki_network_rs::PeerLivenessEvent;
+
+        let pid = test_peer_id();
+        let connected = PeerLivenessEvent::Connected { peer_id: pid };
+        let s = SwiftPeerLivenessEvent::from_upstream(&connected);
+        assert!(matches!(s, SwiftPeerLivenessEvent::Connected { .. }));
+
+        let disconnected = PeerLivenessEvent::Disconnected { peer_id: pid };
+        let s = SwiftPeerLivenessEvent::from_upstream(&disconnected);
+        assert!(matches!(s, SwiftPeerLivenessEvent::Disconnected { .. }));
+
+        let heartbeat_closed = PeerLivenessEvent::HeartbeatStreamClosed { peer_id: pid };
+        let s = SwiftPeerLivenessEvent::from_upstream(&heartbeat_closed);
+        assert!(matches!(s, SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }));
     }
 }

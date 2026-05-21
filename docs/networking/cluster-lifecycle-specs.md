@@ -21,6 +21,10 @@ peer-to-peer relationships.
 The goal is not centralized runtime control. The goal is a small protocol
 foundation that lets peers form clusters and exchange spatial data directly.
 
+This baseline intentionally favors KISS: a small, explicit protocol surface
+over generalized machinery. Recurring rules should stay DRY: define each rule
+once in its natural RFC and reference it elsewhere instead of restating it.
+
 The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", "MAY",
 and "OPTIONAL" are to be interpreted as described in RFC 2119.
 
@@ -33,16 +37,95 @@ normative until their status changes.
 
 This document is ordered from protocol foundations to runtime behavior:
 
-- identity and authority;
+- protocol foundations: authority, identity, wire conventions, and failure
+  codes;
 - peer and domain model;
 - discovery and reachability;
 - connection lifecycle;
 - spatial data exchange;
 - compatibility and observability.
 
-## Identity And Authority
+## Protocol Foundations
 
-### RFC-0001: Peer Identity And Wallet Binding
+### RFC-0001: Authority Boundaries
+
+#### Requirement
+
+Protocol authority is built from:
+
+- the transport-authenticated libp2p peer id;
+- a wallet-signed peer binding;
+- verified domain declarations and delegations;
+- local peer authorization, domain access policy, and offer policy.
+
+The following are never authority proofs by themselves:
+
+- Discovery records, peer graph hints, advertised addresses, and relays;
+- offers, registry references, labels, metadata, diagnostics, and status
+  snapshots;
+- timestamps, freshness hints, liveness checks, and clock-sync results;
+- external registries, blockchain records, NFTs, or tokenomics systems unless a
+  later RFC defines that external-binding authority model.
+
+Domain ownership, delegation, and accepted served-domain membership prove only
+the authority they state. They do not prove payload correctness, canonical
+truth, completeness, trustworthiness, or dialability.
+
+Unless a later RFC explicitly requires it, v1 authority validation MUST NOT
+require Discovery access, blockchain access, registry access, online revocation
+lookup, or any other online lookup.
+
+### RFC-0002: V1 JSON Wire Conventions
+
+#### Requirement
+
+V1 signed authority objects and protocol messages are JSON objects.
+
+Binary values in v1 JSON are encoded as base64url without padding.
+
+UTC timestamps use RFC3339 strings with a `Z` suffix.
+
+The v1 `wallet_signature_scheme` value `ed25519` means:
+
+- raw 32-byte Ed25519 public keys;
+- raw 64-byte Ed25519 signatures;
+- Ed25519 verification over the defined signed bytes.
+
+Unless a field definition overrides them, common v1 encodings are:
+
+- wallet public-key fields: base64url without padding over raw 32-byte Ed25519
+  public keys;
+- `signature`: base64url without padding over a raw 64-byte Ed25519 signature;
+- `domain_id`: base64url without padding over a raw 32-byte domain id;
+- `nonce`: base64url without padding over a raw 16-byte nonce;
+- peer id fields: standard libp2p PeerId text representations.
+
+Unknown fields MAY be present unless a specific object forbids them.
+Receivers MUST ignore unknown fields after validation unless a later RFC
+defines them.
+
+Fields named `label`, `display_name`, `metadata`, `message`, `details`, and
+diagnostic objects are for operators and applications. They MUST NOT change
+identity, authority, delegation, reachability, or policy decisions.
+
+### RFC-0003: Signed JSON Object Conventions
+
+#### Requirement
+
+For v1 peer bindings, domain declarations, and domain delegations, the signed
+bytes are the RFC 8785 JSON Canonicalization Scheme output for the whole object
+with only the `signature` field removed.
+
+The `type` field is part of the signed bytes and is the domain separator.
+
+Receivers MUST include unknown fields in the canonical signed bytes before
+signature verification.
+
+Implementations MUST NOT normalize peer ids, timestamps, base64url spelling,
+field values, or array order, and MUST NOT drop unknown fields before
+canonicalizing signed bytes.
+
+### RFC-0004: Peer Identity And Wallet Binding
 
 #### Requirement
 
@@ -76,23 +159,7 @@ A peer binding MAY include a metadata label.
 
 A peer binding MAY be reused across sessions.
 
-A receiver MAY enforce a maximum accepted binding age from `issued_at`.
-
-A receiver that enforces a maximum accepted binding age MUST reject a peer
-binding whose `issued_at` is older than that limit.
-
-The recommended default maximum accepted binding age is 1 hour.
-
-Peers that rely on fresh peer bindings SHOULD refresh them before half of the
-maximum accepted binding age has elapsed.
-
-A peer refreshes a peer binding by producing a new wallet-signed peer binding
-for the same wallet public key and peer id with a newer `issued_at`.
-
-Refreshing a peer binding does not change domain ownership, delegation, served
-domain validation, or offer authority by itself.
-
-A receiver MAY accept older peer bindings according to local policy.
+Freshness, refresh, and exact failure mapping are defined by `RFC-0005`.
 
 #### Verification
 
@@ -108,10 +175,9 @@ When a peer presents a peer binding, the receiver MUST verify that:
 A peer binding proves only that the wallet recognizes the connected libp2p
 peer id as one of its runtime peers.
 
-A peer binding MUST NOT be treated as proof of domain ownership, runtime
-authority, data correctness, or dialability at any advertised address.
+A peer binding MUST be interpreted with the authority boundaries in `RFC-0001`.
 
-### RFC-0002: Peer Binding Schema
+### RFC-0005: Peer Binding Schema
 
 #### Requirement
 
@@ -121,39 +187,18 @@ A v1 peer binding MUST include:
 
 - `type`: string, exactly `auki.peer_binding.v1`;
 - `wallet_signature_scheme`: string, exactly `ed25519`;
-- `wallet_public_key`: base64url without padding, containing the raw 32-byte
-  Ed25519 wallet public key;
-- `peer_id`: string, containing a standard libp2p PeerId text representation;
-- `issued_at`: UTC RFC3339 timestamp string with a `Z` suffix;
-- `signature`: base64url without padding, containing the raw 64-byte Ed25519
-  signature.
-
-The `wallet_signature_scheme` field determines the wallet public-key encoding,
-signature encoding, signature length, and verification algorithm.
+- `wallet_public_key`: wallet public key;
+- `peer_id`: peer id string;
+- `issued_at`: timestamp;
+- `signature`: Ed25519 signature.
 
 A v1 peer binding MAY include:
 
-- `label`: string, for operator metadata only.
-
-The `label` field has no identity, authority, delegation, reachability, or
-policy semantics.
+- `label`: string.
 
 #### Signed Bytes
 
-The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
-whole peer binding object with only the `signature` field removed.
-
-The `type` field is part of the signed bytes and is the domain separator for
-v1 peer bindings.
-
-Unknown fields MAY be present. A receiver MUST include unknown fields in the
-canonical signed bytes before signature verification, and MUST ignore unknown
-fields after verification unless a later RFC defines them.
-
-An implementation MUST NOT normalize the `peer_id` string, reformat
-`issued_at`, drop unknown fields, or change base64url spelling before
-canonicalizing the signed bytes. The signature verifies the JSON values as
-presented, minus only the `signature` field.
+Peer binding signed bytes use the signed-object conventions in `RFC-0003`.
 
 #### Peer Id Encoding
 
@@ -225,7 +270,7 @@ A receiver SHOULD fail a binding whose signature does not verify with
 A receiver SHOULD fail a binding whose parsed peer id does not match the
 transport-authenticated remote libp2p peer id with `identity.peer_id_mismatch`.
 
-### RFC-0003: Domain Identity And Ownership
+### RFC-0006: Domain Identity And Ownership
 
 #### Requirement
 
@@ -238,7 +283,7 @@ nonce:
 domain_id = hash(domain_owner_wallet_public_key, nonce)
 
 The concrete v1 hash input, hash function, and domain id encoding are defined
-in `RFC-0004`.
+in `RFC-0007`.
 
 The nonce MUST be unique for domains created by the same domain owner wallet.
 
@@ -253,9 +298,6 @@ verifying the signature against the domain owner wallet public key.
 
 The domain owner wallet MAY authorize runtime peers to advertise, serve, or
 update data under that domain.
-
-Domain ownership MUST NOT by itself be treated as proof that associated spatial
-data is correct, canonical, complete, or trusted.
 
 #### Runtime Authority
 
@@ -272,8 +314,7 @@ A valid delegation proves only the delegated authority it states.
 External registries, blockchain records, NFTs, or tokenomics systems MAY bind
 to a domain id.
 
-Such bindings MUST NOT be required to create, identify, or use a domain in
-peer-to-peer mode.
+External bindings are optional for v1 peer-to-peer use.
 
 The native domain id model in this version is wallet-rooted. It fits local,
 private, non-transferable, and explicitly delegated domains.
@@ -290,10 +331,9 @@ The same wallet-rooted domain id model supports local, LAN-only, offline, and
 externally referenced domains. Transferable token-backed domains require a later
 external-binding authority model.
 
-Discovery may help locate peers that claim to serve a domain, but Discovery
-does not create domain ownership or prove runtime authority.
+Domain ownership and external bindings are subject to `RFC-0001`.
 
-### RFC-0004: Domain Declaration Schema
+### RFC-0007: Domain Declaration Schema
 
 #### Requirement
 
@@ -303,23 +343,14 @@ A v1 domain declaration MUST include:
 
 - `type`: string, exactly `auki.domain_declaration.v1`;
 - `wallet_signature_scheme`: string, exactly `ed25519`;
-- `domain_id`: base64url without padding, containing the raw 32-byte v1 domain
-  id;
-- `domain_owner_public_key`: base64url without padding, containing the raw
-  32-byte Ed25519 domain owner wallet public key;
-- `nonce`: base64url without padding, containing the raw 16-byte domain nonce;
-- `signature`: base64url without padding, containing the raw 64-byte Ed25519
-  signature.
-
-The `wallet_signature_scheme` field determines the wallet public-key encoding,
-signature encoding, signature length, and verification algorithm.
+- `domain_id`: v1 domain id;
+- `domain_owner_public_key`: domain owner wallet public key;
+- `nonce`: domain nonce;
+- `signature`: Ed25519 signature.
 
 A v1 domain declaration MAY include:
 
-- `label`: string, for operator metadata only.
-
-The `label` field has no ownership, authority, delegation, reachability, or
-policy semantics.
+- `label`: string.
 
 #### Domain Id Derivation
 
@@ -346,20 +377,8 @@ declaration fields.
 
 #### Signed Bytes
 
-The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
-whole domain declaration object with only the `signature` field removed.
-
-The `type` field is part of the signed bytes and is the domain separator for
-v1 domain declarations.
-
-Unknown fields MAY be present. A receiver MUST include unknown fields in the
-canonical signed bytes before signature verification, and MUST ignore unknown
-fields after verification unless a later RFC defines them.
-
-An implementation MUST NOT normalize `domain_id`, `domain_owner_public_key`,
-`nonce`, drop unknown fields, or change base64url spelling before
-canonicalizing the signed bytes. The signature verifies the JSON values as
-presented, minus only the `signature` field.
+Domain declaration signed bytes use the signed-object conventions in
+`RFC-0003`.
 
 #### Verification
 
@@ -375,8 +394,7 @@ To verify a v1 domain declaration, a receiver MUST:
 7. Verify `signature` against `domain_owner_public_key` over the canonical
    signed bytes.
 
-Domain declaration verification MUST NOT require Discovery, blockchain access,
-registry access, online revocation lookup, or any other online lookup.
+Domain declaration verification follows the online-lookup rule in `RFC-0001`.
 
 #### Failure Mapping
 
@@ -389,7 +407,7 @@ signature.
 A receiver SHOULD fail a declaration whose recomputed domain id does not match
 the declared `domain_id` with `domain.id_mismatch`.
 
-### RFC-0005: Domain Delegation Schema
+### RFC-0008: Domain Delegation Schema
 
 #### Requirement
 
@@ -399,29 +417,19 @@ A v1 domain delegation MUST include:
 
 - `type`: string, exactly `auki.domain_delegation.v1`;
 - `wallet_signature_scheme`: string, exactly `ed25519`;
-- `domain_id`: base64url without padding, containing the raw 32-byte domain
-  id being delegated;
-- `domain_owner_public_key`: base64url without padding, containing the raw
-  32-byte Ed25519 domain owner wallet public key;
-- `delegate_wallet_public_key`: base64url without padding, containing the raw
-  32-byte Ed25519 wallet public key from the delegate peer binding;
-- `delegate_peer_id`: string, containing the delegate's standard libp2p PeerId
-  text representation;
+- `domain_id`: delegated domain id;
+- `domain_owner_public_key`: domain owner wallet public key;
+- `delegate_wallet_public_key`: wallet public key from the delegate peer
+  binding;
+- `delegate_peer_id`: delegate peer id string;
 - `scopes`: non-empty array of strings;
-- `valid_from`: UTC RFC3339 timestamp string with a `Z` suffix;
-- `expires_at`: UTC RFC3339 timestamp string with a `Z` suffix;
-- `signature`: base64url without padding, containing the raw 64-byte Ed25519
-  signature by the domain owner wallet.
-
-The `wallet_signature_scheme` field determines the wallet public-key encoding,
-signature encoding, signature length, and verification algorithm.
+- `valid_from`: timestamp;
+- `expires_at`: timestamp;
+- `signature`: Ed25519 signature by the domain owner wallet.
 
 A v1 domain delegation MAY include:
 
-- `label`: string, for operator metadata only.
-
-The `label` field has no ownership, authority, reachability, or policy
-semantics.
+- `label`: string.
 
 The v1 delegation scopes are exactly:
 
@@ -443,20 +451,8 @@ The `expires_at` timestamp MUST be later than `valid_from`.
 
 #### Signed Bytes
 
-The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
-whole domain delegation object with only the `signature` field removed.
-
-The `type` field is part of the signed bytes and is the domain separator for
-v1 domain delegations.
-
-Unknown fields MAY be present. A receiver MUST include unknown fields in the
-canonical signed bytes before signature verification, and MUST ignore unknown
-fields after verification unless a later RFC defines them.
-
-An implementation MUST NOT normalize `domain_id`, `delegate_peer_id`,
-timestamps, `scopes` array order, drop unknown fields, or change base64url
-spelling before canonicalizing the signed bytes. The signature verifies the
-JSON values as presented, minus only the `signature` field.
+Domain delegation signed bytes use the signed-object conventions in
+`RFC-0003`.
 
 #### Verification
 
@@ -484,8 +480,7 @@ To verify a v1 domain delegation for a claimed action, a receiver MUST:
 13. Verify that the claimed action is included in `scopes`.
 14. Verify that the current time is within the delegation validity window.
 
-Domain delegation verification MUST NOT require Discovery, blockchain access,
-registry access, online revocation lookup, or any other online lookup.
+Domain delegation verification follows the online-lookup rule in `RFC-0001`.
 
 #### Presentation
 
@@ -520,7 +515,7 @@ A receiver SHOULD fail an expired delegation with
 A receiver SHOULD fail a missing required delegation with
 `domain.missing_delegation`.
 
-### RFC-0006: Authority Chain Validation
+### RFC-0009: Authority Chain Validation
 
 #### Requirement
 
@@ -540,13 +535,12 @@ Authority-chain validation MUST run in this order:
 6. Validate each declared domain independently.
 7. Compute the accepted served domain set for the peer relationship.
 
-Peer authorization is defined in `RFC-0016`. In the authority-chain validation
+Peer authorization is defined in `RFC-0020`. In the authority-chain validation
 path, peer authorization runs after peer binding verification and before served
 domains are accepted.
 
-Offer loading happens after authority-chain validation. When offers are loaded,
-the receiver MUST accept only offer catalog entries whose `domain_id` is in the
-accepted served domain set for that peer relationship.
+Offer loading happens after authority-chain validation and follows the offer
+usability rules in `RFC-0026`.
 
 Domain validation MUST verify the domain declaration for each declared domain.
 The receiver MUST recompute the domain id from the declared domain owner wallet
@@ -562,7 +556,7 @@ identity to serve that domain. A receiver MUST reject an expired, malformed, or
 wrong-domain delegation.
 
 A receiver MUST reject a delegation that does not authorize the claimed action.
-The v1 delegation scopes are `advertise`, `serve`, and `update`.
+V1 delegation scopes are defined in `RFC-0008`.
 
 For served-domain validation, the claimed action is `serve`. For Discovery,
 peer-discovery metadata, or equivalent reachability advertisement, the claimed
@@ -570,25 +564,32 @@ action is `advertise`. The `update` scope is checked only by protocols that
 define domain-scoped update behavior.
 
 Domain authority validation answers whether the remote peer may serve under a
-domain. It does not decide whether the local application wants to consume that
-domain or any offer from it.
-
-After domain authority validates, domain access policy MAY still reject the
-domain with `policy.domain_rejected`.
+domain. Local domain access policy MAY still reject the domain with
+`policy.domain_rejected`, as defined in `RFC-0020`.
 
 Validating one declared domain MUST NOT cause another declared domain from the
 same peer to be accepted. Each declared domain needs its own valid authority
 chain.
 
-The v1 authority validation path MUST NOT require online revocation lookup,
-blockchain access, registry access, or Discovery access. Maximum accepted
-binding age is the baseline mechanism for aging out peer bindings. Delegation
-expiry and replacement are the baseline mechanisms for aging out delegations.
+The v1 authority validation path follows the online-lookup rule in `RFC-0001`.
+Maximum accepted binding age is the baseline mechanism for
+aging out peer bindings. Delegation expiry and replacement are the baseline
+mechanisms for aging out delegations.
 
-#### Failure Codes
+#### Consequences
 
-Lifecycle, authority, offer-loading, Get, and Subscribe diagnostics SHOULD use
-stable string failure codes in `category.reason` form.
+Authority-chain validation is interpreted under `RFC-0001`.
+
+Invalid identity material is a peer-level failure. Invalid domain authority is
+a domain-level failure unless peer authorization or local policy chooses to
+reject the whole peer relationship.
+
+### RFC-0010: Failure Code Registry
+
+#### Requirement
+
+Lifecycle, authority, offer-loading, Get, Subscribe, and message diagnostics
+SHOULD use stable string failure codes in `category.reason` form.
 
 Baseline failure codes:
 
@@ -626,19 +627,9 @@ Baseline failure codes:
 - `offer.load_failed`
 - `transport.failed`
 
-#### Consequences
-
-Authority-chain validation proves only that a connected peer is authorized to
-serve the accepted domains it declared. It does not prove that the peer's data
-is correct, canonical, complete, or trusted.
-
-Invalid identity material is a peer-level failure. Invalid domain authority is
-a domain-level failure unless peer authorization or local policy chooses to
-reject the whole peer relationship.
-
 ## Peer And Domain Model
 
-### RFC-0007: Serving Peers Declare Domains
+### RFC-0011: Serving Peers Declare Domains
 
 #### Requirement
 
@@ -673,12 +664,7 @@ A cluster is a peer connectivity/session graph. It MAY be used to
 describe peers that know about each other, are connected, are authorized, or
 are exchanging data.
 
-A cluster MUST NOT be treated as authoritative for:
-
-- who controls a domain;
-- who owns or authored spatial data;
-- authorization to publish data;
-- authorization to consume data.
+A cluster is subject to `RFC-0001`.
 
 #### Consequences
 
@@ -689,7 +675,7 @@ merge their domains or share a common runtime authority.
 Failure of one peer SHOULD affect that peer's served domains and peer
 relationships only; it SHOULD NOT invalidate unrelated domains.
 
-### RFC-0008: Served Domain Set
+### RFC-0012: Served Domain Set
 
 #### Requirement
 
@@ -715,14 +701,8 @@ domain.
 
 #### Offer Interaction
 
-The served domain set is the authority filter for remote offers.
-
-An offer whose domain is in the accepted served domain set MAY be loaded,
-displayed, requested by Get, or requested by Subscribe, subject to local
-domain access policy and offer policy.
-
-An offer whose domain is not in the accepted served domain set MUST NOT be
-treated as usable. Implementations SHOULD reject or ignore such offers with
+The served domain set is the authority filter used by `RFC-0026`. Offers
+outside the set MUST be rejected or ignored with
 `offer.domain_not_served`.
 
 If offer loading fails for an accepted served domain, the peer relationship MAY
@@ -749,7 +729,7 @@ Diagnostics SHOULD report:
 - whether the peer relationship has an empty served domain set;
 - which loaded offers are scoped to each accepted served domain.
 
-### RFC-0009: Private And Discoverable Peers
+### RFC-0013: Private And Discoverable Peers
 
 #### Requirement
 
@@ -768,12 +748,9 @@ A private peer does not register presence in Discovery but can still:
 
 A Discovery query MUST NOT be used to prove that a private peer does not exist.
 
-Peer authorization MUST NOT depend solely on whether the peer appeared in
-Discovery.
-
 ## Discovery And Reachability
 
-### RFC-0010: Discovery Is Optional Entrypoint Rendezvous
+### RFC-0014: Discovery Is Optional Entrypoint Rendezvous
 
 #### Requirement
 
@@ -792,13 +769,7 @@ discovery mechanism.
 Discovery MUST be treated as rendezvous/presence infrastructure unless a later
 RFC explicitly expands its authority.
 
-Discovery MUST NOT be treated as authoritative for:
-
-- who controls a domain;
-- who owns or authored spatial data;
-- cluster membership;
-- the complete set of peers, including private or non-advertised peers;
-- authorization to consume or publish data.
+Discovery is subject to `RFC-0001`.
 
 #### Discovery Records
 
@@ -819,21 +790,10 @@ Receiving an advertisement MUST NOT by itself cause the receiver to accept the
 advertised peer as a server for that domain. Served-domain acceptance still
 requires peer-to-peer authority validation with `serve` authority.
 
-A Discovery record MAY advertise one or more entrypoints into a peer graph.
-
-A Discovery record MUST NOT be assumed to list every peer in that graph.
-
-A Discovery record MAY be stale until its freshness window expires or the
-advertising peer refreshes, updates, or removes it.
-
-Discovery SHOULD attach freshness metadata to each record, such as `expires_at`,
-`ttl`, `last_seen_at`, or an equivalent value.
-
-Discovery SHOULD expire records that are not refreshed within their freshness
-window.
-
-Stale or expired Discovery data MUST NOT invalidate existing peer-to-peer
-connections by itself.
+Discovery records MAY advertise peer-graph entrypoints, but not authoritative
+membership. Discovery SHOULD attach freshness metadata and expire records that
+are not refreshed. Stale or expired Discovery data MUST NOT invalidate existing
+peer-to-peer connections by itself.
 
 #### Consequences
 
@@ -843,7 +803,7 @@ unavailable, assuming the underlying peer-to-peer transport remains healthy.
 SDK status/diagnostics SHOULD distinguish "Discovery presence degraded" from
 "peer relationship degraded".
 
-### RFC-0011: Discovery Record Shape (To Fill)
+### RFC-0015: Discovery Record Shape (To Fill)
 
 Define the concrete Discovery advertisement:
 
@@ -856,7 +816,7 @@ Define the concrete Discovery advertisement:
 The record shape should preserve entrypoint advertisement semantics and avoid
 becoming an authoritative offer catalog.
 
-### RFC-0012: Discovery Data-Type Hints (To Fill)
+### RFC-0016: Discovery Data-Type Hints (To Fill)
 
 Define the coarse data-type hints allowed in Discovery records:
 
@@ -866,7 +826,7 @@ Define the coarse data-type hints allowed in Discovery records:
 - freshness behavior for hints;
 - how clients should treat missing, stale, or unsupported hints.
 
-### RFC-0013: Listen Addresses And Advertised Addresses Are Different
+### RFC-0017: Listen Addresses And Advertised Addresses Are Different
 
 #### Requirement
 
@@ -901,19 +861,15 @@ Apps SHOULD expose listen and advertised address configuration separately.
 SDK diagnostics SHOULD report the final advertised address set and identify
 whether each address was auto-detected, operator-supplied, or relay-mediated.
 
-### RFC-0014: Relay Is Connectivity, Not Authority
+### RFC-0018: Relay Is Connectivity, Not Authority
 
 #### Requirement
 
 Relay support MAY be used to establish peer-to-peer connectivity when direct
 dialing fails or is unavailable.
 
-Relay support MUST NOT change:
-
-- who controls a domain;
-- peer authorization;
-- who owns or authored spatial data;
-- offer, get, subscribe, stream, or resource semantics.
+Relay support MUST NOT change identity, authority, policy, or spatial-data
+semantics.
 
 #### Consequences
 
@@ -925,7 +881,7 @@ sufficient.
 
 ## Connection Lifecycle
 
-### RFC-0015: Peer Handshake
+### RFC-0019: Peer Handshake
 
 #### Requirement
 
@@ -946,15 +902,8 @@ Each handshake side MUST include:
 - offer-catalog fetch path, when the peer exposes offers;
 - liveness or non-authoritative diagnostic initialization data, when supported.
 
-The transport-authenticated libp2p peer id is the source of truth for the
-remote peer id. Any peer id carried inside handshake material is a claim that
-MUST be checked against the transport-authenticated peer id. It MUST NOT
-override the transport-authenticated peer id.
-
-The libp2p Identify protocol MAY provide peer metadata such as public keys,
-agent versions, and listen addresses. Identify metadata MUST NOT override the
-transport-authenticated remote peer id and MUST NOT satisfy the wallet-signed
-peer binding requirement.
+Remote peer id handling follows `RFC-0005`: handshake material MUST match the
+transport-authenticated libp2p peer id and MUST NOT override it.
 
 Each side MUST choose the highest mutually supported lifecycle protocol version.
 If no compatible lifecycle protocol version exists, the peer relationship MUST
@@ -964,11 +913,7 @@ A peer that only consumes remote offers MAY send no declared domains and no
 offer-catalog fetch path.
 
 A peer that exposes a domain-scoped offer catalog MUST declare the domains it
-may use in offers from that catalog.
-
-The receiver MUST NOT treat offers from that catalog as usable unless each
-offer's domain is in the receiver's accepted served domain set for that peer
-relationship.
+may use in offers from that catalog. Offer use follows `RFC-0026`.
 
 #### Handshake Result
 
@@ -984,80 +929,29 @@ For each remote peer relationship, the handshake MUST produce:
 - stable failure codes for any rejected identity, domain, authorization, or
   offer-loading step.
 
-The connection MUST NOT load remote offers before peer identity is verified,
-peer authorization succeeds, and the served domain set is computed.
+The connection MUST NOT load remote offers before the authority-chain
+validation path in `RFC-0009` has completed.
 
 The connection MAY become ready with an empty remote served domain set. In that
 case, the remote peer is connected and authorized but exposes no usable remote
 offers for that relationship.
 
-#### Happy Path Example
+#### Lifecycle Examples
 
-1. Park dials Robot.
-2. Park and Robot exchange supported lifecycle protocol versions.
-3. Robot presents a peer binding.
-4. Robot declares a served domain and presents the domain declaration.
-5. Robot presents a delegation if Robot's verified wallet is not the domain
-   owner wallet.
-6. Park verifies Robot's peer binding against Robot's transport-authenticated
-   libp2p peer id.
-7. Park authorizes Robot under peer authorization mode `all`.
-8. Park validates Robot's declared domain authority.
-9. Park accepts the domain into Robot's served domain set.
-10. Park fetches Robot's offer catalog.
-11. Park may Get or Subscribe to offers scoped to the accepted served domain.
+In the happy path, Park dials Robot, negotiates a lifecycle version, verifies
+Robot's peer binding, authorizes Robot, validates Robot's declared domains,
+computes Robot's served domain set, fetches Robot's offer catalog, and then
+uses Get or Subscribe only for offers that pass `RFC-0026`.
 
-#### Authority Examples
+If Robot's peer binding claims a different peer id than the
+transport-authenticated libp2p peer id, Park rejects the peer relationship with
+`identity.peer_id_mismatch` and stops before domain validation or offer loading.
 
-Direct owner:
+If Robot declares domains `A`, `B`, and `C`, Park MAY accept valid domains
+`A` and `B`, reject expired domain `C` with `domain.expired_delegation`, keep
+the peer relationship, and treat offers scoped to `C` as unusable.
 
-1. Robot's verified peer binding wallet public key equals the domain owner
-   public key in the verified domain declaration.
-2. Park accepts Robot as directly authorized to serve the domain.
-3. Robot does not need to present a delegation for that domain.
-
-Delegated server:
-
-1. Robot's verified peer binding wallet public key differs from the domain
-   owner public key.
-2. Robot presents a delegation signed by the domain owner wallet.
-3. Park verifies that the delegation binds the domain id, domain owner public
-   key, Robot's wallet public key, Robot's transport-authenticated libp2p peer
-   id, a valid time window, and the `serve` scope.
-4. Park accepts the domain into Robot's served domain set.
-
-#### Failure Path Examples
-
-Identity failure:
-
-1. Park dials Robot and establishes a libp2p transport connection.
-2. Robot presents a peer binding for a different libp2p peer id than the
-   transport-authenticated peer id.
-3. Park rejects the peer relationship with `identity.peer_id_mismatch`.
-4. Park MUST NOT validate Robot's declared domains or load Robot's offers.
-
-Partial domain acceptance:
-
-1. Robot declares domains `A`, `B`, and `C`.
-2. Park validates `A` directly because Robot's verified wallet is the domain
-   owner wallet.
-3. Park validates `B` through a valid delegation.
-4. Park rejects `C` because the delegation is expired, reporting
-   `domain.expired_delegation`.
-5. Park keeps the peer relationship and records Robot's served domain set as
-   `{A, B}`.
-6. Park MUST NOT treat offers scoped to `C` as usable.
-
-Policy and offer rejection:
-
-1. Robot declares domain `A` and proves valid domain authority.
-2. Park's domain access policy rejects `A` with `policy.domain_rejected`.
-3. Park keeps the peer relationship if peer authorization succeeded.
-4. Park does not add `A` to Robot's served domain set.
-5. If Robot's offer catalog includes an offer scoped to `A`, Park rejects or
-   ignores that offer with `offer.domain_not_served`.
-
-### RFC-0016: Authorization Model
+### RFC-0020: Authorization Model
 
 #### Requirement
 
@@ -1094,7 +988,7 @@ replace domain authority validation.
 Invite tokens, signed challenges, and per-offer policy hooks are optional
 hardening layers for future RFC work.
 
-### RFC-0017: Peer Connectivity State Is Tracked Per Remote Peer
+### RFC-0021: Peer Connectivity State Is Tracked Per Remote Peer
 
 #### Requirement
 
@@ -1144,7 +1038,7 @@ connections.
 A peer exiting SHOULD make that peer unavailable to other peers. It SHOULD NOT
 by itself invalidate unrelated peer relationships or domains.
 
-### RFC-0018: Peer Graph Hints (To Fill)
+### RFC-0022: Peer Graph Hints (To Fill)
 
 Define how a peer shares additional peer candidates after connection:
 
@@ -1159,7 +1053,7 @@ dial targets or offer sources.
 
 ## Spatial Data Exchange
 
-### RFC-0019: Peers Exchange Spatial Data With Offer / Get / Subscribe
+### RFC-0023: Peers Exchange Spatial Data With Offer / Get / Subscribe
 
 #### Requirement
 
@@ -1171,25 +1065,17 @@ data peer-to-peer.
 A peer MAY choose not to expose spatial data, or MAY expose only a subset of
 its spatial data according to local policy.
 
-A peer that only consumes remote offers is not required to expose offers or
-declare a local domain.
-
 The minimum baseline exchange shape is:
 
 - `Offer`: a peer advertises named and typed spatial data it can share now.
 - `Get`: a peer fetches an offered data item once.
 - `Subscribe`: a peer receives ongoing updates from an offer.
 
-Discovery MAY help a peer find how to dial into a peer graph or cluster, and
-MAY include coarse, non-authoritative summary metadata about the kinds of data
-that may be available there.
-
 A peer that intends to consume spatial data SHOULD fetch offers from remote
-peers after connecting, authorizing, and computing the remote peer's accepted
-served domain set.
+peers only after the offer usability rules in `RFC-0026` can be evaluated.
 
-Discovery MUST NOT be required as the transport for spatial data exchange,
-and MUST NOT be treated as the authoritative offer registry.
+Discovery may help find dial targets, but it follows the authority boundaries
+in `RFC-0001` and MUST NOT be required as the transport for spatial data.
 
 #### Offers
 
@@ -1199,30 +1085,20 @@ is willing to serve.
 Offer ids are scoped to the producing peer's served domain. They identify data
 the producer exposes from that domain, not global network objects.
 
-An offer SHOULD provide enough information for a consumer to decide whether it
-can use the data and whether to fetch it once or subscribe to it:
+The concrete offer object is defined in `RFC-0024`.
 
-- offer id and domain id;
-- display name, when useful;
-- offer kind;
-- payload or schema type and version;
-- supported access mode: Get, Subscribe, or both;
-- registry references for spatial and temporal interpretation, when relevant;
-- freshness or availability status.
-
-An offer MUST NOT by itself be treated as proof of authority, correctness, or
-trustworthiness. It is a reference to data exposed from a domain.
+An offer is a reference to data exposed from a domain. It follows the authority
+boundaries in `RFC-0001`.
 
 #### Get
 
 `Get` fetches an offered data item once.
 
-Get is for finite responses. In v1, `RFC-0023` narrows Get to descriptors,
+Get is for finite responses. In v1, `RFC-0029` narrows Get to descriptors,
 registry entries, transform edges, and small snapshots. Future RFCs MAY extend
 Get to log ranges, map fragments, or other finite spatial-data representations.
 
-A failed `Get` SHOULD explain whether the offer was unknown, unauthorized,
-stale, unavailable, unsupported, or failed at the transport/protocol layer.
+Get failure mapping is defined in `RFC-0029`.
 
 #### Subscribe
 
@@ -1230,9 +1106,7 @@ stale, unavailable, unsupported, or failed at the transport/protocol layer.
 a camera stream, point-cloud stream, pose stream, audio stream, or future live
 map updates.
 
-A subscription failure SHOULD explain whether the offer was unknown,
-unauthorized, stale, unavailable, unsupported, or failed at the
-transport/protocol layer.
+Subscribe failure mapping is defined in `RFC-0030`.
 
 #### Current Implementation Mapping
 
@@ -1248,7 +1122,7 @@ final Offer / Get / Subscribe contract.
 The SDK SHOULD support a peer learning what another peer can share by name or
 type before opening a stream or fetching data.
 
-### RFC-0020: Offer Catalog
+### RFC-0024: Offer Catalog
 
 #### Requirement
 
@@ -1256,15 +1130,13 @@ An offer catalog is a peer-to-peer snapshot of the offers a connected peer is
 willing to expose to the requester at the time of the request.
 
 The offer catalog is runtime metadata. It is not a signed authority object.
-Offer authority is derived from the peer relationship's accepted served domain
-set, as defined in `RFC-0021`.
+Catalog entries become usable only through `RFC-0026`.
 
 A peer that exposes one or more domain-scoped offers MUST declare an
 offer-catalog fetch path during handshake.
 
 A peer that consumes remote offers SHOULD fetch the remote offer catalog only
-after peer identity is verified, peer authorization succeeds, and the remote
-served domain set has been computed.
+after the authority-chain validation path in `RFC-0009` has completed.
 
 A peer that exposes no offers MAY return an empty catalog.
 
@@ -1313,34 +1185,17 @@ A v1 offer-catalog response MUST include:
 
 A v1 offer-catalog response MAY include:
 
-- `generated_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `generated_at`: timestamp;
 - `diagnostics`: array of diagnostic objects.
 
 The `offers` array MAY be empty. An empty array means the responder understood
 the request but has no matching offers currently visible to the requester.
 
-The `generated_at` timestamp is producer metadata. It can help diagnostics and
-freshness decisions, but it MUST NOT be treated as authority proof.
+The `generated_at` timestamp is producer metadata under `RFC-0001`.
 
 #### Diagnostics
 
-A v1 offer-catalog diagnostic uses the v1 error object defined in `RFC-0022`.
-
-A v1 offer-catalog diagnostic MUST include:
-
-- `code`: string.
-
-A v1 offer-catalog diagnostic MAY include:
-
-- `message`: string;
-- `domain_id`: domain id string;
-- `offer_id`: offer id string;
-- `kind`: offer-kind string;
-- `retryable`: boolean;
-- `details`: JSON object.
-
-Diagnostics are explanatory. They MUST NOT authorize an offer or override the
-accepted served domain set.
+A v1 offer-catalog diagnostic uses the v1 error object defined in `RFC-0027`.
 
 #### Offer Object
 
@@ -1359,8 +1214,8 @@ A v1 offer MUST include:
 A v1 offer MAY include:
 
 - `display_name`: string;
-- `updated_at`: UTC RFC3339 timestamp string with a `Z` suffix;
-- `expires_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `updated_at`: timestamp;
+- `expires_at`: timestamp;
 - `metadata`: JSON object.
 
 The `offer_id` is scoped to the tuple `(producing peer id, domain_id)`.
@@ -1374,7 +1229,7 @@ logical data source. Producers SHOULD issue a new `offer_id` when reusing the
 old id would hide an incompatible payload, registry, or access-mode change.
 
 The `kind` field is an open string. The v1 minimum known kinds are defined in
-`RFC-0025`. Consumers MUST ignore unknown kinds unless local application code
+`RFC-0031`. Consumers MUST ignore unknown kinds unless local application code
 explicitly supports them.
 
 The v1 `status` values are:
@@ -1427,7 +1282,7 @@ envelope may further commit to exact payload details.
 
 The payload descriptor describes the expected payload family. It MUST NOT carry
 the payload bytes or structured payload value; those belong in the spatial
-message envelope's payload object defined in `RFC-0022`.
+message envelope's payload object defined in `RFC-0027`.
 
 #### Registry References
 
@@ -1497,12 +1352,8 @@ Subscribe attempts.
 A responder SHOULD fail malformed catalog requests with
 `offer.invalid_catalog_request`.
 
-A responder MUST NOT intentionally return an offer for a domain it did not
-declare to the requester during handshake.
-
-A receiver MUST ignore or reject any returned offer whose `domain_id` is not in
-the receiver's accepted served domain set for that peer relationship, using
-`offer.domain_not_served`.
+Offer catalog responders and receivers MUST apply `RFC-0026`. Domain-scope
+failures use `offer.domain_not_served`.
 
 A receiver SHOULD fail malformed catalog responses with
 `offer.invalid_catalog_response`.
@@ -1513,7 +1364,7 @@ when the rest of the catalog is usable.
 A responder SHOULD use `offer.catalog_unavailable` when it cannot produce a
 catalog because of a local recoverable problem.
 
-### RFC-0021: Offer Domain Scope And Authority
+### RFC-0025: Offer Domain Scope And Authority
 
 #### Requirement
 
@@ -1522,14 +1373,8 @@ Each v1 offer MUST include exactly one `domain_id`.
 One v1 offer belongs to exactly one domain. Multi-domain offers are future
 work.
 
-The `domain_id` field in an offer is a producer-declared scope. It is not proof
-that the producer is authorized to serve that domain.
-
-A receiver MUST treat an offer as usable only when the offer's `domain_id` is
-in the receiver's accepted served domain set for that peer relationship.
-
-An offer whose `domain_id` is not in the accepted served domain set MUST be
-ignored or rejected with `offer.domain_not_served`.
+The `domain_id` field in an offer is a producer-declared scope. Receivers MUST
+apply the offer usability rules in `RFC-0026`.
 
 A v1 offer SHOULD NOT carry its own domain declaration or delegation unless a
 later RFC defines embedded authority proofs. Offer authority is derived from the
@@ -1537,13 +1382,9 @@ peer relationship's accepted served domain set.
 
 #### Domain State Changes
 
-If a domain is rejected during handshake, offers scoped to that domain MUST NOT
-be treated as usable.
-
-If a domain later becomes invalid, expires under local policy, or is removed
-from the accepted served domain set by a future dynamic update protocol, all
-cached offers scoped to that domain MUST become unusable for new Get and
-Subscribe attempts.
+When a domain is rejected, expires under local policy, or is removed from the
+accepted served domain set by a future dynamic update protocol, cached offers
+scoped to that domain MUST become unusable for new Get and Subscribe attempts.
 
 Existing subscriptions for that domain SHOULD be ended or treated as no longer
 authorized once the implementation observes the domain is no longer accepted.
@@ -1555,20 +1396,40 @@ the `not_authorized` reason.
 The producer controls offer metadata such as `offer_id`, `kind`, `payload`,
 `registry_refs`, `status`, and `metadata`.
 
-The receiver controls whether that offer is usable in the local peer
-relationship by applying:
+The receiver controls whether that offer is usable by applying the offer
+usability rules in `RFC-0026`.
 
-- peer authorization;
-- domain authority validation;
-- domain access policy;
-- offer policy;
-- payload and kind compatibility checks.
+Offer metadata and payloads follow the authority boundaries in `RFC-0001`.
 
-Accepting an offer's domain scope does not imply that the receiver trusts the
-offer payload, registry contents, spatial correctness, data completeness, or
-application semantics.
+### RFC-0026: Offer Usability
 
-### RFC-0022: Spatial Message Envelope
+#### Requirement
+
+A remote offer is usable only when all of the following are true for the
+producing peer relationship:
+
+- peer identity is verified;
+- peer authorization has succeeded;
+- the offer's `domain_id` is in the accepted served domain set;
+- local domain access policy and offer policy allow it;
+- the offer's kind, access mode, payload descriptor, status, and freshness are
+  compatible with the requested path.
+
+Catalog loading, Get, Subscribe, spatial-message, and status rules that refer
+to offer usability use this RFC unless a later RFC explicitly changes it.
+
+A producer MUST NOT intentionally expose an offer for a domain it did not
+declare to the requester during handshake.
+
+#### Failure Mapping
+
+An offer that fails the served-domain part of the usability check MUST be
+rejected or ignored with `offer.domain_not_served`.
+
+An offer that fails kind, access-mode, payload, availability, or freshness
+checks SHOULD use the corresponding offer failure code from `RFC-0010`.
+
+### RFC-0027: Spatial Message Envelope
 
 #### Requirement
 
@@ -1595,7 +1456,7 @@ A v1 spatial message envelope MAY include:
 - `timestamp_ns`: integer;
 - `clock`: registry-reference object;
 - `registry_refs`: array of registry-reference objects;
-- `generated_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `generated_at`: timestamp;
 - `metadata`: JSON object.
 
 The tuple `(domain_id, offer_id)` identifies the offer that produced the
@@ -1606,12 +1467,9 @@ diagnostic or forwarding use case for it.
 
 #### Domain And Offer Binding
 
-A receiver MUST reject or ignore a message envelope whose `domain_id` is not in
-the accepted served domain set for the producing peer relationship.
-
-A receiver MUST reject or ignore a message envelope whose `(domain_id,
-offer_id)` does not match the Get request or accepted Subscribe stream the
-receiver opened.
+A receiver MUST reject or ignore a message envelope that fails the
+offer usability rules in `RFC-0026` or whose `(domain_id, offer_id)` does
+not match the Get request or accepted Subscribe stream.
 
 A message envelope MUST NOT carry its own domain declaration, delegation, or
 authority proof in v1.
@@ -1652,7 +1510,7 @@ The `clock` field, when present, is a registry-reference object whose
 `registry` is `clock`.
 
 The `registry_refs` field, when present, uses the same registry-reference shape
-defined in `RFC-0020`.
+defined in `RFC-0024`.
 
 Message-level registry references refine or confirm the registry context for
 that message. For Subscribe, they MUST NOT contradict the registry references
@@ -1688,9 +1546,8 @@ If `timestamp_ns` is present and no clock can be resolved, the receiver SHOULD
 treat the timestamp as uninterpretable rather than assuming local wall-clock
 time.
 
-The `generated_at` field is producer metadata and uses UTC wall-clock time. It
-MAY be used for freshness diagnostics, but it MUST NOT replace `timestamp_ns`
-for domain data timing.
+The `generated_at` field is producer metadata under `RFC-0001` and MUST
+NOT replace `timestamp_ns` for domain data timing.
 
 #### Error Object
 
@@ -1725,7 +1582,7 @@ A receiver SHOULD fail malformed envelopes with `message.invalid_envelope`.
 A receiver SHOULD fail malformed payloads with `message.invalid_payload`.
 
 A receiver SHOULD fail oversized payloads with `message.payload_too_large`.
-Concrete size limits are defined by the Get and Subscribe RFCs.
+Concrete size limits are defined in `RFC-0028`.
 
 A receiver MAY report observed sequence gaps with `message.sequence_gap`.
 
@@ -1733,7 +1590,60 @@ A receiver SHOULD use the existing offer failure-code family when the envelope
 or request targets an unknown, unauthorized, unsupported, unavailable, or stale
 offer.
 
-### RFC-0023: Get
+### RFC-0028: Get And Subscribe Common Path Rules
+
+#### Requirement
+
+Get and Subscribe requests target one offer within the producing peer
+relationship.
+
+Each request MUST include:
+
+- `domain_id`: domain id string;
+- `offer_id`: offer id string.
+
+Each request MAY include:
+
+- `params`: JSON object;
+- `accepted_payload_types`: array of payload type strings;
+- a path-specific positive integer size limit.
+
+The tuple `(domain_id, offer_id)` identifies the offer within the producing
+peer relationship. The producing peer id is known from the
+transport-authenticated peer relationship and SHOULD NOT be repeated in the
+request.
+
+The `params` object is offer-kind-specific. Receivers MUST ignore unknown
+`params` fields unless the offer kind defines them as required.
+
+The `accepted_payload_types` array lets the requester narrow the payload types
+it is willing to receive. If omitted or empty, the requester accepts any
+payload type advertised by the offer and supported by local policy.
+
+Implementations MUST define maximum accepted response or message sizes for
+each path. If the requester supplies a path-specific size limit, the responder
+MUST honor the lower of the requester's limit and the responder's local limit.
+Oversized responses or messages SHOULD fail with `message.payload_too_large`.
+
+Get and Subscribe failure mapping SHOULD reuse the offer failure-code family:
+
+- `offer.unknown_offer` when the requested `(domain_id, offer_id)` is not known;
+- `offer.domain_not_served` when the offer fails the served-domain part of the
+  offer usability check;
+- `offer.unsupported_kind` when the offer kind is known but unsupported by the
+  responder's implementation for that path;
+- `offer.unsupported_access_mode` when the offer does not support the requested
+  path;
+- `offer.unsupported_payload_type` when the responder cannot produce any
+  payload type accepted by the requester;
+- `offer.temporarily_unavailable` when the offer is known but unavailable;
+- `offer.stale` when local freshness policy rejects the offer.
+
+Structured message failures SHOULD use the message failure-code family from
+`RFC-0027`. Transport or framing failures SHOULD use `transport.failed` when a
+structured response, reject, or end message cannot be returned.
+
+### RFC-0029: Get
 
 #### Requirement
 
@@ -1754,26 +1664,11 @@ A v1 Get request is a JSON object.
 A v1 Get request MUST include:
 
 - `type`: string, exactly `auki.get_request.v1`;
-- `domain_id`: domain id string;
-- `offer_id`: offer id string.
+- the common request fields defined in `RFC-0028`.
 
-A v1 Get request MAY include:
+A v1 Get request MAY additionally include:
 
-- `params`: JSON object;
-- `accepted_payload_types`: array of payload type strings;
 - `max_payload_bytes`: positive integer.
-
-The tuple `(domain_id, offer_id)` identifies the offer within the producing
-peer relationship. The producing peer id is known from the
-transport-authenticated peer relationship and SHOULD NOT be repeated in the
-request.
-
-The `params` object is offer-kind-specific. Receivers MUST ignore unknown
-`params` fields unless the offer kind defines them as required.
-
-The `accepted_payload_types` array lets the requester narrow the payload types
-it is willing to receive. If omitted or empty, the requester accepts any
-payload type advertised by the offer and supported by local policy.
 
 The `max_payload_bytes` field lets the requester declare the largest payload it
 is willing to accept. The responder MUST NOT send a payload whose raw payload
@@ -1793,12 +1688,12 @@ A successful v1 Get response MUST include:
 
 A failed v1 Get response MUST include:
 
-- `error`: error object as defined in `RFC-0022`.
+- `error`: error object as defined in `RFC-0027`.
 
 A v1 Get response MUST include exactly one of `message` or `error`.
 
 The `message` object MUST follow the spatial message envelope shape defined in
-`RFC-0022`.
+`RFC-0027`.
 
 The `message.domain_id` and `message.offer_id` MUST match the request
 `domain_id` and `offer_id`.
@@ -1829,13 +1724,7 @@ status changes.
 
 Get v1 is for small finite responses.
 
-Implementations MUST define a maximum accepted Get response size.
-
-If the requester supplies `max_payload_bytes`, the responder MUST honor the
-lower of the requester's limit and the responder's local limit.
-
-If the response would exceed the applicable limit, the responder SHOULD fail
-with `message.payload_too_large`.
+Get response size handling follows `RFC-0028`.
 
 Get v1 MUST NOT split a response into multiple chunks.
 
@@ -1848,14 +1737,6 @@ The first Get use cases are:
 - `transform_edge`: return one direct transform edge;
 - descriptor or small snapshot offers explicitly advertised with `get`.
 
-A `registry_entry` Get response SHOULD return a payload object with a structured
-`json` value containing the canonical registry JSON or an equivalent envelope
-defined by the registry-entry protocol.
-
-A `transform_edge` Get response SHOULD return a payload object with structured
-`json` containing the transform and SHOULD include registry references with
-roles `from_frame` and `to_frame`.
-
 Log ranges, map fragments, and large binary artifacts are future work unless a
 later RFC defines chunking or a separate transfer protocol.
 
@@ -1863,33 +1744,14 @@ later RFC defines chunking or a separate transfer protocol.
 
 A responder SHOULD fail malformed Get requests with `get.invalid_request`.
 
-Get failure mapping SHOULD reuse the offer failure-code family:
+Get SHOULD use the common offer-path failure mapping defined in
+`RFC-0028`.
 
-- `offer.unknown_offer` when the requested `(domain_id, offer_id)` is not known;
-- `offer.domain_not_served` when the domain is not in the accepted served domain
-  set;
-- `offer.unsupported_kind` when the offer kind is known but unsupported by the
-  responder's Get implementation;
-- `offer.unsupported_access_mode` when the offer does not support Get;
-- `offer.unsupported_payload_type` when the responder cannot produce any payload
-  type accepted by the requester;
-- `offer.temporarily_unavailable` when the offer is known but unavailable;
-- `offer.stale` when local freshness policy rejects the offer.
+A requester SHOULD use the message failure-code family from `RFC-0027` when a
+Get response includes `message` but the envelope, payload, or payload size is
+invalid.
 
-A responder SHOULD use `message.payload_too_large` when the response would
-exceed the applicable size limit.
-
-A requester SHOULD use the message failure-code family when a Get response
-includes `message` but the envelope, payload, or payload size is invalid:
-
-- `message.invalid_envelope`;
-- `message.invalid_payload`;
-- `message.payload_too_large`.
-
-A transport or framing failure SHOULD be reported as `transport.failed` when a
-structured Get response cannot be returned.
-
-### RFC-0024: Subscribe
+### RFC-0030: Subscribe
 
 #### Requirement
 
@@ -1911,26 +1773,11 @@ A v1 Subscribe request is a JSON object.
 A v1 Subscribe request MUST include:
 
 - `type`: string, exactly `auki.subscribe_request.v1`;
-- `domain_id`: domain id string;
-- `offer_id`: offer id string.
+- the common request fields defined in `RFC-0028`.
 
-A v1 Subscribe request MAY include:
+A v1 Subscribe request MAY additionally include:
 
-- `params`: JSON object;
-- `accepted_payload_types`: array of payload type strings;
 - `max_message_bytes`: positive integer.
-
-The tuple `(domain_id, offer_id)` identifies the offer within the producing
-peer relationship. The producing peer id is known from the
-transport-authenticated peer relationship and SHOULD NOT be repeated in the
-request.
-
-The `params` object is offer-kind-specific. Receivers MUST ignore unknown
-`params` fields unless the offer kind defines them as required.
-
-The `accepted_payload_types` array lets the requester narrow the payload types
-it is willing to receive. If omitted or empty, the requester accepts any
-payload type advertised by the offer and supported by local policy.
 
 The `max_message_bytes` field lets the requester declare the largest data
 message it is willing to accept on the subscription. The producer MUST NOT send
@@ -1953,7 +1800,7 @@ A successful v1 start result MAY include:
 
 - `registry_refs`: array of registry-reference objects;
 - `initial_sequence`: non-negative integer;
-- `generated_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `generated_at`: timestamp;
 - `metadata`: JSON object.
 
 The `domain_id` and `offer_id` fields MUST match the request.
@@ -1974,7 +1821,7 @@ A failed v1 start result is a JSON object.
 A failed v1 start result MUST include:
 
 - `type`: string, exactly `auki.subscribe_reject.v1`;
-- `error`: error object as defined in `RFC-0022`.
+- `error`: error object as defined in `RFC-0027`.
 
 If the request's `domain_id` and `offer_id` can be parsed, the `error` object
 SHOULD include them.
@@ -1984,7 +1831,7 @@ The producer MUST NOT send data messages after a failed start result.
 #### Data Messages
 
 After a successful start result, each data message MUST follow the spatial
-message envelope shape defined in `RFC-0022`.
+message envelope shape defined in `RFC-0027`.
 
 Each data message MUST have `domain_id` and `offer_id` matching the accepted
 subscription.
@@ -1992,12 +1839,7 @@ subscription.
 The data message payload fields SHOULD be compatible with the accepted
 subscription payload descriptor.
 
-When `sequence` is present, the producer SHOULD start at `initial_sequence` if
-one was accepted, or at 0 or 1 otherwise. The producer SHOULD increase
-`sequence` by 1 for each data message on the subscription.
-
-Receivers MAY use sequence gaps as diagnostics. A sequence gap does not by
-itself require closing the subscription.
+Sequence behavior follows `RFC-0027`, using `initial_sequence` when present.
 
 #### End Message
 
@@ -2018,7 +1860,7 @@ A v1 end message MUST include:
 
 A v1 end message MAY include:
 
-- `error`: error object as defined in `RFC-0022`;
+- `error`: error object as defined in `RFC-0027`;
 - `retryable`: boolean;
 - `details`: JSON object.
 
@@ -2039,15 +1881,7 @@ reports the producer's or requester's local end reason.
 Subscribe v1 does not guarantee delivery, ordering across subscriptions, or
 exactly-once processing.
 
-Implementations MUST define a maximum accepted Subscribe message size.
-
-If the requester supplies `max_message_bytes`, the producer MUST honor the
-lower of the requester's limit and the producer's local serialized-message
-limit.
-
-If a data message would exceed the applicable limit, the producer SHOULD either
-skip the message and record local diagnostics or end the subscription with an
-error using `message.payload_too_large`.
+Subscribe message size handling follows `RFC-0028`.
 
 When a producer or receiver is overloaded, it MAY drop data messages, apply
 local coalescing, or end the subscription. If dropping creates an observable
@@ -2064,46 +1898,22 @@ request for the same `(domain_id, offer_id)` if the offer is still usable.
 Subscribe v1 has no resume token and no replay cursor. A new subscription is a
 new live stream, not a continuation of the old stream.
 
-Before reconnecting, the requester SHOULD re-check that the peer relationship,
-served domain set, offer status, offer access modes, and payload compatibility
-still permit Subscribe.
+Before reconnecting, the requester SHOULD re-check that the peer relationship
+still exists and `RFC-0026` still permits Subscribe.
 
 #### Failure Mapping
 
 A responder SHOULD fail malformed Subscribe requests with
 `subscribe.invalid_request`.
 
-Subscribe failure mapping SHOULD reuse the offer failure-code family:
+Subscribe SHOULD use the common offer-path failure mapping defined in
+`RFC-0028`.
 
-- `offer.unknown_offer` when the requested `(domain_id, offer_id)` is not known;
-- `offer.domain_not_served` when the domain is not in the accepted served domain
-  set;
-- `offer.unsupported_kind` when the offer kind is known but unsupported by the
-  responder's Subscribe implementation;
-- `offer.unsupported_access_mode` when the offer does not support Subscribe;
-- `offer.unsupported_payload_type` when the responder cannot produce any
-  payload type accepted by the requester;
-- `offer.temporarily_unavailable` when the offer is known but unavailable;
-- `offer.stale` when local freshness policy rejects the offer.
+A receiver SHOULD use the message failure-code family from `RFC-0027` when a
+Subscribe data message includes a spatial message envelope but the envelope,
+payload, message size, or observed sequence behavior is invalid.
 
-A producer SHOULD use `message.payload_too_large` when a data message would
-exceed the applicable size limit.
-
-A receiver SHOULD use the message failure-code family when a Subscribe data
-message includes a spatial message envelope but the envelope, payload, message
-size, or observed sequence behavior is invalid:
-
-- `message.invalid_envelope`;
-- `message.invalid_payload`;
-- `message.payload_too_large`;
-- `message.sequence_gap`.
-
-A transport or framing failure SHOULD be reported as `transport.failed` when a
-structured Subscribe reject or end message cannot be returned.
-
-Subscribe is the likely replacement or evolution path for `/auki/stream/0.1.0`.
-
-### RFC-0025: Minimum Offer Kinds
+### RFC-0031: Minimum Offer Kinds
 
 #### Requirement
 
@@ -2196,13 +2006,12 @@ minimum set:
 - `spatial_query`.
 
 Future kinds MUST preserve the same baseline rules: one v1 offer belongs to
-exactly one domain, unknown kinds are ignored by default, and authority is
-derived from the peer relationship's accepted served domain set rather than
-from the offer object itself.
+exactly one domain, unknown kinds are ignored by default, and offer use follows
+the offer usability rules in `RFC-0026`.
 
 ## Compatibility And Observability
 
-### RFC-0026: Protocol Versions Are Compatibility Contracts
+### RFC-0032: Protocol Versions Are Compatibility Contracts
 
 #### Requirement
 
@@ -2240,7 +2049,7 @@ incompatible unless the reader can still handle frames without it.
 An incompatible version should instead use a new protocol ID such as
 `/auki/example/0.0.2`.
 
-### RFC-0027: Observability Must Explain State Transitions
+### RFC-0033: Observability Must Explain State Transitions
 
 #### Requirement
 
@@ -2249,20 +2058,13 @@ per-frame logs.
 
 Diagnostics SHOULD answer:
 
-- whether this peer is discoverable;
-- what it is advertising;
-- which local domain it serves or manages;
-- which peers are known;
-- how each peer was learned;
-- whether each peer is dialable;
-- whether each peer is connected;
-- whether each peer is authorized;
-- what offers each peer claims it can share;
-- why any peer binding, domain declaration, or delegation was rejected;
-- why any offer catalog, Get, Subscribe, or spatial message envelope failed;
-- whether a Subscribe stream has observed sequence gaps;
-- why a peer became degraded or lost;
-- whether Discovery is degraded independently from peer connectivity.
+- local peer, Discovery, and advertised-address state;
+- local domains and their authority material;
+- remote peers, how they were learned, and their lifecycle state;
+- accepted domains, rejected domains, loaded offers, and active paths;
+- why identity, authority, policy, offer, Get, Subscribe, or message validation
+  failed;
+- Discovery degradation independently from peer relationship degradation.
 
 #### Consequences
 
@@ -2272,10 +2074,10 @@ rate-limited or omitted by default.
 State transitions and failures SHOULD be logged once with enough context to
 debug the lifecycle.
 
-`RFC-0028` defines the concrete diagnostic status snapshot shape for
+`RFC-0034` defines the concrete diagnostic status snapshot shape for
 implementations that expose status as structured data.
 
-### RFC-0028: Status And Observability API
+### RFC-0034: Status And Observability API
 
 #### Requirement
 
@@ -2284,8 +2086,9 @@ current lifecycle state, peer relationships, served domains, offer loading, and
 active or recently completed spatial-data paths.
 
 The status surface is diagnostic only. It MUST NOT be used as proof of peer
-identity, domain authority, offer authority, payload correctness, or data
-trustworthiness. Protocol validation remains the source of authority.
+identity, authority, payload correctness, or data trustworthiness. Protocol
+validation and the authority rules in `RFC-0001` remain the source of
+authority.
 
 The status surface MAY be exposed through an in-process API, a local debug
 endpoint, logs, a CLI, or another implementation-defined surface. When exposed
@@ -2302,7 +2105,7 @@ A v1 status snapshot is a JSON object.
 A v1 status snapshot MUST include:
 
 - `type`: string, exactly `auki.status_snapshot.v1`;
-- `generated_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `generated_at`: timestamp;
 - `local_peer`: local peer status object;
 - `local_domains`: array of local domain status objects;
 - `remote_peers`: array of remote peer status objects;
@@ -2325,7 +2128,7 @@ A local peer status object SHOULD include:
 
 - `peer_id`: local libp2p peer id string;
 - `wallet_public_key`: base64url wallet public key string when available;
-- `peer_binding_issued_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `peer_binding_issued_at`: timestamp;
 - `peer_binding_age_ms`: non-negative integer when known;
 - `peer_binding_fresh`: boolean under local freshness policy;
 - `authorization_mode`: string;
@@ -2346,15 +2149,14 @@ A local domain status object SHOULD include:
 - `delegation_present`: boolean;
 - `delegation_valid`: boolean or null when not required or not evaluated;
 - `delegation_scopes`: array of delegation-scope strings;
-- `delegation_expires_at`: UTC RFC3339 timestamp string with a `Z` suffix,
-  or null;
+- `delegation_expires_at`: timestamp or null;
 - `advertised`: boolean;
 - `serving_offers`: boolean;
 - `last_failure`: failure record object or null.
 
 This object reports the local peer's view of domains it owns, manages, serves,
-or intends to advertise. It does not prove that a remote peer will accept those
-domains.
+or intends to advertise. Remote peers still validate domains through
+`RFC-0009`.
 
 The `role` field is diagnostic. The `managed` role means the local peer tracks
 the domain locally without claiming owner or delegate authority in that status
@@ -2368,8 +2170,8 @@ A Discovery status object SHOULD include:
 - `discoverable`: boolean;
 - `advertised_domains`: array of domain id strings;
 - `advertised_addresses`: array of multiaddr strings;
-- `last_refresh_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
-- `expires_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
+- `last_refresh_at`: timestamp or null;
+- `expires_at`: timestamp or null;
 - `degraded`: boolean;
 - `last_failure`: failure record object or null.
 
@@ -2385,7 +2187,7 @@ A remote peer status object SHOULD include:
   `peer_graph_hint`;
 - `dialable`: boolean or null when unknown;
 - `connected`: boolean;
-- `lifecycle_state`: string compatible with the state model in `RFC-0017`;
+- `lifecycle_state`: string compatible with the state model in `RFC-0021`;
 - `selected_protocol_version`: string or null;
 - `authorized`: boolean or null when authorization has not completed;
 - `verified_wallet_public_key`: base64url wallet public key string or null;
@@ -2404,8 +2206,8 @@ A rejected domain status object SHOULD include:
 An offer-catalog status object SHOULD include:
 
 - `path_available`: boolean;
-- `last_fetch_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
-- `last_success_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
+- `last_fetch_at`: timestamp or null;
+- `last_success_at`: timestamp or null;
 - `last_failure`: failure record object or null.
 
 #### Offer Status
@@ -2422,15 +2224,15 @@ An offer status object SHOULD include:
 - `registry_refs`: array of registry-reference summary objects;
 - `usable`: boolean;
 - `unusable_reason`: stable failure code string or null;
-- `updated_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
-- `expires_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
+- `updated_at`: timestamp or null;
+- `expires_at`: timestamp or null;
 - `last_failure`: failure record object or null.
 
-The `usable` field is local policy and compatibility state. It MUST NOT be
-treated as proof that the offer is correct, complete, or trustworthy.
+The `usable` field is local policy and compatibility state under the offer
+usability rules in `RFC-0026`.
 
 Registry-reference summary objects SHOULD include the `registry`, `role`, `id`,
-and `hash` fields from the registry-reference shape defined in `RFC-0020`.
+and `hash` fields from the registry-reference shape defined in `RFC-0024`.
 
 #### Path Status
 
@@ -2442,8 +2244,8 @@ A path status object SHOULD include:
 - `domain_id`: domain id string;
 - `offer_id`: offer id string;
 - `state`: string;
-- `started_at`: UTC RFC3339 timestamp string with a `Z` suffix;
-- `last_message_at`: UTC RFC3339 timestamp string with a `Z` suffix, or null;
+- `started_at`: timestamp;
+- `last_message_at`: timestamp or null;
 - `payload_type`: payload type string when known;
 - `last_sequence`: non-negative integer or null;
 - `sequence_gap_count`: non-negative integer;
@@ -2465,7 +2267,7 @@ bounded diagnostic history according to local policy.
 A failure record object SHOULD include:
 
 - `code`: stable failure code string;
-- `at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `at`: timestamp;
 - `scope`: string, such as `peer`, `domain`, `offer_catalog`, `offer`, `get`,
   `subscribe`, `message`, or `discovery`;
 - `peer_id`: peer id string, optional;
@@ -2476,7 +2278,7 @@ A failure record object SHOULD include:
 - `message`: diagnostic string, optional;
 - `details`: JSON object, optional.
 
-The `code` field SHOULD use the stable failure codes defined in `RFC-0006` or
+The `code` field SHOULD use the stable failure codes defined in `RFC-0010` or
 by the RFC that owns the failing path.
 
 The `message` and `details` fields are diagnostic only. Implementations MUST

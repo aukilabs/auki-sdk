@@ -128,7 +128,7 @@ pub use network_runtime::{
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]
 pub use network_runtime::{
-    OpenStreamError, StreamEntry, StreamError, StreamSubscriptionAudio,
+    OpenStreamError, StreamEntry, StreamError, StreamSubscriptionAudio, StreamSubscriptionCamera,
 };
 
 #[cfg(feature = "app_instance")]

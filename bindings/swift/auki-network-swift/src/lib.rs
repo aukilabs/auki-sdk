@@ -1381,6 +1381,28 @@ mod tests {
         assert!(third.is_none(), "stream ended");
     }
 
+    #[tokio::test]
+    async fn stream_subscription_camera_wraps_typed_subscription() {
+        use auki_network_rs::stream_protocol::{CameraFrame, StreamManifest};
+        use auki_network_rs::stream_runtime::StreamSubscription;
+        use futures::stream;
+
+        let manifest = StreamManifest::default();
+        let entries = stream::iter(vec![Ok(auki_network_rs::stream_runtime::StreamEntry {
+            timestamp_ns: 7,
+            seq: 0,
+            payload: CameraFrame::default(),
+        })]);
+        let sub = StreamSubscription {
+            manifest,
+            entries: Box::pin(entries),
+        };
+        let wrapped = auki_network_rs::StreamSubscriptionCamera::from_inner(sub);
+        let first = wrapped.next_entry().await.expect("ok").expect("some");
+        assert_eq!(first.timestamp_ns, 7);
+        assert!(wrapped.next_entry().await.expect("ok").is_none());
+    }
+
     /// `SwiftStreamDecision::Decline` constructs and matches.
     #[test]
     fn swift_stream_decision_decline_variant() {

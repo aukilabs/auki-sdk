@@ -1396,6 +1396,79 @@ impl StreamSubscriptionAudio {
     }
 }
 
+/// Swift-friendly wrapper around `StreamSubscription<CameraFrame>`.
+/// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
+/// `next_entry()` (async; yields one entry per call until the stream
+/// ends).
+///
+/// The wrapper is fail-poisoned: once `next_entry` returns `Err` (a
+/// final stream error) or `Ok(None)` (clean end-of-stream), subsequent
+/// calls return `Ok(None)`.
+#[cfg(feature = "swift-bindings")]
+#[derive(uniffi::Object)]
+pub struct StreamSubscriptionCamera {
+    inner: tokio::sync::Mutex<
+        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::CameraFrame>>,
+    >,
+    manifest_bytes: Vec<u8>,
+}
+
+#[cfg(feature = "swift-bindings")]
+impl StreamSubscriptionCamera {
+    /// Construct from an upstream typed subscription. Encodes the
+    /// manifest once at construction.
+    pub fn from_inner(
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::CameraFrame>,
+    ) -> Arc<Self> {
+        use prost::Message;
+        let manifest_bytes = inner.manifest.encode_to_vec();
+        Arc::new(Self {
+            inner: tokio::sync::Mutex::new(Some(inner)),
+            manifest_bytes,
+        })
+    }
+}
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl StreamSubscriptionCamera {
+    /// Prost-encoded `StreamManifest`. Stable for the lifetime of the
+    /// subscription; safe to call multiple times.
+    pub fn manifest_bytes(&self) -> Vec<u8> {
+        self.manifest_bytes.clone()
+    }
+
+    /// Read the next entry off the wire. Returns `Ok(Some(entry))` for
+    /// each entry, `Ok(None)` exactly once when the stream ends
+    /// cleanly, or `Err(StreamError)` once when the stream ends with an
+    /// error. After `Ok(None)` or `Err`, subsequent calls return
+    /// `Ok(None)`.
+    pub async fn next_entry(&self) -> Result<Option<StreamEntry>, StreamError> {
+        use futures::StreamExt;
+        use prost::Message;
+
+        let mut guard = self.inner.lock().await;
+        let Some(sub) = guard.as_mut() else {
+            return Ok(None);
+        };
+        match sub.entries.next().await {
+            Some(Ok(entry)) => Ok(Some(StreamEntry {
+                timestamp_ns: entry.timestamp_ns,
+                seq: entry.seq,
+                payload_bytes: entry.payload.encode_to_vec(),
+            })),
+            Some(Err(e)) => {
+                *guard = None;
+                Err(e.into())
+            }
+            None => {
+                *guard = None;
+                Ok(None)
+            }
+        }
+    }
+}
+
 // ─── UniFFI-exposed async stream-open surface ────────────────────────────────
 
 #[cfg(feature = "swift-bindings")]
@@ -1420,6 +1493,27 @@ impl NetworkRuntime {
             .await
             .map_err(OpenStreamError::from)?;
         Ok(StreamSubscriptionAudio::from_inner(sub))
+    }
+
+    /// Open an outbound camera stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionCamera` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_camera_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<Arc<StreamSubscriptionCamera>, OpenStreamError> {
+        use prost::Message;
+        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+            .map_err(|e| OpenStreamError::Protocol {
+                message: format!("StreamRequest decode: {e}"),
+            })?;
+        let sub = self
+            .open_stream::<crate::stream_protocol::CameraFrame>(peer_id, request)
+            .await
+            .map_err(OpenStreamError::from)?;
+        Ok(StreamSubscriptionCamera::from_inner(sub))
     }
 }
 

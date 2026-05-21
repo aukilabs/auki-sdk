@@ -64,11 +64,11 @@ pub mod registries_protocol;
 
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
-    AllowedPeer, BroadcastMembershipError, InfoRequestEvent, JoinEvent, MembershipEvent,
-    NetworkRuntime, NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent,
-    RequestInfoError, RequestRegistryError, RequestResourcesError, RequestSensorsError,
-    ResourcesRequestEvent, SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError,
-    UpdateReport,
+    AllowedPeer, BroadcastMembershipError, HeartbeatNtpSampleObservation, HeartbeatTimestampSource,
+    HeartbeatTimingObservation, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime,
+    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
+    RequestRegistryError, RequestResourcesError, RequestSensorsError, ResourcesRequestEvent,
+    SendJoinRequestError, SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "app_instance")]

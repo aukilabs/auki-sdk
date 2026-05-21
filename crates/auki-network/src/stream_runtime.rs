@@ -890,9 +890,13 @@ mod tests {
         });
 
         // Producer has empty allow-list — C is unknown to P.
-        let (producer, ..) =
-            crate::network_runtime::NetworkRuntime::spawn(swarm_p, vec![], panicking_provider)
-                .expect("producer spawn");
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![],
+            panicking_provider,
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
 
         // Consumer has P in its allow-list, so it auto-dials.
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -902,6 +906,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -974,6 +979,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             camera_provider_yielding_three_frames(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -983,6 +989,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1058,6 +1065,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             camera_provider_declines_unknown(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1067,6 +1075,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1114,6 +1123,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             camera_provider_yields_then_errors(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1123,6 +1133,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1210,6 +1221,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             provider,
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1219,6 +1231,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1281,6 +1294,7 @@ mod tests {
                 multiaddrs: vec![unreachable_addr],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1324,6 +1338,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             pointcloud_provider_yielding_three_frames(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1333,6 +1348,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1403,6 +1419,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             audio_provider_yielding_three_frames(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1412,6 +1429,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 
@@ -1482,6 +1500,7 @@ mod tests {
                 multiaddrs: vec![addr_c],
             }],
             multi_t_provider(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("producer spawn");
         let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
@@ -1491,6 +1510,7 @@ mod tests {
                 multiaddrs: vec![addr_p],
             }],
             decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
         )
         .expect("consumer spawn");
 

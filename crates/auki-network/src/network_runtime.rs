@@ -32,7 +32,8 @@
 //!   `auki-domain` concerns.
 
 use crate::heartbeat_protocol::{
-    HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, Heartbeat, read_heartbeat, write_heartbeat,
+    HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, Heartbeat, HeartbeatDomainClock, HeartbeatEcho,
+    read_heartbeat, write_heartbeat,
 };
 use crate::info_protocol::{
     INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
@@ -68,11 +69,12 @@ use crate::{
     stream_runtime::{StreamProvider, handle_inbound_substream},
     swarm::{self, Behaviour, BehaviourEvent},
 };
+use auki_time::{NtpExchange, NtpSample, compute_ntp_sample};
 use futures::StreamExt;
 use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, swarm::SwarmEvent};
 use libp2p_stream::Control;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -109,6 +111,66 @@ pub struct AllowedPeer {
     /// allows inbound connections from this peer but does not
     /// auto-dial them.
     pub multiaddrs: Vec<Multiaddr>,
+}
+
+/// Clock reading callback used when writing heartbeat frames.
+pub type HeartbeatNowNs = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// Optional domain-clock metadata callback used when writing heartbeat frames.
+pub type HeartbeatDomainClockNs = Arc<dyn Fn() -> Option<HeartbeatDomainClock> + Send + Sync>;
+
+/// Sender-clock identity and timestamp source for `/auki/heartbeat/0.0.1`.
+///
+/// The runtime treats this as required construction input. It does not
+/// synthesize a clock identity on its own.
+#[derive(Clone)]
+pub struct HeartbeatTimestampSource {
+    /// Clock Registry id for heartbeat `sent_at_clock_ns` values.
+    pub clock_id: String,
+    /// Content-addressed hash of `clock_id`'s Clock Registry entry.
+    pub clock_hash: String,
+    /// Returns the current reading of `clock_id` in nanoseconds.
+    pub now_ns: HeartbeatNowNs,
+    /// Returns the domain-clock source metadata to carry on this
+    /// heartbeat frame, if this peer is currently advertising one.
+    pub domain_clock: HeartbeatDomainClockNs,
+}
+
+/// Raw timing fact observed when a heartbeat frame is received.
+///
+/// This is still a transport-level observation. The runtime does not
+/// compute an NTP sample or decide which domain clock matters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatTimingObservation {
+    /// The peer that sent `heartbeat`.
+    pub peer_id: PeerId,
+    /// The received heartbeat frame, including sender clock identity
+    /// and optional echo fields.
+    pub heartbeat: Heartbeat,
+    /// Local clock reading when `heartbeat` was received.
+    pub received_at_clock_ns: i64,
+    /// Local Clock Registry id for `received_at_clock_ns`.
+    pub local_clock_id: String,
+    /// Content-addressed hash of `local_clock_id`'s Clock Registry entry.
+    pub local_clock_hash: String,
+}
+
+/// Raw NTP-style sample produced by matching a peer heartbeat echo to
+/// a locally sent heartbeat timestamp.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatNtpSampleObservation {
+    /// The peer whose clock was measured.
+    pub peer_id: PeerId,
+    /// Local Clock Registry id for the sample's local timestamps.
+    pub local_clock_id: String,
+    /// Content-addressed hash of `local_clock_id`'s Clock Registry entry.
+    pub local_clock_hash: String,
+    /// Remote Clock Registry id for the sample's remote timestamps.
+    pub remote_clock_id: String,
+    /// Content-addressed hash of `remote_clock_id`'s Clock Registry entry.
+    pub remote_clock_hash: String,
+    /// Estimated `remote_clock - local_clock` sample.
+    pub sample: NtpSample,
 }
 
 /// Errors from [`NetworkRuntime::spawn`].
@@ -150,6 +212,10 @@ const JOIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// error.
 pub const JOIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Number of locally sent heartbeat timestamps retained so later peer
+/// echoes can be paired into NTP-style samples.
+const SENT_HEARTBEAT_CACHE_CAPACITY: usize = 64;
+
 /// Inbound peer/heartbeat-carrier event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
@@ -174,6 +240,16 @@ pub enum PeerLivenessEvent {
     HeartbeatReceived {
         /// The peer-id of the peer.
         peer_id: PeerId,
+        /// Raw sender/local clock timing observation for this frame.
+        observation: HeartbeatTimingObservation,
+    },
+    /// A heartbeat echo matched one of our remembered sent frames,
+    /// producing a raw NTP-style sample.
+    HeartbeatNtpSampleObserved {
+        /// The peer-id of the peer.
+        peer_id: PeerId,
+        /// Raw NTP sample plus clock identities.
+        observation: HeartbeatNtpSampleObservation,
     },
     /// A heartbeat substream closed or could not be opened.
     HeartbeatStreamClosed {
@@ -619,6 +695,7 @@ impl NetworkRuntime {
         swarm: Swarm<Behaviour>,
         allowed_peers: Vec<AllowedPeer>,
         stream_provider: StreamProvider,
+        heartbeat_timestamps: HeartbeatTimestampSource,
     ) -> Result<
         (
             Self,
@@ -654,6 +731,7 @@ impl NetworkRuntime {
             allowed_peers,
             connected.clone(),
             stream_provider,
+            heartbeat_timestamps,
             inbound_control,
             inbound_shutdown_rx,
             lifeline_rx,
@@ -1081,6 +1159,7 @@ async fn run_task(
     initial_peers: Vec<AllowedPeer>,
     connected: Arc<Mutex<HashSet<PeerId>>>,
     stream_provider: StreamProvider,
+    heartbeat_timestamps: HeartbeatTimestampSource,
     mut inbound_control: Control,
     inbound_shutdown_rx: watch::Receiver<bool>,
     lifeline_rx: watch::Receiver<()>,
@@ -1235,6 +1314,7 @@ async fn run_task(
                     &mut inbound_heartbeat_tasks,
                     &heartbeat_targets,
                     &liveness_tx,
+                    &heartbeat_timestamps,
                 );
             }
 
@@ -1288,6 +1368,7 @@ async fn run_task(
                     substream,
                     liveness_tx.clone(),
                     lifeline_rx.clone(),
+                    heartbeat_timestamps.clone(),
                 ));
                 inbound_heartbeat_tasks.insert(peer, task);
             }
@@ -1377,6 +1458,7 @@ async fn run_task(
                     &mut heartbeat_targets,
                     &liveness_tx,
                     &lifeline_rx,
+                    &heartbeat_timestamps,
                 );
             }
         }
@@ -1397,6 +1479,7 @@ fn handle_event(
     inbound_heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
     heartbeat_targets: &HashSet<PeerId>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
+    heartbeat_timestamps: &HeartbeatTimestampSource,
 ) {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -1421,6 +1504,7 @@ fn handle_event(
                     outbound_heartbeat_tasks,
                     liveness_tx,
                     lifeline_rx,
+                    heartbeat_timestamps,
                 );
             }
         }
@@ -1466,6 +1550,7 @@ fn handle_command(
     heartbeat_targets: &mut HashSet<PeerId>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     lifeline_rx: &watch::Receiver<()>,
+    heartbeat_timestamps: &HeartbeatTimestampSource,
 ) {
     match cmd {
         RuntimeCmd::SetAllowedPeers { new_peers, ack } => {
@@ -1480,6 +1565,7 @@ fn handle_command(
                 heartbeat_targets,
                 liveness_tx,
                 lifeline_rx,
+                heartbeat_timestamps,
             );
             let _ = ack.send(Ok(report));
         }
@@ -1497,6 +1583,7 @@ fn handle_command(
                 heartbeat_targets,
                 liveness_tx,
                 lifeline_rx,
+                heartbeat_timestamps,
             );
             let _ = ack.send(Ok(()));
         }
@@ -1532,6 +1619,7 @@ fn reconcile_heartbeat_tasks(
     heartbeat_targets: &HashSet<PeerId>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     lifeline_rx: &watch::Receiver<()>,
+    heartbeat_timestamps: &HeartbeatTimestampSource,
 ) {
     let desired: HashSet<PeerId> = heartbeat_targets
         .iter()
@@ -1559,6 +1647,7 @@ fn reconcile_heartbeat_tasks(
                 outbound_heartbeat_tasks,
                 liveness_tx,
                 lifeline_rx,
+                heartbeat_timestamps,
             );
         }
     }
@@ -1588,6 +1677,7 @@ fn try_spawn_heartbeat_opener(
     heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     lifeline_rx: &watch::Receiver<()>,
+    heartbeat_timestamps: &HeartbeatTimestampSource,
 ) {
     if local_peer_id == peer_id || !heartbeat_targets.contains(&peer_id) {
         return;
@@ -1598,8 +1688,9 @@ fn try_spawn_heartbeat_opener(
     let control = stream_control.clone();
     let liveness = liveness_tx.clone();
     let lifeline = lifeline_rx.clone();
+    let timestamps = heartbeat_timestamps.clone();
     let task = tokio::spawn(async move {
-        open_and_run_heartbeat_pair(peer_id, control, liveness, lifeline).await;
+        open_and_run_heartbeat_pair(peer_id, control, liveness, lifeline, timestamps).await;
     });
     heartbeat_tasks.insert(peer_id, task);
 }
@@ -1770,6 +1861,7 @@ async fn open_and_run_heartbeat_pair(
     mut control: Control,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
     mut lifeline_rx: watch::Receiver<()>,
+    heartbeat_timestamps: HeartbeatTimestampSource,
 ) {
     let proto = StreamProtocol::try_from_owned(HEARTBEAT_PROTOCOL.to_string())
         .expect("HEARTBEAT_PROTOCOL is a valid libp2p protocol id");
@@ -1792,7 +1884,67 @@ async fn open_and_run_heartbeat_pair(
         let _ = liveness_tx.try_send(PeerLivenessEvent::HeartbeatStreamClosed { peer_id: peer });
         return;
     };
-    run_heartbeat_pair(peer, substream, liveness_tx, lifeline_rx).await;
+    run_heartbeat_pair(
+        peer,
+        substream,
+        liveness_tx,
+        lifeline_rx,
+        heartbeat_timestamps,
+    )
+    .await;
+}
+
+#[derive(Debug, Default)]
+struct SentHeartbeatCache {
+    sent_at_by_sequence: HashMap<u64, i64>,
+    sequence_order: VecDeque<u64>,
+}
+
+impl SentHeartbeatCache {
+    fn remember(&mut self, sequence: u64, sent_at_clock_ns: i64) {
+        if !self.sent_at_by_sequence.contains_key(&sequence) {
+            self.sequence_order.push_back(sequence);
+        }
+        self.sent_at_by_sequence.insert(sequence, sent_at_clock_ns);
+
+        while self.sequence_order.len() > SENT_HEARTBEAT_CACHE_CAPACITY {
+            if let Some(oldest) = self.sequence_order.pop_front() {
+                self.sent_at_by_sequence.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, sequence: u64) -> Option<i64> {
+        self.sent_at_by_sequence.get(&sequence).copied()
+    }
+}
+
+fn ntp_sample_observation_from_echo(
+    peer_id: PeerId,
+    heartbeat: &Heartbeat,
+    received_at_clock_ns: i64,
+    local_clock_id: &str,
+    local_clock_hash: &str,
+    sent_heartbeats: &SentHeartbeatCache,
+) -> Option<HeartbeatNtpSampleObservation> {
+    let echo = heartbeat.echo.as_ref()?;
+    let local_send_ns = sent_heartbeats.get(echo.sequence)?;
+    let sample = compute_ntp_sample(NtpExchange {
+        local_send_ns,
+        remote_receive_ns: echo.received_at_clock_ns,
+        remote_send_ns: heartbeat.sent_at_clock_ns,
+        local_receive_ns: received_at_clock_ns,
+    })
+    .ok()?;
+
+    Some(HeartbeatNtpSampleObservation {
+        peer_id,
+        local_clock_id: local_clock_id.to_owned(),
+        local_clock_hash: local_clock_hash.to_owned(),
+        remote_clock_id: heartbeat.clock_id.clone(),
+        remote_clock_hash: heartbeat.clock_hash.clone(),
+        sample,
+    })
 }
 
 /// Run the bidirectional heartbeat loop on `substream`. Writes a
@@ -1804,6 +1956,7 @@ async fn run_heartbeat_pair(
     substream: libp2p::Stream,
     liveness_tx: mpsc::Sender<PeerLivenessEvent>,
     mut lifeline_rx: watch::Receiver<()>,
+    heartbeat_timestamps: HeartbeatTimestampSource,
 ) {
     use futures::AsyncReadExt as _;
     // The substream is bidirectional; split it so we can read on
@@ -1811,6 +1964,9 @@ async fn run_heartbeat_pair(
     let (mut reader, mut writer) = substream.split();
 
     let mut write_tick = tokio::time::interval(HEARTBEAT_INTERVAL);
+    let mut next_sequence: u64 = 1;
+    let mut pending_echo: Option<HeartbeatEcho> = None;
+    let mut sent_heartbeats = SentHeartbeatCache::default();
     // First tick fires immediately — send a heartbeat right away so
     // the peer sees the liveness signal without waiting an interval.
     loop {
@@ -1824,18 +1980,58 @@ async fn run_heartbeat_pair(
             _ = lifeline_rx.changed() => break,
 
             _ = write_tick.tick() => {
-                let now_ns = unix_now_ns();
-                if write_heartbeat(&mut writer, &Heartbeat { sent_at_unix_ns: now_ns }).await.is_err() {
+                let sequence = next_sequence;
+                next_sequence = next_sequence.wrapping_add(1).max(1);
+                let sent_at_clock_ns = (heartbeat_timestamps.now_ns)();
+                sent_heartbeats.remember(sequence, sent_at_clock_ns);
+                let hb = Heartbeat {
+                    sent_at_unix_ns: unix_now_ns(),
+                    clock_id: heartbeat_timestamps.clock_id.clone(),
+                    clock_hash: heartbeat_timestamps.clock_hash.clone(),
+                    sequence,
+                    sent_at_clock_ns,
+                    echo: pending_echo.take(),
+                    domain_clock: (heartbeat_timestamps.domain_clock)(),
+                };
+                if write_heartbeat(&mut writer, &hb).await.is_err() {
                     break;
                 }
             }
 
             r = read_heartbeat(&mut reader) => {
                 match r {
-                    Ok(_hb) => {
+                    Ok(hb) => {
+                        let received_at_clock_ns = (heartbeat_timestamps.now_ns)();
+                        let sequence = hb.sequence;
+                        let ntp_observation = ntp_sample_observation_from_echo(
+                            peer,
+                            &hb,
+                            received_at_clock_ns,
+                            &heartbeat_timestamps.clock_id,
+                            &heartbeat_timestamps.clock_hash,
+                            &sent_heartbeats,
+                        );
+                        let observation = HeartbeatTimingObservation {
+                            peer_id: peer,
+                            heartbeat: hb,
+                            received_at_clock_ns,
+                            local_clock_id: heartbeat_timestamps.clock_id.clone(),
+                            local_clock_hash: heartbeat_timestamps.clock_hash.clone(),
+                        };
+                        pending_echo = Some(HeartbeatEcho {
+                            sequence,
+                            received_at_clock_ns,
+                        });
                         let _ = liveness_tx.try_send(PeerLivenessEvent::HeartbeatReceived {
                             peer_id: peer,
+                            observation,
                         });
+                        if let Some(observation) = ntp_observation {
+                            let _ = liveness_tx.try_send(PeerLivenessEvent::HeartbeatNtpSampleObserved {
+                                peer_id: peer,
+                                observation,
+                            });
+                        }
                     }
                     Err(_) => break,
                 }
@@ -1851,6 +2047,16 @@ fn unix_now_ns() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+pub(crate) fn test_heartbeat_timestamps() -> HeartbeatTimestampSource {
+    HeartbeatTimestampSource {
+        clock_id: "test/session-monotonic".into(),
+        clock_hash: "test-clock-hash".into(),
+        now_ns: Arc::new(|| 0),
+        domain_clock: Arc::new(|| None),
+    }
 }
 
 /// Per-substream task for an inbound `/auki/membership/0.0.1` push.
@@ -2185,7 +2391,13 @@ mod tests {
             _resources_events,
             _sensors_events,
             _registry_events,
-        ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
+        ) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .expect("spawn succeeds");
         assert!(rt.connected_peers().is_empty());
         rt.shutdown();
     }
@@ -2208,7 +2420,13 @@ mod tests {
             _resources_events,
             _sensors_events,
             _registry_events,
-        ) = NetworkRuntime::spawn(swarm, vec![], decline_all_streams()).expect("spawn succeeds");
+        ) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
     }
@@ -2242,6 +2460,7 @@ mod tests {
                 },
             ],
             decline_all_streams(),
+            test_heartbeat_timestamps(),
         )
         .expect("spawn succeeds");
 
@@ -2263,5 +2482,82 @@ mod tests {
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
         rt.shutdown();
+    }
+
+    #[test]
+    fn heartbeat_received_event_carries_timing_observation() {
+        let peer_id = PeerIdentity::from_seed(&[9u8; 32]).peer_id();
+        let heartbeat = Heartbeat {
+            sent_at_unix_ns: 1_715_423_400_000_000_000,
+            clock_id: "12D3KooWPeer/session-123/monotonic".into(),
+            clock_hash: "remote-clock-hash".into(),
+            sequence: 7,
+            sent_at_clock_ns: 10_000,
+            echo: None,
+            domain_clock: None,
+        };
+        let observation = HeartbeatTimingObservation {
+            peer_id,
+            heartbeat: heartbeat.clone(),
+            received_at_clock_ns: 10_150,
+            local_clock_id: "12D3KooWLocal/session-456/monotonic".into(),
+            local_clock_hash: "local-clock-hash".into(),
+        };
+
+        let event = PeerLivenessEvent::HeartbeatReceived {
+            peer_id,
+            observation: observation.clone(),
+        };
+
+        match event {
+            PeerLivenessEvent::HeartbeatReceived {
+                peer_id: event_peer,
+                observation: observed,
+            } => {
+                assert_eq!(event_peer, peer_id);
+                assert_eq!(observed, observation);
+                assert_eq!(observed.heartbeat, heartbeat);
+                assert_eq!(observed.received_at_clock_ns, 10_150);
+            }
+            other => panic!("expected HeartbeatReceived, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn heartbeat_echo_builds_ntp_sample_from_remembered_sent_sequence() {
+        let peer_id = PeerIdentity::from_seed(&[10u8; 32]).peer_id();
+        let mut sent = SentHeartbeatCache::default();
+        sent.remember(6, 1_000);
+        let heartbeat = Heartbeat {
+            sent_at_unix_ns: 1_715_423_400_000_000_000,
+            clock_id: "12D3KooWPeer/session-123/monotonic".into(),
+            clock_hash: "remote-clock-hash".into(),
+            sequence: 7,
+            sent_at_clock_ns: 1_001_080,
+            echo: Some(HeartbeatEcho {
+                sequence: 6,
+                received_at_clock_ns: 1_001_050,
+            }),
+            domain_clock: None,
+        };
+
+        let observation = ntp_sample_observation_from_echo(
+            peer_id,
+            &heartbeat,
+            1_130,
+            "12D3KooWLocal/session-456/monotonic",
+            "local-clock-hash",
+            &sent,
+        )
+        .expect("echoed sequence should yield sample");
+
+        assert_eq!(observation.peer_id, peer_id);
+        assert_eq!(
+            observation.local_clock_id,
+            "12D3KooWLocal/session-456/monotonic"
+        );
+        assert_eq!(observation.remote_clock_id, heartbeat.clock_id);
+        assert_eq!(observation.sample.offset_ns, 1_000_000);
+        assert_eq!(observation.sample.uncertainty_ns, 100);
     }
 }

@@ -12,7 +12,15 @@ Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+**SDK crates standardize stream and sensor camera vocabulary.** `auki-datatypes`, `auki-registry`, `auki-network`, `auki-domain`, and `auki-ros-adapter` now use `CameraFrame`, `DetectionFrame`, `SensorBody::Camera`, and the `"camera"` registry tag across active Rust surfaces.
+
+### Nils's codex · May 21, HKT, 2026
+
 **[`auki-domain`](auki-domain/changelog.md) — heartbeat domain timing now uses SDK-owned `SessionClock`.** `ClusterManager` feeds its peer-id rooted `SessionClock` into heartbeat timestamps, initial domain-clock metadata, and promoted-Manager domain-clock advertisements instead of the compatibility `DaemonInfo.session_clock_id/hash` fields.
+
+### Nils's codex · May 21, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — browser contract vocabulary follows current SDK stream names.** Replaced stale `microphone` / `rgb_camera` / `joint_pose` browser contract types with `audio` / `camera` / `joint_encoders` plus the full current sensor-kind set, and pinned UI stream states with exported constants and tests.
 
 ### Nils's codex · May 20, HKT, 2026
 
@@ -74,17 +82,13 @@ Latest entry on top.
 
 **[`auki-time`](auki-time/changelog.md) — crate renamed from `auki-time-transforms`.** The crate now names the broader SDK timekeeping responsibility while retaining the existing TimeTransform Log sampler surface. Workspace metadata, live docs/plans, and parking-lot summaries now point at `auki-time`; historical changelog prose keeps the old name as context.
 
-### Nils's codex · May 19, HKT, 2026
-
-**[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.
-
 ### Nils's claude · May 19, 13:46 HKT, 2026
 
 **[`auki-network-swift`](auki-network-swift/changelog.md) — new crate: UniFFI Swift bindings for `auki-network` (Stage 1, Discovery surface).** Async `DiscoveryClient` + `ClusterEntry`/`CreateClusterOutcome`/flattened `DiscoveryError`, mirroring `auki-network-py`'s root surface and the per-component binding convention. `discovery_client`-only dep (no `swarm`), host build/test green, iOS XCFramework scripted-not-validated. Added to workspace `members` and `crates/README.md`.
 
-### Dobby · May 17, HKT, 2026
+### Nils's codex · May 19, HKT, 2026
 
-**Parking-lot purges across four crates: ~300 lines of plan archaeology and deleted-surface references removed.** [`auki-domain-py`](auki-domain-py/changelog.md) reduced to a 3-line stub (all five entries referenced the deleted `init_domain`/`DomainHandle` shape). [`auki-domain`](auki-domain/changelog.md) lost 11 transcribed "Greenland Decision" blocks whose decisions all shipped, plus a week-stale RESOLVED→Propagate placeholder; three live forward-looking items remain. [`auki-network`](auki-network/changelog.md) lost the 53-line Vinland D6 `discovery_client::subscribe` block (subject deleted), the `ClusterRuntime`-owns-SSE-subscription block (subject deleted), and the six `/auki/message/0.0.1` design blocks (protocol never shipped); ~16 substantive design items retained. [`auki-network-py`](auki-network-py/changelog.md) lost the two-runtime test block (test was deleted) and a 43-line inline type-stubs block describing deleted surface (`_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, etc.). Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. Net: 665 → 369 lines across the four files.
+**[`auki-logs-py`](auki-logs-py/changelog.md) + [`auki-network-py`](auki-network-py/changelog.md) — retained Python log streams get an SDK-owned producer source.** `Log.stream_source(...)` creates a typed retained source over an `auki-logs` directory, and `StreamDecision.accept_source(source)` builds the manifest, tails retained bytes, decodes by payload kind, and dispatches to camera/pointcloud/joint/audio stream arms internally.
 
 ### Nils's codex · May 19, HKT, 2026
 
@@ -102,6 +106,66 @@ Latest entry on top.
 
 **[`auki-domain`](auki-domain/changelog.md) — Manager election excludes the heartbeat-lost peer.** A timed-out Manager is removed from the election candidate view before consulting stale transport reachability, so a battery-pulled or QUIC-idle Manager cannot be re-elected and block Discovery rotation.
 
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser WebRTC probe smoke passes.** Added the browser smoke page/script and verified Chrome can call wasm `dialBrowserProbe` against the native `browser_probe_listener`, returning `ok 12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar`.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser probe dial export.** Added `dialBrowserProbe(seed, address, payload)` behind `browser_libp2p`, using the SDK identity and `libp2p-webrtc-websys` to open `/auki/browser-probe/0.0.1` to a native WebRTC Direct listener.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native browser probe listener lands.** Added a WebRTC Direct `/auki/browser-probe/0.0.1` listener and example that use the SDK `PeerIdentity` and print browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — browser probe protocol begins.** Added the shared `/auki/browser-probe/0.0.1` request/response structs and a native-only `browser_probe` feature gate for the WebRTC Direct listener proof.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — rust-libp2p browser feature compile probe unblocked.** Enabled the `getrandom` 0.3 `wasm_js` feature for the libp2p/yamux wasm path; the browser WebRTC/WebTransport/WebSocket feature set now compiles and packages with `wasm-pack --target web`.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — rust-libp2p browser feature compile probe.** Ran the `browser_libp2p` wasm feature check and recorded that the current SDK stack is blocked by transitive `getrandom` 0.3 wasm JS RNG configuration before WebRTC/WebTransport/WebSocket browser transport modules compile.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — wasm package import smoke test.** Added a Node smoke script proving the generated wasm package imports and returns the locked PeerId vector through JavaScript.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — canonical PeerId wasm export.** Added `peerIdFromSeed(seed)` and pinned the browser wasm crate to the SDK's locked seed-to-libp2p-PeerId vector.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-network-browser-wasm`](auki-network-browser-wasm/changelog.md) — browser/WASM networking probe scaffold.** Added the crate shell for the rust-libp2p browser transport spike, with docs and workspace registration before identity/import/libp2p probes.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — package import smoke test and Discovery validation hardening.** Switched the TypeScript package to NodeNext-compatible ESM specifiers, added `npm run smoke:import`, classified malformed Discovery payloads as `domain_list_failed`, and pinned all transport-backed peer methods to fail closed.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — first browser Domain peer shell.** Added `createBrowserDomainPeer(...)` with idle snapshots, Discovery delegation, metadata/sensor declaration no-ops, and explicit `transport_unavailable` results for real peer/stream operations.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — Discovery domain listing maps into Park's browser contract.** Added browser-side `/clusters` mapping with fetch injection and UI-friendly Discovery error results.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — browser identity seed storage seam.** Added injectable 32-byte browser peer seed storage plus the last-six-character peer id display helper the Park UI expects.
+
+### Nils's codex · May 19, HKT, 2026
+
+**[`auki-domain-browser`](auki-domain-browser/changelog.md) — Park-compatible browser peer contract and global installer.** Added the TypeScript `BrowserDomainPeer` contract, result/error helpers, package exports, and `window.aukiBrowserPeer.createPeer()` installer so Park can load an SDK-owned adapter boundary.
+
+### Nils's codex · May 19, HKT, 2026
+
+`auki-domain-browser`: created the browser Domain peer adapter package scaffold for Park's Milestone 0 SDK handoff. See `auki-domain-browser/changelog.md` for detail.
+
 ### Nils's codex · May 18, HKT, 2026
 
 **[`auki-datatypes`](auki-datatypes/changelog.md) + [`auki-network`](auki-network/changelog.md) + Python bindings — camera streams now carry `PinholeCameraLogEntry` records.** The stream-only `JpegFrame`/`frame_stream` payload is retired; Rust dispatch uses `AcceptCamera`, Python producers use `StreamDecision.accept_camera(...)`, consumers use `open_camera_stream(...)`, and resource catalogs advertise `pinhole_camera_log_entry`.
@@ -109,6 +173,10 @@ Latest entry on top.
 ### Nils's codex · May 18, HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — Manager handoff is less edge-triggered and membership gossip carries Manager identity.** Raw heartbeat carrier close no longer causes immediate election or eviction; `ClusterManager` waits for the heartbeat timeout unless a fresh heartbeat/connection refreshes the peer first. `/auki/membership/0.0.1` now carries `manager_peer_id`, and receivers apply it when the sender is the claimed Manager and the snapshot contains that Manager.
+
+### Dobby · May 17, HKT, 2026
+
+**Parking-lot purges across four crates: ~300 lines of plan archaeology and deleted-surface references removed.** [`auki-domain-py`](auki-domain-py/changelog.md) reduced to a 3-line stub (all five entries referenced the deleted `init_domain`/`DomainHandle` shape). [`auki-domain`](auki-domain/changelog.md) lost 11 transcribed "Greenland Decision" blocks whose decisions all shipped, plus a week-stale RESOLVED→Propagate placeholder; three live forward-looking items remain. [`auki-network`](auki-network/changelog.md) lost the 53-line Vinland D6 `discovery_client::subscribe` block (subject deleted), the `ClusterRuntime`-owns-SSE-subscription block (subject deleted), and the six `/auki/message/0.0.1` design blocks (protocol never shipped); ~16 substantive design items retained. [`auki-network-py`](auki-network-py/changelog.md) lost the two-runtime test block (test was deleted) and a 43-line inline type-stubs block describing deleted surface (`_Cluster.spawn`, `ClusterRuntime`, `ClusterDoc`, etc.). Codename leakage ("Hagall", retired "Vinland"/"Greenland"/"ansuz"/"grimsby"/"Dagaz") stripped throughout. Net: 665 → 369 lines across the four files.
 
 ### Nils's codex · May 17, HKT, 2026
 
@@ -118,9 +186,6 @@ Latest entry on top.
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — `/auki/resources/0.0.1` live resource catalogs begin.** Peers can now fetch a generalized resource catalog with `sensor_stream` rows, optional pinhole intrinsics, and rigid `transform_edge` rows. `NetworkRuntime` binds and requests the protocol; `ClusterManager` auto-lifts sensor catalog rows, accepts producer-supplied resource rows through `ResourceCatalogProvider`, and can embed exact Sensor / Frame Registry JSON for resource consumers.
 
-### Nils's codex · May 16, 19:02 HKT, 2026
-
-**[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.
 ### Nils's codex · May 17, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) + [`auki-network`](auki-network/changelog.md) — heartbeat topology and timeout semantics moved into the domain layer.** `NetworkRuntime` now exposes `set_heartbeat_targets` and reports raw libp2p carrier events; `ClusterManager` owns Manager-star target calculation, first-frame timeout seeding, last-heartbeat timestamps, election on Manager loss, and eviction on peer loss. This keeps `/auki/heartbeat/0.0.1` as the libp2p binding for a domain heartbeat rather than the behavior's source of truth.
@@ -136,6 +201,10 @@ Latest entry on top.
 ### Nils's codex · May 16, 21:07 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — sensor catalog detail requests and registry JSON helpers.** `/auki/sensors/0.0.1` keeps its lightweight default `{}` request and adds opt-in flags for embedding Sensor / Frame Registry JSON by value. `ClusterManager::fetch_sensors_catalog_with` serves those details from the registered app-root registry after hash checks, while the existing `/auki/registries/0.0.1` exact-entry fetch remains the authoritative path. Python mirrors the catalog flags, exposes optional `SensorEntry.sensor_entry_json` / `frame_entry_json`, and adds JSON-returning `fetch_sensor_entry`, `fetch_clock_entry`, and `fetch_frame_entry` helpers.
+
+### Nils's codex · May 16, 19:02 HKT, 2026
+
+**[`auki-registry-py`](auki-registry-py/changelog.md) — Python producers can author registry entries.** New `auki_registry` PyO3 module exposes dict constructors for Frame / Sensor / Clock Registry entries, canonical JSON + hash helpers, and hash-pinned `write_*` / `read_*` helpers over `auki-registry`. Boosterapp can now write a `FrameRegistryEntry`, pin its returned `frame_hash` into a point-cloud / RGB sensor entry, write the sensor entry, and feed the resulting hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`. Tests cover frame write/read, point-cloud sensor write/read, missing-frame rejection, and the documented flow through actual Python call signatures.
 
 ### Nils's codex · May 16, 18:33 HKT, 2026
 
@@ -217,10 +286,6 @@ Latest entry on top.
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T2 PARTIAL → DONE: `/auki/membership/0.0.1` gossip protocol + ClusterManager handler.** Manager broadcasts the updated `ClusterMembership` JSON to all connected allow-listed peers on admit / eviction / Manager-promotion; receivers apply last-write-wins (membership + allow-list, NOT `manager_peer_id` — election owns that). Fire-and-forget framing mirrors `/auki/join/0.0.1`; cluster-trust-gated like `/auki/stream/0.1.0`. New 3-peer integration test passes against `192.168.9.130:8080` in ~600ms (4 live tests total now pass in ~12s). Unblocks Hagall demo step 13's "propagates to all peers" requirement — step 14's stream consumption depends on it (without gossip, Booster #2's allow-list never updates to include Charlie-Park, and Charlie's stream substream gets silently dropped at the trust-boundary gate).
 
-### Nils's claude · May 13, 12:25 HKT, 2026
-
-**[`auki-network`](auki-network/changelog.md) — `/auki/stream/0.1.0` cluster trust boundary resolved: server-side gate (option A), silent-drop non-members.** Filed 2026-05-12 (Park rendered K1 #1's frames without being in K1's cluster); decided 2026-05-13. `handle_inbound_substream` consults the runtime's allow-list before invoking the consumer's `StreamProvider`; non-members get silently dropped (symmetric with the prior outsider-`ParticipantInfo`-drop pattern). No `StreamProvider` signature change, no typed `Decline` variant. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). Same shape will apply to `/auki/message/0.0.1` when it lands.
-
 ### Nils's claude · May 13, 13:00 HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-T5/T6/T7: Manager failover lands.** New `/auki/heartbeat/0.0.1` peer-side heartbeat protocol (500ms cadence, 1500ms timeout); `NetworkRuntime` surfaces `PeerLivenessEvent::{Connected, Lost}`; `ClusterManager` runs the cluster-internal election (`elect_successor`: earliest-joined reachable wins, lower peer-id tie-break) on Manager death and orchestrates the handoff (rotate Discovery directory + start Manager heartbeat tick). Failover demo verified end-to-end against `192.168.9.130:8080`: A creates cluster, B joins, A dies, B detects within ~1.5s and becomes Manager.
@@ -231,9 +296,31 @@ Latest entry on top.
 
 **[`auki-network`](auki-network/changelog.md) + [`auki-domain`](auki-domain/changelog.md) + [`auki-domain-py`](auki-domain-py/changelog.md) — SDK-T3 lands: `/auki/join/0.0.1` protocol + `ClusterManager::join_cluster` (Rust + Python).** Joiner dials Manager, sends join request, receives gossiped membership; Manager-side handler task admits + pushes the updated allow-list to the runtime. Connection-level trust boundary flipped from `AllowedPeers` (deny inbound by default) to `BlockedPeers` (open by default) — membership enforcement moves to per-protocol gates inside the runtime, because Hagall's join handshake requires accepting inbound from peers we've never seen. End-to-end live integration test (2 peers): A creates cluster `foo`, B joins, both see identical 2-member membership, both shutdown cleanly. Passes against `192.168.9.130:8080`. **Booster / Park can now `join_cluster` an existing cluster, not just create.**
 
+### Nils's claude · May 13, 12:25 HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — `/auki/stream/0.1.0` cluster trust boundary resolved: server-side gate (option A), silent-drop non-members.** Filed 2026-05-12 (Park rendered K1 #1's frames without being in K1's cluster); decided 2026-05-13. `handle_inbound_substream` consults the runtime's allow-list before invoking the consumer's `StreamProvider`; non-members get silently dropped (symmetric with the prior outsider-`ParticipantInfo`-drop pattern). No `StreamProvider` signature change, no typed `Decline` variant. Unblocks SDK-T11 (Charlie-Park stream consumption — the Hagall demo win). Same shape will apply to `/auki/message/0.0.1` when it lands.
+
+### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
+
+**[`auki-domain-py`](auki-domain-py) Phase 2 + [`auki-domain`](auki-domain) `init_or_join_domain` + [`auki-network-py`](auki-network-py) `[lib] name` rename + `build_stream_provider` `pub`.** Closes [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1 and #4. Three coordinated changes lift the full producer-side surface so daemons (BoosterApp, Sentinel) can fully migrate to v0.0.33+:
+
+1. **`auki-domain::init_or_join_domain`** — sibling to `init_domain`; collapses race-loss into the happy path. Producer-only daemons that don't care about Manager identity can call this and never see `AlreadyExists`. ~40 LOC; existing `init_domain` unchanged.
+2. **`auki-network-py` `[lib] name` rename** `auki_network` → `auki_network_py`. Breaks the cargo lib-name collision that prevented sibling PyO3 crates from depending on `auki-network-py`'s Rust internals. Python module name unaffected (maturin's `module-name = "auki_network"` instructs the cdylib rename during wheel build). 1 stale `module_exposes_cluster_submodule_with_documented_surface` assertion (left over from v0.0.32; expected `load_doc`/`spawn` to be present) flipped to assert their **removal** — cluster-trust-boundary regression guard.
+3. **`build_stream_provider` promoted `pub(crate)` → `pub`** in `auki-network-py` + `mod stream_types` → `pub mod stream_types`. Now reachable from sibling crates. `auki-domain-py` reuses this ~500-line Python-callable→Rust-`StreamProvider` adapter instead of duplicating it. The `stream_provider` Python kwarg on `auki_domain.init_domain` is now functional; daemons return `auki_network.cluster.StreamDecision.accept(...)` from their callback exactly as they did pre-v0.0.33.
+
+`auki-domain-py`'s `init_domain` Python entry now uses `init_or_join_domain` underneath (race-loss → happy-path join). 12 Rust unit tests pass (was 11; new test exercises the cross-crate `build_stream_provider` link). `auki-network-py` 32 tests, `auki-domain` 12 tests.
+
+### broodsugar's claude · May 13, HKT, 2026
+
+**[`auki-domain-py`](auki-domain-py) — new crate ships, Phase 1: `init_domain` Python entry point.** Wraps [`auki_domain::init_domain`](auki-domain/src/lib.rs) so Python daemons (BoosterApp, Sentinel) can construct a `ClusterRuntime` through Discovery now that `auki-network-py`'s `cluster.spawn` is gone (the v0.0.33 cluster-trust-boundary PR B). Surface: `auki_domain.init_domain(wallet_seed, peer_seed, discovery_url, domain_name, addresses, participant_provider, *, listen_addresses, agent_version, expected_app_id, note) -> DomainHandle`; `DomainHandle` pyclass with `.identity` / `.peers()` / `.shutdown()`; 5 typed Python exceptions (`DomainAlreadyExists`, `DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`, `RuntimeSpawnError`). `participant_provider` wrapped via duck-typed attribute access so daemons keep returning their existing `auki_network.cluster.ParticipantInfo(...)` instances unchanged. `stream_provider` deferred to Phase 2 (blocked on the `auki-network` ↔ `auki-network-py` lib-name collision — resolution paths sketched in [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1). 11 Rust unit tests pass.
+
 ### Nils's claude · May 13, 11:45 HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — SDK-T2 lands: `ClusterManager` ships with `create_cluster` + `admit_peer` + `participant_info` + 3s Discovery heartbeat tick + `shutdown`.** End-to-end live integration test against `192.168.9.130:8080` covers the full lifecycle including heartbeat-keeps-cluster-alive past Discovery's 10s sweep. [`auki-domain-py`](auki-domain-py/changelog.md) — daemon-friendly Python façade `ClusterManager.create_cluster(wallet_seed, ...)` + accessor methods + `participant_info(daemon_info).to_json()` for `/api/info`. Booster / Park / Sentinel can now construct a cluster, claim Manager role, expose `is_manager` + `manager_peer_id` via `/api/info`, and admit peers (admit only locally — the libp2p join protocol is SDK-T3, separate commit). Not in this commit: `join_cluster` end-to-end (needs SDK-T3), peer-side heartbeat (SDK-T5), election (SDK-T6), Manager-handoff (SDK-T7), signed successor tokens (SDK-T4 / SDK-Q3).
+
+### broodsugar's claude · May 13, 11:21 HKT, 2026
+
+**[`auki-network`](auki-network) + [`auki-domain`](auki-domain) + [`auki-network-py`](auki-network-py) — kill `cluster.json` static-config loader + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** Closes every bypass: peers only visible within their cluster, no fallback. `cluster_doc::{load, default_path, resolve_path, LoadError, ENV_OVERRIDE, DEFAULT_RELATIVE_PATH, SUPPORTED_VERSION}` removed; `ClusterRuntime::spawn` removed; `from_swarm` made `#[doc(hidden)] pub` so only `auki_domain::init_domain` (the canonical public path) calls it. `init_domain` signature grows (`swarm`, `participant_provider`, `stream_provider`) and returns `DomainHandle { identity, runtime }` so the `ClusterDoc` Discovery returns never leaves the SDK. `auki-network-py::cluster.spawn` + `cluster.load_doc` removed; Python runtime construction blocks until `auki-domain-py` ships (filed). `auki-network::Swarm` re-export added so `auki-domain` doesn't need a direct libp2p dep. 124 + 12 tests green. Filed: "ClusterRuntime owns its SSE subscription internally" tightening follow-up.
 
 ### Nils's claude · May 13, 11:15 HKT, 2026
 
@@ -259,30 +346,14 @@ Latest entry on top.
 
 **Hagall (Networking) SDK plan drafted; 5 cross-crate open questions filed.** Subpage [`SDK plan`](https://www.notion.so/35f5c8e9659281b3afa7e713bcc89a50) created under the [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) — maps SDK responsibilities (libp2p data plane, `foo.json`, join protocol, successor tokens, peer-side heartbeat, election, handoff orchestration, Discovery directory client) into 12 SDK-T tasks. SDK-Q1 (replace/evolve/layer Greenland's `DomainManager`) and SDK-Q2 (`foo.json` shape) filed in [`auki-domain/parking_lot.md`](auki-domain/parking_lot.md); SDK-Q3 (token format), SDK-Q5 (Manager-role surfacing) also filed there. SDK-Q4 (does demo step 14 stream consumption ride on `stream_provider`?) filed in [`auki-network/parking_lot.md`](auki-network/parking_lot.md). Cross-crate index added to [`parking_lot.md`](parking_lot.md). No code changes; planning-only propagation. SDK-Q1 is the keystone — it sets the diff radius of the first Hagall PR.
 
-### broodsugar's claude · May 13, HKT, 2026 (Phase 2)
-
-**[`auki-domain-py`](auki-domain-py) Phase 2 + [`auki-domain`](auki-domain) `init_or_join_domain` + [`auki-network-py`](auki-network-py) `[lib] name` rename + `build_stream_provider` `pub`.** Closes [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1 and #4. Three coordinated changes lift the full producer-side surface so daemons (BoosterApp, Sentinel) can fully migrate to v0.0.33+:
-
-1. **`auki-domain::init_or_join_domain`** — sibling to `init_domain`; collapses race-loss into the happy path. Producer-only daemons that don't care about Manager identity can call this and never see `AlreadyExists`. ~40 LOC; existing `init_domain` unchanged.
-2. **`auki-network-py` `[lib] name` rename** `auki_network` → `auki_network_py`. Breaks the cargo lib-name collision that prevented sibling PyO3 crates from depending on `auki-network-py`'s Rust internals. Python module name unaffected (maturin's `module-name = "auki_network"` instructs the cdylib rename during wheel build). 1 stale `module_exposes_cluster_submodule_with_documented_surface` assertion (left over from v0.0.32; expected `load_doc`/`spawn` to be present) flipped to assert their **removal** — cluster-trust-boundary regression guard.
-3. **`build_stream_provider` promoted `pub(crate)` → `pub`** in `auki-network-py` + `mod stream_types` → `pub mod stream_types`. Now reachable from sibling crates. `auki-domain-py` reuses this ~500-line Python-callable→Rust-`StreamProvider` adapter instead of duplicating it. The `stream_provider` Python kwarg on `auki_domain.init_domain` is now functional; daemons return `auki_network.cluster.StreamDecision.accept(...)` from their callback exactly as they did pre-v0.0.33.
-
-`auki-domain-py`'s `init_domain` Python entry now uses `init_or_join_domain` underneath (race-loss → happy-path join). 12 Rust unit tests pass (was 11; new test exercises the cross-crate `build_stream_provider` link). `auki-network-py` 32 tests, `auki-domain` 12 tests.
-
-### broodsugar's claude · May 13, HKT, 2026
-
-**[`auki-domain-py`](auki-domain-py) — new crate ships, Phase 1: `init_domain` Python entry point.** Wraps [`auki_domain::init_domain`](auki-domain/src/lib.rs) so Python daemons (BoosterApp, Sentinel) can construct a `ClusterRuntime` through Discovery now that `auki-network-py`'s `cluster.spawn` is gone (the v0.0.33 cluster-trust-boundary PR B). Surface: `auki_domain.init_domain(wallet_seed, peer_seed, discovery_url, domain_name, addresses, participant_provider, *, listen_addresses, agent_version, expected_app_id, note) -> DomainHandle`; `DomainHandle` pyclass with `.identity` / `.peers()` / `.shutdown()`; 5 typed Python exceptions (`DomainAlreadyExists`, `DiscoveryUnreachable`, `DiscoveryRejected`, `DiscoveryClockError`, `RuntimeSpawnError`). `participant_provider` wrapped via duck-typed attribute access so daemons keep returning their existing `auki_network.cluster.ParticipantInfo(...)` instances unchanged. `stream_provider` deferred to Phase 2 (blocked on the `auki-network` ↔ `auki-network-py` lib-name collision — resolution paths sketched in [`auki-domain-py/parking_lot.md`](auki-domain-py/parking_lot.md) #1). 11 Rust unit tests pass.
-
-### broodsugar's claude · May 13, 11:21 HKT, 2026
-
-**[`auki-network`](auki-network) + [`auki-domain`](auki-domain) + [`auki-network-py`](auki-network-py) — kill `cluster.json` static-config loader + make `ClusterRuntime` Discovery-only (PR B of the cluster-trust-boundary resolution).** Closes every bypass: peers only visible within their cluster, no fallback. `cluster_doc::{load, default_path, resolve_path, LoadError, ENV_OVERRIDE, DEFAULT_RELATIVE_PATH, SUPPORTED_VERSION}` removed; `ClusterRuntime::spawn` removed; `from_swarm` made `#[doc(hidden)] pub` so only `auki_domain::init_domain` (the canonical public path) calls it. `init_domain` signature grows (`swarm`, `participant_provider`, `stream_provider`) and returns `DomainHandle { identity, runtime }` so the `ClusterDoc` Discovery returns never leaves the SDK. `auki-network-py::cluster.spawn` + `cluster.load_doc` removed; Python runtime construction blocks until `auki-domain-py` ships (filed). `auki-network::Swarm` re-export added so `auki-domain` doesn't need a direct libp2p dep. 124 + 12 tests green. Filed: "ClusterRuntime owns its SSE subscription internally" tightening follow-up.
-
 ### broodsugar's claude · May 12, 16:30 HKT, 2026
 
 **[`auki-network-py`](auki-network-py) — `DiscoveryClient.create_cluster` + `CreateClusterOutcome` Python binding ships.** Wraps the v0.0.30 Rust addition (PR #95) so headless Python daemons (BoosterApp's sidecar, future Sentinel headless mode) can implement Greenland T12's `try-join → create-if-none → fall-back-to-join` algorithm without going through the typed `auki-domain::init_domain` convenience layer. New PyClass `CreateClusterOutcome { kind: "created" | "already_exists", doc: ClusterDoc }` mirrors the Rust enum — race-loss is a normal outcome, not an exception. 5 new pytest cases in [`python_tests/test_discovery.py`](auki-network-py/python_tests/test_discovery.py) (1 surface + 1 wrong-shape + 3 live integration). Unblocks BoosterApp's [scripts/parking_lot.md #10](https://github.com/aukilabs/boosterapp/blob/develop/scripts/parking_lot.md) Greenland T12 implementation.
+
 ### broodsugar's claude · May 12, 12:30 HKT, 2026
 
 **[`auki-network`](auki-network) + [`auki-network-py`](auki-network-py) — kill mDNS + wire `libp2p-allow-block-list` at the swarm layer (PR A of the cluster-trust-boundary resolution).** Nils's "peers only visible within their cluster, no fallback" decision lands the libp2p-layer enforcement. `mdns::tokio::Behaviour` removed from the swarm `Behaviour`; `mdns` feature removed from `libp2p` deps; `enable_mdns: bool` field removed from `SwarmConfig`. New `allow_list: allow_block_list::Behaviour<AllowedPeers>` on the swarm — empty at build time (dark by default), populated by `cluster_runtime` from `ClusterDoc.peers` on spawn and on every SSE update. Inbound and outbound connections from non-listed peer-ids refused at the libp2p `NetworkBehaviour` layer — outsiders see a closed socket, no protocol-level event ever fires. One mechanism covers every libp2p protocol on the swarm. New direct dep `libp2p-allow-block-list = "0.6"`. +2 unit tests in `swarm` (138 passed total, up from 132). `auki-network-py::cluster.spawn` drops the matching `enable_mdns` kwarg. PR B (kill `cluster.json` static config) follows.
+
 ### broodsugar's claude · May 12, 11:30 HKT, 2026
 
 **[`auki-network`](auki-network) — filed two parking-lot items on `/auki/stream/0.1.0` after Nils surfaced a cluster-trust-boundary bypass.** `stream_runtime::handle_inbound_substream` discards the requesting `PeerId` (named `_peer`) and the `StreamProvider` closure only sees `sensor_id` — so any libp2p-reachable peer subscribes regardless of cluster membership; the control plane's ClusterDoc trust boundary doesn't extend to the stream plane. Filed (a) **trust boundary on the accept path** (sub-options: server-side gate, expose `PeerId` to provider, or both; same shape probably needs to apply to `/auki/message/0.0.1`) and (b) **operator visibility — `runtime.stream_subscribers()` accessor** (companion read-side API; pairs with the membership-gate bookkeeping). Doc-only — no code change.
@@ -310,17 +381,19 @@ Latest entry on top.
 ### broodsugar's dobby · May 11, 14:34 HKT, 2026
 
 **[`auki-domain`](auki-domain) — Greenland T1 shipped: `DomainIdentity` + `init_domain`.** First implementing PR of the [Greenland quest](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). `DomainIdentity` value type carries the wallet-scoped canonical string `{wallet_id}/{name}` with the reserved `"Vinland"` singleton exception (T12); `init_domain` builds the identity, registers via `DiscoveryClient::register`, returns a minimal `DomainHandle`. 12 unit tests + 2 doctests + 2 locked cross-language vectors. Glossary updated.
-### broodsugar's dobby · May 9, 16:34 HKT, 2026
-
-**[`auki-network`](auki-network) — sixth `/auki/message/0.0.1` design question filed in [`parking_lot.md`](auki-network/parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Lean: SDK owns the writer (symmetric with fire-and-forget wire semantics, replay-from-disk independence from consumer health, clean decode-failure exception semantics, outbound capture symmetry). Doc-only PR; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates. Slate becomes six questions.
 
 ### broodsugar's dobby · May 11, 14:20 HKT, 2026
 
 **[`auki-domain`](auki-domain) — crate scaffolded for the Greenland quest's SDK-side Domain lifecycle work.** New crate sibling to `auki-network` / `auki-identity` / `auki-session-py`; owns Domain creation, joining, Manager/Member roles, heartbeats, live Cluster Registry, and Manager failover. Empty `lib.rs` — no functional code. Lands the folder convention + parking-lot pre-files of every Greenland architectural decision transcribed from the [Notion Tasks table](https://www.notion.so/Greenland-35d5c8e9659280dbb8cff0d196f3c3d2). PR 1 (T1: `DomainIdentity` + `init_domain`) lands next per [`auki-domain/src/sprint.md`](auki-domain/src/sprint.md).
 
+### broodsugar's dobby · May 9, 16:34 HKT, 2026
+
+**[`auki-network`](auki-network) — sixth `/auki/message/0.0.1` design question filed in [`parking_lot.md`](auki-network/parking_lot.md): inbound message log ownership.** Question surfaced during downstream API-shape discussion with the boosterapp side ([clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) Phase 2). Lean: SDK owns the writer (symmetric with fire-and-forget wire semantics, replay-from-disk independence from consumer health, clean decode-failure exception semantics, outbound capture symmetry). Doc-only PR; follow-up PR converts the lean to a `### Decision —` once Nils adjudicates. Slate becomes six questions.
+
 ### broodsugar's claude · May 9, 16:30 HKT, 2026
 
 **[`auki-network`](auki-network) + [`auki-network-py`](auki-network-py) ship sawslin Phase B's third `T` — `JointEncodersFrame` over `/auki/stream/0.1.0`.** Adds `StreamDispatch::AcceptJointEncoders { info, source: SourceStream<JointEncodersFrame> }` to the closed dispatch enum; new dispatch arm in `handle_inbound_substream` calling `pump_typed::<JointEncodersFrame>(...)` (the pump is generic, so reuse is automatic). Python binding mirrors the existing `PointCloudFrame` pattern: new `cluster.JointEncodersFrame(angles_rad: list[float])` PyClass, `StreamDecision.accept_joint_encoders(info, source)` factory + `"accept_joint_encoders"` discriminator, `runtime.open_joint_encoders_stream(peer_id, sensor_id) -> StreamSubscription`, `FramePayload`/`PyProducerFrame`/`PyConsumerFrame` extended, `FrameStreamKind::JointEncoders` + `FrameNext::JointEncoders` for the consumer iterator. Wire bytes locked: `[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]` → `0a18 0000803f … 0000c040`. Wire/disk byte-identity with `JointEncodersLogEntry` (sawslin Phase 1) is the load-bearing invariant — a producer prost-encodes once and uses the bytes for both. Tests: `auki-network` 88 → 91 lib (+3 `joint_encoders_*`); `auki-network-py` 33 → 39 python_tests (+6 — 4 unit + 2 end-to-end including a payload-mismatch parity test). Closes BoosterApp's `scripts/parking_lot.md` #9 SDK-side blocker. See per-crate changelogs for detail.
+
 ### broodsugar's dobby · May 9, 15:43 HKT, 2026
 
 **[`auki-network`](auki-network) — five `/auki/message/0.0.1` design questions filed in [`parking_lot.md`](auki-network/parking_lot.md).** Phase 1 of the [clickerlooker quest](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/README.md) (peer-to-peer message channel + click-to-look on the K1) needs five SDK-side architectural calls before the implementing PR — substream lifecycle (lean: per-message), crate placement (lean: inside `auki-network`), envelope typing (lean: `string type_url + bytes body`), log topology (lean: per-peer-pair on the receiving side), ack semantics (lean: fire-and-forget v1). Also moves four cross-repo questions out of [`org/src/quests/clickerlooker/parking_lot.md`](https://github.com/aukilabs/org/blob/develop/src/quests/clickerlooker/parking_lot.md) (per-quest-README "what lives here vs in the sub-repos" rule). Doc-only PR; follow-up PR converts the leans to `### Decision —` subsections once Nils adjudicates.
@@ -332,6 +405,7 @@ Latest entry on top.
 ### broodsugar's claude · May 9, 14:30 HKT, 2026
 
 **New package [`auki-datatypes-py`](auki-datatypes-py) — pure-Python betterproto-generated bindings for [`auki-datatypes`](auki-datatypes).** Closes [Step 9 of the migration sprint](auki-datatypes/src/sprint.md) — the typed-message half of [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4. Surface mirrors the Rust crate one-to-one: `auki_datatypes.<name>.<Type>` for every Rust `auki_datatypes::<name>::<Type>`. **Cross-language byte equality verified by 10/10 tests** pinning every Rust locked vector against the betterproto encoder's output. Pure Python — no Rust code, no maturin; `pyproject.toml` uses `hatchling` build backend. Codegen via `./regen.sh` requires `protoc` + `[regen]` extras (`betterproto[compiler]`, `grpcio-tools`); generated files committed so end consumers don't need protoc. `betterproto` pinned to `1.2.5`. NOT a Cargo workspace member (no Rust). Will land in v0.0.27.
+
 ### broodsugar's claude · May 9, 14:15 HKT, 2026
 
 **Two new sibling crates land — [`auki-layout-py`](auki-layout-py) and [`auki-manifests-py`](auki-manifests-py) — companion wrappers to [`auki-logs-py`](auki-logs-py).** `auki-layout-py` exposes all 10 path helpers (`registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment`) as `#[pyfunction]`s — `str → str`, no state. `auki-manifests-py` exposes all four `build_*_log_manifest` builders, returning Python `dict`s consumers hand straight to `auki_logs.Log.open(...)`. Tagged enums (`PoseSource` / `TimeTransformSource`) take Python dict; `PoseWriterMode` takes Python `str` — sidesteps PyClass complexity. Closes the path / manifest construction gap that previously left Python consumers (e.g. the [ESL detector](https://github.com/aukilabs/detectors)) hand-rolling strings and dicts. Tests: `auki-layout-py` 3 Rust + 9 Python; `auki-manifests-py` 2 Rust + 6 Python. Both `abi3-py38` via PyO3 0.22 + maturin, mirrors [`auki-network-py`](auki-network-py) / [`auki-logs-py`](auki-logs-py). Will land in v0.0.27.
@@ -347,19 +421,22 @@ Latest entry on top.
 ### broodsugar's claude · May 9, 13:30 HKT, 2026
 
 **New crate [`auki-logs-py`](auki-logs-py) — PyO3 bindings for [`auki-logs`](auki-logs)'s `Log<T>` framing primitive.** Closes [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #4 at the bytes level — the ESL detector (Python) can now tail an input sensor log and append to an output detection log without leaving Python. Surface: `Log.open / append / flush / set_retention / read / tail`, `LogReader.entries`, `TailIter` (blocking iterator + non-blocking `try_next`). Opaque-bytes only — Python passes `bytes` for payload; consumers decode prost themselves until `betterproto` codegen lands at Step 9 of the [`auki-datatypes` migration sprint](auki-datatypes/src/sprint.md). Internal `RawBytes` newtype with identity-encoding `LogPayload` impl satisfies the generic bound; manifest seams via Python's stdlib `json` module. GIL released on every blocking call. Errors mapped: `Error::Io` → `OSError`, payload/manifest/format → `ValueError`; closed-log access → `RuntimeError`. Tests: Rust-side 3 (round-trip + empty-payload + seam stub), Python-side 13 (surface, round-trip, tail, end-to-end fake-detector smoke). Build pipeline `abi3-py38` via PyO3 0.22 + maturin, mirrors [`auki-network-py`](auki-network-py). Companion `auki-layout-py` + `auki-manifests-py` (path / manifest helpers) filed as a sibling follow-up. Will land in v0.0.26.
+
 ### broodsugar's claude · May 9, 13:05 HKT, 2026
 
 **[`auki-datatypes`](auki-datatypes) parking-lot: structured prost fields vs opaque bytes — when does each apply?** Filed after [#77](https://github.com/aukilabs/auki-sdk/pull/77) (JointEncoders) made the split precedent visible. Lists the seven on-disk types in two buckets and proposes a working principle (structured = single canonical interpretation across all instances; opaque-bytes = multiple possible layouts or schema-owned-downstream). Doc-only.
 
-### broodsugar's claude · May 8, 19:46 HKT, 2026
-
-**[`auki-logs`](auki-logs) gains `Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../parking_lot.md).** New `pub fn tail(root) -> Result<TailIter<T>>`. The iterator starts at current EOF (existing entries don't replay), polls the segments dir at a configurable cadence (default 10ms), `Iterator::next` blocks while `TailIter::try_next` is non-blocking. Handles segment rollover, mid-write torn reads (surfaces as `Ok(None)`), and segment eviction. The same call works whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording. No new deps (sync, std-only). Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1; blocker #3 (`DetectionLogEntry`) lands in PR #73; #2 (Detector binding API) and #4 (`auki-sdk-py`) remain. Tests: 13 → 21 (+8). Two follow-ups filed: `Log::open` can't extend an existing partially-filled segment after re-open (production callers don't hit this — long-lived writers — but daemon-restart-resume will); `tail` v2 shapes (`tail_from(ts)` checkpoint, EOF detection, notify-based backend) deferred until a real consumer needs them.
 ### broodsugar's claude · May 9, 12:46 HKT, 2026
 
 **Joint-angle (encoder) sensor support landed.** [`auki-registry`](auki-registry) gains `SensorBody::JointEncoders { joint_count, frame_rate_hz }` — fourth sensor-body kind alongside RgbCamera / PointCloud / Microphone. [`auki-datatypes`](auki-datatypes) gains `proto/joint_encoders.proto` (`JointEncodersLogEntry`, on-disk) and `proto/joint_encoders_stream.proto` (`JointEncodersFrame`, libp2p stream wire) — both `repeated float angles_rad = 1`, byte-identical wire/disk shape locked by an explicit symmetry test. Producer ships angle vectors; consumer (Park) holds the URDF and does FK. Joint angles are encoder readings — measurements before any kinematic interpretation. Tests: `auki-datatypes` 37 → 46 (+9), `auki-registry` 33 → 36 (+3).
+
 ### broodsugar's claude · May 9, 12:40 HKT, 2026
 
 **Detector binding API lands — [`auki-layout`](auki-layout) gains `detection_log_path`, [`auki-manifests`](auki-manifests) gains `build_detection_log_manifest`.** Together they let the integrator (Park / Boosterapp) pre-create the output `Log<DetectionLogEntry>` and hand the write-handle to a detector loop. Path: `<session>/detection_logs/<detector_id>__<input_log_id>/`. Manifest carries `(detector_id, detector_hash)` content-addressed producer identity (mirrors `(sensor_id, sensor_hash)`) plus `(input_log_id, input_sensor_id, input_sensor_hash)` for self-containedness — a detection log alone surfaces both producer and input identities even after the input sensor log is evicted. **No `intent` field** — match-the-existing-builders for v1; uniform `intent` rollout across every builder is filed in [`auki-manifests/parking_lot.md`](auki-manifests/parking_lot.md). The `DetectorRegistryEntry` shape (what bytes go through the `detector_hash` hasher) is also deferred — `detector_hash` is an opaque hex string for v1. Caller-decides lifecycle per [PR #72's lean](../parking_lot.md). Tests: `auki-layout` 11 → 13 (+2), `auki-manifests` 9 → 12 (+3). **Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #2**; only blocker #4 (`auki-sdk-py`) remains. Will land in v0.0.26.
+
+### broodsugar's claude · May 8, 19:46 HKT, 2026
+
+**[`auki-logs`](auki-logs) gains `Log<T>::tail()` — read side of the [subscription-as-materialization keystone](../parking_lot.md).** New `pub fn tail(root) -> Result<TailIter<T>>`. The iterator starts at current EOF (existing entries don't replay), polls the segments dir at a configurable cadence (default 10ms), `Iterator::next` blocks while `TailIter::try_next` is non-blocking. Handles segment rollover, mid-write torn reads (surfaces as `Ok(None)`), and segment eviction. The same call works whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording. No new deps (sync, std-only). Resolves [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #1; blocker #3 (`DetectionLogEntry`) lands in PR #73; #2 (Detector binding API) and #4 (`auki-sdk-py`) remain. Tests: 13 → 21 (+8). Two follow-ups filed: `Log::open` can't extend an existing partially-filled segment after re-open (production callers don't hit this — long-lived writers — but daemon-restart-resume will); `tail` v2 shapes (`tail_from(ts)` checkpoint, EOF detection, notify-based backend) deferred until a real consumer needs them.
 
 ### broodsugar's claude · May 8, 15:34 HKT, 2026
 
@@ -376,6 +453,18 @@ Latest entry on top.
 ### broodsugar's claude · May 8, 11:52 HKT, 2026
 
 **Step 5 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md): `auki.pose / SpatialTransform` (on-disk, flat — per the 2026-05-07 synthesis).** [`auki-datatypes`](auki-datatypes) gains `proto/pose.proto` with `SpatialTransform { Vec3 translation; Quat orientation }` + `Vec3` + `Quat`. The pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` are gone — frame identity moves to the manifest's `(from_frame_id, to_frame_id)` pair (mirrors TimeTransform Log). Coordinated downstream changes: [`auki-registry`](auki-registry) drops `PoseLogEntry` + `TransformSample` + `ciborium` dev-dep (scope shrink complete: identity catalogs only); [`auki-manifests`](auki-manifests)' `build_pose_log_manifest` rewritten for 13 args (frame-pair, clock-pair, source, `writer_mode`, `expected_rate_hz`); new `PoseWriterMode` enum; [`auki-layout`](auki-layout)'s `poselog_path` switches to `(session_root, from_frame_id, to_frame_id)`. Tests: `auki-datatypes` 19 → 25 (+6); `auki-registry` 33 (net 0; +0/-2 pose CBOR tests); `auki-manifests` 6 → 7 (+1); `auki-layout` 7 (net 0; +2/-2 pose path tests). Resolves the Pose Log manifest reshape parking-lot item.
+
+### broodsugar's claude · May 8, 11:30 HKT, 2026
+
+**Step 1 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](auki-datatypes) now ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics`, locked wire-bytes + XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`). Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 `Option<T>` for messages) — non-autofocusing cameras pay only the message-tag overhead.
+
+**[`auki-logs`](auki-logs) became encoder-agnostic** — `Log<T>` bound switches from `T: Serialize + DeserializeOwned` to `T: LogPayload`, a tiny new trait with `encode(&self) -> Vec<u8>` + `decode(&[u8]) -> Result<Self, String>`. Resolves the encoder-aware-vs-encoder-agnostic open question in [`auki-logs/parking_lot.md`](auki-logs/parking_lot.md). ciborium dropped from production deps; `Error::Cbor` → `Error::Payload`. The `impl_log_payload!` macro in [`auki-datatypes`](auki-datatypes) gives every prost type a one-line impl; mid-migration ciborium types ([`auki-time-transforms`](auki-time-transforms)'s `TimeTransformEntry`, [`auki-manifests`](auki-manifests)'s `TestEntry` test scaffold) write theirs directly.
+
+**Moves**: `SensorLogEntry` + `DynamicIntrinsics` from [`auki-registry`](auki-registry) → [`auki-datatypes`](auki-datatypes) (renamed `PinholeCameraLogEntry`, encoded via prost). [`auki-ros-adapter`](auki-ros-adapter)'s `build_sensor_log_entry` returns the prost type; `dynamic_intrinsics_from` returns the prost `DynamicIntrinsics`. `auki-ros-adapter` re-exports `auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry}`; gets a path-dep on `auki-datatypes`.
+
+**Test counts**: `auki-datatypes` 1 → 7 (placeholder smoke + 6 camera tests including the segment round-trip seam); `auki-logs` 14 → 14; `auki-registry` 35 → 35 (no inline tests for the moved types); `auki-ros-adapter` 32 → 31 (CBOR round-trip deleted, replaced by the locked prost vector at the new home); `auki-time-transforms` 9 → 9; `auki-manifests` 6 → 6. `cargo test --workspace` clean.
+
+**Doc updates**: [`auki-logs/README.md`](auki-logs) + `src/readme.md` rewrite the entry-framing tables, public-API signatures, error variants, and "Why CBOR" → "Why encoding-agnostic". [`auki-registry/README.md`](auki-registry) + `src/readme.md` drop the `SensorLogEntry` + `DynamicIntrinsics` sections; the "scope shrink in flight" callout now reads "Step 1 (2026-05-08) is complete." [`auki-datatypes/README.md`](auki-datatypes) + `src/readme.md` updated for the first real schema landing. Root `README.md` crate-listing table gains `auki-datatypes` + `auki-manifests` rows (both were missing); `auki-registry` row drops the camera log payload types. Sprint marks Step 1 ✓ done. Two parking-lot questions resolved (`dynamic_intrinsics` placement, encoder-aware vs encoder-agnostic). Will land in v0.0.24.
 
 ### broodsugar's dobby · May 8, 11:27 HKT, 2026
 
@@ -413,22 +502,6 @@ Latest entry on top.
 
 New [`crates/README.md`](README.md) — quick-overview index of every crate in the workspace, grouped by responsibility (cryptography & canonicalization, on-disk format, lifecycle & layout, networking, adapters, Python bindings). One-line descriptions per crate, scoped to responsibility (not status). Complements the more detailed crate-listing table in the root [`README.md`](../README.md). Doc-only.
 
-### broodsugar's claude · May 8, 11:30 HKT, 2026
-
-**Step 1 of the [`auki-datatypes` migration](auki-datatypes/src/sprint.md) landed — first real `.proto`.** [`auki-datatypes`](auki-datatypes) now ships `auki.camera` with `PinholeCameraLogEntry` + `DynamicIntrinsics`, locked wire-bytes + XXH3-128 hash (`0496e1f71a03e00877fc68bf16190026`). Per-step decision: `dynamic_intrinsics` is **inline-optional** (proto3 `Option<T>` for messages) — non-autofocusing cameras pay only the message-tag overhead.
-
-**[`auki-logs`](auki-logs) became encoder-agnostic** — `Log<T>` bound switches from `T: Serialize + DeserializeOwned` to `T: LogPayload`, a tiny new trait with `encode(&self) -> Vec<u8>` + `decode(&[u8]) -> Result<Self, String>`. Resolves the encoder-aware-vs-encoder-agnostic open question in [`auki-logs/parking_lot.md`](auki-logs/parking_lot.md). ciborium dropped from production deps; `Error::Cbor` → `Error::Payload`. The `impl_log_payload!` macro in [`auki-datatypes`](auki-datatypes) gives every prost type a one-line impl; mid-migration ciborium types ([`auki-time-transforms`](auki-time-transforms)'s `TimeTransformEntry`, [`auki-manifests`](auki-manifests)'s `TestEntry` test scaffold) write theirs directly.
-
-**Moves**: `SensorLogEntry` + `DynamicIntrinsics` from [`auki-registry`](auki-registry) → [`auki-datatypes`](auki-datatypes) (renamed `PinholeCameraLogEntry`, encoded via prost). [`auki-ros-adapter`](auki-ros-adapter)'s `build_sensor_log_entry` returns the prost type; `dynamic_intrinsics_from` returns the prost `DynamicIntrinsics`. `auki-ros-adapter` re-exports `auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry}`; gets a path-dep on `auki-datatypes`.
-
-**Test counts**: `auki-datatypes` 1 → 7 (placeholder smoke + 6 camera tests including the segment round-trip seam); `auki-logs` 14 → 14; `auki-registry` 35 → 35 (no inline tests for the moved types); `auki-ros-adapter` 32 → 31 (CBOR round-trip deleted, replaced by the locked prost vector at the new home); `auki-time-transforms` 9 → 9; `auki-manifests` 6 → 6. `cargo test --workspace` clean.
-
-**Doc updates**: [`auki-logs/README.md`](auki-logs) + `src/readme.md` rewrite the entry-framing tables, public-API signatures, error variants, and "Why CBOR" → "Why encoding-agnostic". [`auki-registry/README.md`](auki-registry) + `src/readme.md` drop the `SensorLogEntry` + `DynamicIntrinsics` sections; the "scope shrink in flight" callout now reads "Step 1 (2026-05-08) is complete." [`auki-datatypes/README.md`](auki-datatypes) + `src/readme.md` updated for the first real schema landing. Root `README.md` crate-listing table gains `auki-datatypes` + `auki-manifests` rows (both were missing); `auki-registry` row drops the camera log payload types. Sprint marks Step 1 ✓ done. Two parking-lot questions resolved (`dynamic_intrinsics` placement, encoder-aware vs encoder-agnostic). Will land in v0.0.24.
-
-### broodsugar's dobby · May 8, 07:56 HKT, 2026
-
-API-surface review walkthrough — six items filed across `auki-session` (1), `auki-network` (3), `auki-identity` (1), and `crates/` (1) parking-lots; three editorial items at root [`parking_lot.md`](../parking_lot.md). Marquee elevation finding (`TransformSample` wrong-layered) **resolved by the migration plan** — rename to `SpatialTransform` + move to `auki-datatypes` carries the layering change. Per-crate items: `auki-session` name vs scope mismatch (path helpers today, no `Session` runtime); `auki-network` `Capability` open-string vs enum, `PEER_DERIVATION_LABEL` in wrong crate, `StreamDispatch` README disclosure missing; `auki-identity` missing `Result<T>` aliases. Cross-crate: Rust vs Python surface namespacing mismatch.
-
 ### broodsugar's claude · May 8, 09:00 HKT, 2026
 
 **Step 0 landed: new crate `auki-manifests`** owns the SDK's per-recording manifest schemas + builders. Symmetric with [`auki-datatypes`](auki-datatypes) (segment payloads) — manifests in one crate, payloads in the other. Encoding stays JCS-canonical UTF-8 JSON via [`auki-jcs`](auki-jcs). `cargo test -p auki-manifests` 6/6 passing.
@@ -436,6 +509,10 @@ API-surface review walkthrough — six items filed across `auki-session` (1), `a
 **Moves**: `build_sensor_log_manifest` + `build_pose_log_manifest` + `PoseSource` from [`auki-registry`](auki-registry) → [`auki-manifests`](auki-manifests); `build_manifest` from [`auki-time-transforms`](auki-time-transforms) → [`auki-manifests`](auki-manifests) (renamed `build_time_transform_log_manifest`). Locked-vector tests (`ros2_tf_source_serializes_to_canonical_bytes`, `ros2_tf_source_hash_is_locked` → `f3d296341347589c72297a0cc7c81cd8`) move with their builder. Test counts: `auki-registry` 41 → 35; `auki-time-transforms` 10 → 9; new crate +6. No behaviour change, no encoding change.
 
 **Companion doc updates**: [`auki-registry`](auki-registry) README + `src/readme.md` Pose Log section points at [`auki-manifests`](auki-manifests) for `PoseSource` + `build_pose_log_manifest`; manifest tables removed from `src/readme.md`. [`auki-time-transforms`](auki-time-transforms) README manifest table replaced with a one-paragraph pointer. [`auki-datatypes/src/sprint.md`](auki-datatypes/src/sprint.md) Step 0 marked done. Root parking-lot subfolder summary gains an `auki-manifests` entry. See [`auki-manifests/changelog.md`](auki-manifests/changelog.md) for detail.
+
+### broodsugar's dobby · May 8, 07:56 HKT, 2026
+
+API-surface review walkthrough — six items filed across `auki-session` (1), `auki-network` (3), `auki-identity` (1), and `crates/` (1) parking-lots; three editorial items at root [`parking_lot.md`](../parking_lot.md). Marquee elevation finding (`TransformSample` wrong-layered) **resolved by the migration plan** — rename to `SpatialTransform` + move to `auki-datatypes` carries the layering change. Per-crate items: `auki-session` name vs scope mismatch (path helpers today, no `Session` runtime); `auki-network` `Capability` open-string vs enum, `PEER_DERIVATION_LABEL` in wrong crate, `StreamDispatch` README disclosure missing; `auki-identity` missing `Result<T>` aliases. Cross-crate: Rust vs Python surface namespacing mismatch.
 
 ### broodsugar's dobby · May 7, 22:30 HKT, 2026
 
@@ -540,6 +617,7 @@ API-surface review walkthrough — six items filed across `auki-session` (1), `a
 ### broodsugar's claude · May 4, 18:00 HKT, 2026
 
 `auki-identity-py`: new crate. PyO3 bindings for a tiny slice of the SDK — exactly three primitives (`load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id`, `app_instance.derive`) so Boosterapp's Python sidecar can implement the [`/api/info` v0.0.11 shape](../docs/control-api.md) ahead of the full `auki-py` MVP. PyO3 0.22 with the `Bound<...>` API; `abi3-py38` so one wheel works across Python 3.8+; built via `maturin` (PEP 517 backend in `pyproject.toml`). `crate-type = ["cdylib", "rlib"]` and `extension-module` gated behind a default Cargo feature so `cargo test` can drive the bindings via `Python::with_gil` while `maturin develop` still builds a runtime-link-free extension. Error mapping is one-to-one with the upstream Rust crates: `OSError` for IO; `ValueError` for `InvalidLength`; `RuntimeError` (variant name in message) for `NoNetworkInterfaces` / `NoSuitableMac`. **Out of scope by design** — no async / Tokio / libp2p Swarm; no signing / verification / creation certs; no WASM (those land in the full `auki-py` track later). 5 Rust-side smoke tests + 13 Python-side end-to-end tests including the cross-language locked vector for `Wallet.from_seed(b'\x03' * 32).derive_child("peer/v1").peer_id()`. Workspace `Cargo.toml` updated to include the new member. See per-crate changelog for detail.
+
 ### broodsugar's claude · May 4, 17:30 HKT, 2026
 
 `auki-identity` + `auki-network`: locked cross-language conformance vectors for the `Wallet → libp2p PeerId` chain. `auki-identity::tests::locked_derive_child_peer_v1_pubkey_vector` pins `Wallet::from_seed([3u8; 32]).derive_child("peer/v1").public_key()` to a fixed 32-byte ed25519 pubkey; `auki-network::tests::locked_seed_to_peer_id_vector` pins the canonical libp2p PeerId string `PeerIdentity::from_wallet(...)` produces from the same seed. Pattern matches `auki-hash`'s existing locked vectors; root `README.md` gets a "Cross-language conformance vectors" section indexing all three. Cheap insurance ahead of v0.0.11. See per-crate changelogs for detail.
@@ -551,6 +629,7 @@ API-surface review walkthrough — six items filed across `auki-session` (1), `a
 ### broodsugar's claude · May 4, 16:30 HKT, 2026
 
 `auki-network`: `app_instance::derive()` landed (ansuz #5) — per-machine identifier behind a default-off `app_instance` feature. Recipe: first non-loopback IEEE-administered MAC (skipping U/L-bit-set / locally-administered MACs), sorted lexicographically, rendered as 12 lowercase hex chars (`aabbccddeeff`). New `mac_address` (1.x) optional dep — non-WASM. `derive_from(&[[u8; 6]])` exposed as testing seam. 9 new tests. Generates the value PR #25's `/api/info` redesign carries; PRs are independent. New parking-lot items: container/Docker handling, multi-NIC tiebreaker, eventual stable-id options. See `auki-network/changelog.md` for detail.
+
 ### broodsugar's claude · May 4, 16:00 HKT, 2026
 
 `auki-network`: `ParticipantInfo` landed (ansuz networking-demo deliverable #2b) — the wire shape every Auki participant exchanges to introduce itself. New `auki_network::participant` module with `app`, `name`, `session_id`, `session_clock_id` + `_hash`, `session_now_ns`, `cluster_joined_at_ns: Option<u64>` (serializes as explicit `null` when `None`), `peer_id: PeerId` (multibase-base58 string in JSON), `app_instance`. **One schema, two transports**: matches the `/api/info` HTTP shape from PR #25 and the forthcoming `/auki/cluster/0.0.1` libp2p participant protocol (deliverable #3) byte-for-byte. M0 path — no `swarm` feature required; Park / Console can use it without libp2p's transport stack. 8 new tests including a locked golden-bytes pin. No new dependencies. See `auki-network/changelog.md` for detail.
@@ -574,6 +653,7 @@ API-surface review walkthrough — six items filed across `auki-session` (1), `a
 ### broodsugar's claude · May 4, 09:24 HKT, 2026
 
 `auki-logs` + `auki-session`: on-disk layout diagrams now list `tags.jsonl` as a reserved sibling to `manifest.json` in every log directory (sensorlogs and timetransform_logs alike), with pointers to root `tags.md`. Spec gap fix — the sidecar is fully described in `tags.md` but was previously invisible from the per-crate specs. No code changes. See per-crate changelogs for detail.
+
 ### broodsugar's claude · May 4, 08:52 HKT, 2026
 
 `auki-registry` + `auki-time-transforms`: Sensor Log family and TimeTransform Log manifests both gain a required `app_id: string` field — same identifier as the daemon's `/api/info` `app` value. Spec-only; implementation/tests pending. Breaking against existing on-disk logs (acceptable under v0.x). See per-crate changelogs for detail.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Python domain tests and payload metadata now use `camera_frame`.** The domain binding follows the renamed stream payload metadata while retaining the same cluster-management behavior.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-domain-py`.** The Python package moved from `crates/auki-domain-py` to `bindings/python/auki-domain-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

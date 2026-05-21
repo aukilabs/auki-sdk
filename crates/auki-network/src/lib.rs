@@ -38,6 +38,14 @@ uniffi::setup_scaffolding!();
 pub mod participant;
 pub use participant::ParticipantInfo;
 
+pub mod browser_probe_protocol;
+pub use browser_probe_protocol::{
+    BROWSER_PROBE_PROTOCOL, BrowserProbeRequest, BrowserProbeResponse,
+};
+
+#[cfg(feature = "browser_probe")]
+pub mod browser_probe;
+
 #[cfg(feature = "swarm")]
 pub mod swarm;
 

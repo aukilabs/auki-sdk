@@ -22,9 +22,9 @@ import auki_datatypes as adt
 # ─── Step 1 — auki.camera ────────────────────────────────────────────────────
 
 
-def test_pinhole_camera_log_entry_locked_wire_bytes():
-    # auki-datatypes/src/lib.rs::pinhole_camera_log_entry_serializes_to_locked_wire_bytes
-    entry = adt.camera.PinholeCameraLogEntry(
+def test_camera_frame_locked_wire_bytes():
+    # auki-datatypes/src/lib.rs::camera_frame_serializes_to_locked_wire_bytes
+    entry = adt.camera.CameraFrame(
         dynamic_intrinsics=adt.camera.DynamicIntrinsics(
             fx=1234.5,
             fy=1234.5,
@@ -96,9 +96,9 @@ def test_time_transform_entry_locked_wire_bytes():
 # ─── Step 8 — auki.detection ─────────────────────────────────────────────────
 
 
-def test_detection_log_entry_locked_wire_bytes():
-    # auki-datatypes/src/lib.rs::detection_log_entry_serializes_to_locked_wire_bytes
-    entry = adt.detection.DetectionLogEntry(data=bytes(range(12)))
+def test_detection_frame_locked_wire_bytes():
+    # auki-datatypes/src/lib.rs::detection_frame_serializes_to_locked_wire_bytes
+    entry = adt.detection.DetectionFrame(data=bytes(range(12)))
     expected = "0a0c000102030405060708090a0b"
     assert bytes(entry).hex() == expected
 
@@ -117,9 +117,9 @@ def test_joint_encoders_log_entry_locked_wire_bytes():
 # ─── Round-trip parity ───────────────────────────────────────────────────────
 
 
-def test_detection_log_entry_round_trips():
-    e = adt.detection.DetectionLogEntry(data=b"hello")
-    e2 = adt.detection.DetectionLogEntry().parse(bytes(e))
+def test_detection_frame_round_trips():
+    e = adt.detection.DetectionFrame(data=b"hello")
+    e2 = adt.detection.DetectionFrame().parse(bytes(e))
     assert e2.data == b"hello"
 
 

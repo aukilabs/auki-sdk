@@ -62,7 +62,7 @@ Frame constructors:
 Sensor constructors:
 
 - `point_field(name, offset, datatype, count=1)`
-- `rgb_camera_sensor_entry(...)`
+- `camera_sensor_entry(...)`
 - `point_cloud_sensor_entry(...)`
 - `audio_sensor_entry(...)`
 - `joint_encoders_sensor_entry(...)`
@@ -101,7 +101,7 @@ The Rust crate remains the source of truth for validation:
 - I/O failures raise `OSError`.
 - `read_*` returns `None` when the requested hash-pinned file is absent.
 
-`write_sensor` validates frame-bearing bodies exactly like Rust: `RgbCamera` and `PointCloud` entries must carry non-empty `frame_id` + `frame_hash`, and the exact frame file must already exist under `<app_root>/registries/frames/...`. There is no compatibility fallback or directory scan.
+`write_sensor` validates frame-bearing bodies exactly like Rust: `Camera` and `PointCloud` entries must carry non-empty `frame_id` + `frame_hash`, and the exact frame file must already exist under `<app_root>/registries/frames/...`. There is no compatibility fallback or directory scan.
 
 ## Install
 

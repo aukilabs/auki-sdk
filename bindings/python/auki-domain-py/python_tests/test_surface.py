@@ -89,9 +89,9 @@ def test_resource_value_types() -> None:
         id="K1-LIVE01/head_left_cam",
         sensor_id="K1-LIVE01/head_left_cam",
         sensor_hash="sensor-hash",
-        sensor_kind="rgb_camera",
+        sensor_kind="camera",
         stream_protocol="/auki/stream/0.1.0",
-        payload="pinhole_camera_log_entry",
+        payload="camera_frame",
         pinhole_intrinsics=intrinsics,
     )
 

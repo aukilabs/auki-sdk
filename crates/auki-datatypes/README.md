@@ -31,8 +31,8 @@ This crate holds **log payload types** — the typed shapes that flow through `a
 auki-datatypes/
 ├── proto/                       ← .proto schema files (the source of truth)
 │   ├── audio.proto              ← auki.audio — AudioLogEntry, opaque bytes (Step 4, 2026-05-08; on-disk)
-│   ├── camera.proto             ← auki.camera — PinholeCameraLogEntry + DynamicIntrinsics (Step 1, 2026-05-08)
-│   ├── detection.proto          ← auki.detection — DetectionLogEntry, opaque bytes (Step 8, 2026-05-08; on-disk)
+│   ├── camera.proto             ← auki.camera — CameraFrame + DynamicIntrinsics (Step 1, 2026-05-08)
+│   ├── detection.proto          ← auki.detection — DetectionFrame, opaque bytes (Step 8, 2026-05-08; on-disk)
 │   ├── point_cloud.proto        ← auki.point_cloud — PointCloudLogEntry, opaque bytes (Step 3, 2026-05-08; on-disk)
 │   ├── pose.proto               ← auki.pose — SpatialTransform + Vec3 + Quat (Step 5, 2026-05-08; on-disk)
 │   ├── time_transform.proto     ← auki.time_transform — TimeTransformEntry (Step 6, 2026-05-08; on-disk)
@@ -51,13 +51,13 @@ auki-datatypes/
 ## Surface
 
 ```rust
-use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};   // Step 1 (live)
+use auki_datatypes::camera::{DynamicIntrinsics, CameraFrame};   // Step 1 (live)
 use auki_datatypes::point_cloud::PointCloudLogEntry;                       // Step 3 (live)
 use auki_datatypes::audio::AudioLogEntry;                                  // Step 4 (live)
 use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};                  // Step 5 (live)
 use auki_datatypes::time_transform::TimeTransformEntry;                    // Step 6 (live)
-use auki_datatypes::detection::DetectionLogEntry;                          // Step 8 (live)
-// Camera streams reuse camera::PinholeCameraLogEntry directly.
+use auki_datatypes::detection::DetectionFrame;                          // Step 8 (live)
+// Camera streams reuse camera::CameraFrame directly.
 use auki_datatypes::point_cloud_stream::PointCloudFrame;                   // Step 2 (live)
 use auki_datatypes::stream::{                                              // Step 2 (live)
     StreamManifest, DeclineReason, EndReason, Frame, StreamMessage, StreamRequest,
@@ -89,13 +89,13 @@ cargo test -p auki-datatypes
 
 **The 2026-05-08 migration is complete.** Steps 1 through 7 of the [migration sprint](src/sprint.md) landed 2026-05-08; Step 8 followed the same day to close the producer side of the [Detector keystone](../../parking_lot.md):
 
-- **Step 1** — `auki.camera` carries `PinholeCameraLogEntry` + `DynamicIntrinsics` with locked wire-bytes and hash.
-- **Step 2** — camera streams reuse `auki.camera.PinholeCameraLogEntry` directly, while `auki.point_cloud_stream { PointCloudFrame }` and `auki.stream` (the full envelope `StreamMessage` oneof) provide the remaining protobuf wire types that [`auki-network`](../auki-network)'s `/auki/stream/0.1.0` carries.
+- **Step 1** — `auki.camera` carries `CameraFrame` + `DynamicIntrinsics` with locked wire-bytes and hash.
+- **Step 2** — camera streams reuse `auki.camera.CameraFrame` directly, while `auki.point_cloud_stream { PointCloudFrame }` and `auki.stream` (the full envelope `StreamMessage` oneof) provide the remaining protobuf wire types that [`auki-network`](../auki-network)'s `/auki/stream/0.1.0` carries.
 - **Step 3** — `auki.point_cloud` carries `PointCloudLogEntry { bytes data = 1; }`, opaque-bytes-only. Symmetric with the wire's `PointCloudFrame { bytes }`; ROS-shaped layout fields (`width`, `height`, `is_dense`) are gone — interpretation comes from the `(sensor_id, sensor_hash) → SensorBody::PointCloud` registry entry. Locked wire-bytes vector + XXH3-128 hash + segment-round-trip seam test.
 - **Step 4** — `auki.audio` carries `AudioLogEntry { bytes data = 1; }`, opaque-bytes-only (same stance). `sample_count` and `chunk_duration_ns` derivable from the bytes plus the `Audio` registry entry (renamed from `Microphone` 2026-05-14). Drops the `serde_bytes` dep from [`auki-registry`](../auki-registry).
 - **Step 5** — `auki.pose` carries `SpatialTransform { Vec3 translation; Quat orientation }`, flat. The pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame` / `child_frame` are gone — frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair. Coordinated downstream: [`auki-manifests`](../auki-manifests)' `build_pose_log_manifest` rewritten with frame-pair + `writer_mode` + `expected_rate_hz`; [`auki-layout`](../auki-layout)'s `poselog_path` mirrors `timetransform_log_path`'s `(from, to)`-keyed shape. Drops the `ciborium` dev-dep from [`auki-registry`](../auki-registry).
 - **Step 6** — `auki.time_transform` carries `TimeTransformEntry { int64 offset_ns; uint32 uncertainty_ns }`. The pre-migration per-entry `source` field moved to the manifest as a tagged-enum [`TimeTransformSource`](../auki-manifests/src/lib.rs) (mirrors `PoseSource`); the per-entry `discontinuous: bool` is gone (computed on read with the reader's own threshold). [`auki-time`](../auki-time)'s `tick`/`Sampler` simplified — no more `SamplerState`, no more `discontinuity_threshold` arg. Drops `ciborium` + `serde` + `serde_json` deps from [`auki-time`](../auki-time).
 - **Step 7** — `placeholder.proto` and its smoke-test removed. The seven real `.proto` packages prove the prost-build pipeline now; the placeholder no longer earns its keep.
-- **Step 8** — `auki.detection` carries `DetectionLogEntry { bytes data = 1; }`, opaque-bytes-only (same stance as Steps 3 / 4). The detection schema is per-Detector — the SDK doesn't interpret detector-specific fields (a QR detector emits portal-uid + corners; an ESL detector emits class + bbox + confidence; a people detector emits person bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionLogEntry`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. Unblocks [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #3.
+- **Step 8** — `auki.detection` carries `DetectionFrame { bytes data = 1; }`, opaque-bytes-only (same stance as Steps 3 / 4). The detection schema is per-Detector — the SDK doesn't interpret detector-specific fields (a QR detector emits portal-uid + corners; an ESL detector emits class + bbox + confidence; a people detector emits person bboxes). Closes the producer side of the [subscription-as-materialization keystone](../../parking_lot.md): a Detection Log is `Log<T>` with `T = DetectionFrame`, lifecycle inherited from the sensor-log primitive — no "DetectionLog" abstraction. Unblocks [`detectors`](https://github.com/aukilabs/detectors) phase-2 blocker #3.
 
 The six on-disk and three libp2p-wire packages cover every payload type the SDK ships. See [`src/readme.md`](src/readme.md) for the current state.

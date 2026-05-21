@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Session binding notes now reference `CameraFrame`.** The future typed sensor-log follow-up points at the renamed camera payload; no runtime code changed in this package.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-session-py`.** The Python package moved from `crates/auki-session-py` to `bindings/python/auki-session-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

@@ -4,6 +4,10 @@ Detailed changes for `auki-registry-py`. Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Python registry bindings now expose `Camera` / `"camera"`.** The binding mirrors the renamed Rust registry body and removes the legacy RGB-camera vocabulary from the current public surface.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-registry-py`.** The Python package moved from `crates/auki-registry-py` to `bindings/python/auki-registry-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

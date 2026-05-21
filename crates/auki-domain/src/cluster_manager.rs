@@ -1190,7 +1190,7 @@ impl ClusterManager {
     /// `/auki/stream/0.1.0` trust-boundary resolution 2026-05-13 —
     /// non-cluster substreams are silently dropped).
     ///
-    /// `T` is the typed payload the substream carries (`PinholeCameraLogEntry`,
+    /// `T` is the typed payload the substream carries (`CameraFrame`,
     /// `PointCloudFrame`, `JointEncodersFrame`); the consumer
     /// statically knows which `T` to expect per call.
     pub async fn open_stream<T>(
@@ -2974,7 +2974,7 @@ fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, 
 
 fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
     match body {
-        SensorBody::RgbCamera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
+        SensorBody::Camera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
         SensorBody::PointCloud(point_cloud) => {
             Some((&point_cloud.frame_id, &point_cloud.frame_hash))
         }
@@ -3002,7 +3002,7 @@ fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
 
 fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
     match kind {
-        "rgb_camera" => "pinhole_camera_log_entry",
+        "camera" => "camera_frame",
         "point_cloud" => "point_cloud_frame",
         "joint_encoders" => "joint_encoders_frame",
         "audio" => "audio_frame",
@@ -4077,7 +4077,7 @@ mod tests {
         let resource = sensor_resource_from_entry(SensorEntry {
             sensor_id: "K1-FAKE/head_left_cam".into(),
             sensor_hash: "abc123".into(),
-            kind: "rgb_camera".into(),
+            kind: "camera".into(),
             sensor_entry_json: None,
             frame_entry_json: None,
         });
@@ -4088,9 +4088,9 @@ mod tests {
         assert_eq!(sensor.id, "K1-FAKE/head_left_cam");
         assert_eq!(sensor.sensor_id, "K1-FAKE/head_left_cam");
         assert_eq!(sensor.sensor_hash, "abc123");
-        assert_eq!(sensor.sensor_kind, "rgb_camera");
+        assert_eq!(sensor.sensor_kind, "camera");
         assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
-        assert_eq!(sensor.payload, "pinhole_camera_log_entry");
+        assert_eq!(sensor.payload, "camera_frame");
     }
 
     #[test]

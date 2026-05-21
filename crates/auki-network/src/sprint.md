@@ -7,6 +7,7 @@ Current work and next steps to close the gap between [`src/readme.md`](readme.md
 The crate is the low-level networking substrate. The current implementation has three layers:
 
 - **Identity and reachability, default feature path.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies.
+- **Browser probe, `browser_probe` feature.** The crate exposes shared `/auki/browser-probe/0.0.1` request/response structs and a native WebRTC Direct listener example that prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs. This is a proof surface for browser peers only; production Domain join still lives above it.
 - **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, registry-entry requests, typed stream opening, and shutdown.
 - **Discovery client, `discovery_client` feature.** `DiscoveryClient` wraps Discovery's cluster directory endpoints: list, atomic create, liveness check, Manager rotation, and deregistration.
 
@@ -18,6 +19,7 @@ Current libp2p protocol modules:
 | `/auki/heartbeat/0.0.1` | `heartbeat_protocol` | Pairwise liveness used for Manager-death detection |
 | `/auki/membership/0.0.1` | `membership_protocol` | Manager broadcasts fresh membership JSON |
 | `/auki/info/0.0.1` | `info_protocol` | Fetch another peer's `ParticipantInfo` |
+| `/auki/browser-probe/0.0.1` | `browser_probe_protocol` / `browser_probe` | Native WebRTC Direct request/response probe for browser peers |
 | `/auki/sensors/0.0.1` | `sensors_protocol` | Fetch another peer's current sensor catalog, optionally with Sensor / Frame Registry JSON embedded by value |
 | `/auki/registries/0.0.1` | `registries_protocol` | Fetch exact Sensor / Clock / Frame Registry entries by `(kind, id, hash)` |
 | `/auki/stream/0.1.0` | `stream_protocol` / `stream_runtime` | Typed live sensor streams |

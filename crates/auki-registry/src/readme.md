@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `PinholeCameraLogEntry` + `DynamicIntrinsics` (Step 1); `PointCloudLogEntry` (Step 3, opaque-bytes-only); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
+> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `CameraFrame` + `DynamicIntrinsics` (Step 1); `PointCloudLogEntry` (Step 3, opaque-bytes-only); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
 
 ## What's here
 
@@ -35,13 +35,13 @@ pub struct SensorRegistryEntry {
 
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SensorBody {
-    RgbCamera(RgbCamera),     // serializes as "type":"rgb_camera"
+    Camera(Camera),     // serializes as "type":"camera"
     PointCloud(PointCloud),   // serializes as "type":"point_cloud"
     Audio(Audio),             // serializes as "type":"audio"
     JointEncoders(JointEncoders),
 }
 
-pub struct RgbCamera {
+pub struct Camera {
     pub width: u32,
     pub height: u32,
     pub frame_rate_hz: u32,
@@ -212,7 +212,7 @@ pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Optio
 
 Each entry type also exposes `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
 
-`write_sensor` validates frame-bearing bodies before writing. `RgbCamera` and `PointCloud` must carry non-empty `frame_id` and `frame_hash`, and the exact frame file must already exist at `<app_root>/registries/frames/<frame_id>/<frame_hash>.json`. Non-spatial bodies (`Audio`, `JointEncoders`) do not carry frame fields.
+`write_sensor` validates frame-bearing bodies before writing. `Camera` and `PointCloud` must carry non-empty `frame_id` and `frame_hash`, and the exact frame file must already exist at `<app_root>/registries/frames/<frame_id>/<frame_hash>.json`. Non-spatial bodies (`Audio`, `JointEncoders`) do not carry frame fields.
 
 ## `WriteOutcome`
 
@@ -287,4 +287,4 @@ The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`
 
 - `auki-k1-binary` — writes one Sensor entry + two Clock entries at startup
 - `auki-renderer` — reads the Sensor entry to recover pixel format / dimensions / color space
-- `auki-ros-adapter` — re-exports this crate alongside [`auki-datatypes`](../../auki-datatypes); `build_rgb_camera_registry_entry` constructs entries here, `build_sensor_log_entry` constructs prost-shaped `PinholeCameraLogEntry` from `auki-datatypes`
+- `auki-ros-adapter` — re-exports this crate alongside [`auki-datatypes`](../../auki-datatypes); `build_camera_registry_entry` constructs entries here, `build_sensor_log_entry` constructs prost-shaped `CameraFrame` from `auki-datatypes`

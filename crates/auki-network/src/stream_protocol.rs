@@ -87,7 +87,7 @@ fn _phantom() -> Option<Wallet> {
 // `auki-datatypes`'s `auki.stream` package; this module owns the
 // protocol id, framing helpers, and error type.
 pub use auki_datatypes::audio_stream::AudioFrame;
-pub use auki_datatypes::camera::{DynamicIntrinsics, PinholeCameraLogEntry};
+pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
 pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
 pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
@@ -407,12 +407,12 @@ mod tests {
 
     // ─── Locked cross-language conformance vectors ────────────────────────
 
-    /// `PinholeCameraLogEntry` prost wire bytes. Camera streams carry the
+    /// `CameraFrame` prost wire bytes. Camera streams carry the
     /// exact same payload record as camera Sensor Logs, not a stream-only
     /// wrapper around the JPEG bytes.
     #[test]
     fn camera_frame_serializes_to_locked_wire_bytes() {
-        let frame = PinholeCameraLogEntry {
+        let frame = CameraFrame {
             dynamic_intrinsics: None,
             frame: vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46],
         };
@@ -424,12 +424,12 @@ mod tests {
 
     #[test]
     fn camera_frame_round_trips() {
-        let frame = PinholeCameraLogEntry {
+        let frame = CameraFrame {
             dynamic_intrinsics: None,
             frame: vec![1, 2, 3, 4, 5],
         };
         let bytes = frame.encode_to_vec();
-        let back = PinholeCameraLogEntry::decode(&*bytes).unwrap();
+        let back = CameraFrame::decode(&*bytes).unwrap();
         assert_eq!(back, frame);
     }
 
@@ -518,7 +518,7 @@ mod tests {
     }
 
     /// `AudioFrame` prost wire bytes (Dialogue Batch 1). Same `bytes`
-    /// shape as `PinholeCameraLogEntry` / `PointCloudFrame` but a separate `.proto`
+    /// shape as `CameraFrame` / `PointCloudFrame` but a separate `.proto`
     /// package so the stream dispatch on a distinct Rust type. Byte-
     /// identical wire/disk with `AudioLogEntry` is locked by
     /// `audio_disk_wire_byte_identical` in `auki-datatypes`.

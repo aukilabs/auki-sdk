@@ -67,7 +67,7 @@ pub const MAX_SENSORS_FRAME_BYTES: u32 = 512 * 1024;
 /// `include_registry_entries` to ask the producer to attach the exact
 /// Sensor Registry JSON for each row when it has it locally. Set
 /// `include_frame_entries` to additionally attach the exact Frame
-/// Registry JSON referenced by spatial sensor bodies (`rgb_camera` and
+/// Registry JSON referenced by spatial sensor bodies (`camera` and
 /// `point_cloud`). Receivers MUST tolerate unknown future fields
 /// (serde JSON is permissive by default).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,7 +142,7 @@ pub struct SensorEntry {
     pub sensor_hash: String,
     /// Sensor kind — the `#[serde(tag = "type")]` value from
     /// `auki_registry::SensorBody` flowed through verbatim. Current
-    /// SensorBody variants emit `"rgb_camera"`, `"point_cloud"`,
+    /// SensorBody variants emit `"camera"`, `"point_cloud"`,
     /// `"joint_encoders"`, `"audio"`. Open string by contract:
     /// new SensorBody variants flow through without a wire bump, and
     /// consumers MUST handle unrecognised kinds gracefully (e.g. a
@@ -325,7 +325,7 @@ mod tests {
                 SensorEntry {
                     sensor_id: "K1-LIVE01/head_left_cam".into(),
                     sensor_hash: "abc123".into(),
-                    kind: "rgb_camera".into(),
+                    kind: "camera".into(),
                     sensor_entry_json: None,
                     frame_entry_json: None,
                 },

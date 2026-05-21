@@ -52,8 +52,8 @@ def test_module_exposes_only_documented_apis() -> None:
         "StreamUnreachable",
     }
     assert expected.issubset(public), f"missing expected API: {expected - public}"
-    assert "PinholeCameraLogEntry" not in public
-    assert "JpegFrame" not in public
+    assert "CameraFrame" not in public
+    assert "CameraFrame" not in public
     assert "spawn" not in public
     assert "ClusterRuntime" not in public
 

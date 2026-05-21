@@ -15,7 +15,7 @@ ros2 = ["dep:r2r", "dep:tokio", "dep:futures"]
 
 [dependencies]
 auki-registry = { path = "../auki-registry" }
-# Camera log payload types (`PinholeCameraLogEntry`, `DynamicIntrinsics`)
+# Camera log payload types (`CameraFrame`, `DynamicIntrinsics`)
 # moved from auki-registry into auki-datatypes at Step 1 of the migration.
 auki-datatypes = { path = "../auki-datatypes" }
 serde = { version = "1", features = ["derive"] }

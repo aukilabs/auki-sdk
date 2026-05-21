@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Generated datatypes now expose `CameraFrame` and `DetectionFrame`.** The committed betterproto files and locked-vector tests use the final payload names while preserving the prost/betterproto wire-byte equality contract.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Package relocated to `bindings/python/auki-datatypes-py`.** The Python package moved from `crates/auki-datatypes-py` to `bindings/python/auki-datatypes-py` with no package-name, module-name, or runtime behavior changes. Cargo workspace membership and local path dependencies now point at the new location.

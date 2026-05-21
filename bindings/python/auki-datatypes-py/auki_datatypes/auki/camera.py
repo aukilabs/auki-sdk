@@ -17,6 +17,6 @@ class DynamicIntrinsics(betterproto.Message):
 
 
 @dataclass
-class PinholeCameraLogEntry(betterproto.Message):
+class CameraFrame(betterproto.Message):
     dynamic_intrinsics: "DynamicIntrinsics" = betterproto.message_field(1)
     frame: bytes = betterproto.bytes_field(2)

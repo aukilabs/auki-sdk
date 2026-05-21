@@ -28,6 +28,9 @@ swift-bindings = ["dep:uniffi", "auki-identity/swift-bindings"]
 # encode/decode prost messages directly. base64 is no longer needed
 # under swarm — protobuf handles binary natively.
 swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
+# Native-only probe for proving browser peers can dial an SDK-owned WebRTC
+# Direct listener before the Domain adapter stops failing closed.
+browser_probe = ["swarm", "dep:libp2p-webrtc", "dep:rand"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
@@ -56,6 +59,7 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
+libp2p-webrtc = { version = "0.9.0-alpha.1", default-features = false, features = ["tokio"], optional = true }
 # Cluster trust boundary at the libp2p layer. Inbound and outbound
 # connections from peer-ids not on `ClusterDoc.peers` are refused at
 # the `NetworkBehaviour` layer — the noise handshake completes (libp2p
@@ -78,7 +82,8 @@ thiserror = { version = "2", optional = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"], optional = true }
 # `StreamExt` for polling `swarm.next()` in the runtime task.
 futures = { version = "0.3", default-features = false, optional = true }
-# Stream-protocol wire types — `PinholeCameraLogEntry`, `PointCloudFrame`,
+rand = { version = "0.8", optional = true }
+# Stream-protocol wire types — `CameraFrame`, `PointCloudFrame`,
 # `StreamMessage` envelope. Step 2 of the auki-datatypes migration
 # moves these from this crate's hand-rolled serde structs to
 # auki-datatypes-owned prost types.

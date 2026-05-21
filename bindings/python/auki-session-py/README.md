@@ -23,7 +23,7 @@ with Session.open(Path("/var/lib/boosterapp"),
     # Register sensor + clock schemas. Idempotent — same content hash
     # writes to the same <hash>.json file under registries/.
     camera = session.register_sensor(SensorSpec("camera/left", {
-        "data_type": "rgb_camera",
+        "data_type": "camera",
         "width": 1920, "height": 1080,
         "frame_rate_hz": 30,
         "frame_id": "K1-001/head_left_cam_optical",

@@ -112,7 +112,7 @@ pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf 
 /// Cuba T4 / T16. Same content-addressed multi-version-by-hash shape as
 /// [`sensor_entry_path`]: consumers resolve a detector's body and
 /// output types via the `(detector_id, detector_hash)` pair, just like
-/// sensors. A `DetectionLogEntry`'s `sensor_hash` (Cuba T5) carries
+/// sensors. A `DetectionFrame`'s `sensor_hash` (Cuba T5) carries
 /// the input-frame provenance; the detector entry covers everything
 /// else.
 pub fn detector_entry_path(app_root: &Path, detector_id: &str, hash: &str) -> PathBuf {

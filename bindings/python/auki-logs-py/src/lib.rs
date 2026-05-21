@@ -62,7 +62,7 @@ use auki_logs_rs::{
 /// trivial: encode is the identity function, decode is `Ok(...)` of
 /// the wrapped bytes. Cross-language parity with Rust is preserved
 /// because callers on both sides see the same on-disk bytes — Rust
-/// users with `Log<auki_datatypes::detection::DetectionLogEntry>` and
+/// users with `Log<auki_datatypes::detection::DetectionFrame>` and
 /// Python users with `Log` (this crate) read each other's writes
 /// byte-for-byte; the difference is just whether the `LogPayload`
 /// impl decodes prost on the Rust side or returns raw bytes here.
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(entries[0].payload.0, Vec::<u8>::new());
     }
 
-    /// Cross-encoder parity: `auki_datatypes::detection::DetectionLogEntry`
+    /// Cross-encoder parity: `auki_datatypes::detection::DetectionFrame`
     /// is itself opaque-bytes (a single `bytes data = 1` field).
     /// A buffer encoded by the prost `LogPayload` impl in
     /// `auki-datatypes` should be readable through `Log<RawBytes>` —

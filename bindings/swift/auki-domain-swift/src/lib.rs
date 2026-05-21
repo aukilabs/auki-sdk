@@ -91,6 +91,138 @@ pub use auki_network_swift::{
     SwiftStreamProvider,
 };
 
+// ─── Bootstrap orchestrators ────────────────────────────────────────
+//
+// Swift consumers don't construct a `Swarm<Behaviour>` directly; these
+// orchestrators take a wallet seed + listen multiaddrs + agent version +
+// DaemonInfo + optional SwiftStreamProvider, build the swarm internally,
+// and delegate to the upstream ClusterManager constructors.
+
+/// Errors from the pre-flight phase of [`bootstrap_swift`] /
+/// [`create_cluster_swift`] / [`join_cluster_swift`]. Swarm-build and
+/// 32-byte seed length failures get folded into the matching upstream
+/// error variant (see body); this enum is reserved for future expansion.
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum BootstrapSwiftError {
+    #[error("invalid wallet seed: expected 32 bytes, got {actual}")]
+    InvalidSeed { actual: u32 },
+    #[error("swarm build: {message}")]
+    SwarmBuild { message: String },
+    #[error("identity derivation: {message}")]
+    IdentityDerivation { message: String },
+}
+
+/// Build the libp2p swarm + PeerIdentity from Swift inputs. Returns
+/// the identity, listen multiaddrs (re-parsed to `Vec<Multiaddr>`), and
+/// the configured swarm. Used by the three orchestrators below.
+async fn build_swarm_and_identity(
+    wallet_seed: Vec<u8>,
+    listen_addresses: Vec<String>,
+    external_addresses: Option<Vec<String>>,
+    agent_version: String,
+) -> Result<
+    (
+        auki_network::PeerIdentity,
+        Vec<Multiaddr>,
+        libp2p::Swarm<auki_network::swarm::Behaviour>,
+    ),
+    BootstrapSwiftError,
+> {
+    if wallet_seed.len() != 32 {
+        return Err(BootstrapSwiftError::InvalidSeed {
+            actual: wallet_seed.len() as u32,
+        });
+    }
+    let wallet = auki_identity::Wallet::from_seed(wallet_seed).map_err(|e| {
+        BootstrapSwiftError::IdentityDerivation {
+            message: e.to_string(),
+        }
+    })?;
+    let identity = auki_network::PeerIdentity::from_wallet(wallet);
+
+    let listen_multiaddrs: Vec<Multiaddr> = listen_addresses
+        .iter()
+        .map(|s| s.parse::<Multiaddr>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| BootstrapSwiftError::SwarmBuild {
+            message: format!("invalid listen multiaddr: {e}"),
+        })?;
+
+    let external_multiaddrs: Vec<Multiaddr> = match external_addresses {
+        Some(addrs) => addrs
+            .iter()
+            .map(|s| s.parse::<Multiaddr>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| BootstrapSwiftError::SwarmBuild {
+                message: format!("invalid external multiaddr: {e}"),
+            })?,
+        None => vec![],
+    };
+
+    let mut swarm = auki_network::swarm::build_swarm(
+        &identity,
+        auki_network::swarm::SwarmConfig {
+            listen_addresses: listen_multiaddrs.clone(),
+            agent_version,
+            enable_relay_server: false,
+        },
+    )
+    .map_err(|e| BootstrapSwiftError::SwarmBuild {
+        message: e.to_string(),
+    })?;
+
+    for addr in external_multiaddrs {
+        swarm.add_external_address(addr);
+    }
+
+    Ok((identity, listen_multiaddrs, swarm))
+}
+
+/// Swift entry point for joining-or-creating a cluster. Mirrors
+/// `auki-domain-py`'s `ClusterManager.bootstrap` static method.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn bootstrap_swift(
+    target: ClusterTarget,
+    wallet_seed: Vec<u8>,
+    discovery_url: String,
+    listen_addresses: Vec<String>,
+    agent_version: String,
+    daemon_info: DaemonInfo,
+    stream_provider: Option<Box<dyn SwiftStreamProvider>>,
+    external_addresses: Option<Vec<String>>,
+) -> Result<std::sync::Arc<ClusterManager>, BootstrapError> {
+    let (identity, listen_multiaddrs, swarm) = build_swarm_and_identity(
+        wallet_seed,
+        listen_addresses,
+        external_addresses,
+        agent_version,
+    )
+    .await
+    .map_err(|e| BootstrapError::Rejected(e.to_string()))?;
+
+    // Convert SwiftStreamProvider (Box<dyn>) → upstream StreamProvider
+    // closure. If None, install decline_all_streams.
+    let stream_provider_closure = match stream_provider {
+        Some(p) => {
+            let p: std::sync::Arc<dyn SwiftStreamProvider> = std::sync::Arc::from(p);
+            auki_network_swift::swift_provider_to_upstream(p)
+        }
+        None => auki_network::stream_runtime::decline_all_streams(),
+    };
+
+    let manager = ClusterManager::bootstrap(
+        target,
+        identity,
+        listen_multiaddrs,
+        discovery_url,
+        swarm,
+        stream_provider_closure,
+        daemon_info,
+    )
+    .await?;
+    Ok(std::sync::Arc::new(manager))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +432,35 @@ mod tests {
     fn cluster_manager_is_uniffi_object() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<auki_domain_rs::cluster_manager::ClusterManager>();
+    }
+
+    #[tokio::test]
+    async fn bootstrap_swift_swarm_construction_succeeds() {
+        // Build a real swarm against an ephemeral local listen multiaddr +
+        // unreachable Discovery URL. Expect Discovery failure (no server),
+        // not a swarm-build/identity-derivation failure.
+        let result = bootstrap_swift(
+            ClusterTarget::Create { name: "test-cluster".to_string() },
+            vec![1u8; 32],
+            "http://127.0.0.1:9".to_string(),
+            vec!["/ip4/127.0.0.1/tcp/0".to_string()],
+            "test-agent/0.0".to_string(),
+            DaemonInfo {
+                app: "test-app".to_string(),
+                name: "test-instance".to_string(),
+                session_id: "session-1".to_string(),
+                session_clock_id: "clock-1".to_string(),
+                session_clock_hash: "hash-1".to_string(),
+                app_instance: "instance-1".to_string(),
+            },
+            None,
+            None,
+        ).await;
+
+        match result {
+            Err(BootstrapError::Discovery(_)) => { /* expected */ }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("unexpected success against unreachable Discovery"),
+        }
     }
 }

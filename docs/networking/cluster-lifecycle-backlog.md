@@ -101,14 +101,17 @@ Deliverables:
 - Define canonical signed bytes for each signed object.
 - Define wallet public key encoding, peer id encoding, domain id encoding,
   nonce size, timestamp encoding, expiry encoding, and signature encoding.
+- Preserve the v1 peer-binding rule that bindings may be reused across sessions,
+  `issued_at` is recommended, the recommended maximum accepted binding age is
+  1 hour, and receivers may accept older bindings by local policy.
 - Define hash function, domain-separation prefixes, and canonical hash input
   for domain ids.
 - Define required fields, optional fields, unknown-field handling, and version
   field behavior.
-- Define delegation scopes such as advertise, serve, update, consume, or other
-  baseline actions.
-- Define delegation validity windows, expiry handling, replacement behavior,
-  and any baseline revocation mechanism.
+- Use v1 delegation scopes `advertise`, `serve`, and `update`.
+- Define delegation validity windows, expiry handling, and replacement behavior.
+- Preserve the v1 rule that authority validation does not require online
+  revocation, registry, blockchain, Discovery access, or other online lookup.
 - Define the future external-binding authority model for transferable
   NFT-backed domains, including controller resolution and chain-finality
   assumptions.
@@ -143,8 +146,7 @@ Deliverables:
   served domain expires, is removed, is replaced, or becomes invalid.
 - Define whether offers outside the served domain set are rejected, ignored, or
   surfaced as degraded diagnostics.
-- Define whether one offer may reference multiple domains and, if so, how
-  authority is validated for each referenced domain.
+- Preserve the v1 rule that one offer belongs to exactly one domain.
 - Define how consumers distinguish verified authority fields from
   producer-declared metadata.
 

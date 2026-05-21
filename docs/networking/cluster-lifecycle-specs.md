@@ -58,9 +58,29 @@ A peer binding MUST include:
 - peer id;
 - signature by the wallet key.
 
-A peer binding SHOULD include an issued-at timestamp.
+A peer binding SHOULD include an `issued_at` timestamp.
 
-A peer binding MAY include an expiry or metadata label.
+A peer binding MAY include a metadata label.
+
+A peer binding MAY be reused across sessions.
+
+A receiver MAY enforce a maximum accepted binding age from `issued_at`.
+
+A receiver that enforces a maximum accepted binding age MUST reject a peer
+binding whose `issued_at` is older than that limit.
+
+The recommended default maximum accepted binding age is 1 hour.
+
+Peers that rely on fresh peer bindings SHOULD refresh them before half of the
+maximum accepted binding age has elapsed.
+
+A peer refreshes a peer binding by producing a new wallet-signed peer binding
+for the same wallet public key and peer id with a newer `issued_at`.
+
+Refreshing a peer binding does not change domain ownership, delegation, served
+domain validation, or offer authority by itself.
+
+A receiver MAY accept older peer bindings according to local policy.
 
 #### Verification
 
@@ -85,7 +105,9 @@ Define the concrete peer binding format:
 - wallet public key encoding;
 - peer id encoding;
 - signature encoding;
-- issued-at, expiry, and metadata-label fields.
+- `issued_at` and metadata-label fields;
+- local-policy behavior for bindings without `issued_at` or older than a
+  maximum accepted binding age.
 
 ### RFC-0003: Domain Identity And Ownership
 
@@ -168,10 +190,13 @@ Define the concrete delegation format used when a peer serves a domain on
 behalf of a domain owner wallet:
 
 - required fields;
-- permitted actions or scopes;
-- validity windows;
-- revocation or replacement behavior;
+- permitted actions or scopes: `advertise`, `serve`, and `update`;
+- validity window or expiry;
+- expiry and replacement behavior;
+- no online revocation requirement in v1;
 - how the delegation is presented during peer handshake.
+
+The `consume` scope is not part of the v1 delegation model.
 
 ### RFC-0006: Authority Chain Validation
 
@@ -186,7 +211,8 @@ Authority-chain validation MUST run in this order:
    in the remote peer binding.
 2. Verify that the peer binding signature is valid for the bound wallet public
    key.
-3. Reject an expired peer binding when the peer binding includes an expiry.
+3. Apply local policy for peer bindings without `issued_at` or older than the
+   maximum accepted binding age.
 4. Run peer authorization for the verified peer identity.
 5. Validate each declared domain independently.
 6. Compute the accepted served domain set for the peer relationship.
@@ -210,6 +236,9 @@ delegation from the domain owner wallet that authorizes the verified peer
 identity to serve that domain. A receiver MUST reject an expired, malformed, or
 wrong-domain delegation.
 
+A receiver MUST reject a delegation that does not authorize the claimed action.
+The v1 delegation scopes are `advertise`, `serve`, and `update`.
+
 Domain authority validation answers whether the remote peer may serve under a
 domain. It does not decide whether the local application wants to consume that
 domain or any offer from it.
@@ -220,6 +249,11 @@ domain with `policy.domain_rejected`.
 Validating one declared domain MUST NOT cause another declared domain from the
 same peer to be accepted. Each declared domain needs its own valid authority
 chain.
+
+The v1 authority validation path MUST NOT require online revocation lookup,
+blockchain access, registry access, or Discovery access. Maximum accepted
+binding age is the baseline mechanism for aging out peer bindings. Delegation
+expiry and replacement are the baseline mechanisms for aging out delegations.
 
 #### Failure Codes
 
@@ -232,7 +266,7 @@ Baseline failure codes:
 - `identity.missing_peer_binding`
 - `identity.peer_id_mismatch`
 - `identity.invalid_signature`
-- `identity.expired_binding`
+- `identity.binding_too_old`
 - `domain.invalid_declaration`
 - `domain.id_mismatch`
 - `domain.missing_delegation`
@@ -611,6 +645,37 @@ offers for that relationship.
 10. Park fetches Robot's offer catalog.
 11. Park may Get or Subscribe to offers scoped to the accepted served domain.
 
+#### Failure Path Examples
+
+Identity failure:
+
+1. Park dials Robot and establishes a libp2p transport connection.
+2. Robot presents a peer binding for a different libp2p peer id than the
+   transport-authenticated peer id.
+3. Park rejects the peer relationship with `identity.peer_id_mismatch`.
+4. Park MUST NOT validate Robot's declared domains or load Robot's offers.
+
+Partial domain acceptance:
+
+1. Robot declares domains `A`, `B`, and `C`.
+2. Park validates `A` directly because Robot's verified wallet is the domain
+   owner wallet.
+3. Park validates `B` through a valid delegation.
+4. Park rejects `C` because the delegation is expired, reporting
+   `domain.expired_delegation`.
+5. Park keeps the peer relationship and records Robot's served domain set as
+   `{A, B}`.
+6. Park MUST NOT treat offers scoped to `C` as usable.
+
+Policy and offer rejection:
+
+1. Robot declares domain `A` and proves valid domain authority.
+2. Park's domain access policy rejects `A` with `policy.domain_rejected`.
+3. Park keeps the peer relationship if peer authorization succeeded.
+4. Park does not add `A` to Robot's served domain set.
+5. If Robot's offer catalog includes an offer scoped to `A`, Park rejects or
+   ignores that offer with `offer.domain_not_served`.
+
 ### RFC-0016: Authorization Model
 
 #### Requirement
@@ -820,10 +885,14 @@ This is the likely replacement or evolution path for `/auki/resources/0.0.1`.
 Define how an offer is tied to a served domain:
 
 - required domain id field;
-- whether one offer may reference multiple domains;
+- one offer belongs to exactly one domain in v1;
+- multi-domain offers are future work;
 - how an offer references delegation or served-domain validation;
 - behavior when the served domain becomes rejected, expired, or removed;
 - how consumers distinguish producer-declared metadata from verified authority.
+
+An offer is usable only when its single domain id is in the accepted served
+domain set for that peer relationship.
 
 ### RFC-0022: Spatial Message Envelope (To Fill)
 

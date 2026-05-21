@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "TimeTransform math, NTP-style clock samples, and the local-clock-read sampler."
+description = "Auki SDK time primitives: session clocks, time transforms, NTP-style samples, and TimeTransform Log sampling."
 
 [dependencies]
+auki-registry = { path = "../auki-registry" }
 auki-logs = { path = "../auki-logs" }
 # `TimeTransformEntry` lives in `auki-datatypes` since Step 6 of the
 # migration (2026-05-08, prost-encoded). Re-exported from this crate

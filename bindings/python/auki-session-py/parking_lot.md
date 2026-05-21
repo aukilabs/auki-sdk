@@ -24,7 +24,7 @@ Nils 2026-05-07: "Don't design those libp2p control protocols speculatively now.
 
 The May 7 sketch from booster claude raised eight design questions; six are pinned. They live here as a reminder until the implementation propagates them into the relevant Rust shapes + Python module + tests.
 
-- **`session_id` minting** — SDK mints UUIDv4; optional `session_id: Optional[str] = None` kwarg as escape hatch for deterministic / pre-known IDs (test harnesses, replay tooling). Cross-cutting Propagate task lives in [root parking_lot](../../../parking_lot.md) since it also touches `auki-session` and the `auki-registry` / `auki-time-transforms` manifest tables.
+- **`session_id` minting** — SDK mints UUIDv4; optional `session_id: Optional[str] = None` kwarg as escape hatch for deterministic / pre-known IDs (test harnesses, replay tooling). Cross-cutting Propagate task lives in [root parking_lot](../../../parking_lot.md) since it also touches `auki-session` and the `auki-registry` / `auki-time` manifest tables.
 - **`start_pose_log` symmetry** — add `start_pose_log(source, clock, *, retention_ns, duration_ns) -> PoseLog` and `list_pose_logs(...)` peer to `list_sensor_logs(...)`. Pose logs are first-class.
 - **`SensorLog` is single-writer, no internal locking** — one writer per log, threading is the producer's problem. SDK does NOT acquire an internal lock; concurrent `append()` from multiple threads is undefined behavior. Document in the `SensorLog` docstring.
 - **`SensorLog.append` to a stopped log raises** — typed `LogStopped` exception (Python) / `Error::LogStopped` (Rust). Never silent drop.

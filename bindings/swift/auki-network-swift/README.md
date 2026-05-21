@@ -1,8 +1,8 @@
 # auki-network-swift
 
-UniFFI Swift bindings for the iOS-facing pieces of [`auki-network`](../auki-network).
+UniFFI Swift bindings for the iOS-facing pieces of [`auki-network`](../../../crates/auki-network).
 
-This crate is the Swift sibling of [`auki-network-py`](../auki-network-py): one binding crate per Rust component, no umbrella `auki-swift`. It mirrors that crate's split — Discovery + stream types here; cluster lifecycle / peer enumeration is a future `auki-domain-swift`, paired with [`auki-domain`](../auki-domain) the same way `auki-domain-py` pairs with it on the Python side.
+This crate is the Swift sibling of [`auki-network-py`](../../python/auki-network-py): one binding crate per Rust component, no umbrella `auki-swift`. It mirrors that crate's split — Discovery + stream types here; cluster lifecycle / peer enumeration is a future `auki-domain-swift`, paired with [`auki-domain`](../../../crates/auki-domain) the same way [`auki-domain-py`](../../python/auki-domain-py) pairs with it on the Python side.
 
 The consumer is [`aukilabs/iosapp`](https://github.com/aukilabs/iosapp), a native iOS Auki peer. Its Q1 decision (UniFFI, thin transport binding, prost payloads decoded Swift-side via swift-protobuf) is the spec this crate implements.
 

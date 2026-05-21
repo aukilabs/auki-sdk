@@ -12,13 +12,14 @@ Implementation status for [`auki-network-swift`](../README.md). Honest about wha
 - **Builds and tests on the host.** `cargo build -p auki-network-swift` and `cargo test -p auki-network-swift` are green. UniFFI proc-macro scaffolding (`uniffi::setup_scaffolding!()`) compiles into the library; `#[uniffi::export(async_runtime = "tokio")]` drives the async Discovery methods.
 - **Full Discovery surface wired**: `new`, `base_url`, `list_clusters`, `create_cluster`, `liveness_check`, `rotate_manager`, `deregister` — 1:1 with `auki_network::discovery_client::DiscoveryClient`.
 - **Error mapping** `DiscoveryError` ← `auki_network` `DiscoveryError`, exhaustive, covered by unit tests (`Status`, `InvalidPeerId`, `InvalidMultiaddr`, the `ClusterEntry` stringify conversion, and seam-parse rejection).
+- **iOS XCFramework validated end to end.** `build-xcframework.sh` was run against `aarch64-apple-ios` / `aarch64-apple-ios-sim` / `x86_64-apple-ios` (rustc 1.94, Xcode 26.3) and produces a well-formed `AukiNetwork.xcframework`: a device slice (`ios-arm64`) and a fat simulator slice (`ios-arm64_x86_64-simulator`, x86_64 + arm64), plus `auki_network_swift.swift` / `auki_network_swiftFFI.h` / `module.modulemap`. The generated Swift surface is correct and iOS-safe — `DiscoveryClient` with `createCluster/deregister/listClusters/livenessCheck/rotateManager` as `async throws`, `ClusterEntry`/`CreateClusterOutcome` structs, `DiscoveryError: Swift.Error`. BoM on iOS: `reqwest 0.12` → `rustls 0.23` → **`ring 0.17`** (the `rustls-tls` feature's default backend; `aws-lc-rs` is *not* pulled). The historical `ring`-on-iOS `CC`/SDK-env sharp edge is obsolete — `ring 0.17.x` has first-class iOS cross-compile support, so no intervention was needed. Stage 1 is `discovery_client`-only so libp2p / `SystemConfiguration.framework` never enter the picture.
 
 ## What does NOT work yet
 
-- **No generated Swift / XCFramework is verified.** `build-xcframework.sh` exists but the iOS cross-compile + `uniffi-bindgen generate` + `xcodebuild -create-xcframework` flow has **not** been run/validated here (no iOS targets installed, depends on `ring`/`aws-lc-rs` cross-compile, `SystemConfiguration.framework` link — see `src/sprint.md` and `parking_lot.md`).
 - **No stream/audio surface.** `StreamRequest`, `AudioFrame`, producer/consumer — Stage 2.
 - **No cluster lifecycle / peer enumeration / `ParticipantInfo`.** That is a separate future `auki-domain-swift`, mirroring the `auki-network-py` → `auki-domain-py` split.
 - **Not wired into iosapp.** The `Bridge/` SPM integration is an iosapp-repo task.
+- **`with_http` is not exposed.** The Rust `DiscoveryClient::with_http(base_url, reqwest::Client)` escape hatch — for custom timeouts, proxies, and custom TLS roots — is deliberately omitted at Stage 1; the Swift binding uses `reqwest::Client::new()` defaults. If an iosapp deployment needs a captive-portal proxy, a self-signed-cert Discovery host, or non-default timeouts, this will need a Swift-friendly knob (string proxy URL + CA-bundle bytes?) on the FFI seam — tracked in [`parking_lot.md`](../parking_lot.md).
 
 ## Rust mapping
 
@@ -34,5 +35,5 @@ Implementation status for [`auki-network-swift`](../README.md). Honest about wha
 ```bash
 cargo test -p auki-network-swift          # host gate (green)
 cargo build -p auki-network-swift         # host gate (green)
-crates/auki-network-swift/build-xcframework.sh   # iOS (NOT yet validated)
+crates/auki-network-swift/build-xcframework.sh   # iOS (validated — produces AukiNetwork.xcframework + Swift glue)
 ```

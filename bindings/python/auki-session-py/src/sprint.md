@@ -24,7 +24,7 @@ Crate scaffolding only — empty `#[pymodule]`, no PyClasses, no registry method
 
 6. **Cross-session listing.** `Session.list` / `list_sensor_logs` / `list_pose_logs` walking the on-disk layout. Backs the Control API's `GET /api/sensor_logs`.
 
-7. **TimeTransform log.** `session.time_transform()` returning `TimeTransformLog`. Wraps `auki-time-transforms` writes.
+7. **TimeTransform log.** `session.time_transform()` returning `TimeTransformLog`. Wraps `auki-time` writes.
 
 ## Out-of-band
 

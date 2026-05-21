@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 20, HKT, 2026
 
+**`SessionClock` added.** `auki-time` now owns the SDK's session-monotonic clock primitive: peer-id rooted ids (`<peer_id>/<session_id>/monotonic`), a `ClockRegistryEntry` with `Scope::DeviceLocal` and session epoch marker, `clock_hash()`, `registry_entry()`, and monotonic `now_ns()` / `now_i64_ns()` readers. This gives heartbeat time sync and domain participant info one reusable clock identity instead of a heartbeat-specific abstraction. Added `auki-registry` as a dependency. Tests: `cargo test -p auki-time`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Crate renamed `auki-time-transforms` → `auki-time`.** The old name described the TimeTransform Log sampler only; the new name leaves room for the cleaner SDK timekeeping foundation (`SessionClock`, local clock reads, and future `convert_time` support) while keeping the existing sampler APIs in the same crate. Mechanical scope: directory rename (`crates/auki-time-transforms/` → `crates/auki-time/`), Cargo package/workspace/Cargo.lock rename, Rust crate import path rename (`auki_time_transforms` → `auki_time`), live docs/plan/path references, and parking-lot summaries. Historical changelog entries retain the old crate name as context.
+
+### Nils's codex · May 20, HKT, 2026
+
 **Clock transform estimates can now represent exact local identity.** `ClockTransformEstimate::identity(clock_id, clock_hash, observed_at_clock_ns)` creates the zero-offset, zero-uncertainty estimate used when a peer's local session clock is itself the domain-clock backing clock. This keeps initial Manager domain-clock composition on the same `estimate_domain_clock(...)` path as follower estimates.
 
 Tests: `cargo test -p auki-time clock_transform_estimate_identity_has_zero_offset_and_uncertainty -- --nocapture`.

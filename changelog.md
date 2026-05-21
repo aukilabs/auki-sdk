@@ -6,6 +6,42 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Heartbeat timing now uses the SDK-owned SessionClock after merging latest develop.** The heartbeat/domain-clock sync branch now composes with the latest `develop` SessionClock foundation: `ClusterManager` uses its peer-id rooted session clock for heartbeat timestamps, initial domain-clock backing metadata, and promoted-Manager domain-clock advertisement instead of the compatibility `DaemonInfo.session_clock_id/hash` fields. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, 15:34 HKT, 2026
+
+**Outbound heartbeat carriers restart after transient substream closure.** `auki-network` now prunes completed heartbeat task handles and reconciles outbound carriers on the runtime tick, preventing a stale handle from suppressing replacement `/auki/heartbeat/0.0.1` streams and triggering cluster split-brain invisible to Discovery. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's claude · May 20, 13:31 HKT, 2026
+
+**`auki-network-swift` relocated to [`bindings/swift/`](bindings/swift) under the per-language convention.** PR #156 moved the Python packages out of `crates/`; the Swift crate now follows. `git mv` preserved history. Workspace `members` updated, new `bindings/swift/{README,changelog,parking_lot}.md` mirror `bindings/python/`, `crates/README.md` and `crates/parking_lot.md` no longer list the swift crate, relative-path links inside the crate adjusted for the new depth. Package name / lib name / surface / runtime behavior unchanged; `cargo test -p auki-network-swift` 4/4 green. See [`bindings/changelog.md`](bindings/changelog.md) for the bindings-level entry.
+
+### Nils's claude · May 20, 11:43 HKT, 2026
+
+**`auki-network-swift` PR #152 — review-driven fixes.** Corrected the factually wrong claim that the iOS cross-compile used `aws-lc-rs`: it's actually **`ring 0.17`** via reqwest's `rustls-tls` default (the build worked because ring 0.17 has first-class iOS support now). Fixed a real bug in `build-xcframework.sh` (Swift glue was being packaged into the xcframework Headers dir; moved to a sibling `swift/` dir per the standard UniFFI iOS recipe). Documented `Eq` byte-equality semantics on FFI records and the deliberate `with_http` omission. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source provenance renamed in the plan.** `DomainClockSource` now uses `backing_peer_id` instead of `manager_peer_id`, keeping the source descriptor tied to the peer that owns the backing clock rather than the Manager role. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source plan now uses cluster name.** The heartbeat time-sync plan uses `DomainClockSource.cluster_name` as the existing cluster/domain identity and derives the clock id as `<cluster-name>/domain-clock`, avoiding a separate `domain_id` concept. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Domain clock source identity made explicit in the plan.** `DomainClockSource` now carries `domain_id` directly, and the clock id is derived as `<domain-id>/domain-clock` instead of being the only place the domain identity appears. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat runtime constructor plan corrected.** The plan now makes `HeartbeatTimestampSource` a required part of `NetworkRuntime::spawn(...)` and treats SDK-owned heartbeat timestamps as the default runtime contract. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat time-sync plan payload corrected.** The plan now keeps heartbeat frames sender-clock-only and puts domain-clock identity in `DomainClockSource` / future TimeTransform manifests, with Python binding paths refreshed for `bindings/python`. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **ClusterManager now has a domain-time-now helper.** `auki-domain` exposes `domain_time_now()` to convert a peer's current session monotonic reading into cluster domain time through the existing explicit estimate, returning typed unavailable/overflow errors and no wall-clock fallback. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
@@ -57,6 +93,30 @@ Latest entry on top.
 ### Nils's codex · May 20, HKT, 2026
 
 **Python bindings relocated under `bindings/python`.** The `auki-*-py` package family moved out of `crates/` with package names, Python module names, Cargo package names, and runtime behavior preserved. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Heartbeat time-sync plan responsibility split corrected.** The plan now keeps NTP math/filtering/local TimeTransform production in `auki-time`, with `ClusterManager` limited to exposing the domain-clock source. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 20, HKT, 2026
+
+**SDK-owned session clocks landed.** `auki-time` now provides `SessionClock`, and `auki-domain::ClusterManager` uses it for `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash`. The peer-id rooted session clock becomes the shared substrate for future heartbeat time sync. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagated detail.
+
+### Nils's codex · May 20, HKT, 2026
+
+**Crate renamed `auki-time-transforms` → `auki-time`.** The package now names the SDK's broader timekeeping responsibility while retaining the current TimeTransform Log sampler. Live docs, plans, workspace metadata, and parking-lot summaries now point at [`crates/auki-time`](crates/auki-time). See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagated detail.
+
+### Nils's claude · May 19, 14:27 HKT, 2026
+
+**`auki-network-swift` iOS XCFramework validated.** `build-xcframework.sh` produces a well-formed device + simulator `AukiNetwork.xcframework` with correct async Swift bindings. Active TLS backend is **`ring 0.17`** (via reqwest's `rustls-tls` default — not `aws-lc-rs`); ring 0.17.x has first-class iOS cross-compile support so the historical CC/SDK sharp edge is obsolete. Build output gitignored; crypto-backend parking-lot item resolved. Unblocks the iosapp Discovery wiring. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
+**SDK timekeeping foundation plan captured.** Added a Superpowers implementation plan for introducing a reusable `SessionClock` primitive before heartbeat-based domain-clock synchronization. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 19, HKT, 2026
+
+**Domain-clock heartbeat time-sync plan captured.** Added a Superpowers implementation plan for deriving live peer-session-clock → domain-clock `TimeTransformEntry` estimates from `/auki/heartbeat/0.0.1` NTP-style samples. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 19, HKT, 2026
 

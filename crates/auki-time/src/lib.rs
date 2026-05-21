@@ -22,9 +22,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub use auki_logs;
+use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
 
 // Re-exports for short call sites at consumer crates.
 pub use auki_datatypes::time_transform::TimeTransformEntry;
@@ -682,6 +683,63 @@ fn midpoint(a: i64, b: i64) -> i64 {
     a + (b - a) / 2
 }
 
+/// SDK-owned session-monotonic clock identity and reader.
+///
+/// The first path segment of `clock_id` is the authoring peer id. The
+/// `session_id` is encoded both in the id and as the registry epoch marker,
+/// because a monotonic clock's zero point is only meaningful for one process
+/// lifetime.
+#[derive(Debug, Clone)]
+pub struct SessionClock {
+    registry_entry: ClockRegistryEntry,
+    started: Instant,
+}
+
+impl SessionClock {
+    pub fn new(
+        peer_id: impl Into<String>,
+        session_id: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        let peer_id = peer_id.into();
+        let session_id = session_id.into();
+        let name = name.into();
+        let registry_entry = ClockRegistryEntry {
+            clock_id: format!("{peer_id}/{session_id}/{name}"),
+            body: ClockBody::MonotonicClock(ClockMeta {
+                unit: "ns".into(),
+                monotonic: true,
+                epoch: Some(session_id),
+                scope: Scope::DeviceLocal,
+            }),
+        };
+        Self {
+            registry_entry,
+            started: Instant::now(),
+        }
+    }
+
+    pub fn now_ns(&self) -> u64 {
+        self.started.elapsed().as_nanos().min(u64::MAX as u128) as u64
+    }
+
+    pub fn now_i64_ns(&self) -> i64 {
+        self.started.elapsed().as_nanos().min(i64::MAX as u128) as i64
+    }
+
+    pub fn clock_id(&self) -> &str {
+        &self.registry_entry.clock_id
+    }
+
+    pub fn clock_hash(&self) -> String {
+        self.registry_entry.hash()
+    }
+
+    pub fn registry_entry(&self) -> ClockRegistryEntry {
+        self.registry_entry.clone()
+    }
+}
+
 // `build_manifest` (renamed `build_time_transform_log_manifest`) moved to
 // [`auki-manifests`] in Step 0 of the auki-datatypes migration.
 
@@ -765,6 +823,33 @@ mod tests {
                 .pop_front()
                 .expect("to-clock script exhausted")
         }
+    }
+
+    #[test]
+    fn session_clock_builds_peer_anchored_registry_entry_with_epoch_marker() {
+        let peer_id = "12D3KooWPeerExample";
+        let clock = SessionClock::new(peer_id, "session-123", "monotonic");
+
+        let entry = clock.registry_entry();
+        assert_eq!(entry.clock_id, "12D3KooWPeerExample/session-123/monotonic");
+        match &entry.body {
+            ClockBody::MonotonicClock(meta) => {
+                assert_eq!(meta.unit, "ns");
+                assert!(meta.monotonic);
+                assert_eq!(meta.scope, Scope::DeviceLocal);
+                assert_eq!(meta.epoch.as_deref(), Some("session-123"));
+            }
+            ClockBody::UtcClock(_) => panic!("session clock must be monotonic"),
+        }
+        assert_eq!(clock.clock_hash(), entry.hash());
+    }
+
+    #[test]
+    fn session_clock_now_is_monotonic() {
+        let clock = SessionClock::new("12D3KooWPeerExample", "session-123", "monotonic");
+        let a = clock.now_ns();
+        let b = clock.now_ns();
+        assert!(b >= a);
     }
 
     #[test]

@@ -1,17 +1,18 @@
 # `auki-time/src/`
 
-Time transform math, NTP-style offset samples, peer-clock sync state, domain-clock composition, and the 1 Hz `local_clock_read` sampler producing `TimeTransformEntry` records. Schema spec: this crate's [outer `README.md`](../README.md).
+SDK time primitives, time-transform math, NTP-style offset samples, peer-clock sync state, domain-clock composition, and the 1 Hz `local_clock_read` sampler producing `TimeTransformEntry` records. Schema spec: this crate's [outer `README.md`](../README.md).
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the log payload definition out; this crate owns the producer plus pure time-transform math.
+A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the log payload definition out; this crate owns session clocks, the producer sampler, and pure time-transform math while re-exporting the canonical TimeTransform payload types.
 
-The crate has five composable layers:
-1. The **pure transform API** (`TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`) — no IO, no background tasks.
-2. The **peer-clock sync state** (`ClockSyncState`, `ClockSyncHandle`, `ClockSyncObservation`, `ClockTransformEstimate`) — bounded retention and selection policy over heartbeat-derived samples, plus a cloneable shared handle for runtime/event tasks.
-3. The **domain-clock composition API** (`DomainClockDescriptor`, `DomainClockEstimate`, `estimate_domain_clock`) — pure composition from `local -> backing` estimate plus `backing -> domain` descriptor into `local -> domain`.
-4. The **unit-testable local sampler primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
-5. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
+The crate has six composable layers:
+1. The **session clock** ([`SessionClock`]) — SDK-owned session-monotonic identity and reader. Clock ids are `<peer_id>/<session_id>/monotonic`; the first segment is the authoring peer id, and the registry entry's epoch marker is the session id.
+2. The **pure transform API** (`TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`) — no IO, no background tasks.
+3. The **peer-clock sync state** (`ClockSyncState`, `ClockSyncHandle`, `ClockSyncObservation`, `ClockTransformEstimate`) — bounded retention and selection policy over heartbeat-derived samples, plus a cloneable shared handle for runtime/event tasks.
+4. The **domain-clock composition API** (`DomainClockDescriptor`, `DomainClockEstimate`, `estimate_domain_clock`) — pure composition from `local -> backing` estimate plus `backing -> domain` descriptor into `local -> domain`.
+5. The **unit-testable local sampler primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
+6. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
 
 ## Re-exports
 
@@ -154,6 +155,18 @@ Production: `SystemClock` reads `CLOCK_MONOTONIC` (from-clock) and `CLOCK_REALTI
 
 Tests: `ScriptedClock` (in `#[cfg(test)] mod tests`) pops pre-loaded readings off two queues, one per clock.
 
+## `SessionClock`
+
+```rust
+let clock = SessionClock::new(peer_id.to_string(), session_id, "monotonic");
+let now_ns = clock.now_ns();
+let clock_id = clock.clock_id();
+let clock_hash = clock.clock_hash();
+let registry_entry = clock.registry_entry();
+```
+
+`SessionClock` is deliberately peer-id anchored so another peer can understand the source from the registry id convention. `Scope::DeviceLocal` is correct because the monotonic zero point is local to one peer/session; cluster/domain clocks use a separate `DomainLocal` identity. Time sync should consume this primitive rather than constructing a heartbeat-only clock identity.
+
 ## The three-read protocol
 
 `tick(clock)` reads:
@@ -198,10 +211,12 @@ impl Sampler {
 
 `stop` signals the thread, joins, and **returns the log back** so the caller can flush/drop it on the main thread (matters for fsync ordering during shutdown). Append failures are logged via `eprintln!` and the loop continues — a per-tick I/O hiccup shouldn't kill the sampler.
 
-## Tests (19 total)
+## Tests (21 total)
 
 | Test | Asserts |
 |------|---------|
+| `session_clock_builds_peer_anchored_registry_entry_with_epoch_marker` | `SessionClock` creates a peer-id rooted monotonic `ClockRegistryEntry` with `Scope::DeviceLocal`, session epoch marker, and matching hash. |
+| `session_clock_now_is_monotonic` | Session-clock readings do not move backwards. |
 | `time_transform_converts_from_clock_to_to_clock` | `TimeTransform` adds `offset_ns` and preserves clock ids. |
 | `ntp_sample_estimates_remote_minus_local_offset_across_independent_monotonic_epochs` | NTP formula works when local and remote monotonic clocks have unrelated epochs. |
 | `best_ntp_sample_prefers_lowest_uncertainty_then_latest_observation` | Best-sample selection prefers low uncertainty, then recency. |

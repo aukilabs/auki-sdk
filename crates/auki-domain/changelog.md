@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**Heartbeat timestamps and domain-clock backing now use `ClusterManager`'s `SessionClock`.** `create_cluster` and `join_cluster` pass the SDK-owned peer-id rooted `SessionClock` into `HeartbeatTimestampSource`, initial domain-clock metadata, and promoted-Manager domain-clock advertisement. `DaemonInfo.session_clock_id/hash` remain compatibility inputs for old callers but no longer define heartbeat timing or the backing clock identity used for domain time.
+
+Tests: `cargo test -p auki-domain cluster_manager::tests -- --nocapture`.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **ClusterManager now exposes domain time now.** Added `ClusterManager::domain_time_now()`, which reads the local session monotonic clock once, composes the current cluster domain-clock estimate, and converts that reading into `<cluster_name>/domain-clock`. The method returns typed unavailable errors from `domain_clock_estimate()` and a typed overflow error if the affine conversion exceeds `i64`; it never falls back to wall time.
@@ -63,6 +69,10 @@ Tests: `cargo test -p auki-domain`.
 This keeps heartbeat time provenance tied to the peer's session clock while leaving domain-clock semantics in `auki-domain`: the Manager remains the source of the domain-clock backing clock, and later time-sync code can produce transforms from peer monotonic clocks toward that stable cluster clock.
 
 Tests: `cargo check -p auki-domain`, `cargo test -p auki-domain`.
+
+### Nils's codex · May 20, HKT, 2026
+
+**`ClusterManager` session time now uses `auki_time::SessionClock`.** Create/join construction mints a peer-id rooted session clock from the local libp2p peer id and `DaemonInfo.session_id`. `ParticipantInfo.session_now_ns`, `session_clock_id`, and `session_clock_hash` now come from that SDK clock in both the local accessor and `/auki/info/0.0.1` handler; caller-provided `DaemonInfo.session_clock_id/hash` remain accepted only as compatibility inputs. Added `auki-time` as a dependency and documented the timekeeping ownership/deferred heartbeat-sync boundary. Tests: `cargo test -p auki-domain cluster_manager::tests`.
 
 ### Nils's codex · May 19, HKT, 2026
 

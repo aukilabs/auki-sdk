@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 21, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — heartbeat domain timing now uses SDK-owned `SessionClock`.** `ClusterManager` feeds its peer-id rooted `SessionClock` into heartbeat timestamps, initial domain-clock metadata, and promoted-Manager domain-clock advertisements instead of the compatibility `DaemonInfo.session_clock_id/hash` fields.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — `ClusterManager` can now return domain time now.** `domain_time_now()` converts the peer's current session monotonic reading into `<cluster_name>/domain-clock` through the existing explicit domain-clock estimate and returns typed unavailable/overflow errors without wall-clock fallback.
@@ -57,6 +61,14 @@ Latest entry on top.
 ### Nils's codex · May 20, HKT, 2026
 
 **Python binding packages moved to [`bindings/python`](../bindings/python/changelog.md).** The `auki-*-py` package family left `crates/` with package names, Python module names, and runtime behavior preserved; `crates/` now reads as the Rust component workspace plus non-Python adapters.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) + [`auki-domain`](auki-domain/changelog.md) — SDK-owned session clocks.** `auki-time` adds `SessionClock`, a peer-id rooted session-monotonic `ClockRegistryEntry` plus monotonic reader. `ClusterManager` now mints one at create/join time and publishes its id/hash and `now_ns()` in `ParticipantInfo`, leaving `DaemonInfo.session_clock_id/hash` as compatibility inputs only.
+
+### Nils's codex · May 20, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — crate renamed from `auki-time-transforms`.** The crate now names the broader SDK timekeeping responsibility while retaining the existing TimeTransform Log sampler surface. Workspace metadata, live docs/plans, and parking-lot summaries now point at `auki-time`; historical changelog prose keeps the old name as context.
 
 ### Nils's codex · May 19, HKT, 2026
 

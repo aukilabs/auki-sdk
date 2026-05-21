@@ -1,6 +1,6 @@
 # Parking lot — auki-network-swift
 
-Open questions specific to the Swift/UniFFI bindings. Cross-cutting questions about the underlying primitives belong in [`auki-network/parking_lot.md`](../auki-network/parking_lot.md).
+Open questions specific to the Swift/UniFFI bindings. Cross-cutting questions about the underlying primitives belong in [`auki-network/parking_lot.md`](../../../crates/auki-network/parking_lot.md).
 
 ---
 
@@ -16,9 +16,11 @@ This is a deliberate divergence from the sibling precedent, made to fit the lang
 
 `build-xcframework.sh` produces `auki_network_swiftFFI` (the generated `.swift` + a `.xcframework`). Open: are these build artifacts (gitignored, built by iosapp's CI / a release job) or committed into this repo (a `swift/` dir, or a separate `aukilabs/auki-sdk-swift` SwiftPM-package repo for `Package.swift` consumption)? The `-py` crates ship as `maturin` wheels and do **not** commit generated code; the analogous Swift answer (committed SwiftPM package vs. pip-equivalent build step) is a distribution decision the SDK owners should make. Not blocking Stage 1 (host build/test is green without it).
 
-## iOS crypto backend: `ring` vs `aws-lc-rs`
+## `with_http` not exposed — TLS / proxy / timeout knob shape
 
-The `discovery_client` path pulls `reqwest` + `rustls-tls`, which needs `ring` (or `aws-lc-rs`). `ring` historically needs correct `CC`/SDK env to cross-compile to `aarch64-apple-ios`; `aws-lc-rs` is the more iOS-friendly drop-in. Decide which to pin once `build-xcframework.sh` is actually run on the Apple targets (Stage 1 host build is unaffected — this only bites the iOS cross-compile). Tracked in `src/sprint.md` Next #1.
+The Rust `DiscoveryClient::with_http(base_url, reqwest::Client)` lets callers configure custom timeouts, proxies, and custom TLS roots. The Swift binding at Stage 1 uses `reqwest::Client::new()` defaults only — `with_http` is not surfaced.
+
+This is fine for v0 iosapp (Auki cluster on a known LAN), but the right Swift-friendly FFI shape isn't obvious: do we expose a string proxy URL? A CA-bundle as `Data`? A timeout in milliseconds? Best to wait for a concrete iosapp deployment that actually needs the knob, so we design once against a real requirement rather than guess. `auki-network-py` has the same standing item.
 
 ## Stream payload parity with `auki-network`
 

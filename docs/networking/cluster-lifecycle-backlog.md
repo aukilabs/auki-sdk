@@ -1,6 +1,6 @@
 # Cluster Lifecycle RFC Backlog
 
-Status: non-normative working backlog.
+Status: working backlog. This file is not part of the protocol requirements.
 
 Owner: TBD.
 

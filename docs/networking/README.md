@@ -7,7 +7,7 @@ Read in this order:
 1. [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md) is the normative
    draft spec.
 2. [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md) is the
-   non-normative work queue.
+   working backlog. It is not part of the protocol requirements.
 3. [`glossary.md`](glossary.md) defines recurring terminology.
 
 ## Current Status

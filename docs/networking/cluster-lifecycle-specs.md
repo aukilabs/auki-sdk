@@ -1154,7 +1154,7 @@ restart or become invalid.
 
 #### Candidate State Model
 
-The following states are non-normative names, but implementations SHOULD expose
+The following states are descriptive names, but implementations SHOULD expose
 equivalent diagnostic information:
 
 - `unknown`: the peer relationship has no known discovery, configuration, or

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+`bindings/swift/auki-network-swift` PR B landed: expanded to full v0 networking surface (runtime + 5-payload stream surface + callback interfaces). Stage 1's hand-wrapped Discovery surface replaced by upstream-annotated re-exports. See [`swift/auki-network-swift/changelog.md`](swift/auki-network-swift/changelog.md) and [`swift/changelog.md`](swift/changelog.md).
+
 ### Nils's claude · May 21, 15:41 HKT, 2026
 
 **`auki-identity-swift` added to [`bindings/swift/`](swift/changelog.md).** PR A of Spec 1. Thin UniFFI scaffolding host for `Wallet` + `PeerIdentity` via the upstream `swift-bindings` cargo feature; surface at v0 is the minimum the iosapp Keychain helper needs.

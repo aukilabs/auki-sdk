@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+PR B — UniFFI-annotated the full `swift-bindings`-gated surface needed by `bindings/swift/auki-network-swift`'s expansion. `NetworkRuntime` becomes a `uniffi::Object` with a curated v0 method set (`local_peer_id_string`, `connected_peer_id_strings`, `set_allowed_peers`, `shutdown`). Adds 5 `StreamSubscription*` Objects + 5 `open_*_stream` async methods (one per SDK-supported payload type: `AudioFrame`, `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `DetectionFrame`). Annotates `AllowedPeer`, `SpawnError`, `UpdateError`, `UpdateReport` and the Discovery surface (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `DiscoveryError`). DiscoveryClient methods switched to owned argument types (`String`, `PeerId`, `Vec<Multiaddr>`) for UniFFI 0.31 compatibility; cascading caller updates in `auki-domain` and `bindings/python/auki-network-py`. Shared `StreamEntry { timestamp_ns, seq, payload_bytes: Vec<u8> }` record + flattened `StreamError` / `OpenStreamError` enums. Wire types stay prost-encoded `Vec<u8>` at the FFI seam.
+
 ### Nils's claude · May 21, 15:41 HKT, 2026
 
 **Added optional `swift-bindings` cargo feature; annotated `PeerIdentity` (PR A's slice).** Same additive pattern as `auki-identity`'s new feature. PR A's surface: `PeerIdentity::{from_wallet, peer_id_string}`. `from_wallet`'s parameter changed from `&Wallet` to `Arc<Wallet>` (UniFFI 0.31 doesn't impl `LiftRef` for foreign-crate Objects); workspace callers (auki-network's own tests, swarm.rs doctest, examples/diagnostic-app, bindings/python/auki-domain-py) adapted. `from_wallet`'s body bridges `Wallet::seed()`'s new `Vec<u8>` back to `PeerIdentity::from_seed`'s still-existing `&[u8; 32]` via `.try_into().expect(...)`. `peer_id_string()` returns the canonical libp2p peer-id `String` so PR A doesn't yet need the `PeerId`-as-`String` UniFFI custom type (that lands in PR B). Feature-gated `uniffi::setup_scaffolding!()` at the crate root.

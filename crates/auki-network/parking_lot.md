@@ -4,7 +4,7 @@
 
 ## `swift-bindings` cargo feature
 
-PR A added an additive `swift-bindings` feature that currently gates UniFFI proc-macros on `PeerIdentity` only. The feature propagates `auki-identity/swift-bindings` because UniFFI's `FfiConverterArc<UT>` blanket impl on `Wallet` only compiles when the upstream feature is on. PR B extends it to `NetworkRuntime`, `PeerLivenessEvent`, the stream surface, and the existing Discovery types (replacing the hand-written Stage 1 binding-crate wrappers). The feature lives here, not in a separate `*-swift` upstream crate.
+PR A added an additive `swift-bindings` feature that gates UniFFI proc-macros on `PeerIdentity` only. PR B extended its scope to the full v0 networking surface: `Wallet` (via `auki-identity/swift-bindings`), `PeerIdentity`, `NetworkRuntime`, `AllowedPeer`, `SpawnError`, `UpdateError`, `UpdateReport`, `StreamEntry`, `StreamError`, `OpenStreamError`, `DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `DiscoveryError`, and the 5 `StreamSubscription*` Objects (`StreamSubscriptionAudio`, `StreamSubscriptionCamera`, `StreamSubscriptionPointCloud`, `StreamSubscriptionJointEncoders`, `StreamSubscriptionDetection`). The feature lives here, not in a separate `*-swift` upstream crate. PR C (`auki-domain-swift`) will add further annotations to this crate and to `auki-domain` as needed.
 
 ---
 

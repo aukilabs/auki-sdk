@@ -92,8 +92,11 @@ pub mod stream_protocol;
 #[cfg(feature = "swarm")]
 pub mod stream_runtime;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "join_protocol")]
 pub mod join_protocol;
+
+#[cfg(feature = "join_protocol")]
+pub mod browser_session_protocol;
 
 #[cfg(feature = "swarm")]
 pub mod heartbeat_protocol;

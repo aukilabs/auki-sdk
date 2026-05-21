@@ -15,6 +15,14 @@
 
 #![warn(missing_docs)]
 
+// UniFFI scaffolding. Each annotated `Record` / `Enum` / `Object` /
+// `Error` derive emits `impl FfiConverter<crate::UniFfiTag> for X`, and
+// `UniFfiTag` is only defined where `setup_scaffolding!()` is invoked.
+// Without this, building `--features swift-bindings` fails before the
+// binding crate ever links. Gated so default builds stay scaffolding-free.
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 #[cfg(feature = "browser_runtime")]
 pub mod browser_session;
 #[cfg(feature = "native_runtime")]

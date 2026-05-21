@@ -158,6 +158,20 @@ mod tests {
     }
 
     #[test]
+    fn clock_transform_estimate_constructs() {
+        // Type-level smoke: verify ClockTransformEstimate is accessible as a
+        // UniFFI Record and that sample_count is u64 (FFI-portable width).
+        fn assert_record<T>() {}
+        assert_record::<auki_time::ClockTransformEstimate>();
+        let est = auki_time::ClockTransformEstimate::identity(
+            "peer/local/session-1/monotonic",
+            "local-hash",
+            123,
+        );
+        assert_eq!(est.sample_count, 0u64);
+    }
+
+    #[test]
     fn inbound_diagnostic_message_constructs() {
         use auki_domain_rs::cluster_manager::InboundDiagnosticMessage;
         use auki_network::diagnostic_protocol::DiagnosticMessage;

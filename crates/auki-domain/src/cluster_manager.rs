@@ -141,6 +141,8 @@ pub struct DaemonInfo {
 
 /// Why this cluster handle cannot currently produce a local
 /// session-clock to cluster-domain-clock estimate.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainClockEstimateUnavailable {
     /// No heartbeat has advertised a domain-clock source for this
@@ -189,6 +191,8 @@ impl std::error::Error for DomainClockEstimateUnavailable {}
 
 /// Why this cluster handle cannot convert the current local session
 /// clock reading into cluster-domain time.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainTimeNowError {
     /// The cluster-domain clock estimate is not available yet.

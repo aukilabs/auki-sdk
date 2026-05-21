@@ -39,6 +39,8 @@ swift-bindings = [
     "auki-network/swift-bindings",
     "dep:auki-registry",
     "auki-registry/swift-bindings",
+    "dep:auki-time",
+    "auki-time/swift-bindings",
 ]
 
 [dependencies]

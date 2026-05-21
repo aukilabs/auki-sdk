@@ -18,6 +18,9 @@
 //! - [`Sampler`] wraps `tick` in a 1 Hz background thread for
 //!   production use.
 
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -243,16 +246,19 @@ impl ClockSyncObservation {
 }
 
 /// Best current transform estimate for one ordered clock pair.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClockTransformEstimate {
-    from_clock_id: String,
-    from_clock_hash: String,
-    to_clock_id: String,
-    to_clock_hash: String,
+    pub from_clock_id: String,
+    pub from_clock_hash: String,
+    pub to_clock_id: String,
+    pub to_clock_hash: String,
     pub offset_ns: i64,
     pub uncertainty_ns: u64,
     pub observed_at_clock_ns: i64,
-    pub sample_count: usize,
+    /// Number of NTP samples that contributed to this estimate.
+    /// Stored as `u64` for FFI portability (`usize` is platform-width).
+    pub sample_count: u64,
 }
 
 impl ClockTransformEstimate {
@@ -366,7 +372,7 @@ impl ClockPairSamples {
             offset_ns: best.offset_ns,
             uncertainty_ns: best.uncertainty_ns,
             observed_at_clock_ns: best.observed_at_clock_ns,
-            sample_count: self.samples.len(),
+            sample_count: self.samples.len() as u64,
         })
     }
 }
@@ -490,6 +496,7 @@ impl ClockSyncHandle {
 }
 
 /// Stable domain-clock metadata supplied by the domain layer.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DomainClockDescriptor {
     pub cluster_name: String,
@@ -524,6 +531,7 @@ impl DomainClockDescriptor {
 }
 
 /// A composed estimate from a local clock into a cluster domain clock.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DomainClockEstimate {
     pub cluster_name: String,
@@ -553,6 +561,8 @@ impl DomainClockEstimate {
     }
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainClockEstimateError {
     BackingClockIdMismatch { expected: String, actual: String },

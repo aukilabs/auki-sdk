@@ -7,6 +7,14 @@ repository.workspace = true
 authors.workspace = true
 description = "Auki SDK time primitives: session clocks, time transforms, NTP-style samples, and TimeTransform Log sampling."
 
+[features]
+# Enables UniFFI proc-macros on the public clock-sync value types
+# (ClockTransformEstimate, DomainClockDescriptor, DomainClockEstimate,
+# DomainClockEstimateError) so they can cross the Rust–Swift boundary.
+# When off (default), the crate compiles exactly as today — no UniFFI
+# dep in the graph.
+swift-bindings = ["dep:uniffi", "dep:anyhow"]
+
 [dependencies]
 auki-registry = { path = "../auki-registry" }
 auki-logs = { path = "../auki-logs" }
@@ -19,6 +27,9 @@ auki-datatypes = { path = "../auki-datatypes" }
 # from `auki-manifests` for short call sites.
 auki-manifests = { path = "../auki-manifests" }
 libc = "0.2"
+# Optional — pulled in only when the `swift-bindings` feature is on.
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
+anyhow = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

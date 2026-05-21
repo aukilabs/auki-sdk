@@ -145,4 +145,35 @@ mod tests {
         };
         assert!(matches!(entry.body, SensorBody::Camera(_)));
     }
+
+    #[test]
+    fn diagnostic_message_constructs() {
+        use auki_network::diagnostic_protocol::DiagnosticMessage;
+        let msg = DiagnosticMessage {
+            topic: "diagnostic.tick-report".to_string(),
+            payload_json: r#"{"tick_id":7}"#.to_string(),
+        };
+        assert_eq!(msg.topic, "diagnostic.tick-report");
+        assert_eq!(msg.payload_json, r#"{"tick_id":7}"#);
+    }
+
+    #[test]
+    fn inbound_diagnostic_message_constructs() {
+        use auki_domain_rs::cluster_manager::InboundDiagnosticMessage;
+        use auki_network::diagnostic_protocol::DiagnosticMessage;
+
+        let pid = libp2p_identity::Keypair::ed25519_from_bytes([42u8; 32])
+            .expect("valid ed25519 seed")
+            .public()
+            .to_peer_id();
+        let msg = DiagnosticMessage {
+            topic: "diagnostic.heartbeat".to_string(),
+            payload_json: r#"{"seq":1}"#.to_string(),
+        };
+        let inbound = InboundDiagnosticMessage {
+            peer_id: pid,
+            message: msg,
+        };
+        assert_eq!(inbound.message.topic, "diagnostic.heartbeat");
+    }
 }

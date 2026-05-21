@@ -14,6 +14,7 @@ pub const DIAGNOSTIC_PROTOCOL: &str = "/auki/diagnostic/0.0.1";
 /// Cap on a single diagnostic frame. Diagnostic payloads should be tiny.
 pub const MAX_DIAGNOSTIC_FRAME_BYTES: u32 = 64 * 1024;
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiagnosticMessage {
     pub topic: String,

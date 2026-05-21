@@ -640,6 +640,7 @@ pub struct ClusterManager {
 }
 
 /// Best-effort diagnostic message received from a cluster peer.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct InboundDiagnosticMessage {
     /// Authenticated sender peer id.

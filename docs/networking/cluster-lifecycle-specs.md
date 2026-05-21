@@ -128,6 +128,9 @@ A v1 peer binding MUST include:
 - `signature`: base64url without padding, containing the raw 64-byte Ed25519
   signature.
 
+The `wallet_signature_scheme` field determines the wallet public-key encoding,
+signature encoding, signature length, and verification algorithm.
+
 A v1 peer binding MAY include:
 
 - `label`: string, for operator metadata only.
@@ -234,6 +237,9 @@ nonce:
 
 domain_id = hash(domain_owner_wallet_public_key, nonce)
 
+The concrete v1 hash input, hash function, and domain id encoding are defined
+in `RFC-0004`.
+
 The nonce MUST be unique for domains created by the same domain owner wallet.
 
 The domain owner wallet MUST sign a domain declaration that binds:
@@ -287,29 +293,232 @@ external-binding authority model.
 Discovery may help locate peers that claim to serve a domain, but Discovery
 does not create domain ownership or prove runtime authority.
 
-### RFC-0004: Domain Declaration Schema (To Fill)
+### RFC-0004: Domain Declaration Schema
 
-Define the concrete domain declaration format:
+#### Requirement
 
-- hash function and canonical hash input;
-- nonce size and encoding;
-- domain owner wallet public key encoding;
-- signature encoding;
-- optional display-label handling.
+A v1 domain declaration is a JSON object.
 
-### RFC-0005: Domain Delegation Schema (To Fill)
+A v1 domain declaration MUST include:
 
-Define the concrete delegation format used when a peer serves a domain on
-behalf of a domain owner wallet:
+- `type`: string, exactly `auki.domain_declaration.v1`;
+- `wallet_signature_scheme`: string, exactly `ed25519`;
+- `domain_id`: base64url without padding, containing the raw 32-byte v1 domain
+  id;
+- `domain_owner_public_key`: base64url without padding, containing the raw
+  32-byte Ed25519 domain owner wallet public key;
+- `nonce`: base64url without padding, containing the raw 16-byte domain nonce;
+- `signature`: base64url without padding, containing the raw 64-byte Ed25519
+  signature.
 
-- required fields;
-- permitted actions or scopes: `advertise`, `serve`, and `update`;
-- validity window or expiry;
-- expiry and replacement behavior;
-- no online revocation requirement in v1;
-- how the delegation is presented during peer handshake.
+The `wallet_signature_scheme` field determines the wallet public-key encoding,
+signature encoding, signature length, and verification algorithm.
 
-The `consume` scope is not part of the v1 delegation model.
+A v1 domain declaration MAY include:
+
+- `label`: string, for operator metadata only.
+
+The `label` field has no ownership, authority, delegation, reachability, or
+policy semantics.
+
+#### Domain Id Derivation
+
+The v1 domain id is the SHA-256 digest of the RFC 8785 JSON
+Canonicalization Scheme output for this JSON object:
+
+```json
+{
+  "type": "auki.domain_id.v1",
+  "wallet_signature_scheme": "ed25519",
+  "domain_owner_public_key": "<domain_owner_public_key>",
+  "nonce": "<nonce>"
+}
+```
+
+The `domain_owner_public_key` and `nonce` values in the hash input MUST be the
+same base64url strings carried in the domain declaration.
+
+The encoded `domain_id` field is base64url without padding over the raw
+32-byte SHA-256 digest.
+
+The domain id hash input does not include `label`, `signature`, or unknown
+declaration fields.
+
+#### Signed Bytes
+
+The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
+whole domain declaration object with only the `signature` field removed.
+
+The `type` field is part of the signed bytes and is the domain separator for
+v1 domain declarations.
+
+Unknown fields MAY be present. A receiver MUST include unknown fields in the
+canonical signed bytes before signature verification, and MUST ignore unknown
+fields after verification unless a later RFC defines them.
+
+An implementation MUST NOT normalize `domain_id`, `domain_owner_public_key`,
+`nonce`, drop unknown fields, or change base64url spelling before
+canonicalizing the signed bytes. The signature verifies the JSON values as
+presented, minus only the `signature` field.
+
+#### Verification
+
+To verify a v1 domain declaration, a receiver MUST:
+
+1. Decode the JSON object and verify all required fields are present and
+   well-formed.
+2. Verify that `type` and `wallet_signature_scheme` are supported.
+3. Decode `domain_id`, `domain_owner_public_key`, `nonce`, and `signature`.
+4. Recompute the v1 domain id from `domain_owner_public_key` and `nonce`.
+5. Verify that the recomputed domain id equals `domain_id`.
+6. Recompute the canonical signed bytes.
+7. Verify `signature` against `domain_owner_public_key` over the canonical
+   signed bytes.
+
+Domain declaration verification MUST NOT require Discovery, blockchain access,
+registry access, online revocation lookup, or any other online lookup.
+
+#### Failure Mapping
+
+A receiver SHOULD fail malformed domain declarations with
+`domain.invalid_declaration`. This includes missing required fields,
+unsupported `type`, unsupported wallet signature scheme, malformed base64url,
+wrong field length for the declared scheme, malformed nonce, or an invalid
+signature.
+
+A receiver SHOULD fail a declaration whose recomputed domain id does not match
+the declared `domain_id` with `domain.id_mismatch`.
+
+### RFC-0005: Domain Delegation Schema
+
+#### Requirement
+
+A v1 domain delegation is a JSON object.
+
+A v1 domain delegation MUST include:
+
+- `type`: string, exactly `auki.domain_delegation.v1`;
+- `wallet_signature_scheme`: string, exactly `ed25519`;
+- `domain_id`: base64url without padding, containing the raw 32-byte domain
+  id being delegated;
+- `domain_owner_public_key`: base64url without padding, containing the raw
+  32-byte Ed25519 domain owner wallet public key;
+- `delegate_wallet_public_key`: base64url without padding, containing the raw
+  32-byte Ed25519 wallet public key from the delegate peer binding;
+- `delegate_peer_id`: string, containing the delegate's standard libp2p PeerId
+  text representation;
+- `scopes`: non-empty array of strings;
+- `valid_from`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `expires_at`: UTC RFC3339 timestamp string with a `Z` suffix;
+- `signature`: base64url without padding, containing the raw 64-byte Ed25519
+  signature by the domain owner wallet.
+
+The `wallet_signature_scheme` field determines the wallet public-key encoding,
+signature encoding, signature length, and verification algorithm.
+
+A v1 domain delegation MAY include:
+
+- `label`: string, for operator metadata only.
+
+The `label` field has no ownership, authority, reachability, or policy
+semantics.
+
+The v1 delegation scopes are exactly:
+
+- `advertise`: the peer may announce the domain through Discovery,
+  peer-discovery metadata, or equivalent reachability surfaces;
+- `serve`: the peer may declare the domain during handshake and serve offers
+  scoped to that domain;
+- `update`: the peer may publish or apply domain-scoped updates where a later
+  RFC defines an update path.
+
+The `scopes` array MUST contain only v1 delegation scopes and MUST NOT contain
+duplicates.
+
+Before signing, producers MUST sort `scopes` in alphabetical string order.
+Receivers MUST verify the signature against the `scopes` array exactly as
+presented.
+
+The `expires_at` timestamp MUST be later than `valid_from`.
+
+#### Signed Bytes
+
+The signed bytes are the RFC 8785 JSON Canonicalization Scheme output for the
+whole domain delegation object with only the `signature` field removed.
+
+The `type` field is part of the signed bytes and is the domain separator for
+v1 domain delegations.
+
+Unknown fields MAY be present. A receiver MUST include unknown fields in the
+canonical signed bytes before signature verification, and MUST ignore unknown
+fields after verification unless a later RFC defines them.
+
+An implementation MUST NOT normalize `domain_id`, `delegate_peer_id`,
+timestamps, scope order, drop unknown fields, or change base64url spelling
+before canonicalizing the signed bytes. The signature verifies the JSON values
+as presented, minus only the `signature` field.
+
+#### Verification
+
+To verify a v1 domain delegation for a claimed action, a receiver MUST:
+
+1. Decode the JSON object and verify all required fields are present and
+   well-formed.
+2. Verify that `type` and `wallet_signature_scheme` are supported.
+3. Decode `domain_id`, `domain_owner_public_key`,
+   `delegate_wallet_public_key`, and `signature`.
+4. Parse `delegate_peer_id` as a libp2p PeerId.
+5. Verify that `scopes` contains only v1 scopes, is non-empty, has no
+   duplicates, and is sorted lexicographically.
+6. Verify that `valid_from` and `expires_at` form a valid time window.
+7. Recompute the canonical signed bytes.
+8. Verify `signature` against `domain_owner_public_key` over the canonical
+   signed bytes.
+9. Verify that `domain_id` equals the declared domain id being validated.
+10. Verify that `domain_owner_public_key` equals the owner public key from the
+    verified domain declaration.
+11. Verify that `delegate_wallet_public_key` equals the wallet public key from
+    the verified remote peer binding.
+12. Verify that `delegate_peer_id` equals the transport-authenticated remote
+    libp2p peer id.
+13. Verify that the claimed action is included in `scopes`.
+14. Verify that the current time is within the delegation validity window.
+
+Domain delegation verification MUST NOT require Discovery, blockchain access,
+registry access, online revocation lookup, or any other online lookup.
+
+#### Presentation
+
+A peer that claims to serve a domain on behalf of a domain owner wallet MUST
+present the domain declaration and a matching delegation during handshake.
+
+A peer whose verified wallet public key is the domain owner public key MAY
+serve the domain directly without a delegation.
+
+One delegation authorizes exactly one `domain_id`, one
+`delegate_wallet_public_key`, and one `delegate_peer_id`.
+
+#### Expiry And Replacement
+
+A delegation is valid only within its `valid_from` and `expires_at` window.
+
+The baseline v1 revocation and rotation mechanisms are expiry and replacement.
+Replacing a delegation means issuing a new domain owner signature over a new
+delegation object.
+
+V1 has no online revocation requirement.
+
+#### Failure Mapping
+
+A receiver SHOULD fail malformed, wrong-domain, wrong-owner, wrong-peer,
+wrong-wallet, wrong-scope, not-yet-valid, or invalid-signature delegations with
+`domain.invalid_delegation`.
+
+A receiver SHOULD fail an expired delegation with
+`domain.expired_delegation`.
+
+A receiver SHOULD fail a missing required delegation with
+`domain.missing_delegation`.
 
 ### RFC-0006: Authority Chain Validation
 

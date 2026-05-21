@@ -3,7 +3,7 @@
 //! ## Scope (Stage 1)
 //!
 //! This crate mirrors the **root Discovery surface** of
-//! [`auki-network-py`](../auki-network-py): `DiscoveryClient` plus the
+//! [`auki-network-py`](../../../python/auki-network-py): `DiscoveryClient` plus the
 //! `ClusterEntry` / `CreateClusterOutcome` value types. The stream
 //! (audio) surface is Stage 2 and cluster lifecycle / peer enumeration
 //! is a future `auki-domain-swift`, exactly mirroring the
@@ -42,6 +42,14 @@ uniffi::setup_scaffolding!();
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
 /// the canonical libp2p peer-id string; `manager_multiaddrs` are
 /// canonical `/ip4/.../tcp/...` strings.
+///
+/// `PartialEq`/`Eq` are derived for testing convenience and are
+/// **string-byte equality across every field**. They are *not* a
+/// reliable "same cluster" check — multiaddrs can differ in whitespace,
+/// port-zero, percent-encoding, or protocol-stack order while still
+/// denoting the same endpoint. For semantic equality compare `name`
+/// (Discovery enforces a normalized character set) or `manager_peer_id`
+/// (the libp2p peer-id is round-trip canonical).
 #[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
 pub struct ClusterEntry {
     pub name: String,
@@ -69,6 +77,9 @@ impl From<RustClusterEntry> for ClusterEntry {
 /// `true` when the name was taken (HTTP 409) — the caller should list
 /// and join the existing cluster. `entry` is populated only when the
 /// caller won the create race.
+///
+/// `PartialEq`/`Eq` inherit string-byte equality from [`ClusterEntry`];
+/// see that type's docs for the equality caveat.
 #[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
 pub struct CreateClusterOutcome {
     pub already_exists: bool,

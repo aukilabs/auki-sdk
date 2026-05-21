@@ -406,6 +406,8 @@ impl ClusterTarget {
 ///
 /// Aggregates the failure modes of [`CreateClusterError`] and
 /// [`JoinClusterError`] since bootstrap may resolve to either path.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     /// Discovery rejected the list / create / lookup call, or HTTP
@@ -461,6 +463,8 @@ impl From<JoinClusterError> for BootstrapError {
 }
 
 /// Errors from [`ClusterManager::create_cluster`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum CreateClusterError {
     /// Discovery rejected the create call — typically because the
@@ -480,6 +484,8 @@ pub enum CreateClusterError {
 }
 
 /// Errors from [`ClusterManager::admit_peer`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum AdmitError {
     /// The local peer is not the Manager. Only the Manager admits
@@ -506,6 +512,8 @@ pub enum AdmitError {
 }
 
 /// Errors from [`ClusterManager::join_cluster`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum JoinClusterError {
     /// Discovery rejected the list / lookup call.

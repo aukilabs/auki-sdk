@@ -190,4 +190,26 @@ mod tests {
         };
         assert_eq!(inbound.message.topic, "diagnostic.heartbeat");
     }
+
+    #[test]
+    fn bootstrap_family_errors_display_clean() {
+        use auki_domain_rs::cluster_manager::*;
+        // Verify each bootstrap-family error variant constructs and Displays cleanly.
+        let e1 = BootstrapError::AlreadyExists("cluster-a".to_string());
+        assert!(!e1.to_string().is_empty());
+
+        let e2 = CreateClusterError::AlreadyExists("cluster-b".to_string());
+        assert!(!e2.to_string().is_empty());
+
+        let e3 = AdmitError::AlreadyMember(
+            libp2p_identity::Keypair::ed25519_from_bytes([7u8; 32])
+                .expect("valid ed25519 seed")
+                .public()
+                .to_peer_id(),
+        );
+        assert!(!e3.to_string().is_empty());
+
+        let e4 = JoinClusterError::NotFound("cluster-c".to_string());
+        assert!(!e4.to_string().is_empty());
+    }
 }

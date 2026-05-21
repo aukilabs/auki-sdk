@@ -132,3 +132,8 @@ tempfile = "3"
 # For the swarm tests (require `--features swarm`).
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
+
+[[example]]
+name = "browser_full_peer_manager"
+path = "examples/browser_full_peer_manager.rs"
+required-features = ["browser_probe"]

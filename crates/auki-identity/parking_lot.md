@@ -2,6 +2,12 @@
 
 ---
 
+## `swift-bindings` cargo feature
+
+PR A added an additive `swift-bindings` feature that gates UniFFI proc-macros on `Wallet` (and its `IdentityError`). Default behavior unchanged. The feature lives here, not in a separate `*-swift` upstream crate, to keep the binding crate (`bindings/swift/auki-identity-swift`) a thin scaffolding host. UniFFI 0.31 constraints forced two upstream signature changes (`Wallet::from_seed` and `Wallet::seed` use `Vec<u8>`; `Wallet::new`/`from_seed` return `Arc<Self>`); workspace callers adapted. As more iosapp features land, the curated subset exposed under the feature may grow.
+
+---
+
 ## BIP32-style HD vs. simpler labeled-hash derivation
 
 `derive_child` uses a labeled-hash scheme: `child_seed = XXH3-128(parent_seed || label)`, doubled to 32 bytes by re-hashing with `/expand`. Simple, no HKDF dep, reproducible cross-language.

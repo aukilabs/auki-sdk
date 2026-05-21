@@ -2,6 +2,12 @@
 
 ---
 
+## `swift-bindings` cargo feature
+
+PR A added an additive `swift-bindings` feature that currently gates UniFFI proc-macros on `PeerIdentity` only. The feature propagates `auki-identity/swift-bindings` because UniFFI's `FfiConverterArc<UT>` blanket impl on `Wallet` only compiles when the upstream feature is on. PR B extends it to `NetworkRuntime`, `PeerLivenessEvent`, the stream surface, and the existing Discovery types (replacing the hand-written Stage 1 binding-crate wrappers). The feature lives here, not in a separate `*-swift` upstream crate.
+
+---
+
 ## SDK relay-reservation helper — v2 story for NAT/firewalled daemons _(filed by Nils's claude, 2026-05-14)_
 
 `auki_network::swarm::resolve_advertise_multiaddrs` shipped 2026-05-14 for v1 (LAN-only demo, plus operator-override for multi-NIC / VPN / container-host ambiguity). It does NOT solve the dual-firewalled case where neither peer has a public IP — those daemons need libp2p Circuit Relay v2: dial a relay → reserve a slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (replace-semantics override). v2 should provide an SDK helper that owns the dial + reserve + listen dance and surfaces the resolved circuit address back to the caller, so daemons don't reimplement it.

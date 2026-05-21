@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 15:41 HKT, 2026
+
+**Added optional `swift-bindings` cargo feature; annotated `PeerIdentity` (PR A's slice).** Same additive pattern as `auki-identity`'s new feature. PR A's surface: `PeerIdentity::{from_wallet, peer_id_string}`. `from_wallet`'s parameter changed from `&Wallet` to `Arc<Wallet>` (UniFFI 0.31 doesn't impl `LiftRef` for foreign-crate Objects); workspace callers (auki-network's own tests, swarm.rs doctest, examples/diagnostic-app, bindings/python/auki-domain-py) adapted. `from_wallet`'s body bridges `Wallet::seed()`'s new `Vec<u8>` back to `PeerIdentity::from_seed`'s still-existing `&[u8; 32]` via `.try_into().expect(...)`. `peer_id_string()` returns the canonical libp2p peer-id `String` so PR A doesn't yet need the `PeerId`-as-`String` UniFFI custom type (that lands in PR B). Feature-gated `uniffi::setup_scaffolding!()` at the crate root.
+
+PR B will extend the feature to annotate `NetworkRuntime`, `PeerLivenessEvent`, the full stream surface, and the existing Discovery client (replacing Stage 1's hand-written `bindings/swift/auki-network-swift/src/lib.rs` wrappers).
+
 ### Nils's codex · May 20, HKT, 2026
 
 **Heartbeat frames can carry optional domain-clock source metadata.** `Heartbeat` now has an optional `domain_clock` object with cluster name, stable domain-clock id/hash, backing peer id, backing clock id/hash, and `backing_to_domain_offset_ns`. `HeartbeatTimestampSource` exposes a callback for this metadata, and `run_heartbeat_pair` copies the current value into each outbound frame.

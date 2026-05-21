@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 15:41 HKT, 2026
+
+**[`auki-identity`](auki-identity/changelog.md) + [`auki-network`](auki-network/changelog.md) — new optional `swift-bindings` cargo feature.** Additive, feature-gated UniFFI proc-macros on `Wallet` + `PeerIdentity` (with two UniFFI 0.31 type-system-forced upstream signature changes: `Wallet::{from_seed, seed}` switch to `Vec<u8>` + `Arc<Self>`; `PeerIdentity::from_wallet` takes `Arc<Wallet>`). Default builds unchanged. Consumed by the new [`auki-identity-swift`](../bindings/swift/auki-identity-swift/changelog.md) binding crate (Spec 1 PR A).
+
 ### Nils's codex · May 21, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — heartbeat domain timing now uses SDK-owned `SessionClock`.** `ClusterManager` feeds its peer-id rooted `SessionClock` into heartbeat timestamps, initial domain-clock metadata, and promoted-Manager domain-clock advertisements instead of the compatibility `DaemonInfo.session_clock_id/hash` fields.

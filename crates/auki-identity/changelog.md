@@ -6,6 +6,19 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 15:41 HKT, 2026
+
+**Added optional `swift-bindings` cargo feature; annotated `Wallet`.** Adds `swift-bindings = ["dep:uniffi", "dep:thiserror"]` feature gating UniFFI proc-macros on `Wallet` (`#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]` + split impl exposing `new`, `from_seed`, `seed`, new `wallet_id_str` helper). UniFFI 0.31 type-system constraints forced two upstream-shape changes (additive: defaults unchanged):
+- `Wallet::from_seed`: `&[u8; 32] -> Self` → `Vec<u8> -> Result<Arc<Self>, IdentityError>` (length-checked, `Arc<Self>` per UniFFI Object constructor contract).
+- `Wallet::seed`: `[u8; 32] -> Vec<u8>`.
+- `Wallet::new`: `Self -> Arc<Self>` (UniFFI Object constructor contract).
+- New `IdentityError` enum (`InvalidSeedLength { actual: u32 }`), feature-gated with `uniffi::Error` + `thiserror::Error`; mirror under default builds keeps message format byte-identical.
+- Hand-rolled redacting `Debug for Wallet` so test panics don't leak the ed25519 secret key.
+- `Wallet::derive_child`'s internal construction inlined to bypass the new Result/Arc shape.
+- Feature-gated `uniffi::setup_scaffolding!()` at the crate root (UniFFI 0.31 proc-macros reference `crate::UniFfiTag`).
+
+Consumed by the new `bindings/swift/auki-identity-swift` crate (Spec 1 PR A). Methods kept off the UniFFI export at PR A: `public_key`, `id`, `sign`, `sign_canonical_json`, `derive_child`, `issue_creation_cert` — they remain on `Wallet` in a non-annotated impl block; later PRs lift them when iosapp needs them.
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: stable peer-key prose now points at the current `PeerIdentity` / `ClusterManager` path.** The README no longer describes static cluster-doc peer pinning as the consumer of `load_or_mint_seed`; it now explains that a persisted wallet seed lets `auki-network::PeerIdentity::from_wallet` regenerate the same peer id, which `auki-domain::ClusterManager` advertises to Discovery and cluster members across daemon restarts. No code changed in this crate.

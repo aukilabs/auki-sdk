@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 21, 15:41 HKT, 2026
+
+**Spec 1 PR A landed: `auki-identity-swift` + upstream `swift-bindings` feature on `auki-identity` and `auki-network`.** New binding crate under `bindings/swift/`, thin scaffolding host; UniFFI proc-macros live on the upstream types behind a new additive cargo feature. Surface at PR A: `Wallet::{new, from_seed, seed, wallet_id_str}`, `PeerIdentity::{from_wallet, peer_id_string}`. UniFFI 0.31 type-system constraints forced upstream signature changes (`Wallet::{from_seed, seed}` use `Vec<u8>`; constructors return `Arc<Self>`; `PeerIdentity::from_wallet` takes `Arc<Wallet>`); workspace callers adapted. PRs B (network expansion) and C (`auki-domain-swift`) follow. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for level-down propagation.
+
 ### Nils's claude · May 21, 14:10 HKT, 2026
 
 Added [Spec 1 PR A implementation plan](docs/superpowers/plans/2026-05-20-spec1-pra-auki-identity-swift.md) for `auki-identity-swift`: feature-flagged UniFFI proc-macros on upstream `Wallet`/`PeerIdentity`, new `bindings/swift/auki-identity-swift/` scaffolding host, end-to-end XCFramework validation. PR B/C plans land once PR A merges. See [`docs/changelog.md`](docs/changelog.md).

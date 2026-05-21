@@ -546,6 +546,7 @@ pub enum JoinClusterError {
 
 /// SDK-side handle for a cluster a daemon is participating in. See
 /// the module-level docs.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 pub struct ClusterManager {
     cluster_name: String,
     local_peer_id: PeerId,
@@ -1090,21 +1091,10 @@ impl ClusterManager {
         )
     }
 
-    /// `true` if the local peer is currently the cluster's Manager.
-    pub fn is_manager(&self) -> bool {
-        *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id
-    }
-
     /// Canonical peer-id of whoever the cluster currently agrees is
     /// the Manager. May be the local peer.
     pub fn manager_peer_id(&self) -> PeerId {
         *self.manager_peer_id.lock().expect("manager_peer_id lock")
-    }
-
-    /// Snapshot of the cluster's membership document. Clones; safe to
-    /// call from any thread.
-    pub fn membership(&self) -> ClusterMembership {
-        self.membership.lock().expect("membership lock").clone()
     }
 
     /// Number of cluster members. Aggregate (matches the
@@ -1223,61 +1213,6 @@ impl ClusterManager {
         T: prost::Message + Default + Send + 'static,
     {
         self.runtime.open_stream::<T>(peer_id, request).await
-    }
-
-    /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
-    /// stored daemon-side identity fields (passed at construction
-    /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
-    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
-    /// `cluster_joined_at_ns` set
-    /// lazily on first non-self peer observation), `is_manager` /
-    /// `manager_peer_id` from cluster state, and the local
-    /// `peer_id`.
-    ///
-    /// Daemons serve this verbatim on their Control API's
-    /// `GET /api/info`; cluster peers fetch each other's copies
-    /// over `/auki/info/0.0.1`.
-    pub fn participant_info(&self) -> ParticipantInfo {
-        let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self.session_clock.now_ns();
-
-        // Lazy `cluster_joined_at_ns`: set on first observation of
-        // any peer other than ourselves (per ansuz D3 the local peer
-        // sets its own value, not the SDK on join_cluster's behalf —
-        // a one-peer cluster shouldn't tick `cluster_joined_at_ns`).
-        let cluster_joined_at_ns = {
-            let mut guard = self
-                .cluster_joined_at_ns
-                .lock()
-                .expect("cluster_joined_at_ns mutex poisoned");
-            if guard.is_none() {
-                let has_other = self
-                    .membership
-                    .lock()
-                    .expect("membership lock")
-                    .peers
-                    .iter()
-                    .any(|p| p.peer_id != self.local_peer_id);
-                if has_other {
-                    *guard = Some(session_now_ns);
-                }
-            }
-            *guard
-        };
-
-        ParticipantInfo {
-            app: self.daemon_info.app.clone(),
-            name: self.daemon_info.name.clone(),
-            session_id: self.daemon_info.session_id.clone(),
-            session_clock_id: self.session_clock.clock_id().to_string(),
-            session_clock_hash: self.session_clock.clock_hash(),
-            session_now_ns,
-            cluster_joined_at_ns,
-            peer_id: self.local_peer_id,
-            app_instance: self.daemon_info.app_instance.clone(),
-            is_manager: manager_peer_id == self.local_peer_id,
-            manager_peer_id: manager_peer_id.to_string(),
-        }
     }
 
     /// Best current peer-clock transform estimate for an ordered
@@ -2000,6 +1935,136 @@ impl ClusterManager {
         //    `NetworkRuntime::shutdown` is `&self` + idempotent.
         self.runtime.shutdown();
         result
+    }
+}
+
+// ─── UniFFI-exposed sync surface ─────────────────────────────────────────────
+//
+// Methods Swift consumes synchronously. The `_string` / `_strings` suffix on
+// the peer-id accessors matches PR B's convention for PeerId → String
+// conversion — explicit so the FFI seam shape is visible at the call site.
+//
+// `is_manager`, `membership`, and `participant_info` are moved verbatim from
+// the un-annotated impl above — their signatures are already UniFFI-compatible
+// (`bool`, `ClusterMembership` record, `ParticipantInfo` record).
+//
+// The original typed Rust accessors (`local_peer_id() -> PeerId`,
+// `local_multiaddrs() -> &[Multiaddr]`, `manager_peer_id() -> PeerId`,
+// `cluster_name() -> &str`, `peer_count() -> usize`) remain in the
+// un-annotated impl for Rust-internal callers.
+//
+// `set_registry_app_root` takes `impl Into<PathBuf>` in the un-annotated impl
+// (kept for Rust callers). The FFI-safe String overload is
+// `set_registry_app_root_path`.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl ClusterManager {
+    /// Cluster name as an owned `String`. The typed `cluster_name() -> &str`
+    /// stays available for Rust callers in the un-annotated impl block.
+    pub fn cluster_name_str(&self) -> String {
+        self.cluster_name().to_string()
+    }
+
+    /// Canonical libp2p peer-id string for the local peer.
+    pub fn local_peer_id_string(&self) -> String {
+        self.local_peer_id().to_string()
+    }
+
+    /// Local listen multiaddrs as canonical strings.
+    pub fn local_multiaddr_strings(&self) -> Vec<String> {
+        self.local_multiaddrs().iter().map(|m| m.to_string()).collect()
+    }
+
+    /// Manager peer-id as canonical string.
+    pub fn manager_peer_id_string(&self) -> String {
+        self.manager_peer_id().to_string()
+    }
+
+    /// Number of cluster members as `u32` (FFI-portable width).
+    pub fn peer_count_u32(&self) -> u32 {
+        self.peer_count() as u32
+    }
+
+    /// `true` if the local peer is currently the cluster's Manager.
+    pub fn is_manager(&self) -> bool {
+        *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id
+    }
+
+    /// Snapshot of the cluster's membership document. Clones; safe to
+    /// call from any thread.
+    pub fn membership(&self) -> ClusterMembership {
+        self.membership.lock().expect("membership lock").clone()
+    }
+
+    /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
+    /// stored daemon-side identity fields (passed at construction
+    /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
+    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
+    /// `cluster_joined_at_ns` set lazily on first non-self peer
+    /// observation), `is_manager` / `manager_peer_id` from cluster
+    /// state, and the local `peer_id`.
+    ///
+    /// Daemons serve this verbatim on their Control API's
+    /// `GET /api/info`; cluster peers fetch each other's copies
+    /// over `/auki/info/0.0.1`.
+    pub fn participant_info(&self) -> ParticipantInfo {
+        let manager_peer_id = self.manager_peer_id();
+        let session_now_ns = self.session_clock.now_ns();
+
+        // Lazy `cluster_joined_at_ns`: set on first observation of
+        // any peer other than ourselves (per ansuz D3 the local peer
+        // sets its own value, not the SDK on join_cluster's behalf —
+        // a one-peer cluster shouldn't tick `cluster_joined_at_ns`).
+        let cluster_joined_at_ns = {
+            let mut guard = self
+                .cluster_joined_at_ns
+                .lock()
+                .expect("cluster_joined_at_ns mutex poisoned");
+            if guard.is_none() {
+                let has_other = self
+                    .membership
+                    .lock()
+                    .expect("membership lock")
+                    .peers
+                    .iter()
+                    .any(|p| p.peer_id != self.local_peer_id);
+                if has_other {
+                    *guard = Some(session_now_ns);
+                }
+            }
+            *guard
+        };
+
+        ParticipantInfo {
+            app: self.daemon_info.app.clone(),
+            name: self.daemon_info.name.clone(),
+            session_id: self.daemon_info.session_id.clone(),
+            session_clock_id: self.session_clock.clock_id().to_string(),
+            session_clock_hash: self.session_clock.clock_hash(),
+            session_now_ns,
+            cluster_joined_at_ns,
+            peer_id: self.local_peer_id,
+            app_instance: self.daemon_info.app_instance.clone(),
+            is_manager: manager_peer_id == self.local_peer_id,
+            manager_peer_id: manager_peer_id.to_string(),
+        }
+    }
+
+    /// Register (or replace) the producer-local app root used to serve
+    /// `/auki/registries/0.0.1` requests. FFI-safe String overload of
+    /// `set_registry_app_root(impl Into<PathBuf>)` (kept un-annotated for
+    /// Rust callers). The SDK reads existing registry files from this app
+    /// root via `auki-registry` and returns canonical JSON entries to
+    /// cluster peers.
+    ///
+    /// Inbound registry requests received before this call answer with
+    /// `entry: None`, which means "this peer does not have that exact
+    /// registry entry" from the consumer's perspective.
+    pub fn set_registry_app_root_path(&self, app_root: String) {
+        *self
+            .registry_app_root
+            .lock()
+            .expect("registry_app_root lock") = Some(app_root.into());
     }
 }
 

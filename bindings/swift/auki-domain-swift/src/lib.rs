@@ -248,4 +248,10 @@ mod tests {
         }
         let _p: Box<dyn ResourceCatalogProvider> = Box::new(NoopProvider);
     }
+
+    #[test]
+    fn cluster_manager_is_uniffi_object() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<auki_domain_rs::cluster_manager::ClusterManager>();
+    }
 }

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's claude · May 22, HKT, 2026
+
+Spec 1 PR B landed: `bindings/swift/auki-network-swift` expanded from Stage 1's Discovery-only surface to full v0 networking — `NetworkRuntime` + `spawn_for_swift` + 5-payload stream surface (Audio, Camera, PointCloud, JointEncoders, Detection) + `PeerLivenessListener` / `HeartbeatTimestampProvider` / `SwiftStreamProvider` (two-call protocol) callback interfaces. Stage 1's hand-wrapped Discovery types replaced by upstream-annotated re-exports. `auki-network` upstream picks up the matching UniFFI annotations under the existing `swift-bindings` feature. Unblocks Spec 1 PR C (`auki-domain-swift`).
+
 ### Nils's claude · May 21, 15:41 HKT, 2026
 
 **Spec 1 PR A landed: `auki-identity-swift` + upstream `swift-bindings` feature on `auki-identity` and `auki-network`.** New binding crate under `bindings/swift/`, thin scaffolding host; UniFFI proc-macros live on the upstream types behind a new additive cargo feature. Surface at PR A: `Wallet::{new, from_seed, seed, wallet_id_str}`, `PeerIdentity::{from_wallet, peer_id_string}`. UniFFI 0.31 type-system constraints forced upstream signature changes (`Wallet::{from_seed, seed}` use `Vec<u8>`; constructors return `Arc<Self>`; `PeerIdentity::from_wallet` takes `Arc<Wallet>`); workspace callers adapted. PRs B (network expansion) and C (`auki-domain-swift`) follow. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for level-down propagation.

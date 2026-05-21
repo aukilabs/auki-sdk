@@ -248,21 +248,17 @@ pub enum SpawnSwiftError {
 /// receivers (cluster-orchestration concerns reach for them via
 /// `auki-domain-swift::ClusterManager` in PR C).
 ///
-/// At this task's checkpoint, the stream provider is hard-coded to
-/// `decline_all_streams()` — every inbound stream request is declined.
-/// Task 13 widens this signature to accept a Swift-implemented
-/// `SwiftStreamProvider`.
-///
 /// ## UniFFI callback-interface note
 ///
 /// UniFFI 0.31 `Lift`-implements `Box<dyn Trait>` for callback
-/// interfaces — not `Arc<dyn Trait>`. The `Box` is immediately promoted
+/// interfaces — not `Arc<dyn Trait>`. Each `Box` is immediately promoted
 /// to `Arc` inside the function body so that `drain_liveness_events` can
 /// hold a `'static` reference across the tokio task boundary.
-/// `heartbeat_source_from_provider` likewise needs `Arc`, so both are
-/// promoted at entry. This is an internal implementation detail — Swift
-/// callers see their protocol conformances passed by value, same as any
-/// other UniFFI callback interface.
+/// `heartbeat_source_from_provider` and `swift_provider_to_upstream`
+/// likewise need `Arc`, so all three are promoted at entry. This is an
+/// internal implementation detail — Swift callers see their protocol
+/// conformances passed by value, same as any other UniFFI callback
+/// interface.
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn spawn_for_swift(
     identity: Arc<auki_network_rs::PeerIdentity>,
@@ -270,15 +266,17 @@ pub async fn spawn_for_swift(
     allowed_peers: Vec<auki_network_rs::AllowedPeer>,
     peer_liveness_listener: Box<dyn PeerLivenessListener>,
     heartbeat_timestamps: Box<dyn HeartbeatTimestampProvider>,
+    stream_provider: Box<dyn SwiftStreamProvider>,
 ) -> Result<Arc<auki_network_rs::NetworkRuntime>, SpawnSwiftError> {
-    // Promote callback-interface boxes to Arc so they can be shared
-    // across the tokio spawn boundary and the heartbeat adapter.
-    let peer_liveness_listener: Arc<dyn PeerLivenessListener> =
-        Arc::from(peer_liveness_listener);
-    let heartbeat_timestamps: Arc<dyn HeartbeatTimestampProvider> =
-        Arc::from(heartbeat_timestamps);
+    // Promote Box<dyn ...> to Arc<dyn ...> so the trait objects can be
+    // cloned into spawned tasks / closures (UniFFI lifts callback
+    // interfaces as Box; Arc::from gives us the 'static-clonable shape
+    // the upstream runtime needs).
+    let peer_liveness_listener: Arc<dyn PeerLivenessListener> = Arc::from(peer_liveness_listener);
+    let heartbeat_timestamps: Arc<dyn HeartbeatTimestampProvider> = Arc::from(heartbeat_timestamps);
+    let stream_provider: Arc<dyn SwiftStreamProvider> = Arc::from(stream_provider);
 
-    // 1. Build the swarm. Upstream API: `build_swarm(&PeerIdentity, SwarmConfig)`.
+    // 1. Build the swarm.
     let swarm = auki_network_rs::swarm::build_swarm(
         identity.as_ref(),
         auki_network_rs::swarm::SwarmConfig {
@@ -297,8 +295,8 @@ pub async fn spawn_for_swift(
     // 2. Build the heartbeat source from the Swift provider.
     let heartbeat_source = heartbeat_source_from_provider(heartbeat_timestamps);
 
-    // 3. Install decline-all stream provider (Task 13 widens this).
-    let stream_provider = auki_network_rs::stream_runtime::decline_all_streams();
+    // 3. Build the upstream StreamProvider closure from the Swift provider.
+    let upstream_provider = swift_provider_to_upstream(stream_provider);
 
     // 4. Spawn the runtime. The 9-element tuple destructure: (Self,
     //    join_rx, liveness_rx, membership_rx, info_rx, resources_rx,
@@ -309,14 +307,14 @@ pub async fn spawn_for_swift(
         auki_network_rs::NetworkRuntime::spawn(
             swarm,
             allowed_peers,
-            stream_provider,
+            upstream_provider,
             heartbeat_source,
         )
         .map_err(|e| SpawnSwiftError::RuntimeSpawn {
             message: e.to_string(),
         })?;
 
-    // 5. Drain task: pump liveness events to the Swift listener.
+    // 5. Drain liveness events to the Swift listener.
     tokio::spawn(drain_liveness_events(liveness_rx, peer_liveness_listener));
 
     Ok(Arc::new(rt))
@@ -700,6 +698,91 @@ pub(crate) fn detection_source_to_stream(
     Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
+// ─── Swift provider → upstream StreamProvider adapter ──────────────
+
+/// Wraps a Swift `SwiftStreamProvider` as the upstream
+/// `StreamProvider` closure type. Each invocation of the closure
+/// follows the two-call protocol: dispatch_decision, then (on Accept)
+/// the matching `*_source` call. The source-stream-from-callback
+/// adapters do the prost decoding.
+pub(crate) fn swift_provider_to_upstream(
+    provider: Arc<dyn SwiftStreamProvider>,
+) -> auki_network_rs::stream_runtime::StreamProvider {
+    Arc::new(
+        move |peer: libp2p_identity::PeerId, request: auki_network_rs::stream_protocol::StreamRequest| {
+            use prost::Message;
+            let peer_id_str = peer.to_string();
+            let request_bytes = request.encode_to_vec();
+            let decision = provider.dispatch_decision(peer_id_str.clone(), request_bytes.clone());
+
+            match decision {
+                SwiftStreamDecision::Decline { reason_bytes } => {
+                    let reason = auki_network_rs::stream_protocol::DeclineReason::decode(
+                        reason_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    auki_network_rs::stream_runtime::StreamDispatch::Decline { reason }
+                }
+                SwiftStreamDecision::AcceptAudio { manifest_bytes } => {
+                    let manifest = auki_network_rs::stream_protocol::StreamManifest::decode(
+                        manifest_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    let source = provider.audio_source(peer_id_str, request_bytes);
+                    auki_network_rs::stream_runtime::StreamDispatch::AcceptAudio {
+                        manifest,
+                        source: audio_source_to_stream(source),
+                    }
+                }
+                SwiftStreamDecision::AcceptCamera { manifest_bytes } => {
+                    let manifest = auki_network_rs::stream_protocol::StreamManifest::decode(
+                        manifest_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    let source = provider.camera_source(peer_id_str, request_bytes);
+                    auki_network_rs::stream_runtime::StreamDispatch::AcceptCamera {
+                        manifest,
+                        source: camera_source_to_stream(source),
+                    }
+                }
+                SwiftStreamDecision::AcceptPointCloud { manifest_bytes } => {
+                    let manifest = auki_network_rs::stream_protocol::StreamManifest::decode(
+                        manifest_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    let source = provider.point_cloud_source(peer_id_str, request_bytes);
+                    auki_network_rs::stream_runtime::StreamDispatch::AcceptPointCloud {
+                        manifest,
+                        source: point_cloud_source_to_stream(source),
+                    }
+                }
+                SwiftStreamDecision::AcceptJointEncoders { manifest_bytes } => {
+                    let manifest = auki_network_rs::stream_protocol::StreamManifest::decode(
+                        manifest_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    let source = provider.joint_encoders_source(peer_id_str, request_bytes);
+                    auki_network_rs::stream_runtime::StreamDispatch::AcceptJointEncoders {
+                        manifest,
+                        source: joint_encoders_source_to_stream(source),
+                    }
+                }
+                SwiftStreamDecision::AcceptDetection { manifest_bytes } => {
+                    let manifest = auki_network_rs::stream_protocol::StreamManifest::decode(
+                        manifest_bytes.as_slice(),
+                    )
+                    .unwrap_or_default();
+                    let source = provider.detection_source(peer_id_str, request_bytes);
+                    auki_network_rs::stream_runtime::StreamDispatch::AcceptDetection {
+                        manifest,
+                        source: detection_source_to_stream(source),
+                    }
+                }
+            }
+        },
+    )
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -1057,8 +1140,8 @@ mod tests {
     }
 
     /// Smoke test: `spawn_for_swift` constructs a runtime against a no-op
-    /// listener + a wall-clock heartbeat provider, then shuts it down
-    /// cleanly. Requires a real tokio runtime.
+    /// listener + a wall-clock heartbeat provider + a decline-all stream
+    /// provider, then shuts it down cleanly. Requires a real tokio runtime.
     #[tokio::test]
     async fn spawn_for_swift_smoke() {
         struct NoopListener;
@@ -1086,14 +1169,61 @@ mod tests {
             }
         }
 
+        struct DeclineAllProvider;
+        impl SwiftStreamProvider for DeclineAllProvider {
+            fn dispatch_decision(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> SwiftStreamDecision {
+                SwiftStreamDecision::Decline {
+                    reason_bytes: vec![],
+                }
+            }
+            fn audio_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftAudioSource> {
+                unreachable!("test never accepts")
+            }
+            fn camera_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftCameraSource> {
+                unreachable!("test never accepts")
+            }
+            fn point_cloud_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftPointCloudSource> {
+                unreachable!("test never accepts")
+            }
+            fn joint_encoders_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftJointEncodersSource> {
+                unreachable!("test never accepts")
+            }
+            fn detection_source(
+                &self,
+                _peer_id: String,
+                _request_bytes: Vec<u8>,
+            ) -> Box<dyn SwiftDetectionSource> {
+                unreachable!("test never accepts")
+            }
+        }
+
         let wallet = auki_identity::Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
         let identity =
             std::sync::Arc::new(auki_network_rs::PeerIdentity::from_wallet(wallet));
 
-        // UniFFI callback interfaces cross the FFI as `Box<dyn Trait>`;
-        // pass them as `Box` here to match the exported function signature.
         let listener: Box<dyn PeerLivenessListener> = Box::new(NoopListener);
         let heartbeat: Box<dyn HeartbeatTimestampProvider> = Box::new(WallClockProvider);
+        let stream_provider: Box<dyn SwiftStreamProvider> = Box::new(DeclineAllProvider);
 
         let rt = spawn_for_swift(
             identity,
@@ -1101,15 +1231,14 @@ mod tests {
             vec![],
             listener,
             heartbeat,
+            stream_provider,
         )
         .await
-        .expect("spawn succeeds in test runtime");
+        .expect("spawn succeeds");
 
         let pid = rt.local_peer_id_string();
-        assert!(pid.starts_with("12D3KooW"), "expected canonical PeerId");
-
+        assert!(pid.starts_with("12D3KooW"));
         assert!(rt.connected_peer_id_strings().is_empty());
-
         rt.shutdown();
     }
 

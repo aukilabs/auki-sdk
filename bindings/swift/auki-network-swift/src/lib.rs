@@ -372,4 +372,21 @@ mod tests {
         assert_eq!(ap.peer_id, pid);
         assert_eq!(ap.multiaddrs, vec![addr]);
     }
+
+    /// `SpawnError` is a Display'd error; UniFFI flattens it as a tagged enum.
+    #[test]
+    fn spawn_error_is_display_clean() {
+        use auki_network_rs::SpawnError;
+        let e = SpawnError::NoTokioRuntime;
+        assert!(!e.to_string().is_empty());
+    }
+
+    /// `UpdateError` round-trips through Display; UniFFI surfaces it as a
+    /// tagged enum (no opaque payloads after annotation).
+    #[test]
+    fn update_error_is_display_clean() {
+        use auki_network_rs::UpdateError;
+        let e = UpdateError::RuntimeUnavailable;
+        assert!(!e.to_string().is_empty());
+    }
 }

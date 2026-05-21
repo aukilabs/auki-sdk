@@ -182,6 +182,7 @@ pub struct HeartbeatNtpSampleObservation {
 }
 
 /// Errors from [`NetworkRuntime::spawn`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
 #[derive(Debug, thiserror::Error)]
 pub enum SpawnError {
     /// Constructor was called outside a tokio runtime context — the
@@ -537,6 +538,10 @@ pub enum BroadcastDiagnosticError {
 /// dropped their connections and removed them from the allow-list.
 /// Peers in both keep their existing connection; their addresses are
 /// refreshed for future redials.
+///
+/// `swift-bindings`: UniFFI Record. All fields cross the FFI via the
+/// custom-type registrations in scope (PeerId → String).
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct UpdateReport {
     /// Peer-ids newly added to the allow-list.
@@ -545,7 +550,15 @@ pub struct UpdateReport {
     pub removed: Vec<PeerId>,
 }
 
-/// Errors from [`NetworkRuntime::set_allowed_peers`].
+/// Errors from [`NetworkRuntime::set_allowed_peers`] /
+/// [`NetworkRuntime::set_heartbeat_targets`].
+///
+/// `swift-bindings`: flattened — variants that wrap non-FFI inner
+/// errors are surfaced as Display'd strings; UniFFI consumers see one
+/// tagged-enum case per variant with a `message: String` field where
+/// the wrapped error was.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     /// The runtime task isn't accepting commands — typically because

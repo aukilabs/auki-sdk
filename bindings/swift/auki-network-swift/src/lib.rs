@@ -223,6 +223,119 @@ pub(crate) fn heartbeat_source_from_provider(
     }
 }
 
+// ─── spawn_for_swift orchestrator ──────────────────────────────────
+
+/// Errors from [`spawn_for_swift`].
+///
+/// `swift-bindings`: UniFFI Error. Flattens swarm-build failures to a
+/// `message: String` since the underlying types are libp2p-specific.
+#[derive(uniffi::Error, Debug, thiserror::Error)]
+pub enum SpawnSwiftError {
+    /// `auki_network::swarm::build_swarm` failed (invalid listen
+    /// multiaddr, transport bind failure, etc.).
+    #[error("swarm build: {message}")]
+    SwarmBuild { message: String },
+    /// `NetworkRuntime::spawn` failed — currently only one variant
+    /// (`NoTokioRuntime`), but propagated as a message string for
+    /// consistency.
+    #[error("runtime spawn: {message}")]
+    RuntimeSpawn { message: String },
+}
+
+/// Swift entry point for spawning a `NetworkRuntime`. Builds the libp2p
+/// swarm internally, wires the `PeerLivenessListener` to the
+/// `PeerLivenessEvent` channel via a drain task, drops the other 8
+/// receivers (cluster-orchestration concerns reach for them via
+/// `auki-domain-swift::ClusterManager` in PR C).
+///
+/// At this task's checkpoint, the stream provider is hard-coded to
+/// `decline_all_streams()` — every inbound stream request is declined.
+/// Task 13 widens this signature to accept a Swift-implemented
+/// `SwiftStreamProvider`.
+///
+/// ## UniFFI callback-interface note
+///
+/// UniFFI 0.31 `Lift`-implements `Box<dyn Trait>` for callback
+/// interfaces — not `Arc<dyn Trait>`. The `Box` is immediately promoted
+/// to `Arc` inside the function body so that `drain_liveness_events` can
+/// hold a `'static` reference across the tokio task boundary.
+/// `heartbeat_source_from_provider` likewise needs `Arc`, so both are
+/// promoted at entry. This is an internal implementation detail — Swift
+/// callers see their protocol conformances passed by value, same as any
+/// other UniFFI callback interface.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn spawn_for_swift(
+    identity: Arc<auki_network_rs::PeerIdentity>,
+    listen_multiaddrs: Vec<Multiaddr>,
+    allowed_peers: Vec<auki_network_rs::AllowedPeer>,
+    peer_liveness_listener: Box<dyn PeerLivenessListener>,
+    heartbeat_timestamps: Box<dyn HeartbeatTimestampProvider>,
+) -> Result<Arc<auki_network_rs::NetworkRuntime>, SpawnSwiftError> {
+    // Promote callback-interface boxes to Arc so they can be shared
+    // across the tokio spawn boundary and the heartbeat adapter.
+    let peer_liveness_listener: Arc<dyn PeerLivenessListener> =
+        Arc::from(peer_liveness_listener);
+    let heartbeat_timestamps: Arc<dyn HeartbeatTimestampProvider> =
+        Arc::from(heartbeat_timestamps);
+
+    // 1. Build the swarm. Upstream API: `build_swarm(&PeerIdentity, SwarmConfig)`.
+    let swarm = auki_network_rs::swarm::build_swarm(
+        identity.as_ref(),
+        auki_network_rs::swarm::SwarmConfig {
+            listen_addresses: listen_multiaddrs,
+            agent_version: format!(
+                "auki-network-swift/{}",
+                env!("CARGO_PKG_VERSION")
+            ),
+            enable_relay_server: false,
+        },
+    )
+    .map_err(|e| SpawnSwiftError::SwarmBuild {
+        message: e.to_string(),
+    })?;
+
+    // 2. Build the heartbeat source from the Swift provider.
+    let heartbeat_source = heartbeat_source_from_provider(heartbeat_timestamps);
+
+    // 3. Install decline-all stream provider (Task 13 widens this).
+    let stream_provider = auki_network_rs::stream_runtime::decline_all_streams();
+
+    // 4. Spawn the runtime. The 9-element tuple destructure: (Self,
+    //    join_rx, liveness_rx, membership_rx, info_rx, resources_rx,
+    //    sensors_rx, registry_rx, diagnostic_rx). At v0 we only wire
+    //    liveness_rx to the Swift listener; the others are dropped
+    //    (their senders' errors are swallowed by run_task).
+    let (rt, _join_rx, liveness_rx, _membership_rx, _info_rx, _resources_rx, _sensors_rx, _registry_rx, _diagnostic_rx) =
+        auki_network_rs::NetworkRuntime::spawn(
+            swarm,
+            allowed_peers,
+            stream_provider,
+            heartbeat_source,
+        )
+        .map_err(|e| SpawnSwiftError::RuntimeSpawn {
+            message: e.to_string(),
+        })?;
+
+    // 5. Drain task: pump liveness events to the Swift listener.
+    tokio::spawn(drain_liveness_events(liveness_rx, peer_liveness_listener));
+
+    Ok(Arc::new(rt))
+}
+
+/// Drains the upstream `PeerLivenessEvent` receiver, forwarding each
+/// `is_v0_forwardable` event to the Swift `PeerLivenessListener`.
+async fn drain_liveness_events(
+    mut rx: tokio::sync::mpsc::Receiver<auki_network_rs::PeerLivenessEvent>,
+    listener: Arc<dyn PeerLivenessListener>,
+) {
+    while let Some(event) = rx.recv().await {
+        if SwiftPeerLivenessEvent::is_v0_forwardable(&event) {
+            listener.on_event(SwiftPeerLivenessEvent::from_upstream(&event));
+        }
+        // Else drop the heartbeat-detail variants per v0 design.
+    }
+}
+
 // ─── Value types ───────────────────────────────────────────────────
 
 /// One cluster's entry in Discovery's directory. `manager_peer_id` is
@@ -577,6 +690,63 @@ mod tests {
     fn network_runtime_is_uniffi_object() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<auki_network_rs::NetworkRuntime>();
+    }
+
+    /// Smoke test: `spawn_for_swift` constructs a runtime against a no-op
+    /// listener + a wall-clock heartbeat provider, then shuts it down
+    /// cleanly. Requires a real tokio runtime.
+    #[tokio::test]
+    async fn spawn_for_swift_smoke() {
+        struct NoopListener;
+        impl PeerLivenessListener for NoopListener {
+            fn on_event(&self, _event: SwiftPeerLivenessEvent) {}
+        }
+
+        struct WallClockProvider;
+        impl HeartbeatTimestampProvider for WallClockProvider {
+            fn clock_id(&self) -> String {
+                "smoke-clock".to_string()
+            }
+            fn clock_hash(&self) -> String {
+                "smoke-hash".to_string()
+            }
+            fn now_ns(&self) -> i64 {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as i64)
+                    .unwrap_or(0)
+            }
+            fn domain_clock_bytes(&self) -> Option<Vec<u8>> {
+                None
+            }
+        }
+
+        let wallet = auki_identity::Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
+        let identity =
+            std::sync::Arc::new(auki_network_rs::PeerIdentity::from_wallet(wallet));
+
+        // UniFFI callback interfaces cross the FFI as `Box<dyn Trait>`;
+        // pass them as `Box` here to match the exported function signature.
+        let listener: Box<dyn PeerLivenessListener> = Box::new(NoopListener);
+        let heartbeat: Box<dyn HeartbeatTimestampProvider> = Box::new(WallClockProvider);
+
+        let rt = spawn_for_swift(
+            identity,
+            vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            vec![],
+            listener,
+            heartbeat,
+        )
+        .await
+        .expect("spawn succeeds in test runtime");
+
+        let pid = rt.local_peer_id_string();
+        assert!(pid.starts_with("12D3KooW"), "expected canonical PeerId");
+
+        assert!(rt.connected_peer_id_strings().is_empty());
+
+        rt.shutdown();
     }
 
     /// Smoke test: a `HeartbeatTimestampProvider` impl can be converted

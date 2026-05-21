@@ -40,7 +40,7 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 # Process-wide multi-thread tokio runtime that UniFFI drives the
 # exported async fns on (reqwest needs a reactor). See lib.rs.
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Swift→Rust source-stream adapter wraps `tokio::sync::mpsc::Receiver`s in
 # `tokio_stream::wrappers::ReceiverStream` to satisfy the upstream
 # `SourceStream<T> = Pin<Box<dyn Stream<Item=...> + Send>>` shape.
@@ -55,6 +55,11 @@ thiserror = "2"
 # HeartbeatDomainClock uses JSON (length-prefixed JSON is the heartbeat
 # wire format), so serde_json is the correct decoder — not prost.
 serde_json = "1"
+
+[dev-dependencies]
+# `spawn_for_swift_smoke` uses `Wallet::from_seed` to construct a
+# `PeerIdentity` without a hardcoded 32-byte seed array.
+auki-identity = { path = "../../../crates/auki-identity" }
 
 # Swift codegen helper. Gated on `cli` so a plain library build/test
 # doesn't require the UniFFI CLI; the build script enables the feature.

@@ -42,6 +42,9 @@ mod wasm;
 #[cfg(feature = "browser_probe")]
 pub mod browser_probe;
 
+#[cfg(feature = "message_node")]
+pub mod message_node;
+
 #[cfg(feature = "swarm")]
 pub mod swarm;
 

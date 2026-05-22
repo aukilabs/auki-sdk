@@ -23,6 +23,7 @@ Implementation status for [`auki-network`](../README.md).
 - [`registries_protocol.rs`](registries_protocol.rs) - `/auki/registries/0.0.1` framed request/response for hash-pinned registry entries.
 - [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-proto`.
 - [`message_protocol.rs`](message_protocol.rs) - `/auki/message/0.0.1` prost framing for generic peer messages.
+- [`message_node.rs`](message_node.rs) - native WebRTC Direct message-node facade for Swift/UniFFI hosts, behind `message_node`.
 - [`stream_runtime.rs`](stream_runtime.rs) - typed `Stream<T>` producer/consumer API on top of `stream_protocol`.
 - [`discovery_client.rs`](discovery_client.rs) - Discovery HTTP client, behind `discovery_client`.
 - [`app_instance.rs`](app_instance.rs) - MAC-derived app-instance helper, behind `app_instance`.
@@ -35,6 +36,7 @@ Always available:
 
 ```rust
 pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
+pub const MESSAGE_PROTOCOL: &str = "/auki/message/0.0.1";
 
 pub struct PeerIdentity { /* libp2p ed25519 keypair */ }
 impl PeerIdentity {
@@ -91,6 +93,7 @@ peerIdFromWalletSeed(seed: Uint8Array) -> string
 peerPrivateKeyProtobufFromSeed(seed: Uint8Array) -> Uint8Array
 peerPrivateKeyProtobufFromWalletSeed(seed: Uint8Array) -> Uint8Array
 browserProbeProtocol() -> string
+messageProtocol() -> string
 encodeBrowserProbeRequest(nonce, payload) -> Uint8Array
 decodeBrowserProbeResponse(bytes) -> string
 ```
@@ -109,6 +112,33 @@ pub mod browser_probe {
         identity: PeerIdentity,
         listen_addr: multiaddr::Multiaddr,
     ) -> Result<(), BrowserProbeError>;
+}
+```
+
+Behind `message_node`:
+
+```rust
+pub mod message_node {
+    pub struct MessageNodeConfig {
+        pub listen_addresses: Vec<multiaddr::Multiaddr>,
+        pub agent_version: String,
+    }
+
+    pub struct MessageNodeEvent {
+        pub peer_id: libp2p_identity::PeerId,
+        pub envelope: auki_proto::message::MessageEnvelope,
+    }
+
+    pub struct MessageNode { /* owns a Tokio runtime and WebRTC Direct swarm task */ }
+    impl MessageNode {
+        pub fn spawn(identity: PeerIdentity, config: MessageNodeConfig) -> Result<Self, MessageNodeError>;
+        pub fn local_peer_id(&self) -> libp2p_identity::PeerId;
+        pub fn listen_addrs(&self) -> Vec<multiaddr::Multiaddr>;
+        pub fn dial(&self, peer_id: libp2p_identity::PeerId, addrs: Vec<multiaddr::Multiaddr>) -> Result<(), MessageNodeError>;
+        pub fn send_envelope_bytes(&self, peer_id: libp2p_identity::PeerId, envelope_bytes: Vec<u8>) -> Result<auki_proto::message::MessageAck, MessageNodeError>;
+        pub fn next_event(&self) -> Result<Option<MessageNodeEvent>, MessageNodeError>;
+        pub fn shutdown(&self);
+    }
 }
 ```
 
@@ -258,6 +288,7 @@ cargo check -p auki-network --target wasm32-unknown-unknown --no-default-feature
 cargo test -p auki-network --features swarm,discovery_client
 cargo check -p auki-network --features browser_probe --example browser_probe_listener
 cargo test -p auki-network --features browser_probe browser_probe
+cargo test -p auki-network --features message_node message_node
 just generate-javascript-bindings auki-network
 DISCOVERY_URL=http://127.0.0.1:8080 cargo test -p auki-network --features discovery_client --test discovery_integration -- --ignored
 ```

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**Native `/auki/message/0.0.1` message-node facade added.** The `message_node` feature now owns a synchronous WebRTC Direct node for Swift/UniFFI hosts, using generated `auki-proto` `MessageEnvelope` bytes at the binding boundary and returning `MessageAck` bytes after substream exchange. Tests cover facade defaults, protobuf decode failure, non-blocking event polling, and a local two-node WebRTC Direct message/ack exchange.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`/auki/message/0.0.1` added as a proto-backed peer message protocol.** `message_protocol` now exposes the stable protocol id, re-exports `auki_proto::message::{MessageEnvelope, MessageAck}`, and provides length-prefixed prost read/write helpers with locked protocol/framing tests.
 
 ### Nils's codex · May 22, HKT, 2026

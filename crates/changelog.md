@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — native `/auki/message/0.0.1` message-node facade added.** The `message_node` feature exposes a synchronous WebRTC Direct message/ack node for generated Swift/UniFFI hosts, with a local two-node exchange test.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-datatypes` removed from the Rust workspace.** `auki-proto` is now the only Rust protobuf crate; the deprecated compatibility shim directory and workspace member are gone, and current crate docs / parking-lot summaries point at `auki-proto` or root `proto/auki` instead.
 
 ### Nils's codex · May 22, HKT, 2026

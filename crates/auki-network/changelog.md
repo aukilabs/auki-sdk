@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**iOS/browser generated-binding test path documented.** The source README now points at `examples/ios/AukiNetworkTestApp` as the generated Swift host for `AukiMessageNode` and the browser message smoke script; the sprint now treats the committed app/script as current state and leaves only a live simulator/device interop run as follow-up.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`AukiMessageNode` exposed through generated Swift UniFFI bindings.** The native adapter now exports a Swift-facing message node object with peer id, listen-address, dial, send-envelope, event-poll, and shutdown methods. `bindings.toml` enables Swift generation with the `message_node` feature, and the crate owns a SwiftPM package template. Verification generated the local ignored `bindings/swift/auki-network` package and built its iOS/macOS XCFramework.
 
 ### Nils's codex · May 22, HKT, 2026

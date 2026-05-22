@@ -163,6 +163,8 @@ public struct AukiMessageEvent {
 
 `just generate-swift-bindings auki-network` generates the local ignored SwiftPM package under `bindings/swift/auki-network/` and verifies the iOS/macOS XCFramework build. The package is a generated artifact; crate-owned source policy lives in `bindings.toml`, `ffi.rs`, and `bindings/swift/Package.swift.tmpl`.
 
+[`examples/ios/AukiNetworkTestApp`](../../../examples/ios/AukiNetworkTestApp) is the committed iOS host for this generated package. It imports generated `auki_network` and generated SwiftProtobuf `AukiProto`; it does not import a separate `auki_identity` Swift package because wallet seed handling stays behind the Rust `AukiMessageNode` facade. The companion `browser-message-smoke.mjs` script uses the generated browser package and js-libp2p to send a length-prefixed `MessageEnvelope` to the iOS app over `/auki/message/0.0.1`.
+
 Behind `swarm`:
 
 ```rust

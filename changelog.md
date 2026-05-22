@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-network` iOS/browser generated-binding test path documented.** The crate source docs now point at the committed iOS generated Swift host and browser js-libp2p smoke harness, while tracking a live simulator/device interop run as the remaining follow-up. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Browser-to-iOS `/auki/message/0.0.1` smoke harness added.** `examples/ios/AukiNetworkTestApp` now includes a Node/js-libp2p script that uses generated browser `auki-network` bindings to send protobuf envelopes to the iOS generated Swift/Rust message node. See [`examples/changelog.md`](examples/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

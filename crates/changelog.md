@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — iOS/browser generated-binding test path documented.** The crate source docs now point at the iOS generated Swift host and browser js-libp2p smoke harness, with live simulator/device interop as the remaining follow-up.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — `AukiMessageNode` exposed through generated Swift UniFFI bindings.** The crate now enables Swift generation with `message_node`, owns a SwiftPM package template, and locally verifies the ignored `bindings/swift/auki-network` XCFramework output.
 
 ### Nils's codex · May 22, HKT, 2026

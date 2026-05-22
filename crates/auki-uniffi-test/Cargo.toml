@@ -12,18 +12,41 @@ name = "auki_uniffi_test"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = []
-cli = ["uniffi/cli"]
+default = ["uniffi"]
+uniffi = [
+    "dep:uniffi",
+    "dep:tokio",
+    "dep:thiserror",
+    "tokio/time",
+]
+cli = ["uniffi", "uniffi/cli"]
+wasm = [
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:gloo-timers",
+    "dep:js-sys",
+]
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
-uniffi = { version = "0.31", features = ["tokio"] }
-thiserror = "2"
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+gloo-timers = { version = "0.4", features = ["futures"], optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", default-features = false, optional = true }
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
+thiserror = { version = "2", optional = true }
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
-[dev-dependencies]
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

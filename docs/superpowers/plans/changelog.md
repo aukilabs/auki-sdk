@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+Created the `auki-uniffi-test` multiplatform bindings implementation plan, covering `install-toolchain`, shared core extraction, UniFFI preservation for Swift/Python, wasm-bindgen JavaScript generation, and final verification.
+
+### Nils's codex · May 21, HKT, 2026
+
 Updated the browser Domain peer adapter first-tranche implementation plan so its TypeScript contract uses the current SDK sensor-kind and stream-state vocabulary Park expects.
 
 ### Nils's codex · May 20, HKT, 2026

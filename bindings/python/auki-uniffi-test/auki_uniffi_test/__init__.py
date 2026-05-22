@@ -514,19 +514,19 @@ def _uniffi_check_contract_api_version(lib):
         raise InternalError("UniFFI contract version mismatch: try cleaning and rebuilding your project")
 
 def _uniffi_check_api_checksums(lib):
-    if lib.uniffi_auki_uniffi_test_checksum_func_add() != 61526:
+    if lib.uniffi_auki_uniffi_test_checksum_func_add() != 38953:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_func_delayed_greeting() != 61617:
+    if lib.uniffi_auki_uniffi_test_checksum_func_delayed_greeting() != 59915:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_func_hello() != 14500:
+    if lib.uniffi_auki_uniffi_test_checksum_func_hello() != 45246:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_func_make_greeting() != 7806:
+    if lib.uniffi_auki_uniffi_test_checksum_func_make_greeting() != 61785:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_constructor_counter_new() != 5677:
+    if lib.uniffi_auki_uniffi_test_checksum_constructor_counter_new() != 59574:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_method_counter_add_after() != 49455:
+    if lib.uniffi_auki_uniffi_test_checksum_method_counter_add_after() != 3006:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    if lib.uniffi_auki_uniffi_test_checksum_method_counter_value() != 16338:
+    if lib.uniffi_auki_uniffi_test_checksum_method_counter_value() != 59904:
         raise InternalError("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
 
 # A ctypes library to expose the extern-C FFI definitions.

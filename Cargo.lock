@@ -945,9 +945,13 @@ dependencies = [
 name = "auki-uniffi-test"
 version = "0.0.0"
 dependencies = [
+ "gloo-timers",
+ "js-sys",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

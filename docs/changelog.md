@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 21, HKT, 2026
 
+Added the Superpowers implementation plan for turning `auki-uniffi-test` into a shared-core multiplatform binding proving crate.
+
+### Nils's codex · May 21, HKT, 2026
+
 Refined the Superpowers stream naming cleanup docs after implementation so they describe the final vocabulary directly.
 
 ### Nils's codex · May 21, HKT, 2026

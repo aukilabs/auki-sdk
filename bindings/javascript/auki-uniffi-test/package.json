@@ -1,0 +1,26 @@
+{
+  "name": "auki-uniffi-test",
+  "type": "module",
+  "collaborators": [
+    "Auki Labs Limited"
+  ],
+  "description": "wasm-bindgen JavaScript bindings for the auki-uniffi-test proving crate.",
+  "version": "0.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aukilabs/auki-sdk"
+  },
+  "files": [
+    "auki_uniffi_test_bg.wasm",
+    "auki_uniffi_test.js",
+    "auki_uniffi_test.d.ts",
+    "auki_uniffi_test_bg.wasm.d.ts",
+    "smoke.mjs"
+  ],
+  "main": "auki_uniffi_test.js",
+  "types": "auki_uniffi_test.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

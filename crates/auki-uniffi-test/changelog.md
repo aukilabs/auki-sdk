@@ -4,6 +4,22 @@ Append-only timeline of changes for the UniFFI proving crate. Latest entry on to
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Expanded the crate README into an agent-facing guide for the binding-generation standard. It now explains the binding-free core split, the separate UniFFI and wasm-bindgen adapter files, the Cargo feature contract, the crate-local `uniffi-bindgen` helper, the root `just` recipes, and the checklist for updating or creating another crate that can generate Swift, Python, and JavaScript/WebAssembly bindings.
+
+### Nils's codex · May 22, HKT, 2026
+
+Clarified binding-generation prerequisite and parking-lot propagation docs. `just install-toolchain` now validates Node/npm for the JavaScript smoke path, and the crate parking lot describes the proving surface as native UniFFI plus web wasm-bindgen rather than Swift-only UniFFI.
+
+### Nils's codex · May 22, HKT, 2026
+
+Split the proving crate into binding-free core logic plus separate native and web binding surfaces. `core.rs` now owns the shared `add`, greeting, delay validation, and counter behavior; `ffi.rs` owns the UniFFI Swift/Python exports; and `wasm.rs` owns the wasm-bindgen JavaScript exports. Added the `wasm` feature and kept default native builds on the UniFFI surface.
+
+Added JavaScript/WebAssembly generation for this proving crate. `just generate-javascript-bindings auki-uniffi-test` builds the crate with `--no-default-features --features wasm`, writes a complete package under `bindings/javascript/auki-uniffi-test/`, and runs the generated Node-compatible `smoke.mjs`.
+
+Added the root `just install-toolchain` recipe for binding-generation prerequisites: Rust targets, Docker-backed `cross`, wasm-bindgen tooling, Python, and Apple build tools on macOS.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Turned the generated Python output into a package root under `bindings/python/auki-uniffi-test`. The generated UniFFI API now lands in `auki_uniffi_test/__init__.py`, native libraries live under `auki_uniffi_test/native/<rust-target>/`, and the generated loader selects the current platform with override env vars. Added `just build-python-native-libs` and `just build-python-native-lib` recipes backed by `scripts/build-python-native-libs.sh`, using `cross` for Linux targets.

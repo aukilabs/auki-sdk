@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Bindings parking-lot summary now includes JavaScript.** The bindings-level parking lot points at the JavaScript/Web package target-policy question alongside the existing Python and Swift binding-family summaries.
+
+### Nils's codex · May 22, HKT, 2026
+
+**JavaScript `auki-uniffi-test` smoke test added.** See [`bindings/javascript`](javascript/changelog.md) for the generated Node-compatible `smoke.mjs` and generator verification step.
+
+### Nils's codex · May 22, HKT, 2026
+
+**JavaScript `auki-uniffi-test` binding generation hardened.** See [`bindings/javascript`](javascript/changelog.md) for the staged `wasm-pack` output flow, trackable generated package files, and JavaScript/WASM package metadata updates.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Python `auki-uniffi-test` package root added.** See [`bindings/python`](python/changelog.md) for the UniFFI package layout and single generation/native-library build recipe.

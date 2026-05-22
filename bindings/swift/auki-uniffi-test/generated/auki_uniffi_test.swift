@@ -937,25 +937,25 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_func_add() != 61526) {
+    if (uniffi_auki_uniffi_test_checksum_func_add() != 38953) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_func_delayed_greeting() != 61617) {
+    if (uniffi_auki_uniffi_test_checksum_func_delayed_greeting() != 59915) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_func_hello() != 14500) {
+    if (uniffi_auki_uniffi_test_checksum_func_hello() != 45246) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_func_make_greeting() != 7806) {
+    if (uniffi_auki_uniffi_test_checksum_func_make_greeting() != 61785) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_method_counter_add_after() != 49455) {
+    if (uniffi_auki_uniffi_test_checksum_method_counter_add_after() != 3006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_method_counter_value() != 16338) {
+    if (uniffi_auki_uniffi_test_checksum_method_counter_value() != 59904) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_auki_uniffi_test_checksum_constructor_counter_new() != 5677) {
+    if (uniffi_auki_uniffi_test_checksum_constructor_counter_new() != 59574) {
         return InitializationResult.apiChecksumMismatch
     }
 

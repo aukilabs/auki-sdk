@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — binding-generation standard guide added.** The crate README now explains the core/adapter split, Cargo feature contract, crate-local UniFFI CLI helper, root `just` recipes, and checklist for making another Rust crate generate Swift, Python, and JavaScript/WebAssembly bindings.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — binding prerequisite docs corrected.** `just install-toolchain` now validates Node/npm for JavaScript smoke tests, and parking-lot summaries point at the JavaScript binding family alongside Python and Swift.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — proving crate split for native and web bindings.** Shared logic now lives in `core.rs`, UniFFI Swift/Python exports live in `ffi.rs`, wasm-bindgen JavaScript exports live in `wasm.rs`, and the crate documents the new `install-toolchain` plus JavaScript generation workflows.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — Python UniFFI package now supports target-native libraries.** Generated Python output now becomes a package under `bindings/python/auki-uniffi-test`, loads native libraries from `native/<rust-target>/`, and the single `generate-python-bindings` recipe also runs `cross`-backed Linux target builds.

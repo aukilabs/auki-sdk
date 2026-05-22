@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 21, HKT, 2026
 
+Added the `auki-uniffi-test` multiplatform bindings implementation plan under [`plans/`](plans/2026-05-21-auki-uniffi-test-multiplatform-bindings.md), sequencing the shared-core split, UniFFI native package preservation, wasm-bindgen JavaScript package generation, and setup tooling.
+
+### Nils's codex · May 21, HKT, 2026
+
 Refined the stream naming cleanup Superpowers artifacts so active plans/specs describe the final `CameraFrame`, `DetectionFrame`, and `Camera` vocabulary without mechanical self-renames.
 
 ### Nils's codex · May 21, HKT, 2026

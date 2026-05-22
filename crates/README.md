@@ -11,7 +11,7 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 | [`auki-hash`](auki-hash) | XXH3-128 wrapper. The hash that becomes a registry entry's filename. |
 | [`auki-jcs`](auki-jcs) | RFC 8785 JSON canonicalization. Stable bytes for hashing and signing. |
 | [`auki-identity`](auki-identity) | Wallet primitive — ed25519 keypairs, deterministic child derivation, signed creation certs. WASM-friendly. |
-| [`auki-uniffi-test`](auki-uniffi-test) | Standalone UniFFI proving crate for Swift binding mechanics. Not a production SDK component. |
+| [`auki-uniffi-test`](auki-uniffi-test) | Standalone binding-generation proving crate with shared core logic, UniFFI native exports, and wasm-bindgen web exports. Not a production SDK component. |
 
 ## On-disk format
 

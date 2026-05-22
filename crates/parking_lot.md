@@ -42,7 +42,7 @@ The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) and i
 
 ## Per-crate parking lots
 
-Language-binding package summaries live under [`../bindings/`](../bindings/parking_lot.md) — Python at [`../bindings/python/parking_lot.md`](../bindings/python/parking_lot.md), Swift at [`../bindings/swift/parking_lot.md`](../bindings/swift/parking_lot.md).
+Language-binding package summaries live under [`../bindings/`](../bindings/parking_lot.md) — Python at [`../bindings/python/parking_lot.md`](../bindings/python/parking_lot.md), JavaScript at [`../bindings/javascript/parking_lot.md`](../bindings/javascript/parking_lot.md), and Swift at [`../bindings/swift/parking_lot.md`](../bindings/swift/parking_lot.md).
 
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path
 - [`auki-identity/`](auki-identity/parking_lot.md) — BIP32-vs-labeled-hash derivation; encrypted-at-rest format; BIP39 mnemonics; signing-scheme v2 shape; **missing `Result<T>` aliases** (filed 2026-05-08)
@@ -56,3 +56,4 @@ Language-binding package summaries live under [`../bindings/`](../bindings/parki
 - [`auki-geometry/`](auki-geometry/parking_lot.md) — no open questions yet
 - [`auki-manifests/`](auki-manifests/parking_lot.md) — read-side parsers + validators (deferred until a second reader needs them); `PoseSource` graduation to a sibling registry (deferred until a real SLAM/odometry producer lands); manifest-schema versioning convention; **Pose Log + TimeTransform Log self-provenance gap** (filed 2026-05-08); **`DetectorRegistry` shape** (filed 2026-05-09 — what bytes go through the `detector_hash` hasher; lean: structured `DetectorRegistryEntry` symmetric with Sensor / Frame / Clock); **uniform `intent` field across every manifest builder** (filed 2026-05-09 — match-the-existing-builders shipped first for parity, uniform rollout deferred). Pose Log manifest reshape **resolved 2026-05-08** at Step 5; `build_detection_log_manifest` **landed 2026-05-09**.
 - [`auki-time/`](auki-time/parking_lot.md) — future `TimeTransformSource` variants
+- [`auki-uniffi-test/`](auki-uniffi-test/parking_lot.md) — no open questions; disposable proving surface for binding mechanics

@@ -6,6 +6,34 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-uniffi-test` now documents the binding-generation standard.** The crate README is now an agent-facing guide to the core/adapter split, Cargo features, crate-local UniFFI bindgen helper, root `just` recipes, and checklist for creating or updating crates that generate Swift, Python, and JavaScript/WebAssembly bindings. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Binding prerequisite and parking-lot propagation corrected.** `just install-toolchain` now validates Node/npm for the JavaScript binding smoke path, and root parking-lot summaries include the JavaScript binding target-policy question. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/parking_lot.md`](bindings/parking_lot.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-uniffi-test` split for native and web binding generation.** The proving crate now separates shared Rust logic from UniFFI Swift/Python exports and wasm-bindgen JavaScript exports, documents the single Swift/Python/JavaScript generation workflows, and records `just install-toolchain` as the prerequisite installer. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**JavaScript `auki-uniffi-test` smoke test added.** `just generate-javascript-bindings auki-uniffi-test` now emits and runs a Node-compatible `smoke.mjs` that initializes the web-target wasm package from local bytes and exercises the exported functions, enum, async calls, and `Counter` lifetime behavior. See [`bindings/changelog.md`](bindings/changelog.md) for bindings-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**JavaScript `auki-uniffi-test` binding generation hardened.** `just generate-javascript-bindings` now stages `wasm-pack` output before replacing the final package, removes the generated catch-all ignore file, and patches npm metadata/README content for the JavaScript/WASM package. See [`bindings/changelog.md`](bindings/changelog.md) for bindings-level propagation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**Toolchain installer recipe added.** `just install-toolchain` now validates Python, Docker, and macOS Xcode prerequisites, then installs Rust targets and pinned Cargo binding CLIs for multiplatform binding generation.
+
+### Nils's codex · May 21, HKT, 2026
+
+**`auki-uniffi-test` multiplatform binding plan added.** The Superpowers plan sequences `install-toolchain`, pure core extraction, UniFFI native bindings for Swift/Python, wasm-bindgen JavaScript generation, and verification before applying the pattern to production SDK crates. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Python `auki-uniffi-test` package root added.** Generated UniFFI Python output now forms a source package under `bindings/python/auki-uniffi-test`, with native libraries selected from `native/<rust-target>/` and a single `generate-python-bindings` recipe that also runs `cross`-backed Linux target builds. See [`bindings/changelog.md`](bindings/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.

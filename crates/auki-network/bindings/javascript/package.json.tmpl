@@ -1,0 +1,37 @@
+{
+  "name": "@aukilabs/$crate_package_name",
+  "type": "module",
+  "collaborators": $crate_authors_json,
+  "description": "Browser JavaScript bindings for $crate_package_name, pairing wasm identity/protocol helpers with jslibp2p transport.",
+  "version": "$crate_version",
+  "license": "$crate_license",
+  "repository": {
+    "type": "git",
+    "url": "$crate_repository"
+  },
+  "files": [
+    "$generated_wasm_file",
+    "$generated_js_file",
+    "$generated_types_file",
+    "$generated_wasm_types_file",
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "smoke.mjs"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "^17.0.0",
+    "@chainsafe/libp2p-yamux": "^8.0.1",
+    "@libp2p/crypto": "^5.1.18",
+    "@libp2p/identify": "^4.1.6",
+    "@libp2p/ping": "^3.1.5",
+    "@libp2p/webrtc": "^6.0.23",
+    "@multiformats/multiaddr": "^13.0.3",
+    "libp2p": "^3.3.1"
+  }
+}

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-network` now owns the browser jslibp2p binding path.** The crate follows the core/UniFFI/wasm adapter structure, exposes wasm identity/protocol helpers for browser JavaScript, and carries crate-owned templates that generate and smoke-test the jslibp2p wrapper package. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-identity` now owns its binding package contract.** The production wallet crate has `bindings.toml` plus crate-local JavaScript, Python, and Swift package assets/smoke tests matching the updated `auki-uniffi-test` standard. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

@@ -14,7 +14,7 @@ auki-jcs = { path = "../auki-jcs" }
 # `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
 # the cluster manager drives; `discovery_client` brings the HTTP
 # client. Both required for `ClusterManager::create_cluster`.
-auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+auki-network = { path = "../auki-network", default-features = false, features = ["discovery_client", "swarm"] }
 auki-registry = { path = "../auki-registry" }
 auki-time = { path = "../auki-time" }
 # `ClusterMembership` carries libp2p `PeerId`s on the wire; the

@@ -6,9 +6,18 @@ This crate owns the low-level network pieces: wallet-derived libp2p peer identit
 
 ## Current Shape
 
-The default feature set is intentionally small and WASM-friendly:
+The crate now follows the SDK multiplatform crate pattern:
 
-- `PeerIdentity` derives a libp2p ed25519 peer key from `Wallet::derive_child("peer/v1")`.
+- The binding-free Rust surface lives in `core.rs` and is re-exported from the crate root.
+- The default native feature set enables `uniffi` so ordinary native builds exercise the native adapter.
+- Rust consumers that want only the direct Rust API should depend on `auki-network` with `default-features = false`.
+- Browser builds use `--no-default-features --features wasm`; the Rust wasm layer exposes identity and protocol helpers, while browser transport is implemented in the generated JavaScript package with jslibp2p.
+
+The native UniFFI adapter is intentionally small. It does not replace the existing PyO3 `auki-network-py` runtime package, which still owns Python access to the richer async swarm/discovery surface.
+
+The binding-free core surface is intentionally small and WASM-friendly:
+
+- `PeerIdentity` derives a libp2p ed25519 peer key from `Wallet::derive_child("peer/v1")`, and can export libp2p private-key protobuf bytes so jslibp2p can construct the same PeerId in browser JavaScript.
 - `ReachabilityRecord` is a serializable "how to dial me" shape: peer id, multiaddrs, capabilities, last-seen timestamp.
 - `Capability` is an open namespaced string with four canonical `networking:*` constants.
 - `ParticipantInfo` is the SDK-provided `/api/info` JSON shape: daemon identity, session clock binding, peer id, app instance, `is_manager`, and `manager_peer_id`.
@@ -30,6 +39,17 @@ The `discovery_client` feature adds `DiscoveryClient`, the HTTP client for [`auk
 | `deregister(name)` | `DELETE /clusters/{name}` | Graceful removal when the last member exits |
 
 Discovery v1 is deliberately shape-checked rather than signature-verified. Successor-token and challenge/response hardening are future work.
+
+## Browser JavaScript
+
+`just generate-javascript-bindings auki-network` builds the `wasm` feature with `wasm-pack`, renders the crate-owned templates in `bindings/javascript/`, and smoke-tests the generated package.
+
+The generated package has two layers:
+
+- wasm-bindgen exports for canonical peer derivation, libp2p private-key protobuf bytes, the browser-probe protocol id, and JSON request/response helpers;
+- an `index.js` wrapper that lazily imports jslibp2p packages and creates a browser `Libp2p` node from the Rust-derived private key.
+
+The browser package starts at the network layer. It is not a resurrected `auki-domain-browser` facade, and it does not implement browser Manager semantics. The first production target is a browser leaf peer dialing a native SDK peer through a browser-compatible multiaddr.
 
 ## Protocols
 
@@ -62,6 +82,8 @@ The connection layer is not the main trust boundary anymore. The swarm uses a bl
 - No `cluster.json` static-config loader.
 - No public `ClusterRuntime` or `cluster.spawn` path.
 - No mDNS-based cluster discovery.
+- No Rust wasm `NetworkRuntime`; browsers use jslibp2p through the generated JavaScript package.
+- No browser Manager/create-Domain policy.
 - No `convert_time` or `convert_pose`; this crate only transports the data and metadata those operations need.
 
 See [`src/readme.md`](src/readme.md) for the implementation map and current public surface.

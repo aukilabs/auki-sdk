@@ -1,0 +1,40 @@
+import type { Libp2p } from "libp2p";
+
+export default function initAukiNetwork(input?: unknown): Promise<typeof import("./$generated_js_file")>;
+
+export function peerDerivationLabel(): string;
+export function peerIdFromSeed(seed: Uint8Array): string;
+export function peerIdFromWalletSeed(seed: Uint8Array): string;
+export function peerPublicKeyProtobufFromSeed(seed: Uint8Array): Uint8Array;
+export function peerPrivateKeyProtobufFromSeed(seed: Uint8Array): Uint8Array;
+export function peerPrivateKeyProtobufFromWalletSeed(seed: Uint8Array): Uint8Array;
+export function browserProbeProtocol(): string;
+export function encodeBrowserProbeRequest(nonce: string, payload: Uint8Array): Uint8Array;
+export function decodeBrowserProbeResponse(bytes: Uint8Array): string;
+
+export interface AukiNetworkPeerOptions {
+  seed?: Uint8Array;
+  walletSeed?: Uint8Array;
+  listenAddresses?: string[];
+  announceAddresses?: string[];
+  transports?: unknown[];
+  connectionEncrypters?: unknown[];
+  streamMuxers?: unknown[];
+  services?: Record<string, unknown>;
+  start?: boolean;
+}
+
+export function importAukiPeerPrivateKey(seedInput: Pick<AukiNetworkPeerOptions, "seed" | "walletSeed">): Promise<unknown>;
+export function createAukiNetworkPeer(options?: AukiNetworkPeerOptions): Promise<AukiNetworkPeer>;
+
+export class AukiNetworkPeer {
+  constructor(node: Libp2p);
+  readonly node: Libp2p;
+  readonly peerId: string;
+  readonly multiaddrs: string[];
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  dialProtocol(address: string, protocol: string, options?: unknown): Promise<unknown>;
+  handle(protocol: string, handler: unknown, options?: unknown): Promise<void>;
+  unhandle(protocol: string): Promise<void>;
+}

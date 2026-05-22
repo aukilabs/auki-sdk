@@ -6,11 +6,11 @@ When a question is answered inline, an agent will replace the item with a "Propa
 
 ---
 
-## Browser Domain peer — transport and Manager scope
+## Browser peer — transport and Manager scope
 
-Park's browser-peer Milestone 0 needs a real SDK browser Domain peer. The design spec is [`docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md`](docs/superpowers/specs/2026-05-19-browser-domain-peer-adapter-design.md). Two cross-cutting decisions remain open before full two-browser audio acceptance:
+Park's browser-peer Milestone 0 needs a real SDK browser peer. The old `auki-domain-browser` facade and old `auki-network-browser-wasm` probe crate have both been deleted; current browser networking work lives in [`crates/auki-network`](crates/auki-network), whose generated JavaScript package uses Rust wasm identity/protocol helpers plus jslibp2p.
 
-- **Browser transport spike.** Native peers currently advertise TCP/QUIC multiaddrs that browsers cannot dial directly. The old `auki-network-browser-wasm` probe crate was removed after falling out of date; the remaining question is what current browser transport path should prove that a browser peer can open an SDK-owned protocol stream to a native SDK peer without app-owned media/control relays.
+- **Browser transport proof.** Native peers currently advertise TCP/QUIC multiaddrs that browsers cannot dial directly. The next proof is a generated `auki-network` JavaScript peer importing the wasm-derived private key, dialing a native `browser_probe` WebRTC Direct listener, and exchanging `/auki/browser-probe/0.0.1` bytes. Details live in [`crates/auki-network/parking_lot.md`](crates/auki-network/parking_lot.md#browser-jslibp2p-transport-proof-and-domain-scope-_filed-by-nilss-codex-2026-05-22_).
 - **Browser Manager/create-Domain semantics.** Park needs Domain creation, but a browser Manager must be reachable, admit joins, gossip membership, and run liveness/Manager behavior. Decide whether v1 browser `createDomain` makes the browser Manager, provisions/depends on a native Manager, or lands after leaf-peer join support.
 
 ## Hagall (Networking) — SDK-side open questions _(filed by Nils's claude, 2026-05-13)_

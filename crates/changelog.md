@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — multiplatform crate adapters and browser jslibp2p package contract added.** Core identity/reachability logic now lives in `core.rs`, native default builds expose a small UniFFI surface, wasm builds expose browser identity/protocol helpers, and crate-owned JavaScript templates generate a jslibp2p wrapper package.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-identity`](auki-identity/changelog.md) — crate-owned binding generation contract added.** The crate now carries `bindings.toml` plus JavaScript, Python, and Swift package templates/smoke assets so the generic root generator can produce identity packages from crate metadata and crate-local policy.
 
 ### Nils's codex · May 22, HKT, 2026

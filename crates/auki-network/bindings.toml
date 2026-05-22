@@ -1,0 +1,26 @@
+[generators.uniffi]
+features = ["cli"]
+bindgen_bin = "uniffi-bindgen"
+
+[generators.wasm_pack]
+features = ["wasm"]
+target = "web"
+
+[bindings.python]
+# Disabled while the existing PyO3 `auki-network-py` package owns the rich
+# Python runtime surface. The UniFFI adapter is intentionally small and native.
+enabled = false
+generator = "uniffi"
+
+[bindings.swift]
+# Enable once a Swift consumer needs the small native identity/capability
+# surface; the native runtime itself remains Rust-only for now.
+enabled = false
+generator = "uniffi"
+
+[bindings.javascript]
+enabled = true
+generator = "wasm_pack"
+template_dir = "bindings/javascript"
+templates = ["package.json.tmpl", "README.md.tmpl", "index.js.tmpl", "index.d.ts.tmpl"]
+smoke = "bindings/javascript/smoke.mjs"

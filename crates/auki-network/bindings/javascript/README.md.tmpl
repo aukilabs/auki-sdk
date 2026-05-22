@@ -1,0 +1,36 @@
+# $crate_package_name JavaScript bindings
+
+Generated browser package for `$crate_package_name`.
+
+Generate it from the repo root:
+
+```bash
+just generate-javascript-bindings $crate_package_name
+```
+
+The package has two layers:
+
+- `$generated_js_file` and `$generated_wasm_file` expose Rust-owned identity and protocol helpers through wasm-bindgen.
+- `index.js` composes those helpers with jslibp2p for browser transport.
+
+Browser transport is intentionally JavaScript-owned. Native Rust targets keep using rust-libp2p through the crate's `swarm` feature; browser targets import the same identity/protocol bytes and create a jslibp2p node with WebRTC Direct transport.
+
+## Minimal use
+
+```js
+import initAukiNetwork, {
+  createAukiNetworkPeer,
+  peerIdFromWalletSeed,
+} from "@aukilabs/$crate_package_name";
+
+await initAukiNetwork();
+
+const walletSeed = crypto.getRandomValues(new Uint8Array(32));
+console.log(peerIdFromWalletSeed(walletSeed));
+
+const peer = await createAukiNetworkPeer({ walletSeed });
+console.log(peer.peerId, peer.multiaddrs);
+await peer.stop();
+```
+
+The first browser target is a leaf peer dialing a native SDK peer over a browser-compatible multiaddr. Browser Manager behavior and Domain-level orchestration are intentionally out of scope for this package slice.

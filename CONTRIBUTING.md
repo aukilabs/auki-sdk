@@ -5,17 +5,18 @@
 Every component in this repo follows the same structure:
 
 ```
+questions.md     ← Open questions that need human input
+sprint.md          ← Current work and next steps to close the gap between README.md and VISION.md
+tasks.md - Kanban like board for the repo. should be updated in when starting and finishing a task with who is working on it
 component/
-  README.md          ← The aspirational spec — what this component should be
-  parking_lot.md     ← Open questions that need human input
-  changelog.md       ← History of changes to this component
+  VISION.md          ← The aspirational spec — what this component should be
+  README.md          ← Current state of the component. referencing the VISION.md at the top.
+  
   src/
-    README.md        ← What is actually implemented today (honest, specific)
-    sprint.md        ← Current work and next steps to close the gap between src/README and README
     *.rs             ← Source code
 ```
 
-**README.md** describes the end goal. **src/README.md** describes where we actually are — what works, what's stubbed, what's missing. **src/sprint.md** is the midway point — current work and next steps. **parking_lot.md** captures open design questions. **changelog.md** records what changed and why.
+**VISION.md** describes the end goal. **README.md** describes where we actually are — what works, what's stubbed, what's missing. **src/sprint.md** is the midway point — current work and next steps. **parking_lot.md** captures open design questions. **changelog.md** records what changed and why.
 
 When picking up work on a component, read all three: the spec (README), the status (src/README), and the plan (src/sprint.md).
 

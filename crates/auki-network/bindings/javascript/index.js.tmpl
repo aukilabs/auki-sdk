@@ -1,0 +1,107 @@
+import initWasm, * as wasm from "./$generated_js_file";
+
+export {
+  browserProbeProtocol,
+  decodeBrowserProbeResponse,
+  encodeBrowserProbeRequest,
+  peerDerivationLabel,
+  peerIdFromSeed,
+  peerIdFromWalletSeed,
+  peerPrivateKeyProtobufFromSeed,
+  peerPrivateKeyProtobufFromWalletSeed,
+  peerPublicKeyProtobufFromSeed,
+} from "./$generated_js_file";
+
+export default async function initAukiNetwork(input) {
+  await initWasm(input);
+  return wasm;
+}
+
+export async function importAukiPeerPrivateKey(seedInput) {
+  const { privateKeyFromProtobuf } = await import("@libp2p/crypto/keys");
+  return privateKeyFromProtobuf(peerPrivateKeyProtobuf(seedInput));
+}
+
+export async function createAukiNetworkPeer(options = {}) {
+  const [
+    { createLibp2p },
+    { webRTCDirect },
+    { noise },
+    { yamux },
+    { identify },
+    { ping },
+    { privateKeyFromProtobuf },
+  ] = await Promise.all([
+    import("libp2p"),
+    import("@libp2p/webrtc"),
+    import("@chainsafe/libp2p-noise"),
+    import("@chainsafe/libp2p-yamux"),
+    import("@libp2p/identify"),
+    import("@libp2p/ping"),
+    import("@libp2p/crypto/keys"),
+  ]);
+
+  const privateKey = privateKeyFromProtobuf(peerPrivateKeyProtobuf(options));
+  const node = await createLibp2p({
+    privateKey,
+    addresses: {
+      listen: options.listenAddresses ?? [],
+      announce: options.announceAddresses ?? [],
+    },
+    transports: options.transports ?? [webRTCDirect()],
+    connectionEncrypters: options.connectionEncrypters ?? [noise()],
+    streamMuxers: options.streamMuxers ?? [yamux()],
+    services: {
+      identify: identify(),
+      ping: ping(),
+      ...(options.services ?? {}),
+    },
+    start: options.start ?? true,
+  });
+
+  return new AukiNetworkPeer(node);
+}
+
+export class AukiNetworkPeer {
+  constructor(node) {
+    this.node = node;
+  }
+
+  get peerId() {
+    return this.node.peerId.toString();
+  }
+
+  get multiaddrs() {
+    return this.node.getMultiaddrs().map((addr) => addr.toString());
+  }
+
+  async start() {
+    await this.node.start();
+  }
+
+  async stop() {
+    await this.node.stop();
+  }
+
+  async dialProtocol(address, protocol, options) {
+    return this.node.dialProtocol(address, protocol, options);
+  }
+
+  async handle(protocol, handler, options) {
+    return this.node.handle(protocol, handler, options);
+  }
+
+  async unhandle(protocol) {
+    return this.node.unhandle(protocol);
+  }
+}
+
+function peerPrivateKeyProtobuf(input) {
+  if (input?.walletSeed != null) {
+    return wasm.peerPrivateKeyProtobufFromWalletSeed(input.walletSeed);
+  }
+  if (input?.seed != null) {
+    return wasm.peerPrivateKeyProtobufFromSeed(input.seed);
+  }
+  throw new TypeError("createAukiNetworkPeer requires walletSeed or seed");
+}

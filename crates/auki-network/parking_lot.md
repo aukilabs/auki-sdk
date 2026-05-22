@@ -2,6 +2,22 @@
 
 ---
 
+## Browser jslibp2p transport proof and Domain scope _(filed by Nils's codex, 2026-05-22)_
+
+`auki-network` now owns the browser networking package path: Rust wasm exports canonical peer identity/protocol helpers, and the generated JavaScript package composes those bytes with jslibp2p. The deleted `auki-domain-browser` package is not the target for this work.
+
+Open follow-ups before a browser peer can be treated as production-ready:
+
+1. **Browser-to-native probe smoke.** The generated package's current smoke pins identity and browser-probe JSON bytes. Next, run an actual browser or Node-compatible jslibp2p peer that imports the wasm-derived private key, dials the native `browser_probe` WebRTC Direct listener, opens `/auki/browser-probe/0.0.1`, and verifies the response.
+
+2. **Address advertisement contract.** Native Managers still commonly advertise TCP/QUIC multiaddrs that browsers cannot dial. Decide exactly where browser-dialable WebRTC Direct or relay-backed WebRTC multiaddrs are produced and published: native `SwarmConfig`, Discovery manager fields, or a separate browser-reachability field.
+
+3. **Domain leaf join scope.** After the probe passes, decide whether the generated `auki-network` package should expose first-class helpers for `/auki/join/0.0.1` and `/auki/info/0.0.1`, or stay as a lower-level protocol-byte/dialing package consumed by an app-specific facade.
+
+4. **Browser Manager/create-Domain scope.** Leaf-peer join does not imply browser Manager support. A browser Manager must be reachable, admit joins, gossip membership, and run liveness/Manager behavior despite browser listen-address constraints. Keep this out of the first transport proof unless a concrete app requirement forces it forward.
+
+---
+
 ## SDK relay-reservation helper — v2 story for NAT/firewalled daemons _(filed by Nils's claude, 2026-05-14)_
 
 `auki_network::swarm::resolve_advertise_multiaddrs` shipped 2026-05-14 for v1 (LAN-only demo, plus operator-override for multi-NIC / VPN / container-host ambiguity). It does NOT solve the dual-firewalled case where neither peer has a public IP — those daemons need libp2p Circuit Relay v2: dial a relay → reserve a slot → listen on a circuit address → libp2p emits a `NewListenAddr` with the assembled `/dns4/relay/.../p2p-circuit/p2p/<self>` multiaddr. v1 operators handle this themselves by hand-assembling the circuit multiaddr and passing it as `external_addresses` (replace-semantics override). v2 should provide an SDK helper that owns the dial + reserve + listen dance and surfaces the resolved circuit address back to the caller, so daemons don't reimplement it.

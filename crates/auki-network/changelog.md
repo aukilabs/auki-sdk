@@ -6,6 +6,16 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-network` now follows the multiplatform crate structure and owns the browser jslibp2p package path.** The binding-free peer identity/reachability surface moved into `core.rs` and is re-exported unchanged from the crate root. Native default builds now enable a small UniFFI adapter, while `--no-default-features --features wasm` builds wasm-bindgen helpers for peer derivation, libp2p private-key protobuf export, and browser-probe protocol bytes.
+
+The crate now carries `bindings.toml` plus JavaScript package templates under `bindings/javascript/`. `just generate-javascript-bindings auki-network` builds the wasm package and smoke-tests the generated `index.js` wrapper. Browser transport is intentionally JavaScript-owned: the wrapper lazily imports jslibp2p and creates a browser libp2p node from the Rust-derived private key instead of compiling the Rust `NetworkRuntime` to wasm.
+
+Downstream Rust crates that want the direct runtime surface now depend on `auki-network` with `default-features = false`, preserving the existing `swarm`/`discovery_client` behavior without pulling in UniFFI. The deleted `auki-domain-browser` package is not a target for this work; remaining browser transport proof and Domain-scope questions are recorded in `parking_lot.md`.
+
+Tests: `cargo test -p auki-network --test surface`; `cargo check -p auki-network --target wasm32-unknown-unknown --no-default-features --features wasm`; `cargo check -p auki-network --no-default-features --features swarm,discovery_client`; `just generate-javascript-bindings auki-network`.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Stream protocol payload names now match the final SDK vocabulary.** Camera streams use `CameraFrame`, detection streams use `DetectionFrame`, and the stream/resource protocol docs and tests use the `"camera"` sensor tag. Dispatch variant names (`AcceptCamera`, `AcceptDetection`, etc.) remain unchanged.

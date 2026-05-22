@@ -7,10 +7,27 @@ repository.workspace = true
 authors.workspace = true
 description = "Networking substrate for the Auki SDK — peer identity (derived from a wallet), reachability records, named capabilities, and (with the `swarm` feature) a libp2p Swarm builder for TCP/QUIC transport."
 
+[lib]
+name = "auki_network"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [features]
-# Default-off so M0 stays WASM-friendly (Console derives peer-id without
-# pulling in libp2p's transport stack). Daemons opt in.
-default = []
+# Default native builds exercise the UniFFI surface. Rust consumers that want
+# only the direct API should depend with `default-features = false`.
+default = ["uniffi"]
+uniffi = [
+    "dep:uniffi",
+    "dep:thiserror",
+]
+cli = ["uniffi", "uniffi/cli"]
+# Browser builds expose identity/protocol helpers to JavaScript. Browser
+# transport is implemented by the generated JS package using jslibp2p.
+wasm = [
+    "auki-identity/wasm",
+    "dep:getrandom",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+]
 # Stream protocol wire types live in `auki-datatypes` (Step 2 of the
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
@@ -38,6 +55,11 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# `wasm` feature
+getrandom = { version = "0.2", features = ["js"], optional = true }
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
 
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
@@ -100,6 +122,19 @@ eventsource-stream = { version = "0.2", optional = true }
 # slash must be encoded as `%2F` before riding in a URL path segment, or
 # Discovery's router sees four path components instead of three and 404s.
 percent-encoding = { version = "2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = { version = "0.31", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "browser_probe_listener"
+path = "examples/browser_probe_listener.rs"
+required-features = ["browser_probe"]
 
 [dev-dependencies]
 tempfile = "3"

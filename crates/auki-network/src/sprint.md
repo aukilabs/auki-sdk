@@ -4,9 +4,10 @@ Current work and next steps to close the gap between [`src/readme.md`](readme.md
 
 ## Now
 
-The crate is the low-level networking substrate. The current implementation has three layers:
+The crate is the low-level networking substrate. The current implementation has these layers:
 
-- **Identity and reachability, default feature path.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies.
+- **Core identity and reachability, `default-features = false`.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies. `PeerIdentity::private_key_protobuf()` is the bridge that lets jslibp2p import the same key material in browser JavaScript.
+- **Native and browser binding adapters.** The default native feature set enables a small UniFFI surface. The `wasm` feature exposes identity/protocol helpers to wasm-bindgen. Crate-owned JavaScript templates generate a package whose runtime imports jslibp2p lazily; browser transport is not implemented by Rust `NetworkRuntime`.
 - **Browser probe, `browser_probe` feature.** The crate exposes shared `/auki/browser-probe/0.0.1` request/response structs and a native WebRTC Direct listener example that prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs. This is a proof surface for browser peers only; production Domain join still lives above it.
 - **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, registry-entry requests, typed stream opening, and shutdown.
 - **Discovery client, `discovery_client` feature.** `DiscoveryClient` wraps Discovery's cluster directory endpoints: list, atomic create, liveness check, Manager rotation, and deregistration.
@@ -39,17 +40,20 @@ Cluster lifecycle policy is intentionally one layer up in [`auki-domain`](../../
 
 In priority order:
 
-1. **Capability and topic discovery.** The architecture still needs a peer-to-peer way to advertise current capabilities and available sensor topics. The likely shape is a request/response protocol sibling to the current info and sensors protocols, owned by `NetworkRuntime` and surfaced through `auki-domain`.
+1. **Browser jslibp2p transport proof.** The generated JavaScript package can derive/import the canonical peer key and build a jslibp2p node. Next, prove it can dial the native `browser_probe` listener over a WebRTC Direct multiaddr and exchange `/auki/browser-probe/0.0.1` request/response bytes.
 
-2. **Protocol hardening.** Successor-token verification, challenge/response, and tighter Discovery trust checks belong with the next security pass. Discovery v1 is shape-checked, not signature-verified.
+2. **Capability and topic discovery.** The architecture still needs a peer-to-peer way to advertise current capabilities and available sensor topics. The likely shape is a request/response protocol sibling to the current info and sensors protocols, owned by `NetworkRuntime` and surfaced through `auki-domain`.
 
-3. **Transport reachability upgrades.** DCUtR / hole-punching and AutoNAT are additive improvements once real deployments need better direct-connect behavior.
+3. **Protocol hardening.** Successor-token verification, challenge/response, and tighter Discovery trust checks belong with the next security pass. Discovery v1 is shape-checked, not signature-verified.
+
+4. **Transport reachability upgrades.** DCUtR / hole-punching and AutoNAT are additive improvements once real deployments need better direct-connect behavior.
 
 ## Smaller Follow-Ups
 
 - Expose only the `SwarmConfig` knobs that real daemons need; keep idle/ping/connection-limit tuning private until there is pressure.
 - Decide whether transport build errors should stay stringly typed or preserve structured sources.
 - Keep the Python stream-provider bridge aligned when new `StreamDispatch` payload variants land.
+- Keep the generated JavaScript package at the network layer; add a separate facade only if an app needs one after browser leaf-peer join works.
 
 ## Open Items
 

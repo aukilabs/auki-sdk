@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+Added the iOS Auki network UniFFI test app implementation plan under [`plans/`](plans/2026-05-22-ios-auki-network-uniffi-test-app.md), covering generated Swift bindings from Rust crates plus browser-to-iOS message interop.
+
+### Nils's codex · May 22, HKT, 2026
+
 Corrected the iOS Auki network UniFFI design to center the generated-binding iOS test app: Rust crates export behavior through UniFFI, generated Swift packages are consumed by the app, and the app does not hand-write SDK networking behavior.
 
 ### Nils's codex · May 22, HKT, 2026

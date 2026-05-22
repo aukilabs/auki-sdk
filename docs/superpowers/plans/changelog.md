@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+Created the iOS Auki network UniFFI test app implementation plan, sequencing binding generator feature selection, Rust `auki-network` message-node exports, generated Swift packages, the iOS host app, and browser-to-iOS `/auki/message/0.0.1` smoke testing.
+
+### Nils's codex · May 22, HKT, 2026
+
 Updated the Auki proto generation implementation plan so only the generated Rust `auki-proto` crate is committed; JavaScript/TypeScript, Swift, and Python generation scripts create ignored local outputs under `bindings/`.
 
 ### Nils's codex · May 22, HKT, 2026

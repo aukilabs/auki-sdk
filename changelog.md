@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**iOS Auki network UniFFI test app plan added.** The implementation sequence now covers crate-owned Swift binding feature selection, Rust `auki-network` message-node exports, generated Swift package consumption, and browser-to-iOS `/auki/message/0.0.1` smoke testing. See [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **iOS UniFFI design corrected around the test app.** The planned iOS artifact is now explicitly a test app that consumes generated Swift bindings from the Rust crates; `auki-network` still owns libp2p through UniFFI, and the app contains only host/test orchestration plus protobuf conversion. See [`docs/changelog.md`](docs/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

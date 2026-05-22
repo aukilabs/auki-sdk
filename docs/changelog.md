@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 22, HKT, 2026
 
+Added the Superpowers implementation plan for the iOS Auki network UniFFI test app, sequencing generated Swift binding consumption, Rust-owned `auki-network` messaging, and browser-to-iOS `/auki/message/0.0.1` smoke testing.
+
+### Nils's codex · May 22, HKT, 2026
+
 Corrected the Superpowers iOS Auki network UniFFI design so the planned artifact is an iOS test app that imports generated Swift bindings from the Rust crates rather than a hand-written Swift networking layer.
 
 ### Nils's codex · May 22, HKT, 2026

@@ -24,7 +24,7 @@ CameraLogProduct {
   app_id:          string,               // copied from LogManifest
   session_id:      string,               // copied from LogManifest
   log_id:          string,               // local fetch handle, not semantic identity
-  payload_type:    string,               // "auki.camera.PinholeCameraLogEntry"
+  payload_type:    string,               // "auki.camera.CameraFrame"
 
   // ── Sensor identity ─────────────────────────────────────────────
   // Embedded by value (full registry entry, not just a hash reference)
@@ -38,7 +38,7 @@ CameraLogProduct {
                    //   pixel_format, color_space,
                    //   intrinsics_model, distortion_model
                    // Dynamic intrinsics, when present, live per-entry
-                   // in PinholeCameraLogEntry.dynamic_intrinsics.
+                   // in CameraFrame.dynamic_intrinsics.
 
   // ── Clock identity ──────────────────────────────────────────────
   // The clock the log's framing timestamps are expressed in.
@@ -69,8 +69,7 @@ CameraLogProduct {
   // ── Spatial-alignment options ───────────────────────────────────
   // One entry per pose chain available for `frame_id` (i.e. how this
   // sensor's mounting frame relates to other frames over time).
-  // Pending Pose Log; shape TBD.
-  frame_transforms: [FrameTransformAvailability],   // TBD — pending Pose Log
+  frame_transforms: [FrameTransformAvailability],
 
   // ── Log parameters (mirror log_manifest.json) ───────────────────
   segment_duration_ns: i64,
@@ -108,8 +107,8 @@ TimeTransformAvailability {
 FrameTransformAvailability {
   to_frame_id:           string,
   to_frame_hash:         string,
-  to_frame_entry:        FrameRegistryEntry,    // embedded; v0.0.22 shipped
-  log_handle:            string,                // e.g. "poselogs/<pose_log_id>" — relative to <session_id>
+  to_frame_entry:        FrameRegistryEntry,    // embedded
+  log_handle:            string,                // e.g. "poselogs/<from_frame_id>__<to_frame_id>" — relative to <session_id>
   earliest_timestamp_ns: i64,
   latest_timestamp_ns:   i64,
   status:                "live" | "sealed" | "aborted",
@@ -118,7 +117,7 @@ FrameTransformAvailability {
 
 The Pose Log capture path uses `Log<auki_datatypes::pose::SpatialTransform>` with identity in `build_pose_log_manifest` (`from_frame_id/hash`, `to_frame_id/hash`, `PoseSource`, `PoseWriterMode`, `expected_rate_hz`) and pathing from `poselog_path`. There is no `PoseLogEntry` wrapper. `auki-geometry` ships convention-level helpers (`convert_pose_convention`, point/vector/direction conversion), while the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending. `FrameTransformAvailability` describes what is available; graph composition is the consumer's job today.
 
-Detection Logs use `Log<auki_datatypes::detection::DetectionLogEntry>`, where `DetectionLogEntry` is opaque bytes. The detector-specific schema is owned by the detector family, not the SDK. The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`; a future detector registry can make `detector_hash` resolvable the same way sensor/clock/frame hashes are today.
+Detection Logs use `Log<auki_datatypes::detection::DetectionFrame>`. The frame envelope is structured: `data` carries opaque detector-specific bytes (schema owned by the detector family, not the SDK), `sensor_hash` pins the source sensor's registry hash, and `type` is an open-string discriminator (`aruco`, `portal`, `esl`, `person`, ...). The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`. `detector_hash` resolves through the Detector Registry (`DetectorRegistryEntry`, stored at `<app_root>/registries/detectors/<detector_id>/<hash>.json`) the same way sensor / clock / frame hashes do.
 
 ---
 
@@ -160,7 +159,7 @@ Everything required to decide "do I want this, and how do I consume it" without 
   "app_id": "boosterapp",
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "log_id": "rec-456",
-  "payload_type": "auki.camera.PinholeCameraLogEntry",
+  "payload_type": "auki.camera.CameraFrame",
   "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
   "sensor_hash": "d798fa879c80a5b00cabc1ce47ca4f7a",
   "sensor_entry": {
@@ -231,3 +230,5 @@ Tracked in the root [`parking_lot.md`](parking_lot.md) under the "Discovery desc
 - **Connection info for fetching** — URL, peer ID, port. Depends on transport.
 - **Multi-product wrappers** (`NodeManifest { products: [...] }`) — a level up; needed eventually but distinct schema.
 - **Other product types** — `PointCloudLogProduct`, `TimeTransformLogProduct`, etc. Expected to be parallel to `CameraLogProduct` but designed once this one is locked.
+- **Raster / 2D frame conventions for image bytes** — see [#140](https://github.com/aukilabs/auki-sdk/issues/140). `frame_entry` here only describes the 3D optical frame; declaring the raster convention of the published bytes (mirrored vs. not, origin, axes) is a parallel concern that will likely extend the descriptor with a `raster_frame_entry`.
+- **Peer-level frame transform advertisement / scenegraph availability** — see [#141](https://github.com/aukilabs/auki-sdk/issues/141). `frame_transforms[]` here is the per-camera slice; #141 generalizes it to a peer-level advertisement of known transform edges and producer-derived output frames.

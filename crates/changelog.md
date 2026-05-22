@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Browser peers now exchange native info/sensors catalogs.** `auki-network` exposes reusable info/sensors protocol framing to browser builds, and `auki-network-browser-wasm` serves/fetches `/auki/info/0.0.1` plus `/auki/sensors/0.0.1` after membership so remote browser audio sensors no longer come from membership placeholders. See [`auki-network/changelog.md`](auki-network/changelog.md) and [`auki-network-browser-wasm/changelog.md`](auki-network-browser-wasm/changelog.md).
+
 ### Nils's claude · May 22, HKT, 2026
 
 `auki-network` — UniFFI-annotated the full PR B surface (`NetworkRuntime`, 5 `StreamSubscription*` Objects, 5 `open_*_stream` methods, error types, Discovery types). See [`auki-network/changelog.md`](auki-network/changelog.md).

@@ -4,8 +4,7 @@ use auki_network::PeerIdentity;
 mod browser_full_peer;
 #[cfg(feature = "browser_libp2p")]
 use auki_network::browser_session_protocol::{
-    BrowserMediaPresence, BrowserRosterSnapshot, BrowserSessionClientMessage,
-    BrowserSessionParticipant, BrowserSessionSensor,
+    BrowserMediaPresence, BrowserRosterSnapshot, BrowserSessionParticipant, BrowserSessionSensor,
 };
 #[cfg(feature = "browser_libp2p")]
 use std::{
@@ -78,7 +77,6 @@ struct BrowserDomainSessionState {
     snapshot: RefCell<Option<BrowserRosterSnapshot>>,
     observers: RefCell<BTreeMap<u32, js_sys::Function>>,
     next_observer_id: Cell<u32>,
-    sender: RefCell<Option<futures::channel::mpsc::UnboundedSender<BrowserSessionClientMessage>>>,
 }
 
 #[cfg(feature = "browser_libp2p")]
@@ -96,7 +94,6 @@ impl BrowserDomainSessionState {
             snapshot: RefCell::new(None),
             observers: RefCell::new(BTreeMap::new()),
             next_observer_id: Cell::new(1),
-            sender: RefCell::new(None),
         }
     }
 
@@ -110,27 +107,13 @@ impl BrowserDomainSessionState {
         )
     }
 
-    fn queue(&self, message: BrowserSessionClientMessage) -> bool {
-        self.sender
-            .borrow()
-            .as_ref()
-            .is_some_and(|sender| sender.unbounded_send(message).is_ok())
-    }
-
-    fn set_sender(
-        &self,
-        sender: futures::channel::mpsc::UnboundedSender<BrowserSessionClientMessage>,
-    ) {
-        self.sender.replace(Some(sender));
-    }
-
-    fn clear_sender(&self) {
-        self.sender.replace(None);
-    }
-
     fn clear_snapshot(&self) {
         self.snapshot.replace(None);
         self.emit();
+    }
+
+    fn has_joined_snapshot(&self) -> bool {
+        self.snapshot.borrow().is_some()
     }
 
     fn apply_snapshot(&self, mut snapshot: BrowserRosterSnapshot) {
@@ -241,12 +224,16 @@ impl BrowserDomainSession {
             uses_browser_session: bool,
             advertised_multiaddrs: Vec<String>,
             membership_peer_count: usize,
+            info_protocol_peer_count: usize,
+            sensor_catalog_protocol_peer_count: usize,
         }
         let state = self.full_peer.debug_state();
         serde_wasm_bindgen::to_value(&Wire {
             uses_browser_session: state.uses_browser_session,
             advertised_multiaddrs: state.advertised_multiaddrs,
             membership_peer_count: state.membership_peer_count,
+            info_protocol_peer_count: state.info_protocol_peer_count,
+            sensor_catalog_protocol_peer_count: state.sensor_catalog_protocol_peer_count,
         })
         .map_err(|err| JsValue::from_str(&err.to_string()))
     }
@@ -274,10 +261,10 @@ impl BrowserDomainSession {
         .await;
         if result.ok {
             if let Some(value) = &result.value {
-                self.state.apply_snapshot(self.full_peer.roster_snapshot(
-                    value.domain_name.clone(),
-                    value.manager_peer_id.clone(),
-                ));
+                self.state.apply_snapshot(
+                    self.full_peer
+                        .roster_snapshot(value.domain_name.clone(), value.manager_peer_id.clone()),
+                );
             }
         }
         serde_wasm_bindgen::to_value(&result).map_err(|err| JsValue::from_str(&err.to_string()))
@@ -285,8 +272,6 @@ impl BrowserDomainSession {
 
     #[wasm_bindgen(js_name = leaveDomain)]
     pub fn leave_domain(&self) -> Result<JsValue, JsValue> {
-        let _ = self.state.queue(BrowserSessionClientMessage::Leave);
-        self.state.clear_sender();
         self.state.clear_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -318,11 +303,7 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.metadata.replace(metadata);
         let participant = self.state.local_participant();
-        self.full_peer
-            .update_local_participant(participant.clone());
-        let _ = self
-            .state
-            .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
+        self.full_peer.update_local_participant(participant.clone());
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -333,11 +314,7 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.sensors.replace(sensors);
         let participant = self.state.local_participant();
-        self.full_peer
-            .update_local_participant(participant.clone());
-        let _ = self
-            .state
-            .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
+        self.full_peer.update_local_participant(participant.clone());
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -348,7 +325,7 @@ impl BrowserDomainSession {
         sensor_id: String,
         enabled: bool,
     ) -> Result<JsValue, JsValue> {
-        if self.state.sender.borrow().is_none() {
+        if !self.state.has_joined_snapshot() {
             return browser_domain_result(self.inner.transport_unavailable());
         }
         if sensor_id == "audio" {
@@ -358,9 +335,6 @@ impl BrowserDomainSession {
             media.mic_capture_healthy = enabled;
             self.full_peer.set_local_media(media.clone());
         }
-        let _ = self
-            .state
-            .queue(BrowserSessionClientMessage::SetSensorPublication { sensor_id, enabled });
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -371,7 +345,7 @@ impl BrowserDomainSession {
         peer_id: String,
         sensor_id: String,
     ) -> Result<JsValue, JsValue> {
-        if self.state.sender.borrow().is_none() {
+        if !self.state.has_joined_snapshot() {
             return browser_domain_result(self.inner.transport_unavailable());
         }
         {
@@ -381,9 +355,6 @@ impl BrowserDomainSession {
             media.selected_remote_stream_state = "connecting".to_string();
             self.full_peer.set_local_media(media.clone());
         }
-        let _ = self
-            .state
-            .queue(BrowserSessionClientMessage::Subscribe { peer_id, sensor_id });
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -394,7 +365,7 @@ impl BrowserDomainSession {
         peer_id: String,
         sensor_id: String,
     ) -> Result<JsValue, JsValue> {
-        if self.state.sender.borrow().is_none() {
+        if !self.state.has_joined_snapshot() {
             return browser_domain_result(self.inner.transport_unavailable());
         }
         {
@@ -408,9 +379,6 @@ impl BrowserDomainSession {
                 self.full_peer.set_local_media(media.clone());
             }
         }
-        let _ = self
-            .state
-            .queue(BrowserSessionClientMessage::Unsubscribe { peer_id, sensor_id });
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
@@ -501,172 +469,6 @@ async fn join_browser_domain(
             ),
         }),
     }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "browser_libp2p"))]
-async fn start_browser_session(
-    _identity: PeerIdentity,
-    _discovery_url: String,
-    _domain_name: String,
-    _state: Rc<BrowserDomainSessionState>,
-) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
-async fn start_browser_session(
-    identity: PeerIdentity,
-    discovery_url: String,
-    domain_name: String,
-    state: Rc<BrowserDomainSessionState>,
-) -> Result<(), String> {
-    use auki_network::browser_session_protocol::{
-        BROWSER_SESSION_PROTOCOL, BrowserSessionServerMessage, read_server_message,
-        write_client_message,
-    };
-    use futures::{AsyncReadExt as _, FutureExt as _, StreamExt as _, select};
-    use libp2p::{
-        PeerId, StreamProtocol, SwarmBuilder,
-        swarm::{SwarmEvent, dial_opts::DialOpts},
-    };
-
-    let entry = fetch_browser_discovery_cluster(discovery_url, &domain_name)
-        .await
-        .map_err(|(code, message)| format!("{code}: {message}"))?;
-    let address =
-        browser_manager_address(&entry).map_err(|(code, message)| format!("{code}: {message}"))?;
-    let manager_peer_id = entry.manager_peer_id.clone();
-    let remote_peer: PeerId = manager_peer_id
-        .parse()
-        .map_err(|err| format!("malformed manager peer id: {err}"))?;
-    let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
-        .with_wasm_bindgen()
-        .with_other_transport(|keypair| {
-            libp2p::webrtc_websys::Transport::new(libp2p::webrtc_websys::Config::new(keypair))
-                .boxed()
-        })
-        .map_err(|err| format!("transport setup failed: {err}"))?
-        .with_behaviour(|_| BrowserJoinBehaviour {
-            stream: libp2p_stream::Behaviour::new(),
-        })
-        .map_err(|err| format!("behaviour setup failed: {err}"))?
-        .build();
-
-    swarm
-        .dial(
-            DialOpts::peer_id(remote_peer)
-                .addresses(vec![address])
-                .build(),
-        )
-        .map_err(|err| format!("browser session dial setup failed: {err}"))?;
-
-    {
-        let timeout = js_timeout(BROWSER_JOIN_TIMEOUT_MS).fuse();
-        futures::pin_mut!(timeout);
-        loop {
-            select! {
-                timeout_result = timeout => {
-                    return match timeout_result {
-                        Ok(()) => Err(format!("browser session dial timed out after {BROWSER_JOIN_TIMEOUT_MS}ms")),
-                        Err(err) => Err(format!("browser session dial timeout setup failed: {err}")),
-                    };
-                }
-                event = swarm.select_next_some().fuse() => {
-                    match event {
-                        SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == remote_peer => break,
-                        SwarmEvent::OutgoingConnectionError {
-                            peer_id: Some(peer),
-                            error,
-                            ..
-                        } if peer == remote_peer => {
-                            return Err(format!("browser session dial failure for {peer}: {error}"));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    let mut control = swarm.behaviour().stream.new_control();
-    let proto = StreamProtocol::try_from_owned(BROWSER_SESSION_PROTOCOL.to_string())
-        .expect("BROWSER_SESSION_PROTOCOL is a valid libp2p protocol id");
-    let open = control.open_stream(remote_peer, proto).fuse();
-    let timeout = js_timeout(BROWSER_JOIN_TIMEOUT_MS).fuse();
-    futures::pin_mut!(open, timeout);
-
-    let mut substream = loop {
-        select! {
-            result = open => {
-                break result.map_err(|err| format!("open browser session stream failed: {err}"))?;
-            }
-            timeout_result = timeout => {
-                return match timeout_result {
-                    Ok(()) => Err(format!("browser session stream open timed out after {BROWSER_JOIN_TIMEOUT_MS}ms")),
-                    Err(err) => Err(format!("browser session stream open timeout setup failed: {err}")),
-                };
-            }
-            event = swarm.select_next_some().fuse() => {
-                if let SwarmEvent::OutgoingConnectionError {
-                    peer_id: Some(peer),
-                    error,
-                    ..
-                } = event
-                {
-                    if peer == remote_peer {
-                        return Err(format!("browser session dial failure for {peer}: {error}"));
-                    }
-                }
-            }
-        }
-    };
-
-    write_client_message(
-        &mut substream,
-        &BrowserSessionClientMessage::Hello {
-            domain_name,
-            participant: state.local_participant(),
-        },
-    )
-    .await
-    .map_err(|err| format!("write browser session hello failed: {err}"))?;
-
-    let (mut reader, mut writer) = substream.split();
-    let (sender, mut outbound) = futures::channel::mpsc::unbounded();
-    state.set_sender(sender);
-    let task_state = state.clone();
-    wasm_bindgen_futures::spawn_local(async move {
-        loop {
-            select! {
-                outbound_message = outbound.next().fuse() => {
-                    let Some(message) = outbound_message else {
-                        break;
-                    };
-                    let should_leave = matches!(message, BrowserSessionClientMessage::Leave);
-                    if write_client_message(&mut writer, &message).await.is_err() {
-                        break;
-                    }
-                    if should_leave {
-                        break;
-                    }
-                }
-                server_message = read_server_message(&mut reader).fuse() => {
-                    match server_message {
-                        Ok(BrowserSessionServerMessage::Snapshot { snapshot }) => {
-                            task_state.apply_snapshot(snapshot);
-                        }
-                        Ok(BrowserSessionServerMessage::Ack) => {}
-                        Ok(BrowserSessionServerMessage::Error { .. }) => {}
-                        Err(_) => break,
-                    }
-                }
-                _event = swarm.select_next_some().fuse() => {}
-            }
-        }
-        task_state.clear_sender();
-    });
-
-    Ok(())
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]

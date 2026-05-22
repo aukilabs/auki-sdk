@@ -15,6 +15,7 @@ default = []
 browser_libp2p = [
     "dep:auki-domain",
     "auki-network/join_protocol",
+    "auki-network/peer_protocols",
     "dep:futures",
     "dep:libp2p",
     "dep:libp2p-stream",

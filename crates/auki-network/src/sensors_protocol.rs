@@ -45,14 +45,13 @@
 //! still defending against malformed senders.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// libp2p protocol id for "what sensors are you currently
 /// publishing?". Stable; bump version only on an incompatible
 /// wire-shape change.
-pub const SENSORS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/sensors/0.0.1");
+pub const SENSORS_PROTOCOL: &str = "/auki/sensors/0.0.1";
 
 /// Cap on a single framed message. 512 KiB — a plain
 /// `SensorsResponse` with a few dozen `SensorEntry` rows is tiny, and

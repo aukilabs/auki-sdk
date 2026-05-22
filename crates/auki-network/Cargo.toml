@@ -27,11 +27,16 @@ swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings"]
 # Keeping this separate from `swarm` lets wasm/browser packaging reuse the
 # canonical `/auki/join/0.0.1` shapes without pulling in native Tokio transport.
 join_protocol = ["dep:futures", "dep:thiserror"]
+# Info and sensors protocol wire types/framing are shared by native and browser
+# runtimes. Keep them separate from `swarm` so wasm/browser packaging can reuse
+# the canonical `/auki/info/0.0.1` and `/auki/sensors/0.0.1` shapes without
+# pulling in native Tokio transports.
+peer_protocols = ["dep:futures", "dep:thiserror"]
 # Stream protocol wire types live in `auki-datatypes` (Step 2 of the
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
 # under swarm — protobuf handles binary natively.
-swarm = ["join_protocol", "dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:tokio", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
+swarm = ["join_protocol", "peer_protocols", "dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:tokio", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
 # Native-only probe for proving browser peers can dial an SDK-owned WebRTC
 # Direct listener before the Domain adapter stops failing closed.
 browser_probe = ["swarm", "dep:libp2p-webrtc", "dep:rand"]

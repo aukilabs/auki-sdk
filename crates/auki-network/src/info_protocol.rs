@@ -39,14 +39,16 @@
 //!
 //! ## Wire format
 //!
-//! Length-prefixed JSON, same framing as the other Hagall
+//! Length-prefixed protobuf, same framing as the other Hagall
 //! protocols. [`MAX_INFO_FRAME_BYTES`] caps each side at 64 KiB —
 //! `ParticipantInfo` is well under 1 KiB; the cap is defense
 //! against malformed senders.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use serde::{Deserialize, Serialize};
+use prost::Message;
 use thiserror::Error;
+
+pub use auki_datatypes::info::{InfoRequest, InfoResponse};
 
 /// libp2p protocol id for the `/api/info` equivalent over libp2p.
 /// Stable; bump version only on an incompatible wire-shape change.
@@ -57,50 +59,24 @@ pub const INFO_PROTOCOL: &str = "/auki/info/0.0.1";
 /// senders.
 pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
 
-/// Body of the request the initiator sends. Currently empty —
-/// reserved for future delta-fetching fields like
-/// `since_session_now_ns`. Receivers MUST tolerate unknown future
-/// fields (serde JSON is permissive by default).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InfoRequest {}
-
-/// Body of the response the responder sends. Carries a serialized
-/// [`crate::ParticipantInfo`] JSON string — same shape served on
-/// HTTP `/api/info`, same JSON the membership-gossip protocol
-/// already passes around for the membership doc. Cross-language
-/// consumers parse with their own JSON decoder.
-///
-/// `participant_info_json` is a [`String`] (not a typed Rust struct)
-/// so this module stays independent of the [`crate::ParticipantInfo`]
-/// type's exact field set — consumers can add fields without
-/// touching this protocol's wire shape.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InfoResponse {
-    /// Serialized `auki_network::ParticipantInfo` (JSON).
-    pub participant_info_json: String,
-}
-
 /// Failure modes for the framed read/write helpers below.
 #[derive(Debug, Error)]
 pub enum InfoProtocolError {
     /// Underlying I/O on the libp2p substream failed.
     #[error("io: {0}")]
     Io(#[source] std::io::Error),
-    /// JSON encode (write side) failed.
+    /// Protobuf encode (write side) failed.
     #[error("encode: {0}")]
-    Encode(#[source] serde_json::Error),
-    /// JSON decode (read side) failed.
+    Encode(#[source] prost::EncodeError),
+    /// Protobuf decode (read side) failed.
     #[error("decode: {0}")]
-    Decode(#[source] serde_json::Error),
-    /// Length prefix is zero.
-    #[error("frame is empty (length prefix is zero)")]
-    EmptyFrame,
+    Decode(#[source] prost::DecodeError),
     /// Length prefix exceeds [`MAX_INFO_FRAME_BYTES`].
     #[error("frame too large: {actual} bytes (max {max})")]
     FrameTooLarge { actual: u64, max: u64 },
 }
 
-/// Write an [`InfoRequest`] to `stream`, length-prefixed JSON.
+/// Write an [`InfoRequest`] to `stream`, length-prefixed protobuf.
 pub async fn write_info_request<S>(
     stream: &mut S,
     msg: &InfoRequest,
@@ -108,10 +84,10 @@ pub async fn write_info_request<S>(
 where
     S: AsyncWriteExt + Unpin,
 {
-    write_json(stream, msg).await
+    write_frame(stream, msg).await
 }
 
-/// Write an [`InfoResponse`] to `stream`, length-prefixed JSON.
+/// Write an [`InfoResponse`] to `stream`, length-prefixed protobuf.
 pub async fn write_info_response<S>(
     stream: &mut S,
     msg: &InfoResponse,
@@ -119,7 +95,7 @@ pub async fn write_info_response<S>(
 where
     S: AsyncWriteExt + Unpin,
 {
-    write_json(stream, msg).await
+    write_frame(stream, msg).await
 }
 
 /// Read an [`InfoRequest`] from `stream`.
@@ -127,7 +103,7 @@ pub async fn read_info_request<S>(stream: &mut S) -> Result<InfoRequest, InfoPro
 where
     S: AsyncReadExt + Unpin,
 {
-    read_json(stream).await
+    read_frame(stream).await
 }
 
 /// Read an [`InfoResponse`] from `stream`.
@@ -135,15 +111,16 @@ pub async fn read_info_response<S>(stream: &mut S) -> Result<InfoResponse, InfoP
 where
     S: AsyncReadExt + Unpin,
 {
-    read_json(stream).await
+    read_frame(stream).await
 }
 
-async fn write_json<S, T>(stream: &mut S, msg: &T) -> Result<(), InfoProtocolError>
+async fn write_frame<S, T>(stream: &mut S, msg: &T) -> Result<(), InfoProtocolError>
 where
     S: AsyncWriteExt + Unpin,
-    T: Serialize,
+    T: Message,
 {
-    let bytes = serde_json::to_vec(msg).map_err(InfoProtocolError::Encode)?;
+    let mut bytes = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut bytes).map_err(InfoProtocolError::Encode)?;
     if bytes.len() as u64 > MAX_INFO_FRAME_BYTES as u64 {
         return Err(InfoProtocolError::FrameTooLarge {
             actual: bytes.len() as u64,
@@ -163,10 +140,10 @@ where
     Ok(())
 }
 
-async fn read_json<S, T>(stream: &mut S) -> Result<T, InfoProtocolError>
+async fn read_frame<S, T>(stream: &mut S) -> Result<T, InfoProtocolError>
 where
     S: AsyncReadExt + Unpin,
-    T: for<'de> Deserialize<'de>,
+    T: Message + Default,
 {
     let mut len_buf = [0u8; 4];
     stream
@@ -174,9 +151,6 @@ where
         .await
         .map_err(InfoProtocolError::Io)?;
     let len = u32::from_be_bytes(len_buf);
-    if len == 0 {
-        return Err(InfoProtocolError::EmptyFrame);
-    }
     if len > MAX_INFO_FRAME_BYTES {
         return Err(InfoProtocolError::FrameTooLarge {
             actual: len as u64,
@@ -188,7 +162,7 @@ where
         .read_exact(&mut payload)
         .await
         .map_err(InfoProtocolError::Io)?;
-    serde_json::from_slice(&payload).map_err(InfoProtocolError::Decode)
+    T::decode(&*payload).map_err(InfoProtocolError::Decode)
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -205,6 +179,21 @@ mod tests {
         let mut cursor = futures::io::Cursor::new(buf);
         let back = read_info_request(&mut cursor).await.unwrap();
         assert_eq!(req, back);
+    }
+
+    #[tokio::test]
+    async fn info_response_payload_is_protobuf_not_json() {
+        let resp = InfoResponse {
+            participant_info_json: r#"{"peer_id":"12D3KooWA"}"#.to_string(),
+        };
+        let mut buf = Vec::new();
+        write_info_response(&mut buf, &resp).await.unwrap();
+
+        assert_ne!(
+            buf.get(4),
+            Some(&b'{'),
+            "info protocol payload must be generated protobuf, not JSON"
+        );
     }
 
     #[tokio::test]
@@ -228,25 +217,12 @@ mod tests {
         assert!(matches!(err, InfoProtocolError::FrameTooLarge { .. }));
     }
 
-    /// Pins the on-wire JSON key. Cross-language consumers (Python
-    /// via `auki-domain-py`, future TS/Swift) parse by this exact name.
     #[test]
-    fn wire_shape_locked_field_name() {
-        let json = serde_json::to_string(&InfoResponse {
+    fn generated_response_field_number_is_locked() {
+        let bytes = InfoResponse {
             participant_info_json: "abc".into(),
-        })
-        .unwrap();
-        assert!(json.contains(r#""participant_info_json":"#), "{json}");
-    }
-
-    /// Future-compat: an InfoRequest with extra fields decodes
-    /// cleanly into today's empty struct (serde ignores unknown
-    /// fields). Lets us add `since_session_now_ns` later without a
-    /// protocol-id bump.
-    #[test]
-    fn request_decodes_with_future_unknown_fields() {
-        let forward_json = r#"{"since_session_now_ns":12345}"#;
-        let back: InfoRequest = serde_json::from_str(forward_json).unwrap();
-        assert_eq!(back, InfoRequest::default());
+        }
+        .encode_to_vec();
+        assert_eq!(bytes, vec![0x0a, 0x03, b'a', b'b', b'c']);
     }
 }

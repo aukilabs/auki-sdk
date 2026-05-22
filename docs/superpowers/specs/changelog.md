@@ -6,6 +6,10 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+Corrected the iOS Auki network UniFFI design so the primary artifact is an iOS test app consuming generated Swift bindings from the Rust crates, with the message-networking facade exported by `auki-network` through UniFFI.
+
+### Nils's codex · May 22, HKT, 2026
+
 Added the iOS Auki network UniFFI design spec, locking the no-swift-libp2p rule and scoping the first browser-to-iOS milestone to `/auki/message/0.0.1` over Rust `auki-network` exposed through Swift UniFFI.
 
 ### Nils's codex · May 22, HKT, 2026

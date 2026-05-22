@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**iOS UniFFI design corrected around the test app.** The planned iOS artifact is now explicitly a test app that consumes generated Swift bindings from the Rust crates; `auki-network` still owns libp2p through UniFFI, and the app contains only host/test orchestration plus protobuf conversion. See [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **iOS `auki-network` UniFFI design added.** The first browser-to-iOS client milestone is scoped to `/auki/message/0.0.1`, with Swift using generated protobuf data types and Rust `auki-network` owning libp2p through UniFFI; swift-libp2p is explicitly out of scope. See [`docs/changelog.md`](docs/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

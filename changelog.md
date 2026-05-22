@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**Browser-to-iOS `/auki/message/0.0.1` smoke harness added.** `examples/ios/AukiNetworkTestApp` now includes a Node/js-libp2p script that uses generated browser `auki-network` bindings to send protobuf envelopes to the iOS generated Swift/Rust message node. See [`examples/changelog.md`](examples/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **iOS generated-binding Auki network test host added.** `examples/ios/AukiNetworkTestApp` now builds a SwiftUI host app against generated `auki_network` UniFFI bindings and generated SwiftProtobuf `AukiProto`, keeping libp2p networking in Rust. See [`examples/changelog.md`](examples/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

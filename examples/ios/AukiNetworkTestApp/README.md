@@ -25,3 +25,19 @@ xcodebuild \
 ```
 
 This app is a host/test harness only. SDK networking behavior lives in Rust crates and generated Swift bindings.
+
+## Browser message smoke
+
+Generate browser bindings:
+
+```bash
+just generate-javascript-bindings auki-network
+```
+
+Run the iOS app, tap **Start node**, then copy one full listen address including `/p2p/<peer-id>`.
+
+From the repository root:
+
+```bash
+node examples/ios/AukiNetworkTestApp/browser-message-smoke.mjs '<ios-multiaddr>'
+```

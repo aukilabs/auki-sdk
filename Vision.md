@@ -10,12 +10,13 @@ The on-device SDK for the Auki **real world web** — a collaborative spatial co
 
 Each physical space — a warehouse, a hospital ward, a retail floor — gets a **Domain**: a unique tag applied to data, asserting that the data is *about* that space. Domains are to the real world what websites are to the internet — privately owned, independently operated, linked by a shared protocol. A Domain has one or more **scenegraphs** — structured representations of typed nodes (frames, sensors, clocks) connected by transform edges. The Domain Owner designates one as the canonical **Map**, served by default when a peer asks for "the map" without naming a scenegraph. See [Glossary.md](Glossary.md) for the full term list, including the distinction between Domain ID, Scenegraph ID, and Session ID.
 
-The Auki protocol exists so any node — a phone, a robot, a cloud server, a browser tab — can answer four questions about any other node:
+The Auki protocol is built around five questions any node — a phone, a robot, a cloud server, a browser tab — should be able to answer about any other node:
 
-- **Where is this?**
-- **When was this?**
-- **How can I talk to you?**
-- **How can I compensate you?**
+- **Identity** — Who am I?
+- **Spatial** — Where did this happen?
+- **Temporal** — When did this happen?
+- **Networking** — How do I talk to you?
+- **Tokenomics** — How do I compensate you?
 
 This SDK is the on-device library that lets a node participate. It captures sensor data with the right identity and timing metadata, maintains a local scene graph, and (in time) crosses domain boundaries through the protocol's transform-composition operations.
 
@@ -318,7 +319,7 @@ The two-stage chain in `auki-identity` + `auki-network` pins the `Wallet -> libp
 
 The SDK's design is being worked through across two spaces:
 
-- **Long-form design docs** live in Notion under [About the real world web](https://www.notion.so/3495c8e9659280b38cc9ce1540f72a29). These cover the broader Auki protocol, the four questions, the registries and logs, and the Domain/Cluster/Map architecture.
+- **Long-form design docs** live in Notion under [About the real world web](https://www.notion.so/3495c8e9659280b38cc9ce1540f72a29). These cover the broader Auki protocol, the five questions, the registries and logs, and the Domain/Cluster/Map architecture.
 - **Open architectural questions** live in the [SDK Parking lot](https://www.notion.so/3495c8e9659280f5b0eafc6e4f70898b) — registry vs. manifest, frame pairing, schema versioning, etc.
 
 Notion is the source of truth for design conversations; this repo is the source of truth for the implementation.

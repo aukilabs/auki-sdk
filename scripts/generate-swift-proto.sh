@@ -46,4 +46,5 @@ MD
 protoc \
   -I proto \
   --swift_out "$src" \
+  --swift_opt Visibility=Public \
   proto/auki/*.proto

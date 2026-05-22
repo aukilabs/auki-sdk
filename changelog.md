@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**Swift protobuf generation now emits public types.** `scripts/generate-swift-proto.sh` passes SwiftProtobuf's public visibility option so generated `AukiProto` messages can be imported from the iOS test app target.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Generated Swift `AukiMessageNode` binding enabled for `auki-network`.** The crate now exposes the native message-node facade through UniFFI and verifies the local ignored SwiftPM/XCFramework output for iOS and macOS. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

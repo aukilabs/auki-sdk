@@ -18,8 +18,8 @@ For the SDK as a whole, start at the [root `README.md`](../README.md). Cross-cra
 | Crate | What it does |
 |---|---|
 | [`auki-logs`](auki-logs) | Generic segmented ring-buffer log primitive (manifest + segments + retention eviction). Encoder-agnostic via the `LogPayload` trait. |
-| [`auki-datatypes`](auki-datatypes) | Single source of truth for cross-language **segment payload** shapes — `.proto` schemas + prost-generated Rust. |
-| [`auki-manifests`](auki-manifests) | Single source of truth for **manifest** shapes — JCS-canonical UTF-8 JSON. Symmetric with `auki-datatypes`. |
+| [`auki-proto`](auki-proto) | Generated Rust protobuf package from root [`../proto/auki`](../proto/auki) schemas. Rust generated output is committed; JavaScript/TypeScript, Swift, and Python outputs are generated locally under `bindings/` and ignored. |
+| [`auki-manifests`](auki-manifests) | Single source of truth for **manifest** shapes — JCS-canonical UTF-8 JSON. Symmetric with `auki-proto`. |
 | [`auki-registry`](auki-registry) | Sensor + Clock + Frame registry types and IO. Identity for sensors, clocks, and coordinate frames. |
 
 ## Lifecycle & layout

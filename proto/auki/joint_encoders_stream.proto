@@ -22,7 +22,7 @@ package auki.joint_encoders_stream;
 // payloads have identical shape and exist as separate proto packages
 // only so wire and log code paths dispatch on distinct Rust types.
 // Symmetry is locked by the `joint_encoders_disk_wire_byte_identical`
-// test in `auki-datatypes`.
+// test in `auki-proto`.
 //
 // Field number ledger (never reuse, never renumber):
 //   JointEncodersFrame.angles_rad = 1

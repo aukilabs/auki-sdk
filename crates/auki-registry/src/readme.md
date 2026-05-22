@@ -2,7 +2,7 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink complete.** As of 2026-05-08, this crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Every log payload type that historically lived here has departed to [`auki-datatypes`](../../auki-datatypes) per the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md): manifest builders + `PoseSource` to [`auki-manifests`](../../auki-manifests) (Step 0); `CameraFrame` + `DynamicIntrinsics` (Step 1); `PointCloudLogEntry` (Step 3, opaque-bytes-only); `AudioLogEntry` (Step 4, opaque-bytes-only); `SpatialTransform` + `Vec3` + `Quat`, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5). Both `serde_bytes` and `ciborium` deps dropped along the way.
+> **Scope shrink complete.** This crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Log payload types live in generated [`auki-proto`](../../auki-proto) modules sourced from root [`proto/auki`](../../../proto/auki). Both `serde_bytes` and `ciborium` deps dropped along the way.
 
 ## What's here
 
@@ -145,7 +145,7 @@ pub enum AxisDirection { Forward, Backward, Up, Down, Left, Right }
 pub enum LengthUnit { Meters, Millimeters, Centimeters }
 ```
 
-A named coordinate system. Tells a consumer how to interpret position and rotation data tagged with this frame: handedness, what each axis points toward semantically, and the length unit. **Tree structure lives elsewhere** — edges between frames (the TF tree) live in the Pose Log: each Pose Log holds samples for one `(from_frame_id, to_frame_id)` pair, with flat `auki_datatypes::pose::SpatialTransform` segment entries. **Rotation representation** is fixed at the `SpatialTransform` layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
+A named coordinate system. Tells a consumer how to interpret position and rotation data tagged with this frame: handedness, what each axis points toward semantically, and the length unit. **Tree structure lives elsewhere** — edges between frames (the TF tree) live in the Pose Log: each Pose Log holds samples for one `(from_frame_id, to_frame_id)` pair, with flat `auki_proto::pose::SpatialTransform` segment entries. **Rotation representation** is fixed at the `SpatialTransform` layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
 
 `AxisConvention` is validated at write time: the three axes must be drawn from three distinct axis-pairs (forward/backward, left/right, up/down). Handedness consistency vs. axes is **not** cross-checked — both fields are declarations.
 
@@ -182,7 +182,7 @@ pub struct JointEncoders {
 }
 ```
 
-Per-frame data lives in [`auki_datatypes::joint_encoders::JointEncodersLogEntry`](../../auki-datatypes/src/lib.rs) (`repeated float angles_rad`). On the libp2p stream wire, the same payload rides as [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`](../../auki-datatypes/src/lib.rs) — byte-identical to the disk-side entry by design (Step 2/3 precedent).
+Per-frame data lives in [`auki_proto::joint_encoders::JointEncodersLogEntry`](../../auki-proto/src/lib.rs) (`repeated float angles_rad`). On the libp2p stream wire, the same payload rides as [`auki_proto::joint_encoders_stream::JointEncodersFrame`](../../auki-proto/src/lib.rs) — byte-identical to the disk-side entry by design.
 
 Joint angles are encoder readings — measurements of joint positions, before any kinematic interpretation. The URDF that drives forward kinematics (joint space → cartesian TF) lives with the consumer (Park, future analyses), not the producer; mapping joint indices to URDF links is a consumer-side concern. Joint ordering is producer-defined and immutable per log; consumers and producers coordinate the order at integration time.
 
@@ -194,7 +194,7 @@ Deliberately minimal — `joint_count` is the deserialization invariant (matches
 
 ## Log payload types
 
-All log payload types departed at Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (all 2026-05-08): camera, point cloud, audio, and pose all live in [`auki-datatypes`](../../auki-datatypes) now. The `serde_bytes` and `ciborium` deps dropped from this crate at the same time. The crate's surface narrowed back to identity catalogs only (Sensor / Clock / Frame registry types and IO).
+All log payload types live in [`auki-proto`](../../auki-proto) now. The `serde_bytes` and `ciborium` deps dropped from this crate at the same time. The crate's surface narrowed back to identity catalogs only (Sensor / Clock / Frame registry types and IO).
 
 ## Public functions
 
@@ -287,4 +287,4 @@ The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`
 
 - `auki-k1-binary` — writes one Sensor entry + two Clock entries at startup
 - `auki-renderer` — reads the Sensor entry to recover pixel format / dimensions / color space
-- `auki-ros-adapter` — re-exports this crate alongside [`auki-datatypes`](../../auki-datatypes); `build_camera_registry_entry` constructs entries here, `build_sensor_log_entry` constructs prost-shaped `CameraFrame` from `auki-datatypes`
+- `auki-ros-adapter` — re-exports this crate alongside [`auki-proto`](../../auki-proto); `build_camera_registry_entry` constructs entries here, `build_sensor_log_entry` constructs prost-shaped `CameraFrame` from `auki-proto`

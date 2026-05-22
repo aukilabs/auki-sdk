@@ -15,7 +15,7 @@ package auki.stream;
 // resolves the producer's `StreamManifest.sensor_hash` against its
 // Sensor Registry to learn which payload type `StreamEntry.payload` carries.
 // The SDK runtime decodes `StreamEntry.payload` (a length-bounded `bytes`
-// field) as the matching prost type from `auki-datatypes` (e.g.
+// field) as the matching prost type from `auki-proto` (e.g.
 // `CameraFrame`, `PointCloudFrame`).
 //
 // Field number ledger (never reuse, never renumber):

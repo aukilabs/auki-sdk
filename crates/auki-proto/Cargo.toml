@@ -1,0 +1,17 @@
+[package]
+name = "auki-proto"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Generated Rust protobuf bindings for Auki SDK schemas from root proto/auki sources."
+
+[dependencies]
+prost = "0.13"
+auki-logs = { path = "../auki-logs" }
+
+[dev-dependencies]
+auki-hash = { path = "../auki-hash" }
+serde_json = "1"
+tempfile = "3"

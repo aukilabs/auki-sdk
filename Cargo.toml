@@ -13,7 +13,7 @@ members = [
     "bindings/python/auki-manifests-py",
     "crates/auki-network",
     "bindings/python/auki-network-py",
-    "crates/auki-datatypes",
+    "crates/auki-proto",
     "crates/auki-domain",
     "bindings/python/auki-domain-py",
     "crates/auki-registry",
@@ -24,6 +24,7 @@ members = [
     "bindings/python/auki-session-py",
     "crates/auki-time",
     "examples/diagnostic-app",
+    "tools/proto-gen-rust",
 ]
 
 [workspace.package]

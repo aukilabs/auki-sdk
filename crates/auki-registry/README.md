@@ -2,18 +2,18 @@
 
 The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (all landed 2026-05-08) moved every log payload type out — `CameraFrame` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and `SpatialTransform` (Step 5, replacing the pre-migration `PoseLogEntry` + `TransformSample` shape). All five live in [`auki-datatypes`](../auki-datatypes); `auki-registry` now holds the Sensor / Clock / Frame registry types and IO only.
+> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Log payload types live in generated [`auki-proto`](../auki-proto) modules sourced from root [`proto/auki`](../../proto/auki); `auki-registry` holds the Sensor / Clock / Frame registry types and IO only.
 
 ## Two kinds of typed data (today, with one departing)
 
 | Kind            | What it is                             | Where it lives                                          | Future home                          |
 | --------------- | -------------------------------------- | ------------------------------------------------------- | ------------------------------------ |
 | Registry entry  | Immutable identity, one per hash       | `<app_root>/registries/<kind>/<id>/<hash>.json`         | Stays in `auki-registry` (canonical) |
-| Log payload     | Per-frame mutable data — **AI-drift**  | Inside an [`auki-logs`](../auki-logs) segment, mixed encoding mid-migration | Moves to [`auki-datatypes`](../auki-datatypes) (protobuf) |
+| Log payload     | Per-frame mutable data                  | Inside an [`auki-logs`](../auki-logs) segment, protobuf encoded | Lives in [`auki-proto`](../auki-proto) |
 
 Registry entries describe **what a thing is**; log payloads describe **what was sampled at a moment**. The split is right — the AI-drift was placing both halves in the same crate. The split itself stays; only the location of the second half changes.
 
-All log payload types departed at Steps 1, 3, 4, and 5 of the migration (all 2026-05-08): `CameraFrame` + `DynamicIntrinsics` (Step 1), `PointCloudLogEntry` (Step 3, opaque-bytes-only), `AudioLogEntry` (Step 4, opaque-bytes-only), and the pre-migration `PoseLogEntry` + `TransformSample` shape (Step 5, replaced by flat `SpatialTransform` + `Vec3` + `Quat`). All five now live in [`auki-datatypes`](../auki-datatypes), protobuf via prost.
+All log payload types now live in [`auki-proto`](../auki-proto), protobuf via prost.
 
 ---
 
@@ -143,15 +143,15 @@ ClockRegistryEntry {
 
 ---
 
-## Sensor Log payload — moved to `auki-datatypes` (Step 1, 2026-05-08)
+## Sensor Log payload — in `auki-proto`
 
-The Sensor Log payload (renamed `CameraFrame`) and `DynamicIntrinsics` now live in [`auki-datatypes`](../auki-datatypes) under the `auki.camera` `.proto` package. Encoding switched from CBOR to protobuf via prost. The split between static-registry-side and dynamic-per-frame intrinsics survives the move; the rationale (registry hash stability vs. autofocus drift) carried over verbatim. Manifest shape is unchanged — same `(sensor_id, sensor_hash)` resolution against the Sensor Registry tells a reader the segments hold `CameraFrame` rather than another payload type. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+The Sensor Log payload (`CameraFrame`) and `DynamicIntrinsics` live in [`auki-proto`](../auki-proto) under the `auki.camera` `.proto` package. Encoding is protobuf via prost. The split between static-registry-side and dynamic-per-frame intrinsics survives the move; the rationale (registry hash stability vs. autofocus drift) carried over verbatim. Manifest shape is unchanged — same `(sensor_id, sensor_hash)` resolution against the Sensor Registry tells a reader the segments hold `CameraFrame` rather than another payload type.
 
 ---
 
-## Point Cloud Log payload — moved to `auki-datatypes` (Step 3, 2026-05-08)
+## Point Cloud Log payload — in `auki-proto`
 
-`PointCloudLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The Step 3 decision was **opaque-bytes-only** — `PointCloudLogEntry { bytes data = 1; }` — symmetric with the wire's `PointCloudFrame`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id, frame_hash }` chain that already governs interpretation. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+`PointCloudLogEntry` lives in [`auki-proto`](../auki-proto) under the `auki.point_cloud` `.proto` package, encoded as protobuf via prost. The payload is **opaque-bytes-only** — `PointCloudLogEntry { bytes data = 1; }` — symmetric with the wire's `PointCloudFrame`. The pre-migration ROS-shaped fields `width` / `height` / `is_dense` are gone from the per-frame entry; readers resolve them via the `(sensor_id, sensor_hash) → SensorBody::PointCloud { fields, point_step, is_bigendian, frame_id, frame_hash }` chain that already governs interpretation.
 
 The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `PointCloudLogEntry`. Capturing camera + point cloud simultaneously is still two parallel sensor logs sharing a session.
 
@@ -166,19 +166,19 @@ The bytes in the segment are the repacked layout; a `SensorBody::PointCloud` reg
 
 ---
 
-## Audio Log payload — moved to `auki-datatypes` (Step 4, 2026-05-08)
+## Audio Log payload — in `auki-proto`
 
-`AudioLogEntry` now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.audio` `.proto` package, encoded as protobuf via prost. The Step 4 decision was **opaque-bytes-only** — `AudioLogEntry { bytes data = 1; }` — same stance as Step 3 for point clouds. The pre-Step-3 sprint lean toward adding a typed `sample_count: u32` was declined: sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Audio { sample_format, channels, sample_rate_hz }` body (renamed from `Microphone` 2026-05-14), and denormalizing a derivable field would risk inconsistency for marginal reader convenience. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the current shape.
+`AudioLogEntry` lives in [`auki-proto`](../auki-proto) under the `auki.audio` `.proto` package, encoded as protobuf via prost. The payload is **opaque-bytes-only** — `AudioLogEntry { bytes data = 1; }` — same stance as point clouds. Sample count and chunk duration are both derivable from the bytes plus the SensorRegistryEntry's `Audio { sample_format, channels, sample_rate_hz }` body, and denormalizing a derivable field would risk inconsistency for marginal reader convenience.
 
 The manifest shape is unchanged — same `(sensor_id, sensor_hash)` against the Sensor Registry tells a reader the segments hold `AudioLogEntry`. Sample-layout semantics (interleaved per channel; encoding per the registry's `sample_format`; compressed formats drop in cleanly via new `sample_format` values without changing the wrapper) carried over verbatim.
 
 ---
 
-## Pose Log payload — moved to `auki-datatypes` (Step 5, 2026-05-08)
+## Pose Log payload — in `auki-proto`
 
-The Pose Log payload now lives in [`auki-datatypes`](../auki-datatypes) under the `auki.pose` `.proto` package, encoded as protobuf via prost. Step 5 of the migration landed the synthesis decided 2026-05-07: the pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame`/`child_frame` strings are gone too. The new segment entry is flat `SpatialTransform { Vec3 translation; Quat orientation }`; frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair, mirroring how TimeTransform Log already keys per `(from_clock_id, to_clock_id)`.
+The Pose Log payload lives in [`auki-proto`](../auki-proto) under the `auki.pose` `.proto` package, encoded as protobuf via prost. The pre-migration `PoseLogEntry { transforms: Vec<TransformSample> }` wrapper is gone, and per-sample `parent_frame`/`child_frame` strings are gone too. The segment entry is flat `SpatialTransform { Vec3 translation; Quat orientation }`; frame identity lives in the manifest's `(from_frame_id, to_frame_id)` pair, mirroring how TimeTransform Log already keys per `(from_clock_id, to_clock_id)`.
 
-A producer that observes a multi-pair ROS `TFMessage` is responsible for fanning the message into N parallel pose logs (one per `(from, to)` pair). Each log has stable identity over its lifetime; the manifest carries `(from_frame_id + from_frame_hash)`, `(to_frame_id + to_frame_hash)`, `clock_id + clock_hash`, the inline `PoseSource` provenance tag, plus a `writer_mode: "rigid" | "movable"` hint and an `expected_rate_hz` rate hint per the synthesis. See [`auki-datatypes/README.md`](../auki-datatypes/README.md) for the segment payload and [`auki-manifests/README.md`](../auki-manifests/README.md) for the manifest builder.
+A producer that observes a multi-pair ROS `TFMessage` is responsible for fanning the message into N parallel pose logs (one per `(from, to)` pair). Each log has stable identity over its lifetime; the manifest carries `(from_frame_id + from_frame_hash)`, `(to_frame_id + to_frame_hash)`, `clock_id + clock_hash`, the inline `PoseSource` provenance tag, plus a `writer_mode: "rigid" | "movable"` hint and an `expected_rate_hz` rate hint per the synthesis. See [`auki-proto/README.md`](../auki-proto/README.md) for the segment payload and [`auki-manifests/README.md`](../auki-manifests/README.md) for the manifest builder.
 
 The on-disk pose-log directory is `<session>/poselogs/<from_id>__<to_id>/` (each frame_id's `/` substituted to `__` per the same convention as `timetransform_log_path`).
 
@@ -192,4 +192,4 @@ Each `from_frame_id` / `to_frame_id` in a Pose Log manifest references an entry 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`CameraFrame` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-datatypes`](../auki-datatypes)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`CameraFrame` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-proto`](../auki-proto)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

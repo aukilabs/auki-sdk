@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package auki.message;
+
+// Generic peer message envelope for `/auki/message/0.0.1`.
+//
+// The protocol carries application-defined messages without teaching
+// auki-network each application schema. `type_url` names the payload
+// contract, `body` carries the contract-specific protobuf bytes, and
+// `request_id` correlates a best-effort `MessageAck` when the sender
+// expects one.
+//
+// Field number ledger (never reuse, never renumber):
+//   MessageEnvelope.type_url   = 1
+//   MessageEnvelope.body       = 2
+//   MessageEnvelope.request_id = 3
+//   MessageAck.request_id      = 1
+//   MessageAck.accepted        = 2
+//   MessageAck.detail          = 3
+
+message MessageEnvelope {
+  string type_url = 1;
+  bytes body = 2;
+  string request_id = 3;
+}
+
+message MessageAck {
+  string request_id = 1;
+  bool accepted = 2;
+  string detail = 3;
+}

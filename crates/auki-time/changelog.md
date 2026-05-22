@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Active time docs now point `TimeTransformEntry` readers at generated `auki-proto`.** No sampler or time-transform behavior changed.
+
+### Nils's codex · May 22, HKT, 2026
+
+**TimeTransform payload import moved to `auki-proto`.** `auki-time` now re-exports `TimeTransformEntry` from generated Rust `auki-proto` instead of deprecated `auki-datatypes`.
+
 ### Nils's codex · May 20, HKT, 2026
 
 **`SessionClock` added.** `auki-time` now owns the SDK's session-monotonic clock primitive: peer-id rooted ids (`<peer_id>/<session_id>/monotonic`), a `ClockRegistryEntry` with `Scope::DeviceLocal` and session epoch marker, `clock_hash()`, `registry_entry()`, and monotonic `now_ns()` / `now_i64_ns()` readers. This gives heartbeat time sync and domain participant info one reusable clock identity instead of a heartbeat-specific abstraction. Added `auki-registry` as a dependency. Tests: `cargo test -p auki-time`.

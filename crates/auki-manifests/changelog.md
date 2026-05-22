@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Manifest docs no longer link to removed datatypes crate.** Current README, sprint, and parking-lot text now describe segment payload protobuf ownership as `auki-proto` / root `proto/auki` while preserving the May 8 migration history.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Manifest docs now point segment-payload readers at `auki-proto`.** The active README frames manifests as the JCS half and generated `auki-proto` payloads as the protobuf half; manifest JSON behavior is unchanged.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Manifest docs now describe `CameraFrame` payloads.** Active examples and comments follow the SDK-wide stream payload vocabulary cleanup; manifest schema behavior is unchanged.

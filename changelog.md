@@ -8,6 +8,50 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-datatypes` and `auki-datatypes-py` removed.** The Rust workspace now uses `auki-proto` directly with no compatibility shim, and Python protobuf output is generated locally under ignored `bindings/python/auki-proto/` instead of a committed package. Current docs and parking-lot summaries were updated away from the deleted packages. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`/auki/message/0.0.1` added through root protobuf schemas.** `proto/auki/message.proto` now defines `MessageEnvelope` and `MessageAck`, `auki-proto` includes generated Rust bindings and locked vectors, and `auki-network` exposes proto-backed framing helpers. See [`proto/changelog.md`](proto/changelog.md) and [`crates/changelog.md`](crates/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Active docs propagated to `auki-proto`.** Current crate and binding docs now point protobuf readers at root `proto/auki` plus generated `auki-proto` outputs, and mark committed Python datatypes output as deprecated. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Local non-Rust `auki-proto` generators added.** JavaScript/TypeScript, Swift, and Python protobuf outputs now generate under ignored `bindings/*/auki-proto/` paths; only the Rust `auki-proto` crate is committed. See [`bindings/changelog.md`](bindings/changelog.md) for binding-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Rust protobuf consumers migrated to `auki-proto`.** Workspace crates now import generated payload types from `auki-proto`; `auki-datatypes` remains only as a compatibility shim. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-datatypes` deprecated as an `auki-proto` shim.** The old crate now re-exports `auki_proto::*` instead of owning schemas or build-time prost generation. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Generated Rust `auki-proto` crate added.** Root `proto/auki` schemas now feed checked-in prost output under `crates/auki-proto`, while non-Rust protobuf outputs remain generated local binding artifacts. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Canonical protobuf schemas moved to `proto/auki/`.** The repo now has a platform-neutral schema source for the forthcoming `auki-proto` generated package family. See [`proto/changelog.md`](proto/changelog.md) for schema-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-proto` plan corrected for generated output ownership.** The proto migration now commits only the generated Rust `auki-proto` crate; JavaScript/TypeScript, Swift, and Python protobuf outputs are generated locally under ignored `bindings/` paths. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-proto` plan corrected for Python generation.** The initial proto migration now commits Rust, JavaScript/TypeScript, and Swift generated packages only; Python protobuf output is generated on demand and left uncommitted until packaging policy is approved. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-proto` generation migration planned.** Added Superpowers docs for moving canonical protobuf schemas to root `proto/auki`, generating Rust/JavaScript/Swift/Python `auki-proto` packages, and deprecating `auki-datatypes` as a Rust compatibility shim. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-network` now owns the browser jslibp2p binding path.** The crate follows the core/UniFFI/wasm adapter structure, exposes wasm identity/protocol helpers for browser JavaScript, and carries crate-owned templates that generate and smoke-test the jslibp2p wrapper package. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

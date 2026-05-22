@@ -116,9 +116,9 @@ FrameTransformAvailability {
 }
 ```
 
-The Pose Log capture path uses `Log<auki_datatypes::pose::SpatialTransform>` with identity in `build_pose_log_manifest` (`from_frame_id/hash`, `to_frame_id/hash`, `PoseSource`, `PoseWriterMode`, `expected_rate_hz`) and pathing from `poselog_path`. There is no `PoseLogEntry` wrapper. `auki-geometry` ships convention-level helpers (`convert_pose_convention`, point/vector/direction conversion), while the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending. `FrameTransformAvailability` describes what is available; graph composition is the consumer's job today.
+The Pose Log capture path uses `Log<auki_proto::pose::SpatialTransform>` with identity in `build_pose_log_manifest` (`from_frame_id/hash`, `to_frame_id/hash`, `PoseSource`, `PoseWriterMode`, `expected_rate_hz`) and pathing from `poselog_path`. There is no `PoseLogEntry` wrapper. `auki-geometry` ships convention-level helpers (`convert_pose_convention`, point/vector/direction conversion), while the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending. `FrameTransformAvailability` describes what is available; graph composition is the consumer's job today.
 
-Detection Logs use `Log<auki_datatypes::detection::DetectionLogEntry>`, where `DetectionLogEntry` is opaque bytes. The detector-specific schema is owned by the detector family, not the SDK. The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`; a future detector registry can make `detector_hash` resolvable the same way sensor/clock/frame hashes are today.
+Detection Logs use `Log<auki_proto::detection::DetectionFrame>`, where `DetectionFrame` is opaque bytes. The detector-specific schema is owned by the detector family, not the SDK. The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`; a future detector registry can make `detector_hash` resolvable the same way sensor/clock/frame hashes are today.
 
 ---
 

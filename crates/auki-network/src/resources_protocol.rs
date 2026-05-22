@@ -218,7 +218,7 @@ pub struct TransformEdgeResource {
     pub to_frame_entry_json: Option<String>,
 }
 
-/// JSON-friendly counterpart of `auki_datatypes::pose::SpatialTransform`.
+/// JSON-friendly counterpart of `auki_proto::pose::SpatialTransform`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ResourceSpatialTransform {
     /// Translation component.

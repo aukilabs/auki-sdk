@@ -4,6 +4,18 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation artifacts so the initial migration commits only the generated Rust `auki-proto` crate; JavaScript/TypeScript, Swift, and Python protobuf outputs are generated locally under ignored `bindings/` paths.
+
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation artifacts so the initial migration commits Rust, JavaScript/TypeScript, and Swift generated protobuf packages only; Python generation remains on-demand and uncommitted.
+
+### Nils's codex · May 22, HKT, 2026
+
+Added the Auki proto generation design and implementation plan under [`specs/`](specs/2026-05-22-auki-proto-generation-design.md) and [`plans/`](plans/2026-05-22-auki-proto-generation.md), defining generated per-platform `auki-proto` packages and the `auki-datatypes` deprecation path.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Added the `auki-uniffi-test` multiplatform bindings implementation plan under [`plans/`](plans/2026-05-21-auki-uniffi-test-multiplatform-bindings.md), sequencing the shared-core split, UniFFI native package preservation, wasm-bindgen JavaScript package generation, and setup tooling.

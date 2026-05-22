@@ -12,7 +12,7 @@ This crate provides:
 - The three-read sampling protocol (`m1, r, m2`) and its `uncertainty_ns` computation.
 - A `Clock` trait + `SystemClock` impl wired to `clock_gettime` for `CLOCK_MONOTONIC` / `CLOCK_REALTIME`.
 
-The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. One TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
+`TimeTransformEntry` is generated from the root protobuf schemas into [`auki-proto`](../auki-proto). The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. One TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
 
 ## SessionClock
 
@@ -89,9 +89,9 @@ The returned `DomainClockEstimate` carries both component offsets and the compos
 
 ## Where the types live
 
-Step 6 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) moved the type definitions out of this crate; they live in their canonical homes now and are re-exported here for short call sites:
+The type definitions live in their canonical homes and are re-exported here for short call sites:
 
-- **`TimeTransformEntry`** lives in [`auki-datatypes`](../auki-datatypes) under the `auki.time_transform` `.proto` package — protobuf via prost, two fields only (`int64 offset_ns`, `uint32 uncertainty_ns`). The pre-migration per-entry `source` field moved to the manifest; the per-entry `discontinuous: bool` is gone (computed on read, see below).
+- **`TimeTransformEntry`** lives in [`auki-proto`](../auki-proto) under the `auki.time_transform` `.proto` package — protobuf via prost, two fields only (`int64 offset_ns`, `uint32 uncertainty_ns`). The pre-migration per-entry `source` field moved to the manifest; the per-entry `discontinuous: bool` is gone (computed on read, see below).
 - **`TimeTransformSource`** lives in [`auki-manifests`](../auki-manifests) — manifest metadata, mirrors `PoseSource`'s tagged-enum shape. One variant today (`LocalClockRead`); future producers (`NtpSynced { server }`, `SyncedTo { peer_id }`, ...) attach metadata without a schema break.
 - The `tick` and `Sampler` primitives in this crate are the producer of `TimeTransformEntry`. They drive `clock_gettime` and write entries to an `auki-logs::Log<TimeTransformEntry>`.
 

@@ -3,9 +3,9 @@
 //!
 //! Schema spec: [`../README.md`](../README.md).
 //!
-//! - [`auki_datatypes::time_transform::TimeTransformEntry`] is the
+//! - [`auki_proto::time_transform::TimeTransformEntry`] is the
 //!   per-sample payload (re-exported here for short call sites). Lives
-//!   in [`auki-datatypes`](../auki-datatypes) since Step 6 of the
+//!   in [`auki-proto`](../auki-proto) since Step 6 of the
 //!   migration (2026-05-08) — encoding switched from CBOR-via-ciborium
 //!   to protobuf via prost; pre-migration `source` and `discontinuous`
 //!   fields are gone (`source` moved to manifest, `discontinuous` is
@@ -28,8 +28,8 @@ pub use auki_logs;
 use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
 
 // Re-exports for short call sites at consumer crates.
-pub use auki_datatypes::time_transform::TimeTransformEntry;
 pub use auki_manifests::TimeTransformSource;
+pub use auki_proto::time_transform::TimeTransformEntry;
 
 /// A fixed affine relationship from one clock to another.
 ///
@@ -741,7 +741,7 @@ impl SessionClock {
 }
 
 // `build_manifest` (renamed `build_time_transform_log_manifest`) moved to
-// [`auki-manifests`] in Step 0 of the auki-datatypes migration.
+// [`auki-manifests`] in Step 0 of the auki-proto migration.
 
 /// Background sampler. Calls `tick` every `period`, appending each entry to
 /// the log. Stops cleanly via the returned handle.
@@ -1402,12 +1402,12 @@ mod tests {
 
     // `build_manifest_contains_required_fields` moved to [`auki-manifests`]
     // (renamed `build_time_transform_log_manifest_contains_required_fields`)
-    // in Step 0 of the auki-datatypes migration. Discontinuity-detection
+    // in Step 0 of the auki-proto migration. Discontinuity-detection
     // tests dropped at Step 6 — `discontinuous` is a reader-side
     // computation now, no longer baked into the entry. Source-snake-case
     // test moved to [`auki-manifests`] alongside `TimeTransformSource`.
     // CBOR round-trip test dropped — entry encoding moved to prost in
-    // [`auki-datatypes`](../auki-datatypes), where the round-trip test
+    // [`auki-proto`](../auki-proto), where the round-trip test
     // also lives.
 
     #[test]
@@ -1446,7 +1446,7 @@ mod tests {
             !entries.is_empty(),
             "sampler should have written at least one entry"
         );
-        // Sample contents are pinned by auki-datatypes' round-trip tests;
+        // Sample contents are pinned by auki-proto' round-trip tests;
         // here we just confirm the sampler wrote something readable.
         for e in &entries {
             // `uncertainty_ns` is bounded; ScriptedClock advances linearly.

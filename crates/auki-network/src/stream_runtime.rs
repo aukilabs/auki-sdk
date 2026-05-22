@@ -47,7 +47,7 @@ use crate::stream_protocol::{
     STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
     StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
 };
-use auki_datatypes::detection::DetectionFrame;
+use auki_proto::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::OpenStreamError as Libp2pOpenStreamError;
@@ -123,7 +123,7 @@ pub enum StreamDispatch {
     /// indexed in the producer's emit order, length pinned by the
     /// registry entry's `joint_count`). Wire bytes are identical to the
     /// on-disk `JointEncodersLogEntry` payload by design (locked in
-    /// `auki-datatypes` by `joint_encoders_disk_wire_byte_identical`).
+    /// `auki-proto` by `joint_encoders_disk_wire_byte_identical`).
     AcceptJointEncoders {
         manifest: StreamManifest,
         source: SourceStream<JointEncodersFrame>,
@@ -136,7 +136,7 @@ pub enum StreamDispatch {
     /// `(sensor_id, sensor_hash) → SensorBody::Audio` — the wire
     /// payload is opaque-bytes-only. Wire bytes are byte-identical to
     /// the on-disk `AudioLogEntry` payload by design (locked in
-    /// `auki-datatypes` by `audio_disk_wire_byte_identical`).
+    /// `auki-proto` by `audio_disk_wire_byte_identical`).
     AcceptAudio {
         manifest: StreamManifest,
         source: SourceStream<AudioFrame>,

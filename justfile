@@ -13,3 +13,18 @@ generate-python-bindings crate:
 
 generate-javascript-bindings crate:
     bash scripts/generate-javascript-bindings.sh "{{crate}}"
+
+generate-rust-proto:
+    bash scripts/generate-rust-proto.sh
+
+generate-proto:
+    bash scripts/generate-proto.sh
+
+generate-javascript-proto:
+    bash scripts/generate-javascript-proto.sh
+
+generate-swift-proto:
+    bash scripts/generate-swift-proto.sh
+
+generate-python-proto:
+    bash scripts/generate-python-proto.sh

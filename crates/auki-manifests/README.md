@@ -1,15 +1,15 @@
 # auki-manifests
 
-Single source of truth for the Auki SDK's **log manifests** — schemas + builders for the per-recording metadata that lives at the root of each `auki-logs` log directory. Symmetric with [`auki-datatypes`](../auki-datatypes), which owns segment payload shapes; this crate owns manifest shapes.
+Single source of truth for the Auki SDK's **log manifests** — schemas + builders for the per-recording metadata that lives at the root of each `auki-logs` log directory. Symmetric with [`auki-proto`](../auki-proto), which owns generated segment payload shapes; this crate owns manifest shapes.
 
 ## Two crates, two halves of an `auki-logs::Log<T>`
 
 | Concern | Crate | Encoding |
 |---|---|---|
 | Manifest (per-recording metadata at the log root) | this crate | JCS-canonical UTF-8 JSON via [`auki-jcs`](../auki-jcs) |
-| Segment payloads (per-frame bulk data) | [`auki-datatypes`](../auki-datatypes) | Protobuf via prost |
+| Segment payloads (per-frame bulk data) | [`auki-proto`](../auki-proto) | Protobuf via prost |
 
-Manifests stay JCS-JSON because (a) JCS gives free cross-language byte-equivalence for content-hashing the inline producer identities like [`PoseSource`](src/lib.rs); (b) manifests are operator-debugged via `cat`, browser-read by Park, and inspected by ad-hoc tooling — JSON is the universal denominator; (c) per-recording metadata doesn't benefit from protobuf's wire compactness (~500 bytes, written once, read by humans + code). See the [`auki-datatypes` parking-lot decision](../auki-datatypes/parking_lot.md) for the full rationale.
+Manifests stay JCS-JSON because (a) JCS gives free cross-language byte-equivalence for content-hashing the inline producer identities like [`PoseSource`](src/lib.rs); (b) manifests are operator-debugged via `cat`, browser-read by Park, and inspected by ad-hoc tooling — JSON is the universal denominator; (c) per-recording metadata doesn't benefit from protobuf's wire compactness (~500 bytes, written once, read by humans + code).
 
 ## What this crate exports
 
@@ -91,7 +91,7 @@ The `(sensor_id, sensor_hash)` pair resolves to a [`SensorRegistryEntry`](../auk
 
 ### Pose Log
 
-Per-`(from, to)` log identity (Step 5 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md), 2026-05-08). Each Pose Log holds samples for exactly one `(from_frame_id, to_frame_id)` pair; segment entries are flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs).
+Per-`(from, to)` log identity. Each Pose Log holds samples for exactly one `(from_frame_id, to_frame_id)` pair; segment entries are flat [`auki_proto::pose::SpatialTransform`](../auki-proto/src/lib.rs).
 
 | Key                   | Type            | Notes                                                            |
 | --------------------- | --------------- | ---------------------------------------------------------------- |
@@ -141,7 +141,7 @@ The `(from_frame_id, to_frame_id)` pair mirrors the TimeTransform Log's `(from_c
 | `clock_id`            | string          | Same clock as the input log                                                                                  |
 | `clock_hash`          | string          | Same clock-hash as the input log                                                                             |
 
-The detection log opens with [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs)'s on-disk shape `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring how Sensor Logs and Pose Logs map a log identity to a directory. Segment payloads are [`auki_datatypes::detection::DetectionFrame`](../auki-datatypes/src/lib.rs) (Step 8 of the migration, 2026-05-08).
+The detection log opens with [`auki_layout::detection_log_path`](../auki-layout/src/lib.rs)'s on-disk shape `<session>/detection_logs/<detector_id>__<input_log_id>/`, mirroring how Sensor Logs and Pose Logs map a log identity to a directory. Segment payloads are [`auki_proto::detection::DetectionFrame`](../auki-proto/src/lib.rs).
 
 **No `intent` field** — the keystone's `buffer | intent_recording` dimension applies to every log but is not yet plumbed through the existing builders. Match-the-existing-builders for v1; uniform rollout is a separate PR.
 
@@ -151,4 +151,4 @@ Schema version is **1** for all four manifest shapes (Sensor Log family, Pose Lo
 
 ## Status
 
-Step 0 of the [`auki-datatypes` migration](../auki-datatypes/src/sprint.md) (2026-05-08) extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). Step 5 (2026-05-08) rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`. Step 6 (2026-05-08) added `&TimeTransformSource` as a `build_time_transform_log_manifest` argument and brought `TimeTransformSource` over from [`auki-time`](../auki-time) — it's manifest metadata, not a per-entry field, mirroring `PoseSource`.
+The May 8 payload migration extracted the manifest builders from `auki-registry` (`build_sensor_log_manifest`, `build_pose_log_manifest`, `PoseSource`) and `auki-time` (`build_manifest`, renamed to `build_time_transform_log_manifest` here for unambiguity). The same migration rewrote `build_pose_log_manifest` for the new per-`(from, to)`-frame Pose Log identity per the 2026-05-07 synthesis: 13 args, including frame-pair fields, `writer_mode: PoseWriterMode`, and `expected_rate_hz: u32`. It also added `&TimeTransformSource` as a `build_time_transform_log_manifest` argument and brought `TimeTransformSource` over from [`auki-time`](../auki-time) — it's manifest metadata, not a per-entry field, mirroring `PoseSource`.

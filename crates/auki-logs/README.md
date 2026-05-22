@@ -1,8 +1,8 @@
 # auki-logs
 
-Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The schemas for each live with the crate that owns the entry type ([`auki-datatypes`](../auki-datatypes) for `CameraFrame` since 2026-05-08, [`auki-time`](../auki-time) for `TimeTransformEntry` until Step 6 of the [migration](../auki-datatypes/src/sprint.md)).
+Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the Sensor Log and the TimeTransform Log — are typed instantiations of this primitive. The protobuf schemas for their entry types live under root [`proto/auki`](../../proto/auki) and are generated into [`auki-proto`](../auki-proto).
 
-Payload encoding is the consumer's choice via the [`LogPayload`](src/lib.rs) trait — this crate handles framing only. Prost types in [`auki-datatypes`](../auki-datatypes) get a blanket impl through the `impl_log_payload!` macro; mid-migration CBOR types implement it directly.
+Payload encoding is the consumer's choice via the [`LogPayload`](src/lib.rs) trait — this crate handles framing only. Prost types in [`auki-proto`](../auki-proto) get a blanket impl through the `impl_log_payload!` macro.
 
 The rest of this README is the **on-disk format spec, version 1** — implementations in any language must read and write segment files that conform to it.
 
@@ -97,4 +97,4 @@ Format version is **1**. Bump for any incompatible change to the header layout, 
 
 ## Why encoding-agnostic
 
-Earlier drafts pinned the payload encoding to CBOR via ciborium. The migration in [`auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md) replaces it with prost (protobuf) for cross-language schema enforcement. Rather than swap one hardcoded encoder for another, the crate exposes a [`LogPayload`](src/lib.rs) trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>` — and stays out of the encoder's way. Consumers pick the encoder; the framing primitive doesn't care. Decision pinned 2026-05-08 (Step 1 of the migration); see [`parking_lot.md`](parking_lot.md).
+Earlier drafts pinned the payload encoding to CBOR via ciborium. The migration to root protobuf schemas and generated [`auki-proto`](../auki-proto) bindings gives cross-language schema enforcement without making this crate protobuf-specific. Rather than swap one hardcoded encoder for another, the crate exposes a [`LogPayload`](src/lib.rs) trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>` — and stays out of the encoder's way. Consumers pick the encoder; the framing primitive doesn't care. Decision pinned 2026-05-08 (Step 1 of the migration); see [`parking_lot.md`](parking_lot.md).

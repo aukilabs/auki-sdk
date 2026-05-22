@@ -10,11 +10,11 @@ When a question is answered inline, an agent removes the item and propagates the
 
 The v1 Discovery contract (locked 2026-05-13) skips signature verification entirely, so for v1 even bare unsigned JSON is fine. For the v2 hardening pass, the successor token `{cluster, eligible_successor: <joiner_peer_id>, issued_at: <ts>}` signed by the current Manager's libp2p private key needs an encoding decision. Three options:
 
-1. **Prost message in `auki-datatypes`.** Consistent with the convention putting all on-wire payloads in `auki-datatypes`. Compact wire; deterministic encoding (good for signatures); typed boundary.
+1. **Prost message in `auki-proto`.** Consistent with the convention putting all on-wire payloads in root `proto/auki` schemas and generated Rust bindings in `auki-proto`. Compact wire; deterministic encoding (good for signatures); typed boundary.
 2. **JWT-flavored.** Familiar ecosystem; but the JWT signature stack doesn't natively speak libp2p keypair (ed25519 / secp256k1 / RSA — libp2p's `Keypair` enum), so we'd be reimplementing the bit JWT is supposed to give us.
-3. **Bare signed JSON.** Quickest to ship. No prost schema bump, no dep on `auki-datatypes`. Risks the canonicalization rabbit hole (whose JSON ordering wins?) the moment a second language signs or verifies — `auki-jcs` exists for exactly that, so the cost is real.
+3. **Bare signed JSON.** Quickest to ship. No prost schema bump, no dep on `auki-proto`. Risks the canonicalization rabbit hole (whose JSON ordering wins?) the moment a second language signs or verifies — `auki-jcs` exists for exactly that, so the cost is real.
 
-**Lean: prost in `auki-datatypes`,** ~60%. Matches the v0.0.24 convention and gives a deterministic encoding for free. Question only matters at v2; defer until then.
+**Lean: prost in `auki-proto`,** ~60%. Matches the current root-proto convention and gives a deterministic encoding for free. Question only matters at v2; defer until then.
 
 ---
 

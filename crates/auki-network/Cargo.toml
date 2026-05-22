@@ -28,11 +28,11 @@ wasm = [
     "dep:js-sys",
     "dep:wasm-bindgen",
 ]
-# Stream protocol wire types live in `auki-datatypes` (Step 2 of the
-# migration); pulled in alongside libp2p so the substream protocol can
-# encode/decode prost messages directly. base64 is no longer needed
-# under swarm — protobuf handles binary natively.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
+# Stream/message protocol wire types live in `auki-proto`; pulled in
+# alongside libp2p so substream protocols can encode/decode prost messages
+# directly. base64 is no longer needed under swarm — protobuf handles binary
+# natively.
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-proto", "dep:auki-time", "dep:prost"]
 # Native-only probe for proving browser peers can dial an SDK-owned WebRTC
 # Direct listener before the Domain adapter stops failing closed.
 browser_probe = ["swarm", "dep:libp2p-webrtc", "dep:rand"]
@@ -87,11 +87,9 @@ tokio = { version = "1", default-features = false, features = ["macros", "rt", "
 # `StreamExt` for polling `swarm.next()` in the runtime task.
 futures = { version = "0.3", default-features = false, optional = true }
 rand = { version = "0.8", optional = true }
-# Stream-protocol wire types — `CameraFrame`, `PointCloudFrame`,
-# `StreamMessage` envelope. Step 2 of the auki-datatypes migration
-# moves these from this crate's hand-rolled serde structs to
-# auki-datatypes-owned prost types.
-auki-datatypes = { path = "../auki-datatypes", optional = true }
+# Stream/message-protocol wire types — `CameraFrame`, `PointCloudFrame`,
+# `StreamMessage`, `MessageEnvelope`, and `MessageAck`.
+auki-proto = { path = "../auki-proto", optional = true }
 # NTP-style samples derived from heartbeat echoes.
 auki-time = { path = "../auki-time", optional = true }
 # Encode/decode prost messages on the substream wire.

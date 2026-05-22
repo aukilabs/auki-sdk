@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Single source of truth for the Auki SDK's log manifests — schemas + builders for Sensor Log, Pose Log, and TimeTransform Log manifests. Symmetric with `auki-datatypes` (which owns segment payload shapes); this crate owns manifest shapes. Encoding is JCS-canonical UTF-8 JSON via `auki-jcs`."
+description = "Single source of truth for the Auki SDK's log manifests — schemas + builders for Sensor Log, Pose Log, and TimeTransform Log manifests. Symmetric with `auki-proto` (which owns generated segment payload shapes); this crate owns manifest shapes. Encoding is JCS-canonical UTF-8 JSON via `auki-jcs`."
 
 [dependencies]
 # JCS-canonical JSON encoding for content-hashed manifest fields

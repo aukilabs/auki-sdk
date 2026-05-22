@@ -4,6 +4,18 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation implementation plan so only the generated Rust `auki-proto` crate is committed; JavaScript/TypeScript, Swift, and Python generation scripts create ignored local outputs under `bindings/`.
+
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation implementation plan to skip the Python package rename and keep generated Python protobuf output uncommitted until a separate packaging decision.
+
+### Nils's codex · May 22, HKT, 2026
+
+Created the Auki proto generation implementation plan, sequencing root schema relocation, generated Rust `auki-proto`, `auki-datatypes` shim deprecation, Rust consumer migration, and JavaScript/Swift/Python protobuf generation.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Created the `auki-uniffi-test` multiplatform bindings implementation plan, covering `install-toolchain`, shared core extraction, UniFFI preservation for Swift/Python, wasm-bindgen JavaScript generation, and final verification.

@@ -4,7 +4,7 @@ SDK time primitives, time-transform math, NTP-style offset samples, peer-clock s
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). Step 6 of the [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) (2026-05-08) moved the log payload definition out; this crate owns session clocks, the producer sampler, and pure time-transform math while re-exporting the canonical TimeTransform payload types.
+A single source file: [`lib.rs`](lib.rs). The log payload definition lives in generated [`auki-proto`](../../auki-proto); this crate owns session clocks, the producer sampler, and pure time-transform math while re-exporting the canonical TimeTransform payload type.
 
 The crate has six composable layers:
 1. The **session clock** ([`SessionClock`]) — SDK-owned session-monotonic identity and reader. Clock ids are `<peer_id>/<session_id>/monotonic`; the first segment is the authoring peer id, and the registry entry's epoch marker is the session id.
@@ -17,7 +17,7 @@ The crate has six composable layers:
 ## Re-exports
 
 ```rust
-pub use auki_datatypes::time_transform::TimeTransformEntry;  // { offset_ns: i64, uncertainty_ns: u32 }
+pub use auki_proto::time_transform::TimeTransformEntry;  // { offset_ns: i64, uncertainty_ns: u32 }
 pub use auki_manifests::TimeTransformSource;                  // tagged enum, lives in the manifest
 ```
 
@@ -238,7 +238,7 @@ impl Sampler {
 | `tick_computes_offset_uncertainty_and_timestamp` | The math is right for one canned set of readings (offset, uncertainty, timestamp). |
 | `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries are written and stop cleanly via the join handle. |
 
-The Step 6 cleanup dropped 6 discontinuity-detection tests (logic moved to readers; no producer-side discontinuity to test in this crate any more), the snake-case `TimeTransformSource` test (moved to [`auki-manifests`](../../auki-manifests) where the type now lives), and the CBOR round-trip test (replaced by the prost round-trip in [`auki-datatypes::tests`](../../auki-datatypes/src/lib.rs)).
+The Step 6 cleanup dropped 6 discontinuity-detection tests (logic moved to readers; no producer-side discontinuity to test in this crate any more), the snake-case `TimeTransformSource` test (moved to [`auki-manifests`](../../auki-manifests) where the type now lives), and the CBOR round-trip test (replaced by the prost round-trip in [`auki-proto::tests`](../../auki-proto/src/lib.rs)).
 
 ## Consumers in this workspace
 

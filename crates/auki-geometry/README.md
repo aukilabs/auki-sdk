@@ -5,7 +5,7 @@ Pure spatial math for the Auki SDK.
 This crate is the home for operations that *use* registry declarations and payload datatypes without owning either:
 
 - [`auki-registry`](../auki-registry) declares frame conventions (`FrameRegistryEntry`, `AxisConvention`, `LengthUnit`).
-- [`auki-datatypes`](../auki-datatypes) declares pose payloads (`SpatialTransform`, `Vec3`, `Quat`).
+- [`auki-proto`](../auki-proto) declares generated pose payloads (`SpatialTransform`, `Vec3`, `Quat`).
 - `auki-geometry` converts and composes those values.
 
 It does not read registry files, fetch missing hashes, open logs, or speak libp2p. Callers resolve the relevant entries first; this crate only performs deterministic geometry.

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Active log docs now point payload readers at `auki-proto`.** The log framing docs describe root protobuf schemas and generated `auki-proto` payload impls as the active prost path; no segment format behavior changed.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Active log documentation now names camera records as `CameraFrame`.** The retained-log docs now align with the SDK-wide camera/detection frame naming cleanup; no log file format changed.

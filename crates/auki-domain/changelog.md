@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Successor-token parking-lot option updated to `auki-proto`.** The v2 hardening question now frames the prost option as a root-proto / generated-`auki-proto` message instead of pointing at the removed `auki-datatypes` crate.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Domain resource metadata now follows the final camera stream vocabulary.** Cluster resource lifting and stream manifests use `camera_frame` payload metadata with the `"camera"` sensor tag, matching the renamed datatypes, registry, and network surfaces.

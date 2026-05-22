@@ -641,19 +641,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-datatypes"
-version = "0.0.0"
-dependencies = [
- "auki-hash",
- "auki-logs",
- "prost",
- "prost-build",
- "protoc-bin-vendored",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "auki-diagnostic-app"
 version = "0.0.0"
 dependencies = [
@@ -718,7 +705,7 @@ dependencies = [
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
- "auki-datatypes",
+ "auki-proto",
  "auki-registry",
 ]
 
@@ -826,9 +813,9 @@ dependencies = [
 name = "auki-network"
 version = "0.0.0"
 dependencies = [
- "auki-datatypes",
  "auki-identity",
  "auki-jcs",
+ "auki-proto",
  "auki-time",
  "base64",
  "eventsource-stream",
@@ -859,10 +846,10 @@ dependencies = [
 name = "auki-network-py"
 version = "0.0.0"
 dependencies = [
- "auki-datatypes",
  "auki-logs",
  "auki-logs-py",
  "auki-network",
+ "auki-proto",
  "futures",
  "libp2p-identity",
  "multiaddr",
@@ -873,6 +860,25 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "auki-proto"
+version = "0.0.0"
+dependencies = [
+ "auki-hash",
+ "auki-logs",
+ "prost",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "auki-proto-gen-rust"
+version = "0.0.0"
+dependencies = [
+ "prost-build",
+ "protoc-bin-vendored",
 ]
 
 [[package]]
@@ -903,7 +909,7 @@ dependencies = [
 name = "auki-ros-adapter"
 version = "0.0.0"
 dependencies = [
- "auki-datatypes",
+ "auki-proto",
  "auki-registry",
  "ciborium",
  "futures",
@@ -924,9 +930,9 @@ dependencies = [
 name = "auki-time"
 version = "0.0.0"
 dependencies = [
- "auki-datatypes",
  "auki-logs",
  "auki-manifests",
+ "auki-proto",
  "auki-registry",
  "libc",
  "tempfile",

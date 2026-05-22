@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`/auki/message/0.0.1` added as a proto-backed peer message protocol.** `message_protocol` now exposes the stable protocol id, re-exports `auki_proto::message::{MessageEnvelope, MessageAck}`, and provides length-prefixed prost read/write helpers with locked protocol/framing tests.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Stream payload imports moved to `auki-proto`.** `/auki/stream/0.1.0` wire re-exports and detection dispatch now depend on generated Rust `auki-proto` instead of deprecated `auki-datatypes`.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-network` now follows the multiplatform crate structure and owns the browser jslibp2p package path.** The binding-free peer identity/reachability surface moved into `core.rs` and is re-exported unchanged from the crate root. Native default builds now enable a small UniFFI adapter, while `--no-default-features --features wasm` builds wasm-bindgen helpers for peer derivation, libp2p private-key protobuf export, and browser-probe protocol bytes.
 
 The crate now carries `bindings.toml` plus JavaScript package templates under `bindings/javascript/`. `just generate-javascript-bindings auki-network` builds the wasm package and smoke-tests the generated `index.js` wrapper. Browser transport is intentionally JavaScript-owned: the wrapper lazily imports jslibp2p and creates a browser libp2p node from the Rust-derived private key instead of compiling the Rust `NetworkRuntime` to wasm.

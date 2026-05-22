@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Obsolete log-payload migration parking-lot item removed.** With payload schemas now rooted in `proto/auki` and generated Rust bindings in `auki-proto`, the old registry-to-datatypes migration question no longer belongs in the live parking lot.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Registry docs now point log-payload readers at `auki-proto`.** Active registry README/status docs describe this crate as identity catalogs only and refer segment payload schemas to generated `auki-proto`; registry JSON behavior is unchanged.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Camera sensor registry bodies now use `Camera` and the `"camera"` tag.** `SensorBody::Camera(Camera)` replaces the legacy RGB-camera body vocabulary, and the locked canonical JSON/hash fixtures intentionally pin the new registry tag.

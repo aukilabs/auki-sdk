@@ -21,7 +21,8 @@ Implementation status for [`auki-network`](../README.md).
 - [`resources_protocol.rs`](resources_protocol.rs) - `/auki/resources/0.0.1` framed request/response for live resource catalogs (`sensor_stream` with optional pinhole intrinsics, and `transform_edge` rows in v0).
 - [`sensors_protocol.rs`](sensors_protocol.rs) - `/auki/sensors/0.0.1` framed request/response for `SensorEntry` catalogs, with optional embedded Sensor / Frame Registry JSON.
 - [`registries_protocol.rs`](registries_protocol.rs) - `/auki/registries/0.0.1` framed request/response for hash-pinned registry entries.
-- [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-datatypes`.
+- [`stream_protocol.rs`](stream_protocol.rs) - `/auki/stream/0.1.0` prost framing and re-exports from `auki-proto`.
+- [`message_protocol.rs`](message_protocol.rs) - `/auki/message/0.0.1` prost framing for generic peer messages.
 - [`stream_runtime.rs`](stream_runtime.rs) - typed `Stream<T>` producer/consumer API on top of `stream_protocol`.
 - [`discovery_client.rs`](discovery_client.rs) - Discovery HTTP client, behind `discovery_client`.
 - [`app_instance.rs`](app_instance.rs) - MAC-derived app-instance helper, behind `app_instance`.

@@ -59,10 +59,10 @@ This repo is in early development. The crates here implement a foundational subs
 | Crate | Status |
 |---|---|
 | [`auki-logs`](crates/auki-logs) | ✓ Generic segmented ring-buffer log primitive — manifest + segment files + retention eviction. Encoder-agnostic via the `LogPayload` trait (Step 1, 2026-05-08); consumers pick prost / ciborium / their own. |
-| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock + Frame registry types and IO. All log payload types departed at Steps 1, 3, 4, and 5 of the [`auki-datatypes` migration](crates/auki-datatypes/src/sprint.md) (all 2026-05-08); the crate's scope shrunk back to identity catalogs only. Frame Registry shipped in v0.0.22 with four preset constructors (`ros_body` / `ros_optical` / `opengl` / `unity`); spatial sensor bodies (`Camera` + `PointCloud`) now pin exact `frame_id` + `frame_hash` references. |
-| [`auki-datatypes`](crates/auki-datatypes) | ✓ Single source of truth for shared cross-language segment payload shapes (`.proto` schemas + prost-generated Rust). Ships on-disk payloads for camera, point cloud, audio, joint encoders, pose, time transforms, and detection logs, plus stream payloads for camera, point cloud, joint encoders, audio, and the `/auki/stream/0.1.0` envelope. Encoding is protobuf via prost; the name names the responsibility. |
+| [`auki-registry`](crates/auki-registry) | ✓ Sensor + Clock + Frame registry types and IO. All log payload types departed to protobuf schemas now sourced from [`proto/auki`](proto/auki); the crate's scope shrunk back to identity catalogs only. Frame Registry shipped in v0.0.22 with four preset constructors (`ros_body` / `ros_optical` / `opengl` / `unity`); spatial sensor bodies (`Camera` + `PointCloud`) now pin exact `frame_id` + `frame_hash` references. |
+| [`auki-proto`](crates/auki-proto) | ✓ Generated Rust protobuf package from the canonical root [`proto/auki`](proto/auki) schemas. Ships on-disk payloads for camera, point cloud, audio, joint encoders, pose, time transforms, and detection logs; stream payloads and envelopes for `/auki/stream/0.1.0`; and the generic `/auki/message/0.0.1` message envelope. |
 | [`auki-geometry`](crates/auki-geometry) | ✓ Pure spatial math. Phase 1 ships convention conversion for points, length-bearing vectors, unitless directions, and `SpatialTransform` poses via `convert_pose_convention` — the convention-only layer underneath future full `convert_pose`. No registry IO, log IO, or networking. |
-| [`auki-manifests`](crates/auki-manifests) | ✓ Single source of truth for log manifest shapes — JCS-canonical UTF-8 JSON via `auki-jcs`. Builders for sensor, pose, time-transform, and detection logs plus `PoseSource`, `PoseWriterMode`, and `TimeTransformSource`. Symmetric with `auki-datatypes`: that crate owns segment payload shapes, this one owns per-recording manifest shapes. |
+| [`auki-manifests`](crates/auki-manifests) | ✓ Single source of truth for log manifest shapes — JCS-canonical UTF-8 JSON via `auki-jcs`. Builders for sensor, pose, time-transform, and detection logs plus `PoseSource`, `PoseWriterMode`, and `TimeTransformSource`. Symmetric with `auki-proto`: that crate owns segment payload shapes, this one owns per-recording manifest shapes. |
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
 | [`auki-time`](crates/auki-time) | ✓ `SessionClock`, pure `TimeTransform` math, NTP-style offset samples, and the 1 Hz `local_clock_read` sampler for TimeTransform Logs. |
@@ -78,7 +78,7 @@ This repo is in early development. The crates here implement a foundational subs
 
 **Not yet implemented:**
 
-- full `convert_pose` (the Pose Log primitives — `SpatialTransform` + `Vec3` + `Quat` in [`auki-datatypes`](crates/auki-datatypes), `PoseSource` + `PoseWriterMode` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-layout`](crates/auki-layout), and the convention-only `convert_pose_convention` layer in [`auki-geometry`](crates/auki-geometry) — are in place; the operation that composes pose-log paths is pending)
+- full `convert_pose` (the Pose Log primitives — `SpatialTransform` + `Vec3` + `Quat` in [`auki-proto`](crates/auki-proto), `PoseSource` + `PoseWriterMode` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-layout`](crates/auki-layout), and the convention-only `convert_pose_convention` layer in [`auki-geometry`](crates/auki-geometry) — are in place; the operation that composes pose-log paths is pending)
 - Detector binding API (`Detector::new(sensor_log) -> Log<DetectionFrame>` or equivalent). Detection log payload, manifest, and layout primitives are already in place.
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
 - A `Session` abstraction tying clock + sensor-id minting + recording lifecycle together (today daemons construct sessions by convention)
@@ -92,9 +92,9 @@ Logs and registries write to a documented binary + JSON format. Each format spec
 
 - [`auki-logs`](crates/auki-logs/README.md) — segmented ring-buffer log layout (used by both Sensor and TimeTransform Logs)
 - [`auki-registry`](crates/auki-registry/README.md) — registry entry storage layout (Sensor / Clock / Frame); identity catalogs only post-migration
-- [`auki-datatypes`](crates/auki-datatypes/README.md) — segment payload schemas for every on-disk log type (Pinhole cameras, Point Clouds, Audio, Joint Encoders, Pose, TimeTransform, Detection); the `.proto` files are the cross-language contract
+- [`proto/auki`](proto/auki) + [`auki-proto`](crates/auki-proto/README.md) — canonical `.proto` schemas and generated Rust bindings for every on-disk log payload, stream payload, and generic message envelope
 - [`auki-manifests`](crates/auki-manifests/README.md) — Sensor / Pose / TimeTransform / Detection Log manifest shapes (JCS-JSON)
-- [`auki-time`](crates/auki-time/README.md) — TimeTransform Log sampling protocol; segment payload schema lives in [`auki-datatypes`](crates/auki-datatypes) post-Step-6
+- [`auki-time`](crates/auki-time/README.md) — TimeTransform Log sampling protocol; segment payload schema lives in [`auki-proto`](crates/auki-proto)
 - [`auki-layout`](crates/auki-layout/README.md) — the path layout and helpers below
 
 Files within an app:
@@ -131,7 +131,7 @@ Files within an app:
 
 **A sensor log is one sensor stream.** Each `<sensor_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel sensor logs sharing a session, not a multi-sensor log. Buffers, intent recordings, and time-bounded captures are all sensor logs — they differ only in their `retention_ns` (backward window kept on disk; `0` = no eviction) and `duration_ns` (forward auto-stop cap; `0` = run indefinitely). The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path. **A pose log is one ordered frame pair.** Each `<from_id>__<to_id>/` directory holds samples for exactly one `(from_frame_id, to_frame_id)` pair — same shape as TimeTransform Logs key per ordered clock pair. Multi-pair capture (a ROS `TFMessage`) fans into N parallel pose logs.
 
-The on-disk shape is pre-1.0 and changes accumulate by tag — see [`changelog.md`](changelog.md) for the per-tag history. Recent shape changes include Frame Registry entries, pose logs keyed per `(from, to)` frame pair, detection log paths keyed by `(detector_id, input_log_id)`, and protobuf-owned payload types in `auki-datatypes`.
+The on-disk shape is pre-1.0 and changes accumulate by tag — see [`changelog.md`](changelog.md) for the per-tag history. Recent shape changes include Frame Registry entries, pose logs keyed per `(from, to)` frame pair, detection log paths keyed by `(detector_id, input_log_id)`, and protobuf-owned payload types generated through `auki-proto`.
 
 ---
 
@@ -148,13 +148,13 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-hash`](crates/auki-hash) | `hash_jcs_bytes(bytes) -> String` (XXH3-128) |
 | [`auki-jcs`](crates/auki-jcs) | `canonicalize(value) -> Vec<u8>` (RFC 8785) |
 | [`auki-identity`](crates/auki-identity) | `Wallet`, `PublicKey`, `WalletId`, `Signature`, `CreationCert`, `verify(...)`, `load_or_mint_seed(...)` |
-| [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error`, `LogPayload` (trait — consumers pick the encoder; prost types in `auki-datatypes` get a blanket impl) |
-| [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`Camera`, `PointCloud`, `JointEncoders`, `Audio`), `ClockRegistryEntry`, `FrameRegistryEntry`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. The crate's scope is identity catalogs only; log payloads live in [`auki-datatypes`](crates/auki-datatypes). |
-| [`auki-datatypes`](crates/auki-datatypes) | `camera::CameraFrame`, `camera::DynamicIntrinsics`, `point_cloud::PointCloudLogEntry`, `audio::AudioLogEntry`, `joint_encoders::JointEncodersLogEntry`, `detection::DetectionFrame`, `pose::{SpatialTransform, Vec3, Quat}`, `time_transform::TimeTransformEntry`, stream payloads (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`), and `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}` helpers. |
-| [`auki-geometry`](crates/auki-geometry) | `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, `axis_convention_matrix`, `convention_matrix`, `meters_per_unit`. Pure math over `auki-registry` declarations + `auki-datatypes` pose types. |
-| [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
+| [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error`, `LogPayload` (trait — consumers pick the encoder; prost types in `auki-proto` get a blanket impl) |
+| [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`Camera`, `PointCloud`, `JointEncoders`, `Audio`), `ClockRegistryEntry`, `FrameRegistryEntry`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. The crate's scope is identity catalogs only; log payloads live in [`auki-proto`](crates/auki-proto). |
+| [`auki-proto`](crates/auki-proto) | `camera::CameraFrame`, `camera::DynamicIntrinsics`, `point_cloud::PointCloudLogEntry`, `audio::AudioLogEntry`, `joint_encoders::JointEncodersLogEntry`, `detection::DetectionFrame`, `pose::{SpatialTransform, Vec3, Quat}`, `time_transform::TimeTransformEntry`, stream payloads (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`), `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}` helpers, and `message::{MessageEnvelope, MessageAck}`. |
+| [`auki-geometry`](crates/auki-geometry) | `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, `axis_convention_matrix`, `convention_matrix`, `meters_per_unit`. Pure math over `auki-registry` declarations + `auki-proto` pose types. |
+| [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-proto` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
-| [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-datatypes`) and `TimeTransformSource` (from `auki-manifests`). |
+| [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-proto`) and `TimeTransformSource` (from `auki-manifests`). |
 | [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `sensors_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
 | [`auki-domain`](crates/auki-domain) | `ClusterManager`, `ClusterTarget`, `ClusterMembership`, `ClusterMember`, `DaemonInfo`, `ResourceCatalogProvider`, `ResourceEntry`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`, `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`, Manager/election/bootstrap error types, `LIVENESS_CHECK_INTERVAL`, `elect_successor(...)`. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
@@ -258,7 +258,7 @@ Add the SDK crates as Git dependencies in your `Cargo.toml`. Pin a tag — the S
 auki-logs      = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
 auki-layout    = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
 auki-manifests = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
-auki-datatypes = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
+auki-proto     = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
 ```
 
 Open a sensor log for one recording:
@@ -268,7 +268,7 @@ use std::{path::Path, time::Duration};
 use auki_logs::Log;
 use auki_layout::{session_root, sensorlog_path};
 use auki_manifests::build_sensor_log_manifest;
-use auki_datatypes::camera::CameraFrame;
+use auki_proto::camera::CameraFrame;
 
 let app_root  = Path::new("/home/booster/auki/boosterapp");
 let session   = session_root(app_root, "session-uuid");

@@ -2,8 +2,8 @@
 //! + builders for Sensor Log, Pose Log, and TimeTransform Log
 //! manifests.
 //!
-//! Symmetric with [`auki-datatypes`](../../auki-datatypes), which
-//! owns segment payload shapes. This crate owns manifest shapes —
+//! Symmetric with [`auki-proto`](../../auki-proto), which owns generated
+//! segment payload shapes. This crate owns manifest shapes —
 //! the per-recording metadata that lives at the root of each
 //! `auki-logs` log directory.
 //!
@@ -215,11 +215,10 @@ pub fn build_sensor_log_manifest(
     .expect("SensorLogManifest serializes")
 }
 
-/// Build a Pose Log manifest for the new `(from, to)`-keyed Pose Log
-/// shape (Step 5 of the [`auki-datatypes` migration],
-/// 2026-05-08). One Pose Log holds samples for exactly one
+/// Build a Pose Log manifest for the `(from, to)`-keyed Pose Log
+/// shape. One Pose Log holds samples for exactly one
 /// `(from_frame_id, to_frame_id)` pair; segment entries are flat
-/// `auki_datatypes::pose::SpatialTransform`. A producer that observes a
+/// `auki_proto::pose::SpatialTransform`. A producer that observes a
 /// multi-pair ROS `TFMessage` is responsible for fanning the message
 /// into N parallel pose logs.
 ///
@@ -286,7 +285,7 @@ pub fn build_pose_log_manifest(
 ///
 /// Closes blocker #2 of [`detectors`](https://github.com/aukilabs/detectors)
 /// phase 2 — the read side ([`auki-logs::Log<T>::tail`](../../auki-logs))
-/// and the segment payload type ([`auki_datatypes::detection::DetectionFrame`](../../auki-datatypes))
+/// and the segment payload type ([`auki_proto::detection::DetectionFrame`](../../auki-proto))
 /// landed in sibling PRs. The detector loop the integrator writes is
 /// `for entry in tail(input_path)? { detector.process(...); output.append(...); }`,
 /// where `output` is the `Log<DetectionFrame>` opened with this
@@ -362,8 +361,8 @@ pub fn build_detection_log_manifest(
 /// producer identity, and auki-logs's required `segment_duration_ns` /
 /// `retention_ns`.
 ///
-/// Step 6 of the [`auki-datatypes` migration] (2026-05-08) added the
-/// `source: &TimeTransformSource` argument: per-sample `source` on
+/// The `source: &TimeTransformSource` argument records producer
+/// provenance: per-sample `source` on
 /// `TimeTransformEntry` moved to per-log `source` on the manifest,
 /// matching how Pose Log carries `PoseSource` inline.
 ///
@@ -404,9 +403,9 @@ pub fn build_time_transform_log_manifest(
 /// source identity is provenance, not a decoder. Tagged-enum body
 /// mirrors [`PoseSource`]'s shape for future producer variants.
 ///
-/// Step 6 of the [`auki-datatypes` migration] (2026-05-08) moved this
-/// type from its pre-migration home in [`auki-time`](../../auki-time)
-/// (where it was a per-sample field on `TimeTransformEntry`) to here.
+/// This type moved from its pre-migration home in
+/// [`auki-time`](../../auki-time) (where it was a per-sample field on
+/// `TimeTransformEntry`) to here.
 /// One variant ships today (`LocalClockRead` — the 1 Hz sampler in
 /// [`auki-time`](../../auki-time) reading
 /// `CLOCK_MONOTONIC` and `CLOCK_REALTIME` via `clock_gettime`); the

@@ -1,7 +1,7 @@
 //! ROS2 → Auki translation: `sensor_msgs/CameraInfo` + `sensor_msgs/Image`
 //! into `SensorRegistryEntry` + `DynamicIntrinsics` + `CameraFrame`.
 //!
-//! Sensor Log payload schema: see [`auki-datatypes`](../../auki-datatypes/README.md).
+//! Sensor Log payload schema: see [`auki-proto`](../../auki-proto/README.md).
 //! Translation contract: [`../README.md`](../README.md).
 //!
 //! ## Architecture
@@ -86,13 +86,13 @@ pub struct PointFieldMsg {
 // ─── Output types written to the Sensor Log ─────────────────────────────────
 //
 // `DynamicIntrinsics` + the camera log entry moved to
-// [`auki-datatypes`](../../auki-datatypes)'s `auki.camera` `.proto` at
+// [`auki-proto`](../../auki-proto)'s `auki.camera` `.proto` at
 // Step 1; `PointCloudLogEntry` followed at Step 3 under `auki.point_cloud`
 // (now opaque-bytes-only). Re-exported here so existing call sites stay
 // short.
 
-pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
-pub use auki_datatypes::point_cloud::PointCloudLogEntry;
+pub use auki_proto::camera::{CameraFrame, DynamicIntrinsics};
+pub use auki_proto::point_cloud::PointCloudLogEntry;
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -923,7 +923,7 @@ mod tests {
         assert_eq!(entry.dynamic_intrinsics.as_ref().unwrap().fx, 400.0);
     }
 
-    // Prost round-trip lives in `auki-datatypes` (locked vector). The previous
+    // Prost round-trip lives in `auki-proto` (locked vector). The previous
     // ciborium round-trip test here covered the same surface for the old CBOR
     // shape and was deleted at Step 1 of the migration.
 

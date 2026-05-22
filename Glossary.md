@@ -138,11 +138,11 @@ The four declarations that make a [Frame](#frame) interpretable: **handedness** 
 
 ## Manifest
 
-The per-recording metadata sidecar — a JCS-canonical UTF-8 JSON file at the root of every [log](README.md)'s directory. Carries the identity references the segment payloads need (`sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`, `session_id`, `app_id`, etc.) plus the rollover/retention parameters (`segment_duration_ns`, `retention_ns`, `duration_ns`). Schemas and builders live in [`auki-manifests`](crates/auki-manifests); sibling crate to [`auki-datatypes`](crates/auki-datatypes), which owns the segment payload schemas.
+The per-recording metadata sidecar — a JCS-canonical UTF-8 JSON file at the root of every [log](README.md)'s directory. Carries the identity references the segment payloads need (`sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`, `session_id`, `app_id`, etc.) plus the rollover/retention parameters (`segment_duration_ns`, `retention_ns`, `duration_ns`). Schemas and builders live in [`auki-manifests`](crates/auki-manifests); segment payload schemas live in root [`proto/auki`](proto/auki) and generated Rust bindings live in [`auki-proto`](crates/auki-proto).
 
 ## SpatialTransform
 
-The data type at the core of [convert_pose](#convert_pose) — a translation `Vec3 { x, y, z }` plus a rotation quaternion `Quat { x, y, z, w }` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the `(from_frame_id, to_frame_id)` identity lives in the manifest, not on each sample. Implementation is `auki_datatypes::pose::SpatialTransform` (prost-encoded); the rename from the pre-migration `TransformSample` shape (per-sample frame labels) landed at Step 5 of the [auki-datatypes migration](crates/auki-datatypes/src/sprint.md) on 2026-05-08.
+The data type at the core of [convert_pose](#convert_pose) — a translation `Vec3 { x, y, z }` plus a rotation quaternion `Quat { x, y, z, w }` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the `(from_frame_id, to_frame_id)` identity lives in the manifest, not on each sample. Implementation is `auki_proto::pose::SpatialTransform` (prost-encoded); the rename from the pre-migration `TransformSample` shape (per-sample frame labels) landed during the May 8 payload migration.
 
 ## Pose Log
 
@@ -158,7 +158,7 @@ One of the [four logs](README.md). Stores per-frame detection outputs from extra
 
 ## TimeTransform Log
 
-One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `(from_clock_id, to_clock_id)` pair — flat `TimeTransformEntry { offset_ns, uncertainty_ns }` entries (`auki_datatypes::time_transform`, prost-encoded since Step 6, 2026-05-08). Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. The manifest carries the inline `TimeTransformSource` provenance tag (`LocalClockRead` ships today; mirrors `PoseSource`'s extension pattern). Discontinuity detection (was a per-entry bool pre-migration) is reader-side now — readers compute it against their own threshold. Producer side ships in [`auki-time`](crates/auki-time); the consumer-side `convert_time` operation is pending.
+One of the [four logs](README.md). Stores periodic clock-offset samples between two clocks named in the manifest's `(from_clock_id, to_clock_id)` pair — flat `TimeTransformEntry { offset_ns, uncertainty_ns }` entries (`auki_proto::time_transform`, prost-encoded since Step 6, 2026-05-08). Lets `convert_time` (planned) translate a timestamp on clock A into the equivalent on clock B by interpolating the sampled offsets at the source timestamp. Lives at `<session>/timetransform_logs/<from_id>__<to_id>/`. The manifest carries the inline `TimeTransformSource` provenance tag (`LocalClockRead` ships today; mirrors `PoseSource`'s extension pattern). Discontinuity detection (was a per-entry bool pre-migration) is reader-side now — readers compute it against their own threshold. Producer side ships in [`auki-time`](crates/auki-time); the consumer-side `convert_time` operation is pending.
 
 ## Pose Source
 

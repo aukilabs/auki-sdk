@@ -4,6 +4,18 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Superpowers Auki proto generation docs so only the generated Rust `auki-proto` crate is committed; JavaScript/TypeScript, Swift, and Python protobuf outputs live as ignored generated artifacts under `bindings/`.
+
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Superpowers Auki proto generation plan to skip committed Python protobuf output for now; Python generation remains an on-demand artifact outside the initial `auki-proto` migration.
+
+### Nils's codex · May 22, HKT, 2026
+
+Added the Superpowers design and implementation plan for replacing `auki-datatypes` with generated per-platform `auki-proto` packages sourced from root `proto/auki` schemas.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Added the Superpowers implementation plan for turning `auki-uniffi-test` into a shared-core multiplatform binding proving crate.

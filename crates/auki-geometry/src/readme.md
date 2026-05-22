@@ -56,6 +56,6 @@ pub fn convert_pose_convention(pose: &SpatialTransform, from: &FrameRegistryEntr
 ## Dependencies
 
 - [`auki-registry`](../../auki-registry) — frame convention declarations.
-- [`auki-datatypes`](../../auki-datatypes) — `SpatialTransform`, `Vec3`, and `Quat`.
+- [`auki-proto`](../../auki-proto) — generated `SpatialTransform`, `Vec3`, and `Quat`.
 
 No filesystem, registry IO, networking, or log dependencies.

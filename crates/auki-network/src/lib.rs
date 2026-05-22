@@ -73,6 +73,9 @@ pub mod membership_protocol;
 pub mod diagnostic_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod message_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod info_protocol;
 
 #[cfg(feature = "swarm")]

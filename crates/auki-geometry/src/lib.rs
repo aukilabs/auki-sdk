@@ -5,7 +5,7 @@
 //! converts, composes, and eventually queries geometry over those
 //! values.
 
-use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
+use auki_proto::pose::{Quat, SpatialTransform, Vec3};
 use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry, Handedness, LengthUnit};
 use std::{error, fmt};
 

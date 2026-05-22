@@ -1,6 +1,6 @@
 //! `/auki/stream/0.1.0` — libp2p substream protocol carrying typed
 //! [`Stream<T>`] data, encoded as protobuf via prost. Step 2 of the
-//! [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md)
+//! [`auki-proto` migration](../../auki-proto/src/sprint.md)
 //! moved the wire format off JSON-via-serde-json onto protobuf.
 //!
 //! Substream lifetime IS the stream subscription's lifetime (grimsby D1
@@ -12,7 +12,7 @@
 //! the doc cannot dial).
 //!
 //! This module ships the **wire primitives**: protocol id, message
-//! envelope re-exports from [`auki_datatypes::stream`], framing
+//! envelope re-exports from [`auki_proto::stream`], framing
 //! helpers. The `Stream<T>` Rust API (consumer / producer handles) and
 //! the runtime integration (per-substream lifecycle, `stream_provider`
 //! invocation) live in [`crate::stream_runtime`].
@@ -48,7 +48,7 @@
 //! cross-language schema lived in two places (Rust hand-rolled structs
 //! + Python's hand-rolled mirror in `auki-network-py`). Protobuf
 //! addresses both: native binary fields drop the adapter, and the
-//! `.proto` file in [`auki-datatypes`](../../auki-datatypes/proto/stream.proto)
+//! `.proto` file in [`auki-proto`](../../auki-proto/proto/stream.proto)
 //! is the single source of truth that consumers in any language
 //! generate from.
 //!
@@ -80,13 +80,13 @@ fn _phantom() -> Option<Wallet> {
 }
 
 // Wire-type re-exports — single source of truth lives in
-// `auki-datatypes`'s `auki.stream` package; this module owns the
+// `auki-proto`'s `auki.stream` package; this module owns the
 // protocol id, framing helpers, and error type.
-pub use auki_datatypes::audio_stream::AudioFrame;
-pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
-pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
-pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
-pub use auki_datatypes::stream::{
+pub use auki_proto::audio_stream::AudioFrame;
+pub use auki_proto::camera::{CameraFrame, DynamicIntrinsics};
+pub use auki_proto::joint_encoders_stream::JointEncodersFrame;
+pub use auki_proto::point_cloud_stream::PointCloudFrame;
+pub use auki_proto::stream::{
     DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
 };
@@ -97,9 +97,9 @@ pub use auki_datatypes::stream::{
 ///
 /// Pre-1.0; sub-1.0 versioning per the workspace convention. Replaces
 /// the previous JSON-on-wire `/auki/stream/1.0.0` (retired in this
-/// PR) at Step 2 of the [`auki-datatypes`](../../auki-datatypes)
+/// PR) at Step 2 of the [`auki-proto`](../../auki-proto)
 /// migration. The new wire is prost-encoded `StreamMessage` from
-/// `auki-datatypes`'s `auki.stream` package; consumers update their
+/// `auki-proto`'s `auki.stream` package; consumers update their
 /// decoders in lockstep. 1.0.0 is reserved for the SDK's first
 /// official release.
 pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
@@ -476,7 +476,7 @@ mod tests {
     /// proto packages purely so wire and disk dispatch on distinct Rust
     /// types. Byte-identical wire/disk is locked by the
     /// `joint_encoders_disk_wire_byte_identical` test in
-    /// `auki-datatypes`.
+    /// `auki-proto`.
     #[test]
     fn joint_encoders_frame_serializes_to_locked_wire_bytes() {
         let frame = JointEncodersFrame {
@@ -517,7 +517,7 @@ mod tests {
     /// shape as `CameraFrame` / `PointCloudFrame` but a separate `.proto`
     /// package so the stream dispatch on a distinct Rust type. Byte-
     /// identical wire/disk with `AudioLogEntry` is locked by
-    /// `audio_disk_wire_byte_identical` in `auki-datatypes`.
+    /// `audio_disk_wire_byte_identical` in `auki-proto`.
     #[test]
     fn audio_frame_serializes_to_locked_wire_bytes() {
         let frame = AudioFrame {

@@ -4,6 +4,18 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation design so only the generated Rust `auki-proto` crate is committed; JavaScript/TypeScript, Swift, and Python protobuf outputs are generated under ignored `bindings/` paths.
+
+### Nils's codex · May 22, HKT, 2026
+
+Updated the Auki proto generation design so Python protobuf output is generated on demand and not committed in the initial `auki-proto` migration.
+
+### Nils's codex · May 22, HKT, 2026
+
+Added the Auki proto generation design spec, locking root `proto/auki` schemas, generated per-platform `auki-proto` packages, and `auki-datatypes` deprecation as a Rust compatibility shim.
+
 ### Nils's codex · May 21, HKT, 2026
 
 Refined the stream naming cleanup design spec to describe the already-renamed final vocabulary without reintroducing legacy identifiers into active docs.

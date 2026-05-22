@@ -43,7 +43,7 @@ Out of scope for the detector-binding PR because the rollout is broader than det
 
 ## ✓ Resolved 2026-05-08 — Pose Log manifest reshape (Step 5)
 
-Landed at Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md). `build_pose_log_manifest` now takes 13 args and emits a manifest with `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash`, `writer_mode` (`PoseWriterMode::Rigid | Movable`, JSON `"rigid"` / `"movable"`), and `expected_rate_hz: u32`. The pre-migration shape is gone; segment-side switched from `PoseLogEntry { transforms: Vec<...> }` to flat [`auki_datatypes::pose::SpatialTransform`](../auki-datatypes/src/lib.rs) at the same time.
+Landed during the May 8 payload migration. `build_pose_log_manifest` now takes 13 args and emits a manifest with `from_frame_id` + `from_frame_hash`, `to_frame_id` + `to_frame_hash`, `writer_mode` (`PoseWriterMode::Rigid | Movable`, JSON `"rigid"` / `"movable"`), and `expected_rate_hz: u32`. The pre-migration shape is gone; segment-side switched from `PoseLogEntry { transforms: Vec<...> }` to flat [`auki_proto::pose::SpatialTransform`](../auki-proto/src/lib.rs) at the same time.
 
 ## Manifest-side schema versioning vs auki-logs segment-format versioning
 
@@ -62,4 +62,4 @@ Pose Log and TimeTransform Log have no analogous convention.
 
 Lean: (a). Frame IDs are already structured strings; threading the device prefix through is a documentation move, not a schema change. Symmetric with sensor IDs. Catches the case where two robots' `base_link` frames collide today.
 
-**Lower priority than the sensor-log fix** because the Pose Log manifest is mid-rewrite (Step 5 of [`../auki-datatypes/src/sprint.md`](../auki-datatypes/src/sprint.md)). Better to fold this into the Step 5 redesign than to land a fix on a shape that's about to change. Park here until Step 5 starts.
+**Lower priority than the sensor-log fix** because the Pose Log manifest was mid-rewrite when this was filed. Better to fold this into the Pose Log redesign than to land a fix on a shape that's about to change.

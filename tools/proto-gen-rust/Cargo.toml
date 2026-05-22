@@ -1,0 +1,9 @@
+[package]
+name = "auki-proto-gen-rust"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"

@@ -32,7 +32,7 @@ package auki.audio_stream;
 // where wire and disk payloads have identical shape and exist as
 // separate proto packages only so wire and log code paths dispatch on
 // distinct Rust types. Symmetry is locked by the
-// `audio_disk_wire_byte_identical` test in `auki-datatypes`.
+// `audio_disk_wire_byte_identical` test in `auki-proto`.
 //
 // Field number ledger (never reuse, never renumber):
 //   AudioFrame.data = 1

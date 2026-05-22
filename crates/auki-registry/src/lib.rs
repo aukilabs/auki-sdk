@@ -61,7 +61,7 @@ pub struct Camera {
 
 /// Static layout of a point-cloud sensor's per-point bytes. The actual point
 /// data lives in the per-frame log payload
-/// ([`auki_datatypes::point_cloud::PointCloudLogEntry`]); this describes how
+/// ([`auki_proto::point_cloud::PointCloudLogEntry`]); this describes how
 /// to interpret those bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointCloud {
@@ -117,7 +117,7 @@ impl PointFieldDataType {
 
 /// Static identity of an audio sensor (microphone or microphone array) — the
 /// bits that describe how to interpret the bytes downstream consumers will
-/// see in [`auki_datatypes::audio::AudioLogEntry`].
+/// see in [`auki_proto::audio::AudioLogEntry`].
 ///
 /// **Multi-microphone arrays are modelled as one sensor with `channels = N`,
 /// not as N independent sensors.** This is right for physically-synchronized
@@ -151,8 +151,8 @@ pub struct Audio {
 
 /// Static identity of a joint-encoder bank — the bits that describe how
 /// to interpret the per-frame angle vector consumers will see in
-/// [`auki_datatypes::joint_encoders::JointEncodersLogEntry`] (on disk)
-/// and [`auki_datatypes::joint_encoders_stream::JointEncodersFrame`]
+/// [`auki_proto::joint_encoders::JointEncodersLogEntry`] (on disk)
+/// and [`auki_proto::joint_encoders_stream::JointEncodersFrame`]
 /// (on the libp2p stream wire).
 ///
 /// **Joint angles are encoder readings — measurements of joint
@@ -204,16 +204,14 @@ impl SensorRegistryEntry {
 
 // ─── Sensor Log payload ──────────────────────────────────────────────────────
 
-// `SensorLogEntry` (renamed `CameraFrame`) and `DynamicIntrinsics`
-// moved to [`auki-datatypes`](../../auki-datatypes) under the `auki.camera`
-// `.proto` package in Step 1 of the migration. Encoding switched from CBOR
-// to protobuf; segment payload bytes are no longer self-describing
-// (consumers resolve the schema via `(sensor_id, sensor_hash)` pointing at a
-// `SensorRegistryEntry` whose body kind tells them which `.proto` to use).
+// Sensor Log payloads live in `auki-proto` under root `proto/auki`.
+// Encoding is protobuf; segment payload bytes are no longer
+// self-describing (consumers resolve the schema via `(sensor_id,
+// sensor_hash)` pointing at a `SensorRegistryEntry` whose body kind tells
+// them which `.proto` to use).
 
-// Pose Log payload moved to [`auki_datatypes::pose`] (Step 5 of the
-// auki-datatypes migration, 2026-05-08): flat `SpatialTransform` per
-// segment entry — no `PoseLogEntry { transforms: Vec<TransformSample> }`
+// Pose Log payload lives in `auki_proto::pose`: flat `SpatialTransform`
+// per segment entry — no `PoseLogEntry { transforms: Vec<TransformSample> }`
 // wrapper, no per-sample `parent_frame`/`child_frame`. Frame identity
 // lives in the manifest (`from_frame_id` / `from_frame_hash` /
 // `to_frame_id` / `to_frame_hash`); each Pose Log holds one
@@ -277,7 +275,7 @@ impl ClockRegistryEntry {
 ///
 /// **Tree structure lives elsewhere.** A FrameRegistryEntry declares
 /// what one frame *is in isolation*. Edges between frames (the TF tree)
-/// live in the Pose Log as `auki_datatypes::pose::SpatialTransform`
+/// live in the Pose Log as `auki_proto::pose::SpatialTransform`
 /// segment entries; the `(from, to)` frame pair is pinned in the log's
 /// manifest, not on each sample.
 ///
@@ -718,8 +716,7 @@ pub fn read_detector(
     Ok(Some(entry))
 }
 
-// `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
-// auki-datatypes migration.
+// `build_sensor_log_manifest` lives in `auki-manifests`.
 
 // ─── Internals ───────────────────────────────────────────────────────────────
 
@@ -1280,13 +1277,9 @@ mod tests {
         assert_eq!(read, Some(entry));
     }
 
-    // Sensor Log manifest builder + locked PoseSource vectors moved to
-    // [`auki-manifests`] in Step 0 of the auki-datatypes migration. The Pose
-    // Log payload (`PoseLogEntry` / `TransformSample`) moved to
-    // [`auki_datatypes::pose::SpatialTransform`] at Step 5 of the migration —
-    // the flat `SpatialTransform` segment entry replaced the
-    // `PoseLogEntry { transforms: Vec<...> }` wrapper, and the round-trip
-    // tests live in `auki-datatypes::tests` now.
+    // Sensor Log manifest builder + locked PoseSource vectors live in
+    // `auki-manifests`. Pose Log payload round-trip tests live in
+    // `auki-proto` alongside the generated `SpatialTransform` type.
 
     // ─── Frame Registry tests ──────────────────────────────────────────────
 
@@ -1464,10 +1457,8 @@ mod tests {
         assert_eq!(entry, None);
     }
 
-    // `pose_log_manifest_opens_a_log_round_trip` moved to [`auki-manifests`]
-    // in Step 0 of the auki-datatypes migration — `build_pose_log_manifest`
-    // and `PoseSource` live there now. The PoseLogEntry CBOR round-trip
-    // tests above cover this crate's payload-encoding contract.
+    // `pose_log_manifest_opens_a_log_round_trip` lives in `auki-manifests`;
+    // `build_pose_log_manifest` and `PoseSource` live there now.
 
     // ─── Detector Registry tests (Cuba T4 + T16) ────────────────────────────
 

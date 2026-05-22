@@ -125,7 +125,7 @@ pub enum Error {
 
 ## Why a `LogPayload` trait, not a baked-in encoder
 
-This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md) swaps the camera / pose / audio / time-transform payloads to protobuf via prost. Rather than swap one hardcoded encoder for another, the crate exposes a tiny `LogPayload` trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>`. Consumers pick their encoder. Mid-migration types (TimeTransformEntry) implement `LogPayload` over ciborium; post-migration types ([`auki-datatypes`](../../auki-datatypes)) use the `impl_log_payload!` macro to wire prost. The framing primitive stays out of the encoder's way.
+This crate previously pinned CBOR (via `ciborium`). The SDK's camera / pose / audio / time-transform payloads now use protobuf via the generated [`auki-proto`](../../auki-proto) crate. Rather than swap one hardcoded encoder for another, the crate exposes a tiny `LogPayload` trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>`. Consumers pick their encoder. Generated prost types use the `impl_log_payload!` macro to wire prost. The framing primitive stays out of the encoder's way.
 
 ## Tests (21 total)
 
@@ -155,7 +155,7 @@ This crate previously pinned CBOR (via `ciborium`). The [`auki-datatypes` migrat
 ## Consumers in this workspace
 
 - `auki-time` — `Log<TimeTransformEntry>` for the 1 Hz sampler
-- `auki-ros-adapter` — `Log<CameraFrame>` for the ring-buffered camera frame log (per Step 1 of the [migration](../../auki-datatypes/src/sprint.md))
-- `auki-datatypes` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically; ships `DetectionFrame` (Step 8) for the detector pipeline
+- `auki-ros-adapter` — `Log<CameraFrame>` for the ring-buffered camera frame log
+- `auki-proto` — provides `impl_log_payload!` so prost-generated types satisfy `LogPayload` automatically; ships `DetectionFrame` for the detector pipeline
 - `auki-renderer` — read-only consumer for the sensor log
 - [`detectors`](https://github.com/aukilabs/detectors) (downstream) — phase-2 Detector runners use `Log::<SensorLogEntry>::tail()` (this PR) on the read side; the unblocking is "the same `tail` call works regardless of whether the bytes were captured locally, materialized from a peer's stream, or opened from a recording on disk." Phase-2 blockers #1 (tail) is now resolved; #2 (Detector binding API) is next.

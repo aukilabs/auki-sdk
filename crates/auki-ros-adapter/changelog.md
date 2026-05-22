@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Active ROS adapter docs now point payload readers at generated `auki-proto`.** No ROS translation behavior changed.
+
+### Nils's codex · May 22, HKT, 2026
+
+**ROS payload imports moved to `auki-proto`.** Camera and point-cloud prost payloads now come from generated Rust `auki-proto` instead of deprecated `auki-datatypes`.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **ROS camera translation now emits `CameraFrame` and `Camera` registry entries.** The adapter re-exports the renamed camera payload type, builds `SensorBody::Camera`, and refreshes the locked camera registry hashes for the `"camera"` tag.

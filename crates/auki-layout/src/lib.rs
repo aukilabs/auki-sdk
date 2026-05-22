@@ -156,8 +156,7 @@ pub fn sensorlog_path(session_root: &Path, sensor_log_id: &str) -> PathBuf {
 /// in the log's manifest under the `source` field, not encoded in the
 /// path.
 ///
-/// Step 5 of the [`auki-datatypes` migration] (2026-05-08) reshaped
-/// the Pose Log to per-`(from, to)` identity — pre-migration logs
+/// The Pose Log is per-`(from, to)` identity — pre-migration logs
 /// keyed on an opaque `pose_log_id`. A producer that observes a
 /// multi-pair ROS `TFMessage` is responsible for fanning the message
 /// into N parallel pose logs.

@@ -27,7 +27,7 @@ package auki.joint_encoders;
 // different proto packages purely so the libp2p substream payload and
 // the disk log entry have separate Rust types; the bytes inside are
 // identical (locked by the `joint_encoders_disk_wire_byte_identical`
-// test in `auki-datatypes`).
+// test in `auki-proto`).
 //
 // Field number ledger (never reuse, never renumber):
 //   JointEncodersLogEntry.angles_rad = 1

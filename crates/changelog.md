@@ -8,6 +8,30 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-datatypes` removed from the Rust workspace.** `auki-proto` is now the only Rust protobuf crate; the deprecated compatibility shim directory and workspace member are gone, and current crate docs / parking-lot summaries point at `auki-proto` or root `proto/auki` instead.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) + [`auki-proto`](auki-proto/changelog.md) — `/auki/message/0.0.1` added as a proto-backed peer message protocol.** The root `auki.message` schema generates Rust `MessageEnvelope` / `MessageAck` bindings, and `auki-network::message_protocol` provides length-prefixed prost framing helpers.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Active crate docs propagated to `auki-proto`.** Logs, manifests, registry, geometry, time, layout, ROS adapter, and network docs now point current payload readers at generated `auki-proto` and root `proto/auki` schemas while `auki-datatypes` remains only a deprecated shim.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Rust protobuf consumers migrated to `auki-proto`.** `auki-geometry`, `auki-time`, `auki-network`, `auki-ros-adapter`, and the Rust side of `auki-network-py` now import generated payload types from `auki-proto`.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-datatypes`](auki-datatypes/changelog.md) — deprecated as an `auki-proto` shim.** The crate no longer owns schema files or build-time prost generation; it re-exports `auki_proto::*` while Rust consumers migrate.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-proto`](auki-proto/changelog.md) — generated Rust protobuf crate added.** Root `proto/auki` schemas now generate checked-in prost modules under `crates/auki-proto/src/generated`, making Rust the only committed protobuf output.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — multiplatform crate adapters and browser jslibp2p package contract added.** Core identity/reachability logic now lives in `core.rs`, native default builds expose a small UniFFI surface, wasm builds expose browser identity/protocol helpers, and crate-owned JavaScript templates generate a jslibp2p wrapper package.
 
 ### Nils's codex · May 22, HKT, 2026

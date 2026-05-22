@@ -10,11 +10,11 @@ description = "Auki SDK time primitives: session clocks, time transforms, NTP-st
 [dependencies]
 auki-registry = { path = "../auki-registry" }
 auki-logs = { path = "../auki-logs" }
-# `TimeTransformEntry` lives in `auki-datatypes` since Step 6 of the
+# `TimeTransformEntry` lives in `auki-proto` since Step 6 of the
 # migration (2026-05-08, prost-encoded). Re-exported from this crate
 # for short call sites; encoding handled via the `LogPayload` macro
-# impl in `auki-datatypes`.
-auki-datatypes = { path = "../auki-datatypes" }
+# impl in `auki-proto`.
+auki-proto = { path = "../auki-proto" }
 # `TimeTransformSource` is manifest metadata since Step 6 — re-exported
 # from `auki-manifests` for short call sites.
 auki-manifests = { path = "../auki-manifests" }

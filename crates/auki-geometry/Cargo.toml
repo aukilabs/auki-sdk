@@ -8,5 +8,5 @@ authors.workspace = true
 description = "Pure spatial math helpers for Auki frame conventions and pose operations."
 
 [dependencies]
-auki-datatypes = { path = "../auki-datatypes" }
+auki-proto = { path = "../auki-proto" }
 auki-registry = { path = "../auki-registry" }

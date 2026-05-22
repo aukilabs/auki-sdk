@@ -8,6 +8,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Pose-log docs stop pointing at the deprecated datatypes migration path.** The path contract is unchanged; comments now describe the current per-`(from, to)` identity directly.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Detector log references now use `DetectionFrame`.** Active docs/comments follow the SDK-wide detection payload rename; layout paths and hashing behavior are unchanged.

@@ -1,13 +1,11 @@
-//! Single source of truth for the Auki SDK's shared cross-language data
-//! types — the typed payload shapes that flow through logs and streams.
+//! Generated Rust protobuf bindings for the Auki SDK's shared data types.
 //!
-//! The `.proto` files live in [`proto/`](../proto/); `build.rs` invokes
-//! `prost-build` to generate Rust code into `OUT_DIR`, included here
-//! one module per `.proto` package.
+//! The canonical `.proto` files live at the repository root under
+//! `proto/auki/`. `just generate-rust-proto` refreshes the checked-in prost
+//! output under `src/generated/`, included here one module per `.proto`
+//! package.
 //!
-//! Crate name names the **responsibility** (canonical shared data
-//! types), not the implementation (protobuf via prost). Encoding could
-//! change someday; the responsibility doesn't.
+//! This crate is the active Rust protobuf package.
 //!
 //! See the [outer `README.md`](../README.md) for the spec, the
 //! [`parking_lot.md`](../parking_lot.md) for open questions, and
@@ -39,7 +37,7 @@ macro_rules! impl_log_payload {
 /// `auki.camera` — Pinhole camera log payload (Sensor Log family).
 /// Migration Step 1.
 pub mod camera {
-    include!(concat!(env!("OUT_DIR"), "/auki.camera.rs"));
+    include!("generated/auki.camera.rs");
 }
 
 impl_log_payload!(camera::CameraFrame);
@@ -50,7 +48,7 @@ impl_log_payload!(camera::CameraFrame);
 /// `PointCloud` body — interpretation comes from `(sensor_id,
 /// sensor_hash)`, not from the per-frame log entry.
 pub mod point_cloud {
-    include!(concat!(env!("OUT_DIR"), "/auki.point_cloud.rs"));
+    include!("generated/auki.point_cloud.rs");
 }
 
 impl_log_payload!(point_cloud::PointCloudLogEntry);
@@ -65,7 +63,7 @@ impl_log_payload!(point_cloud::PointCloudLogEntry);
 /// `repeated float angles_rad = 1` shape on disk and wire; mirrors
 /// the point-cloud Step 2/3 pattern).
 pub mod joint_encoders {
-    include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders.rs"));
+    include!("generated/auki.joint_encoders.rs");
 }
 
 impl_log_payload!(joint_encoders::JointEncodersLogEntry);
@@ -79,7 +77,7 @@ impl_log_payload!(joint_encoders::JointEncodersLogEntry);
 /// chunk start timestamp rides in the auki-logs framing's
 /// `timestamp_ns`.
 pub mod audio {
-    include!(concat!(env!("OUT_DIR"), "/auki.audio.rs"));
+    include!("generated/auki.audio.rs");
 }
 
 impl_log_payload!(audio::AudioLogEntry);
@@ -92,7 +90,7 @@ impl_log_payload!(audio::AudioLogEntry);
 /// lifecycle inherited from the sensor-log primitive. The frame
 /// timestamp rides in the auki-logs framing's `timestamp_ns`.
 pub mod detection {
-    include!(concat!(env!("OUT_DIR"), "/auki.detection.rs"));
+    include!("generated/auki.detection.rs");
 }
 
 impl_log_payload!(detection::DetectionFrame);
@@ -104,7 +102,7 @@ impl_log_payload!(detection::DetectionFrame);
 /// `to_frame_id` / `to_frame_hash`); each Pose Log holds one
 /// `(from, to)` pair. Quaternion is `(x, y, z, w)` Hamilton.
 pub mod pose {
-    include!(concat!(env!("OUT_DIR"), "/auki.pose.rs"));
+    include!("generated/auki.pose.rs");
 }
 
 impl_log_payload!(pose::SpatialTransform);
@@ -118,15 +116,23 @@ impl_log_payload!(pose::SpatialTransform);
 /// sample's timestamp rides in the auki-logs framing's
 /// `timestamp_ns` (from-clock reading at the sample instant).
 pub mod time_transform {
-    include!(concat!(env!("OUT_DIR"), "/auki.time_transform.rs"));
+    include!("generated/auki.time_transform.rs");
 }
 
 impl_log_payload!(time_transform::TimeTransformEntry);
 
+/// `auki.message` — generic peer message envelope and acknowledgement
+/// payloads for `/auki/message/0.0.1`. Application-specific schemas stay
+/// behind `MessageEnvelope.type_url`; the SDK network layer transports
+/// the envelope and does not interpret the opaque `body` bytes.
+pub mod message {
+    include!("generated/auki.message.rs");
+}
+
 /// `auki.point_cloud_stream` — `PointCloudFrame` substream payload
 /// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
 pub mod point_cloud_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.point_cloud_stream.rs"));
+    include!("generated/auki.point_cloud_stream.rs");
 }
 
 /// `auki.joint_encoders_stream` — `JointEncodersFrame` substream payload
@@ -137,7 +143,7 @@ pub mod point_cloud_stream {
 /// wire-side prost types are used directly by the substream runtime,
 /// same as [`point_cloud_stream::PointCloudFrame`].
 pub mod joint_encoders_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders_stream.rs"));
+    include!("generated/auki.joint_encoders_stream.rs");
 }
 
 /// `auki.audio_stream` — `AudioFrame` substream payload (libp2p
@@ -148,7 +154,7 @@ pub mod joint_encoders_stream {
 /// below. Separate proto package so the wire and log code paths
 /// dispatch on distinct Rust types.
 pub mod audio_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.audio_stream.rs"));
+    include!("generated/auki.audio_stream.rs");
 }
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
@@ -156,7 +162,7 @@ pub mod audio_stream {
 /// libp2p substream wire shape; mono-`T` per substream, with
 /// `StreamEntry.payload` carrying the prost-encoded `T` bytes.
 pub mod stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.stream.rs"));
+    include!("generated/auki.stream.rs");
 
     impl StreamMessage {
         pub fn request(req: StreamRequest) -> Self {
@@ -253,6 +259,7 @@ mod tests {
     use super::detection::DetectionFrame;
     use super::joint_encoders::JointEncodersLogEntry;
     use super::joint_encoders_stream::JointEncodersFrame;
+    use super::message::{MessageAck, MessageEnvelope};
     use super::point_cloud::PointCloudLogEntry;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
@@ -863,6 +870,57 @@ mod tests {
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.offset_ns, 0);
         assert_eq!(entries[1].payload.uncertainty_ns, 0);
+    }
+
+    // ─── auki.message locked vectors ────────────────────────────────────────
+
+    fn message_envelope_fixture() -> MessageEnvelope {
+        MessageEnvelope {
+            type_url: "auki.test/hello".to_string(),
+            body: vec![1, 2, 3],
+            request_id: "req-1".to_string(),
+        }
+    }
+
+    fn message_ack_fixture() -> MessageAck {
+        MessageAck {
+            request_id: "req-1".to_string(),
+            accepted: true,
+            detail: "ok".to_string(),
+        }
+    }
+
+    #[test]
+    fn message_envelope_locked_vector() {
+        let bytes = message_envelope_fixture().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "0a0f61756b692e746573742f68656c6c6f12030102031a057265712d31"
+        );
+    }
+
+    #[test]
+    fn message_ack_locked_vector() {
+        let bytes = message_ack_fixture().encode_to_vec();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex, "0a057265712d3110011a026f6b");
+    }
+
+    #[test]
+    fn message_envelope_round_trips() {
+        let envelope = message_envelope_fixture();
+        let bytes = envelope.encode_to_vec();
+        let decoded = MessageEnvelope::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, envelope);
+    }
+
+    #[test]
+    fn message_ack_round_trips() {
+        let ack = message_ack_fixture();
+        let bytes = ack.encode_to_vec();
+        let decoded = MessageAck::decode(&*bytes).expect("decode");
+        assert_eq!(decoded, ack);
     }
 
     // ─── auki.detection locked vectors ───────────────────────────────────────

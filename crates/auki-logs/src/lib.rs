@@ -28,8 +28,8 @@ pub const LOG_MANIFEST_FILE: &str = "log_manifest.json";
 
 /// Encoder-agnostic payload contract. The log primitive handles framing and
 /// segment rollover; the consumer picks the payload encoding by implementing
-/// this trait for their `T`. Mid-migration types use ciborium; post-migration
-/// types defined in [`auki-datatypes`](../../auki-datatypes) use prost.
+/// this trait for their `T`. Generated payload types defined in
+/// [`auki-proto`](../../auki-proto) use prost.
 pub trait LogPayload: Sized {
     fn encode(&self) -> Vec<u8>;
     fn decode(bytes: &[u8]) -> std::result::Result<Self, String>;

@@ -47,7 +47,7 @@ def test_camera_frame_locked_wire_bytes():
 
 def test_point_cloud_log_entry_locked_wire_bytes():
     # auki-datatypes/src/lib.rs::point_cloud_log_entry_serializes_to_locked_wire_bytes
-    entry = adt.point_cloud.PointCloudLogEntry(data=bytes(range(24)))
+    entry = adt.point_cloud.Data(data=bytes(range(24)))
     expected = "0a18000102030405060708090a0b0c0d0e0f1011121314151617"
     assert bytes(entry).hex() == expected
 
@@ -59,7 +59,7 @@ def test_audio_log_entry_locked_wire_bytes():
     # auki-datatypes/src/lib.rs::audio_log_entry_serializes_to_locked_wire_bytes
     # 16 bytes of stereo `pcm_s16le` — i.wrapping_mul(17) for i in 0..16
     data = bytes((i * 17) & 0xFF for i in range(16))
-    entry = adt.audio.AudioLogEntry(data=data)
+    entry = adt.audio.Data(data=data)
     expected = "0a1000112233445566778899aabbccddeeff"
     assert bytes(entry).hex() == expected
 
@@ -109,7 +109,7 @@ def test_detection_frame_locked_wire_bytes():
 def test_joint_encoders_log_entry_locked_wire_bytes():
     # auki-datatypes/src/lib.rs::joint_encoders_log_entry_serializes_to_locked_wire_bytes
     # 6-DOF fixture: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
-    entry = adt.joint_encoders.JointEncodersLogEntry(angles_rad=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+    entry = adt.joint_encoders.Data(angles_rad=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
     expected = "0a18000000000000803f0000004000004040000080400000a040"
     assert bytes(entry).hex() == expected
 
@@ -156,9 +156,7 @@ def test_module_re_exports_all_packages():
         "camera",
         "detection",
         "joint_encoders",
-        "joint_encoders_stream",
         "point_cloud",
-        "point_cloud_stream",
         "pose",
         "stream",
         "time_transform",

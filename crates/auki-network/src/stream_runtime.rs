@@ -8,7 +8,7 @@
 //! variant that pairs the typed source-stream with the [`StreamManifest`],
 //! or [`StreamDispatch::Decline`] with a typed reason. The
 //! dispatch enum is *closed* over the SDK-supported `T`s (`CameraFrame`,
-//! `PointCloudFrame` today; new variants added per coordinated
+//! `point_cloud::Data` today; new variants added per coordinated
 //! SDK + consumer release). Each substream is mono-`T`; the producer's
 //! callback decides which `T` based on `request.sensor_id`.
 //!
@@ -43,9 +43,9 @@
 
 use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
-    AudioFrame, CameraFrame, DeclineReason, EndReason, JointEncodersFrame, PointCloudFrame,
-    STREAM_PROTOCOL, StreamEntry as WireStreamEntry, StreamManifest, StreamMessage,
-    StreamProtocolError, StreamRequest, read_message, stream_message, write_message,
+    CameraFrame, DeclineReason, EndReason, STREAM_PROTOCOL, StreamEntry as WireStreamEntry,
+    StreamManifest, StreamMessage, StreamProtocolError, StreamRequest, audio, joint_encoders,
+    point_cloud, read_message, stream_message, write_message,
 };
 use auki_datatypes::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
@@ -86,13 +86,14 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 
 /// Producer's accept/decline decision for a single inbound request.
 /// Closed over the `T`s the SDK supports today: `CameraFrame` (grimsby v1),
-/// `PointCloudFrame` (Dagaz Batch 1, raw CDR per D2),
-/// `JointEncodersFrame` (sawslin Phase B — `repeated float angles_rad`,
-/// byte-identical to the on-disk `JointEncodersLogEntry`), and
-/// `AudioFrame` (Dialogue Batch 1 — opaque interleaved PCM bytes,
-/// byte-identical to the on-disk `AudioLogEntry`). Adding a new `T`
-/// is a coordinated SDK + consumer release — bump the runtime, add
-/// the variant, every consumer that wants the new sensor type opts in.
+/// `point_cloud::Data` (Dagaz Batch 1, raw CDR per D2),
+/// `joint_encoders::Data` (sawslin Phase B — `repeated float angles_rad`),
+/// and `audio::Data` (Dialogue Batch 1 — opaque interleaved PCM bytes).
+/// One proto message per payload module is used on both disk (Sensor
+/// Log segment) and wire (this substream) — the disk/wire mirror split
+/// was collapsed in #176. Adding a new `T` is a coordinated SDK +
+/// consumer release — bump the runtime, add the variant, every
+/// consumer that wants the new sensor type opts in.
 ///
 /// On `Accept*`, the SDK writes [`StreamMessage::Accept(manifest)`]
 /// for the matching `T` and drains the source-Stream onto the substream as
@@ -100,8 +101,8 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// substream closes. On [`StreamDispatch::Decline`], the SDK writes
 /// `Decline { reason }` and closes the substream.
 ///
-/// SDK-supported `T`s: `CameraFrame`, `PointCloudFrame`,
-/// `JointEncodersFrame`, `AudioFrame`, and (Cuba T8) `DetectionFrame`.
+/// SDK-supported `T`s: `CameraFrame`, `point_cloud::Data`,
+/// `joint_encoders::Data`, `audio::Data`, and (Cuba T8) `DetectionFrame`.
 pub enum StreamDispatch {
     /// Accept the request with a Camera source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
@@ -111,35 +112,35 @@ pub enum StreamDispatch {
         source: SourceStream<CameraFrame>,
     },
     /// Accept the request with a PointCloud source-Stream — Dagaz's new
-    /// path. Each [`PointCloudFrame`] carries a single CDR-encoded
+    /// path. Each [`point_cloud::Data`] carries a single CDR-encoded
     /// `PointCloud2` ROS message; the consumer parses CDR on its side.
     AcceptPointCloud {
         manifest: StreamManifest,
-        source: SourceStream<PointCloudFrame>,
+        source: SourceStream<point_cloud::Data>,
     },
     /// Accept the request with a JointEncoders source-Stream — sawslin
-    /// Phase B. Each [`JointEncodersFrame`] carries one
+    /// Phase B. Each [`joint_encoders::Data`] carries one
     /// `repeated float angles_rad` sample (joint angles in radians,
     /// indexed in the producer's emit order, length pinned by the
-    /// registry entry's `joint_count`). Wire bytes are identical to the
-    /// on-disk `JointEncodersLogEntry` payload by design (locked in
-    /// `auki-datatypes` by `joint_encoders_disk_wire_byte_identical`).
+    /// registry entry's `joint_count`). One proto message used on both
+    /// disk (Sensor Log segment) and wire (substream) — collapsed
+    /// disk/wire mirror in #176.
     AcceptJointEncoders {
         manifest: StreamManifest,
-        source: SourceStream<JointEncodersFrame>,
+        source: SourceStream<joint_encoders::Data>,
     },
     /// Accept the request with an Audio source-Stream — Dialogue Batch
-    /// 1. Each [`AudioFrame`] carries interleaved PCM bytes; the
+    /// 1. Each [`audio::Data`] carries interleaved PCM bytes; the
     /// consumer pushes them into a player session (e.g. the K1's
     /// `AudioPlayer` in `PCM_STREAM` mode). Sample format, channels,
     /// sample rate, and channel layout are resolved out-of-band via
     /// `(sensor_id, sensor_hash) → SensorBody::Audio` — the wire
-    /// payload is opaque-bytes-only. Wire bytes are byte-identical to
-    /// the on-disk `AudioLogEntry` payload by design (locked in
-    /// `auki-datatypes` by `audio_disk_wire_byte_identical`).
+    /// payload is opaque-bytes-only. One proto message used on both
+    /// disk (Sensor Log segment) and wire (substream) — collapsed
+    /// disk/wire mirror in #176.
     AcceptAudio {
         manifest: StreamManifest,
-        source: SourceStream<AudioFrame>,
+        source: SourceStream<audio::Data>,
     },
     /// Accept the request with a Detection source-Stream — Cuba T8.
     /// Each [`DetectionFrame`] is the same on-disk Detection Log
@@ -430,13 +431,13 @@ pub(crate) async fn handle_inbound_substream(
             pump_typed::<CameraFrame>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptPointCloud { manifest, source } => {
-            pump_typed::<PointCloudFrame>(substream, manifest, source, shutdown_rx).await;
+            pump_typed::<point_cloud::Data>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptJointEncoders { manifest, source } => {
-            pump_typed::<JointEncodersFrame>(substream, manifest, source, shutdown_rx).await;
+            pump_typed::<joint_encoders::Data>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptAudio { manifest, source } => {
-            pump_typed::<AudioFrame>(substream, manifest, source, shutdown_rx).await;
+            pump_typed::<audio::Data>(substream, manifest, source, shutdown_rx).await;
         }
         StreamDispatch::AcceptDetection { manifest, source } => {
             pump_typed::<DetectionFrame>(substream, manifest, source, shutdown_rx).await;
@@ -454,7 +455,7 @@ pub(crate) async fn handle_inbound_substream(
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
-/// (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`). Adding a new
+/// (`CameraFrame`, `point_cloud::Data`, `joint_encoders::Data`). Adding a new
 /// variant means adding a new monomorphization plus extending
 /// [`StreamDispatch`].
 async fn pump_typed<T>(
@@ -580,12 +581,12 @@ pub use crate::stream_protocol::CameraFrame as _CameraFrameReExport;
 #[allow(unused_imports)]
 use _CameraFrameReExport as _;
 
-// Static check that `CameraFrame` and `PointCloudFrame` satisfy the
+// Static check that `CameraFrame` and `point_cloud::Data` satisfy the
 // bounds the runtime expects for `T`.
 const _: fn() = || {
     fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
     assert_message_send_static::<CameraFrame>();
-    assert_message_send_static::<PointCloudFrame>();
+    assert_message_send_static::<point_cloud::Data>();
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -750,20 +751,20 @@ mod tests {
             let frames = vec![
                 Ok(StreamItem {
                     timestamp_ns: 10_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x01, 0x02, 0x03],
+                    payload: point_cloud::Data {
+                        data: vec![0xCD, 0xAA, 0x01, 0x02, 0x03],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 20_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x04, 0x05, 0x06],
+                    payload: point_cloud::Data {
+                        data: vec![0xCD, 0xAA, 0x04, 0x05, 0x06],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 30_000,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xAA, 0x07, 0x08, 0x09],
+                    payload: point_cloud::Data {
+                        data: vec![0xCD, 0xAA, 0x07, 0x08, 0x09],
                     },
                 }),
             ];
@@ -789,19 +790,19 @@ mod tests {
             let frames = vec![
                 Ok(StreamItem {
                     timestamp_ns: 10_000,
-                    payload: AudioFrame {
+                    payload: audio::Data {
                         data: vec![0x00, 0x10, 0x20, 0x30, 0x40, 0x50],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 30_000,
-                    payload: AudioFrame {
+                    payload: audio::Data {
                         data: vec![0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0],
                     },
                 }),
                 Ok(StreamItem {
                     timestamp_ns: 50_000,
-                    payload: AudioFrame {
+                    payload: audio::Data {
                         data: vec![0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02],
                     },
                 }),
@@ -850,8 +851,8 @@ mod tests {
                 ),
                 source: Box::pin(stream::iter(vec![Ok(StreamItem {
                     timestamp_ns: 1,
-                    payload: PointCloudFrame {
-                        bytes: vec![0xCD, 0xCD, 0xCD],
+                    payload: point_cloud::Data {
+                        data: vec![0xCD, 0xCD, 0xCD],
                     },
                 })])),
             },
@@ -1320,7 +1321,7 @@ mod tests {
     }
 
     /// Same happy-path as `producer_accepts_and_streams_camera_frames`
-    /// but with `T = PointCloudFrame`. Exercises the multi-`T`
+    /// but with `T = point_cloud::Data`. Exercises the multi-`T`
     /// dispatch chain (Dagaz D1) end-to-end.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn producer_accepts_and_streams_pointcloud_frames() {
@@ -1358,7 +1359,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<PointCloudFrame> = consumer
+        let sub: StreamSubscription<point_cloud::Data> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1366,7 +1367,7 @@ mod tests {
                 },
             )
             .await
-            .expect("open_stream<PointCloudFrame>");
+            .expect("open_stream<point_cloud::Data>");
 
         assert_eq!(sub.manifest.sensor_id, "test/pc");
         assert_eq!(sub.manifest.sensor_hash, "pc-sensor-hash-3");
@@ -1377,12 +1378,12 @@ mod tests {
         let mut entries = sub.entries;
         let f0 = entries.next().await.unwrap().expect("frame 0");
         assert_eq!(f0.seq, 0);
-        assert_eq!(f0.payload.bytes, vec![0xCD, 0xAA, 0x01, 0x02, 0x03]);
+        assert_eq!(f0.payload.data, vec![0xCD, 0xAA, 0x01, 0x02, 0x03]);
         let f1 = entries.next().await.unwrap().expect("frame 1");
         assert_eq!(f1.seq, 1);
         let f2 = entries.next().await.unwrap().expect("frame 2");
         assert_eq!(f2.seq, 2);
-        assert_eq!(f2.payload.bytes, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
+        assert_eq!(f2.payload.data, vec![0xCD, 0xAA, 0x07, 0x08, 0x09]);
 
         let end = entries
             .next()
@@ -1400,8 +1401,8 @@ mod tests {
     }
 
     /// Same happy-path as `producer_accepts_and_streams_pointcloud_frames`
-    /// but with `T = AudioFrame` — Dialogue Batch 1 end-to-end.
-    /// Exercises the `AcceptAudio` arm + `pump_typed::<AudioFrame>`
+    /// but with `T = audio::Data` — Dialogue Batch 1 end-to-end.
+    /// Exercises the `AcceptAudio` arm + `pump_typed::<audio::Data>`
     /// dispatch through a real libp2p substream.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn producer_accepts_and_streams_audio_frames() {
@@ -1439,7 +1440,7 @@ mod tests {
         .await;
         assert!(connected);
 
-        let sub: StreamSubscription<AudioFrame> = consumer
+        let sub: StreamSubscription<audio::Data> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1447,7 +1448,7 @@ mod tests {
                 },
             )
             .await
-            .expect("open_stream<AudioFrame>");
+            .expect("open_stream<audio::Data>");
 
         assert_eq!(sub.manifest.sensor_id, "test/audio");
         assert_eq!(sub.manifest.sensor_hash, "audio-sensor-hash-3");
@@ -1537,7 +1538,7 @@ mod tests {
         assert_eq!(cf.payload.frame, vec![0xff, 0xd8, 0xab]);
 
         // Substream 2: PointCloud.
-        let sub_pc: StreamSubscription<PointCloudFrame> = consumer
+        let sub_pc: StreamSubscription<point_cloud::Data> = consumer
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
@@ -1545,12 +1546,12 @@ mod tests {
                 },
             )
             .await
-            .expect("open_stream<PointCloudFrame> pointcloud");
+            .expect("open_stream<point_cloud::Data> pointcloud");
         assert_eq!(sub_pc.manifest.sensor_id, "pointcloud");
         assert_eq!(sub_pc.manifest.sensor_hash, "pc-hash");
         let mut pc_entries = sub_pc.entries;
         let pcf = pc_entries.next().await.unwrap().expect("pc frame");
-        assert_eq!(pcf.payload.bytes, vec![0xCD, 0xCD, 0xCD]);
+        assert_eq!(pcf.payload.data, vec![0xCD, 0xCD, 0xCD]);
 
         // Substream 3: unknown sensor → Decline.
         let unknown: Result<StreamSubscription<CameraFrame>, OpenStreamError> = consumer

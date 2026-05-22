@@ -488,13 +488,13 @@ pub trait SwiftStreamProvider: Send + Sync {
 pub(crate) fn audio_source_to_stream(
     source: Box<dyn SwiftAudioSource>,
 ) -> auki_network_rs::stream_runtime::SourceStream<
-    auki_network_rs::stream_protocol::AudioFrame,
+    auki_network_rs::stream_protocol::audio::Data,
 > {
     let source: Arc<dyn SwiftAudioSource> = Arc::from(source);
     let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<
             auki_network_rs::stream_runtime::StreamItem<
-                auki_network_rs::stream_protocol::AudioFrame,
+                auki_network_rs::stream_protocol::audio::Data,
             >,
             String,
         >,
@@ -505,7 +505,7 @@ pub(crate) fn audio_source_to_stream(
                 Ok(Some(item)) => {
                     use prost::Message;
                     let frame =
-                        match auki_network_rs::stream_protocol::AudioFrame::decode(
+                        match auki_network_rs::stream_protocol::audio::Data::decode(
                             item.payload_bytes.as_slice(),
                         ) {
                             Ok(f) => f,
@@ -588,13 +588,13 @@ pub(crate) fn camera_source_to_stream(
 pub(crate) fn point_cloud_source_to_stream(
     source: Box<dyn SwiftPointCloudSource>,
 ) -> auki_network_rs::stream_runtime::SourceStream<
-    auki_network_rs::stream_protocol::PointCloudFrame,
+    auki_network_rs::stream_protocol::point_cloud::Data,
 > {
     let source: Arc<dyn SwiftPointCloudSource> = Arc::from(source);
     let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<
             auki_network_rs::stream_runtime::StreamItem<
-                auki_network_rs::stream_protocol::PointCloudFrame,
+                auki_network_rs::stream_protocol::point_cloud::Data,
             >,
             String,
         >,
@@ -604,7 +604,7 @@ pub(crate) fn point_cloud_source_to_stream(
             match source.next_item() {
                 Ok(Some(item)) => {
                     use prost::Message;
-                    let frame = match auki_network_rs::stream_protocol::PointCloudFrame::decode(
+                    let frame = match auki_network_rs::stream_protocol::point_cloud::Data::decode(
                         item.payload_bytes.as_slice(),
                     ) {
                         Ok(f) => f,
@@ -636,13 +636,13 @@ pub(crate) fn point_cloud_source_to_stream(
 pub(crate) fn joint_encoders_source_to_stream(
     source: Box<dyn SwiftJointEncodersSource>,
 ) -> auki_network_rs::stream_runtime::SourceStream<
-    auki_network_rs::stream_protocol::JointEncodersFrame,
+    auki_network_rs::stream_protocol::joint_encoders::Data,
 > {
     let source: Arc<dyn SwiftJointEncodersSource> = Arc::from(source);
     let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<
             auki_network_rs::stream_runtime::StreamItem<
-                auki_network_rs::stream_protocol::JointEncodersFrame,
+                auki_network_rs::stream_protocol::joint_encoders::Data,
             >,
             String,
         >,
@@ -652,7 +652,7 @@ pub(crate) fn joint_encoders_source_to_stream(
             match source.next_item() {
                 Ok(Some(item)) => {
                     use prost::Message;
-                    let frame = match auki_network_rs::stream_protocol::JointEncodersFrame::decode(
+                    let frame = match auki_network_rs::stream_protocol::joint_encoders::Data::decode(
                         item.payload_bytes.as_slice(),
                     ) {
                         Ok(f) => f,
@@ -1094,11 +1094,11 @@ mod tests {
     use futures::StreamExt;
 
     /// `audio_source_to_stream` drains a Swift source that produces 3
-    /// prost-encoded `AudioFrame`s then ends-of-source. Rust side reads
-    /// back 3 items + `None`.
+    /// prost-encoded `audio::Data` payloads then ends-of-source. Rust
+    /// side reads back 3 items + `None`.
     #[tokio::test]
     async fn audio_source_adapter_drains_three_items() {
-        use auki_network_rs::stream_protocol::AudioFrame;
+        use auki_network_rs::stream_protocol::audio;
         use prost::Message;
 
         struct ThreeItems {
@@ -1111,7 +1111,7 @@ mod tests {
                     return Ok(None);
                 }
                 *c += 1;
-                let frame = AudioFrame {
+                let frame = audio::Data {
                     data: vec![*c],
                     ..Default::default()
                 };
@@ -1139,7 +1139,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_subscription_audio_wraps_typed_subscription() {
-        use auki_network_rs::stream_protocol::{AudioFrame, StreamManifest};
+        use auki_network_rs::stream_protocol::{StreamManifest, audio};
         use auki_network_rs::stream_runtime::StreamSubscription;
         use futures::stream;
 
@@ -1148,7 +1148,7 @@ mod tests {
             Ok(auki_network_rs::stream_runtime::StreamEntry {
                 timestamp_ns: 1,
                 seq: 0,
-                payload: AudioFrame {
+                payload: audio::Data {
                     data: vec![1, 2, 3],
                     ..Default::default()
                 },
@@ -1156,7 +1156,7 @@ mod tests {
             Ok(auki_network_rs::stream_runtime::StreamEntry {
                 timestamp_ns: 2,
                 seq: 1,
-                payload: AudioFrame {
+                payload: audio::Data {
                     data: vec![4, 5],
                     ..Default::default()
                 },
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_subscription_joint_encoders_wraps_typed_subscription() {
-        use auki_network_rs::stream_protocol::{JointEncodersFrame, StreamManifest};
+        use auki_network_rs::stream_protocol::{StreamManifest, joint_encoders};
         use auki_network_rs::stream_runtime::StreamSubscription;
         use futures::stream;
 
@@ -1209,7 +1209,7 @@ mod tests {
         let entries = stream::iter(vec![Ok(auki_network_rs::stream_runtime::StreamEntry {
             timestamp_ns: 7,
             seq: 0,
-            payload: JointEncodersFrame::default(),
+            payload: joint_encoders::Data::default(),
         })]);
         let sub = StreamSubscription {
             manifest,
@@ -1223,7 +1223,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_subscription_pointcloud_wraps_typed_subscription() {
-        use auki_network_rs::stream_protocol::{PointCloudFrame, StreamManifest};
+        use auki_network_rs::stream_protocol::{StreamManifest, point_cloud};
         use auki_network_rs::stream_runtime::StreamSubscription;
         use futures::stream;
 
@@ -1231,7 +1231,7 @@ mod tests {
         let entries = stream::iter(vec![Ok(auki_network_rs::stream_runtime::StreamEntry {
             timestamp_ns: 7,
             seq: 0,
-            payload: PointCloudFrame::default(),
+            payload: point_cloud::Data::default(),
         })]);
         let sub = StreamSubscription {
             manifest,

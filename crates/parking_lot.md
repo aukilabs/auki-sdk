@@ -44,6 +44,7 @@ The [Hagall quest](https://www.notion.so/35e5c8e9659280e69b86f5edc32641a0) and i
 
 Language-binding package summaries live under [`../bindings/`](../bindings/parking_lot.md) — Python at [`../bindings/python/parking_lot.md`](../bindings/python/parking_lot.md), Swift at [`../bindings/swift/parking_lot.md`](../bindings/swift/parking_lot.md).
 
+- [`auki-datatypes/`](auki-datatypes/parking_lot.md) — `.proto` package naming; field number allocation; locked conformance vector format; schema versioning; structured prost fields vs opaque bytes principle. All per-type slop fixes resolved. **Disk/wire mirror collapse landed 2026-05-22 ([#176](https://github.com/aukilabs/auki-sdk/issues/176))** — `audio`, `point_cloud`, `joint_encoders` each now ship a single `Data` message used on both Sensor Log segment and `/auki/stream/0.1.0` substream; the three `*_stream` packages are gone; supersedes the in-flight `2026-05-21-stream-naming-cleanup` plan.
 - [`auki-hash/`](auki-hash/parking_lot.md) — cryptographic strength upgrade path
 - [`auki-identity/`](auki-identity/parking_lot.md) — BIP32-vs-labeled-hash derivation; encrypted-at-rest format; BIP39 mnemonics; signing-scheme v2 shape; **missing `Result<T>` aliases** (filed 2026-05-08)
 - [`auki-jcs/`](auki-jcs/parking_lot.md) — `serde_jcs` upstream vendoring strategy

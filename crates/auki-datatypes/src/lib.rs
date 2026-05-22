@@ -44,45 +44,46 @@ pub mod camera {
 
 impl_log_payload!(camera::CameraFrame);
 
-/// `auki.point_cloud` — opaque-bytes point-cloud log payload (Sensor Log
-/// family). Migration Step 3. Layout fields (`fields`, `point_step`,
-/// `is_bigendian`, `frame_id`) live on the SensorRegistryEntry's
-/// `PointCloud` body — interpretation comes from `(sensor_id,
-/// sensor_hash)`, not from the per-frame log entry.
+/// `auki.point_cloud` — opaque-bytes point-cloud payload shared by disk
+/// (Sensor Log segment) and wire (`/auki/stream/0.1.0` substream). One
+/// `Data` type, byte-identical encoding on both paths. Layout fields
+/// (`fields`, `point_step`, `is_bigendian`, `frame_id`) live on the
+/// SensorRegistryEntry's `PointCloud` body — interpretation comes from
+/// `(sensor_id, sensor_hash)`, not from the per-frame payload.
 pub mod point_cloud {
     include!(concat!(env!("OUT_DIR"), "/auki.point_cloud.rs"));
 }
 
-impl_log_payload!(point_cloud::PointCloudLogEntry);
+impl_log_payload!(point_cloud::Data);
 
-/// `auki.joint_encoders` — `JointEncodersLogEntry` Sensor Log payload.
-/// Per-frame `repeated float angles_rad`; vector length pinned by the
+/// `auki.joint_encoders` — joint-encoder payload shared by disk
+/// (Sensor Log segment) and wire (`/auki/stream/0.1.0` substream). One
+/// `Data` type, byte-identical encoding on both paths. Per-sample
+/// `repeated float angles_rad`; vector length pinned by the
 /// `SensorRegistryEntry`'s `JointEncoders { joint_count }` body via
 /// `(sensor_id, sensor_hash)`. Joint angles are encoder readings —
 /// measurements before any kinematic interpretation; FK against the
-/// URDF is a consumer-side derivation. Symmetric with the wire's
-/// [`joint_encoders_stream::JointEncodersFrame`] (same
-/// `repeated float angles_rad = 1` shape on disk and wire; mirrors
-/// the point-cloud Step 2/3 pattern).
+/// URDF is a consumer-side derivation.
 pub mod joint_encoders {
     include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders.rs"));
 }
 
-impl_log_payload!(joint_encoders::JointEncodersLogEntry);
+impl_log_payload!(joint_encoders::Data);
 
-/// `auki.audio` — opaque-bytes audio log payload (Sensor Log family).
-/// Migration Step 4. `sample_format`, `channels`, `sample_rate_hz`,
-/// `channel_layout`, `frame_id` live on the SensorRegistryEntry's
-/// `Audio` body — interpretation comes from `(sensor_id,
-/// sensor_hash)`, not from the per-chunk log entry. Sample count and
-/// chunk duration are derivable from the bytes plus the registry; the
-/// chunk start timestamp rides in the auki-logs framing's
+/// `auki.audio` — opaque-bytes audio payload shared by disk (Sensor Log
+/// segment) and wire (`/auki/stream/0.1.0` substream). One `Data` type,
+/// byte-identical encoding on both paths. `sample_format`, `channels`,
+/// `sample_rate_hz`, `channel_layout`, `frame_id` live on the
+/// SensorRegistryEntry's `Audio` body — interpretation comes from
+/// `(sensor_id, sensor_hash)`, not from the per-chunk payload. Sample
+/// count and chunk duration are derivable from the bytes plus the
+/// registry; the chunk start timestamp rides in the framing's
 /// `timestamp_ns`.
 pub mod audio {
     include!(concat!(env!("OUT_DIR"), "/auki.audio.rs"));
 }
 
-impl_log_payload!(audio::AudioLogEntry);
+impl_log_payload!(audio::Data);
 
 /// `auki.detection` — opaque-bytes detection log payload (Detection Log
 /// family). Migration Step 8. The detection schema is defined by the
@@ -122,34 +123,6 @@ pub mod time_transform {
 }
 
 impl_log_payload!(time_transform::TimeTransformEntry);
-
-/// `auki.point_cloud_stream` — `PointCloudFrame` substream payload
-/// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
-pub mod point_cloud_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.point_cloud_stream.rs"));
-}
-
-/// `auki.joint_encoders_stream` — `JointEncodersFrame` substream payload
-/// (libp2p `/auki/stream/0.1.0`). Same shape as
-/// [`joint_encoders::JointEncodersLogEntry`] (separate proto package so
-/// the wire and log code paths dispatch on distinct Rust types — Step
-/// 2/3 precedent). No `impl_stream_payload!` macro registration —
-/// wire-side prost types are used directly by the substream runtime,
-/// same as [`point_cloud_stream::PointCloudFrame`].
-pub mod joint_encoders_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.joint_encoders_stream.rs"));
-}
-
-/// `auki.audio_stream` — `AudioFrame` substream payload (libp2p
-/// `/auki/stream/0.1.0`). Dialogue Batch 1. Same `bytes data = 1`
-/// shape as [`audio::AudioLogEntry`] — wire and disk payloads are
-/// byte-identical by design (Step 2/3 + joint-encoders precedent),
-/// locked by `audio_disk_wire_byte_identical` in the test module
-/// below. Separate proto package so the wire and log code paths
-/// dispatch on distinct Rust types.
-pub mod audio_stream {
-    include!(concat!(env!("OUT_DIR"), "/auki.audio_stream.rs"));
-}
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
 /// `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. The
@@ -247,13 +220,11 @@ pub mod stream {
 
 #[cfg(test)]
 mod tests {
-    use super::audio::AudioLogEntry;
-    use super::audio_stream::AudioFrame;
+    use super::audio;
     use super::camera::{CameraFrame, DynamicIntrinsics};
     use super::detection::DetectionFrame;
-    use super::joint_encoders::JointEncodersLogEntry;
-    use super::joint_encoders_stream::JointEncodersFrame;
-    use super::point_cloud::PointCloudLogEntry;
+    use super::joint_encoders;
+    use super::point_cloud;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
     use prost::Message;
@@ -376,19 +347,21 @@ mod tests {
     /// Two XYZ float32 points = 24 bytes, deterministic content. Stands
     /// in for a real PointCloud2 CDR payload — the SDK only sees opaque
     /// bytes, so the exact contents don't matter beyond reproducibility.
-    fn step3_point_cloud_log_entry() -> PointCloudLogEntry {
-        PointCloudLogEntry {
+    fn step3_point_cloud_data() -> point_cloud::Data {
+        point_cloud::Data {
             data: (0..24u8).collect(),
         }
     }
 
-    /// Locks the prost wire bytes for the Step 3 example point-cloud log
-    /// entry. Cross-language readers MUST produce these exact bytes for
-    /// the same input. Field 1 length-delimited: tag 0x0a, varint
-    /// length 0x18 (24), then the 24 payload bytes.
+    /// Locks the prost wire bytes for the example point-cloud payload.
+    /// Cross-language readers MUST produce these exact bytes for the
+    /// same input. Field 1 length-delimited: tag 0x0a, varint length
+    /// 0x18 (24), then the 24 payload bytes. Same bytes whether the
+    /// payload travels on disk (Sensor Log segment) or on the wire
+    /// (`/auki/stream/0.1.0` substream).
     #[test]
-    fn point_cloud_log_entry_serializes_to_locked_wire_bytes() {
-        let bytes = step3_point_cloud_log_entry().encode_to_vec();
+    fn point_cloud_data_serializes_to_locked_wire_bytes() {
+        let bytes = step3_point_cloud_data().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(hex, "0a18000102030405060708090a0b0c0d0e0f1011121314151617");
     }
@@ -397,8 +370,8 @@ mod tests {
     /// conformance set so future drift in either prost-build or
     /// auki-hash trips the test.
     #[test]
-    fn point_cloud_log_entry_hash_is_locked() {
-        let bytes = step3_point_cloud_log_entry().encode_to_vec();
+    fn point_cloud_data_hash_is_locked() {
+        let bytes = step3_point_cloud_data().encode_to_vec();
         assert_eq!(
             auki_hash::hash_jcs_bytes(&bytes),
             "4ea525d849212b2e067e33bec455c7ea"
@@ -406,10 +379,10 @@ mod tests {
     }
 
     #[test]
-    fn point_cloud_log_entry_round_trips() {
-        let entry = step3_point_cloud_log_entry();
+    fn point_cloud_data_round_trips() {
+        let entry = step3_point_cloud_data();
         let bytes = entry.encode_to_vec();
-        let decoded = PointCloudLogEntry::decode(&*bytes).expect("decode");
+        let decoded = point_cloud::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -417,33 +390,33 @@ mod tests {
     /// the same prost path as direct `Message::encode_to_vec` /
     /// `decode` calls.
     #[test]
-    fn point_cloud_log_entry_log_payload_round_trips() {
+    fn point_cloud_data_log_payload_round_trips() {
         use auki_logs::LogPayload;
-        let entry = step3_point_cloud_log_entry();
+        let entry = step3_point_cloud_data();
         let bytes = LogPayload::encode(&entry);
-        let decoded = <PointCloudLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        let decoded = <point_cloud::Data as LogPayload>::decode(&bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// Empty payload — opaque-bytes-only is honest about empty: a frame
     /// with zero points encodes to a single tag byte (no length, no body).
     #[test]
-    fn point_cloud_log_entry_empty_data_round_trips() {
-        let entry = PointCloudLogEntry { data: vec![] };
+    fn point_cloud_data_empty_round_trips() {
+        let entry = point_cloud::Data { data: vec![] };
         let bytes = entry.encode_to_vec();
         // proto3 default-elision: an empty `bytes` field encodes as
         // zero output bytes (the field is its default value).
         assert_eq!(bytes.len(), 0);
-        let decoded = PointCloudLogEntry::decode(&*bytes).expect("decode");
+        let decoded = point_cloud::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
-    /// End-to-end seam test: open a real `auki_logs::Log<PointCloudLogEntry>`,
+    /// End-to-end seam test: open a real `auki_logs::Log<point_cloud::Data>`,
     /// append two entries (one populated, one empty), close, re-read,
     /// assert order + payload byte-equality. Catches any regression in the
     /// `LogPayload` macro wiring or the segment-framing path.
     #[test]
-    fn point_cloud_log_entry_segment_round_trip() {
+    fn point_cloud_data_segment_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "segment_duration_ns": 1_000_000_000i64,
@@ -451,18 +424,17 @@ mod tests {
             "kind": "test"
         });
         {
-            let mut log: auki_logs::Log<PointCloudLogEntry> =
+            let mut log: auki_logs::Log<point_cloud::Data> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
-            log.append(100, &step3_point_cloud_log_entry()).unwrap();
-            log.append(200, &PointCloudLogEntry { data: vec![] })
-                .unwrap();
+            log.append(100, &step3_point_cloud_data()).unwrap();
+            log.append(200, &point_cloud::Data { data: vec![] }).unwrap();
         }
-        let reader: auki_logs::LogReader<PointCloudLogEntry> =
-            auki_logs::Log::<PointCloudLogEntry>::read(dir.path()).unwrap();
+        let reader: auki_logs::LogReader<point_cloud::Data> =
+            auki_logs::Log::<point_cloud::Data>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
-        assert_eq!(entries[0].payload, step3_point_cloud_log_entry());
+        assert_eq!(entries[0].payload, step3_point_cloud_data());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }
@@ -472,27 +444,29 @@ mod tests {
     /// 16 bytes of stereo `pcm_s16le` — 4 frames × 2 channels × 2 bytes.
     /// Stands in for a real audio chunk; the SDK only sees opaque bytes,
     /// so the exact contents don't matter beyond reproducibility.
-    fn step4_audio_log_entry() -> AudioLogEntry {
-        AudioLogEntry {
+    fn step4_audio_data() -> audio::Data {
+        audio::Data {
             data: (0..16u8).map(|i| i.wrapping_mul(17)).collect(),
         }
     }
 
-    /// Locks the prost wire bytes for the Step 4 example audio log entry.
-    /// Field 1 length-delimited: tag 0x0a, varint length 0x10 (16), then
-    /// the 16 payload bytes (`0x00, 0x11, 0x22, ..., 0xff`). Cross-language
-    /// readers MUST reproduce them.
+    /// Locks the prost wire bytes for the example audio payload. Field 1
+    /// length-delimited: tag 0x0a, varint length 0x10 (16), then the 16
+    /// payload bytes (`0x00, 0x11, 0x22, ..., 0xff`). Cross-language
+    /// readers MUST reproduce them. Same bytes whether the payload
+    /// travels on disk (Sensor Log segment) or on the wire
+    /// (`/auki/stream/0.1.0` substream).
     #[test]
-    fn audio_log_entry_serializes_to_locked_wire_bytes() {
-        let bytes = step4_audio_log_entry().encode_to_vec();
+    fn audio_data_serializes_to_locked_wire_bytes() {
+        let bytes = step4_audio_data().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(hex, "0a1000112233445566778899aabbccddeeff");
     }
 
     /// XXH3-128 of those wire bytes.
     #[test]
-    fn audio_log_entry_hash_is_locked() {
-        let bytes = step4_audio_log_entry().encode_to_vec();
+    fn audio_data_hash_is_locked() {
+        let bytes = step4_audio_data().encode_to_vec();
         assert_eq!(
             auki_hash::hash_jcs_bytes(&bytes),
             "a5864ae7018f28a5c094a714af1db62e"
@@ -500,40 +474,40 @@ mod tests {
     }
 
     #[test]
-    fn audio_log_entry_round_trips() {
-        let entry = step4_audio_log_entry();
+    fn audio_data_round_trips() {
+        let entry = step4_audio_data();
         let bytes = entry.encode_to_vec();
-        let decoded = AudioLogEntry::decode(&*bytes).expect("decode");
+        let decoded = audio::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// `LogPayload` round-trip — proves the macro-generated impl rides
     /// the same prost path as direct `Message::encode_to_vec` / `decode`.
     #[test]
-    fn audio_log_entry_log_payload_round_trips() {
+    fn audio_data_log_payload_round_trips() {
         use auki_logs::LogPayload;
-        let entry = step4_audio_log_entry();
+        let entry = step4_audio_data();
         let bytes = LogPayload::encode(&entry);
-        let decoded = <AudioLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        let decoded = <audio::Data as LogPayload>::decode(&bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// Empty chunk — proto3 default-elision: zero-byte chunk encodes to
     /// zero output bytes and decodes back to the empty form.
     #[test]
-    fn audio_log_entry_empty_data_round_trips() {
-        let entry = AudioLogEntry { data: vec![] };
+    fn audio_data_empty_round_trips() {
+        let entry = audio::Data { data: vec![] };
         let bytes = entry.encode_to_vec();
         assert_eq!(bytes.len(), 0);
-        let decoded = AudioLogEntry::decode(&*bytes).expect("decode");
+        let decoded = audio::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
-    /// End-to-end seam: open a real `auki_logs::Log<AudioLogEntry>`,
+    /// End-to-end seam: open a real `auki_logs::Log<audio::Data>`,
     /// append two entries (one populated, one empty), close, re-read,
     /// assert order + payload byte-equality.
     #[test]
-    fn audio_log_entry_segment_round_trip() {
+    fn audio_data_segment_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "segment_duration_ns": 1_000_000_000i64,
@@ -541,90 +515,19 @@ mod tests {
             "kind": "test"
         });
         {
-            let mut log: auki_logs::Log<AudioLogEntry> =
+            let mut log: auki_logs::Log<audio::Data> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
-            log.append(100, &step4_audio_log_entry()).unwrap();
-            log.append(200, &AudioLogEntry { data: vec![] }).unwrap();
+            log.append(100, &step4_audio_data()).unwrap();
+            log.append(200, &audio::Data { data: vec![] }).unwrap();
         }
-        let reader: auki_logs::LogReader<AudioLogEntry> =
-            auki_logs::Log::<AudioLogEntry>::read(dir.path()).unwrap();
+        let reader: auki_logs::LogReader<audio::Data> =
+            auki_logs::Log::<audio::Data>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
-        assert_eq!(entries[0].payload, step4_audio_log_entry());
+        assert_eq!(entries[0].payload, step4_audio_data());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
-    }
-
-    // ─── auki.audio_stream locked vectors ────────────────────────────────────
-
-    /// Same fixture data as `step4_audio_log_entry` — the disk and wire
-    /// payloads are content-identical by design (Step 2/3 + joint-
-    /// encoders precedent). The `audio_disk_wire_byte_identical` test
-    /// below locks that equality at byte level.
-    fn step_audio_frame() -> AudioFrame {
-        AudioFrame {
-            data: (0..16u8).map(|i| i.wrapping_mul(17)).collect(),
-        }
-    }
-
-    /// Locks the prost wire bytes for the example audio substream
-    /// frame. The locked hex MUST equal the hex from
-    /// `audio_log_entry_serializes_to_locked_wire_bytes` above (same
-    /// field shape, same field numbers, same fixture data) — that
-    /// equality is the symmetry assertion below. Cross-language
-    /// readers (boosterapp's libp2p stream path) pinned to these
-    /// bytes.
-    #[test]
-    fn audio_frame_serializes_to_locked_wire_bytes() {
-        let bytes = step_audio_frame().encode_to_vec();
-        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        // Identical to disk-side hex — wire/disk symmetry.
-        assert_eq!(hex, "0a1000112233445566778899aabbccddeeff");
-    }
-
-    /// XXH3-128 of those wire bytes — joins the workspace's locked
-    /// conformance set so future drift in either prost-build or
-    /// auki-hash trips the test.
-    #[test]
-    fn audio_frame_hash_is_locked() {
-        let bytes = step_audio_frame().encode_to_vec();
-        assert_eq!(
-            auki_hash::hash_jcs_bytes(&bytes),
-            "a5864ae7018f28a5c094a714af1db62e"
-        );
-    }
-
-    #[test]
-    fn audio_frame_round_trips() {
-        let frame = step_audio_frame();
-        let bytes = frame.encode_to_vec();
-        let decoded = AudioFrame::decode(&*bytes).expect("decode");
-        assert_eq!(decoded, frame);
-    }
-
-    /// Empty chunk — proto3 default-elision: zero-byte payload encodes
-    /// to zero output bytes and decodes back to the empty form.
-    #[test]
-    fn audio_frame_empty_data_round_trips() {
-        let frame = AudioFrame { data: vec![] };
-        let bytes = frame.encode_to_vec();
-        assert_eq!(bytes.len(), 0);
-        let decoded = AudioFrame::decode(&*bytes).expect("decode");
-        assert_eq!(decoded, frame);
-    }
-
-    /// **Symmetry assertion** — the disk-side `AudioLogEntry` and the
-    /// wire-side `AudioFrame` encode to byte-identical output for the
-    /// same input bytes. If this ever diverges, one of the protos
-    /// drifted and the wire/disk pact is broken. Mirrors
-    /// `joint_encoders_disk_wire_byte_identical`. See
-    /// `auki-labs-repos/references/wire-disk-proto-symmetry.md`.
-    #[test]
-    fn audio_disk_wire_byte_identical() {
-        let entry = step4_audio_log_entry();
-        let frame = step_audio_frame();
-        assert_eq!(entry.encode_to_vec(), frame.encode_to_vec());
     }
 
     // ─── auki.pose locked vectors ────────────────────────────────────────────
@@ -1000,36 +903,28 @@ mod tests {
         assert_eq!(entries[1].payload.data, Vec::<u8>::new());
     }
 
-    // ─── auki.joint_encoders + auki.joint_encoders_stream locked vectors ─────
+    // ─── auki.joint_encoders locked vectors ──────────────────────────────────
 
     /// 6-DOF arm fixture, integer-valued radians for stable wire bytes.
     /// Joint ordering is producer-defined; this fixture pins one valid
     /// ordering so cross-language readers reproduce the byte-equal
     /// encoding.
-    fn step_joint_encoders_log_entry() -> JointEncodersLogEntry {
-        JointEncodersLogEntry {
+    fn step_joint_encoders_data() -> joint_encoders::Data {
+        joint_encoders::Data {
             angles_rad: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
         }
     }
 
-    /// Same fixture data as the disk-side entry — the disk and wire
-    /// payloads are content-identical by design (Step 2/3 precedent).
-    /// The `joint_encoders_disk_wire_byte_identical` test below locks
-    /// that equality at byte level.
-    fn step_joint_encoders_frame() -> JointEncodersFrame {
-        JointEncodersFrame {
-            angles_rad: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
-        }
-    }
-
-    /// Locks the prost wire bytes for the example joint-encoders log
-    /// entry. Cross-language readers (Python via betterproto, future
+    /// Locks the prost wire bytes for the example joint-encoders
+    /// payload. Cross-language readers (Python via betterproto, future
     /// boosterapp Python) MUST produce these exact bytes for the same
     /// input. Field 1 packed-repeated float: tag 0x0a, varint length
-    /// 0x18 (24 bytes = 6 × 4), then 6 little-endian f32s.
+    /// 0x18 (24 bytes = 6 × 4), then 6 little-endian f32s. Same bytes
+    /// whether the payload travels on disk (Sensor Log segment) or on
+    /// the wire (`/auki/stream/0.1.0` substream).
     #[test]
-    fn joint_encoders_log_entry_serializes_to_locked_wire_bytes() {
-        let bytes = step_joint_encoders_log_entry().encode_to_vec();
+    fn joint_encoders_data_serializes_to_locked_wire_bytes() {
+        let bytes = step_joint_encoders_data().encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(hex, "0a18000000000000803f0000004000004040000080400000a040");
     }
@@ -1038,8 +933,8 @@ mod tests {
     /// conformance set so future drift in either prost-build or
     /// auki-hash trips the test.
     #[test]
-    fn joint_encoders_log_entry_hash_is_locked() {
-        let bytes = step_joint_encoders_log_entry().encode_to_vec();
+    fn joint_encoders_data_hash_is_locked() {
+        let bytes = step_joint_encoders_data().encode_to_vec();
         assert_eq!(
             auki_hash::hash_jcs_bytes(&bytes),
             "150a56272692540cf5d8e8e93dc74b7a"
@@ -1047,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn joint_encoders_log_entry_round_trips() {
-        let entry = step_joint_encoders_log_entry();
+    fn joint_encoders_data_round_trips() {
+        let entry = step_joint_encoders_data();
         let bytes = entry.encode_to_vec();
-        let decoded = JointEncodersLogEntry::decode(&*bytes).expect("decode");
+        let decoded = joint_encoders::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
@@ -1058,32 +953,32 @@ mod tests {
     /// the same prost path as direct `Message::encode_to_vec` /
     /// `decode` calls.
     #[test]
-    fn joint_encoders_log_entry_log_payload_round_trips() {
+    fn joint_encoders_data_log_payload_round_trips() {
         use auki_logs::LogPayload;
-        let entry = step_joint_encoders_log_entry();
+        let entry = step_joint_encoders_data();
         let bytes = LogPayload::encode(&entry);
-        let decoded = <JointEncodersLogEntry as LogPayload>::decode(&bytes).expect("decode");
+        let decoded = <joint_encoders::Data as LogPayload>::decode(&bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// Empty angle vector — proto3 default-elision: a packed-repeated
     /// float field with no elements encodes to zero bytes.
     #[test]
-    fn joint_encoders_log_entry_empty_angles_round_trips() {
-        let entry = JointEncodersLogEntry { angles_rad: vec![] };
+    fn joint_encoders_data_empty_round_trips() {
+        let entry = joint_encoders::Data { angles_rad: vec![] };
         let bytes = entry.encode_to_vec();
         assert_eq!(bytes.len(), 0);
-        let decoded = JointEncodersLogEntry::decode(&*bytes).expect("decode");
+        let decoded = joint_encoders::Data::decode(&*bytes).expect("decode");
         assert_eq!(decoded, entry);
     }
 
     /// End-to-end seam test: open a real
-    /// `auki_logs::Log<JointEncodersLogEntry>`, append two entries
+    /// `auki_logs::Log<joint_encoders::Data>`, append two entries
     /// (one populated, one empty), close, re-read, assert order +
     /// payload byte-equality. Catches any regression in the
     /// `LogPayload` macro wiring or the segment-framing path.
     #[test]
-    fn joint_encoders_log_entry_segment_round_trip() {
+    fn joint_encoders_data_segment_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = serde_json::json!({
             "segment_duration_ns": 1_000_000_000i64,
@@ -1091,57 +986,19 @@ mod tests {
             "kind": "test"
         });
         {
-            let mut log: auki_logs::Log<JointEncodersLogEntry> =
+            let mut log: auki_logs::Log<joint_encoders::Data> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
-            log.append(100, &step_joint_encoders_log_entry()).unwrap();
-            log.append(200, &JointEncodersLogEntry { angles_rad: vec![] })
+            log.append(100, &step_joint_encoders_data()).unwrap();
+            log.append(200, &joint_encoders::Data { angles_rad: vec![] })
                 .unwrap();
         }
-        let reader: auki_logs::LogReader<JointEncodersLogEntry> =
-            auki_logs::Log::<JointEncodersLogEntry>::read(dir.path()).unwrap();
+        let reader: auki_logs::LogReader<joint_encoders::Data> =
+            auki_logs::Log::<joint_encoders::Data>::read(dir.path()).unwrap();
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].timestamp_ns, 100);
-        assert_eq!(entries[0].payload, step_joint_encoders_log_entry());
+        assert_eq!(entries[0].payload, step_joint_encoders_data());
         assert_eq!(entries[1].timestamp_ns, 200);
         assert_eq!(entries[1].payload.angles_rad, Vec::<f32>::new());
-    }
-
-    /// Locks the prost wire bytes for the example joint-encoders
-    /// substream frame. The locked hex MUST equal the hex from
-    /// `joint_encoders_log_entry_serializes_to_locked_wire_bytes`
-    /// above (same field shape, same field numbers, same fixture
-    /// data) — that equality is the symmetry assertion below. Cross-
-    /// language readers (boosterapp's libp2p stream path) pinned to
-    /// these bytes.
-    #[test]
-    fn joint_encoders_frame_serializes_to_locked_wire_bytes() {
-        let bytes = step_joint_encoders_frame().encode_to_vec();
-        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-        // Identical to disk-side hex — Step 2/3 wire/disk symmetry.
-        assert_eq!(hex, "0a18000000000000803f0000004000004040000080400000a040");
-    }
-
-    #[test]
-    fn joint_encoders_frame_round_trips() {
-        let frame = step_joint_encoders_frame();
-        let bytes = frame.encode_to_vec();
-        let decoded = JointEncodersFrame::decode(&*bytes).expect("decode");
-        assert_eq!(decoded, frame);
-    }
-
-    /// **Symmetry assertion** — the disk-side `LogEntry` and the
-    /// wire-side `Frame` encode to byte-identical output for the
-    /// same input vector. If this ever diverges, one of the protos
-    /// drifted and the wire/disk pact is broken. Steps 2/3 didn't
-    /// need this test because the payloads were `bytes`-only
-    /// (trivially identical); JointEncoders has structured fields,
-    /// so the symmetry is locked explicitly. See
-    /// `auki-labs-repos/references/wire-disk-proto-symmetry.md`.
-    #[test]
-    fn joint_encoders_disk_wire_byte_identical() {
-        let entry = step_joint_encoders_log_entry();
-        let frame = step_joint_encoders_frame();
-        assert_eq!(entry.encode_to_vec(), frame.encode_to_vec());
     }
 }

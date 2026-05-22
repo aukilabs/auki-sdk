@@ -1,5 +1,7 @@
 # Stream Naming Cleanup Implementation Plan
 
+> **⚠️ SUPERSEDED 2026-05-22 by [#176](https://github.com/aukilabs/auki-sdk/issues/176).** This plan proposed converging the SDK's payload vocabulary on `*Frame` names (`AudioFrame`, `PointCloudFrame`, `JointEncodersFrame`, etc.). #176 took the opposite direction: collapse the three disk/wire mirror pairs to a single `Data` message per module (`auki.audio.Data`, `auki.point_cloud.Data`, `auki.joint_encoders.Data`), used on both the Sensor Log segment and the `/auki/stream/0.1.0` substream. The structured payloads with semantically-rich names (`CameraFrame`, `DetectionFrame`, `SpatialTransform`, `TimeTransformEntry`) keep their names. Do not execute the steps below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rename the SDK stream, log-payload, and sensor registry vocabulary to `CameraFrame`, `DetectionFrame`, and `Camera` with no compatibility aliases or legacy tags.

@@ -35,9 +35,9 @@ use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::stream_protocol::{
-    AudioFrame as RustAudioFrame, CameraFrame as RustCameraFrame,
-    JointEncodersFrame as RustJointEncodersFrame, PointCloudFrame as RustPointCloudFrame,
-    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest,
+    CameraFrame as RustCameraFrame, StreamManifest as RustStreamManifest,
+    StreamRequest as RustStreamRequest, audio::Data as RustAudioFrame,
+    joint_encoders::Data as RustJointEncodersFrame, point_cloud::Data as RustPointCloudFrame,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};

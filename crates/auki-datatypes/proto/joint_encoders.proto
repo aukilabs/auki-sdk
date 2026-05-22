@@ -2,37 +2,31 @@ syntax = "proto3";
 
 package auki.joint_encoders;
 
-// Per-frame joint-encoder log payload — segment payload for a Sensor
-// Log whose registry entry has body kind `joint_encoders`. The frame's
-// timestamp rides in the auki-logs framing's `timestamp_ns`, not here.
+// Joint-encoder payload — used on both disk (Sensor Log segment payload
+// for a log whose registry entry has body kind `joint_encoders`) and on
+// the wire (the libp2p `/auki/stream/0.1.0` substream payload). One
+// type, one byte shape; the framing's `timestamp_ns` carries the
+// sample timestamp on both paths.
 //
 // Joint angles are encoder readings — measurements of joint positions,
 // before any kinematic interpretation. Forward kinematics (joint space
 // → cartesian TF) is a consumer-side derivation; the URDF that drives
 // it lives with the consumer (Park, future analyses), not with the
-// producer. Mirrors the layering of `auki.point_cloud`,
+// producer. Mirrors the layering of `auki.point_cloud` and
 // `auki.audio`: producer ships raw measurements + just enough
 // deserialization metadata (`joint_count` on the registry body) for
 // the consumer to read the bytes correctly.
 //
-// Joint ordering is producer-defined and immutable per log; the
-// registry entry's `joint_count` pins vector length. Mapping joint
-// indices to URDF links is a consumer-side concern — the URDF lives
-// with the consumer that interprets these readings, not the producer
-// that emits them.
-//
-// Symmetric with the wire — same `repeated float angles_rad = 1`
-// shape on disk and on `/auki/stream/0.1.0`'s `JointEncodersFrame`
-// (in `auki.joint_encoders_stream`). The two messages exist in
-// different proto packages purely so the libp2p substream payload and
-// the disk log entry have separate Rust types; the bytes inside are
-// identical (locked by the `joint_encoders_disk_wire_byte_identical`
-// test in `auki-datatypes`).
+// Joint ordering is producer-defined and immutable per stream/log; the
+// SensorRegistryEntry's `JointEncoders { joint_count }` body — pinned
+// by `(sensor_id, sensor_hash)` — pins vector length and is the single
+// source of interpretation. Mapping joint indices to URDF links is a
+// consumer-side concern.
 //
 // Field number ledger (never reuse, never renumber):
-//   JointEncodersLogEntry.angles_rad = 1
+//   Data.angles_rad = 1
 
-message JointEncodersLogEntry {
+message Data {
   // Joint angle readings in radians, indexed in the producer's emit
   // order. Length MUST equal the registry entry's `joint_count`.
   repeated float angles_rad = 1;

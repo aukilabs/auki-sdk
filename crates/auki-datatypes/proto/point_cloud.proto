@@ -2,24 +2,24 @@ syntax = "proto3";
 
 package auki.point_cloud;
 
-// Per-frame point-cloud log payload — the segment payload for a Sensor
-// Log whose registry entry has body kind `point_cloud`. The frame
-// timestamp rides in the auki-logs framing's `timestamp_ns`, not here.
+// Point-cloud payload — used on both disk (Sensor Log segment payload
+// for a log whose registry entry has body kind `point_cloud`) and on
+// the wire (the libp2p `/auki/stream/0.1.0` substream payload, raw CDR
+// `sensor_msgs/PointCloud2` per Dagaz D2). One type, one byte shape;
+// the framing's `timestamp_ns` carries the frame timestamp on both
+// paths.
 //
-// Step 3 decision (2026-05-08): opaque-bytes-only. Layout — the
-// `width × height × is_dense` ROS-shaped fields that lived on the
-// pre-migration `auki_registry::PointCloudLogEntry` are gone; the byte
-// stream is the single thing the SDK persists per frame. Interpretation
+// Opaque-bytes-only (Step 3, 2026-05-08): the byte stream is the single
+// thing the SDK persists / transmits per frame. Interpretation
 // (`fields`, `point_step`, `is_bigendian`, `frame_id`) comes from the
-// SensorRegistryEntry's `PointCloud` body that the log's manifest pins
-// via `(sensor_id, sensor_hash)`. Symmetric with the wire — same
-// `bytes`-only shape on disk and on `/auki/stream/0.1.0`'s
-// `PointCloudFrame`. Resolves the on-disk-vs-wire drift in
-// ../parking_lot.md.
+// SensorRegistryEntry's `PointCloud` body that the log's manifest or
+// stream's accept pins via `(sensor_id, sensor_hash)`. Per-frame layout
+// (`row_step`, `height`, `width`, `is_dense`) rides inside the CDR
+// payload when consumers parse it on their side.
 //
 // Field number ledger (never reuse, never renumber):
-//   PointCloudLogEntry.data = 1
+//   Data.data = 1
 
-message PointCloudLogEntry {
+message Data {
   bytes data = 1;
 }

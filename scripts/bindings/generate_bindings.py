@@ -149,6 +149,7 @@ def plan(root: Path, package_name: str, language: str) -> dict:
         "binding_language": binding_language,
         "generator": generator,
         "generator_config": generator_config,
+        "binding_config": section,
         "crate_assets_dir": rel(root, crate_assets_dir),
         "output_dir": rel(root, output_dir),
         "template_files": template_files,
@@ -216,6 +217,34 @@ def validate_features(metadata: dict, features: list[str]) -> None:
     missing = [feature for feature in features if feature not in metadata["features"]]
     if missing:
         raise BindingError(f"{metadata['package_name']} is missing binding generator features: {', '.join(missing)}")
+
+
+def binding_build_features(binding_plan: dict) -> list[str]:
+    binding_config = binding_plan.get("binding_config", {})
+    features = binding_config.get("build_features", [])
+    if not isinstance(features, list):
+        raise BindingError("build_features must be a list")
+    metadata = binding_plan["metadata"]
+    validate_features(metadata, features)
+    return features
+
+
+def cargo_build_command(
+    package_name: str,
+    *,
+    target: str | None = None,
+    release: bool = False,
+    features: list[str] | None = None,
+) -> list[str]:
+    cmd = ["cargo", "build"]
+    if release:
+        cmd.append("--release")
+    cmd.extend(["-p", package_name])
+    if target is not None:
+        cmd.extend(["--target", target])
+    if features:
+        cmd.extend(["--features", ",".join(features)])
+    return cmd
 
 
 def uniffi_generate(root: Path, package_name: str, language: str, out_dir: Path, library: Path, release: bool = False) -> None:
@@ -402,10 +431,11 @@ def generate_swift(root: Path, package_name: str) -> None:
     generated_dir = package_dir / "generated"
     lib_file = dynamic_lib_file(lib_name)
     library = root / "target" / "debug" / lib_file
+    build_features = binding_build_features(binding_plan)
 
     package_dir.mkdir(parents=True, exist_ok=True)
     render_templates(root, binding_plan, package_dir)
-    run(["cargo", "build", "-p", package_name], cwd=root)
+    run(cargo_build_command(package_name, features=build_features), cwd=root)
     if not library.exists():
         raise BindingError(f"expected UniFFI library not found: {library}")
 
@@ -435,6 +465,7 @@ def generate_swift_xcframework(root: Path, package_name: str) -> None:
     package_dir = root / binding_plan["output_dir"]
     generated_dir = package_dir / "generated"
     headers_dir = generated_dir / "headers"
+    build_features = binding_build_features(binding_plan)
 
     package_dir.mkdir(parents=True, exist_ok=True)
     render_templates(root, binding_plan, package_dir)
@@ -450,7 +481,15 @@ def generate_swift_xcframework(root: Path, package_name: str) -> None:
         "x86_64-apple-darwin",
     ]
     for target in targets:
-        run(["cargo", "build", "--release", "-p", package_name, "--target", target], cwd=root)
+        run(
+            cargo_build_command(
+                package_name,
+                target=target,
+                release=True,
+                features=build_features,
+            ),
+            cwd=root,
+        )
 
     device_lib = root / "target/aarch64-apple-ios/release" / static_lib_file(lib_name)
     sim_fat = generated_dir / f"lib{lib_name}-sim.a"

@@ -37,6 +37,12 @@ Use when the child must be **a separate, independent keypair** that the parent v
 
 ## API
 
+The public Rust API remains the canonical crate surface. Other Rust crates
+should depend on these direct Rust types and functions, normally with
+`default-features = false` so they do not compile binding-generator adapters.
+Generated bindings opt into the adapter features and expose language-friendly
+byte vectors, objects, and storage conventions without changing Rust callers.
+
 ```rust
 // Generate / load
 pub fn Wallet::new() -> Wallet                 // fresh random
@@ -63,6 +69,25 @@ pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>
 ```
 
 Public types are serde-serializable. Bytes fields use `serde_bytes` so JSON and CBOR encodings stay compact.
+
+## Multiplatform binding structure
+
+`auki-identity` follows the workspace binding-generation standard from
+[`auki-uniffi-test`](../auki-uniffi-test):
+
+- [`src/core.rs`](src/core.rs) owns the binding-free Rust wallet primitive and
+  is re-exported from [`src/lib.rs`](src/lib.rs) for source compatibility.
+- [`src/ffi.rs`](src/ffi.rs) owns the native UniFFI surface for Swift/Python.
+  It wraps `Wallet` as a UniFFI object, maps byte arrays to `Vec<u8>`, exposes
+  typed binding errors, and includes `load_or_mint_seed(path: String)`.
+- [`src/wasm.rs`](src/wasm.rs) owns the JavaScript/WebAssembly surface for
+  wasm-bindgen. It exposes the same wallet operations with JavaScript-friendly
+  names and exposes `loadOrMintSeed(storageKey)`.
+
+The native binding path uses `load_or_mint_seed(path)` against the filesystem.
+The web binding path has no filesystem, so `loadOrMintSeed(storageKey)` reads
+a 64-character hex seed from browser `localStorage`, validates that it decodes
+to exactly 32 bytes, or mints and stores a fresh seed under that key.
 
 ## load_or_mint_seed
 
@@ -105,9 +130,9 @@ The function takes any `&Path`; the convention — *not baked into the signature
 
 ## WASM compatibility
 
-The crate is designed to compile to WASM for in-browser use (Console). The wallet primitive — keypair generation, signing, verification, child derivation, creation certs — uses no `std::fs` and no platform syscalls. Randomness comes from `getrandom`, which works in the browser via downstream `js-sys` feature when consumers enable it. `ed25519-dalek` 2.x is WASM-friendly.
+The crate is designed to compile to WASM for in-browser use (Console). The wallet primitive — keypair generation, signing, verification, child derivation, creation certs — uses no `std::fs` and no platform syscalls. WASM builds use the crate's `wasm` feature, which enables `getrandom`'s JavaScript support for browser randomness. `ed25519-dalek` 2.x is WASM-friendly.
 
-The single exception is [`load_or_mint_seed`](#load_or_mint_seed), which touches the filesystem and is therefore gated `#[cfg(not(target_arch = "wasm32"))]`. WASM builds compile cleanly without it; browser consumers manage seed material via Console's in-browser keystore instead.
+The Rust [`load_or_mint_seed`](#load_or_mint_seed) function touches the filesystem and is therefore gated `#[cfg(not(target_arch = "wasm32"))]`. The generated JavaScript/WASM binding exposes the same operation name as `loadOrMintSeed(storageKey)`, backed by browser `localStorage` instead of a path.
 
 ## Cross-language conformance
 

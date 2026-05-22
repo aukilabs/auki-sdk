@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
 
 [dependencies]
-auki-identity = { path = "../auki-identity" }
+auki-identity = { path = "../auki-identity", default-features = false }
 auki-hash = { path = "../auki-hash" }
 auki-jcs = { path = "../auki-jcs" }
 # `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime

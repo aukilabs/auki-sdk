@@ -33,7 +33,7 @@ app_instance = ["dep:mac_address"]
 discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio", "dep:percent-encoding"]
 
 [dependencies]
-auki-identity = { path = "../auki-identity" }
+auki-identity = { path = "../auki-identity", default-features = false }
 libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }

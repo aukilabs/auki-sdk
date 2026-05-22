@@ -4,8 +4,12 @@ Wallet primitive for the SDK. Spec: this crate's [outer `README.md`](../README.m
 
 ## What's here
 
-- [`lib.rs`](lib.rs) — wallet primitive (ed25519 keypair, sign/verify, child derivation, creation certs).
+- [`lib.rs`](lib.rs) — crate wiring; re-exports the stable Rust API from `core` and compiles private binding adapters behind feature gates.
+- [`core.rs`](core.rs) — wallet primitive (ed25519 keypair, sign/verify, child derivation, creation certs). Binding-free.
 - [`seed.rs`](seed.rs) — `load_or_mint_seed` filesystem helper. Native-only (`#[cfg(not(target_arch = "wasm32"))]`); the rest of the crate stays WASM-clean.
+- [`ffi.rs`](ffi.rs) — native UniFFI adapter for Swift/Python. Private to binding generation.
+- [`wasm.rs`](wasm.rs) — wasm-bindgen adapter for JavaScript/WebAssembly. Private to binding generation.
+- [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) — crate-local UniFFI CLI entry point used by the root binding recipes.
 
 ## Public types
 
@@ -66,6 +70,28 @@ pub fn verify(pubkey: &PublicKey, msg: &[u8], sig: &Signature) -> Result<(), Ver
 pub fn load_or_mint_seed(path: &Path) -> Result<[u8; 32], SeedError>;
 ```
 
+Rust crates should keep using this root API, normally depending on
+`auki-identity` with `default-features = false` so they do not compile
+binding-generator adapters. The generated Swift/Python/JS surfaces are adapter
+APIs that use language-friendly byte vectors and storage conventions without
+changing the Rust surface.
+
+## Binding surfaces
+
+Native UniFFI (`ffi.rs`) exposes:
+
+- `Wallet.new()` / `Wallet.from_seed(seed)` plus `seed`, `public_key`, `id`, `sign`, `sign_canonical_json`, `derive_child`, and `issue_creation_cert`.
+- `verify(pubkey, msg, signature)` and `verify_creation_cert(cert)`.
+- `load_or_mint_seed(path)` using the native filesystem helper.
+
+JavaScript/WASM (`wasm.rs`) exposes the same wallet operations with JS-style
+names (`fromSeed`, `publicKey`, `signCanonicalJson`, `deriveChild`,
+`issueCreationCert`) and exposes `loadOrMintSeed(storageKey)`.
+
+The wasm seed helper reads a 64-character hex seed from browser `localStorage`,
+validates that it decodes to exactly 32 bytes, or mints and stores a fresh
+seed under the caller-supplied key.
+
 ## How `derive_child` works
 
 ```text
@@ -105,9 +131,12 @@ created_at_ns_le64 (8 bytes)
 
 Verifiers reproduce the same bytes locally and check the ed25519 signature against the parent pubkey. Cross-language: same recipe, same bytes, same ed25519 verification.
 
-## Tests (31 total — 22 wallet + 9 seed)
+## Tests
 
-### Wallet (`lib.rs`)
+Current verification covers the original Rust behavior, native binding adapter
+smoke paths, and root API compatibility.
+
+### Wallet (`core.rs`)
 
 | Test | Asserts |
 |------|---------|
@@ -148,6 +177,16 @@ Verifiers reproduce the same bytes locally and check the ed25519 signature again
 | `minted_file_has_mode_0600` | Unix-only; persisted file has owner-r/w-only mode |
 | `minted_seed_drives_a_deterministic_wallet` | `Wallet::from_seed(load_or_mint_seed(p))` is stable across calls |
 
+### Binding adapters
+
+| Test | Asserts |
+|------|---------|
+| `binding_wallet_sign_verify_round_trip` | Native UniFFI adapter wallet signs and verifies through binding byte-vector types |
+| `binding_rejects_bad_seed_length` | Native binding constructor validates 32-byte seeds |
+| `binding_load_or_mint_seed_uses_native_seed_helper` | Native binding seed helper persists and reloads the same seed |
+| `rust_root_api_remains_source_compatible` | Existing Rust root imports still work after the adapter split |
+| `rust_root_still_exposes_creation_cert_and_native_seed_helper` | `CreationCert` and `load_or_mint_seed(&Path)` remain available at crate root |
+
 ## Dependencies
 
 - `ed25519-dalek` (2.x) — ed25519 implementation. WASM-friendly; pinned with the `rand_core` feature for `SigningKey::generate`.
@@ -156,6 +195,8 @@ Verifiers reproduce the same bytes locally and check the ed25519 signature again
 - `serde` + `serde_bytes` — serialization for the public types.
 - `serde_json` — `serde_json::Value` appears in the public signature of `sign_canonical_json`.
 - `rand_core` — the OS RNG (`OsRng`) that feeds `Wallet::new()` and `load_or_mint_seed`.
+- `uniffi` + `thiserror` — optional native binding surface dependencies behind `uniffi`.
+- `wasm-bindgen`, `js-sys`, `web-sys`, `getrandom/js` — optional JavaScript/WASM binding dependencies behind `wasm`.
 - `tempfile` (dev-only) — test isolation for seed-persistence tests.
 
 ## Consumers in this workspace

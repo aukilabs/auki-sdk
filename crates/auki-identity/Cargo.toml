@@ -7,14 +7,50 @@ repository.workspace = true
 authors.workspace = true
 description = "Wallet primitive for the Auki SDK — ed25519 keypairs, signing, deterministic child derivation, and signed creation certs. WASM-friendly."
 
+[lib]
+name = "auki_identity"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = [
+    "dep:uniffi",
+    "dep:thiserror",
+]
+cli = ["uniffi", "uniffi/cli"]
+wasm = [
+    "dep:getrandom",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:web-sys",
+]
+
 [dependencies]
 auki-hash = { path = "../auki-hash" }
 auki-jcs = { path = "../auki-jcs" }
 ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "zeroize", "rand_core"] }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+js-sys = { version = "0.3", optional = true }
 rand_core = { version = "0.6", features = ["std", "getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
+wasm-bindgen = { version = "0.2", optional = true }
+web-sys = { version = "0.3", features = ["Storage", "Window"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = { version = "0.31", optional = true }
+thiserror = { version = "2", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]
 
 [dev-dependencies]
 tempfile = "3"

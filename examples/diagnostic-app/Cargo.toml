@@ -9,7 +9,7 @@ description = "Native diagnostic example app for Auki networking, clustering, an
 
 [dependencies]
 auki-domain = { path = "../../crates/auki-domain" }
-auki-identity = { path = "../../crates/auki-identity" }
+auki-identity = { path = "../../crates/auki-identity", default-features = false }
 auki-network = { path = "../../crates/auki-network", features = ["swarm", "discovery_client", "app_instance"] }
 eframe = "0.30"
 egui = "0.30"

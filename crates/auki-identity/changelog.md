@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, 10:45 HKT, 2026
+
+**Multiplatform binding structure added without changing the public Rust API.** The existing wallet implementation moved to [`src/core.rs`](src/core.rs), and [`src/lib.rs`](src/lib.rs) now re-exports it so Rust consumers keep using `auki_identity::{Wallet, PublicKey, WalletId, Signature, CreationCert, VerifyError, verify, load_or_mint_seed}` unchanged. Rust-only workspace dependents now opt out of default binding features with `default-features = false`, while generation uses explicit adapter features. New private adapters follow the [`auki-uniffi-test`](../auki-uniffi-test) standard: [`src/ffi.rs`](src/ffi.rs) exposes a UniFFI Swift/Python surface with binding-friendly byte vectors, typed binding errors, wallet object methods, signature verification, creation-cert verification, canonical-JSON signing, and native `load_or_mint_seed(path)`; [`src/wasm.rs`](src/wasm.rs) exposes the JavaScript/WebAssembly surface via wasm-bindgen, including `loadOrMintSeed(storageKey)` backed by browser `localStorage` because web targets have no filesystem. Cargo now declares `staticlib`/`cdylib`/`rlib`, separate `uniffi`/`cli`/`wasm` features, the crate-local [`src/bin/uniffi-bindgen.rs`](src/bin/uniffi-bindgen.rs), and optional binding dependencies. Added [`tests/surface.rs`](tests/surface.rs) to pin Rust root API compatibility, plus native adapter smoke tests in `ffi.rs`; added [`src/sprint.md`](src/sprint.md) to satisfy the crate folder convention.
+
+---
+
 ### Nils's codex · May 15, 11:40 HKT, 2026
 
 **Documentation refresh: stable peer-key prose now points at the current `PeerIdentity` / `ClusterManager` path.** The README no longer describes static cluster-doc peer pinning as the consumer of `load_or_mint_seed`; it now explains that a persisted wallet seed lets `auki-network::PeerIdentity::from_wallet` regenerate the same peer id, which `auki-domain::ClusterManager` advertises to Discovery and cluster members across daemon restarts. No code changed in this crate.

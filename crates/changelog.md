@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-network-browser-wasm` removed from the workspace.** The old browser/WASM networking probe crate was deleted because it was stale and not working; workspace membership and current parking-lot summaries no longer point at it. Historical changelog and Superpowers plan entries remain as decision history.
+
+### Nils's codex · May 22, HKT, 2026
+
+**[`auki-identity`](auki-identity/changelog.md) — multiplatform binding adapters added while preserving the Rust API.** Wallet logic now lives in `core.rs` and is re-exported unchanged from the crate root; Rust-only workspace dependents opt out of binding features, while private UniFFI and wasm-bindgen adapters expose Swift/Python/JavaScript-friendly surfaces, including native path-backed `load_or_mint_seed` and wasm `localStorage`-backed `loadOrMintSeed`.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — binding-generation standard guide added.** The crate README now explains the core/adapter split, Cargo feature contract, crate-local UniFFI CLI helper, root `just` recipes, and checklist for making another Rust crate generate Swift, Python, and JavaScript/WebAssembly bindings.
 
 ### Nils's codex · May 22, HKT, 2026

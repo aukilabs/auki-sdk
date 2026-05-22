@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**JavaScript `auki-identity` bindings generated and smoke-tested.** The generic JavaScript generation script now emits an identity-specific smoke file that exercises wallet, signing, deterministic derivation, canonical JSON signing, creation-cert verification, and the web seed-persistence export. See [`bindings/changelog.md`](bindings/changelog.md) for binding-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**Stale `auki-network-browser-wasm` probe crate removed.** The old browser/WASM networking probe is no longer a workspace member, and current parking-lot summaries no longer link to the deleted crate. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
+**`auki-identity` now follows the multiplatform crate structure without changing its Rust API.** The wallet primitive is re-exported unchanged from a new core module, Rust-only workspace dependents opt out of binding features, and private UniFFI/wasm-bindgen adapters expose generated Swift/Python/JavaScript bindings with seed persistence on all binding targets. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-uniffi-test` now documents the binding-generation standard.** The crate README is now an agent-facing guide to the core/adapter split, Cargo features, crate-local UniFFI bindgen helper, root `just` recipes, and checklist for creating or updating crates that generate Swift, Python, and JavaScript/WebAssembly bindings. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

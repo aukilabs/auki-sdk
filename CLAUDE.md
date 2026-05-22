@@ -6,74 +6,18 @@ This file is for AI agents reading this repo.
 
 This is the design foundation for the Auki SDK — a human and AI readable wiki and task repository that defines how the network works, what it is made of, and what needs to be built.
 
-## Core concept
-
-The SDK has two core operations: `convert_time` (agree on time) and `convert_pose` (communicate across coordinate systems). Everything else — clusters, maps, detectors, credits — is infrastructure that produces the transforms these two operations consume. When reading or writing any document in this repo, keep this framing in mind.
-
-## Folder convention
-
-Every component follows the same structure:
-
-```
-component/
-  README.md          ← The aspirational spec
-  parking_lot.md     ← Open questions
-  changelog.md       ← Change history
-  src/
-    README.md        ← What is actually implemented today
-    sprint.md        ← Current work and next steps
-    *.rs             ← Source code
-```
-
-When reading a component, check all three layers: spec (README), status (src/README), plan (src/sprint.md).
-
 ## Root files
 
-- `README.md` — start here. Overview of the network, repo structure, and component index.
-- `CONTRIBUTING.md` — folder convention, changelog format, parking lot workflow.
+
+- `VISION.md` — The aspirational spec — what this project should be
+- `README.md` — start here. Overview of repo and crates.
+- `CONTRIBUTING.md` — folder convention, project management and git workflows.
 - `CLAUDE.md` — this file. Rules for AI agents.
-- `Glossary.md` — definitions of all key terms.
-- `parking_lot.md` — root-level open questions and cross-cutting design decisions.
-- `changelog.md` — the global timeline of all changes across the repo.
+- `GLOSSARY.md` — definitions of all key terms.
+
 
 ## Rules
 
-### Hierarchical propagation
-
-Both `parking_lot.md` and `changelog.md` exist at every level of the folder hierarchy. They follow the same propagation pattern:
-
-1. **Start at the leaf.** Make your change in the `parking_lot.md` or `changelog.md` in the same folder as the file you changed.
-2. **Propagate upward.** Update the parent folder's corresponding file — a structured summary for parking lots, a one-liner for changelogs.
-3. **Repeat until root.** Continue propagating up through every intermediate folder until you reach the root-level file.
-
-Do this immediately after every change. Do not batch.
-
-### parking_lot.md
-
-- **Leaf parking lots** contain the full detail of each open question.
-- **Parent parking lots** are structured summaries — they link to each subfolder's parking lot with item counts and one-line descriptions.
-- Append questions to the parking lot in the folder where the question belongs. If the question is cross-cutting, use the root-level `parking_lot.md`.
-
-### changelog.md
-
-- **Append-only.** Never remove or edit existing entries.
-- **Leaf changelogs** contain the detailed entry. See `CONTRIBUTING.md` for the format.
-- **Parent changelogs** contain a one-liner summary of the change.
-- The root `changelog.md` is the global timeline — every change in the repo, no matter how deep, should appear there as a one-liner.
-
-### Resolving parking lot items
-
-When a human answers a parking lot question, they will write their answer inline beneath the item. The agent should then, **immediately and in the same turn:**
-
-1. **Remove the answered item** from the parking lot (this is the one exception to append-only). Delete it entirely — do not tombstone, do not leave a "Resolved" marker. The parking lot is for live open questions only; audit history belongs in the changelog and in git.
-2. **Propagate the answer everywhere it touches** — Notion pages, repo READMEs, downstream parking-lot items, sprint files, code comments, any other doc where the open question was visible. Do not leave the propagation as a future task; stale "Propagate: …" placeholders defeat the purpose of the parking lot.
-3. **Update parent parking-lot summaries** so they no longer list the resolved item.
-4. **Add a changelog entry** at the appropriate level capturing the decision + propagation, per the changelog rules above.
-
-Engineering work that follows from the answer (e.g., a deletion PR, a consumer notification, a new question the resolution surfaced) belongs in `src/sprint.md` or as a fresh parking-lot entry — not as a propagation placeholder.
-
-**Caveat:** if propagation is genuinely large (touches more than ~5 documents, or requires judgment the agent shouldn't unilaterally make), flag scope to the human and confirm before continuing — but the default is propagate immediately.
-
 ### When in doubt, surface it
 
-Do not resolve ambiguities unilaterally. Add them to the parking lot and flag them to the developer.
+Do not resolve ambiguities unilaterally. Add them to the github project issues as a question and flag them to the developer.

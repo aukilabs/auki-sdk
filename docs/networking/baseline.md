@@ -126,7 +126,7 @@ Implementations MUST define a local maximum frame body size for each supported
 baseline protocol.
 
 If a frame exceeds a local frame limit and a structured path failure can be
-returned safely, the receiver SHOULD use `message.payload_too_large`. If the
+returned safely, the receiver MUST use `message.payload_too_large`. If the
 receiver cannot decode enough state to return a structured failure, or cannot
 safely continue the stream, it SHOULD close or reset the stream and report
 `transport.failed` locally.
@@ -1175,25 +1175,36 @@ offers for that relationship.
 
 #### Failure Mapping
 
-A receiver SHOULD fail a malformed v1 handshake message with
-`handshake.invalid_message`. This includes invalid JSON, unsupported `type`, a
-missing or malformed `supported_lifecycle_versions` field, a malformed
-`declared_domains` field, a malformed `authorization_material` field, or a
-malformed `offer_catalog` field.
+A receiver that observes a malformed handshake frame, body, or message schema
+MUST use `handshake.invalid_message` when the failure can be attributed to the
+handshake and enough protocol state has been decoded. This includes invalid
+JSON, unsupported `type`, a missing or malformed
+`supported_lifecycle_versions` field, a malformed `declared_domains` field, a
+malformed `authorization_material` field, or a malformed `offer_catalog` field.
+If framing or transport fails before the receiver can decode enough state to
+attribute the failure safely, the receiver SHOULD use `transport.failed`
+locally.
 
-A receiver SHOULD fail a handshake that omits `peer_binding` with
+A receiver MUST fail a handshake that omits `peer_binding` with
 `identity.missing_peer_binding`.
 
-A receiver SHOULD fail missing authorization material required by local policy
+A receiver MUST fail missing authorization material required by local policy
 with `handshake.missing_required_material` or `authorization.peer_rejected`.
 
-A receiver SHOULD fail a declared-domain object whose `domain_id` does not
-match its domain declaration with `domain.id_mismatch`.
+A receiver MUST fail a peer rejected by local peer authorization policy with
+`authorization.peer_rejected`.
 
-A receiver SHOULD fail a declared-domain object that requires but omits a
+A receiver MUST fail a declared-domain object whose `domain_id` does not match
+its domain declaration with `domain.id_mismatch`.
+
+A receiver MUST fail a declared-domain object that requires but omits a
 delegation with `domain.missing_delegation`.
 
-A receiver SHOULD fail a handshake whose `supported_lifecycle_versions` omits
+A receiver MUST fail malformed declared-domain authority material with the
+identity or domain failure code defined by `RFC-0005`, `RFC-0007`, or
+`RFC-0008`.
+
+A receiver MUST fail a handshake whose `supported_lifecycle_versions` omits
 `auki.cluster_lifecycle.v1` with `protocol.unsupported_version`.
 
 #### Lifecycle Examples, Explanatory
@@ -1629,9 +1640,9 @@ entry, but it cannot be locally content-verified from the reference alone.
 
 A malformed registry reference, invalid `hash`, invalid `canonical_json`, or
 `canonical_json` hash mismatch is a malformed-container failure. In an offer
-catalog, receivers SHOULD use `offer.invalid_offer` for an individual malformed
+catalog, receivers MUST use `offer.invalid_offer` for an individual malformed
 offer or `offer.invalid_catalog_response` when the response cannot otherwise be
-used. In a spatial message envelope, receivers SHOULD use
+used. In a spatial message envelope, receivers MUST use
 `message.invalid_envelope`.
 
 Offer kinds and application profiles define which registry references are
@@ -1662,20 +1673,23 @@ Subscribe attempts.
 
 #### Failure Mapping
 
-A responder SHOULD fail malformed catalog requests with
-`offer.invalid_catalog_request`.
+A responder that returns a structured failure for a malformed catalog request
+MUST use `offer.invalid_catalog_request`.
 
 Offer catalog responders and receivers MUST apply `RFC-0026`. Domain-scope
-failures use `offer.domain_not_served`.
+failures use `offer.domain_not_served`. A diagnostic for an unserved requested
+domain MUST use `offer.domain_not_served`.
 
-A receiver SHOULD fail malformed catalog responses with
-`offer.invalid_catalog_response`.
+A receiver that reports a malformed catalog response MUST use
+`offer.invalid_catalog_response`. A catalog response with a duplicate
+`(domain_id, offer_id)` tuple is malformed.
 
-A receiver SHOULD ignore individual malformed offers with `offer.invalid_offer`
-when the rest of the catalog is usable.
+A receiver that ignores an individual malformed offer while using the rest of
+the catalog MUST use `offer.invalid_offer` for the per-offer diagnostic.
 
-A responder SHOULD use `offer.catalog_unavailable` when it cannot produce a
-catalog because of a local recoverable problem.
+A responder that returns a structured failure because it cannot produce a
+catalog due to a local recoverable problem MUST use
+`offer.catalog_unavailable`.
 
 ### RFC-0025: Offer Domain Scope And Authority
 
@@ -1884,15 +1898,18 @@ when it is absent.
 
 #### Failure Mapping
 
-A receiver SHOULD fail malformed envelopes with `message.invalid_envelope`.
+A receiver that reports a malformed envelope MUST use
+`message.invalid_envelope`.
 
-A receiver SHOULD fail malformed payloads with `message.invalid_payload`.
+A receiver that reports a malformed payload MUST use
+`message.invalid_payload`.
 
-A receiver SHOULD fail oversized payloads or envelopes with
+A receiver that reports an oversized payload or envelope MUST use
 `message.payload_too_large`. Concrete size units and enforcement points are
 defined in `RFC-0028`.
 
-A receiver MAY report observed sequence gaps with `message.sequence_gap`.
+A receiver MAY report observed sequence gaps. When it does, it MUST use
+`message.sequence_gap`.
 
 A receiver SHOULD use the existing offer failure-code family when the envelope
 or request targets an unknown, unauthorized, unsupported, unavailable, or stale
@@ -1998,12 +2015,13 @@ production or acceptance limits, the implementation MUST enforce those limits
 too.
 
 If a Get response, Subscribe data message, or received envelope exceeds an
-applicable requester or local size limit, the failing side SHOULD report
+applicable requester or local size limit, the failing side MUST report
 `message.payload_too_large` when a structured error, reject, or end message can
 be sent. If the path cannot return structured failure because transport or
 framing failed first, `transport.failed` MAY be used.
 
-Get and Subscribe failure mapping SHOULD reuse the offer failure-code family:
+Get and Subscribe structured offer-path failures MUST use the offer
+failure-code family:
 
 - `offer.unknown_offer` when the requested `(domain_id, offer_id)` is not known;
 - `offer.domain_not_served` when the offer fails the served-domain part of the
@@ -2017,7 +2035,7 @@ Get and Subscribe failure mapping SHOULD reuse the offer failure-code family:
 - `offer.temporarily_unavailable` when the offer is known but unavailable;
 - `offer.stale` when local freshness policy rejects the offer.
 
-Structured message failures SHOULD use the message failure-code family from
+Structured message failures MUST use the message failure-code family from
 `RFC-0027`. Transport or framing failures SHOULD use `transport.failed` when a
 structured response, reject, or end message cannot be returned.
 
@@ -2138,16 +2156,16 @@ registry references, and any additional compatibility rules.
 
 #### Failure Mapping
 
-A responder SHOULD fail malformed Get requests with `get.invalid_request`.
+A responder that returns a structured failure for a malformed Get request MUST
+use `get.invalid_request`.
 
-Get SHOULD use the common offer-path failure mapping defined in
-`RFC-0028`. Common offer-path failures, including
-`offer.unsupported_payload_type`, SHOULD be returned as a failed Get response
-when a structured response can be returned.
+Get uses the common offer-path failure mapping defined in `RFC-0028`. Common
+offer-path failures, including `offer.unsupported_payload_type`, MUST be
+returned as a failed Get response when a structured response can be returned.
 
-A requester SHOULD use the message failure-code family from `RFC-0027` when a
-Get response includes `message` but the envelope, payload, or payload size is
-invalid.
+A requester that reports a Get response with an invalid envelope, invalid
+payload, unexpected selected payload type, or oversized payload MUST use the
+message failure-code family from `RFC-0027`.
 
 ### RFC-0030: Subscribe
 
@@ -2349,17 +2367,18 @@ still exists and `RFC-0026` still permits Subscribe.
 
 #### Failure Mapping
 
-A responder SHOULD fail malformed Subscribe requests with
-`subscribe.invalid_request`.
+A responder that returns a structured failure for a malformed Subscribe request
+MUST use `subscribe.invalid_request`.
 
-Subscribe SHOULD use the common offer-path failure mapping defined in
-`RFC-0028`. Common offer-path failures before acceptance, including
-`offer.unsupported_payload_type`, SHOULD be returned as a failed start result
+Subscribe uses the common offer-path failure mapping defined in `RFC-0028`.
+Common offer-path failures before acceptance, including
+`offer.unsupported_payload_type`, MUST be returned as a failed start result
 when a structured reject can be returned.
 
-A receiver SHOULD use the message failure-code family from `RFC-0027` when a
-Subscribe data message includes a spatial message envelope but the envelope,
-payload, message size, or observed sequence behavior is invalid.
+A receiver that reports an invalid Subscribe data envelope, invalid payload,
+unexpected selected payload type, or oversized message MUST use the message
+failure-code family from `RFC-0027`. Observed sequence gaps remain advisory;
+when reported, they MUST use `message.sequence_gap`.
 
 ### RFC-0031: Offer Kind Extensibility
 

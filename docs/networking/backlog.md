@@ -1,6 +1,7 @@
 # Peer-To-Peer Cluster Backlog
 
-Status: working backlog. This file is not part of the protocol requirements.
+Status: implementation and follow-up work queue. This file is not part of the
+protocol requirements.
 
 Owner: TBD.
 
@@ -17,90 +18,57 @@ Related glossary:
 
 ## Purpose
 
-Track the remaining work needed before a clean-room SDK implementer can build
-the baseline protocol from `baseline.md` alone.
+Track the work that follows the draft implementable baseline.
 
 The protocol requirements live in `baseline.md`. Future extension sketches live
 in `drafts.md`. This file is only the work queue.
 
 ## Current State
 
-Implementable now:
+The baseline text is ready to drive a first SDK implementation path for
+configured/manual peer-to-peer connectivity.
 
-- authority and identity objects;
-- domain id derivation;
-- domain declaration and delegation validation;
-- authority-chain validation;
-- served-domain-set computation;
-- peer authorization model;
-- lifecycle handshake stream behavior and message shape;
-- Offer Catalog, Get, Subscribe, and message-envelope object shapes;
-- catalog filter semantics;
-- registry-reference hash format;
-- payload-type matching;
-- status object shapes;
-- time and clock semantics.
+Discovery remains optional and does not block the baseline path.
 
-Baseline path:
+## Next Work
 
-- configured/manual peer-to-peer connectivity;
-- Discovery is optional and does not block the baseline path.
+Start implementing a first SDK path from `baseline.md`.
 
-## Work Order
+Suggested first vertical slice:
 
-1. `P1-1`: Tighten deterministic failure mapping where interop needs exact
-   outcomes.
-2. Start compatibility examples, expected results, and validation transcripts.
+1. Configured peer dial to a known peer id and multiaddr.
+2. V1 JSON frame encode/decode.
+3. Peer binding creation and verification.
+4. Lifecycle handshake over `/auki/cluster-lifecycle/0.0.1`.
+5. Authority-chain validation for zero or more declared domains.
+6. Accepted served-domain set computation.
+7. Ready/degraded peer relationship state.
+8. Minimal status surface for local peer, remote peer, served domains, and last
+   failures.
 
-## P1
+Suggested second vertical slice:
 
-### P1-1: Deterministic Failure Mapping
-
-Owner sections:
-
-- `RFC-0010: Failure Code Registry`
-- `RFC-0019: Peer Handshake`
-- `RFC-0024: Offer Catalog`
-- `RFC-0027: Spatial Message Envelope`
-- `RFC-0028: Get And Subscribe Common Path Rules`
-- `RFC-0029: Get`
-- `RFC-0030: Subscribe`
-- `RFC-0034: Status And Observability API`
-
-Patch:
-
-- Keep the failure precedence rule in `RFC-0010` and authority-chain precedence
-  in `RFC-0009` as the baseline ordering model.
-- Decide which malformed, unsupported, unauthorized, oversized, and stale cases
-  need exact failure codes.
-- Upgrade only those mappings that must be deterministic for interop.
-- Keep advisory diagnostics advisory.
-
-Done when:
-
-- Common bad inputs produce predictable failure codes without forcing every
-  diagnostic path to become a protocol requirement.
-
-## Drafts Outside The Baseline
-
-Detailed draft text lives in [`drafts.md`](drafts.md).
-
-Tracked drafts:
-
-- Dynamic Served-Domain Updates
-- Discovery Record Shape
-- Discovery Data-Type Hints
-- Peer Graph Hints
-- Concrete Clock-Sync Protocol
-- Shared Offer-Kind Profiles
-
-These do not block the baseline configured/manual peer-to-peer path.
+1. Offer-catalog request/response over `/auki/offer-catalog/0.0.1`.
+2. Offer usability evaluation.
+3. Get request/response over `/auki/get/0.0.1`.
+4. Subscribe request/accept/reject/data/end over `/auki/subscribe/0.0.1`.
+5. Spatial message envelope validation.
+6. Deterministic failure-code reporting for common bad inputs.
 
 ## Interop/Test Work
 
-Do this after the remaining deterministic failure-mapping cleanup.
+Create these from the first SDK implementation, so the examples match running
+code:
 
-Create compatibility examples and expected results for:
+- compatibility examples;
+- expected results;
+- validation transcripts;
+- fixture JSON;
+- signed-object test vectors;
+- frame encoding examples;
+- machine-readable schema aids where they are useful.
+
+Suggested coverage:
 
 - JSON frame encoding and JSON wire conventions;
 - signed-object canonicalization;
@@ -118,18 +86,20 @@ Create compatibility examples and expected results for:
 - status snapshots;
 - time fields.
 
-Create validation transcripts for:
+## Drafts To Pull Forward When Needed
 
-- configured peer connects to configured peer;
-- peer connects without Discovery;
-- peer connects after optional Discovery lookup;
-- producer declares no served domains;
-- producer declares one accepted served domain;
-- producer declares multiple domains with mixed accept/reject results;
-- consumer fetches an offer catalog;
-- consumer performs Get for a usable offer;
-- consumer starts and ends Subscribe for a usable offer;
-- malformed or unauthorized inputs produce stable failure codes.
+Detailed draft text lives in [`drafts.md`](drafts.md).
+
+Pull these forward only when product or implementation work needs them:
+
+- Dynamic Served-Domain Updates
+- Discovery Record Shape
+- Discovery Data-Type Hints
+- Peer Graph Hints
+- Concrete Clock-Sync Protocol
+- Shared Offer-Kind Profiles
+
+These do not block the baseline configured/manual peer-to-peer path.
 
 ## Later / Product-Scope Work
 
@@ -139,4 +109,5 @@ Keep these parked unless product scope pulls them forward:
 - Relay milestone expansion beyond `RFC-0017` and `RFC-0018`.
 - Shared offer-kind profiles and payload schemas.
 - Chunking, replay, resume, reliable history, and large object transfer.
-- Implementation migration notes, if needed after the baseline stabilizes.
+- Implementation migration notes, if needed after the baseline implementation
+  exists.

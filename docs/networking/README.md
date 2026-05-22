@@ -63,8 +63,9 @@ handshake message shape, offer objects, catalog filters, registry-reference
 hashes, payload-type matching, message envelopes, and status objects are
 specified.
 
-End-to-end clean-room implementation still needs deterministic failure-mapping
-cleanup before broad compatibility work.
+The next work is implementing a first SDK path from this baseline, then using
+that implementation to drive compatibility examples, expected results,
+validation transcripts, and machine-readable schema aids.
 
 ## Drafts And Parked Work
 
@@ -81,5 +82,5 @@ The following work is intentionally outside the first implementable baseline:
 
 ## Resume Here
 
-Start with [`backlog.md`](backlog.md), especially the remaining P1 cleanup
-items.
+Start with [`backlog.md`](backlog.md), especially the first SDK implementation
+path.

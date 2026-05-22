@@ -23,9 +23,8 @@
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
 use auki_datatypes::{
-    audio::AudioLogEntry as RustAudioLogEntry,
-    joint_encoders::JointEncodersLogEntry as RustJointEncodersLogEntry,
-    point_cloud::PointCloudLogEntry as RustPointCloudLogEntry,
+    audio::Data as RustAudioFrame, joint_encoders::Data as RustJointEncodersFrame,
+    point_cloud::Data as RustPointCloudFrame,
 };
 use auki_logs_py_rs::{
     RawBytes as RustRawLogBytes, RetainedStreamSource as RustRetainedStreamSource,
@@ -33,11 +32,10 @@ use auki_logs_py_rs::{
 };
 use auki_logs_rs::{Error as RustLogError, Log as RustLog};
 use auki_network_rs::stream_protocol::{
-    AudioFrame as RustAudioFrame, CameraFrame as RustCameraFrame,
-    DeclineReason as RustDeclineReason, DynamicIntrinsics as RustDynamicIntrinsics,
-    EndReason as RustEndReason, JointEncodersFrame as RustJointEncodersFrame,
-    PointCloudFrame as RustPointCloudFrame, StreamManifest as RustStreamManifest,
-    StreamRequest as RustStreamRequest, decline_reason, end_reason,
+    CameraFrame as RustCameraFrame, DeclineReason as RustDeclineReason,
+    DynamicIntrinsics as RustDynamicIntrinsics, EndReason as RustEndReason,
+    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest, decline_reason,
+    end_reason,
 };
 use auki_network_rs::stream_runtime::{
     OpenStreamError as RustOpenStreamError, SourceStream, StreamDispatch as RustStreamDispatch,
@@ -314,7 +312,7 @@ impl PyPointCloudFrame {
     fn new(bytes: Bound<'_, PyBytes>) -> Self {
         Self {
             inner: RustPointCloudFrame {
-                bytes: bytes.as_bytes().to_vec(),
+                data: bytes.as_bytes().to_vec(),
             },
         }
     }
@@ -323,15 +321,15 @@ impl PyPointCloudFrame {
     /// each call.
     #[getter]
     fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new_bound(py, &self.inner.bytes)
+        PyBytes::new_bound(py, &self.inner.data)
     }
 
     fn __len__(&self) -> usize {
-        self.inner.bytes.len()
+        self.inner.data.len()
     }
 
     fn __repr__(&self) -> String {
-        format!("PointCloudFrame(<{} bytes>)", self.inner.bytes.len())
+        format!("PointCloudFrame(<{} bytes>)", self.inner.data.len())
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -1357,20 +1355,15 @@ fn decode_retained_camera(bytes: Vec<u8>) -> Result<RustCameraFrame, String> {
 }
 
 fn decode_retained_pointcloud(bytes: Vec<u8>) -> Result<RustPointCloudFrame, String> {
-    let entry = RustPointCloudLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
-    Ok(RustPointCloudFrame { bytes: entry.data })
+    RustPointCloudFrame::decode(&*bytes).map_err(|e| e.to_string())
 }
 
 fn decode_retained_joint_encoders(bytes: Vec<u8>) -> Result<RustJointEncodersFrame, String> {
-    let entry = RustJointEncodersLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
-    Ok(RustJointEncodersFrame {
-        angles_rad: entry.angles_rad,
-    })
+    RustJointEncodersFrame::decode(&*bytes).map_err(|e| e.to_string())
 }
 
 fn decode_retained_audio(bytes: Vec<u8>) -> Result<RustAudioFrame, String> {
-    let entry = RustAudioLogEntry::decode(&*bytes).map_err(|e| e.to_string())?;
-    Ok(RustAudioFrame { data: entry.data })
+    RustAudioFrame::decode(&*bytes).map_err(|e| e.to_string())
 }
 
 /// Convert a Python async iterator (yielding `PyStreamItem`) into a
@@ -1879,10 +1872,10 @@ pub(crate) fn invalid_arg<S: Into<String>>(msg: S) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_datatypes::audio::AudioLogEntry;
+    use auki_datatypes::audio::Data as AudioData;
     use auki_datatypes::camera::CameraFrame;
-    use auki_datatypes::joint_encoders::JointEncodersLogEntry;
-    use auki_datatypes::point_cloud::PointCloudLogEntry;
+    use auki_datatypes::joint_encoders::Data as JointEncodersData;
+    use auki_datatypes::point_cloud::Data as PointCloudData;
     use auki_logs_rs::Log as RawLog;
     use auki_network_rs::PeerIdentity;
     use auki_network_rs::stream_runtime::OPEN_STREAM_TIMEOUT;
@@ -2011,7 +2004,7 @@ mod tests {
     #[test]
     fn retained_pointcloud_source_maps_log_data_to_stream_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = PointCloudLogEntry {
+        let entry = PointCloudData {
             data: b"cdr".to_vec(),
         };
         append_raw_payload(dir.path(), 200, entry.encode_to_vec());
@@ -2027,13 +2020,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(got.timestamp_ns, 200);
-        assert_eq!(got.payload.bytes, b"cdr");
+        assert_eq!(got.payload.data, b"cdr");
     }
 
     #[test]
     fn retained_joint_encoder_source_maps_log_angles_to_stream_angles() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = JointEncodersLogEntry {
+        let entry = JointEncodersData {
             angles_rad: vec![0.1, 0.2, 0.3],
         };
         append_raw_payload(dir.path(), 300, entry.encode_to_vec());
@@ -2055,7 +2048,7 @@ mod tests {
     #[test]
     fn retained_audio_source_maps_log_data_to_stream_data() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = AudioLogEntry {
+        let entry = AudioData {
             data: b"pcm".to_vec(),
         };
         append_raw_payload(dir.path(), 400, entry.encode_to_vec());
@@ -2192,7 +2185,7 @@ mod tests {
             let pf = PyStreamItem::new(42, payload_any).unwrap();
             let rust = pf.to_rust_pointcloud().expect("payload is PointCloud");
             assert_eq!(rust.timestamp_ns, 42);
-            assert_eq!(rust.payload.bytes, vec![0xaa, 0xbb]);
+            assert_eq!(rust.payload.data, vec![0xaa, 0xbb]);
         });
     }
 
@@ -2283,14 +2276,14 @@ mod tests {
                 timestamp_ns: 1_000,
                 seq: 7,
                 payload: RustPointCloudFrame {
-                    bytes: vec![0x01, 0x02, 0x03, 0x04],
+                    data: vec![0x01, 0x02, 0x03, 0x04],
                 },
             };
             let pf = PyStreamEntry::from_rust_pointcloud(rust_frame);
             assert_eq!(pf.timestamp_ns(), 1_000);
             assert_eq!(pf.seq(), 7);
             match &pf.payload {
-                StreamPayload::PointCloud(p) => assert_eq!(p.inner.bytes.len(), 4),
+                StreamPayload::PointCloud(p) => assert_eq!(p.inner.data.len(), 4),
                 _ => panic!("expected PointCloud payload variant"),
             }
         });

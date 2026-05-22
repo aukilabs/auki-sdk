@@ -7,5 +7,5 @@ import betterproto
 
 
 @dataclass
-class PointCloudLogEntry(betterproto.Message):
+class Data(betterproto.Message):
     data: bytes = betterproto.bytes_field(1)

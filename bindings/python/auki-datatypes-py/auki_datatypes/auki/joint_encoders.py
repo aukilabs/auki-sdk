@@ -8,7 +8,7 @@ import betterproto
 
 
 @dataclass
-class JointEncodersLogEntry(betterproto.Message):
+class Data(betterproto.Message):
     # Joint angle readings in radians, indexed in the producer's emit order.
     # Length MUST equal the registry entry's `joint_count`.
     angles_rad: List[float] = betterproto.float_field(1)

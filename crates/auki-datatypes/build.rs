@@ -15,15 +15,12 @@ fn main() -> std::io::Result<()> {
         .compile_protos(
             &[
                 "proto/audio.proto",
-                "proto/audio_stream.proto",
                 "proto/camera.proto",
                 "proto/detection.proto",
                 "proto/info.proto",
-                "proto/joint_encoders.proto",
-                "proto/joint_encoders_stream.proto",
                 "proto/join.proto",
+                "proto/joint_encoders.proto",
                 "proto/point_cloud.proto",
-                "proto/point_cloud_stream.proto",
                 "proto/pose.proto",
                 "proto/sensors.proto",
                 "proto/stream.proto",

@@ -44,7 +44,7 @@
 //!
 //! The previous wire used JSON-via-`serde_json`. Two pressures: (1)
 //! `Vec<u8>` rendered as JSON arrays-of-integers (~4× overhead), so
-//! `PointCloudFrame` had to carry a `base64_bytes` adapter; (2) the
+//! point-cloud payloads had to carry a `base64_bytes` adapter; (2) the
 //! cross-language schema lived in two places (Rust hand-rolled structs
 //! + Python's hand-rolled mirror in `auki-network-py`). Protobuf
 //! addresses both: native binary fields drop the adapter, and the
@@ -84,16 +84,17 @@ fn _phantom() -> Option<Wallet> {
 }
 
 // Wire-type re-exports — single source of truth lives in
-// `auki-datatypes`'s `auki.stream` package; this module owns the
-// protocol id, framing helpers, and error type.
-pub use auki_datatypes::audio_stream::AudioFrame;
+// `auki-datatypes`. The opaque-bytes / structured-vector payloads
+// (`audio`, `joint_encoders`, `point_cloud`) share one `Data` message
+// per module that's used on both disk (Sensor Log segment) and wire
+// (this substream); the dual `*_stream` packages were removed in
+// favour of that single shape.
 pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
-pub use auki_datatypes::joint_encoders_stream::JointEncodersFrame;
-pub use auki_datatypes::point_cloud_stream::PointCloudFrame;
 pub use auki_datatypes::stream::{
     DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
 };
+pub use auki_datatypes::{audio, joint_encoders, point_cloud};
 
 /// libp2p protocol id for the typed-byte-stream protocol. Stable; do
 /// not change without coordinating with consumers (Boosterapp, Sentinel,
@@ -433,57 +434,53 @@ mod tests {
         assert_eq!(back, frame);
     }
 
-    /// `PointCloudFrame` prost wire bytes. Point clouds still use a
-    /// stream-specific opaque-byte wrapper because their log entry has
-    /// the same field shape and no per-record metadata to preserve.
+    /// `point_cloud::Data` prost wire bytes. Same opaque-bytes shape on
+    /// disk and on the wire (one type, one byte spec — locked by the
+    /// `point_cloud_data_*` tests in `auki-datatypes`).
     #[test]
-    fn point_cloud_frame_serializes_to_locked_wire_bytes() {
-        let frame = PointCloudFrame {
-            bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
+    fn point_cloud_data_serializes_to_locked_wire_bytes() {
+        let frame = point_cloud::Data {
+            data: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
         };
         let bytes = frame.encode_to_vec();
         let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
         let expected: String = std::iter::once(0x0au8)
             .chain(std::iter::once(0x08u8))
-            .chain(frame.bytes.iter().copied())
+            .chain(frame.data.iter().copied())
             .map(|b| format!("{:02x}", b))
             .collect();
         assert_eq!(hex, expected);
     }
 
     #[test]
-    fn point_cloud_frame_round_trips_a_kilobyte_payload() {
+    fn point_cloud_data_round_trips_a_kilobyte_payload() {
         let bytes: Vec<u8> = (0..1024u32).map(|i| (i * 37 + 11) as u8).collect();
-        let frame = PointCloudFrame {
-            bytes: bytes.clone(),
+        let frame = point_cloud::Data {
+            data: bytes.clone(),
         };
         let encoded = frame.encode_to_vec();
-        let back = PointCloudFrame::decode(&*encoded).unwrap();
-        assert_eq!(back.bytes, bytes);
+        let back = point_cloud::Data::decode(&*encoded).unwrap();
+        assert_eq!(back.data, bytes);
     }
 
     /// Wire-size pin: protobuf's `bytes` field is native binary, no
     /// JSON tax. A 1 KB payload encodes to ~1 KB + tiny envelope (tag +
     /// varint length).
     #[test]
-    fn point_cloud_frame_wire_size_is_native_binary() {
-        let bytes = vec![0xAB; 1024];
-        let frame = PointCloudFrame { bytes };
+    fn point_cloud_data_wire_size_is_native_binary() {
+        let data = vec![0xAB; 1024];
+        let frame = point_cloud::Data { data };
         let encoded = frame.encode_to_vec();
         // 1 byte tag + 2 bytes varint length (1024) + 1024 bytes payload = 1027.
         assert_eq!(encoded.len(), 1027);
     }
 
-    /// `JointEncodersFrame` prost wire bytes (sawslin Phase B). Same
-    /// `repeated float angles_rad` shape as the on-disk
-    /// `JointEncodersLogEntry` — the two messages exist in different
-    /// proto packages purely so wire and disk dispatch on distinct Rust
-    /// types. Byte-identical wire/disk is locked by the
-    /// `joint_encoders_disk_wire_byte_identical` test in
-    /// `auki-datatypes`.
+    /// `joint_encoders::Data` prost wire bytes (sawslin Phase B). Same
+    /// `repeated float angles_rad` shape on disk and on the wire — one
+    /// type, one byte spec.
     #[test]
-    fn joint_encoders_frame_serializes_to_locked_wire_bytes() {
-        let frame = JointEncodersFrame {
+    fn joint_encoders_data_serializes_to_locked_wire_bytes() {
+        let frame = joint_encoders::Data {
             angles_rad: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         };
         let bytes = frame.encode_to_vec();
@@ -496,12 +493,12 @@ mod tests {
     }
 
     #[test]
-    fn joint_encoders_frame_round_trips() {
-        let frame = JointEncodersFrame {
+    fn joint_encoders_data_round_trips() {
+        let frame = joint_encoders::Data {
             angles_rad: vec![0.0, 0.5, -1.5, 3.14159],
         };
         let bytes = frame.encode_to_vec();
-        let back = JointEncodersFrame::decode(&*bytes).unwrap();
+        let back = joint_encoders::Data::decode(&*bytes).unwrap();
         assert_eq!(back, frame);
     }
 
@@ -509,22 +506,19 @@ mod tests {
     /// with no entries elides to zero bytes on the wire. Locked so the
     /// SDK's "frame with no joints" edge case stays predictable.
     #[test]
-    fn joint_encoders_frame_empty_vector_elides() {
-        let frame = JointEncodersFrame { angles_rad: vec![] };
+    fn joint_encoders_data_empty_vector_elides() {
+        let frame = joint_encoders::Data { angles_rad: vec![] };
         let bytes = frame.encode_to_vec();
         assert!(bytes.is_empty());
-        let back = JointEncodersFrame::decode(&*bytes).unwrap();
+        let back = joint_encoders::Data::decode(&*bytes).unwrap();
         assert_eq!(back.angles_rad, Vec::<f32>::new());
     }
 
-    /// `AudioFrame` prost wire bytes (Dialogue Batch 1). Same `bytes`
-    /// shape as `CameraFrame` / `PointCloudFrame` but a separate `.proto`
-    /// package so the stream dispatch on a distinct Rust type. Byte-
-    /// identical wire/disk with `AudioLogEntry` is locked by
-    /// `audio_disk_wire_byte_identical` in `auki-datatypes`.
+    /// `audio::Data` prost wire bytes (Dialogue Batch 1). Same opaque-
+    /// bytes shape on disk and on the wire — one type, one byte spec.
     #[test]
-    fn audio_frame_serializes_to_locked_wire_bytes() {
-        let frame = AudioFrame {
+    fn audio_data_serializes_to_locked_wire_bytes() {
+        let frame = audio::Data {
             data: vec![0x00, 0x80, 0xff, 0x7f, 0x40, 0x40, 0xc0, 0xbf],
         };
         let bytes = frame.encode_to_vec();
@@ -534,12 +528,12 @@ mod tests {
     }
 
     #[test]
-    fn audio_frame_round_trips() {
-        let frame = AudioFrame {
+    fn audio_data_round_trips() {
+        let frame = audio::Data {
             data: vec![0, 1, 2, 3, 4, 5],
         };
         let bytes = frame.encode_to_vec();
-        let back = AudioFrame::decode(&*bytes).unwrap();
+        let back = audio::Data::decode(&*bytes).unwrap();
         assert_eq!(back, frame);
     }
 
@@ -548,21 +542,21 @@ mod tests {
     /// wire-size envelope expected on the actual demo path: 1 byte tag
     /// + 2 bytes varint length (1920) + 1920 payload = 1923 bytes.
     #[test]
-    fn audio_frame_wire_size_is_native_binary() {
+    fn audio_data_wire_size_is_native_binary() {
         let data = vec![0xAB; 1920];
-        let frame = AudioFrame { data };
+        let frame = audio::Data { data };
         let encoded = frame.encode_to_vec();
         assert_eq!(encoded.len(), 1923);
     }
 
     /// Locked conformance vector for a `StreamMessage::Entry` carrying
-    /// a `PointCloudFrame` payload. Pins the full envelope: the `StreamEntry`
+    /// a `point_cloud::Data` payload. Pins the full envelope: the `StreamEntry`
     /// inside the `StreamMessage` oneof carries a `bytes` field whose
-    /// content is the prost-encoded `PointCloudFrame`.
+    /// content is the prost-encoded `point_cloud::Data`.
     #[test]
     fn locked_stream_message_entry_with_point_cloud_payload() {
-        let pc = PointCloudFrame {
-            bytes: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
+        let pc = point_cloud::Data {
+            data: vec![0x42, 0x43, 0x44, 0x45, 0x00, 0x01, 0xfe, 0xff],
         };
         let pc_encoded = pc.encode_to_vec();
         let msg = entry_msg(1_700_000_000_000_000_000, 42, pc_encoded.clone());
@@ -571,12 +565,12 @@ mod tests {
         let back = StreamMessage::decode(&*envelope).unwrap();
         assert_eq!(back, msg);
 
-        // Decode the inner payload and confirm it's the same PointCloudFrame.
+        // Decode the inner payload and confirm it's the same point_cloud::Data.
         let frame_inner = match back.variant {
             Some(stream_message::Variant::Entry(f)) => f,
             _ => panic!("expected Entry variant"),
         };
-        let parsed_pc = PointCloudFrame::decode(&*frame_inner.payload).unwrap();
+        let parsed_pc = point_cloud::Data::decode(&*frame_inner.payload).unwrap();
         assert_eq!(parsed_pc, pc);
         assert_eq!(frame_inner.timestamp_ns, 1_700_000_000_000_000_000);
         assert_eq!(frame_inner.seq, 42);

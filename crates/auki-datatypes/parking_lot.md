@@ -78,14 +78,32 @@ Adjudicated in favour of opaque-bytes-only: `auki.detection.DetectionFrame { byt
 
 The Detection-Log analog of `SensorRegistryEntry` (the registry entry that pins per-`(detector_id, ...)` interpretation of the opaque bytes) is a sibling shape that lives in [`auki-registry`](../../auki-registry) when needed, not in this crate. File when subscription / discovery for detection logs needs it.
 
-### ✓ Resolved 2026-05-09 — `JointEncodersLogEntry` and `JointEncodersFrame` are structured (`repeated float angles_rad`), and ship as a paired wire/disk package
+### ✓ Resolved 2026-05-09 — joint-encoder payload is structured (`repeated float angles_rad`), originally shipped as a paired wire/disk package, **collapsed in #176**
 
-Decided: `auki.joint_encoders.JointEncodersLogEntry` (on disk) and `auki.joint_encoders_stream.JointEncodersFrame` (on wire), both `repeated float angles_rad = 1`. Byte-identical wire/disk shape, locked by an explicit symmetry test (`joint_encoders_disk_wire_byte_identical`) — Step 2/3 didn't need that test because `bytes`-only payloads were trivially identical. Two separate proto packages so the wire and log code paths dispatch on distinct Rust types (Step 2/3 precedent). Resolved + propagated in the same PR.
+Originally decided: `auki.joint_encoders.JointEncodersLogEntry` (on disk) and `auki.joint_encoders_stream.JointEncodersFrame` (on wire), both `repeated float angles_rad = 1`, byte-identical and locked by an explicit symmetry test (`joint_encoders_disk_wire_byte_identical`). Two separate proto packages so the wire and log code paths dispatched on distinct Rust types (Step 2/3 precedent).
 
-Two component-decisions filed at the same PR:
+**Superseded by [#176](https://github.com/aukilabs/auki-sdk/issues/176) (2026-05-22)**: the "separate Rust types so wire/disk can't accidentally cross-wire" preference was outweighed by the cost of mirroring two packages cross-language. The auki.joint_encoders_stream package was removed; the surviving disk-side message was renamed to `auki.joint_encoders.Data`. Wire bytes unchanged (same field number 1, same `repeated float` wire type) so locked vectors stay green; the symmetry test is gone (tautology — one type can't drift from itself).
+
+Two component-decisions filed at the original PR (still stand):
 
 - **`angles_rad` precision: f32 over f64.** Going with `repeated float` (f32) to match `SpatialTransform`'s quaternion components. Revisit if a consumer needs higher precision for low-rate slow-motion replay.
-- **No `velocity_rad_per_s` / `effort_nm` companion fields on `JointEncodersLogEntry`.** v1 ships positions only — minimal-fields stance from Steps 3/4. ROS `JointState` carries velocity and effort and the K1 publishes velocity, so the upstream signal is there. Revisit when a consumer (predictive smoothing, force-controlled teleop, non-Park use) earns the addition. Adding new proto fields later is cheap (new field number); adding them now bakes them in for everyone.
+- **No `velocity_rad_per_s` / `effort_nm` companion fields on `joint_encoders.Data`.** v1 ships positions only — minimal-fields stance from Steps 3/4. ROS `JointState` carries velocity and effort and the K1 publishes velocity, so the upstream signal is there. Revisit when a consumer (predictive smoothing, force-controlled teleop, non-Park use) earns the addition. Adding new proto fields later is cheap (new field number); adding them now bakes them in for everyone.
+
+### ✓ Resolved 2026-05-22 — disk/wire mirror pairs collapse to one `Data` per module ([#176](https://github.com/aukilabs/auki-sdk/issues/176))
+
+Adjudicated in favour of one proto message per opaque-bytes / structured-vector payload module, used on both disk (Sensor Log segment) and wire (libp2p `/auki/stream/0.1.0` substream). The three pre-existing mirror pairs collapse:
+
+- `auki.audio.AudioLogEntry` + `auki.audio_stream.AudioFrame` → `auki.audio.Data { bytes data = 1 }`
+- `auki.point_cloud.PointCloudLogEntry` + `auki.point_cloud_stream.PointCloudFrame` → `auki.point_cloud.Data { bytes data = 1 }`
+- `auki.joint_encoders.JointEncodersLogEntry` + `auki.joint_encoders_stream.JointEncodersFrame` → `auki.joint_encoders.Data { repeated float angles_rad = 1 }`
+
+Reverses the Step 2/3 "two proto packages so wire and log code paths dispatch on distinct Rust types" precedent. The byte-identity tests that locked the symmetry (`audio_disk_wire_byte_identical`, `joint_encoders_disk_wire_byte_identical`) become tautologies once there's only one type, and are removed.
+
+Wire bytes unchanged (every field number + wire type preserved); locked vectors stay green. PointCloud's field name went from `bytes` (wire-side) and `data` (disk-side) to a single `data` — Rust callers in `auki-network` and the PyO3 wrapper updated to match; the Python user-facing `.bytes` getter on `PyPointCloudFrame` is preserved for ergonomic stability.
+
+Structured payloads where one canonical name already existed (`camera.CameraFrame`, `detection.DetectionFrame`, `pose.SpatialTransform`, `time_transform.TimeTransformEntry`) keep their existing names — only the opaque-bytes / vector mirror pairs converged.
+
+Supersedes the in-flight [`docs/superpowers/plans/2026-05-21-stream-naming-cleanup.md`](../../docs/superpowers/plans/2026-05-21-stream-naming-cleanup.md), which proposed the opposite direction (rename toward `*Frame` as the canonical name).
 
 ---
 

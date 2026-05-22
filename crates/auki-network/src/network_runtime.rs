@@ -1247,7 +1247,7 @@ impl Drop for NetworkRuntime {
 // ─── UniFFI-exposed stream surface ──────────────────────────────────────────
 
 /// Shared cross-FFI stream entry shape. The opaque `payload_bytes` is
-/// prost-encoded against the per-payload `.proto` (`AudioFrame.proto`,
+/// prost-encoded against the per-payload `.proto` (`audio.proto`,
 /// `CameraFrame.proto`, …); Swift consumers decode via swift-protobuf.
 /// Type-distinguishability lives at the `StreamSubscription*` /
 /// `open_*_stream` level.
@@ -1323,7 +1323,7 @@ impl From<crate::stream_runtime::OpenStreamError> for OpenStreamError {
     }
 }
 
-/// Swift-friendly wrapper around `StreamSubscription<AudioFrame>`.
+/// Swift-friendly wrapper around `StreamSubscription<audio::Data>`.
 /// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
 /// `next_entry()` (async; yields one entry per call until the stream
 /// ends).
@@ -1335,7 +1335,7 @@ impl From<crate::stream_runtime::OpenStreamError> for OpenStreamError {
 #[derive(uniffi::Object)]
 pub struct StreamSubscriptionAudio {
     inner: tokio::sync::Mutex<
-        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>>,
+        Option<crate::stream_runtime::StreamSubscription<crate::stream_protocol::audio::Data>>,
     >,
     manifest_bytes: Vec<u8>,
 }
@@ -1345,7 +1345,7 @@ impl StreamSubscriptionAudio {
     /// Construct from an upstream typed subscription. Encodes the
     /// manifest once at construction.
     pub fn from_inner(
-        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::AudioFrame>,
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::audio::Data>,
     ) -> Arc<Self> {
         use prost::Message;
         let manifest_bytes = inner.manifest.encode_to_vec();
@@ -1469,7 +1469,7 @@ impl StreamSubscriptionCamera {
     }
 }
 
-/// Swift-friendly wrapper around `StreamSubscription<PointCloudFrame>`.
+/// Swift-friendly wrapper around `StreamSubscription<point_cloud::Data>`.
 /// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
 /// `next_entry()` (async; yields one entry per call until the stream
 /// ends).
@@ -1482,7 +1482,7 @@ impl StreamSubscriptionCamera {
 pub struct StreamSubscriptionPointCloud {
     inner: tokio::sync::Mutex<
         Option<
-            crate::stream_runtime::StreamSubscription<crate::stream_protocol::PointCloudFrame>,
+            crate::stream_runtime::StreamSubscription<crate::stream_protocol::point_cloud::Data>,
         >,
     >,
     manifest_bytes: Vec<u8>,
@@ -1493,7 +1493,7 @@ impl StreamSubscriptionPointCloud {
     /// Construct from an upstream typed subscription. Encodes the
     /// manifest once at construction.
     pub fn from_inner(
-        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::PointCloudFrame>,
+        inner: crate::stream_runtime::StreamSubscription<crate::stream_protocol::point_cloud::Data>,
     ) -> Arc<Self> {
         use prost::Message;
         let manifest_bytes = inner.manifest.encode_to_vec();
@@ -1544,7 +1544,7 @@ impl StreamSubscriptionPointCloud {
     }
 }
 
-/// Swift-friendly wrapper around `StreamSubscription<JointEncodersFrame>`.
+/// Swift-friendly wrapper around `StreamSubscription<joint_encoders::Data>`.
 /// Exposes `manifest_bytes()` (prost-encoded `StreamManifest`) and
 /// `next_entry()` (async; yields one entry per call until the stream
 /// ends).
@@ -1558,7 +1558,7 @@ pub struct StreamSubscriptionJointEncoders {
     inner: tokio::sync::Mutex<
         Option<
             crate::stream_runtime::StreamSubscription<
-                crate::stream_protocol::JointEncodersFrame,
+                crate::stream_protocol::joint_encoders::Data,
             >,
         >,
     >,
@@ -1571,7 +1571,7 @@ impl StreamSubscriptionJointEncoders {
     /// manifest once at construction.
     pub fn from_inner(
         inner: crate::stream_runtime::StreamSubscription<
-            crate::stream_protocol::JointEncodersFrame,
+            crate::stream_protocol::joint_encoders::Data,
         >,
     ) -> Arc<Self> {
         use prost::Message;
@@ -1723,7 +1723,7 @@ impl NetworkRuntime {
                 message: format!("StreamRequest decode: {e}"),
             })?;
         let sub = self
-            .open_stream::<crate::stream_protocol::AudioFrame>(peer_id, request)
+            .open_stream::<crate::stream_protocol::audio::Data>(peer_id, request)
             .await
             .map_err(OpenStreamError::from)?;
         Ok(StreamSubscriptionAudio::from_inner(sub))
@@ -1765,7 +1765,7 @@ impl NetworkRuntime {
                 message: format!("StreamRequest decode: {e}"),
             })?;
         let sub = self
-            .open_stream::<crate::stream_protocol::PointCloudFrame>(peer_id, request)
+            .open_stream::<crate::stream_protocol::point_cloud::Data>(peer_id, request)
             .await
             .map_err(OpenStreamError::from)?;
         Ok(StreamSubscriptionPointCloud::from_inner(sub))
@@ -1786,7 +1786,7 @@ impl NetworkRuntime {
                 message: format!("StreamRequest decode: {e}"),
             })?;
         let sub = self
-            .open_stream::<crate::stream_protocol::JointEncodersFrame>(peer_id, request)
+            .open_stream::<crate::stream_protocol::joint_encoders::Data>(peer_id, request)
             .await
             .map_err(OpenStreamError::from)?;
         Ok(StreamSubscriptionJointEncoders::from_inner(sub))

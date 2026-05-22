@@ -87,12 +87,14 @@ pub struct PointFieldMsg {
 //
 // `DynamicIntrinsics` + the camera log entry moved to
 // [`auki-datatypes`](../../auki-datatypes)'s `auki.camera` `.proto` at
-// Step 1; `PointCloudLogEntry` followed at Step 3 under `auki.point_cloud`
-// (now opaque-bytes-only). Re-exported here so existing call sites stay
-// short.
+// Step 1; the point-cloud payload followed at Step 3 under
+// `auki.point_cloud`. The disk/wire mirror split was collapsed (#176) —
+// `auki.point_cloud.Data` is now one opaque-bytes message used on both
+// the Sensor Log segment and the libp2p substream. Re-exported here so
+// existing call sites stay short.
 
 pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
-pub use auki_datatypes::point_cloud::PointCloudLogEntry;
+pub use auki_datatypes::point_cloud;
 
 // ─── Translation functions ──────────────────────────────────────────────────
 
@@ -464,17 +466,17 @@ pub fn build_point_cloud_registry_entry(
     }
 }
 
-/// Build a `PointCloudLogEntry` from a `PointCloud2` message. Returns
-/// `(timestamp_ns, entry)` ready for `auki_logs::Log::append`. Applies the
-/// same RGB(A) normalization as `build_point_cloud_registry_entry`.
+/// Build a `point_cloud::Data` payload from a `PointCloud2` message.
+/// Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
+/// Applies the same RGB(A) normalization as `build_point_cloud_registry_entry`.
 ///
-/// Step 3 (2026-05-08): the entry is now opaque-bytes-only. `width` /
-/// `height` / `is_dense` no longer ride on the per-frame entry — readers
+/// Step 3 (2026-05-08): the entry is opaque-bytes-only. `width` /
+/// `height` / `is_dense` don't ride on the per-frame entry — readers
 /// resolve them via the `(sensor_id, sensor_hash)` pointing at the
 /// `SensorBody::PointCloud` registry entry. ROS-shape interpretation
 /// (`width × height × is_dense`) lives in the producer (here) and is
 /// flattened into the bytes via the registry's `point_step` and `fields`.
-pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogEntry) {
+pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, point_cloud::Data) {
     let timestamp_ns = stamp_to_ns(msg.stamp);
     let normalized = normalize_layout(&msg.fields);
     let num_points = (msg.width as usize).saturating_mul(msg.height as usize);
@@ -485,7 +487,7 @@ pub fn build_point_cloud_log_entry(msg: &PointCloud2Msg) -> (i64, PointCloudLogE
         num_points,
         normalized.point_step,
     );
-    let entry = PointCloudLogEntry { data };
+    let entry = point_cloud::Data { data };
     (timestamp_ns, entry)
 }
 

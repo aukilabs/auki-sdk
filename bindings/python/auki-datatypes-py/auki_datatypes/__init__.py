@@ -11,8 +11,13 @@ Surface mirrors the Rust crate's module layout one-to-one — every
 `auki_datatypes.<name>.<Type>` in Python.
 
 Re-exported submodules:
-    audio, camera, detection, joint_encoders, joint_encoders_stream,
-    point_cloud, point_cloud_stream, pose, stream, time_transform.
+    audio, camera, detection, joint_encoders, point_cloud, pose,
+    stream, time_transform.
+
+The opaque-bytes / structured-vector payloads (`audio`, `point_cloud`,
+`joint_encoders`) each expose a single `Data` message used on both disk
+(Sensor Log segment) and wire (libp2p `/auki/stream/0.1.0` substream).
+The dual `*_stream` packages were removed in #176.
 
 The generated files live one level down, in the `auki/` package
 (matching the proto-package path). The re-exports below let consumers
@@ -24,9 +29,7 @@ from .auki import audio
 from .auki import camera
 from .auki import detection
 from .auki import joint_encoders
-from .auki import joint_encoders_stream
 from .auki import point_cloud
-from .auki import point_cloud_stream
 from .auki import pose
 from .auki import stream
 from .auki import time_transform
@@ -36,9 +39,7 @@ __all__ = [
     "camera",
     "detection",
     "joint_encoders",
-    "joint_encoders_stream",
     "point_cloud",
-    "point_cloud_stream",
     "pose",
     "stream",
     "time_transform",

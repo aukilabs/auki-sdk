@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+Added the iOS Auki network UniFFI design under [`specs/`](specs/2026-05-22-ios-auki-network-uniffi-design.md), defining Swift as an app/protobuf layer over Rust `auki-network` rather than a swift-libp2p implementation.
+
+### Nils's codex · May 22, HKT, 2026
+
 Updated the Auki proto generation artifacts so the initial migration commits only the generated Rust `auki-proto` crate; JavaScript/TypeScript, Swift, and Python protobuf outputs are generated locally under ignored `bindings/` paths.
 
 ### Nils's codex · May 22, HKT, 2026

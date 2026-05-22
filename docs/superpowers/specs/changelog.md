@@ -6,6 +6,10 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+Added the iOS Auki network UniFFI design spec, locking the no-swift-libp2p rule and scoping the first browser-to-iOS milestone to `/auki/message/0.0.1` over Rust `auki-network` exposed through Swift UniFFI.
+
+### Nils's codex · May 22, HKT, 2026
+
 Updated the Auki proto generation design so only the generated Rust `auki-proto` crate is committed; JavaScript/TypeScript, Swift, and Python protobuf outputs are generated under ignored `bindings/` paths.
 
 ### Nils's codex · May 22, HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**iOS `auki-network` UniFFI design added.** The first browser-to-iOS client milestone is scoped to `/auki/message/0.0.1`, with Swift using generated protobuf data types and Rust `auki-network` owning libp2p through UniFFI; swift-libp2p is explicitly out of scope. See [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-datatypes` and `auki-datatypes-py` removed.** The Rust workspace now uses `auki-proto` directly with no compatibility shim, and Python protobuf output is generated locally under ignored `bindings/python/auki-proto/` instead of a committed package. Current docs and parking-lot summaries were updated away from the deleted packages. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

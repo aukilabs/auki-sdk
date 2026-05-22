@@ -267,20 +267,18 @@ impl BrowserDomainSession {
         domain_name: String,
     ) -> Result<JsValue, JsValue> {
         let result = join_browser_domain(
-            self.inner.identity(),
             discovery_url.clone(),
             domain_name.clone(),
+            self.full_peer.clone(),
         )
         .await;
         if result.ok {
-            start_browser_session(
-                self.inner.identity(),
-                discovery_url,
-                domain_name,
-                self.state.clone(),
-            )
-            .await
-            .map_err(|err| JsValue::from_str(&err))?;
+            if let Some(value) = &result.value {
+                self.state.apply_snapshot(self.full_peer.roster_snapshot(
+                    value.domain_name.clone(),
+                    value.manager_peer_id.clone(),
+                ));
+            }
         }
         serde_wasm_bindgen::to_value(&result).map_err(|err| JsValue::from_str(&err.to_string()))
     }
@@ -463,15 +461,17 @@ struct BrowserDiscoveryCluster {
     name: String,
     manager_peer_id: String,
     manager_multiaddrs: Vec<String>,
+    #[serde(default)]
+    relay_multiaddrs: Vec<String>,
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
 async fn join_browser_domain(
-    identity: PeerIdentity,
     discovery_url: String,
     domain_name: String,
+    full_peer: Rc<browser_full_peer::BrowserFullPeer>,
 ) -> BrowserDomainJoinResult {
-    match join_browser_domain_inner(identity, discovery_url, domain_name).await {
+    match join_browser_domain_inner(discovery_url, domain_name, full_peer).await {
         Ok(value) => BrowserDomainJoinResult {
             ok: true,
             value: Some(value),
@@ -487,9 +487,9 @@ async fn join_browser_domain(
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "browser_libp2p"))]
 async fn join_browser_domain(
-    _identity: PeerIdentity,
     _discovery_url: String,
     domain_name: String,
+    _full_peer: Rc<browser_full_peer::BrowserFullPeer>,
 ) -> BrowserDomainJoinResult {
     BrowserDomainJoinResult {
         ok: false,
@@ -671,14 +671,16 @@ async fn start_browser_session(
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
 async fn join_browser_domain_inner(
-    identity: PeerIdentity,
     discovery_url: String,
     domain_name: String,
+    full_peer: Rc<browser_full_peer::BrowserFullPeer>,
 ) -> Result<BrowserDomainJoinValue, (&'static str, String)> {
     let entry = fetch_browser_discovery_cluster(discovery_url, &domain_name).await?;
     let manager_address = browser_manager_address(&entry)?;
-    let manager_peer_id = entry.manager_peer_id.clone();
-    let response = dial_browser_join_inner(identity, manager_address, Vec::new(), manager_peer_id)
+    let relay_address = browser_relay_address(&entry, &manager_address)?;
+    let response = full_peer
+        .clone()
+        .join_via_relayed_peer(manager_address, relay_address)
         .await
         .map_err(|err| ("domain_join_failed", err))?;
 
@@ -704,6 +706,49 @@ async fn fetch_browser_discovery_cluster(
 ) -> Result<BrowserDiscoveryCluster, (&'static str, String)> {
     use wasm_bindgen::JsCast as _;
     use wasm_bindgen_futures::JsFuture;
+
+    if let Some(encoded) = discovery_url.strip_prefix("inline-manager://") {
+        let inline_addr = js_sys::decode_uri_component(encoded)
+            .map_err(|err| ("domain_join_failed", js_error_message(err.into())))?
+            .as_string()
+            .ok_or_else(|| {
+                (
+                    "domain_join_failed",
+                    "inline Manager address did not decode to a string.".to_string(),
+                )
+            })?;
+        let (manager_addr, relay_addr) = inline_addr
+            .split_once('|')
+            .map(|(manager, relay)| (manager.to_string(), Some(relay.to_string())))
+            .unwrap_or((inline_addr, None));
+        let manager_addr: libp2p::Multiaddr = manager_addr.parse().map_err(|err| {
+            (
+                "domain_join_failed",
+                format!("inline Manager multiaddr is malformed: {err}"),
+            )
+        })?;
+        let relay_addr = relay_addr
+            .map(|addr| {
+                addr.parse::<libp2p::Multiaddr>().map_err(|err| {
+                    (
+                        "domain_join_failed",
+                        format!("inline relay multiaddr is malformed: {err}"),
+                    )
+                })
+            })
+            .transpose()?;
+        let manager_peer_id = peer_id_from_multiaddr(&manager_addr)
+            .map_err(|err| ("domain_join_failed", err))?
+            .to_string();
+        return Ok(BrowserDiscoveryCluster {
+            name: domain_name.to_string(),
+            manager_peer_id,
+            manager_multiaddrs: vec![manager_addr.to_string()],
+            relay_multiaddrs: relay_addr
+                .map(|addr| vec![addr.to_string()])
+                .unwrap_or_default(),
+        });
+    }
 
     let window = web_sys::window().ok_or_else(|| {
         (
@@ -793,6 +838,27 @@ fn browser_manager_address(
         (
             "domain_join_failed",
             format!("Discovery Manager multiaddr is malformed: {err}"),
+        )
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+fn browser_relay_address(
+    entry: &BrowserDiscoveryCluster,
+    manager_address: &libp2p::Multiaddr,
+) -> Result<libp2p::Multiaddr, (&'static str, String)> {
+    let Some(address) = entry
+        .relay_multiaddrs
+        .iter()
+        .find(|addr| addr.contains("/webrtc-direct/"))
+        .or_else(|| entry.relay_multiaddrs.first())
+    else {
+        return Ok(manager_address.clone());
+    };
+    address.parse().map_err(|err| {
+        (
+            "domain_join_failed",
+            format!("Discovery relay multiaddr is malformed: {err}"),
         )
     })
 }
@@ -979,7 +1045,7 @@ struct BrowserProbeBehaviour {
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
-async fn dial_browser_join_inner(
+pub(crate) async fn dial_browser_join_inner(
     identity: PeerIdentity,
     address: libp2p::Multiaddr,
     advertised_multiaddrs: Vec<libp2p::Multiaddr>,

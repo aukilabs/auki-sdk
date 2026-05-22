@@ -19,6 +19,7 @@ browser_libp2p = [
     "dep:libp2p",
     "dep:libp2p-stream",
     "dep:serde",
+    "dep:serde_json",
     "dep:serde-wasm-bindgen",
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
@@ -44,6 +45,7 @@ libp2p = { version = "0.56", default-features = false, optional = true, features
     "macros",
     "noise",
     "ping",
+    "relay",
     "request-response",
     "wasm-bindgen",
     "webrtc-websys",
@@ -54,6 +56,7 @@ libp2p = { version = "0.56", default-features = false, optional = true, features
 libp2p-stream = { version = "=0.4.0-alpha", optional = true }
 futures = { version = "0.3", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", features = ["Response", "Window"], optional = true }

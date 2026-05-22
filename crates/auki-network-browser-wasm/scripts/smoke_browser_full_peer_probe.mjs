@@ -7,6 +7,7 @@ import { chromium } from "playwright-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
+const sdkRoot = path.resolve(root, "../..");
 const manager = spawn(
   "cargo",
   [
@@ -19,30 +20,62 @@ const manager = spawn(
     "browser_probe",
   ],
   {
-    cwd: path.resolve(root, "../.."),
+    cwd: sdkRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  },
+);
+const relay = spawn(
+  "cargo",
+  [
+    "run",
+    "-p",
+    "auki-network",
+    "--example",
+    "browser_full_peer_relay",
+    "--features",
+    "browser_probe",
+  ],
+  {
+    cwd: sdkRoot,
     stdio: ["ignore", "pipe", "pipe"],
   },
 );
 
 let managerAddr = "";
+let relayAddr = "";
 let managerStderr = "";
 manager.stdout.on("data", (chunk) => {
   const text = String(chunk);
-  const match = text.match(/manager_addr=(\S+)/);
-  if (match) managerAddr = match[1];
+  for (const match of text.matchAll(/manager_addr=(\S+)/g)) {
+    managerAddr = preferLoopback(managerAddr, match[1]);
+  }
+  for (const match of text.matchAll(/relay_addr=(\S+)/g)) {
+    relayAddr = preferLoopback(relayAddr, match[1]);
+  }
 });
 manager.stderr.on("data", (chunk) => {
   managerStderr += String(chunk);
   process.stderr.write(chunk);
 });
+relay.stdout.on("data", (chunk) => {
+  const text = String(chunk);
+  for (const match of text.matchAll(/relay_addr=(\S+)/g)) {
+    relayAddr = preferLoopback(relayAddr, match[1]);
+  }
+});
+relay.stderr.on("data", (chunk) => {
+  managerStderr += String(chunk);
+  process.stderr.write(chunk);
+});
 
 const deadline = Date.now() + 60000;
-while (!managerAddr && Date.now() < deadline) {
+while ((!managerAddr || !relayAddr) && Date.now() < deadline) {
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
-if (!managerAddr) {
+if (!managerAddr || !relayAddr) {
   manager.kill("SIGTERM");
-  throw new Error(`manager did not print a dialable address\n${managerStderr}`);
+  relay.kill("SIGTERM");
+  throw new Error(`manager did not print dialable manager and relay addresses\n${managerStderr}`);
 }
 
 const contentTypes = new Map([
@@ -80,9 +113,13 @@ try {
   const pageB = await browser.newPage();
   await pageA.goto(`http://127.0.0.1:${port}/`);
   await pageB.goto(`http://127.0.0.1:${port}/`);
+  await Promise.all([
+    pageA.waitForFunction(() => typeof window.runFullPeerProbe === "function"),
+    pageB.waitForFunction(() => typeof window.runFullPeerProbe === "function"),
+  ]);
   const seedA = Array.from({ length: 32 }, (_, i) => i + 1);
   const seedB = Array.from({ length: 32 }, (_, i) => i + 101);
-  const discoveryUrl = `inline-manager://${encodeURIComponent(managerAddr)}`;
+  const discoveryUrl = `inline-manager://${encodeURIComponent(`${managerAddr}|${relayAddr}`)}`;
   const [a, b] = await Promise.all([
     pageA.evaluate((args) => window.runFullPeerProbe(args), {
       seed: seedA,
@@ -110,6 +147,7 @@ try {
   await browser.close();
   server.close();
   manager.kill("SIGTERM");
+  relay.kill("SIGTERM");
 }
 
 async function chromeExecutable() {
@@ -132,4 +170,10 @@ async function chromeExecutable() {
   }
 
   return undefined;
+}
+
+function preferLoopback(current, candidate) {
+  if (!current) return candidate;
+  if (candidate.includes("/ip4/127.0.0.1/")) return candidate;
+  return current;
 }

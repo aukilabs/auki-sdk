@@ -2212,7 +2212,7 @@ impl ClusterManager {
     /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
     /// `StreamSubscriptionPointCloud` on accept; an `OpenStreamError` on
     /// decline, libp2p failure, or timeout.
-    pub async fn open_pointcloud_stream(
+    pub async fn open_point_cloud_stream(
         &self,
         peer_id: PeerId,
         request_bytes: Vec<u8>,
@@ -2221,7 +2221,7 @@ impl ClusterManager {
         auki_network::network_runtime::OpenStreamError,
     > {
         self.runtime
-            .open_pointcloud_stream(peer_id, request_bytes)
+            .open_point_cloud_stream(peer_id, request_bytes)
             .await
     }
 

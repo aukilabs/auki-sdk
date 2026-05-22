@@ -1756,7 +1756,7 @@ impl NetworkRuntime {
     /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
     /// `StreamSubscriptionPointCloud` on accept; an `OpenStreamError` on
     /// decline, libp2p failure, or timeout.
-    pub async fn open_pointcloud_stream(
+    pub async fn open_point_cloud_stream(
         &self,
         peer_id: PeerId,
         request_bytes: Vec<u8>,

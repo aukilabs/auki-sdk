@@ -6,7 +6,7 @@ Implementation status for [`auki-network`](../README.md).
 
 - [`lib.rs`](lib.rs) - feature gates, binding adapter wiring, module exports, and root re-exports.
 - [`core.rs`](core.rs) - binding-free peer identity, reachability, capability types, and locked identity tests.
-- [`ffi.rs`](ffi.rs) - native UniFFI adapter for the small identity/capability surface, behind `uniffi`.
+- [`ffi.rs`](ffi.rs) - native UniFFI adapter for identity/capabilities and the `message_node` Swift host surface, behind `uniffi`.
 - [`wasm.rs`](wasm.rs) - wasm-bindgen adapter for browser identity/protocol helpers, behind `wasm`.
 - [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) - crate-local UniFFI CLI entry point used by the root binding generator.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
@@ -141,6 +141,27 @@ pub mod message_node {
     }
 }
 ```
+
+Behind `uniffi,message_node`, generated Swift bindings expose:
+
+```swift
+public class AukiMessageNode {
+    public static func fromWalletSeed(seed: Data, listenAddrs: [String], agentVersion: String) throws -> AukiMessageNode
+    public func peerId() -> String
+    public func listenAddrs() -> [String]
+    public func dial(peerId: String, addrs: [String]) throws
+    public func sendMessageEnvelopeBytes(peerId: String, envelope: Data) throws -> Data
+    public func nextEvent() throws -> AukiMessageEvent?
+    public func shutdown()
+}
+
+public struct AukiMessageEvent {
+    public let peerId: String
+    public let envelope: Data
+}
+```
+
+`just generate-swift-bindings auki-network` generates the local ignored SwiftPM package under `bindings/swift/auki-network/` and verifies the iOS/macOS XCFramework build. The package is a generated artifact; crate-owned source policy lives in `bindings.toml`, `ffi.rs`, and `bindings/swift/Package.swift.tmpl`.
 
 Behind `swarm`:
 

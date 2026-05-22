@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**Generated Swift `AukiMessageNode` binding enabled for `auki-network`.** The crate now exposes the native message-node facade through UniFFI and verifies the local ignored SwiftPM/XCFramework output for iOS and macOS. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Native `auki-network` message-node facade added.** The `message_node` feature now provides the Rust WebRTC Direct side that generated Swift/UniFFI clients will use for `/auki/message/0.0.1` envelope/ack exchange. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

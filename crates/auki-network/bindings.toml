@@ -1,5 +1,5 @@
 [generators.uniffi]
-features = ["cli"]
+features = ["cli", "message_node"]
 bindgen_bin = "uniffi-bindgen"
 
 [generators.wasm_pack]
@@ -13,10 +13,11 @@ enabled = false
 generator = "uniffi"
 
 [bindings.swift]
-# Enable once a Swift consumer needs the small native identity/capability
-# surface; the native runtime itself remains Rust-only for now.
-enabled = false
+enabled = true
 generator = "uniffi"
+template_dir = "bindings/swift"
+templates = ["Package.swift.tmpl"]
+build_features = ["message_node"]
 
 [bindings.javascript]
 enabled = true

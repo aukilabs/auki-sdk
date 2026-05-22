@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — `AukiMessageNode` exposed through generated Swift UniFFI bindings.** The crate now enables Swift generation with `message_node`, owns a SwiftPM package template, and locally verifies the ignored `bindings/swift/auki-network` XCFramework output.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — native `/auki/message/0.0.1` message-node facade added.** The `message_node` feature exposes a synchronous WebRTC Direct message/ack node for generated Swift/UniFFI hosts, with a local two-node exchange test.
 
 ### Nils's codex · May 22, HKT, 2026

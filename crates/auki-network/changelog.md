@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`AukiMessageNode` exposed through generated Swift UniFFI bindings.** The native adapter now exports a Swift-facing message node object with peer id, listen-address, dial, send-envelope, event-poll, and shutdown methods. `bindings.toml` enables Swift generation with the `message_node` feature, and the crate owns a SwiftPM package template. Verification generated the local ignored `bindings/swift/auki-network` package and built its iOS/macOS XCFramework.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Native `/auki/message/0.0.1` message-node facade added.** The `message_node` feature now owns a synchronous WebRTC Direct node for Swift/UniFFI hosts, using generated `auki-proto` `MessageEnvelope` bytes at the binding boundary and returning `MessageAck` bytes after substream exchange. Tests cover facade defaults, protobuf decode failure, non-blocking event polling, and a local two-node WebRTC Direct message/ack exchange.
 
 ### Nils's codex · May 22, HKT, 2026

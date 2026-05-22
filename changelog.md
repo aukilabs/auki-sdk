@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**iOS generated-binding Auki network test host added.** `examples/ios/AukiNetworkTestApp` now builds a SwiftUI host app against generated `auki_network` UniFFI bindings and generated SwiftProtobuf `AukiProto`, keeping libp2p networking in Rust. See [`examples/changelog.md`](examples/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Swift protobuf generation now emits public types.** `scripts/generate-swift-proto.sh` passes SwiftProtobuf's public visibility option so generated `AukiProto` messages can be imported from the iOS test app target.
 
 ### Nils's codex · May 22, HKT, 2026

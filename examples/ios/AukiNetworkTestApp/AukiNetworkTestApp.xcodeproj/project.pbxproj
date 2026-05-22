@@ -1,0 +1,484 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		39FB5F3BC4A2DF00A691360B /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6255DAD8C35EB507018436D /* SystemConfiguration.framework */; };
+		747C0B90AADE34D8B979B1AE /* auki_network in Frameworks */ = {isa = PBXBuildFile; productRef = 7569024907DFB2960C48C8CC /* auki_network */; };
+		9B2C184ECE16E23BC319B77B /* MessageNodeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6731746DE61B5AE91D26E2DF /* MessageNodeViewModel.swift */; };
+		A7466673BA4B5569E344F24E /* auki_network in Frameworks */ = {isa = PBXBuildFile; productRef = 0E31D5E8A392139983F1AFBD /* auki_network */; };
+		AD22AE4C994488D6A2D457DF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 662684A36D6BDE4013167401 /* ContentView.swift */; };
+		ADA635988EE35A63CA0B1E9C /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = 7FD3F4BE871BBD2758855E15 /* AukiProto */; };
+		BDFCB6C49B67D80BCFC55685 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1F6545F7DC24C6D1BFEB41 /* App.swift */; };
+		E078CE110C125CDEA0BD73B3 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6255DAD8C35EB507018436D /* SystemConfiguration.framework */; };
+		EB5D2A0B7668947CB84C6D58 /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = DCCDFDEAD1335A78B1517F03 /* AukiProto */; };
+		FCCA7DE0BCB31335FB8C3F87 /* GeneratedBindingsSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB326A6046C7C9B435A8150 /* GeneratedBindingsSmokeTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		EE9B5E3E70B88B3D90F615F5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F8E1600A659E3EA7A4F1256B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C05C233B25CB7229130DB2DB;
+			remoteInfo = AukiNetworkTestApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0428889D6508D769706263A5 /* auki-proto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-proto"; path = "../../../bindings/swift/auki-proto"; sourceTree = SOURCE_ROOT; };
+		0D1F6545F7DC24C6D1BFEB41 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		52F759A91B5A33A5ED20AB64 /* AukiNetworkTestAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AukiNetworkTestAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		662684A36D6BDE4013167401 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		6731746DE61B5AE91D26E2DF /* MessageNodeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageNodeViewModel.swift; sourceTree = "<group>"; };
+		7F78F40CFB63D84DF532FA41 /* AukiNetworkTestApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AukiNetworkTestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		85750C54B2344D299E49C25A /* auki-network */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-network"; path = "../../../bindings/swift/auki-network"; sourceTree = SOURCE_ROOT; };
+		BAB326A6046C7C9B435A8150 /* GeneratedBindingsSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedBindingsSmokeTests.swift; sourceTree = "<group>"; };
+		D6255DAD8C35EB507018436D /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		12FECB301D5D96631D6EAD78 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				747C0B90AADE34D8B979B1AE /* auki_network in Frameworks */,
+				ADA635988EE35A63CA0B1E9C /* AukiProto in Frameworks */,
+				39FB5F3BC4A2DF00A691360B /* SystemConfiguration.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		192E3782823B3095ABD41584 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A7466673BA4B5569E344F24E /* auki_network in Frameworks */,
+				EB5D2A0B7668947CB84C6D58 /* AukiProto in Frameworks */,
+				E078CE110C125CDEA0BD73B3 /* SystemConfiguration.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2FB47C7D5BD7EEB1DE4AF566 = {
+			isa = PBXGroup;
+			children = (
+				918B01AF4548ED6061E179A2 /* AukiNetworkTestApp */,
+				B317C26B49B162DBA1DA08E5 /* AukiNetworkTestAppTests */,
+				BAA05C52D473A273E242A5A4 /* Packages */,
+				A2AB9A22C89886122C6624FE /* Frameworks */,
+				862F7F578D4C3A9C3EDD6F90 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		862F7F578D4C3A9C3EDD6F90 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7F78F40CFB63D84DF532FA41 /* AukiNetworkTestApp.app */,
+				52F759A91B5A33A5ED20AB64 /* AukiNetworkTestAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		918B01AF4548ED6061E179A2 /* AukiNetworkTestApp */ = {
+			isa = PBXGroup;
+			children = (
+				0D1F6545F7DC24C6D1BFEB41 /* App.swift */,
+				662684A36D6BDE4013167401 /* ContentView.swift */,
+				6731746DE61B5AE91D26E2DF /* MessageNodeViewModel.swift */,
+			);
+			path = AukiNetworkTestApp;
+			sourceTree = "<group>";
+		};
+		A2AB9A22C89886122C6624FE /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				D6255DAD8C35EB507018436D /* SystemConfiguration.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		B317C26B49B162DBA1DA08E5 /* AukiNetworkTestAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				BAB326A6046C7C9B435A8150 /* GeneratedBindingsSmokeTests.swift */,
+			);
+			path = AukiNetworkTestAppTests;
+			sourceTree = "<group>";
+		};
+		BAA05C52D473A273E242A5A4 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				85750C54B2344D299E49C25A /* auki-network */,
+				0428889D6508D769706263A5 /* auki-proto */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		44397F5E943AC574A33756A4 /* AukiNetworkTestAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EBCC20D1A2C1735F8388704A /* Build configuration list for PBXNativeTarget "AukiNetworkTestAppTests" */;
+			buildPhases = (
+				4E240CFAB3312C6768F1AEB3 /* Sources */,
+				192E3782823B3095ABD41584 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3EA0CD45D6955EFFD238A350 /* PBXTargetDependency */,
+			);
+			name = AukiNetworkTestAppTests;
+			packageProductDependencies = (
+				0E31D5E8A392139983F1AFBD /* auki_network */,
+				DCCDFDEAD1335A78B1517F03 /* AukiProto */,
+			);
+			productName = AukiNetworkTestAppTests;
+			productReference = 52F759A91B5A33A5ED20AB64 /* AukiNetworkTestAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		C05C233B25CB7229130DB2DB /* AukiNetworkTestApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 676FDD06DD37DF3816EE25CC /* Build configuration list for PBXNativeTarget "AukiNetworkTestApp" */;
+			buildPhases = (
+				480579AF3DB37504A2269DD8 /* Sources */,
+				12FECB301D5D96631D6EAD78 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AukiNetworkTestApp;
+			packageProductDependencies = (
+				7569024907DFB2960C48C8CC /* auki_network */,
+				7FD3F4BE871BBD2758855E15 /* AukiProto */,
+			);
+			productName = AukiNetworkTestApp;
+			productReference = 7F78F40CFB63D84DF532FA41 /* AukiNetworkTestApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F8E1600A659E3EA7A4F1256B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = B525AFD67A4EEF2819C74166 /* Build configuration list for PBXProject "AukiNetworkTestApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 2FB47C7D5BD7EEB1DE4AF566;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				77AE40843AB5C9C1F21B4B69 /* XCLocalSwiftPackageReference "../../../bindings/swift/auki-network" */,
+				0076808FADEF349364789600 /* XCLocalSwiftPackageReference "../../../bindings/swift/auki-proto" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 862F7F578D4C3A9C3EDD6F90 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C05C233B25CB7229130DB2DB /* AukiNetworkTestApp */,
+				44397F5E943AC574A33756A4 /* AukiNetworkTestAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		480579AF3DB37504A2269DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BDFCB6C49B67D80BCFC55685 /* App.swift in Sources */,
+				AD22AE4C994488D6A2D457DF /* ContentView.swift in Sources */,
+				9B2C184ECE16E23BC319B77B /* MessageNodeViewModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E240CFAB3312C6768F1AEB3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FCCA7DE0BCB31335FB8C3F87 /* GeneratedBindingsSmokeTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3EA0CD45D6955EFFD238A350 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C05C233B25CB7229130DB2DB /* AukiNetworkTestApp */;
+			targetProxy = EE9B5E3E70B88B3D90F615F5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		19B2BC706ED2C18E165B0698 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		205A0EE2855512F9294CE521 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aukilabs.AukiNetworkTestApp;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3F6E04A6C550A35B1CEB3923 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aukilabs.AukiNetworkTestAppTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AukiNetworkTestApp.app/AukiNetworkTestApp";
+			};
+			name = Debug;
+		};
+		51D87D98F3A4ED113B11947F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		583772686B214874445E714B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aukilabs.AukiNetworkTestAppTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AukiNetworkTestApp.app/AukiNetworkTestApp";
+			};
+			name = Release;
+		};
+		68E5E96D68A0683B5A997D5E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.aukilabs.AukiNetworkTestApp;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		676FDD06DD37DF3816EE25CC /* Build configuration list for PBXNativeTarget "AukiNetworkTestApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				205A0EE2855512F9294CE521 /* Debug */,
+				68E5E96D68A0683B5A997D5E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B525AFD67A4EEF2819C74166 /* Build configuration list for PBXProject "AukiNetworkTestApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				51D87D98F3A4ED113B11947F /* Debug */,
+				19B2BC706ED2C18E165B0698 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EBCC20D1A2C1735F8388704A /* Build configuration list for PBXNativeTarget "AukiNetworkTestAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3F6E04A6C550A35B1CEB3923 /* Debug */,
+				583772686B214874445E714B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		0076808FADEF349364789600 /* XCLocalSwiftPackageReference "../../../bindings/swift/auki-proto" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../bindings/swift/auki-proto";
+		};
+		77AE40843AB5C9C1F21B4B69 /* XCLocalSwiftPackageReference "../../../bindings/swift/auki-network" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../../bindings/swift/auki-network";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0E31D5E8A392139983F1AFBD /* auki_network */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = auki_network;
+		};
+		7569024907DFB2960C48C8CC /* auki_network */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = auki_network;
+		};
+		7FD3F4BE871BBD2758855E15 /* AukiProto */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiProto;
+		};
+		DCCDFDEAD1335A78B1517F03 /* AukiProto */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiProto;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = F8E1600A659E3EA7A4F1256B /* Project object */;
+}

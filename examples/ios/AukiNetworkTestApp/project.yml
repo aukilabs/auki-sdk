@@ -1,0 +1,44 @@
+name: AukiNetworkTestApp
+options:
+  bundleIdPrefix: com.aukilabs
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  auki-network:
+    path: ../../../bindings/swift/auki-network
+  auki-proto:
+    path: ../../../bindings/swift/auki-proto
+targets:
+  AukiNetworkTestApp:
+    type: application
+    platform: iOS
+    sources:
+      - AukiNetworkTestApp
+    dependencies:
+      - package: auki-network
+        product: auki_network
+      - package: auki-proto
+        product: AukiProto
+      - sdk: SystemConfiguration.framework
+    settings:
+      base:
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: 0.1
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.AukiNetworkTestApp
+  AukiNetworkTestAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - AukiNetworkTestAppTests
+    dependencies:
+      - target: AukiNetworkTestApp
+      - package: auki-network
+        product: auki_network
+      - package: auki-proto
+        product: AukiProto
+      - sdk: SystemConfiguration.framework
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.AukiNetworkTestAppTests

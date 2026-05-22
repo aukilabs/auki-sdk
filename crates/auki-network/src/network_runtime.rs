@@ -933,7 +933,8 @@ impl NetworkRuntime {
         request: SensorsRequest,
     ) -> Result<SensorsResponse, RequestSensorsError> {
         let mut control = self.stream_control.clone();
-        let proto = SENSORS_PROTOCOL.clone();
+        let proto = StreamProtocol::try_from_owned(SENSORS_PROTOCOL.to_string())
+            .expect("SENSORS_PROTOCOL is a valid libp2p protocol id");
 
         let open_fut = control.open_stream(peer_id, proto);
         let mut substream = match tokio::time::timeout(SENSORS_REQUEST_TIMEOUT, open_fut).await {
@@ -1937,7 +1938,8 @@ async fn run_task(
     };
 
     // Register inbound `/auki/sensors/0.0.1` substream acceptance.
-    let sensors_proto = SENSORS_PROTOCOL.clone();
+    let sensors_proto = StreamProtocol::try_from_owned(SENSORS_PROTOCOL.to_string())
+        .expect("SENSORS_PROTOCOL is a valid libp2p protocol id");
     let mut incoming_sensors: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(sensors_proto) {

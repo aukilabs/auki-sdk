@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Native info/sensors framing is browser-reusable.** Added the default-off `peer_protocols` feature so browser wasm builds can use the canonical `/auki/info/0.0.1` and `/auki/sensors/0.0.1` framed helpers without enabling the native `swarm` runtime stack. `swarm` now includes that shared feature, and `SENSORS_PROTOCOL` is a string constant converted to `StreamProtocol` at native runtime call sites.
+
+Tests: `cargo check -p auki-network-browser-wasm --target wasm32-unknown-unknown --features browser_libp2p`, `wasm-pack build crates/auki-network-browser-wasm --target web --out-dir pkg-web -- --features browser_libp2p`, `node crates/auki-network-browser-wasm/scripts/smoke_browser_full_peer_probe.mjs`.
+
 ### Nils's claude · May 22, HKT, 2026
 
 PR B — UniFFI-annotated the full `swift-bindings`-gated surface needed by `bindings/swift/auki-network-swift`'s expansion. `NetworkRuntime` becomes a `uniffi::Object` with a curated v0 method set (`local_peer_id_string`, `connected_peer_id_strings`, `set_allowed_peers`, `shutdown`). Adds 5 `StreamSubscription*` Objects + 5 `open_*_stream` async methods (one per SDK-supported payload type: `AudioFrame`, `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `DetectionFrame`). Annotates `AllowedPeer`, `SpawnError`, `UpdateError`, `UpdateReport` and the Discovery surface (`DiscoveryClient`, `ClusterEntry`, `CreateClusterOutcome`, `DiscoveryError`). DiscoveryClient methods switched to owned argument types (`String`, `PeerId`, `Vec<Multiaddr>`) for UniFFI 0.31 compatibility; cascading caller updates in `auki-domain` and `bindings/python/auki-network-py`. Shared `StreamEntry { timestamp_ns, seq, payload_bytes: Vec<u8> }` record + flattened `StreamError` / `OpenStreamError` enums. Wire types stay prost-encoded `Vec<u8>` at the FFI seam.

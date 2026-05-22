@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 22, HKT, 2026
+
+**Browser SDK peers now use native info/sensors catalog exchange.** Browser peers serve and fetch `/auki/info/0.0.1` plus `/auki/sensors/0.0.1` after membership, and the full-peer smoke now proves remote browser audio sensors come through the native sensors protocol instead of membership placeholders. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's claude · May 22, HKT, 2026
 
 Spec 1 PR B landed: `bindings/swift/auki-network-swift` expanded from Stage 1's Discovery-only surface to full v0 networking — `NetworkRuntime` + `spawn_for_swift` + 5-payload stream surface (Audio, Camera, PointCloud, JointEncoders, Detection) + `PeerLivenessListener` / `HeartbeatTimestampProvider` / `SwiftStreamProvider` (two-call protocol) callback interfaces. Stage 1's hand-wrapped Discovery types replaced by upstream-annotated re-exports. `auki-network` upstream picks up the matching UniFFI annotations under the existing `swift-bindings` feature. Unblocks Spec 1 PR C (`auki-domain-swift`).

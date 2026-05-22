@@ -143,6 +143,15 @@ try {
   if (!b.snapshots.at(-1)?.participants?.some((p) => p.peerId === a.peerId)) {
     throw new Error("B cannot see A through full peer state");
   }
+  if (!a.debug?.sensorCatalogProtocolPeerCount || !b.debug?.sensorCatalogProtocolPeerCount) {
+    throw new Error(`browser peers did not fetch remote sensor catalogs through /auki/sensors/0.0.1: ${JSON.stringify({ a, b }, null, 2)}`);
+  }
+  if (!hasRemoteAudioSensor(a.snapshots.at(-1), b.peerId)) {
+    throw new Error(`A cannot see B's audio sensor through /auki/sensors/0.0.1: ${JSON.stringify(a.snapshots.at(-1), null, 2)}`);
+  }
+  if (!hasRemoteAudioSensor(b.snapshots.at(-1), a.peerId)) {
+    throw new Error(`B cannot see A's audio sensor through /auki/sensors/0.0.1: ${JSON.stringify(b.snapshots.at(-1), null, 2)}`);
+  }
 } finally {
   await browser.close();
   server.close();
@@ -176,4 +185,15 @@ function preferLoopback(current, candidate) {
   if (!current) return candidate;
   if (candidate.includes("/ip4/127.0.0.1/")) return candidate;
   return current;
+}
+
+function hasRemoteAudioSensor(snapshot, peerId) {
+  return Boolean(
+    snapshot?.participants?.some(
+      (participant) =>
+        participant.peerId === peerId &&
+        participant.isSelf === false &&
+        participant.sensors?.some((sensor) => sensor.id === "audio" && sensor.kind === "audio"),
+    ),
+  );
 }

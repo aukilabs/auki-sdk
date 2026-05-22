@@ -107,10 +107,10 @@ pub mod membership_protocol;
 #[cfg(feature = "swarm")]
 pub mod diagnostic_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(any(feature = "swarm", feature = "peer_protocols"))]
 pub mod info_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(any(feature = "swarm", feature = "peer_protocols"))]
 pub mod sensors_protocol;
 
 #[cfg(feature = "swarm")]

@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script type="module">
+  import init, { BrowserDomainSession } from "../pkg-web/auki_network_browser_wasm.js";
+
+  await init();
+
+  window.runFullPeerProbe = async ({ seed, discoveryUrl, domainName }) => {
+    const session = new BrowserDomainSession(new Uint8Array(seed));
+    const join = await session.joinDomain(discoveryUrl, domainName);
+    const snapshots = [];
+    const unsubscribe = session.observeParticipants((snapshot) => snapshots.push(snapshot));
+    await session.setParticipantMetadata({ appId: "park", displayName: session.peerId() });
+    await session.declareLocalSensors([
+      { id: "audio", kind: "audio", label: "Microphone", publishable: true, subscribable: true },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    unsubscribe();
+    return {
+      peerId: session.peerId(),
+      join,
+      snapshots,
+      debug: typeof session.debugState === "function" ? session.debugState() : null,
+    };
+  };
+</script>

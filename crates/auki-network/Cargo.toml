@@ -66,7 +66,7 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 anyhow = { version = "1", optional = true }
 
 # `swarm` feature
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "dns", "websocket", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
 libp2p-webrtc = { version = "0.9.0-alpha.1", default-features = false, features = ["tokio"], optional = true }
 # Cluster trust boundary at the libp2p layer. Inbound and outbound
 # connections from peer-ids not on `ClusterDoc.peers` are refused at
@@ -132,3 +132,13 @@ tempfile = "3"
 # For the swarm tests (require `--features swarm`).
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
+
+[[example]]
+name = "browser_full_peer_manager"
+path = "examples/browser_full_peer_manager.rs"
+required-features = ["browser_probe"]
+
+[[example]]
+name = "browser_full_peer_relay"
+path = "examples/browser_full_peer_relay.rs"
+required-features = ["browser_probe"]

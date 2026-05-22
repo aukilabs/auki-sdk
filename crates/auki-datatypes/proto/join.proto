@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package auki.join;
+
+// libp2p substream protocol envelope for `/auki/join/0.0.1`.
+//
+// Framing is owned by `auki-network`: 4-byte big-endian u32 length prefix
+// followed by the protobuf-encoded message body.
+
+message JoinRequest {
+  repeated string multiaddrs = 1;
+}
+
+message JoinResponse {
+  oneof kind {
+    Accept accept = 1;
+    Reject reject = 2;
+  }
+
+  message Accept {
+    string membership_json = 1;
+    bytes successor_token = 2;
+  }
+
+  message Reject {
+    string reason = 1;
+  }
+}

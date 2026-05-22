@@ -123,6 +123,60 @@ pub mod time_transform {
 
 impl_log_payload!(time_transform::TimeTransformEntry);
 
+/// `auki.join` — `/auki/join/0.0.1` request/response messages.
+pub mod join {
+    include!(concat!(env!("OUT_DIR"), "/auki.join.rs"));
+
+    impl JoinResponse {
+        pub fn accept(membership_json: impl Into<String>, successor_token: Vec<u8>) -> Self {
+            Self {
+                kind: Some(join_response::Kind::Accept(join_response::Accept {
+                    membership_json: membership_json.into(),
+                    successor_token,
+                })),
+            }
+        }
+
+        pub fn reject(reason: impl Into<String>) -> Self {
+            Self {
+                kind: Some(join_response::Kind::Reject(join_response::Reject {
+                    reason: reason.into(),
+                })),
+            }
+        }
+    }
+}
+
+/// `auki.info` — `/auki/info/0.0.1` request/response messages.
+pub mod info {
+    include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));
+}
+
+/// `auki.sensors` — `/auki/sensors/0.0.1` request/response messages.
+pub mod sensors {
+    include!(concat!(env!("OUT_DIR"), "/auki.sensors.rs"));
+
+    impl SensorsRequest {
+        pub fn catalog() -> Self {
+            Self::default()
+        }
+
+        pub fn with_registry_entries() -> Self {
+            Self {
+                include_registry_entries: true,
+                include_frame_entries: false,
+            }
+        }
+
+        pub fn with_frame_entries() -> Self {
+            Self {
+                include_registry_entries: true,
+                include_frame_entries: true,
+            }
+        }
+    }
+}
+
 /// `auki.point_cloud_stream` — `PointCloudFrame` substream payload
 /// (libp2p `/auki/stream/0.1.0`). Migration Step 2.
 pub mod point_cloud_stream {

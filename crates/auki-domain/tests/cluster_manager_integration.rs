@@ -173,7 +173,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
     //    take over). Explicit `deregister` for test cleanup.
     manager.shutdown().await.expect("shutdown succeeds");
     discovery
-        .deregister(&cluster_name)
+        .deregister(cluster_name.clone())
         .await
         .expect("explicit cleanup deregister");
     let after = discovery
@@ -550,7 +550,7 @@ async fn domain_clock_metadata_survives_manager_handoff() {
     let after = discovery.list_clusters().await.expect("list after");
     if after.iter().any(|c| c.name == cluster_name) {
         discovery
-            .deregister(&cluster_name)
+            .deregister(cluster_name.clone())
             .await
             .expect("explicit cleanup deregister");
     }

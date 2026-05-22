@@ -7,9 +7,6 @@
 //! methods (clock sync, diagnostics) explicitly included per the design
 //! spec.
 //!
-//! See `README.md` for the full API surface description and `src/readme.md`
-//! for the implementation breakdown.
-
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 

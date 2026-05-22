@@ -7,6 +7,10 @@ repository.workspace = true
 authors.workspace = true
 description = "Single source of truth for the Auki SDK's shared cross-language data types. Owns the .proto schemas and the prost-generated Rust code for log payload types (camera frames, point clouds, audio chunks, transforms, time-transform samples). Downstream Rust crates (auki-logs, auki-network, auki-ros-adapter, auki-time) import the generated types from here. Cross-language consumers (Python via betterproto, future Sentinel ports) generate their own bindings from the same .proto files. Encoding is protobuf via prost; the name names the responsibility, not the implementation."
 
+[features]
+default = []
+swift-bindings = ["dep:uniffi"]
+
 [dependencies]
 # Runtime support for prost-generated types — Message trait, encode /
 # decode, well-known types, etc.
@@ -15,6 +19,9 @@ prost = "0.13"
 # blanket-style impl through the `impl_log_payload!` macro so consumers
 # can drop them straight into `auki_logs::Log<T>`.
 auki-logs = { path = "../auki-logs" }
+# Optional — pulled in only when generated protobuf records cross the
+# UniFFI Swift surface.
+uniffi = { version = "0.31", optional = true }
 
 [build-dependencies]
 # Compiles .proto → Rust at build time. Output lands in OUT_DIR and is

@@ -1,6 +1,6 @@
 # auki-domain-swift parking lot
 
-Open questions for this crate. Resolved items are deleted (per auki-sdk convention) and recorded in `changelog.md`.
+Open questions for this crate. Track implementation work through the SDK project board; keep only live questions here.
 
 ## Open
 

@@ -10,7 +10,20 @@ fn main() -> std::io::Result<()> {
     let protoc = protoc_bin_vendored::protoc_bin_path()
         .expect("vendored protoc binary not available for this platform");
 
-    prost_build::Config::new()
+    let mut config = prost_build::Config::new();
+
+    for ty in [
+        ".auki.sensors.SensorsRequest",
+        ".auki.sensors.SensorsResponse",
+        ".auki.sensors.SensorEntry",
+    ] {
+        config.type_attribute(
+            ty,
+            "#[cfg_attr(feature = \"swift-bindings\", derive(uniffi::Record))]",
+        );
+    }
+
+    config
         .protoc_executable(protoc)
         .compile_protos(
             &[

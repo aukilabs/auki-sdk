@@ -6,8 +6,6 @@ When a question is answered inline, an agent removes the item and propagates the
 
 ---
 
-- **`swift-bindings` feature**: gates UniFFI proc-macros on the full public ClusterManager surface + provider trait callback interfaces. Propagates to `auki-identity/swift-bindings`, `auki-network/swift-bindings`, and `auki-time/swift-bindings`. No behavior change with the feature off (default).
-
 ## Successor-token encoding for v2 Manager-handoff hardening _(filed by Nils's claude, 2026-05-13)_
 
 The v1 Discovery contract (locked 2026-05-13) skips signature verification entirely, so for v1 even bare unsigned JSON is fine. For the v2 hardening pass, the successor token `{cluster, eligible_successor: <joiner_peer_id>, issued_at: <ts>}` signed by the current Manager's libp2p private key needs an encoding decision. Three options:

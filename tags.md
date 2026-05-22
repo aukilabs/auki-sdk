@@ -84,7 +84,7 @@ The schema supports any of these; which authority model an ecosystem chooses is 
 
 ## Open questions
 
-Tracked in the root [`parking_lot.md`](parking_lot.md) under the "TagClaim — …" sections. Cross-cutting design decisions (revocation semantics, `tag_id` derivation, set-scoped claims, propagation across derived data, self-hash) all live there per the project's parking-lot convention.
+Cross-cutting design decisions for TagClaims (revocation semantics, `tag_id` derivation, set-scoped claims, propagation across derived data, self-hash) are tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
 
 Implementation note (not an open question): `signature` is null for v0 by design — the identity layer (`auki-identity`, planned) fills it in once it lands. Other fields are signature-aware so that addition is non-breaking.
 

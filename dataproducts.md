@@ -218,7 +218,7 @@ Everything required to decide "do I want this, and how do I consume it" without 
 
 ## Open questions
 
-Tracked in the root [`parking_lot.md`](parking_lot.md) under the "Discovery descriptor — …" sections (`log_handle` semantics, aborted-status detection, self-hash) and per-crate parking lots. The Frame Registry shape question is resolved; Pose Log capture shape is resolved; graph-level `convert_pose` path finding and descriptor transport are still pending.
+The Frame Registry shape question is resolved; Pose Log capture shape is resolved; graph-level `convert_pose` path finding and descriptor transport are still pending.
 
 ---
 

@@ -4,7 +4,7 @@ PyO3 bindings for `auki-session` — a transport-neutral, in-process Python surf
 
 The aspirational shape is the **source-of-truth API** for SDK control-plane operations: both the [HTTP Control API](../../../docs/control-api.md) (frozen at SDK release v0.0.23) and the forthcoming libp2p control protocols (`/auki/control/info/0.0.1`, `/auki/control/sensor_logs/0.0.1`, …) are thin wrappers over this surface.
 
-**Status:** WIP (scaffolding only) — the Python module is empty. First implementation gates on the `payload` encoding decision in [`parking_lot.md`](../parking_lot.md). See the upstream Rust `auki-session` crate's design notes for the resolved-2026-05-07 decisions and the two open questions.
+**Status:** WIP (scaffolding only) — the Python module is empty. First implementation gates on the `payload` encoding decision, tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
 
 ## Public surface
 

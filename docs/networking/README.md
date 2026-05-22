@@ -5,10 +5,12 @@ This directory contains the draft peer-to-peer cluster lifecycle RFCs.
 Read in this order:
 
 1. [`baseline.md`](baseline.md) is the draft implementable baseline.
-2. [`drafts.md`](drafts.md) parks future extension drafts.
-3. [`backlog.md`](backlog.md) is the working task list. It is not part of the
+2. [`security-profile-v1.md`](security-profile-v1.md) is the short production
+   guardrail profile for baseline deployments.
+3. [`drafts.md`](drafts.md) parks future extension drafts.
+4. [`backlog.md`](backlog.md) is the working task list. It is not part of the
    protocol requirements.
-4. [`glossary.md`](glossary.md) defines recurring terminology.
+5. [`glossary.md`](glossary.md) defines recurring terminology.
 
 ## Baseline Compliance Profile
 
@@ -55,6 +57,10 @@ remote data.
 The baseline is a bootstrapping protocol for configured or private peer-to-peer
 relationships. Discovery is optional rendezvous/presence infrastructure and is
 not required for the baseline peer-to-peer path.
+
+The baseline is not a complete production security profile by itself. Production
+or production-like deployments should also enforce
+[`security-profile-v1.md`](security-profile-v1.md).
 
 The authority and identity path is implementable now: peer bindings, domain
 ids, domain declarations, domain delegations, authority-chain validation,

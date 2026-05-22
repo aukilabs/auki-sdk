@@ -1,0 +1,41 @@
+# $crate_package_name Python package
+
+UniFFI-generated Python package for the [`$crate_package_name`](../../../crates/$crate_package_name) wallet primitive.
+
+Generate the package from the repo root:
+
+```bash
+just generate-python-bindings $crate_package_name
+```
+
+That refreshes `$binding_module_name/__init__.py`, writes the crate-owned Python
+package templates, then builds and copies native libraries for all default
+targets.
+
+`setup.py` marks the distribution as binary so wheel builds are platform-tagged
+instead of `py3-none-any`.
+
+## Native libraries
+
+By default, generation includes the host target plus these Linux targets:
+
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+
+On macOS, generation also includes both Darwin targets:
+
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+
+Linux target builds use `cross`, so Docker must be running.
+
+For a local one-target regeneration while iterating:
+
+```bash
+AUKI_PYTHON_NATIVE_TARGETS="aarch64-apple-darwin" just generate-python-bindings $crate_package_name
+```
+
+At import time the generated package selects the native library that matches
+`sys.platform` and `platform.machine()`. Set `AUKI_IDENTITY_LIBRARY_PATH` to
+force a specific dynamic library, or `AUKI_IDENTITY_NATIVE_TARGET` to force a
+bundled target directory.

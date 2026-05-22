@@ -1,0 +1,25 @@
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "$crate_package_name",
+    platforms: [
+        .iOS(.v13),
+        .macOS(.v12)
+    ],
+    products: [
+        .library(name: "$crate_lib_name", targets: ["$crate_lib_name"])
+    ],
+    targets: [
+        .target(
+            name: "$crate_lib_name",
+            dependencies: ["${crate_lib_name}FFI"],
+            path: "generated",
+            sources: ["$crate_lib_name.swift"]
+        ),
+        .binaryTarget(
+            name: "${crate_lib_name}FFI",
+            path: "generated/$crate_lib_name.xcframework"
+        )
+    ]
+)

@@ -10,6 +10,8 @@ Wallet primitive for the SDK. Spec: this crate's [outer `README.md`](../README.m
 - [`ffi.rs`](ffi.rs) — native UniFFI adapter for Swift/Python. Private to binding generation.
 - [`wasm.rs`](wasm.rs) — wasm-bindgen adapter for JavaScript/WebAssembly. Private to binding generation.
 - [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) — crate-local UniFFI CLI entry point used by the root binding recipes.
+- [`../bindings.toml`](../bindings.toml) — crate-owned binding policy for the generic root generator.
+- [`../bindings/`](../bindings) — crate-owned JavaScript, Python, and Swift package templates plus the JavaScript smoke test.
 
 ## Public types
 
@@ -91,6 +93,11 @@ names (`fromSeed`, `publicKey`, `signCanonicalJson`, `deriveChild`,
 The wasm seed helper reads a 64-character hex seed from browser `localStorage`,
 validates that it decodes to exactly 32 bytes, or mints and stores a fresh
 seed under the caller-supplied key.
+
+Binding package generation is also crate-owned. `bindings.toml` tells the
+generic root generator to use UniFFI for Python/Swift, wasm-pack for
+JavaScript/WebAssembly, the `cli` and `wasm` feature flags for those generators,
+and the templates/smoke files under `bindings/<language>/`.
 
 ## How `derive_child` works
 

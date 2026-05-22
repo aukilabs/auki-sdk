@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-identity`](auki-identity/changelog.md) — crate-owned binding generation contract added.** The crate now carries `bindings.toml` plus JavaScript, Python, and Swift package templates/smoke assets so the generic root generator can produce identity packages from crate metadata and crate-local policy.
+
+### Nils's codex · May 22, HKT, 2026
+
 **[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — binding generation ownership moved into the crate.** The proving crate now carries `bindings.toml` plus JavaScript, Python, and Swift package templates/smoke assets; generic root scripts read Cargo metadata and crate-local binding policy instead of embedding crate-specific package content.
 
 ### Nils's codex · May 22, HKT, 2026

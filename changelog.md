@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**`auki-identity` now owns its binding package contract.** The production wallet crate has `bindings.toml` plus crate-local JavaScript, Python, and Swift package assets/smoke tests matching the updated `auki-uniffi-test` standard. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **Binding generation now uses crate-owned binding contracts.** Added a generic metadata-driven generator and migrated `auki-uniffi-test` so JavaScript, Python, and Swift package templates/smoke assets live under the Rust crate while generated packages still land under `bindings/`. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
 
 ### Nils's codex · May 22, HKT, 2026

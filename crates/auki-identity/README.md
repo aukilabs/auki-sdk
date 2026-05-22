@@ -89,6 +89,31 @@ The web binding path has no filesystem, so `loadOrMintSeed(storageKey)` reads
 a 64-character hex seed from browser `localStorage`, validates that it decodes
 to exactly 32 bytes, or mints and stores a fresh seed under that key.
 
+## Binding generation ownership
+
+The crate owns the binding-generation contract and package assets used by the
+root `just` recipes:
+
+```text
+bindings.toml
+bindings/
+  javascript/
+    package.json.tmpl
+    README.md.tmpl
+    smoke.mjs
+  python/
+    pyproject.toml.tmpl
+    setup.py.tmpl
+    README.md.tmpl
+  swift/
+    Package.swift.tmpl
+```
+
+[`bindings.toml`](bindings.toml) declares which generator each language uses,
+which feature flags to enable, and which crate-local templates and smoke tests
+belong to the generated packages. The root scripts read Cargo metadata and this
+crate-owned policy; they do not carry `auki-identity`-specific package content.
+
 ## load_or_mint_seed
 
 Small filesystem helper for daemons that need a stable wallet — and therefore a stable libp2p peer id — across process restarts. It is the mechanism behind the SDK's stable peer-key guarantee: `auki-network::PeerIdentity::from_wallet(&wallet)` derives the same peer id every time, and `auki-domain::ClusterManager` can safely advertise that peer id to Discovery and other cluster members across daemon restarts as long as the wallet seed is persisted somewhere.

@@ -4,7 +4,7 @@ Status: working backlog. This file is not part of the protocol requirements.
 
 Owner: TBD.
 
-Last updated: 2026-05-21.
+Last updated: 2026-05-22.
 
 Related protocol spec:
 [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md).
@@ -19,12 +19,12 @@ the currently specified v1 protocol from the spec alone.
 
 The protocol baseline lives in
 [`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md). This backlog is
-not normative.
+not part of the protocol requirements.
 
 ## Implementability Verdict
 
 Authority, identity, domain validation, handshake message shape, offer objects,
-spatial envelopes, and status objects are implementable now.
+message envelopes, and status objects are implementable now.
 
 The currently specified v1 protocol is not fully implementable end to end yet.
 The blocker is the post-handshake path layer: Offer Catalog, Get, and Subscribe
@@ -41,8 +41,7 @@ Concrete Discovery records are v1 To Fill work and do not block that path.
 2. Define registry-reference hash format.
 3. Tighten deterministic failure mapping where interop needs exact outcomes.
 4. Tighten payload-type matching.
-5. Decide minimum offer-kind payload semantics.
-6. Start Interop/Test work.
+5. Start Interop/Test work.
 
 ## Start Here: Spec Blockers
 
@@ -159,26 +158,6 @@ Done when:
 - A responder can decide whether it can satisfy `accepted_payload_types`.
 - A receiver can reject an unexpected payload family deterministically.
 
-### P1-3: Minimum Offer-Kind Payload Semantics
-
-Slot:
-
-- `RFC-0031: Minimum Offer Kinds`
-
-Patch:
-
-- Decide whether `sensor_stream`, `transform_edge`, and `registry_entry` need
-  minimum v1 payload schemas.
-- If they do not, state that payload schemas are offer-defined or
-  application-defined unless a later kind RFC defines them.
-- Keep large maps, log ranges, replay, resume, and large object transfer out of
-  the current baseline.
-
-Done when:
-
-- A clean-room implementer knows whether to implement concrete payload schemas
-  or only the transport and envelope layer.
-
 ## Parked V1 To Fill Work
 
 These are in v1 scope but do not block the currently specified
@@ -267,11 +246,9 @@ Keep these parked unless product scope pulls them forward:
 
 - DHT-style discovery.
 - Relay milestone expansion beyond `RFC-0017` and `RFC-0018`.
-- Future offer kinds beyond the `RFC-0031` minimum set, such as `pose_stream`,
-  `pose_log_range`, `time_transform`, `detection_stream`, `map_fragment`, and
-  `spatial_query`.
-- Chunking, replay, resume, reliable history, large object transfer, and map
-  queries.
-- Non-normative migration notes mapping current SDK protocol paths such as
+- Shared offer-kind profiles and payload schemas beyond
+  `RFC-0031: Offer Kind Extensibility`.
+- Chunking, replay, resume, reliable history, and large object transfer.
+- Migration notes mapping current SDK protocol paths such as
   `/auki/resources/0.0.1`, `/auki/registries/0.0.1`, and
   `/auki/stream/0.1.0` to the final v1 contract.

@@ -2,7 +2,7 @@
 
 Status: draft terminology baseline.
 
-Last updated: 2026-05-21.
+Last updated: 2026-05-22.
 
 This glossary defines terms used by the networking RFCs. The goal is stable
 protocol wording: each term should name one concept, and each concept should
@@ -45,7 +45,7 @@ peer/domain/offer/path identifiers, and optional diagnostic details.
 ### Handshake
 
 The symmetric exchange peers perform after transport connection and before
-offer loading or spatial-data exchange.
+offer loading or domain-scoped data exchange.
 
 ### Offer Catalog Fetch Path
 
@@ -101,7 +101,7 @@ A peer graph is operational state. It is not authoritative membership.
 
 ### Domain
 
-A namespace and authority boundary for spatial state.
+A namespace and authority boundary for domain-scoped data.
 
 ### Domain Id
 
@@ -259,10 +259,11 @@ Diagnostic clock-comparison behavior used to estimate timing relationships.
 
 ## Exchange Terms
 
-### Spatial Data
+### Domain-Scoped Data
 
-Data describing spatial or temporal state, including frames, clocks, sensors,
-streams, logs, maps, transforms, and resources.
+Domain-scoped data advertised and exchanged through Offer, Get, and Subscribe.
+Its concrete meaning is defined by an offer kind, application implementation,
+deployment profile, or later RFC.
 
 ### Offer
 
@@ -279,7 +280,8 @@ The protocol surface a peer uses to list current offers.
 
 ### Offer Kind
 
-An open string identifying the kind of data or behavior an offer exposes.
+An open string identifying which application-defined, profile-defined, or
+later-RFC-defined semantics apply to an offer.
 
 ### Offer Status
 
@@ -306,8 +308,9 @@ media type.
 
 ### Registry Reference
 
-A content-addressed reference to a registry entry needed to interpret an offer
-or spatial message.
+A content-addressed reference to a registry entry used by an offer or message.
+The required registry references depend on the offer kind or application
+profile.
 
 ### Offer Policy
 
@@ -316,8 +319,7 @@ Subscribe to a specific offer.
 
 ### Spatial Message Envelope
 
-Common metadata carried with spatial data messages so a consumer can interpret
-the payload.
+Common metadata carried with data messages returned by Get or Subscribe.
 
 ### Spatial Message Payload
 

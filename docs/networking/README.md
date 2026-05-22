@@ -20,7 +20,7 @@ path.
 The authority and identity path is implementable now: peer bindings, domain
 ids, domain declarations, domain delegations, authority-chain validation,
 served-domain-set computation, peer authorization, handshake message shape,
-offer objects, spatial envelopes, and status objects are specified.
+offer objects, message envelopes, and status objects are specified.
 
 End-to-end clean-room implementation is not complete yet. The next blocker is
 post-handshake path binding and framing for Offer Catalog, Get, and Subscribe.
@@ -37,7 +37,7 @@ The following work is intentionally parked:
 - concrete NTP or clock-sync message flow;
 - compatibility examples, expected results, and validation transcripts;
 - later product-scope features such as replay, resume, chunking, large object
-  transfer, map queries, and future offer kinds.
+  transfer, and shared offer-kind profiles.
 
 ## Resume Here
 

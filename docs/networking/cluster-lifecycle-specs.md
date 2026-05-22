@@ -2,7 +2,7 @@
 
 Status: draft normative baseline.
 
-Last updated: 2026-05-21.
+Last updated: 2026-05-22.
 
 Related RFC backlog:
 [`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md).
@@ -15,11 +15,12 @@ Related glossary:
 This document specifies the first minimal version of the peer-to-peer cluster
 protocol. Its scope is bootstrapping: peers identify each other, declare served
 domains when they expose domain-scoped data, configure or optionally discover
-reachable peers, authorize connections, and exchange spatial data through
+reachable peers, authorize connections, and exchange domain-scoped data through
 simple peer-to-peer relationships.
 
 The goal is not centralized runtime control. The goal is a small protocol
-foundation that lets peers form clusters and exchange spatial data directly.
+foundation that lets peers form clusters and exchange domain-scoped data
+directly.
 
 This baseline intentionally uses a small, explicit protocol surface. Recurring
 rules should be defined once in their owner RFC and referenced elsewhere
@@ -31,7 +32,7 @@ and "OPTIONAL" are to be interpreted as described in RFC 2119.
 Terminology used by this document is defined in the related glossary.
 
 Sections marked "To Fill" are placeholders for unfinished RFC work. They are
-not normative until their status changes.
+not part of the protocol requirements until their status changes.
 
 This document distinguishes specified v1 text from v1 To Fill sections.
 Specified v1 text is the current v1 baseline. V1 To Fill sections are in v1
@@ -47,7 +48,7 @@ This document is ordered from protocol foundations to runtime behavior:
 - peer and domain model;
 - discovery and reachability;
 - connection lifecycle;
-- spatial data exchange;
+- offer-based data exchange;
 - compatibility and observability.
 
 ## Protocol Foundations
@@ -434,7 +435,7 @@ The v1 delegation scopes are exactly:
 - `advertise`: the peer may announce the domain through Discovery,
   peer-discovery metadata, or equivalent reachability surfaces;
 - `serve`: the peer may declare the domain during handshake and serve offers
-  or spatial data scoped to that domain.
+  or domain-scoped data.
 
 The `scopes` array MUST contain only v1 delegation scopes and MUST NOT contain
 duplicates.
@@ -660,13 +661,12 @@ Concrete NTP or clock-sync message flow is v1 To Fill work.
 A peer that only consumes remote offers MAY participate without declaring a
 local domain.
 
-A peer that serves offers, publishes spatial data, or asks a remote peer to
+A peer that serves offers, publishes domain-scoped data, or asks a remote peer to
 accept it as serving a domain MUST declare that domain and MUST prove that it
 controls the domain owner wallet or has a valid delegation.
 
-A local domain is the authority boundary for spatial state served by the peer,
-including frames, clocks, sensors, streams, logs, maps, transforms, offers, and
-resources.
+A local domain is the authority boundary for data served by the peer through
+offers.
 
 A peer MAY own or maintain a local domain without making that domain
 discoverable or exposing offers from it.
@@ -692,7 +692,7 @@ A cluster is subject to `RFC-0001`.
 
 #### Consequences
 
-A peer can consume another peer's spatial data through a direct peer
+A peer can consume another peer's domain-scoped data through a direct peer
 relationship without declaring its own local domain. The peers do not need to
 merge their domains or share a common runtime authority.
 
@@ -926,7 +926,7 @@ each address was auto-detected, operator-supplied, or relay-mediated.
 Relay support MAY be used to establish peer-to-peer connectivity when direct
 dialing fails or is unavailable.
 
-Relay support MUST NOT change identity, authority, policy, or spatial-data
+Relay support MUST NOT change identity, authority, policy, or data-exchange
 semantics.
 
 #### Consequences
@@ -944,7 +944,7 @@ sufficient.
 #### Requirement
 
 After dialing and establishing a transport connection, peers MUST run a
-symmetric handshake before loading offers or exchanging spatial data.
+symmetric handshake before loading offers or exchanging domain-scoped data.
 
 The handshake is symmetric because either peer may be a producer, consumer, or
 both. Each side MUST be able to present identity, supported protocol versions,
@@ -958,7 +958,8 @@ The v1 lifecycle version string is `auki.cluster_lifecycle.v1`.
 The v1 offer-catalog protocol ID is `/auki/offer-catalog/0.0.1`.
 
 Each handshake side MUST send one v1 handshake message and MUST validate the
-remote v1 handshake message before loading offers or exchanging spatial data.
+remote v1 handshake message before loading offers or exchanging domain-scoped
+data.
 
 Remote peer id handling follows `RFC-0005`: handshake material MUST match the
 transport-authenticated libp2p peer id and MUST NOT override it.
@@ -1208,31 +1209,42 @@ Define how a peer shares additional peer candidates after connection:
 The intended baseline is to treat learned peers as non-authoritative candidate
 dial targets or offer sources.
 
-## Spatial Data Exchange
+## Offer-Based Data Exchange
 
-### RFC-0023: Peers Exchange Spatial Data With Offer / Get / Subscribe
+### RFC-0023: Peers Exchange Domain-Scoped Data With Offer / Get / Subscribe
+
+#### Problem
+
+After a peer relationship is connected, authorized, and has an accepted served
+domain set, the consumer still needs a mechanical way to know what the producer
+is willing to serve, decide whether each item is usable, and request or receive
+the data.
+
+This version solves that with an offer-based access model. It defines exchange
+mechanics, not application data semantics.
 
 #### Requirement
 
-Each peer SHOULD maintain local spatial state for the domains it serves.
+After configuration or optional discovery and authorization, peers MAY exchange
+domain-scoped data peer-to-peer.
 
-After configuration or optional discovery and authorization, peers SHOULD
-exchange spatial data peer-to-peer.
-
-A peer MAY choose not to expose spatial data, or MAY expose only a subset of
-its spatial data according to local policy.
+A peer MAY choose not to expose domain-scoped data, or MAY expose only a subset
+of its domain-scoped data according to local policy.
 
 The minimum baseline exchange shape is:
 
-- `Offer`: a peer advertises named and typed spatial data it can share now.
+- `Offer`: a peer advertises one named and typed data item it can share now.
 - `Get`: a peer fetches an offered data item once.
 - `Subscribe`: a peer receives ongoing updates from an offer.
 
-A peer that intends to consume spatial data SHOULD fetch offers from remote
+Offer kinds, request parameters, payload schemas, and payload interpretation
+are defined by application implementations, deployment profiles, or later RFCs.
+
+A peer that intends to consume domain-scoped data SHOULD fetch offers from remote
 peers only after the offer usability rules in `RFC-0026` can be evaluated.
 
 Discovery may help find dial targets, but it follows the authority boundaries
-in `RFC-0001` and MUST NOT be required to exchange spatial data.
+in `RFC-0001` and MUST NOT be required to exchange domain-scoped data.
 
 #### Offers
 
@@ -1252,16 +1264,14 @@ boundaries in `RFC-0001`.
 `Get` fetches an offered data item once.
 
 Get is for finite responses. In v1, `RFC-0029` narrows Get to descriptors,
-registry entries, transform edges, and small snapshots. Future RFCs MAY extend
-Get to log ranges, map fragments, or other finite spatial-data representations.
+small snapshots, and other finite representations advertised by an offer.
+Future RFCs MAY extend Get with additional finite exchange behavior.
 
 Get failure mapping is defined in `RFC-0029`.
 
 #### Subscribe
 
-`Subscribe` receives live updates from an offered data item. Examples include
-a camera stream, point-cloud stream, pose stream, audio stream, or future live
-map updates.
+`Subscribe` receives ongoing updates from an offered data item.
 
 Subscribe failure mapping is defined in `RFC-0030`.
 
@@ -1376,7 +1386,7 @@ Producers SHOULD keep `offer_id` stable across catalog refreshes for the same
 logical data source. Producers SHOULD issue a new `offer_id` when reusing the
 old id would hide an incompatible payload, registry, or access-mode change.
 
-The `kind` field is an open string. The v1 minimum known kinds are defined in
+The `kind` field is an open string. Offer-kind extensibility is defined in
 `RFC-0031`. Consumers MUST ignore unknown kinds unless local application code
 explicitly supports them.
 
@@ -1450,29 +1460,21 @@ A v1 registry reference MAY include:
 The registry-reference shape is reused by offer catalogs and spatial message
 envelopes.
 
-The v1 known `registry` values are:
-
-- `sensor`;
-- `clock`;
-- `frame`;
-- `detector`.
-
 The `registry` and `role` fields are open strings. The `registry` field names
 the registry namespace. The `role` field names why this offer references that
-entry, such as `sensor`, `clock`, `frame`, `from_frame`, `to_frame`, or
-`detector`. A generic registry-entry offer MAY use `entry` as the role.
+entry.
+
+This spec defines common handling for `clock` registry references in
+`RFC-0035`. Other registry namespaces and roles are defined by offer kinds,
+application implementations, deployment profiles, or later RFCs.
 
 Registry references are content-addressed. A consumer that receives
 `canonical_json` MUST hash the canonical JSON bytes and verify that the result
-matches `hash` before using the entry. A consumer that needs an entry not
-inlined in the catalog SHOULD fetch it through a `registry_entry` offer using
-Get.
+matches `hash` before using the entry.
 
-Spatial offers SHOULD include frame registry references needed to interpret
-positions, rotations, or point coordinates. Temporal offers SHOULD include
-clock registry references needed to interpret timestamps when the producer
-knows them at catalog time. Clock registry-reference semantics are defined in
-`RFC-0035`.
+Offer kinds and application profiles define which registry references are
+needed to interpret their payloads. Clock registry-reference semantics are
+defined in `RFC-0035`.
 
 For live subscriptions, the Subscribe accept start result MAY refine or confirm
 registry references for that subscription. The accepted registry context is
@@ -1667,12 +1669,11 @@ explicitly allows per-message registry changes. For Get, they SHOULD be
 compatible with the requested offer's registry references and payload
 descriptor.
 
-Spatial messages SHOULD include or inherit the frame registry references needed
-to interpret positions, rotations, point coordinates, or other frame-scoped
-data.
+Offer kinds and application profiles define which registry references are
+needed to interpret message payloads.
 
-Temporal messages SHOULD include or inherit the clock registry reference needed
-to interpret `timestamp_ns`.
+Messages that use `timestamp_ns` SHOULD include or inherit the clock registry
+reference needed to interpret it.
 
 #### Sequence And Freshness
 
@@ -1692,7 +1693,7 @@ The `timestamp_ns`, unresolved-clock, and `generated_at` semantics follow
 
 #### Error Object
 
-Get, Subscribe, offer-catalog diagnostics, and future spatial protocols SHOULD
+Get, Subscribe, offer-catalog diagnostics, and future data protocols SHOULD
 use a common error object.
 
 A v1 error object is a JSON object.
@@ -1773,8 +1774,8 @@ The v1 size units are:
   decoded byte length. For a payload object with `json`, this is the UTF-8 JSON
   byte length of the serialized `payload.json` value used in the message. If
   both `bytes` and `json` are validly present, the raw payload size is the sum
-  of both carried representations unless the offer-kind RFC defines a narrower
-  rule.
+  of both carried representations unless the offer-kind definition or
+  application profile defines a narrower rule.
 - serialized envelope bytes: the byte length of the UTF-8 JSON serialization
   of the spatial message envelope produced by the path before transport
   framing, compression, or encryption. This size includes envelope fields and
@@ -1825,9 +1826,9 @@ structured response, reject, or end message cannot be returned.
 Get is a one-shot request-response protocol for fetching a finite representation
 of one offer.
 
-Get v1 is intentionally narrow. It is for descriptors, registry entries,
-transform edges, and small snapshots. Get v1 does not define log-range fetches,
-chunked responses, streaming responses, map queries, or large object transfer.
+Get v1 is intentionally narrow. It is for finite responses advertised by an
+offer. Get v1 does not define chunked responses, streaming responses, resumable
+transfer, or large object transfer.
 
 Get MUST NOT be usable for an offer unless the offer advertises `get` in
 `access_modes`.
@@ -1908,17 +1909,11 @@ or envelope local limits may also apply under `RFC-0028`.
 
 Get v1 MUST NOT split a response into multiple chunks.
 
-#### First Use Cases
+#### Kind Semantics
 
-The first Get use cases are:
-
-- `registry_entry`: return the exact registry entry identified by the offer's
-  registry reference;
-- `transform_edge`: return one direct transform edge;
-- descriptor or small snapshot offers explicitly advertised with `get`.
-
-Log ranges, map fragments, and large binary artifacts are future work unless a
-later RFC defines chunking or a separate transfer protocol.
+Get v1 defines request-response mechanics only. The offer kind or application
+profile defines the meaning of `params`, the response payload, required
+registry references, and any additional compatibility rules.
 
 #### Failure Mapping
 
@@ -1938,10 +1933,10 @@ invalid.
 Subscribe is a request-accept-message-end protocol for receiving live updates
 from one offer.
 
-Subscribe v1 is intentionally narrow. It is for live updates from an already
-advertised offer. It does not define historical replay, log-range fetches,
-exactly-once delivery, reliable delivery, resumable streams, stream forwarding,
-map queries, or large object transfer.
+Subscribe v1 is intentionally narrow. It is for ongoing updates from an already
+advertised offer. It does not define historical replay, exactly-once delivery,
+reliable delivery, resumable streams, stream forwarding, or large object
+transfer.
 
 Subscribe MUST NOT be usable for an offer unless the offer advertises
 `subscribe` in `access_modes`.
@@ -2061,6 +2056,12 @@ The v1 end reason values are:
 An end message does not prove that all prior data was delivered. It only
 reports the producer's or requester's local end reason.
 
+#### Kind Semantics
+
+Subscribe v1 defines subscription mechanics only. The offer kind or application
+profile defines the meaning of `params`, data-message payloads, required
+registry references, and any additional compatibility rules.
+
 #### Backpressure And Delivery
 
 Subscribe v1 does not guarantee delivery, ordering across subscriptions, or
@@ -2073,8 +2074,8 @@ When a producer or receiver is overloaded, it MAY drop data messages, apply
 local coalescing, or end the subscription. If dropping creates an observable
 `sequence` gap, the receiver MAY report `message.sequence_gap`.
 
-Offer kinds that need reliable history, replay, resume, or chunking MUST define
-that behavior in a later RFC.
+Offer kinds or application profiles that need reliable history, replay, resume,
+or chunking MUST define that behavior outside the v1 baseline.
 
 #### Reconnect
 
@@ -2099,101 +2100,42 @@ A receiver SHOULD use the message failure-code family from `RFC-0027` when a
 Subscribe data message includes a spatial message envelope but the envelope,
 payload, message size, or observed sequence behavior is invalid.
 
-### RFC-0031: Minimum Offer Kinds
+### RFC-0031: Offer Kind Extensibility
 
 #### Requirement
 
-The v1 minimum offer-kind set is:
+Offer kinds are open strings.
 
-- `sensor_stream`;
-- `transform_edge`;
-- `registry_entry`.
+The v1 baseline defines offer exchange mechanics. It does not define required
+data-kind semantics or required payload schemas.
 
-Offer kinds are open strings. Implementations MAY advertise additional kinds,
-and consumers MUST ignore unknown kinds unless local application code supports
-them.
+Implementations MAY advertise any offer kind they are willing to serve.
+Consumers MUST ignore unknown kinds unless local application code explicitly
+supports them.
 
-The minimum set is intentionally small. It covers the current baseline of live
-sensor data, exact metadata lookup, and direct frame transforms without
-requiring maps, generic spatial queries, payments, bookings, or application
-marketplace semantics.
+An implementation MUST NOT treat an offer kind string as an authority proof.
+Offer authority is derived from the producing peer relationship and the offer
+usability rules in `RFC-0026`.
 
-#### `sensor_stream`
+An offer-kind definition MAY be provided by an application implementation,
+deployment profile, or later RFC.
 
-A `sensor_stream` offer represents live data produced by one sensor-like data
-source.
+An offer-kind definition SHOULD define:
 
-A `sensor_stream` offer MUST include:
+- supported access modes;
+- expected request `params`, if any;
+- payload descriptor compatibility rules;
+- payload object compatibility rules;
+- required or optional registry-reference roles;
+- path-specific size expectations, if narrower than `RFC-0028`;
+- path-specific failure mapping, if more specific than `RFC-0028`.
 
-- `subscribe` in `access_modes`;
-- a `sensor` registry reference;
-- a payload descriptor that lets consumers choose a decoder.
+Until a shared offer-kind definition exists, interoperability for that kind is
+limited to implementations that share the same application behavior or
+deployment profile.
 
-A `sensor_stream` offer SHOULD include:
-
-- a `clock` registry reference when the producer knows the stream clock at
-  catalog time;
-- a `frame` registry reference for spatial sensors when the producer knows the
-  sensor frame at catalog time.
-
-A Subscribe implementation for `sensor_stream` MUST commit to the exact sensor,
-clock, and frame references for that subscription when those references are
-required to interpret messages.
-
-Examples of sensor stream payloads include camera frames, point-cloud frames,
-audio frames, and joint-encoder frames. The offer kind does not imply a single
-payload format; the payload descriptor and registry references define
-interpretation.
-
-#### `transform_edge`
-
-A `transform_edge` offer represents a direct transform between two frame
-registry entries.
-
-A `transform_edge` offer MUST include:
-
-- `get` in `access_modes`;
-- a `from_frame` registry reference;
-- a `to_frame` registry reference;
-- a payload descriptor for a spatial transform payload.
-
-A `transform_edge` offer MAY include `subscribe` in `access_modes` when the
-transform is expected to change over time.
-
-Static or rigid transforms SHOULD be represented as `transform_edge` offers
-before introducing a pose-stream or pose-log-range offer kind.
-
-#### `registry_entry`
-
-A `registry_entry` offer represents one exact content-addressed registry entry
-that the producer is willing to serve.
-
-A `registry_entry` offer MUST include:
-
-- `get` in `access_modes`;
-- exactly one `registry_refs` entry identifying the registry entry.
-
-A `registry_entry` offer MUST NOT include `subscribe` in `access_modes` in v1.
-
-Registry entries are immutable by hash. A changed registry entry is a different
-offer target and SHOULD use a different `offer_id` or a changed registry
-reference in a later catalog snapshot.
-
-#### Future Kinds
-
-The following are expected future offer kinds, but are not part of the v1
-minimum set:
-
-- `pose_stream`;
-- `pose_log_range`;
-- `time_transform`;
-- `detection_stream`;
-- `map_fragment`;
-- `spatial_query`.
-
-This list is planning context, not a v1 interoperability requirement. Future
-kind definitions can reference the existing owner RFCs for baseline offer
-behavior:
+Shared kind definitions can reference the existing owner RFCs for baseline
+offer behavior:
 
 - domain scope is owned by `RFC-0025`;
 - unknown-kind handling is owned by `RFC-0024` and this RFC;
@@ -2244,7 +2186,7 @@ An incompatible version should instead use a new protocol ID such as
 #### Requirement
 
 Implementations MUST make core lifecycle state explainable without noisy
-per-frame logs.
+per-message logs.
 
 Diagnostics SHOULD answer:
 
@@ -2273,7 +2215,7 @@ implementations that expose status as structured data.
 
 Implementations MUST expose a status surface that explains the local peer's
 current lifecycle state, peer relationships, served domains, offer loading, and
-active or recently completed spatial-data paths.
+active or recently completed data paths.
 
 The status surface is diagnostic state under `RFC-0001`. Protocol validation
 and the authority rules in `RFC-0001` remain the source of authority.
@@ -2489,7 +2431,7 @@ Implementations SHOULD update the status surface when:
 - a spatial message envelope or payload is rejected.
 
 Repeated high-frequency message events SHOULD be aggregated. Implementations
-SHOULD expose counters and last failure records instead of unbounded per-frame
+SHOULD expose counters and last failure records instead of unbounded per-message
 logs by default.
 
 Implementations SHOULD bound retained `last_failures` and completed path

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadOrCreateSeed, memorySeedStore, shortPeerId } from "./identity.js";
+import { derivePeerSeed, loadOrCreateSeed, memorySeedStore, peerIdFromSeed, shortPeerId } from "./identity.js";
 
 describe("browser identity helpers", () => {
   it("persists generated seed through the provided store", async () => {
@@ -22,6 +22,16 @@ describe("browser identity helpers", () => {
   it("formats short peer ids from the last six characters", () => {
     expect(shortPeerId("12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar")).toBe(
       "iVKcar",
+    );
+  });
+
+  it("matches the Rust Wallet -> peer/v1 -> PeerId vector", async () => {
+    const seed = new Uint8Array(32).fill(3);
+    const peerSeed = await derivePeerSeed(seed);
+
+    expect(Array.from(peerSeed.slice(0, 4))).toEqual([0x82, 0x4f, 0xed, 0xdf]);
+    await expect(peerIdFromSeed(seed)).resolves.toBe(
+      "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
     );
   });
 });

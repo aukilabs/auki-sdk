@@ -10,6 +10,11 @@ import type {
 } from "./contract.js";
 import { listDomains as listDiscoveryDomains } from "./discovery.js";
 import { ok, transportUnavailable } from "./errors.js";
+import {
+  createJsLibp2pBrowserPeer,
+  type BrowserPeerTransport,
+  type JoinTarget,
+} from "./jsLibp2pPeer.js";
 
 type Fetcher = (url: string) => Promise<Response>;
 
@@ -55,13 +60,25 @@ declare global {
 
 export type CreateBrowserDomainPeerOptions = {
   peerId: PeerId;
+  seed?: Uint8Array;
   fetcher?: Fetcher;
   sdkSession?: BrowserDomainSession;
+  transport?: BrowserPeerTransport;
+  resolveJoinTarget?: (discoveryUrl: string, domainName: DomainName) => Promise<JoinTarget>;
 };
 
 export async function createBrowserDomainPeer(
   options: CreateBrowserDomainPeerOptions,
 ): Promise<BrowserDomainPeer> {
+  if (options.seed || options.transport) {
+    return createJsLibp2pBrowserPeer({
+      seed: options.seed,
+      peerId: options.peerId,
+      fetcher: options.fetcher,
+      transport: options.transport,
+      resolveJoinTarget: options.resolveJoinTarget,
+    });
+  }
   if (!options.sdkSession) {
     const globalSession = await createPeerFromGlobal();
     if (globalSession) {

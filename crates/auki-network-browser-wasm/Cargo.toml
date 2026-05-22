@@ -13,11 +13,13 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 browser_libp2p = [
+    "dep:auki-datatypes",
     "dep:auki-domain",
     "auki-network/join_protocol",
     "dep:futures",
     "dep:libp2p",
     "dep:libp2p-stream",
+    "dep:prost",
     "dep:serde",
     "dep:serde_json",
     "dep:serde-wasm-bindgen",
@@ -27,6 +29,7 @@ browser_libp2p = [
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
+auki-datatypes = { path = "../auki-datatypes", optional = true }
 auki-domain = { path = "../auki-domain", default-features = false, features = ["browser_runtime"], optional = true }
 auki-network = { path = "../auki-network", default-features = false }
 js-sys = "0.3"
@@ -55,6 +58,7 @@ libp2p = { version = "0.56", default-features = false, optional = true, features
 ] }
 libp2p-stream = { version = "=0.4.0-alpha", optional = true }
 futures = { version = "0.3", default-features = false, optional = true }
+prost = { version = "0.13", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }

@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script type="module">
+  import init, { BrowserDomainSession } from "../pkg-web/auki_network_browser_wasm.js";
+
+  await init();
+
+  window.startAudioPeer = async ({ seed, discoveryUrl, domainName, displayName }) => {
+    const session = new BrowserDomainSession(new Uint8Array(seed));
+    const snapshots = [];
+    window.session = session;
+    window.latestSnapshot = null;
+    const unsubscribe = session.observeParticipants((snapshot) => {
+      snapshots.push(snapshot);
+      window.latestSnapshot = snapshot;
+    });
+    const join = await session.joinDomain(discoveryUrl, domainName);
+    await session.setParticipantMetadata({ appId: "park", displayName });
+    await session.declareLocalSensors([
+      { id: "audio", kind: "audio", label: "Microphone", publishable: true, subscribable: true },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return {
+      peerId: session.peerId(),
+      join,
+      snapshots,
+      debug: session.debugState(),
+      unsubscribe,
+    };
+  };
+
+  window.publishGeneratedAudio = async () => {
+    window.session.enableGeneratedAudioForTests();
+    return await window.session.setSensorPublication("audio", true);
+  };
+
+  window.subscribeToAudio = async (peerId) => {
+    return await window.session.subscribeToSensor(peerId, "audio");
+  };
+
+  window.audioEvidence = () => {
+    const self = window.latestSnapshot?.participants?.find((participant) => participant.isSelf);
+    return {
+      debug: window.session.debugState(),
+      mediaPresence: self?.mediaPresence ?? null,
+    };
+  };
+</script>

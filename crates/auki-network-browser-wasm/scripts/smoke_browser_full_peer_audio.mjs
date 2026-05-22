@@ -20,7 +20,6 @@ await assertFreshPkgWeb({
     path.join(root, "src/browser_audio.rs"),
     path.join(root, "src/browser_stream.rs"),
     path.join(root, "Cargo.toml"),
-    path.join(sdkRoot, "crates/auki-network/src/join_protocol.rs"),
   ],
   buildCommand,
 });
@@ -105,7 +104,7 @@ const contentTypes = new Map([
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://127.0.0.1");
-    const rel = url.pathname === "/" ? "/scripts/browser_full_peer_probe.html" : url.pathname;
+    const rel = url.pathname === "/" ? "/scripts/browser_full_peer_audio.html" : url.pathname;
     const file = path.join(root, rel);
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
@@ -131,22 +130,23 @@ try {
   await pageA.goto(`http://127.0.0.1:${port}/`);
   await pageB.goto(`http://127.0.0.1:${port}/`);
   await Promise.all([
-    pageA.waitForFunction(() => typeof window.runFullPeerProbe === "function"),
-    pageB.waitForFunction(() => typeof window.runFullPeerProbe === "function"),
+    pageA.waitForFunction(() => typeof window.startAudioPeer === "function"),
+    pageB.waitForFunction(() => typeof window.startAudioPeer === "function"),
   ]);
-  const seedA = Array.from({ length: 32 }, (_, i) => i + 1);
-  const seedB = Array.from({ length: 32 }, (_, i) => i + 101);
+
   const discoveryUrl = `inline-manager://${encodeURIComponent(`${managerAddr}|${relayAddr}`)}`;
   const [a, b] = await Promise.all([
-    pageA.evaluate((args) => window.runFullPeerProbe(args), {
-      seed: seedA,
+    pageA.evaluate((args) => window.startAudioPeer(args), {
+      seed: Array.from({ length: 32 }, (_, i) => i + 1),
       discoveryUrl,
-      domainName: "browser-full-peer",
+      domainName: "browser-full-peer-audio",
+      displayName: "Audio A",
     }),
-    pageB.evaluate((args) => window.runFullPeerProbe(args), {
-      seed: seedB,
+    pageB.evaluate((args) => window.startAudioPeer(args), {
+      seed: Array.from({ length: 32 }, (_, i) => i + 101),
       discoveryUrl,
-      domainName: "browser-full-peer",
+      domainName: "browser-full-peer-audio",
+      displayName: "Audio B",
     }),
   ]);
   if (!a.join?.ok || !b.join?.ok) throw new Error(`join failed: ${JSON.stringify({ a, b }, null, 2)}`);
@@ -154,11 +154,31 @@ try {
   if (!a.debug?.advertisedMultiaddrs?.length || !b.debug?.advertisedMultiaddrs?.length) {
     throw new Error("browser peers did not advertise multiaddrs");
   }
-  if (!a.snapshots.at(-1)?.participants?.some((p) => p.peerId === b.peerId)) {
-    throw new Error("A cannot see B through full peer state");
-  }
-  if (!b.snapshots.at(-1)?.participants?.some((p) => p.peerId === a.peerId)) {
-    throw new Error("B cannot see A through full peer state");
+
+  const publish = await pageA.evaluate(() => window.publishGeneratedAudio());
+  if (!publish?.ok) throw new Error(`generated audio publication failed: ${JSON.stringify(publish)}`);
+  const subscribe = await pageB.evaluate((peerId) => window.subscribeToAudio(peerId), a.peerId);
+  if (!subscribe?.ok) throw new Error(`audio subscription failed: ${JSON.stringify(subscribe)}`);
+
+  try {
+    await pageB.waitForFunction(
+      () => {
+        const evidence = window.audioEvidence();
+        const media = evidence.mediaPresence;
+        return evidence.debug?.usesBrowserSession === false &&
+          media?.selectedRemoteStreamState === "connected" &&
+          media?.playbackHealthy === true &&
+          media?.lastFrameUnixMs !== null &&
+          media?.outputLevel !== null;
+      },
+      null,
+      { timeout: 10000 },
+    );
+  } catch (err) {
+    const evidence = await pageB.evaluate(() => window.audioEvidence());
+    throw new Error(`no received browser audio evidence: ${JSON.stringify(evidence, null, 2)}`, {
+      cause: err,
+    });
   }
 } finally {
   await browser.close();

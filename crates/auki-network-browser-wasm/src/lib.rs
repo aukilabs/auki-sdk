@@ -1,7 +1,11 @@
 use auki_identity::Wallet;
 use auki_network::PeerIdentity;
 #[cfg(feature = "browser_libp2p")]
+mod browser_audio;
+#[cfg(feature = "browser_libp2p")]
 mod browser_full_peer;
+#[cfg(feature = "browser_libp2p")]
+mod browser_stream;
 #[cfg(feature = "browser_libp2p")]
 use auki_network::browser_session_protocol::{
     BrowserMediaPresence, BrowserRosterSnapshot, BrowserSessionClientMessage,
@@ -251,6 +255,12 @@ impl BrowserDomainSession {
         .map_err(|err| JsValue::from_str(&err.to_string()))
     }
 
+    #[wasm_bindgen(js_name = enableGeneratedAudioForTests)]
+    pub fn enable_generated_audio_for_tests(&self) {
+        self.full_peer
+            .set_audio_publication(browser_full_peer::BrowserAudioPublication::Generated);
+    }
+
     #[wasm_bindgen(js_name = createDomain)]
     pub fn create_domain(
         &self,
@@ -274,10 +284,10 @@ impl BrowserDomainSession {
         .await;
         if result.ok {
             if let Some(value) = &result.value {
-                self.state.apply_snapshot(self.full_peer.roster_snapshot(
-                    value.domain_name.clone(),
-                    value.manager_peer_id.clone(),
-                ));
+                self.state.apply_snapshot(
+                    self.full_peer
+                        .roster_snapshot(value.domain_name.clone(), value.manager_peer_id.clone()),
+                );
             }
         }
         serde_wasm_bindgen::to_value(&result).map_err(|err| JsValue::from_str(&err.to_string()))
@@ -318,8 +328,7 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.metadata.replace(metadata);
         let participant = self.state.local_participant();
-        self.full_peer
-            .update_local_participant(participant.clone());
+        self.full_peer.update_local_participant(participant.clone());
         let _ = self
             .state
             .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
@@ -333,8 +342,7 @@ impl BrowserDomainSession {
             .map_err(|err| JsValue::from_str(&err.to_string()))?;
         self.state.sensors.replace(sensors);
         let participant = self.state.local_participant();
-        self.full_peer
-            .update_local_participant(participant.clone());
+        self.full_peer.update_local_participant(participant.clone());
         let _ = self
             .state
             .queue(BrowserSessionClientMessage::UpdateParticipant { participant });
@@ -348,15 +356,27 @@ impl BrowserDomainSession {
         sensor_id: String,
         enabled: bool,
     ) -> Result<JsValue, JsValue> {
-        if self.state.sender.borrow().is_none() {
-            return browser_domain_result(self.inner.transport_unavailable());
-        }
         if sensor_id == "audio" {
+            if !enabled {
+                self.full_peer
+                    .set_audio_publication(browser_full_peer::BrowserAudioPublication::Off);
+            } else if self.full_peer.audio_publication()
+                == browser_full_peer::BrowserAudioPublication::Off
+            {
+                self.full_peer
+                    .set_audio_publication(browser_full_peer::BrowserAudioPublication::Microphone);
+            }
             let mut media = self.state.media_presence.borrow_mut();
             media.mic_available = true;
             media.mic_publication_enabled = enabled;
             media.mic_capture_healthy = enabled;
             self.full_peer.set_local_media(media.clone());
+            drop(media);
+            self.state.update_local_snapshot();
+            return browser_domain_result(self.inner.ok());
+        }
+        if self.state.sender.borrow().is_none() {
+            return browser_domain_result(self.inner.transport_unavailable());
         }
         let _ = self
             .state
@@ -371,15 +391,32 @@ impl BrowserDomainSession {
         peer_id: String,
         sensor_id: String,
     ) -> Result<JsValue, JsValue> {
-        if self.state.sender.borrow().is_none() {
-            return browser_domain_result(self.inner.transport_unavailable());
-        }
-        {
+        if sensor_id == "audio" {
             let mut media = self.state.media_presence.borrow_mut();
             media.listening_to_peer_id = Some(peer_id.clone());
             media.listening_to_sensor_id = Some(sensor_id.clone());
             media.selected_remote_stream_state = "connecting".to_string();
+            media.playback_healthy = false;
             self.full_peer.set_local_media(media.clone());
+            drop(media);
+            self.state.update_local_snapshot();
+            #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+            {
+                spawn_audio_subscription(
+                    self.state.clone(),
+                    self.full_peer.clone(),
+                    peer_id,
+                    sensor_id,
+                );
+                return browser_domain_result(self.inner.ok());
+            }
+            #[cfg(not(all(target_arch = "wasm32", feature = "browser_libp2p")))]
+            {
+                return browser_domain_result(self.inner.transport_unavailable());
+            }
+        }
+        if self.state.sender.borrow().is_none() {
+            return browser_domain_result(self.inner.transport_unavailable());
         }
         let _ = self
             .state
@@ -414,6 +451,147 @@ impl BrowserDomainSession {
         self.state.update_local_snapshot();
         browser_domain_result(self.inner.ok())
     }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+fn spawn_audio_subscription(
+    state: Rc<BrowserDomainSessionState>,
+    full_peer: Rc<browser_full_peer::BrowserFullPeer>,
+    peer_id: String,
+    sensor_id: String,
+) {
+    wasm_bindgen_futures::spawn_local(async move {
+        match subscribe_audio_stream(full_peer.clone(), peer_id.clone(), sensor_id.clone()).await {
+            Ok(output_level) => {
+                set_audio_media_state(
+                    &state,
+                    &full_peer,
+                    Some(peer_id),
+                    Some(sensor_id),
+                    "connected",
+                    true,
+                    Some(js_sys::Date::now() as u64),
+                    Some(output_level),
+                );
+            }
+            Err(_err) => {
+                set_audio_media_state(
+                    &state,
+                    &full_peer,
+                    Some(peer_id),
+                    Some(sensor_id),
+                    "error",
+                    false,
+                    None,
+                    None,
+                );
+            }
+        }
+    });
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+async fn subscribe_audio_stream(
+    full_peer: Rc<browser_full_peer::BrowserFullPeer>,
+    peer_id: String,
+    sensor_id: String,
+) -> Result<u8, String> {
+    use crate::browser_stream::{
+        STREAM_PROTOCOL, StreamMessage, StreamRequest, read_message, stream_message, write_message,
+    };
+    use futures::{FutureExt as _, select};
+    use libp2p::{PeerId, StreamProtocol};
+    use prost::Message as _;
+
+    let remote_peer: PeerId = peer_id
+        .parse()
+        .map_err(|err| format!("malformed peer id {peer_id}: {err}"))?;
+    let mut control = full_peer
+        .stream_control()
+        .ok_or_else(|| "browser full peer stream control is unavailable".to_string())?;
+    let proto = StreamProtocol::try_from_owned(STREAM_PROTOCOL.to_string())
+        .expect("STREAM_PROTOCOL is a valid libp2p protocol id");
+
+    let open = control.open_stream(remote_peer, proto).fuse();
+    let timeout = js_timeout(BROWSER_JOIN_TIMEOUT_MS).fuse();
+    futures::pin_mut!(open, timeout);
+    let mut substream = loop {
+        select! {
+            result = open => {
+                break result.map_err(|err| format!("open audio stream failed: {err}"))?;
+            }
+            timeout_result = timeout => {
+                return match timeout_result {
+                    Ok(()) => Err(format!("audio stream open timed out after {BROWSER_JOIN_TIMEOUT_MS}ms")),
+                    Err(err) => Err(format!("audio stream timeout setup failed: {err}")),
+                };
+            }
+        }
+    };
+
+    write_message(
+        &mut substream,
+        &StreamMessage::request(StreamRequest {
+            sensor_id: sensor_id.clone(),
+        }),
+    )
+    .await
+    .map_err(|err| format!("write audio stream request failed: {err}"))?;
+
+    let reply = read_message(&mut substream)
+        .await
+        .map_err(|err| format!("read audio stream reply failed: {err}"))?;
+    match reply.variant {
+        Some(stream_message::Variant::Accept(_manifest)) => {}
+        Some(stream_message::Variant::Decline(reason)) => {
+            return Err(format!("audio stream declined: {reason:?}"));
+        }
+        _ => return Err("audio stream expected Accept or Decline".to_string()),
+    }
+
+    loop {
+        let message = read_message(&mut substream)
+            .await
+            .map_err(|err| format!("read audio stream entry failed: {err}"))?;
+        if let Some(stream_message::Variant::Entry(entry)) = message.variant {
+            let data = crate::browser_stream::audio::Data::decode(&*entry.payload)
+                .map_err(|err| format!("decode audio payload failed: {err}"))?;
+            return Ok(audio_output_level(&data.data));
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+fn set_audio_media_state(
+    state: &Rc<BrowserDomainSessionState>,
+    full_peer: &Rc<browser_full_peer::BrowserFullPeer>,
+    peer_id: Option<String>,
+    sensor_id: Option<String>,
+    stream_state: &str,
+    playback_healthy: bool,
+    last_frame_unix_ms: Option<u64>,
+    output_level: Option<u8>,
+) {
+    let mut media = state.media_presence.borrow_mut();
+    media.listening_to_peer_id = peer_id;
+    media.listening_to_sensor_id = sensor_id;
+    media.selected_remote_stream_state = stream_state.to_string();
+    media.playback_healthy = playback_healthy;
+    media.last_frame_unix_ms = last_frame_unix_ms;
+    media.output_level = output_level;
+    full_peer.set_local_media(media.clone());
+    drop(media);
+    state.update_local_snapshot();
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+fn audio_output_level(pcm_s16le: &[u8]) -> u8 {
+    let max_abs = pcm_s16le
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]).unsigned_abs() as u32)
+        .max()
+        .unwrap_or(0);
+    ((max_abs * 100) / 32768).min(100) as u8
 }
 
 #[cfg(feature = "browser_libp2p")]

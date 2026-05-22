@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use auki_network::PeerIdentity;
 use auki_network::browser_session_protocol::{
     BrowserMediaPresence, BrowserRosterSnapshot, BrowserSessionParticipant, BrowserSessionSensor,
@@ -26,11 +28,21 @@ pub struct BrowserPeerMember {
     pub participant: Option<BrowserSessionParticipant>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserAudioPublication {
+    Off,
+    Generated,
+    Microphone,
+}
+
 pub struct BrowserFullPeer {
     identity: PeerIdentity,
     advertised_multiaddrs: RefCell<Vec<Multiaddr>>,
     members: RefCell<BTreeMap<String, BrowserPeerMember>>,
     local_participant: RefCell<BrowserSessionParticipant>,
+    audio_publication: RefCell<BrowserAudioPublication>,
+    #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+    stream_control: RefCell<Option<libp2p_stream::Control>>,
 }
 
 impl BrowserFullPeer {
@@ -40,6 +52,9 @@ impl BrowserFullPeer {
             advertised_multiaddrs: RefCell::new(Vec::new()),
             members: RefCell::new(BTreeMap::new()),
             local_participant: RefCell::new(participant),
+            audio_publication: RefCell::new(BrowserAudioPublication::Off),
+            #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+            stream_control: RefCell::new(None),
         })
     }
 
@@ -51,6 +66,7 @@ impl BrowserFullPeer {
         self.advertised_multiaddrs.replace(addrs);
     }
 
+    #[allow(dead_code)]
     pub fn advertised_multiaddrs(&self) -> Vec<Multiaddr> {
         self.advertised_multiaddrs.borrow().clone()
     }
@@ -72,12 +88,35 @@ impl BrowserFullPeer {
         self.local_participant.replace(participant);
     }
 
+    #[allow(dead_code)]
     pub fn set_local_sensors(&self, sensors: Vec<BrowserSessionSensor>) {
         self.local_participant.borrow_mut().sensors = sensors;
     }
 
     pub fn set_local_media(&self, media: BrowserMediaPresence) {
         self.local_participant.borrow_mut().media_presence = media;
+    }
+
+    pub fn set_audio_publication(&self, publication: BrowserAudioPublication) {
+        self.audio_publication.replace(publication);
+    }
+
+    pub fn audio_publication(&self) -> BrowserAudioPublication {
+        *self.audio_publication.borrow()
+    }
+
+    pub fn member_multiaddrs(&self, peer_id: &str) -> Vec<Multiaddr> {
+        self.members
+            .borrow()
+            .get(peer_id)
+            .map(|member| {
+                member
+                    .multiaddrs
+                    .iter()
+                    .filter_map(|addr| addr.parse::<Multiaddr>().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn apply_membership_json(&self, membership_json: &str) -> Result<(), String> {
@@ -97,8 +136,8 @@ impl BrowserFullPeer {
         let local_peer_id = self.peer_id();
         let mut members = BTreeMap::new();
         for member in membership.peers {
-            let participant = (member.peer_id == local_peer_id)
-                .then(|| self.local_participant.borrow().clone());
+            let participant =
+                (member.peer_id == local_peer_id).then(|| self.local_participant.borrow().clone());
             members.insert(
                 member.peer_id.clone(),
                 BrowserPeerMember {
@@ -120,21 +159,23 @@ impl BrowserFullPeer {
         let local_peer_id = self.peer_id();
         let mut participants = Vec::new();
         for member in self.members.borrow().values() {
-            let mut participant = member.participant.clone().unwrap_or_else(|| {
-                BrowserSessionParticipant {
-                    peer_id: member.peer_id.clone(),
-                    app_id: if member.peer_id == manager_peer_id {
-                        "auki-network".to_string()
-                    } else {
-                        "auki-browser-peer".to_string()
-                    },
-                    display_name: member.peer_id.clone(),
-                    is_self: false,
-                    connected: true,
-                    sensors: Vec::new(),
-                    media_presence: BrowserMediaPresence::default(),
-                }
-            });
+            let mut participant =
+                member
+                    .participant
+                    .clone()
+                    .unwrap_or_else(|| BrowserSessionParticipant {
+                        peer_id: member.peer_id.clone(),
+                        app_id: if member.peer_id == manager_peer_id {
+                            "auki-network".to_string()
+                        } else {
+                            "auki-browser-peer".to_string()
+                        },
+                        display_name: member.peer_id.clone(),
+                        is_self: false,
+                        connected: true,
+                        sensors: Vec::new(),
+                        media_presence: BrowserMediaPresence::default(),
+                    });
             participant.is_self = participant.peer_id == local_peer_id;
             participants.push(participant);
         }
@@ -158,16 +199,26 @@ struct BrowserFullPeerBehaviour {
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
 impl BrowserFullPeer {
+    pub fn stream_control(&self) -> Option<libp2p_stream::Control> {
+        self.stream_control.borrow().clone()
+    }
+
+    fn set_stream_control(&self, control: libp2p_stream::Control) {
+        self.stream_control.replace(Some(control));
+    }
+
     pub async fn join_via_relayed_peer(
         self: Rc<Self>,
         manager_address: Multiaddr,
         relay_address: Multiaddr,
     ) -> Result<auki_network::join_protocol::JoinResponse, String> {
-        use futures::StreamExt as _;
+        use futures::{FutureExt as _, StreamExt as _, select};
         use libp2p::{
-            SwarmBuilder, identify, noise,
+            StreamProtocol, SwarmBuilder,
             core::{Transport as _, muxing::StreamMuxerBox, upgrade},
+            identify,
             multiaddr::Protocol,
+            noise,
             swarm::dial_opts::DialOpts,
             yamux,
         };
@@ -240,12 +291,6 @@ impl BrowserFullPeer {
         let advertised = wait_for_relay_address(&mut swarm, self.identity.peer_id()).await?;
         self.set_advertised_multiaddrs(vec![advertised]);
 
-        wasm_bindgen_futures::spawn_local(async move {
-            loop {
-                let _ = swarm.select_next_some().await;
-            }
-        });
-
         if let auki_network::join_protocol::JoinResponse::Accept {
             membership_json, ..
         } = &response
@@ -253,7 +298,110 @@ impl BrowserFullPeer {
             self.apply_membership_json(membership_json)?;
         }
 
+        let local_peer_id = self.identity.peer_id();
+        for member in self.members.borrow().values() {
+            let Ok(peer_id) = member.peer_id.parse::<PeerId>() else {
+                continue;
+            };
+            if peer_id == local_peer_id {
+                continue;
+            }
+            let dial_addresses = self.member_multiaddrs(&member.peer_id);
+            for mut addr in self.member_multiaddrs(&member.peer_id) {
+                if addr.iter().last().is_some_and(
+                    |protocol| matches!(protocol, Protocol::P2p(peer) if peer == peer_id),
+                ) {
+                    let _ = addr.pop();
+                }
+                swarm.add_peer_address(peer_id, addr);
+            }
+            if !dial_addresses.is_empty() {
+                let _ = swarm.dial(DialOpts::peer_id(peer_id).addresses(dial_addresses).build());
+            }
+        }
+
+        let mut stream_control = swarm.behaviour().stream.new_control();
+        let mut stream_listener = stream_control
+            .accept(StreamProtocol::new(crate::browser_stream::STREAM_PROTOCOL))
+            .map_err(|err| format!("stream protocol accept setup failed: {err}"))?;
+        self.set_stream_control(stream_control);
+        let full_peer = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            loop {
+                select! {
+                    incoming = stream_listener.next().fuse() => {
+                        let Some((peer, stream)) = incoming else {
+                            continue;
+                        };
+                        let full_peer = full_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            full_peer.handle_inbound_stream(peer, stream).await;
+                        });
+                    }
+                    _event = swarm.select_next_some().fuse() => {}
+                }
+            }
+        });
+
         Ok(response)
+    }
+
+    async fn handle_inbound_stream(self: Rc<Self>, _peer: PeerId, mut stream: libp2p::Stream) {
+        use crate::browser_stream::{
+            DeclineReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest, read_message,
+            stream_message, write_message,
+        };
+        use prost::Message as _;
+
+        let request = match read_message(&mut stream).await {
+            Ok(message) => match message.variant {
+                Some(stream_message::Variant::Request(request)) => request,
+                _ => return,
+            },
+            Err(_) => return,
+        };
+
+        if self.audio_publication() != BrowserAudioPublication::Generated
+            || request
+                != (StreamRequest {
+                    sensor_id: "audio".to_string(),
+                })
+        {
+            let _ = write_message(
+                &mut stream,
+                &StreamMessage::decline(DeclineReason::sensor_unavailable()),
+            )
+            .await;
+            return;
+        }
+
+        let accept = StreamMessage::accept(StreamManifest {
+            sensor_id: "audio".to_string(),
+            sensor_hash: String::new(),
+            clock_id: String::new(),
+            clock_hash: String::new(),
+            frame_id: String::new(),
+            frame_hash: String::new(),
+        });
+        if write_message(&mut stream, &accept).await.is_err() {
+            return;
+        }
+
+        for frame_index in 0..250_u32 {
+            let payload = crate::browser_stream::audio::Data {
+                data: crate::browser_audio::generated_audio_frame(frame_index),
+            }
+            .encode_to_vec();
+            let entry = StreamMessage::entry(StreamEntry {
+                timestamp_ns: (js_sys::Date::now() * 1_000_000.0) as i64,
+                seq: u64::from(frame_index),
+                payload,
+            });
+            if write_message(&mut stream, &entry).await.is_err() {
+                return;
+            }
+            let _ = js_timeout(crate::browser_audio::AUDIO_FRAME_MS as i32).await;
+        }
     }
 }
 
@@ -350,8 +498,8 @@ fn with_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
 async fn js_timeout(ms: i32) -> Result<(), String> {
-    use wasm_bindgen::JsValue;
     use wasm_bindgen::JsCast as _;
+    use wasm_bindgen::JsValue;
 
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let Some(window) = web_sys::window() else {
@@ -371,10 +519,7 @@ async fn js_timeout(ms: i32) -> Result<(), String> {
             )
             .is_err()
         {
-            let _ = reject.call1(
-                &JsValue::UNDEFINED,
-                &JsValue::from_str("setTimeout failed"),
-            );
+            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("setTimeout failed"));
             return;
         }
         closure.forget();
@@ -391,4 +536,43 @@ async fn js_timeout(ms: i32) -> Result<(), String> {
                     .unwrap_or_else(|| "timeout promise failed".to_string())
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use auki_identity::Wallet;
+
+    fn full_peer() -> Rc<BrowserFullPeer> {
+        let wallet = Wallet::from_seed(vec![7u8; 32]).expect("32-byte seed");
+        let identity = PeerIdentity::from_wallet(wallet);
+        let peer_id = identity.peer_id().to_string();
+        BrowserFullPeer::new(
+            identity,
+            BrowserSessionParticipant {
+                peer_id,
+                app_id: "park".to_string(),
+                display_name: "Browser Peer".to_string(),
+                is_self: true,
+                connected: true,
+                sensors: Vec::new(),
+                media_presence: BrowserMediaPresence::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn audio_publication_defaults_off() {
+        assert_eq!(
+            full_peer().audio_publication(),
+            BrowserAudioPublication::Off
+        );
+    }
+
+    #[test]
+    fn enables_generated_audio_publication_for_smokes() {
+        let peer = full_peer();
+        peer.set_audio_publication(BrowserAudioPublication::Generated);
+        assert_eq!(peer.audio_publication(), BrowserAudioPublication::Generated);
+    }
 }

@@ -7,12 +7,26 @@ repository.workspace = true
 authors.workspace = true
 description = "Sensor and Clock Registry entry shapes + content-addressed on-disk storage."
 
+[features]
+# Enables UniFFI proc-macros on SensorRegistryEntry, SensorBody, and all
+# nested types (Camera, PointCloud, Audio, JointEncoders, PointField,
+# PointFieldDataType, ClockRegistryEntry, ClockBody, ClockMeta, Scope,
+# FrameRegistryEntry, Handedness, AxisConvention, AxisDirection, LengthUnit,
+# DetectorRegistryEntry, DetectorBody, Aruco, Qr, Esl).
+# When off, the crate compiles exactly as today — no UniFFI dep in the graph.
+swift-bindings = ["dep:uniffi"]
+
 [dependencies]
 auki-jcs = { path = "../auki-jcs" }
 auki-hash = { path = "../auki-hash" }
 auki-layout = { path = "../auki-layout" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Optional — only pulled in when `swift-bindings` is on. Carries the UniFFI
+# proc-macros so the registry entry types cross the FFI boundary as typed
+# Records/Enums rather than opaque JSON strings.
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [dev-dependencies]
 auki-logs = { path = "../auki-logs" }

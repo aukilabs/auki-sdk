@@ -19,6 +19,9 @@
 
 #![allow(missing_docs, clippy::derive_partial_eq_without_eq)]
 
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 /// Implement [`auki_logs::LogPayload`] for a prost-generated message
 /// type. Encodes via `prost::Message::encode_to_vec`, decodes via
 /// `prost::Message::decode`, surfaces decode errors as the `String`

@@ -32,6 +32,7 @@ pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 /// Default `{}` asks for every resource kind the peer is willing to
 /// advertise. `kinds` is an open-string filter; unknown kinds simply
 /// return no rows from peers that do not produce them.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourcesRequest {
     /// Optional open-string resource kind filter. Examples:
@@ -85,6 +86,7 @@ impl ResourcesRequest {
 }
 
 /// Body of the response the responder sends.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourcesResponse {
     /// Snapshot of resources the producer can currently provide.
@@ -116,6 +118,7 @@ impl ResourceKind {
 /// The serde tag is intentionally `kind` so cross-language clients
 /// can route by open string even if their SDK copy predates a future
 /// resource variant.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResourceEntry {
@@ -144,6 +147,7 @@ impl ResourceEntry {
 }
 
 /// Live sensor stream resource.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SensorStreamResource {
     /// Resource id. Defaults to `sensor_id` for the v0 shape.
@@ -175,6 +179,7 @@ pub struct SensorStreamResource {
 }
 
 /// Numeric pinhole-camera intrinsics for projection.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ResourcePinholeIntrinsics {
     /// Focal length in pixels along image X.
@@ -188,6 +193,7 @@ pub struct ResourcePinholeIntrinsics {
 }
 
 /// Direct transform edge resource.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TransformEdgeResource {
     /// Resource id. Conventionally `<from_frame_id>-><to_frame_id>`.
@@ -205,8 +211,16 @@ pub struct TransformEdgeResource {
     pub writer_mode: String,
     /// Producer/source identity. Mirrors PoseSource's tagged JSON
     /// shape without making auki-network depend on auki-manifests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<Value>,
+    /// Stored as a canonical JSON string so the field can cross the
+    /// UniFFI boundary. Callers that need structured access can call
+    /// `serde_json::from_str::<serde_json::Value>(&s)` on read.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_source_opt",
+        deserialize_with = "deserialize_source_opt"
+    )]
+    pub source: Option<String>,
     /// Transform from `from_frame_id` into `to_frame_id`, following
     /// Pose Log semantics (parent/source frame to child/target frame).
     pub transform: ResourceSpatialTransform,
@@ -219,6 +233,7 @@ pub struct TransformEdgeResource {
 }
 
 /// JSON-friendly counterpart of `auki_datatypes::pose::SpatialTransform`.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ResourceSpatialTransform {
     /// Translation component.
@@ -228,6 +243,7 @@ pub struct ResourceSpatialTransform {
 }
 
 /// JSON-friendly 3D vector.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ResourceVec3 {
     /// X component.
@@ -239,6 +255,7 @@ pub struct ResourceVec3 {
 }
 
 /// JSON-friendly Hamilton quaternion.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ResourceQuat {
     /// X component.
@@ -253,6 +270,36 @@ pub struct ResourceQuat {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// Serialize `Option<String>` as a JSON `Value` (no double-encoding).
+///
+/// The `source` field stores its value as a canonical JSON string so it can
+/// cross the UniFFI boundary. On the wire it must appear as a raw JSON object,
+/// not a quoted string, to stay compatible with producers/consumers that
+/// pre-date the type change. This helper parses the stored string back into a
+/// `Value` before writing.
+fn serialize_source_opt<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::Error;
+    match value {
+        None => serializer.serialize_none(),
+        Some(s) => {
+            let v: Value = serde_json::from_str(s).map_err(|e| S::Error::custom(e))?;
+            v.serialize(serializer)
+        }
+    }
+}
+
+/// Deserialize a JSON `Value` into `Option<String>` (canonical JSON string).
+fn deserialize_source_opt<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(opt.map(|v| v.to_string()))
 }
 
 /// Failure modes for the framed read/write helpers below.
@@ -413,10 +460,10 @@ mod tests {
                     to_frame_id: "K1-LIVE01/head_left_cam_optical".into(),
                     to_frame_hash: "tohash".into(),
                     writer_mode: "rigid".into(),
-                    source: Some(serde_json::json!({
-                        "kind": "ros2_tf",
-                        "publishers": ["robot_state_publisher"]
-                    })),
+                    source: Some(
+                        serde_json::json!({"kind": "ros2_tf", "publishers": ["robot_state_publisher"]})
+                            .to_string(),
+                    ),
                     transform: ResourceSpatialTransform {
                         translation: ResourceVec3 {
                             x: 0.0,

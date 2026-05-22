@@ -20,8 +20,17 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// UniFFI scaffolding. The `uniffi::Record` / `uniffi::Enum` proc-macros emit
+// code that references `crate::UniFfiTag`; that type only exists where
+// `setup_scaffolding!()` is invoked. Without this, building with
+// `--features swift-bindings` fails before the binding crate pulls it in.
+// Gated so default builds stay scaffolding-free.
+#[cfg(feature = "swift-bindings")]
+uniffi::setup_scaffolding!();
+
 // ─── Sensor Registry ─────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SensorRegistryEntry {
     pub sensor_id: String,
@@ -29,6 +38,7 @@ pub struct SensorRegistryEntry {
     pub body: SensorBody,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SensorBody {
@@ -38,6 +48,7 @@ pub enum SensorBody {
     JointEncoders(JointEncoders),
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Camera {
     pub width: u32,
@@ -63,6 +74,7 @@ pub struct Camera {
 /// data lives in the per-frame log payload
 /// ([`auki_datatypes::point_cloud::PointCloudLogEntry`]); this describes how
 /// to interpret those bytes.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointCloud {
     pub fields: Vec<PointField>,
@@ -80,6 +92,7 @@ pub struct PointCloud {
     pub frame_hash: String,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointField {
     pub name: String,
@@ -88,6 +101,7 @@ pub struct PointField {
     pub count: u32,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PointFieldDataType {
@@ -129,6 +143,7 @@ impl PointFieldDataType {
 /// consistency with the other sensor bodies (`PointCloud`, `JointEncoders`)
 /// and the `SensorEntry.kind` open-string contract in
 /// [`auki-network::sensors_protocol`](../../../auki-network/src/sensors_protocol.rs).
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Audio {
     /// Samples per channel per second (e.g. 48000).
@@ -178,6 +193,7 @@ pub struct Audio {
 ///   they're in joint space. Including a `frame_id` would invite
 ///   consumers to look up a Frame Registry entry that doesn't make
 ///   sense for this sensor type.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JointEncoders {
     /// Number of joints in each per-frame angle vector. Sanity-check
@@ -225,6 +241,7 @@ impl SensorRegistryEntry {
 
 // ─── Clock Registry ──────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockRegistryEntry {
     pub clock_id: String,
@@ -232,6 +249,7 @@ pub struct ClockRegistryEntry {
     pub body: ClockBody,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClockBody {
@@ -239,6 +257,7 @@ pub enum ClockBody {
     UtcClock(ClockMeta),
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockMeta {
     pub unit: String,
@@ -249,6 +268,7 @@ pub struct ClockMeta {
     pub scope: Scope,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Scope {
@@ -287,6 +307,7 @@ impl ClockRegistryEntry {
 /// Construct via the field-explicit struct literal or via one of the
 /// `ros_body` / `ros_optical` / `opengl` / `unity` preset constructors —
 /// the on-disk JSON is fully spelled out either way.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameRegistryEntry {
     /// Stable human ID, e.g. `"K1-AABBCCDDEEFF/head_left_cam_optical"`.
@@ -297,6 +318,7 @@ pub struct FrameRegistryEntry {
     pub units: LengthUnit,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Handedness {
@@ -309,6 +331,7 @@ pub enum Handedness {
 /// left/right, up/down); [`FrameRegistryEntry::validate`] enforces this.
 /// Handedness is declared independently — the SDK does not cross-check
 /// the two.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AxisConvention {
     pub x: AxisDirection,
@@ -316,6 +339,7 @@ pub struct AxisConvention {
     pub z: AxisDirection,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AxisDirection {
@@ -340,6 +364,7 @@ impl AxisDirection {
     }
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LengthUnit {
@@ -474,6 +499,7 @@ impl FrameRegistryEntry {
 /// the QR_Reader that emits both `portal` and `portal_corner`) lists
 /// them all. Each `type` value should match what the detector sets on
 /// `DetectionFrame.type` (Cuba T12) for the entries it produces.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectorRegistryEntry {
     pub detector_id: String,
@@ -484,6 +510,7 @@ pub struct DetectorRegistryEntry {
     pub output_types: Vec<String>,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DetectorBody {
@@ -492,6 +519,7 @@ pub enum DetectorBody {
     Esl(Esl),
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Aruco {
     /// One of OpenCV's predefined ArUco dictionary names, lowercased
@@ -501,9 +529,11 @@ pub struct Aruco {
     pub dictionary: String,
 }
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Qr {}
 
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Esl {}
 

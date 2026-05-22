@@ -733,7 +733,7 @@ pub(crate) fn detection_source_to_stream(
 /// follows the two-call protocol: dispatch_decision, then (on Accept)
 /// the matching `*_source` call. The source-stream-from-callback
 /// adapters do the prost decoding.
-pub(crate) fn swift_provider_to_upstream(
+pub fn swift_provider_to_upstream(
     provider: Arc<dyn SwiftStreamProvider>,
 ) -> auki_network_rs::stream_runtime::StreamProvider {
     Arc::new(

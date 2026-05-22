@@ -22,7 +22,7 @@ default = []
 # enabled there's no `FfiConverterArc<UT>` for `Wallet` and the
 # `uniffi::export` here fails to compile. `use_remote_type!` (in
 # `src/lib.rs`) reuses that upstream impl.
-swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings"]
+swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings", "auki-datatypes?/swift-bindings"]
 # Join protocol wire types/framing are shared by native and browser runtimes.
 # Keeping this separate from `swarm` lets wasm/browser packaging reuse the
 # canonical `/auki/join/0.0.1` shapes without pulling in native Tokio transport.

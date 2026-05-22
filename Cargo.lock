@@ -651,6 +651,7 @@ dependencies = [
  "protoc-bin-vendored",
  "serde_json",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]
@@ -675,6 +676,7 @@ dependencies = [
 name = "auki-domain"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "auki-hash",
  "auki-identity",
  "auki-jcs",
@@ -693,6 +695,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "uniffi",
 ]
 
 [[package]]
@@ -713,6 +716,26 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "auki-domain-swift"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "auki-domain",
+ "auki-identity",
+ "auki-network",
+ "auki-network-swift",
+ "auki-registry",
+ "auki-time",
+ "libp2p",
+ "libp2p-identity",
+ "multiaddr",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
 ]
 
 [[package]]
@@ -931,6 +954,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]
@@ -969,12 +993,14 @@ dependencies = [
 name = "auki-time"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "auki-datatypes",
  "auki-logs",
  "auki-manifests",
  "auki-registry",
  "libc",
  "tempfile",
+ "uniffi",
 ]
 
 [[package]]

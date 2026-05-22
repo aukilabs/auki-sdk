@@ -118,6 +118,7 @@ pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// `cluster_joined_at_ns` set lazily on first non-self peer
 /// observation) live on the ClusterManager — not on `DaemonInfo` —
 /// so daemons aren't responsible for keeping them fresh.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct DaemonInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, `"park"`).
@@ -140,6 +141,8 @@ pub struct DaemonInfo {
 
 /// Why this cluster handle cannot currently produce a local
 /// session-clock to cluster-domain-clock estimate.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainClockEstimateUnavailable {
     /// No heartbeat has advertised a domain-clock source for this
@@ -188,6 +191,8 @@ impl std::error::Error for DomainClockEstimateUnavailable {}
 
 /// Why this cluster handle cannot convert the current local session
 /// clock reading into cluster-domain time.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainTimeNowError {
     /// The cluster-domain clock estimate is not available yet.
@@ -249,7 +254,8 @@ type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomai
 /// Application-supplied source of truth for "which sensors am I
 /// currently publishing". The producer daemon (Booster, future
 /// robotics SDK consumers) installs an implementation via
-/// [`ClusterManager::set_sensor_catalog_provider`] right after
+/// [`ClusterManager::set_sensor_catalog_provider`] (FFI) or
+/// [`ClusterManager::set_sensor_catalog_provider_arc`] (Rust) right after
 /// constructing the manager; the SDK reads it in the inbound
 /// `/auki/sensors/0.0.1` handler and returns the snapshot to the
 /// requesting cluster peer.
@@ -262,6 +268,7 @@ type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomai
 /// the inbound handler returns an empty `sensors: []` — "I have a
 /// catalog and it's empty" is a valid producer state (a daemon
 /// that's started but hasn't mounted any sensors yet).
+#[cfg_attr(feature = "swift-bindings", uniffi::export(callback_interface))]
 pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// Snapshot the producer's currently-published sensors.
     /// Called once per inbound `/auki/sensors/0.0.1` request. Keep
@@ -269,26 +276,26 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// 2 s to respond before closing the substream.
     fn snapshot(&self) -> Vec<SensorEntry>;
 
-    /// Snapshot the catalog for a concrete request. The default
-    /// implementation preserves the lightweight catalog path for
-    /// existing providers, and enriches rows from the producer's
-    /// registered app root only when the requester asks for embedded
-    /// registry entries.
-    fn snapshot_for_request(
-        &self,
-        request: &SensorsRequest,
-        registry_app_root: Option<&Path>,
-    ) -> Vec<SensorEntry> {
-        let mut sensors = self.snapshot();
-        if !request.include_registry_entries && !request.include_frame_entries {
-            return sensors;
-        }
-        let Some(app_root) = registry_app_root else {
-            return sensors;
-        };
-        enrich_sensor_entries(&mut sensors, request, app_root);
-        sensors
+}
+
+/// Snapshot the sensor catalog for a concrete request. Moved out of
+/// [`SensorCatalogProvider`] so the trait can be exported as a UniFFI
+/// callback interface (which requires all trait methods to be abstract).
+/// The logic is identical to the former default implementation.
+fn sensor_catalog_snapshot_for_request(
+    provider: &dyn SensorCatalogProvider,
+    request: &SensorsRequest,
+    registry_app_root: Option<&Path>,
+) -> Vec<SensorEntry> {
+    let mut sensors = provider.snapshot();
+    if !request.include_registry_entries && !request.include_frame_entries {
+        return sensors;
     }
+    let Some(app_root) = registry_app_root else {
+        return sensors;
+    };
+    enrich_sensor_entries(&mut sensors, request, app_root);
+    sensors
 }
 
 /// Application-supplied source of truth for non-sensor resources the
@@ -296,6 +303,7 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
 /// lifted from the registered [`SensorCatalogProvider`] into
 /// `/auki/resources/0.0.1`; install this provider for additional
 /// resources such as rigid transform edges.
+#[cfg_attr(feature = "swift-bindings", uniffi::export(callback_interface))]
 pub trait ResourceCatalogProvider: Send + Sync + 'static {
     /// Snapshot currently-advertised resources. Called once per
     /// inbound `/auki/resources/0.0.1` request. Keep it cheap — the
@@ -303,22 +311,23 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
     /// before closing the substream.
     fn snapshot(&self) -> Vec<ResourceEntry>;
 
-    /// Snapshot resources for a concrete request. The default
-    /// implementation filters by requested open-string kind and
-    /// enriches rows from the producer's registered app root when the
-    /// requester asks for embedded registry entries.
-    fn snapshot_for_request(
-        &self,
-        request: &ResourcesRequest,
-        registry_app_root: Option<&Path>,
-    ) -> Vec<ResourceEntry> {
-        let mut resources = self.snapshot();
-        filter_resource_entries(&mut resources, request);
-        if let Some(app_root) = registry_app_root {
-            enrich_resource_entries(&mut resources, request, app_root);
-        }
-        resources
+}
+
+/// Snapshot the resource catalog for a concrete request. Moved out of
+/// [`ResourceCatalogProvider`] so the trait can be exported as a UniFFI
+/// callback interface (which requires all trait methods to be abstract).
+/// The logic is identical to the former default implementation.
+fn resource_catalog_snapshot_for_request(
+    provider: &dyn ResourceCatalogProvider,
+    request: &ResourcesRequest,
+    registry_app_root: Option<&Path>,
+) -> Vec<ResourceEntry> {
+    let mut resources = provider.snapshot();
+    filter_resource_entries(&mut resources, request);
+    if let Some(app_root) = registry_app_root {
+        enrich_resource_entries(&mut resources, request, app_root);
     }
+    resources
 }
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
@@ -331,6 +340,7 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
 /// [`ClusterTarget::join`], [`ClusterTarget::join_or_create`],
 /// [`ClusterTarget::most_recent_or_create`]) for ergonomics; the bare
 /// enum variants are exposed for pattern-matching only.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Enum))]
 #[derive(Debug, Clone)]
 pub enum ClusterTarget {
     /// Create a new cluster with this exact name. Errors with
@@ -401,6 +411,8 @@ impl ClusterTarget {
 ///
 /// Aggregates the failure modes of [`CreateClusterError`] and
 /// [`JoinClusterError`] since bootstrap may resolve to either path.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum BootstrapError {
     /// Discovery rejected the list / create / lookup call, or HTTP
@@ -456,6 +468,8 @@ impl From<JoinClusterError> for BootstrapError {
 }
 
 /// Errors from [`ClusterManager::create_cluster`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum CreateClusterError {
     /// Discovery rejected the create call — typically because the
@@ -475,6 +489,8 @@ pub enum CreateClusterError {
 }
 
 /// Errors from [`ClusterManager::admit_peer`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum AdmitError {
     /// The local peer is not the Manager. Only the Manager admits
@@ -501,6 +517,8 @@ pub enum AdmitError {
 }
 
 /// Errors from [`ClusterManager::join_cluster`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum JoinClusterError {
     /// Discovery rejected the list / lookup call.
@@ -529,6 +547,7 @@ pub enum JoinClusterError {
 
 /// SDK-side handle for a cluster a daemon is participating in. See
 /// the module-level docs.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 pub struct ClusterManager {
     cluster_name: String,
     local_peer_id: PeerId,
@@ -611,7 +630,8 @@ pub struct ClusterManager {
     diagnostic_messages: Arc<Mutex<Vec<InboundDiagnosticMessage>>>,
     /// Application-supplied sensor catalog provider. `None` until
     /// the daemon calls
-    /// [`Self::set_sensor_catalog_provider`]; the inbound handler
+    /// [`Self::set_sensor_catalog_provider`] (FFI) /
+    /// [`Self::set_sensor_catalog_provider_arc`] (Rust); the inbound handler
     /// returns an empty `sensors: []` response while `None`.
     /// Wrapped in `Arc<Mutex<...>>` so swap-out at runtime works
     /// and the handler task can read concurrently.
@@ -639,6 +659,7 @@ pub struct ClusterManager {
 }
 
 /// Best-effort diagnostic message received from a cluster peer.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct InboundDiagnosticMessage {
     /// Authenticated sender peer id.
@@ -1054,126 +1075,16 @@ impl ClusterManager {
         &self.local_multiaddrs
     }
 
-    /// Broadcast one best-effort diagnostic message to connected cluster peers.
-    pub fn broadcast_diagnostic_message(
-        &self,
-        message: DiagnosticMessage,
-    ) -> Result<(), BroadcastDiagnosticError> {
-        self.runtime.broadcast_diagnostic_message(message)
-    }
-
-    /// Drain diagnostic messages received since the previous call.
-    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
-        std::mem::take(
-            &mut *self
-                .diagnostic_messages
-                .lock()
-                .expect("diagnostic_messages lock"),
-        )
-    }
-
-    /// `true` if the local peer is currently the cluster's Manager.
-    pub fn is_manager(&self) -> bool {
-        *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id
-    }
-
     /// Canonical peer-id of whoever the cluster currently agrees is
     /// the Manager. May be the local peer.
     pub fn manager_peer_id(&self) -> PeerId {
         *self.manager_peer_id.lock().expect("manager_peer_id lock")
     }
 
-    /// Snapshot of the cluster's membership document. Clones; safe to
-    /// call from any thread.
-    pub fn membership(&self) -> ClusterMembership {
-        self.membership.lock().expect("membership lock").clone()
-    }
-
     /// Number of cluster members. Aggregate (matches the
     /// `peer_count` Discovery records in its heartbeat snapshot).
     pub fn peer_count(&self) -> usize {
         self.membership.lock().expect("membership lock").peers.len()
-    }
-
-    /// Admit a new peer to the cluster. Manager-only — other peers
-    /// route join requests to the Manager.
-    ///
-    /// On success the membership document gains a new
-    /// [`ClusterMember`] entry, the runtime's allow-list is
-    /// extended, and the new entry is returned. In v1 the successor
-    /// token is an empty byte vec — signature verification is
-    /// disabled per the Discovery v1 contract, so the bytes don't
-    /// need to mean anything yet. SDK-T4 (when it lands) replaces
-    /// this with a signed token.
-    pub async fn admit_peer(
-        &self,
-        peer_id: PeerId,
-        multiaddrs: Vec<Multiaddr>,
-    ) -> Result<ClusterMember, AdmitError> {
-        if self.stopped.load(Ordering::SeqCst) {
-            return Err(AdmitError::Stopped);
-        }
-        // Manager check.
-        let manager = self.manager_peer_id();
-        if manager != self.local_peer_id {
-            return Err(AdmitError::NotManager {
-                cluster: self.cluster_name.clone(),
-                manager,
-            });
-        }
-
-        // Build the new member entry, then take the lock briefly to
-        // append. Releasing the lock before the (async) runtime
-        // call avoids holding it across .await.
-        let member = ClusterMember {
-            peer_id,
-            multiaddrs: multiaddrs.clone(),
-            join_ts_ns: now_unix_nanos(),
-            successor_token: Some(Vec::new()),
-        };
-
-        let new_allow_list: Vec<AllowedPeer> = {
-            let mut membership = self.membership.lock().expect("membership lock");
-            if membership.peers.iter().any(|p| p.peer_id == peer_id) {
-                return Err(AdmitError::AlreadyMember(peer_id));
-            }
-            membership.admit(member.clone());
-            // Build the allow-list from membership, excluding our
-            // own peer-id (the runtime doesn't dial itself).
-            membership
-                .peers
-                .iter()
-                .filter(|p| p.peer_id != self.local_peer_id)
-                .map(|p| AllowedPeer {
-                    peer_id: p.peer_id,
-                    multiaddrs: p.multiaddrs.clone(),
-                })
-                .collect()
-        };
-
-        // Push the updated allow-list to the runtime.
-        self.runtime.set_allowed_peers(new_allow_list).await?;
-        sync_heartbeat_targets(
-            &self.runtime.handle(),
-            self.local_peer_id,
-            &self.manager_peer_id,
-            &self.membership,
-            &self.cluster_name,
-        )
-        .await;
-
-        // Gossip the updated membership to every connected peer so
-        // existing members learn about the new joiner (the joiner
-        // itself already has the same JSON in the `JoinResponse::Accept`
-        // it just received). Fire-and-forget; per-peer errors are
-        // logged inside the broadcast tasks.
-        broadcast_current_membership(
-            &self.runtime.handle(),
-            &self.manager_peer_id,
-            &self.membership,
-        );
-
-        Ok(member)
     }
 
     /// Open an outbound stream subscription on `peer_id` for the
@@ -1207,79 +1118,6 @@ impl ClusterManager {
         self.runtime.open_stream::<T>(peer_id, request).await
     }
 
-    /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
-    /// stored daemon-side identity fields (passed at construction
-    /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
-    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
-    /// `cluster_joined_at_ns` set
-    /// lazily on first non-self peer observation), `is_manager` /
-    /// `manager_peer_id` from cluster state, and the local
-    /// `peer_id`.
-    ///
-    /// Daemons serve this verbatim on their Control API's
-    /// `GET /api/info`; cluster peers fetch each other's copies
-    /// over `/auki/info/0.0.1`.
-    pub fn participant_info(&self) -> ParticipantInfo {
-        let manager_peer_id = self.manager_peer_id();
-        let session_now_ns = self.session_clock.now_ns();
-
-        // Lazy `cluster_joined_at_ns`: set on first observation of
-        // any peer other than ourselves (per ansuz D3 the local peer
-        // sets its own value, not the SDK on join_cluster's behalf —
-        // a one-peer cluster shouldn't tick `cluster_joined_at_ns`).
-        let cluster_joined_at_ns = {
-            let mut guard = self
-                .cluster_joined_at_ns
-                .lock()
-                .expect("cluster_joined_at_ns mutex poisoned");
-            if guard.is_none() {
-                let has_other = self
-                    .membership
-                    .lock()
-                    .expect("membership lock")
-                    .peers
-                    .iter()
-                    .any(|p| p.peer_id != self.local_peer_id);
-                if has_other {
-                    *guard = Some(session_now_ns);
-                }
-            }
-            *guard
-        };
-
-        ParticipantInfo {
-            app: self.daemon_info.app.clone(),
-            name: self.daemon_info.name.clone(),
-            session_id: self.daemon_info.session_id.clone(),
-            session_clock_id: self.session_clock.clock_id().to_string(),
-            session_clock_hash: self.session_clock.clock_hash(),
-            session_now_ns,
-            cluster_joined_at_ns,
-            peer_id: self.local_peer_id,
-            app_instance: self.daemon_info.app_instance.clone(),
-            is_manager: manager_peer_id == self.local_peer_id,
-            manager_peer_id: manager_peer_id.to_string(),
-        }
-    }
-
-    /// Best current peer-clock transform estimate for an ordered
-    /// local/remote clock pair, if heartbeat NTP samples have
-    /// produced one. This is a read-only view over `auki-time`'s
-    /// sync state; `ClusterManager` does not own sample policy.
-    pub fn clock_sync_estimate(
-        &self,
-        local_clock_id: &str,
-        remote_clock_id: &str,
-    ) -> Option<ClockTransformEstimate> {
-        self.clock_sync.estimate(local_clock_id, remote_clock_id)
-    }
-
-    /// Snapshot all current heartbeat-derived peer-clock transform
-    /// estimates known to this manager.
-    pub fn clock_sync_estimates(&self) -> Vec<ClockTransformEstimate> {
-        self.clock_sync.estimates()
-    }
-
     fn session_clock_now_ns(&self) -> i64 {
         self.session_clock.now_i64_ns()
     }
@@ -1301,63 +1139,11 @@ impl ClusterManager {
         )
     }
 
-    /// Best current transform estimate from this peer's session
-    /// clock into the cluster's stable domain clock.
-    ///
-    /// Returns an explicit unavailable reason when the domain-clock
-    /// source has not been advertised yet, or when this peer has not
-    /// yet measured its session clock against that source's backing
-    /// clock. No wall-clock fallback is used.
-    pub fn domain_clock_estimate(
-        &self,
-    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
-        self.domain_clock_estimate_at(self.session_clock_now_ns())
-    }
-
-    /// Current local reading converted into the cluster's stable
-    /// domain clock.
-    ///
-    /// This is the convenience form of [`Self::domain_clock_estimate`]
-    /// for callers that need "domain time now" rather than the full
-    /// transform estimate. It returns typed unavailable errors until
-    /// the domain source and any required peer-clock transform are
-    /// known. No wall-clock fallback is used.
-    pub fn domain_time_now(&self) -> Result<i64, DomainTimeNowError> {
-        let session_now_ns = self.session_clock_now_ns();
-        let estimate = self.domain_clock_estimate_at(session_now_ns)?;
-        convert_session_now_to_domain_time(&estimate, session_now_ns)
-    }
-
-    /// Fetch a cluster peer's [`ParticipantInfo`] over the
-    /// `/auki/info/0.0.1` libp2p protocol. The target peer's
-    /// `ClusterManager` builds its own `ParticipantInfo` from its
-    /// stored state and serializes it over the wire.
-    ///
-    /// `peer_id` must be a current cluster member — the runtime
-    /// allow-list gates the outbound substream. Returns the
-    /// parsed `ParticipantInfo` ready for HTTP serialization.
-    pub async fn fetch_participant_info(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
-        if self.stopped.load(Ordering::SeqCst) {
-            return Err(FetchParticipantInfoError::Stopped);
-        }
-        let response = self.runtime.request_participant_info(peer_id).await?;
-        let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
-        Ok(info)
-    }
-
     /// Register (or replace) the application-supplied
-    /// [`SensorCatalogProvider`]. Called by the producer daemon
-    /// after constructing the `ClusterManager` — and again any
-    /// time the daemon wants to swap in a different provider.
-    ///
-    /// Inbound `/auki/sensors/0.0.1` requests received before this
-    /// call answer with an empty `sensors: []`. After this call,
-    /// each inbound request invokes [`SensorCatalogProvider::snapshot`]
-    /// on the registered provider.
-    pub fn set_sensor_catalog_provider(&self, provider: Arc<dyn SensorCatalogProvider>) {
+    /// [`SensorCatalogProvider`]. Arc-taking variant for Rust callers.
+    /// The FFI-facing Box variant is `set_sensor_catalog_provider` in the
+    /// annotated sync impl block.
+    pub fn set_sensor_catalog_provider_arc(&self, provider: Arc<dyn SensorCatalogProvider>) {
         *self
             .sensor_catalog_provider
             .lock()
@@ -1365,14 +1151,10 @@ impl ClusterManager {
     }
 
     /// Register (or replace) the application-supplied
-    /// [`ResourceCatalogProvider`]. Sensor streams are already lifted
-    /// from [`SensorCatalogProvider`]; use this for transform edges
-    /// and future non-sensor resources.
-    ///
-    /// Inbound `/auki/resources/0.0.1` requests received before this
-    /// call still include sensor streams when a sensor provider is
-    /// installed. Additional resource kinds appear after this call.
-    pub fn set_resource_catalog_provider(&self, provider: Arc<dyn ResourceCatalogProvider>) {
+    /// [`ResourceCatalogProvider`]. Arc-taking variant for Rust callers.
+    /// The FFI-facing Box variant is `set_resource_catalog_provider` in the
+    /// annotated sync impl block.
+    pub fn set_resource_catalog_provider_arc(&self, provider: Arc<dyn ResourceCatalogProvider>) {
         *self
             .resource_catalog_provider
             .lock()
@@ -1392,167 +1174,6 @@ impl ClusterManager {
             .registry_app_root
             .lock()
             .expect("registry_app_root lock") = Some(app_root.into());
-    }
-
-    /// Fetch a cluster peer's current sensor catalog over the
-    /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
-    /// `ClusterManager` snapshots its registered
-    /// [`SensorCatalogProvider`] (or returns an empty list if the
-    /// daemon hasn't installed one yet) and serializes the catalog
-    /// over the wire.
-    ///
-    /// `peer_id` must be a current cluster member — the runtime
-    /// allow-list gates the outbound substream. Returns the parsed
-    /// [`SensorsResponse`] ready for consumers (Park's chip row,
-    /// Sentinel's status board).
-    pub async fn fetch_sensors_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
-        let response = self.runtime.request_sensors_catalog(peer_id).await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's sensor catalog with explicit request
-    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
-    /// consumer wants the producer to embed Sensor / Frame Registry
-    /// JSON by value and avoid per-row registry fetch round trips.
-    pub async fn fetch_sensors_catalog_with(
-        &self,
-        peer_id: PeerId,
-        request: SensorsRequest,
-    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
-        let response = self
-            .runtime
-            .request_sensors_catalog_with(peer_id, request)
-            .await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's current generalized resource catalog
-    /// over `/auki/resources/0.0.1`. This is the canonical discovery
-    /// path for sensor streams, transform edges, and future resource
-    /// kinds.
-    pub async fn fetch_resources_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
-        let response = self.runtime.request_resources_catalog(peer_id).await?;
-        Ok(response)
-    }
-
-    /// Fetch a cluster peer's generalized resource catalog with an
-    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
-    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
-    /// when a consumer wants embedded registry JSON by value.
-    pub async fn fetch_resources_catalog_with(
-        &self,
-        peer_id: PeerId,
-        request: ResourcesRequest,
-    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
-        let response = self
-            .runtime
-            .request_resources_catalog_with(peer_id, request)
-            .await?;
-        Ok(response)
-    }
-
-    /// Fetch and verify a peer's `SensorRegistryEntry` by exact
-    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
-    ///
-    /// The SDK verifies the returned canonical JSON bytes hash to the
-    /// requested hash before decoding, then checks the decoded
-    /// `sensor_id` matches the requested id.
-    pub async fn fetch_sensor_entry(
-        &self,
-        peer_id: PeerId,
-        sensor_id: impl Into<String>,
-        sensor_hash: impl Into<String>,
-    ) -> Result<SensorRegistryEntry, FetchRegistryEntryError> {
-        let id = sensor_id.into();
-        let hash = sensor_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Sensor, id.clone(), hash.clone())
-            .await?;
-        let entry: SensorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.sensor_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded sensor_id mismatch: expected {:?}, found {:?}",
-                id, entry.sensor_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `ClockRegistryEntry` by exact
-    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
-    pub async fn fetch_clock_entry(
-        &self,
-        peer_id: PeerId,
-        clock_id: impl Into<String>,
-        clock_hash: impl Into<String>,
-    ) -> Result<ClockRegistryEntry, FetchRegistryEntryError> {
-        let id = clock_id.into();
-        let hash = clock_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Clock, id.clone(), hash.clone())
-            .await?;
-        let entry: ClockRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.clock_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded clock_id mismatch: expected {:?}, found {:?}",
-                id, entry.clock_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `FrameRegistryEntry` by exact
-    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
-    pub async fn fetch_frame_entry(
-        &self,
-        peer_id: PeerId,
-        frame_id: impl Into<String>,
-        frame_hash: impl Into<String>,
-    ) -> Result<FrameRegistryEntry, FetchRegistryEntryError> {
-        let id = frame_id.into();
-        let hash = frame_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Frame, id.clone(), hash.clone())
-            .await?;
-        let entry: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.frame_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded frame_id mismatch: expected {:?}, found {:?}",
-                id, entry.frame_id
-            )));
-        }
-        Ok(entry)
-    }
-
-    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
-    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
-    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
-    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
-    pub async fn fetch_detector_entry(
-        &self,
-        peer_id: PeerId,
-        detector_id: impl Into<String>,
-        detector_hash: impl Into<String>,
-    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
-        let id = detector_id.into();
-        let hash = detector_hash.into();
-        let envelope = self
-            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
-            .await?;
-        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
-        if entry.detector_id != id {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
-                "decoded detector_id mismatch: expected {:?}, found {:?}",
-                id, entry.detector_id
-            )));
-        }
-        Ok(entry)
     }
 
     async fn fetch_registry_envelope(
@@ -1855,6 +1476,560 @@ impl ClusterManager {
         })
     }
 
+}
+
+// ─── UniFFI-exposed sync surface ─────────────────────────────────────────────
+//
+// Methods Swift consumes synchronously. The `_string` / `_strings` suffix on
+// the peer-id accessors matches PR B's convention for PeerId → String
+// conversion — explicit so the FFI seam shape is visible at the call site.
+//
+// `is_manager`, `membership`, and `participant_info` are moved verbatim from
+// the un-annotated impl above — their signatures are already UniFFI-compatible
+// (`bool`, `ClusterMembership` record, `ParticipantInfo` record).
+//
+// The original typed Rust accessors (`local_peer_id() -> PeerId`,
+// `local_multiaddrs() -> &[Multiaddr]`, `manager_peer_id() -> PeerId`,
+// `cluster_name() -> &str`, `peer_count() -> usize`) remain in the
+// un-annotated impl for Rust-internal callers.
+//
+// `set_registry_app_root` takes `impl Into<PathBuf>` in the un-annotated impl
+// (kept for Rust callers). The FFI-safe String overload is
+// `set_registry_app_root_path`.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl ClusterManager {
+    /// Cluster name as an owned `String`. The typed `cluster_name() -> &str`
+    /// stays available for Rust callers in the un-annotated impl block.
+    pub fn cluster_name_str(&self) -> String {
+        self.cluster_name().to_string()
+    }
+
+    /// Canonical libp2p peer-id string for the local peer.
+    pub fn local_peer_id_string(&self) -> String {
+        self.local_peer_id().to_string()
+    }
+
+    /// Local listen multiaddrs as canonical strings.
+    pub fn local_multiaddr_strings(&self) -> Vec<String> {
+        self.local_multiaddrs().iter().map(|m| m.to_string()).collect()
+    }
+
+    /// Manager peer-id as canonical string.
+    pub fn manager_peer_id_string(&self) -> String {
+        self.manager_peer_id().to_string()
+    }
+
+    /// Number of cluster members as `u32` (FFI-portable width).
+    pub fn peer_count_u32(&self) -> u32 {
+        self.peer_count() as u32
+    }
+
+    /// `true` if the local peer is currently the cluster's Manager.
+    pub fn is_manager(&self) -> bool {
+        *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id
+    }
+
+    /// Snapshot of the cluster's membership document. Clones; safe to
+    /// call from any thread.
+    pub fn membership(&self) -> ClusterMembership {
+        self.membership.lock().expect("membership lock").clone()
+    }
+
+    /// Build a fresh [`ParticipantInfo`] snapshot. Combines the
+    /// stored daemon-side identity fields (passed at construction
+    /// via [`DaemonInfo`]) with SDK-tracked dynamic fields
+    /// (`session_now_ns` read from the SDK-owned [`SessionClock`],
+    /// `cluster_joined_at_ns` set lazily on first non-self peer
+    /// observation), `is_manager` / `manager_peer_id` from cluster
+    /// state, and the local `peer_id`.
+    ///
+    /// Daemons serve this verbatim on their Control API's
+    /// `GET /api/info`; cluster peers fetch each other's copies
+    /// over `/auki/info/0.0.1`.
+    pub fn participant_info(&self) -> ParticipantInfo {
+        let manager_peer_id = self.manager_peer_id();
+        let session_now_ns = self.session_clock.now_ns();
+
+        // Lazy `cluster_joined_at_ns`: set on first observation of
+        // any peer other than ourselves (per ansuz D3 the local peer
+        // sets its own value, not the SDK on join_cluster's behalf —
+        // a one-peer cluster shouldn't tick `cluster_joined_at_ns`).
+        let cluster_joined_at_ns = {
+            let mut guard = self
+                .cluster_joined_at_ns
+                .lock()
+                .expect("cluster_joined_at_ns mutex poisoned");
+            if guard.is_none() {
+                let has_other = self
+                    .membership
+                    .lock()
+                    .expect("membership lock")
+                    .peers
+                    .iter()
+                    .any(|p| p.peer_id != self.local_peer_id);
+                if has_other {
+                    *guard = Some(session_now_ns);
+                }
+            }
+            *guard
+        };
+
+        ParticipantInfo {
+            app: self.daemon_info.app.clone(),
+            name: self.daemon_info.name.clone(),
+            session_id: self.daemon_info.session_id.clone(),
+            session_clock_id: self.session_clock.clock_id().to_string(),
+            session_clock_hash: self.session_clock.clock_hash(),
+            session_now_ns,
+            cluster_joined_at_ns,
+            peer_id: self.local_peer_id,
+            app_instance: self.daemon_info.app_instance.clone(),
+            is_manager: manager_peer_id == self.local_peer_id,
+            manager_peer_id: manager_peer_id.to_string(),
+        }
+    }
+
+    /// Register (or replace) the producer-local app root used to serve
+    /// `/auki/registries/0.0.1` requests. FFI-safe String overload of
+    /// `set_registry_app_root(impl Into<PathBuf>)` (kept un-annotated for
+    /// Rust callers). The SDK reads existing registry files from this app
+    /// root via `auki-registry` and returns canonical JSON entries to
+    /// cluster peers.
+    ///
+    /// Inbound registry requests received before this call answer with
+    /// `entry: None`, which means "this peer does not have that exact
+    /// registry entry" from the consumer's perspective.
+    pub fn set_registry_app_root_path(&self, app_root: String) {
+        *self
+            .registry_app_root
+            .lock()
+            .expect("registry_app_root lock") = Some(app_root.into());
+    }
+}
+
+// ─── UniFFI-exposed sync surface: clock-sync, diagnostics, providers ─────────
+//
+// Separate annotated block from the identity/simple surface block above because
+// the methods here depend on types (`ClockTransformEstimate`, `DiagnosticMessage`,
+// callback-interface Box providers) that profit from explicit doc commentary.
+//
+// `clock_sync_estimate` takes `&str` in the un-annotated impl; the UniFFI export
+// takes `String` (UniFFI requires owned types in exported signatures). The body
+// passes `.as_str()` to the underlying `ClockSyncHandle::estimate`.
+//
+// Provider setters: UniFFI 0.31 callback-interface contract requires `Box<dyn Trait>`.
+// The un-annotated impl has `set_sensor_catalog_provider_arc` / `set_resource_catalog_provider_arc`
+// for Rust callers (takes `Arc<dyn ...>`). The FFI-exported names here are the
+// canonical ones: `set_sensor_catalog_provider` / `set_resource_catalog_provider`.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export)]
+impl ClusterManager {
+    /// Broadcast one best-effort diagnostic message to connected cluster peers.
+    pub fn broadcast_diagnostic_message(
+        &self,
+        message: DiagnosticMessage,
+    ) -> Result<(), BroadcastDiagnosticError> {
+        self.runtime.broadcast_diagnostic_message(message)
+    }
+
+    /// Drain diagnostic messages received since the previous call.
+    pub fn drain_diagnostic_messages(&self) -> Vec<InboundDiagnosticMessage> {
+        std::mem::take(
+            &mut *self
+                .diagnostic_messages
+                .lock()
+                .expect("diagnostic_messages lock"),
+        )
+    }
+
+    /// Best current peer-clock transform estimate for an ordered
+    /// local/remote clock pair, if heartbeat NTP samples have
+    /// produced one. This is a read-only view over `auki-time`'s
+    /// sync state; `ClusterManager` does not own sample policy.
+    ///
+    /// `local_clock_id` and `remote_clock_id` are the stable clock-id
+    /// strings (same strings stored in `ParticipantInfo::session_clock_id`).
+    pub fn clock_sync_estimate(
+        &self,
+        local_clock_id: String,
+        remote_clock_id: String,
+    ) -> Option<ClockTransformEstimate> {
+        self.clock_sync
+            .estimate(local_clock_id.as_str(), remote_clock_id.as_str())
+    }
+
+    /// Snapshot all current heartbeat-derived peer-clock transform
+    /// estimates known to this manager.
+    pub fn clock_sync_estimates(&self) -> Vec<ClockTransformEstimate> {
+        self.clock_sync.estimates()
+    }
+
+    /// Best current transform estimate from this peer's session
+    /// clock into the cluster's stable domain clock.
+    ///
+    /// Returns an explicit unavailable reason when the domain-clock
+    /// source has not been advertised yet, or when this peer has not
+    /// yet measured its session clock against that source's backing
+    /// clock. No wall-clock fallback is used.
+    pub fn domain_clock_estimate(
+        &self,
+    ) -> Result<DomainClockEstimate, DomainClockEstimateUnavailable> {
+        self.domain_clock_estimate_at(self.session_clock_now_ns())
+    }
+
+    /// Current local reading converted into the cluster's stable
+    /// domain clock.
+    ///
+    /// This is the convenience form of [`Self::domain_clock_estimate`]
+    /// for callers that need "domain time now" rather than the full
+    /// transform estimate. It returns typed unavailable errors until
+    /// the domain source and any required peer-clock transform are
+    /// known. No wall-clock fallback is used.
+    pub fn domain_time_now(&self) -> Result<i64, DomainTimeNowError> {
+        let session_now_ns = self.session_clock_now_ns();
+        let estimate = self.domain_clock_estimate_at(session_now_ns)?;
+        convert_session_now_to_domain_time(&estimate, session_now_ns)
+    }
+
+    /// Register (or replace) the application-supplied
+    /// [`SensorCatalogProvider`]. Called by the producer daemon
+    /// after constructing the `ClusterManager` — and again any
+    /// time the daemon wants to swap in a different provider.
+    ///
+    /// Inbound `/auki/sensors/0.0.1` requests received before this
+    /// call answer with an empty `sensors: []`. After this call,
+    /// each inbound request invokes [`SensorCatalogProvider::snapshot`]
+    /// on the registered provider.
+    ///
+    /// Rust callers that already hold an `Arc<dyn SensorCatalogProvider>`
+    /// may use `set_sensor_catalog_provider_arc` in the un-annotated impl
+    /// to avoid the Box→Arc conversion.
+    pub fn set_sensor_catalog_provider(&self, provider: Box<dyn SensorCatalogProvider>) {
+        let provider: Arc<dyn SensorCatalogProvider> = Arc::from(provider);
+        *self
+            .sensor_catalog_provider
+            .lock()
+            .expect("sensor_catalog_provider lock") = Some(provider);
+    }
+
+    /// Register (or replace) the application-supplied
+    /// [`ResourceCatalogProvider`]. Sensor streams are already lifted
+    /// from [`SensorCatalogProvider`]; use this for transform edges
+    /// and future non-sensor resources.
+    ///
+    /// Inbound `/auki/resources/0.0.1` requests received before this
+    /// call still include sensor streams when a sensor provider is
+    /// installed. Additional resource kinds appear after this call.
+    ///
+    /// Rust callers that already hold an `Arc<dyn ResourceCatalogProvider>`
+    /// may use `set_resource_catalog_provider_arc` in the un-annotated impl
+    /// to avoid the Box→Arc conversion.
+    pub fn set_resource_catalog_provider(&self, provider: Box<dyn ResourceCatalogProvider>) {
+        let provider: Arc<dyn ResourceCatalogProvider> = Arc::from(provider);
+        *self
+            .resource_catalog_provider
+            .lock()
+            .expect("resource_catalog_provider lock") = Some(provider);
+    }
+}
+
+// ─── UniFFI-exposed async surface ────────────────────────────────────────────
+//
+// All methods in this block must be callable from Swift via async/await.
+// The `async_runtime = "tokio"` attribute tells UniFFI to drive each
+// `async fn` on the Tokio runtime that was already started by the host
+// app (Park / Sentinel / iosapp all own a Tokio runtime). A separate
+// sync impl block is used for the non-async surface (see above) because
+// UniFFI requires the `async_runtime` annotation on the entire impl —
+// mixing sync and async methods in one annotated block is not supported.
+//
+// Methods with `impl Into<String>` parameters in the un-annotated impl
+// are changed to concrete `String` here because UniFFI requires concrete
+// types. Rust callers that passed `String` continue to work unchanged;
+// callers that passed `&str` need `.to_string()` — the integration tests
+// already did this (`frame.frame_id.clone()`, `"deadbeef".to_string()`).
+//
+// `fetch_registry_envelope` is a private async helper; it stays in the
+// un-annotated block and is reachable from the new annotated block
+// because all blocks share the same `ClusterManager` type.
+
+#[cfg_attr(feature = "swift-bindings", uniffi::export(async_runtime = "tokio"))]
+impl ClusterManager {
+    /// Admit a new peer to the cluster. Manager-only — other peers
+    /// route join requests to the Manager.
+    ///
+    /// On success the membership document gains a new
+    /// [`ClusterMember`] entry, the runtime's allow-list is
+    /// extended, and the new entry is returned. In v1 the successor
+    /// token is an empty byte vec — signature verification is
+    /// disabled per the Discovery v1 contract, so the bytes don't
+    /// need to mean anything yet. SDK-T4 (when it lands) replaces
+    /// this with a signed token.
+    pub async fn admit_peer(
+        &self,
+        peer_id: PeerId,
+        multiaddrs: Vec<Multiaddr>,
+    ) -> Result<ClusterMember, AdmitError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(AdmitError::Stopped);
+        }
+        // Manager check.
+        let manager = self.manager_peer_id();
+        if manager != self.local_peer_id {
+            return Err(AdmitError::NotManager {
+                cluster: self.cluster_name.clone(),
+                manager,
+            });
+        }
+
+        // Build the new member entry, then take the lock briefly to
+        // append. Releasing the lock before the (async) runtime
+        // call avoids holding it across .await.
+        let member = ClusterMember {
+            peer_id,
+            multiaddrs: multiaddrs.clone(),
+            join_ts_ns: now_unix_nanos(),
+            successor_token: Some(Vec::new()),
+        };
+
+        let new_allow_list: Vec<AllowedPeer> = {
+            let mut membership = self.membership.lock().expect("membership lock");
+            if membership.peers.iter().any(|p| p.peer_id == peer_id) {
+                return Err(AdmitError::AlreadyMember(peer_id));
+            }
+            membership.admit(member.clone());
+            // Build the allow-list from membership, excluding our
+            // own peer-id (the runtime doesn't dial itself).
+            membership
+                .peers
+                .iter()
+                .filter(|p| p.peer_id != self.local_peer_id)
+                .map(|p| AllowedPeer {
+                    peer_id: p.peer_id,
+                    multiaddrs: p.multiaddrs.clone(),
+                })
+                .collect()
+        };
+
+        // Push the updated allow-list to the runtime.
+        self.runtime.set_allowed_peers(new_allow_list).await?;
+        sync_heartbeat_targets(
+            &self.runtime.handle(),
+            self.local_peer_id,
+            &self.manager_peer_id,
+            &self.membership,
+            &self.cluster_name,
+        )
+        .await;
+
+        // Gossip the updated membership to every connected peer so
+        // existing members learn about the new joiner (the joiner
+        // itself already has the same JSON in the `JoinResponse::Accept`
+        // it just received). Fire-and-forget; per-peer errors are
+        // logged inside the broadcast tasks.
+        broadcast_current_membership(
+            &self.runtime.handle(),
+            &self.manager_peer_id,
+            &self.membership,
+        );
+
+        Ok(member)
+    }
+
+    /// Fetch a cluster peer's [`ParticipantInfo`] over the
+    /// `/auki/info/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` builds its own `ParticipantInfo` from its
+    /// stored state and serializes it over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the
+    /// parsed `ParticipantInfo` ready for HTTP serialization.
+    pub async fn fetch_participant_info(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ParticipantInfo, FetchParticipantInfoError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FetchParticipantInfoError::Stopped);
+        }
+        let response = self.runtime.request_participant_info(peer_id).await?;
+        let info: ParticipantInfo = serde_json::from_str(&response.participant_info_json)?;
+        Ok(info)
+    }
+
+    /// Fetch a cluster peer's current sensor catalog over the
+    /// `/auki/sensors/0.0.1` libp2p protocol. The target peer's
+    /// `ClusterManager` snapshots its registered
+    /// [`SensorCatalogProvider`] (or returns an empty list if the
+    /// daemon hasn't installed one yet) and serializes the catalog
+    /// over the wire.
+    ///
+    /// `peer_id` must be a current cluster member — the runtime
+    /// allow-list gates the outbound substream. Returns the parsed
+    /// [`SensorsResponse`] ready for consumers (Park's chip row,
+    /// Sentinel's status board).
+    pub async fn fetch_sensors_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self.runtime.request_sensors_catalog(peer_id).await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's sensor catalog with explicit request
+    /// flags. Use [`SensorsRequest::with_frame_entries`] when a
+    /// consumer wants the producer to embed Sensor / Frame Registry
+    /// JSON by value and avoid per-row registry fetch round trips.
+    pub async fn fetch_sensors_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: SensorsRequest,
+    ) -> Result<SensorsResponse, FetchSensorsCatalogError> {
+        let response = self
+            .runtime
+            .request_sensors_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's current generalized resource catalog
+    /// over `/auki/resources/0.0.1`. This is the canonical discovery
+    /// path for sensor streams, transform edges, and future resource
+    /// kinds.
+    pub async fn fetch_resources_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self.runtime.request_resources_catalog(peer_id).await?;
+        Ok(response)
+    }
+
+    /// Fetch a cluster peer's generalized resource catalog with an
+    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
+    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
+    /// when a consumer wants embedded registry JSON by value.
+    pub async fn fetch_resources_catalog_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequest,
+    ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        let response = self
+            .runtime
+            .request_resources_catalog_with(peer_id, request)
+            .await?;
+        Ok(response)
+    }
+
+    /// Fetch and verify a peer's `SensorRegistryEntry` by exact
+    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// The SDK verifies the returned canonical JSON bytes hash to the
+    /// requested hash before decoding, then checks the decoded
+    /// `sensor_id` matches the requested id.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_sensor_entry(
+        &self,
+        peer_id: PeerId,
+        sensor_id: String,
+        sensor_hash: String,
+    ) -> Result<SensorRegistryEntry, FetchRegistryEntryError> {
+        let id = sensor_id;
+        let hash = sensor_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Sensor, id.clone(), hash.clone())
+            .await?;
+        let entry: SensorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.sensor_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded sensor_id mismatch: expected {:?}, found {:?}",
+                id, entry.sensor_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `ClockRegistryEntry` by exact
+    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_clock_entry(
+        &self,
+        peer_id: PeerId,
+        clock_id: String,
+        clock_hash: String,
+    ) -> Result<ClockRegistryEntry, FetchRegistryEntryError> {
+        let id = clock_id;
+        let hash = clock_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Clock, id.clone(), hash.clone())
+            .await?;
+        let entry: ClockRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.clock_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded clock_id mismatch: expected {:?}, found {:?}",
+                id, entry.clock_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `FrameRegistryEntry` by exact
+    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_frame_entry(
+        &self,
+        peer_id: PeerId,
+        frame_id: String,
+        frame_hash: String,
+    ) -> Result<FrameRegistryEntry, FetchRegistryEntryError> {
+        let id = frame_id;
+        let hash = frame_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Frame, id.clone(), hash.clone())
+            .await?;
+        let entry: FrameRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.frame_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded frame_id mismatch: expected {:?}, found {:?}",
+                id, entry.frame_id
+            )));
+        }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
+    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
+    /// Cuba T4 — closes Park-side detector enumeration without an HTTP
+    /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
+    ///
+    /// Parameters changed from `impl Into<String>` to `String` for
+    /// UniFFI compatibility (concrete types required).
+    pub async fn fetch_detector_entry(
+        &self,
+        peer_id: PeerId,
+        detector_id: String,
+        detector_hash: String,
+    ) -> Result<DetectorRegistryEntry, FetchRegistryEntryError> {
+        let id = detector_id;
+        let hash = detector_hash;
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Detector, id.clone(), hash.clone())
+            .await?;
+        let entry: DetectorRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.detector_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded detector_id mismatch: expected {:?}, found {:?}",
+                id, entry.detector_id
+            )));
+        }
+        Ok(entry)
+    }
+
     /// Shutdown — cancels all background tasks, deregisters the
     /// cluster from Discovery **only if we're the last member**,
     /// and shuts down the runtime.
@@ -1982,6 +2157,106 @@ impl ClusterManager {
         //    `NetworkRuntime::shutdown` is `&self` + idempotent.
         self.runtime.shutdown();
         result
+    }
+}
+
+// ─── UniFFI-exposed async surface: per-payload streams ───────────────────────
+//
+// Five typed `open_*_stream` wrappers. Each is a thin delegator to the
+// identically-named method on `NetworkRuntime` (added in PR B). The
+// ClusterManager surface is the natural consumer-facing entry point;
+// callers should not need to reach into the runtime directly.
+//
+// `request_bytes` is a prost-encoded `auki.stream.StreamRequest`. The runtime
+// method decodes it and re-encodes the frame type, so this layer is truly
+// zero-logic.
+//
+// The entire impl block is gated by `#[cfg(feature = "swift-bindings")]`
+// (not just the export attribute) because the delegated `NetworkRuntime`
+// methods (`open_audio_stream`, …) are also only compiled under that feature.
+
+#[cfg(feature = "swift-bindings")]
+#[uniffi::export(async_runtime = "tokio")]
+impl ClusterManager {
+    /// Open an outbound audio stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionAudio` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_audio_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionAudio>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime.open_audio_stream(peer_id, request_bytes).await
+    }
+
+    /// Open an outbound camera stream against `peer_id`. `request_bytes` is
+    /// a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionCamera` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_camera_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionCamera>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime.open_camera_stream(peer_id, request_bytes).await
+    }
+
+    /// Open an outbound point-cloud stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionPointCloud` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_point_cloud_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionPointCloud>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_point_cloud_stream(peer_id, request_bytes)
+            .await
+    }
+
+    /// Open an outbound joint-encoders stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionJointEncoders` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_joint_encoders_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionJointEncoders>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_joint_encoders_stream(peer_id, request_bytes)
+            .await
+    }
+
+    /// Open an outbound detection stream against `peer_id`. `request_bytes`
+    /// is a prost-encoded `auki.stream.StreamRequest`. Returns a typed
+    /// `StreamSubscriptionDetection` on accept; an `OpenStreamError` on
+    /// decline, libp2p failure, or timeout.
+    pub async fn open_detection_stream(
+        &self,
+        peer_id: PeerId,
+        request_bytes: Vec<u8>,
+    ) -> Result<
+        Arc<auki_network::network_runtime::StreamSubscriptionDetection>,
+        auki_network::network_runtime::OpenStreamError,
+    > {
+        self.runtime
+            .open_detection_stream(peer_id, request_bytes)
+            .await
     }
 }
 
@@ -2834,6 +3109,8 @@ fn heartbeat_timestamp_source(
 }
 
 /// Errors from [`ClusterManager::fetch_participant_info`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchParticipantInfoError {
     /// libp2p / wire / timeout failure during the request.
@@ -2850,6 +3127,8 @@ pub enum FetchParticipantInfoError {
 }
 
 /// Errors from [`ClusterManager::fetch_sensors_catalog`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchSensorsCatalogError {
     /// libp2p / wire / timeout failure during the request.
@@ -2858,6 +3137,8 @@ pub enum FetchSensorsCatalogError {
 }
 
 /// Errors from [`ClusterManager::fetch_resources_catalog`].
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchResourcesCatalogError {
     /// libp2p / wire / timeout failure during the request.
@@ -2866,6 +3147,8 @@ pub enum FetchResourcesCatalogError {
 }
 
 /// Errors from `ClusterManager::fetch_*_entry`.
+#[cfg_attr(feature = "swift-bindings", derive(uniffi::Error))]
+#[cfg_attr(feature = "swift-bindings", uniffi(flat_error))]
 #[derive(Debug, Error)]
 pub enum FetchRegistryEntryError {
     /// libp2p / wire / timeout failure during the request.
@@ -3130,7 +3413,7 @@ fn spawn_resources_handler(
                         .lock()
                         .expect("sensor_catalog_provider lock");
                     match guard.as_ref() {
-                        Some(p) => p.snapshot_for_request(&sensors_request, root.as_deref()),
+                        Some(p) => sensor_catalog_snapshot_for_request(p.as_ref(), &sensors_request, root.as_deref()),
                         None => Vec::new(),
                     }
                 };
@@ -3142,7 +3425,7 @@ fn spawn_resources_handler(
                     .lock()
                     .expect("resource_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(p) => resource_catalog_snapshot_for_request(p.as_ref(), &request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
@@ -3179,7 +3462,7 @@ fn spawn_sensors_handler(
             let sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(p) => sensor_catalog_snapshot_for_request(p.as_ref(), &request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
@@ -4118,10 +4401,10 @@ mod tests {
             to_frame_id: to.frame_id.clone(),
             to_frame_hash: to_hash,
             writer_mode: "rigid".into(),
-            source: Some(serde_json::json!({
-                "kind": "ros2_tf",
-                "publishers": ["robot_state_publisher"]
-            })),
+            source: Some(
+                serde_json::json!({"kind": "ros2_tf", "publishers": ["robot_state_publisher"]})
+                    .to_string(),
+            ),
             transform: ResourceSpatialTransform {
                 translation: ResourceVec3 {
                     x: 0.0,

@@ -891,12 +891,15 @@ impl PyTransformEdgeResource {
         from_frame_entry_json: Option<String>,
         to_frame_entry_json: Option<String>,
     ) -> PyResult<Self> {
-        let source = match source_json {
-            Some(json) => Some(serde_json::from_str(&json).map_err(|e| {
+        // Validate that source_json, if provided, is valid JSON before storing.
+        // `source` is now `Option<String>` in the upstream type (Path a change);
+        // we keep the parse check here so Python callers see a clear error on
+        // malformed input rather than a silent serialization failure later.
+        if let Some(ref json) = source_json {
+            serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
                 PyValueError::new_err(format!("source_json must be valid JSON: {e}"))
-            })?),
-            None => None,
-        };
+            })?;
+        }
         Ok(Self {
             inner: RustTransformEdgeResource {
                 id,
@@ -905,7 +908,7 @@ impl PyTransformEdgeResource {
                 to_frame_id,
                 to_frame_hash,
                 writer_mode,
-                source,
+                source: source_json,
                 transform: transform.inner,
                 from_frame_entry_json,
                 to_frame_entry_json,
@@ -950,10 +953,8 @@ impl PyTransformEdgeResource {
 
     #[getter]
     fn source_json(&self) -> Option<String> {
-        self.inner
-            .source
-            .as_ref()
-            .map(|value| serde_json::to_string(value).expect("serde_json::Value serializes"))
+        // `source` is now `Option<String>` (canonical JSON); return as-is.
+        self.inner.source.clone()
     }
 
     #[getter]
@@ -1680,7 +1681,11 @@ impl PyClusterManager {
     fn set_sensor_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PySensorCatalogProvider { callable });
         self.with_inner(|m| {
-            m.set_sensor_catalog_provider(provider);
+            // PR C renamed the Arc-taking method to `_arc` and added a
+            // Box-taking variant for UniFFI callback-interface compatibility.
+            // Python's PyO3 binding constructs an Arc directly; keep using
+            // the _arc variant.
+            m.set_sensor_catalog_provider_arc(provider);
             Ok(())
         })
     }
@@ -1694,7 +1699,9 @@ impl PyClusterManager {
     fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PyResourceCatalogProvider { callable });
         self.with_inner(|m| {
-            m.set_resource_catalog_provider(provider);
+            // PR C renamed the Arc-taking method to `_arc` (see
+            // set_sensor_catalog_provider above for rationale).
+            m.set_resource_catalog_provider_arc(provider);
             Ok(())
         })
     }

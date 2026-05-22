@@ -2,16 +2,16 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
-    core::{Transport as _, muxing::StreamMuxerBox, transport::Boxed},
+    Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
     request_response::{self, ProtocolSupport, json},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
-use libp2p_webrtc as webrtc;
-use rand::thread_rng;
 use thiserror::Error;
 
-use crate::{BROWSER_PROBE_PROTOCOL, BrowserProbeRequest, BrowserProbeResponse, PeerIdentity};
+use crate::{
+    BROWSER_PROBE_PROTOCOL, BrowserProbeRequest, BrowserProbeResponse, PeerIdentity,
+    swarm::webrtc_direct_transport,
+};
 
 pub fn responder_label(identity: &PeerIdentity) -> String {
     format!("native:{}", identity.peer_id())
@@ -33,16 +33,6 @@ pub enum BrowserProbeError {
     },
     #[error("listener did not produce a dialable address within {0:?}")]
     ListenTimeout(Duration),
-}
-
-pub fn webrtc_direct_transport(
-    keypair: &libp2p::identity::Keypair,
-) -> Boxed<(PeerId, StreamMuxerBox)> {
-    let certificate = webrtc::tokio::Certificate::generate(&mut thread_rng())
-        .expect("WebRTC certificate generation should succeed");
-    webrtc::tokio::Transport::new(keypair.clone(), certificate)
-        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
-        .boxed()
 }
 
 pub fn build_browser_probe_swarm(

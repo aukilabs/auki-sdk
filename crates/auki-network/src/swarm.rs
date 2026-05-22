@@ -69,12 +69,18 @@
 //! ```
 
 use crate::PeerIdentity;
+#[cfg(feature = "webrtc_direct")]
+use libp2p::core::{Transport as _, muxing::StreamMuxerBox, transport::Boxed};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping, relay,
     swarm::{DialError, NetworkBehaviour, behaviour::toggle::Toggle, dial_opts::DialOpts},
     tcp, yamux,
 };
 use libp2p_allow_block_list as allow_block_list;
+#[cfg(feature = "webrtc_direct")]
+use libp2p_webrtc as webrtc;
+#[cfg(feature = "webrtc_direct")]
+use rand::thread_rng;
 use std::time::Duration;
 
 /// libp2p protocol id used for the SDK's identify exchanges. Stable; do
@@ -171,6 +177,17 @@ pub enum BuildError {
         #[source]
         source: libp2p::TransportError<std::io::Error>,
     },
+}
+
+#[cfg(feature = "webrtc_direct")]
+pub fn webrtc_direct_transport(
+    keypair: &libp2p::identity::Keypair,
+) -> Boxed<(PeerId, StreamMuxerBox)> {
+    let certificate = webrtc::tokio::Certificate::generate(&mut thread_rng())
+        .expect("WebRTC certificate generation should succeed");
+    webrtc::tokio::Transport::new(keypair.clone(), certificate)
+        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .boxed()
 }
 
 /// Assemble a libp2p swarm. Constructed swarm starts listening on every

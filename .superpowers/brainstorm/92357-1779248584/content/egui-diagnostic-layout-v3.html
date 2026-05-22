@@ -1,0 +1,98 @@
+<h2>Diagnostic App Layout</h2>
+<p class="subtitle">Revised time-sync language: offsets must name the target clock.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Auki Diagnostics</div>
+  <div class="mockup-body" style="padding:0;background:#111827;color:#e5e7eb;border-radius:0 0 8px 8px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:280px 1fr;min-height:520px">
+      <aside style="border-right:1px solid #374151;padding:16px;background:#0f172a">
+        <div style="font-size:12px;text-transform:uppercase;color:#93c5fd;margin-bottom:8px">Peer self</div>
+        <div style="font-size:22px;font-weight:700;margin-bottom:4px">nils-macbook</div>
+        <div style="font-family:monospace;color:#9ca3af;font-size:12px;line-height:1.5;margin-bottom:18px">
+          peer: ...8kP7hQ<br>
+          app: auki-diagnostic<br>
+          role: Member<br>
+          session clock: .../monotonic
+        </div>
+
+        <div style="font-size:12px;text-transform:uppercase;color:#93c5fd;margin-bottom:8px">Cluster</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span style="width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block"></span>
+          <strong>hagall-test</strong>
+        </div>
+        <div style="font-family:monospace;color:#9ca3af;font-size:12px;line-height:1.6;margin-bottom:18px">
+          peers: 2<br>
+          manager: ...Q2La9F<br>
+          domain clock: hagall-test/domain-clock
+        </div>
+
+        <button class="mock-button" style="width:100%;margin-bottom:8px;background:#2563eb;color:white;border:0">Join / Create</button>
+        <button class="mock-button" style="width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563">Leave Cluster</button>
+      </aside>
+
+      <main style="padding:18px;display:grid;grid-template-rows:auto 1fr auto;gap:16px">
+        <section style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          <div style="border:1px solid #374151;padding:12px;border-radius:6px;background:#111827">
+            <div style="font-size:11px;color:#9ca3af;text-transform:uppercase">Networking</div>
+            <div style="font-size:20px;font-weight:700;color:#22c55e">Connected</div>
+          </div>
+          <div style="border:1px solid #374151;padding:12px;border-radius:6px;background:#111827">
+            <div style="font-size:11px;color:#9ca3af;text-transform:uppercase">Heartbeat</div>
+            <div style="font-size:20px;font-weight:700">42 ms ago</div>
+          </div>
+          <div style="border:1px solid #374151;padding:12px;border-radius:6px;background:#111827">
+            <div style="font-size:11px;color:#9ca3af;text-transform:uppercase">Session -> domain</div>
+            <div style="font-size:20px;font-weight:700">+1.8 ms</div>
+          </div>
+        </section>
+
+        <section style="border:1px solid #374151;background:#020617;border-radius:8px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden">
+          <div style="position:absolute;top:16px;left:18px;font-size:12px;color:#9ca3af;text-transform:uppercase">3-second flash on domain clock</div>
+          <div style="width:220px;height:220px;border-radius:50%;background:#facc15;box-shadow:0 0 80px #facc15;display:flex;align-items:center;justify-content:center;color:#111827;font-size:44px;font-weight:800">
+            FLASH
+          </div>
+          <div style="position:absolute;bottom:16px;left:18px;right:18px;display:flex;justify-content:space-between;color:#9ca3af;font-family:monospace;font-size:12px">
+            <span>next domain tick: 1.42s</span>
+            <span>local render lag: 2.1 ms</span>
+            <span>period: 3.000s</span>
+          </div>
+        </section>
+
+        <section style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="border:1px solid #374151;padding:12px;border-radius:6px;background:#111827">
+            <div style="font-size:12px;color:#9ca3af;text-transform:uppercase;margin-bottom:6px">Peers</div>
+            <div style="font-family:monospace;font-size:12px;line-height:1.7;color:#d1d5db">
+              self ...8kP7hQ  Member  session->domain +1.8ms<br>
+              peer ...Q2La9F  Manager session->domain +0.0ms
+            </div>
+          </div>
+          <div style="border:1px solid #374151;padding:12px;border-radius:6px;background:#111827">
+            <div style="font-size:12px;color:#9ca3af;text-transform:uppercase;margin-bottom:6px">Events</div>
+            <div style="font-family:monospace;font-size:12px;line-height:1.7;color:#d1d5db">
+              joined hagall-test<br>
+              heartbeat opened to ...Q2La9F<br>
+              session->domain estimate updated
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve-layout" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>This wording is clear</h3>
+      <p>The UI names the target as the cluster domain clock and flashes on that clock.</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise-layout" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Revise terminology</h3>
+      <p>Use different labels for the shared time basis or per-peer offset.</p>
+    </div>
+  </div>
+</div>

@@ -9,6 +9,7 @@ export function peerPublicKeyProtobufFromSeed(seed: Uint8Array): Uint8Array;
 export function peerPrivateKeyProtobufFromSeed(seed: Uint8Array): Uint8Array;
 export function peerPrivateKeyProtobufFromWalletSeed(seed: Uint8Array): Uint8Array;
 export function browserProbeProtocol(): string;
+export function messageProtocol(): string;
 export function encodeBrowserProbeRequest(nonce: string, payload: Uint8Array): Uint8Array;
 export function decodeBrowserProbeResponse(bytes: Uint8Array): string;
 

@@ -46,6 +46,11 @@ pub fn browser_probe_protocol() -> String {
     BROWSER_PROBE_PROTOCOL.to_string()
 }
 
+#[wasm_bindgen(js_name = messageProtocol)]
+pub fn message_protocol() -> String {
+    core::MESSAGE_PROTOCOL.to_string()
+}
+
 #[wasm_bindgen(js_name = encodeBrowserProbeRequest)]
 pub fn encode_browser_probe_request(nonce: String, payload: &[u8]) -> Result<Vec<u8>, JsValue> {
     serde_json::to_vec(&BrowserProbeRequest {

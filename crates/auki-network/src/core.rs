@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// peer identity is regenerable from a wallet seed backup alone.
 pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 
+/// libp2p protocol id for generic peer messages. Stable; bump version
+/// only on an incompatible wire-shape change.
+pub const MESSAGE_PROTOCOL: &str = "/auki/message/0.0.1";
+
 // ─── PeerIdentity ────────────────────────────────────────────────────────────
 
 /// libp2p peer identity for a node. Holds the ed25519 keypair libp2p uses

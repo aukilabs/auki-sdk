@@ -3,6 +3,7 @@ import initAukiNetwork, {
   browserProbeProtocol,
   decodeBrowserProbeResponse,
   encodeBrowserProbeRequest,
+  messageProtocol,
   peerDerivationLabel,
   peerIdFromWalletSeed,
   peerPrivateKeyProtobufFromWalletSeed,
@@ -43,5 +44,6 @@ const response = JSON.parse(decodeBrowserProbeResponse(responseBytes));
 assert(response.responder === "native:test", "browser probe response decode failed");
 
 assert(browserProbeProtocol() === "/auki/browser-probe/0.0.1", "browser probe protocol drifted");
+assert(messageProtocol() === "/auki/message/0.0.1", "message protocol drifted");
 
 console.log("javascript wasm smoke ok");

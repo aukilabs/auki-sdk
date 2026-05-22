@@ -15,11 +15,8 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
 use thiserror::Error;
 
+pub use crate::core::MESSAGE_PROTOCOL;
 pub use auki_proto::message::{MessageAck, MessageEnvelope};
-
-/// libp2p protocol id for generic peer messages. Stable; bump version
-/// only on an incompatible wire-shape change.
-pub const MESSAGE_PROTOCOL: &str = "/auki/message/0.0.1";
 
 /// Cap on a single message frame. Message payloads are control-plane
 /// data, not bulk sensor or media transfer.

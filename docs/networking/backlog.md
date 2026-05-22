@@ -1,4 +1,4 @@
-# Cluster Lifecycle RFC Backlog
+# Peer-To-Peer Cluster Backlog
 
 Status: working backlog. This file is not part of the protocol requirements.
 
@@ -6,8 +6,11 @@ Owner: TBD.
 
 Last updated: 2026-05-22.
 
-Related protocol spec:
-[`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md).
+Related baseline:
+[`baseline.md`](baseline.md).
+
+Related drafts:
+[`drafts.md`](drafts.md).
 
 Related glossary:
 [`glossary.md`](glossary.md).
@@ -15,25 +18,25 @@ Related glossary:
 ## Purpose
 
 Track the remaining work needed before a clean-room SDK implementer can build
-the currently specified v1 protocol from the spec alone.
+the baseline protocol from `baseline.md` alone.
 
 The protocol baseline lives in
-[`cluster-lifecycle-specs.md`](cluster-lifecycle-specs.md). This backlog is
-not part of the protocol requirements.
+[`baseline.md`](baseline.md). This backlog is not part of the protocol
+requirements.
 
 ## Implementability Verdict
 
 Authority, identity, domain validation, handshake message shape, offer objects,
 message envelopes, and status objects are implementable now.
 
-The currently specified v1 protocol is not fully implementable end to end yet.
-The blocker is the post-handshake path layer: Offer Catalog, Get, and Subscribe
-have object shapes, but Get and Subscribe do not yet have concrete protocol IDs
-or path-binding rules, and common JSON framing/exchange mechanics are not
+The baseline protocol is not fully implementable end to end yet. The blocker is
+the post-handshake path layer: Offer Catalog, Get, and Subscribe have object
+shapes, but Get and Subscribe do not yet have concrete protocol IDs or
+path-binding rules, and common JSON framing/exchange mechanics are not
 mechanical enough.
 
-Configured/private peer-to-peer connectivity is the currently specified path.
-Concrete Discovery records are v1 To Fill work and do not block that path.
+Configured/manual peer-to-peer connectivity is the baseline path. Concrete
+Discovery records are parked in `drafts.md` and do not block that path.
 
 ## Work Order
 
@@ -75,7 +78,7 @@ Patch:
 - Define Get request/response ordering.
 - Define Subscribe request, accept, reject, data, end, and close ordering.
 - Define where structured errors appear when a path fails.
-- Keep current SDK protocol paths outside the normative spec.
+- Keep current SDK protocol paths outside the baseline.
 
 Done when:
 
@@ -158,14 +161,14 @@ Done when:
 - A responder can decide whether it can satisfy `accepted_payload_types`.
 - A receiver can reject an unexpected payload family deterministically.
 
-## Parked V1 To Fill Work
+## Drafts Tracked Outside The Baseline
 
-These are in v1 scope but do not block the currently specified
-configured/private peer-to-peer path.
+These items live in `drafts.md`. They do not block the baseline configured or
+manual peer-to-peer path.
 
 ### Dynamic Served-Domain Updates
 
-Slot: `RFC-0012: Served Domain Set`, `Dynamic Updates (To Fill)`.
+Draft: `drafts.md`, `Dynamic Served-Domain Updates`.
 
 Current baseline: served-domain changes require reconnect or fresh handshake.
 
@@ -175,7 +178,7 @@ behavior, and failure mapping.
 
 ### Discovery Record Shape
 
-Slot: `RFC-0015: Discovery Record Shape`.
+Draft: `drafts.md`, `Discovery Record Shape`.
 
 Current baseline: Discovery is optional rendezvous/presence infrastructure.
 Configured/private peer-to-peer connectivity does not require a concrete
@@ -186,22 +189,21 @@ and expiry behavior, and non-authoritative metadata boundaries.
 
 ### Discovery Data-Type Hints
 
-Slot: `RFC-0016: Discovery Data-Type Hints`.
+Draft: `drafts.md`, `Discovery Data-Type Hints`.
 
 Fill later: hint vocabulary, relationship between hints and offers, and
 handling for missing, stale, or unsupported hints.
 
 ### Peer Graph Hints
 
-Slot: `RFC-0022: Peer Graph Hints`.
+Draft: `drafts.md`, `Peer Graph Hints`.
 
 Fill later: candidate-peer sharing shape, candidate handling rules, and
 non-authoritative membership boundaries.
 
-### Concrete SDK NTP / Clock-Sync Protocol
+### Concrete Clock-Sync Protocol
 
-Slot: `RFC-0035: Time And Clock Semantics` plus a future concrete clock-sync
-message RFC.
+Draft: `drafts.md`, `Concrete Clock-Sync Protocol`.
 
 Current baseline: `RFC-0035` owns timestamp and clock semantics. A concrete
 clock-sync protocol is not required for Offer, Get, or Subscribe.

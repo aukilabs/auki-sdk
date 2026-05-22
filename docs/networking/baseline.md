@@ -1,11 +1,14 @@
-# Peer-To-Peer Cluster Protocol Specs
+# Peer-To-Peer Cluster Baseline
 
-Status: draft normative baseline.
+Status: draft first implementable baseline.
 
 Last updated: 2026-05-22.
 
-Related RFC backlog:
-[`cluster-lifecycle-backlog.md`](cluster-lifecycle-backlog.md).
+Related drafts:
+[`drafts.md`](drafts.md).
+
+Related backlog:
+[`backlog.md`](backlog.md).
 
 Related glossary:
 [`glossary.md`](glossary.md).
@@ -18,9 +21,8 @@ domains when they expose domain-scoped data, configure or optionally discover
 reachable peers, authorize connections, and exchange domain-scoped data through
 simple peer-to-peer relationships.
 
-The goal is not centralized runtime control. The goal is a small protocol
-foundation that lets peers form clusters and exchange domain-scoped data
-directly.
+The goal is a small protocol foundation that lets peers form clusters and
+exchange domain-scoped data directly, without centralized authority.
 
 This baseline intentionally uses a small, explicit protocol surface. Recurring
 rules should be defined once in their owner RFC and referenced elsewhere
@@ -31,13 +33,8 @@ and "OPTIONAL" are to be interpreted as described in RFC 2119.
 
 Terminology used by this document is defined in the related glossary.
 
-Sections marked "To Fill" are placeholders for unfinished RFC work. They are
-not part of the protocol requirements until their status changes.
-
-This document distinguishes specified v1 text from v1 To Fill sections.
-Specified v1 text is the current v1 baseline. V1 To Fill sections are in v1
-scope, but their concrete interoperability rules are not defined until the
-placeholder section is filled.
+Future extension drafts are tracked in `drafts.md`. They are not part of this
+first implementable baseline until moved into this file.
 
 ## Protocol Structure
 
@@ -644,13 +641,11 @@ dialability.
 Local receive time is receiver diagnostic state. It is distinct from
 `generated_at` and `timestamp_ns`.
 
-Clock-sync results are optional diagnostics in the specified v1 protocol. The
-specified v1 protocol does not require a concrete clock-sync protocol for
-Offer, Get, or Subscribe. Clock-sync results MAY inform local diagnostics or
-local policy. A local policy MAY decline a path when clock-sync state is absent
-or unhealthy, but that policy decision is not a protocol authority proof.
-
-Concrete NTP or clock-sync message flow is v1 To Fill work.
+Clock-sync results are optional diagnostics in the baseline protocol. The
+baseline protocol does not require a concrete clock-sync protocol for Offer,
+Get, or Subscribe. Clock-sync results MAY inform local diagnostics or local
+policy. A local policy MAY decline a path when clock-sync state is absent or
+unhealthy, but that policy decision is not a protocol authority proof.
 
 ## Peer And Domain Model
 
@@ -723,10 +718,10 @@ The served domain set is scoped to one peer relationship. Accepting a domain for
 one remote peer MUST NOT imply that another peer is accepted to serve the same
 domain.
 
-The specified v1 protocol does not define in-place changes to the served domain
-set during an active peer relationship. A peer that wants the remote peer to
-accept a changed served-domain set MUST use a reconnect or fresh handshake.
-The changed served-domain set MUST NOT be treated as accepted until the same
+The baseline protocol does not define in-place changes to the served domain set
+during an active peer relationship. A peer that wants the remote peer to accept
+a changed served-domain set MUST use a reconnect or fresh handshake. The
+changed served-domain set MUST NOT be treated as accepted until the same
 authority-chain validation used during the initial handshake has succeeded.
 
 #### Offer Interaction
@@ -736,22 +731,6 @@ outside the set fail the served-domain part of offer usability.
 
 If offer loading fails for an accepted served domain, the peer relationship MAY
 remain ready while reporting `offer.load_failed` for that offer-loading path.
-
-#### Dynamic Updates (To Fill)
-
-Classification: v1 To Fill. This section is in v1 scope. Its concrete
-interoperability rules are unset until filled.
-
-Future protocol work can define how a peer adds, removes, refreshes, or
-replaces served domains during an active peer relationship.
-
-That work needs to describe:
-
-- update message shape;
-- validation trigger;
-- authority-chain reuse;
-- stale offer and subscription handling;
-- failure mapping.
 
 #### Diagnostics
 
@@ -767,7 +746,7 @@ Diagnostics SHOULD report:
 
 #### Requirement
 
-The specified v1 protocol MUST support private or configured peer-to-peer
+The baseline protocol MUST support private or configured peer-to-peer
 connectivity without Discovery.
 
 A private or configured peer does not need to register presence in Discovery
@@ -779,15 +758,8 @@ and can still:
 - participate in authorized peer-to-peer exchange once connected.
 
 A discoverable peer registers presence through Discovery or an equivalent
-index.
-
-Discoverable-peer interoperability is v1 To Fill until `RFC-0015` defines a
-concrete Discovery record shape. Discovery data-type hints are v1 To Fill
-until `RFC-0016` defines the hint vocabulary.
-
-Until those RFCs are filled, implementations MAY support discoverable peers
-through implementation-defined Discovery records, but specified v1
-peer-to-peer interoperability MUST NOT depend on those records.
+index. Baseline peer-to-peer interoperability MUST NOT depend on a concrete
+Discovery record shape or Discovery data-type hint vocabulary.
 
 #### Consequences
 
@@ -800,7 +772,7 @@ A Discovery query MUST NOT be used to prove that a private peer does not exist.
 #### Requirement
 
 A peer MUST NOT be required to register with Discovery merely to use the
-currently specified v1 peer-to-peer lifecycle or to connect to another peer.
+baseline peer-to-peer lifecycle or to connect to another peer.
 
 A peer MAY register with Discovery when it wants to be discoverable by other
 peers.
@@ -809,8 +781,8 @@ A peer that does not register with Discovery MAY still connect to other peers
 through manual configuration, invitation, direct address exchange, or another
 discovery mechanism.
 
-The currently specified v1 peer-to-peer lifecycle does not require a concrete
-Discovery record schema.
+The baseline peer-to-peer lifecycle does not require a concrete Discovery
+record schema.
 
 #### Discovery Authority
 
@@ -828,9 +800,8 @@ When implemented, a Discovery record SHOULD answer:
 - coarse, non-authoritative metadata about data types that may be available;
 - how fresh the advertisement is.
 
-Until `RFC-0015` and `RFC-0016` are filled, Discovery record shapes and
-data-type hints are implementation-defined and MUST NOT be required for the
-currently specified v1 peer-to-peer lifecycle.
+Discovery record shapes and data-type hints are implementation-defined and
+MUST NOT be required for the baseline peer-to-peer lifecycle.
 
 A Discovery record MUST NOT be treated as an authoritative offer catalog.
 
@@ -854,35 +825,6 @@ unavailable, assuming the underlying peer-to-peer transport remains healthy.
 
 Implementations SHOULD distinguish "Discovery presence degraded" from "peer
 relationship degraded" in status and diagnostics.
-
-### RFC-0015: Discovery Record Shape (To Fill)
-
-Classification: v1 To Fill. This section is in v1 scope. Its concrete
-interoperability rules are unset until filled.
-
-Define the concrete Discovery advertisement:
-
-- domain id and optional display label;
-- peer id and dialable advertised addresses;
-- freshness fields such as `ttl`, `expires_at`, or `last_seen_at`;
-- coarse, non-authoritative data-type hints;
-- refresh, update, remove, and expiry behavior.
-
-The record shape needs to preserve entrypoint advertisement semantics and avoid
-becoming an authoritative offer catalog.
-
-### RFC-0016: Discovery Data-Type Hints (To Fill)
-
-Classification: v1 To Fill. This section is in v1 scope. Its concrete
-interoperability rules are unset until filled.
-
-Define the coarse data-type hints allowed in Discovery records:
-
-- vocabulary for baseline hints;
-- how hints differ from offers;
-- whether hints are free-form, registered, or both;
-- freshness behavior for hints;
-- client handling for missing, stale, or unsupported hints.
 
 ### RFC-0017: Listen Addresses And Advertised Addresses Are Different
 
@@ -1192,22 +1134,6 @@ connections.
 
 A peer exiting SHOULD make that peer unavailable to other peers. It SHOULD NOT
 by itself invalidate unrelated peer relationships or domains.
-
-### RFC-0022: Peer Graph Hints (To Fill)
-
-Classification: v1 To Fill. This section is in v1 scope. Its concrete
-interoperability rules are unset until filled.
-
-Define how a peer shares additional peer candidates after connection:
-
-- whether learned peers are dialed automatically or surfaced as candidates;
-- what metadata can be shared;
-- whether a peer may hide known peers;
-- how the exchange avoids becoming authoritative membership;
-- whether DHT-style peer discovery is in scope for this baseline.
-
-The intended baseline is to treat learned peers as non-authoritative candidate
-dial targets or offer sources.
 
 ## Offer-Based Data Exchange
 

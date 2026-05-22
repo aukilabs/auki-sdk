@@ -20,102 +20,42 @@ Related glossary:
 Track the remaining work needed before a clean-room SDK implementer can build
 the baseline protocol from `baseline.md` alone.
 
-The protocol baseline lives in
-[`baseline.md`](baseline.md). This backlog is not part of the protocol
-requirements.
+The protocol requirements live in `baseline.md`. Future extension sketches live
+in `drafts.md`. This file is only the work queue.
 
-## Implementability Verdict
+## Current State
 
-Authority, identity, domain validation, handshake message shape, offer objects,
-message envelopes, and status objects are implementable now.
+Implementable now:
 
-The baseline protocol is not fully implementable end to end yet. The blocker is
-the post-handshake path layer: Offer Catalog, Get, and Subscribe have object
-shapes, but Get and Subscribe do not yet have concrete protocol IDs or
-path-binding rules, and common JSON framing/exchange mechanics are not
-mechanical enough.
+- authority and identity objects;
+- domain id derivation;
+- domain declaration and delegation validation;
+- authority-chain validation;
+- served-domain-set computation;
+- peer authorization model;
+- lifecycle handshake stream behavior and message shape;
+- Offer Catalog, Get, Subscribe, and message-envelope object shapes;
+- registry-reference hash format;
+- status object shapes;
+- time and clock semantics.
 
-Configured/manual peer-to-peer connectivity is the baseline path. Concrete
-Discovery records are parked in `drafts.md` and do not block that path.
+Baseline path:
+
+- configured/manual peer-to-peer connectivity;
+- Discovery is optional and does not block the baseline path.
 
 ## Work Order
 
-1. Define post-handshake path binding and framing.
-2. Define registry-reference hash format.
-3. Tighten deterministic failure mapping where interop needs exact outcomes.
-4. Tighten payload-type matching.
-5. Start Interop/Test work.
+1. `P1-1`: Tighten deterministic failure mapping where interop needs exact
+   outcomes.
+2. `P1-2`: Tighten payload-type matching.
+3. Start compatibility examples, expected results, and validation transcripts.
 
-## Start Here: Spec Blockers
-
-### P0-1: Post-Handshake Path Binding And Framing
-
-Slots:
-
-- `RFC-0002: V1 JSON Wire Conventions`
-- `RFC-0019: Peer Handshake`
-- `RFC-0024: Offer Catalog`
-- `RFC-0029: Get`
-- `RFC-0030: Subscribe`
-- `RFC-0032: Protocol Versions Are Compatibility Contracts`
-
-Problem:
-
-The spec defines the handshake protocol ID and offer-catalog protocol ID, but
-not the concrete Get/Subscribe protocol IDs or path descriptors. It also does
-not fully define JSON object framing and message ordering for lifecycle paths.
-
-Patch:
-
-- Define the JSON object framing rule for lifecycle, Offer Catalog, Get, and
-  Subscribe.
-- Define how the handshake exchange runs over
-  `/auki/cluster-lifecycle/0.0.1`.
-- Define Offer Catalog request/response exchange over
-  `/auki/offer-catalog/0.0.1`.
-- Define fixed v1 protocol IDs or offer-declared path descriptors for Get and
-  Subscribe.
-- Define Get request/response ordering.
-- Define Subscribe request, accept, reject, data, end, and close ordering.
-- Define where structured errors appear when a path fails.
-- Keep current SDK protocol paths outside the baseline.
-
-Done when:
-
-- A clean-room implementer can handshake, fetch offers, run Get, and run
-  Subscribe without reading SDK code.
-- An offer that advertises `get` or `subscribe` gives the consumer enough
-  information to open the correct path.
-
-### P0-2: Registry Reference Hash Format
-
-Slots:
-
-- `RFC-0024: Offer Catalog`
-- `RFC-0027: Spatial Message Envelope`
-
-Problem:
-
-Registry references include `hash`, and inline `canonical_json` verification
-depends on it, but the hash algorithm and string encoding are not defined.
-
-Patch:
-
-- Define the v1 registry-reference hash algorithm.
-- Define the v1 hash string encoding.
-- State exactly what bytes are hashed for `canonical_json`.
-
-Done when:
-
-- Two implementations can verify the same inline registry entry and produce the
-  same `hash`.
-- A consumer can reject a mismatched `canonical_json` deterministically.
-
-## Should Fix Before V1
+## P1
 
 ### P1-1: Deterministic Failure Mapping
 
-Slots:
+Owner sections:
 
 - `RFC-0010: Failure Code Registry`
 - `RFC-0019: Peer Handshake`
@@ -128,6 +68,8 @@ Slots:
 
 Patch:
 
+- Keep the failure precedence rule in `RFC-0010` and authority-chain precedence
+  in `RFC-0009` as the baseline ordering model.
 - Decide which malformed, unsupported, unauthorized, oversized, and stale cases
   need exact failure codes.
 - Upgrade only those mappings that must be deterministic for interop.
@@ -136,11 +78,11 @@ Patch:
 Done when:
 
 - Common bad inputs produce predictable failure codes without forcing every
-  diagnostic path to be normative.
+  diagnostic path to become a protocol requirement.
 
 ### P1-2: Payload-Type Matching
 
-Slots:
+Owner sections:
 
 - `RFC-0024: Offer Catalog`
 - `RFC-0027: Spatial Message Envelope`
@@ -161,86 +103,55 @@ Done when:
 - A responder can decide whether it can satisfy `accepted_payload_types`.
 - A receiver can reject an unexpected payload family deterministically.
 
-## Drafts Tracked Outside The Baseline
+## Drafts Outside The Baseline
 
-These items live in `drafts.md`. They do not block the baseline configured or
-manual peer-to-peer path.
+Detailed draft text lives in [`drafts.md`](drafts.md).
 
-### Dynamic Served-Domain Updates
+Tracked drafts:
 
-Draft: `drafts.md`, `Dynamic Served-Domain Updates`.
+- Dynamic Served-Domain Updates
+- Discovery Record Shape
+- Discovery Data-Type Hints
+- Peer Graph Hints
+- Concrete Clock-Sync Protocol
+- Shared Offer-Kind Profiles
 
-Current baseline: served-domain changes require reconnect or fresh handshake.
-
-Fill later: update message shape, validation trigger, authority-chain reuse,
-new delegation scope if needed, cached-offer behavior, active-subscription
-behavior, and failure mapping.
-
-### Discovery Record Shape
-
-Draft: `drafts.md`, `Discovery Record Shape`.
-
-Current baseline: Discovery is optional rendezvous/presence infrastructure.
-Configured/private peer-to-peer connectivity does not require a concrete
-Discovery record.
-
-Fill later: concrete fields, dial address semantics, relay semantics, freshness
-and expiry behavior, and non-authoritative metadata boundaries.
-
-### Discovery Data-Type Hints
-
-Draft: `drafts.md`, `Discovery Data-Type Hints`.
-
-Fill later: hint vocabulary, relationship between hints and offers, and
-handling for missing, stale, or unsupported hints.
-
-### Peer Graph Hints
-
-Draft: `drafts.md`, `Peer Graph Hints`.
-
-Fill later: candidate-peer sharing shape, candidate handling rules, and
-non-authoritative membership boundaries.
-
-### Concrete Clock-Sync Protocol
-
-Draft: `drafts.md`, `Concrete Clock-Sync Protocol`.
-
-Current baseline: `RFC-0035` owns timestamp and clock semantics. A concrete
-clock-sync protocol is not required for Offer, Get, or Subscribe.
-
-Fill later: message flow, fields, offset calculation, delay calculation,
-sampling, retry, failure behavior, status fields, and any needed failure codes.
+These do not block the baseline configured/manual peer-to-peer path.
 
 ## Interop/Test Work
 
-Do this after the blocker patches.
+Do this after P0 and P1 patches.
 
-### Compatibility Examples And Expected Results
+Create compatibility examples and expected results for:
 
-Create canonical example inputs and expected outputs for:
+- JSON frame encoding and JSON wire conventions;
+- signed-object canonicalization;
+- peer bindings;
+- domain id derivation;
+- domain declarations;
+- domain delegations;
+- authority-chain validation;
+- lifecycle handshake;
+- Offer Catalog;
+- Get;
+- Subscribe;
+- spatial message envelopes;
+- error objects;
+- status snapshots;
+- time fields.
 
-- JSON wire conventions and signed-object canonicalization;
-- peer bindings, domain declarations, domain delegations, and domain id
-  derivation;
-- Offer Catalog, Get, Subscribe, envelopes, errors, status snapshots, and time
-  fields;
-- additive fields, removed fields, renamed fields, required fields, unknown
-  fields, and semantic changes.
+Create validation transcripts for:
 
-### Validation Scenarios And Failure Paths
-
-Create success and failure transcripts for:
-
-- Park finds one robot;
-- Park finds many robots;
-- Robot exists without Park;
-- private peer connects to discoverable peer;
-- peer learns additional peers after entrypoint dial;
-- peer fetches offers, performs Get, and performs Subscribe.
-
-Each scenario should include expected served-domain-set result, offer usability
-result, Get or Subscribe behavior, lifecycle state, status fields, and stable
-failure codes.
+- configured peer connects to configured peer;
+- peer connects without Discovery;
+- peer connects after optional Discovery lookup;
+- producer declares no served domains;
+- producer declares one accepted served domain;
+- producer declares multiple domains with mixed accept/reject results;
+- consumer fetches an offer catalog;
+- consumer performs Get for a usable offer;
+- consumer starts and ends Subscribe for a usable offer;
+- malformed or unauthorized inputs produce stable failure codes.
 
 ## Later / Product-Scope Work
 
@@ -248,9 +159,6 @@ Keep these parked unless product scope pulls them forward:
 
 - DHT-style discovery.
 - Relay milestone expansion beyond `RFC-0017` and `RFC-0018`.
-- Shared offer-kind profiles and payload schemas beyond
-  `RFC-0031: Offer Kind Extensibility`.
+- Shared offer-kind profiles and payload schemas.
 - Chunking, replay, resume, reliable history, and large object transfer.
-- Migration notes mapping current SDK protocol paths such as
-  `/auki/resources/0.0.1`, `/auki/registries/0.0.1`, and
-  `/auki/stream/0.1.0` to the final v1 contract.
+- Implementation migration notes, if needed after the baseline stabilizes.

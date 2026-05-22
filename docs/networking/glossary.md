@@ -25,6 +25,19 @@ diagnostics.
 The shared JSON encoding conventions used by v1 protocol messages and signed
 authority objects.
 
+### V1 JSON Frame
+
+A length-prefixed UTF-8 JSON object sent over a baseline libp2p stream.
+
+### Safe Integer
+
+A JSON number integer in the range `0..9007199254740991`.
+
+### Decimal Integer String
+
+A JSON string containing a non-negative integer in decimal form, with no sign,
+decimal point, exponent, whitespace, or leading zero except for `0` itself.
+
 ### Signed JSON Object
 
 A JSON object whose signature is verified over a defined canonical byte form.
@@ -46,6 +59,9 @@ peer/domain/offer/path identifiers, and optional diagnostic details.
 
 The symmetric exchange peers perform after transport connection and before
 offer loading or domain-scoped data exchange.
+
+The baseline handshake uses a dialer-opened lifecycle stream, but the handshake
+message content is symmetric.
 
 ### Offer Catalog Fetch Path
 
@@ -230,7 +246,8 @@ status record was generated.
 
 ### Timestamp Ns
 
-Producer or domain event time expressed in nanoseconds in a referenced clock.
+Producer or domain event time expressed as a non-negative decimal integer
+string of nanoseconds in a referenced clock.
 
 ### Clock Reference
 
@@ -309,6 +326,7 @@ media type.
 ### Registry Reference
 
 A content-addressed reference to a registry entry used by an offer or message.
+V1 registry references use `sha256:` plus a base64url-without-padding digest.
 The required registry references depend on the offer kind or application
 profile.
 

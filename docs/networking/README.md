@@ -4,7 +4,8 @@ This directory contains the draft peer-to-peer cluster lifecycle RFCs.
 
 Read in this order:
 
-1. [`baseline.md`](baseline.md) is the first implementable protocol baseline.
+1. [`baseline.md`](baseline.md) is the draft baseline for the first
+   implementable protocol.
 2. [`drafts.md`](drafts.md) parks future extension drafts.
 3. [`backlog.md`](backlog.md) is the working task list. It is not part of the
    protocol requirements.
@@ -31,6 +32,25 @@ Read in this order:
 | Offer kind semantics | Application, deployment profile, or later RFC defined |
 | Shared offer-kind profiles | Excluded from first implementable version |
 
+## Peer Role Quick Reference
+
+This table is a reading guide. The protocol requirements live in
+[`baseline.md`](baseline.md).
+
+| Capability | Consumer-only peer | Producer peer | Producer + consumer |
+| --- | --- | --- | --- |
+| libp2p peer identity | Required | Required | Required |
+| Peer binding | Required | Required | Required |
+| Declared domains | May be empty | Required for served domains | Required for served domains |
+| Offer-catalog fetch path | Omitted when exposing no offers | Required when exposing offers | Required when exposing offers |
+| Fetch remote catalog | Allowed | Allowed | Expected when consuming |
+| Get responder | Only when advertised | Required for offers advertising `get` | Required for offers advertising `get` |
+| Subscribe responder | Only when advertised | Required for offers advertising `subscribe` | Required for offers advertising `subscribe` |
+
+A peer does not need to own or declare a domain merely to connect,
+authenticate, authorize a peer relationship, fetch remote offers, or consume
+remote data.
+
 ## Current Status
 
 The baseline is a bootstrapping protocol for configured or private peer-to-peer
@@ -39,12 +59,12 @@ not required for the baseline peer-to-peer path.
 
 The authority and identity path is implementable now: peer bindings, domain
 ids, domain declarations, domain delegations, authority-chain validation,
-served-domain-set computation, peer authorization, handshake message shape,
-offer objects, message envelopes, and status objects are specified.
+served-domain-set computation, peer authorization, handshake stream behavior,
+handshake message shape, offer objects, registry-reference hashes, message
+envelopes, and status objects are specified.
 
-End-to-end clean-room implementation is not complete yet. The next blocker is
-post-handshake path binding and framing for Offer Catalog, Get, and Subscribe.
-The backlog tracks that as `P0-1`.
+End-to-end clean-room implementation still needs deterministic failure-mapping
+and payload-type matching cleanup before broad compatibility work.
 
 ## Drafts And Parked Work
 
@@ -61,5 +81,5 @@ The following work is intentionally outside the first implementable baseline:
 
 ## Resume Here
 
-Start with [`backlog.md`](backlog.md), especially
-`P0-1: Post-Handshake Path Binding And Framing`.
+Start with [`backlog.md`](backlog.md), especially the remaining P1 cleanup
+items.

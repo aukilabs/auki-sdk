@@ -1,6 +1,6 @@
 # Peer-To-Peer Cluster Baseline
 
-Status: draft first implementable baseline.
+Status: draft baseline for the first implementable version.
 
 Last updated: 2026-05-22.
 
@@ -86,9 +86,67 @@ lookup, or any other online lookup.
 
 V1 signed authority objects and protocol messages are JSON objects.
 
+When a baseline protocol message is sent over a libp2p stream, it MUST be sent
+as a v1 JSON frame.
+
+#### V1 JSON Frame
+
+A v1 JSON frame is:
+
+1. `length`: an unsigned 64-bit integer encoded as unsigned LEB128;
+2. `body`: exactly `length` bytes of UTF-8 JSON.
+
+The `length` value is the byte length of `body`, not a character count.
+
+The unsigned LEB128 length prefix uses seven payload bits per byte. The most
+significant bit is the continuation bit. The least significant payload group is
+encoded first. Senders MUST use the shortest valid encoding. Receivers MUST
+reject length prefixes that are non-minimal, exceed ten bytes, do not terminate,
+or encode a value larger than the receiver's local frame limit.
+
+The `body` MUST decode as UTF-8 and MUST parse as one JSON object. Receivers
+MUST reject frame bodies that are not valid UTF-8. A frame body MUST NOT
+contain multiple JSON values.
+
+Receivers MUST reject JSON objects with duplicate member names before
+interpreting, validating, or canonicalizing the object.
+
+Receivers MUST reject JSON that uses non-standard numeric values such as `NaN`,
+`Infinity`, or `-Infinity`.
+
+Senders SHOULD emit compact JSON without insignificant whitespace. Receivers
+MUST accept valid JSON with insignificant whitespace inside the frame.
+
+Implementations MUST define a local maximum frame body size for each supported
+baseline protocol.
+
+If a frame exceeds a local frame limit and a structured path failure can be
+returned safely, the receiver SHOULD use `message.payload_too_large`. If the
+receiver cannot decode enough state to return a structured failure, or cannot
+safely continue the stream, it SHOULD close or reset the stream and report
+`transport.failed` locally.
+
+Baseline libp2p protocols do not define multiplexed request ids. Unless a
+later RFC explicitly defines multiplexing, each stream carries exactly one
+logical operation for that protocol.
+
 Binary values in v1 JSON are encoded as base64url without padding.
 
 UTC timestamps use RFC3339 strings with a `Z` suffix.
+
+A baseline field defined as an `integer`, `non-negative integer`, or
+`positive integer` uses a JSON number and MUST be in the safe integer range
+`0..9007199254740991`, unless the field definition says otherwise.
+
+Baseline protocol fields that can exceed the safe integer range MUST use a
+decimal integer string instead of a JSON number.
+
+A decimal integer string is a JSON string containing either `0` or an ASCII
+digit `1` through `9` followed by zero or more ASCII digits. It MUST NOT contain
+a sign, decimal point, exponent, whitespace, or leading zero.
+
+When a field definition gives a numeric range for a decimal integer string,
+receivers MUST reject values outside that range.
 
 The v1 `wallet_signature_scheme` value `ed25519` means:
 
@@ -233,6 +291,10 @@ libp2p secure-channel signature, and it MUST NOT be verified against the
 remote libp2p public key unless that same key is explicitly the declared wallet
 public key.
 
+A receiver MUST NOT accept a malformed peer binding, a peer binding whose
+signature does not verify, or a peer binding whose parsed peer id does not
+match the transport-authenticated remote libp2p peer id.
+
 #### Freshness
 
 The `issued_at` timestamp is required in v1 peer bindings.
@@ -246,6 +308,19 @@ binding older than that age with `identity.binding_too_old`.
 Receivers SHOULD reject bindings whose `issued_at` is in the future beyond
 local clock-skew tolerance with `identity.binding_from_future`. The recommended
 default future tolerance is 5 minutes.
+
+V1 peer bindings are reusable until rejected by local freshness policy. V1 does
+not define per-connection wallet challenges or require a new wallet signature
+for each transport connection.
+
+Replay of a peer binding by a party that does not control the matching libp2p
+peer private key does not satisfy peer-binding verification, because the
+binding's `peer_id` must match the transport-authenticated remote libp2p peer
+id for the connection.
+
+Applications that require per-session wallet freshness MAY layer signed
+challenges on top of the baseline peer authorization policy, but such
+challenges are not required for baseline peer-binding verification.
 
 Refreshing a peer binding requires a new wallet authority signature over a
 binding for the same wallet public key and peer id with a newer `issued_at`.
@@ -392,6 +467,10 @@ To verify a v1 domain declaration, a receiver MUST:
 
 Domain declaration verification follows the online-lookup rule in `RFC-0001`.
 
+A receiver MUST NOT accept a malformed or invalid domain declaration. A
+receiver MUST NOT accept a domain declaration whose recomputed domain id does
+not match the declared `domain_id`.
+
 #### Failure Mapping
 
 A receiver SHOULD fail malformed domain declarations with
@@ -487,6 +566,11 @@ serve the domain directly without a delegation.
 One delegation authorizes exactly one `domain_id`, one
 `delegate_wallet_public_key`, and one `delegate_peer_id`.
 
+A receiver MUST NOT accept a malformed, expired, wrong-domain, wrong-owner,
+wrong-wallet, wrong-peer, wrong-scope, not-yet-valid, or invalid-signature
+delegation. A receiver MUST NOT accept delegated service authority when a
+required matching delegation is missing.
+
 #### Expiry And Replacement
 
 A delegation is valid only within its `valid_from` and `expires_at` window.
@@ -524,12 +608,20 @@ Authority-chain validation MUST run in this order:
    delegation is required, `RFC-0008`.
 4. Compute the accepted served domain set for the peer relationship.
 
+Authority-chain failure precedence follows the same order. Missing or invalid
+peer binding is a peer-level failure and precedes peer authorization. Peer
+authorization failure precedes accepting any declared domain. For each declared
+domain, domain declaration validation precedes delegation validation when
+delegation is required. Accepted served-domain-set computation runs after
+per-domain validation.
+
 Peer authorization is defined in `RFC-0020`. In the authority-chain validation
 path, peer authorization runs after peer binding verification and before served
 domains are accepted.
 
 Offer loading happens after authority-chain validation and follows the offer
-usability rules in `RFC-0026`.
+usability rules in `RFC-0026`. Offer-loading failures do not override earlier
+peer-level authority failures.
 
 For each declared domain, domain declaration verification uses `RFC-0007`.
 
@@ -552,6 +644,14 @@ domain. Local domain access policy MAY still reject the domain with
 Validating one declared domain MUST NOT cause another declared domain from the
 same peer to be accepted. Each declared domain needs its own valid authority
 chain.
+
+A domain MUST NOT enter the accepted served-domain set unless its domain
+declaration validates and any required delegation validates.
+
+When multiple domains are declared, receivers SHOULD keep diagnostics per
+declared domain. Receivers do not need to collapse per-domain failures into one
+global failure code unless local peer policy rejects the whole peer
+relationship.
 
 The v1 authority validation path follows the online-lookup rule in `RFC-0001`.
 Peer-binding freshness is defined in `RFC-0005`. Delegation expiry and
@@ -610,6 +710,20 @@ Baseline failure codes:
 - `offer.load_failed`
 - `transport.failed`
 
+#### Failure Precedence
+
+When multiple validation failures are present, a receiver SHOULD report the
+first failure reached by the validation order defined by the owning RFC.
+
+This precedence rule does not require receivers to continue validation after a
+fatal peer-level, transport-level, or path-level failure. Receivers MAY stop at
+the fatal failure and MAY record additional failures as diagnostics when they
+are already known.
+
+If a failure occurs before enough protocol state has been decoded to return a
+structured failure safely, the receiver SHOULD close or reset the stream and
+report `transport.failed` locally.
+
 ### RFC-0035: Time And Clock Semantics
 
 #### Requirement
@@ -623,8 +737,10 @@ producer generated an object, snapshot, message, or status record. It MUST NOT
 replace `timestamp_ns` for domain data timing.
 
 The `timestamp_ns` field is producer or domain event time in nanoseconds. It is
-measured in the clock identified by the message `clock` field or by an
-inherited clock registry reference for the stream, response, or offer.
+a decimal integer string representing an unsigned 64-bit integer value
+(`0..18446744073709551615`). It is measured in the clock identified by the
+message `clock` field or by an inherited clock registry reference for the
+stream, response, or offer.
 
 The `clock` field, when present, is a registry-reference object whose
 `registry` is `clock`. Clock registry references use the registry-reference
@@ -889,7 +1005,7 @@ After dialing and establishing a transport connection, peers MUST run a
 symmetric handshake before loading offers or exchanging domain-scoped data.
 
 The handshake is symmetric because either peer may be a producer, consumer, or
-both. Each side MUST be able to present identity, supported protocol versions,
+both. Each side MUST be able to present identity, baseline version support,
 authorization material, and any domains it claims to serve.
 
 The v1 lifecycle handshake protocol ID is
@@ -897,18 +1013,58 @@ The v1 lifecycle handshake protocol ID is
 
 The v1 lifecycle version string is `auki.cluster_lifecycle.v1`.
 
+The `/auki/cluster-lifecycle/0.0.1` protocol ID fixes the selected lifecycle
+version to `auki.cluster_lifecycle.v1`. The baseline does not negotiate another
+lifecycle version inside this protocol ID.
+
 The v1 offer-catalog protocol ID is `/auki/offer-catalog/0.0.1`.
 
-Each handshake side MUST send one v1 handshake message and MUST validate the
-remote v1 handshake message before loading offers or exchanging domain-scoped
-data.
+A v1 handshake attempt uses one libp2p stream negotiated with
+`/auki/cluster-lifecycle/0.0.1`.
+
+For one transport connection, the peer that initiated the transport connection
+is the lifecycle stream opener. The lifecycle stream opener MUST open exactly
+one lifecycle stream for that transport connection after the secure transport
+connection is established and before opening any baseline Offer Catalog, Get,
+or Subscribe stream on that connection.
+
+The peer that accepted the transport connection MUST NOT open a separate
+lifecycle stream on that same transport connection. It MUST accept the lifecycle
+stream opened by the transport dialer.
+
+After the lifecycle stream is open, each endpoint MUST write exactly one v1
+handshake message as a v1 JSON frame before waiting to receive or validate the
+remote handshake frame. An endpoint MAY start reading concurrently, but it MUST
+NOT wait to receive a remote handshake frame before writing its own.
+
+Each endpoint MUST validate the remote v1 handshake message before loading
+offers or exchanging domain-scoped data.
+
+If the stream closes before a side receives a valid remote handshake frame, the
+peer relationship MUST fail with `transport.failed` or
+`handshake.invalid_message`, depending on whether a frame was received and
+could be parsed.
+
+After both sides have sent and received one valid handshake frame, either side
+MAY close the handshake stream. Additional frames on the same handshake stream
+MUST be rejected with `handshake.invalid_message` or `transport.failed`.
+
+Additional lifecycle streams on the same transport connection MUST be rejected
+with `handshake.invalid_message` or `transport.failed`.
+
+If both peers dial each other and create separate transport connections, each
+transport connection has its own lifecycle handshake attempt. Connection
+deduplication and retention are local connection-management policy unless a
+later RFC defines shared behavior.
 
 Remote peer id handling follows `RFC-0005`: handshake material MUST match the
 transport-authenticated libp2p peer id and MUST NOT override it.
 
-Each side MUST choose the highest mutually supported lifecycle protocol version.
-If no compatible lifecycle protocol version exists, the peer relationship MUST
-fail with `protocol.unsupported_version`.
+The `supported_lifecycle_versions` field is a compatibility declaration for
+future lifecycle protocol IDs. In the baseline, it does not select a version.
+It MUST include `auki.cluster_lifecycle.v1`. If it does not include
+`auki.cluster_lifecycle.v1`, the peer relationship MUST fail with
+`protocol.unsupported_version`.
 
 A peer that only consumes remote offers MAY send an empty `declared_domains`
 array and omit the offer-catalog fetch path.
@@ -936,7 +1092,9 @@ A v1 handshake message MAY include:
 - `metadata`: JSON object.
 
 The `supported_lifecycle_versions` array MUST contain
-`auki.cluster_lifecycle.v1` for v1. It MUST NOT contain duplicates.
+`auki.cluster_lifecycle.v1`. It MUST NOT contain duplicates. Receivers MUST
+ignore additional lifecycle version strings while processing
+`/auki/cluster-lifecycle/0.0.1`.
 
 The `declared_domains` array MAY be empty.
 
@@ -993,7 +1151,7 @@ path in this peer relationship.
 
 For each remote peer relationship, the handshake MUST produce:
 
-- selected lifecycle protocol version;
+- selected lifecycle protocol version, always `auki.cluster_lifecycle.v1`;
 - verified peer id and wallet public key;
 - peer authorization result;
 - validation result for each declared domain;
@@ -1030,15 +1188,16 @@ match its domain declaration with `domain.id_mismatch`.
 A receiver SHOULD fail a declared-domain object that requires but omits a
 delegation with `domain.missing_delegation`.
 
-A receiver SHOULD fail unsupported lifecycle versions with
-`protocol.unsupported_version`.
+A receiver SHOULD fail a handshake whose `supported_lifecycle_versions` omits
+`auki.cluster_lifecycle.v1` with `protocol.unsupported_version`.
 
 #### Lifecycle Examples
 
-In the happy path, Park dials Robot, negotiates a lifecycle version, verifies
-Robot's peer binding, authorizes Robot, validates Robot's declared domains,
-computes Robot's served domain set, fetches Robot's offer catalog, and then
-uses Get or Subscribe only for offers that pass `RFC-0026`.
+In the happy path, Park dials Robot, uses lifecycle version
+`auki.cluster_lifecycle.v1`, verifies Robot's peer binding, authorizes Robot,
+validates Robot's declared domains, computes Robot's served domain set, fetches
+Robot's offer catalog, and then uses Get or Subscribe only for offers that pass
+`RFC-0026`.
 
 If Robot's peer binding claims a different peer id than the
 transport-authenticated libp2p peer id, Park rejects the peer relationship with
@@ -1224,6 +1383,21 @@ after the authority-chain validation path in `RFC-0009` has completed.
 
 A peer that exposes no offers MAY return an empty catalog.
 
+#### Stream
+
+A v1 offer-catalog request uses one libp2p stream negotiated with
+`/auki/offer-catalog/0.0.1`.
+
+The requester MUST send exactly one `auki.offer_catalog_request.v1` frame. The
+responder MUST send exactly one `auki.offer_catalog_response.v1` frame and then
+SHOULD close or half-close its write side.
+
+The stream MUST NOT be reused for another catalog request. Additional request
+or response frames on the same catalog stream MUST be rejected with
+`offer.invalid_catalog_request`, `offer.invalid_catalog_response`, or
+`transport.failed`, depending on which side observes the violation and whether
+a structured response can be returned.
+
 #### Request
 
 A v1 offer-catalog request is a JSON object.
@@ -1280,6 +1454,10 @@ The `generated_at` timestamp follows `RFC-0035`.
 #### Diagnostics
 
 A v1 offer-catalog diagnostic uses the v1 error object defined in `RFC-0027`.
+
+When a catalog failure can be returned as a structured response, the responder
+SHOULD return an `auki.offer_catalog_response.v1` frame with `offers: []` and a
+`diagnostics` array containing an error object with the stable failure code.
 
 #### Offer Object
 
@@ -1395,8 +1573,41 @@ This spec defines common handling for `clock` registry references in
 application implementations, deployment profiles, or later RFCs.
 
 Registry references are content-addressed. A consumer that receives
-`canonical_json` MUST hash the canonical JSON bytes and verify that the result
-matches `hash` before using the entry.
+`canonical_json` MUST verify it against `hash` before using the entry.
+
+A v1 registry-reference `hash` value MUST have this form:
+
+```text
+sha256:<digest>
+```
+
+The `<digest>` value is the base64url-without-padding encoding of a SHA-256
+digest and MUST decode to exactly 32 bytes. Base64url encoding follows
+`RFC-0002`.
+
+For a registry reference with `canonical_json`, the `canonical_json` string
+value MUST be RFC 8785 canonical JSON. A receiver MUST parse the
+`canonical_json` string value as JSON, canonicalize the parsed value using RFC
+8785, and reject the registry reference if the resulting canonical JSON string
+is not byte-for-byte equal to the supplied `canonical_json` string value. The
+JSON parser rules in `RFC-0002` apply when parsing `canonical_json`.
+
+The v1 hash input for a registry reference with `canonical_json` is the UTF-8
+bytes of the `canonical_json` string value. A receiver MUST verify:
+
+```text
+hash == "sha256:" + base64url_no_padding(SHA-256(utf8(canonical_json)))
+```
+
+A registry reference without `canonical_json` can still name a referenced
+entry, but it cannot be locally content-verified from the reference alone.
+
+A malformed registry reference, invalid `hash`, invalid `canonical_json`, or
+`canonical_json` hash mismatch is a malformed-container failure. In an offer
+catalog, receivers SHOULD use `offer.invalid_offer` for an individual malformed
+offer or `offer.invalid_catalog_response` when the response cannot otherwise be
+used. In a spatial message envelope, receivers SHOULD use
+`message.invalid_envelope`.
 
 Offer kinds and application profiles define which registry references are
 needed to interpret their payloads. Clock registry-reference semantics are
@@ -1513,10 +1724,10 @@ checks SHOULD use the corresponding offer failure code from `RFC-0010`.
 Get and Subscribe use a shared envelope shape for successful data responses or
 messages and shared error objects for failures.
 
-The envelope is a semantic object. This RFC does not require a specific
-transport framing, binary encoding, compression scheme, or libp2p protocol id.
-The Get and Subscribe RFCs define the concrete request, response, and stream
-message shapes for each path.
+The envelope is a semantic object. Stream framing is defined in `RFC-0002`.
+This RFC does not define an additional binary encoding or compression scheme.
+The Get and Subscribe RFCs define the concrete request, response, stream, and
+protocol-id rules for each path.
 
 A v1 spatial message envelope is a JSON object.
 
@@ -1529,8 +1740,8 @@ A v1 spatial message envelope MUST include:
 
 A v1 spatial message envelope MAY include:
 
-- `sequence`: non-negative integer;
-- `timestamp_ns`: integer;
+- `sequence`: decimal integer string;
+- `timestamp_ns`: decimal integer string;
 - `clock`: registry-reference object;
 - `registry_refs`: array of registry-reference objects;
 - `generated_at`: timestamp;
@@ -1603,12 +1814,14 @@ reference needed to interpret it.
 
 #### Sequence And Freshness
 
-The `sequence` field, when present, is scoped to one Subscribe stream or to the
-single successful Get response. Get v1 does not use `sequence` for
-continuation.
+The `sequence` field, when present, is a decimal integer string representing an
+unsigned 64-bit integer value (`0..18446744073709551615`). It is scoped to one
+Subscribe stream or to the single successful Get response. Get v1 does not use
+`sequence` for continuation.
 
 When `sequence` is present on a Subscribe stream, the producer SHOULD start at
-0 or 1 and increase it by 1 for each data message on that stream.
+`0` or `1` and increase its numeric value by 1 for each data message on that
+stream.
 
 Receivers MAY use `sequence` gaps as a diagnostic signal. A sequence gap does
 not by itself prove data tampering or producer fault, because Subscribe v1
@@ -1682,6 +1895,11 @@ The tuple `(domain_id, offer_id)` identifies the offer within the producing
 peer relationship. The producing peer id is known from the
 transport-authenticated peer relationship and SHOULD NOT be repeated in the
 request.
+
+In the baseline, an offer that advertises `get` in `access_modes` is accessed
+over `/auki/get/0.0.1`. An offer that advertises `subscribe` in `access_modes`
+is accessed over `/auki/subscribe/0.0.1`. Baseline offers do not need separate
+path descriptors for Get or Subscribe.
 
 The `params` object is offer-kind-specific. Receivers MUST ignore unknown
 `params` fields unless the offer kind defines them as required.
@@ -1758,6 +1976,22 @@ transfer, or large object transfer.
 
 Get MUST NOT be usable for an offer unless the offer advertises `get` in
 `access_modes`.
+
+The v1 Get protocol ID is `/auki/get/0.0.1`.
+
+#### Stream
+
+A v1 Get request uses one libp2p stream negotiated with `/auki/get/0.0.1`.
+
+The requester MUST send exactly one `auki.get_request.v1` frame. The responder
+MUST send exactly one `auki.get_response.v1` frame and then SHOULD close or
+half-close its write side.
+
+The stream MUST NOT be reused for another Get request. Additional request or
+response frames on the same Get stream MUST be rejected with
+`get.invalid_request`, `message.invalid_envelope`, or `transport.failed`,
+depending on which side observes the violation and whether a structured
+response can be returned.
 
 #### Request
 
@@ -1867,6 +2101,36 @@ transfer.
 Subscribe MUST NOT be usable for an offer unless the offer advertises
 `subscribe` in `access_modes`.
 
+The v1 Subscribe protocol ID is `/auki/subscribe/0.0.1`.
+
+#### Stream
+
+A v1 Subscribe request uses one libp2p stream negotiated with
+`/auki/subscribe/0.0.1`.
+
+The requester MUST send exactly one `auki.subscribe_request.v1` frame.
+
+The responder MUST send exactly one start-result frame:
+
+- `auki.subscribe_accept.v1`; or
+- `auki.subscribe_reject.v1`.
+
+If the responder sends `auki.subscribe_reject.v1`, it MUST NOT send data
+messages on that stream and SHOULD close or half-close its write side.
+
+After `auki.subscribe_accept.v1`, the producer MAY send zero or more
+`auki.spatial_message.v1` frames. The subscription MAY end by stream close,
+stream reset, or one `auki.subscribe_end.v1` frame.
+
+A requester MAY cancel a subscription by sending one
+`auki.subscribe_end.v1` frame with reason `cancelled`, by closing the stream,
+or by resetting the stream.
+
+The stream MUST NOT be reused for another Subscribe request. Additional
+Subscribe request frames on the same stream MUST be rejected with
+`subscribe.invalid_request` or `transport.failed`, depending on whether a
+structured failure can be returned.
+
 #### Request
 
 A v1 Subscribe request is a JSON object.
@@ -1903,7 +2167,7 @@ A successful v1 start result MUST include:
 A successful v1 start result MAY include:
 
 - `registry_refs`: array of registry-reference objects;
-- `initial_sequence`: non-negative integer;
+- `initial_sequence`: decimal integer string;
 - `generated_at`: timestamp;
 - `metadata`: JSON object.
 
@@ -1918,7 +2182,9 @@ When present, data messages on the subscription MUST NOT contradict it unless
 the accepted offer kind explicitly allows per-message registry changes.
 
 The `initial_sequence` field, when present, declares the first expected
-`message.sequence` value for the subscription.
+`message.sequence` value for the subscription. It MUST be a decimal integer
+string representing an unsigned 64-bit integer value
+(`0..18446744073709551615`).
 
 The `generated_at` field follows `RFC-0035`.
 
@@ -2303,11 +2569,14 @@ A path status object SHOULD include:
 - `started_at`: timestamp;
 - `last_message_at`: timestamp or null;
 - `payload_type`: payload type string when known;
-- `last_sequence`: non-negative integer or null;
+- `last_sequence`: decimal integer string or null;
 - `sequence_gap_count`: non-negative integer;
 - `last_envelope_failure`: failure record object or null;
 - `last_payload_failure`: failure record object or null;
 - `last_failure`: failure record object or null.
+
+The `last_sequence` field, when present, uses the same decimal integer string
+rules as `message.sequence` in `RFC-0027`.
 
 For `get` paths, `state` SHOULD distinguish at least `requested`, `succeeded`,
 and `failed`.

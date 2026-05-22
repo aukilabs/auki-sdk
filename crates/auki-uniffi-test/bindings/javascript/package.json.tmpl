@@ -1,0 +1,24 @@
+{
+  "name": "@auki/$crate_package_name",
+  "type": "module",
+  "collaborators": $crate_authors_json,
+  "description": "wasm-bindgen JavaScript bindings for $crate_package_name.",
+  "version": "$crate_version",
+  "license": "$crate_license",
+  "repository": {
+    "type": "git",
+    "url": "$crate_repository"
+  },
+  "files": [
+    "$generated_wasm_file",
+    "$generated_js_file",
+    "$generated_types_file",
+    "$generated_wasm_types_file",
+    "smoke.mjs"
+  ],
+  "main": "$generated_js_file",
+  "types": "$generated_types_file",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

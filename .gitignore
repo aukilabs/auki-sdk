@@ -6,3 +6,4 @@ dist/
 .build/
 .swiftpm/
 generated/
+/bindings/

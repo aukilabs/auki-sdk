@@ -1,0 +1,18 @@
+# $crate_package_name JavaScript bindings
+
+Generated wasm-bindgen JavaScript package for `$crate_package_name`.
+
+Generate the package from the repo root:
+
+```bash
+just generate-javascript-bindings $crate_package_name
+```
+
+The generated package contains:
+
+- `package.json` - npm package metadata for the web-targeted ESM package.
+- `$generated_js_file` - wasm-bindgen JavaScript glue.
+- `$generated_types_file` - TypeScript declarations for the JavaScript glue.
+- `$generated_wasm_file` - compiled WebAssembly module.
+- `$generated_wasm_types_file` - wasm-bindgen WebAssembly declarations.
+- `smoke.mjs` - Node-compatible smoke test for the generated web-target package.

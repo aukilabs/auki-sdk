@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**[`auki-uniffi-test`](auki-uniffi-test/changelog.md) — binding generation ownership moved into the crate.** The proving crate now carries `bindings.toml` plus JavaScript, Python, and Swift package templates/smoke assets; generic root scripts read Cargo metadata and crate-local binding policy instead of embedding crate-specific package content.
+
+### Nils's codex · May 22, HKT, 2026
+
 **`auki-network-browser-wasm` removed from the workspace.** The old browser/WASM networking probe crate was deleted because it was stale and not working; workspace membership and current parking-lot summaries no longer point at it. Historical changelog and Superpowers plan entries remain as decision history.
 
 ### Nils's codex · May 22, HKT, 2026

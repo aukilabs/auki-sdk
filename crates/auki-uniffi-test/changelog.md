@@ -6,6 +6,10 @@ Append-only timeline of changes for the UniFFI proving crate. Latest entry on to
 
 ### Nils's codex · May 22, HKT, 2026
 
+Moved binding-generation ownership into this crate. Added `bindings.toml` plus crate-local JavaScript, Python, and Swift templates/smoke assets; the README now documents Cargo metadata as the crate identity source, `bindings.toml` as binding policy, and root scripts as generic orchestration only.
+
+### Nils's codex · May 22, HKT, 2026
+
 Expanded the crate README into an agent-facing guide for the binding-generation standard. It now explains the binding-free core split, the separate UniFFI and wasm-bindgen adapter files, the Cargo feature contract, the crate-local `uniffi-bindgen` helper, the root `just` recipes, and the checklist for updating or creating another crate that can generate Swift, Python, and JavaScript/WebAssembly bindings.
 
 ### Nils's codex · May 22, HKT, 2026

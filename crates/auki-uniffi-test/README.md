@@ -52,7 +52,7 @@ name = "auki_uniffi_test"
 crate-type = ["staticlib", "cdylib", "rlib"]
 ```
 
-Use a stable underscore library name. The binding scripts currently derive the native library name from the package name by replacing `-` with `_`, so a crate named `my-crate` should normally use `name = "my_crate"`.
+Use a stable underscore library name. The binding generator reads this value from Cargo metadata and uses it for native library paths, generated module names, and template variables. If `[lib].name` is omitted, Cargo's normal hyphen-to-underscore default applies.
 
 The crate types serve different consumers:
 
@@ -132,6 +132,42 @@ required-features = ["uniffi"]
 
 Native binding surface tests should require the `uniffi` feature. Keep pure Rust behavior tests in `core.rs` where possible, because they are cheaper and do not depend on binding generation.
 
+## Binding generation ownership
+
+The root scripts are generic. A Rust crate owns the binding-specific contract and package assets needed to generate correct language packages.
+
+For this crate, the source of truth is:
+
+```text
+crates/auki-uniffi-test/
+  Cargo.toml
+  bindings.toml
+  bindings/
+    javascript/
+      package.json.tmpl
+      README.md.tmpl
+      smoke.mjs
+    python/
+      pyproject.toml.tmpl
+      setup.py.tmpl
+      README.md.tmpl
+    swift/
+      Package.swift.tmpl
+```
+
+`Cargo.toml` owns crate identity: package name, version, description, license, repository, authors, library name, features, and the local `uniffi-bindgen` binary target. The generator reads these values through `cargo metadata`; do not repeat them in `bindings.toml`.
+
+`bindings.toml` owns binding policy:
+
+- which generator each language uses (`uniffi` or `wasm_pack`);
+- generator feature flags such as `cli` and `wasm`;
+- which language outputs are enabled;
+- which crate-local templates and smoke tests are used.
+
+The crate-local `bindings/<language>/` directories own package-specific material. The root generator renders those templates into the consumer-facing package directories under root `bindings/<language>/<crate>/`.
+
+The root scripts should not know about concrete crates, generated package templates, or crate-specific smoke tests. They only load Cargo metadata, read `bindings.toml`, run the requested generator, render the crate-owned package assets, and run the crate-owned smoke test when configured.
+
 ## Export surface
 
 The proving API intentionally covers the shapes a production SDK binding is likely to need:
@@ -156,13 +192,23 @@ just install-toolchain
 
 That checks the local prerequisites and installs the pinned Rust targets and Cargo CLIs used by the binding scripts.
 
+The public recipes stay small and stable:
+
+```bash
+just generate-swift-bindings <crate>
+just generate-python-bindings <crate>
+just generate-javascript-bindings <crate>
+```
+
+Each recipe delegates to [`scripts/bindings/generate_bindings.py`](../../scripts/bindings/generate_bindings.py), which reads `crates/<crate>/bindings.toml` and Cargo metadata.
+
 ### Swift
 
 ```bash
 just generate-swift-bindings auki-uniffi-test
 ```
 
-The Swift recipe builds the native UniFFI library, runs the crate-local `uniffi-bindgen` helper, and builds the Apple XCFramework path. Generated Swift artifacts land under:
+The Swift recipe renders this crate's `bindings/swift/Package.swift.tmpl`, builds the native UniFFI library, runs the crate-local `uniffi-bindgen` helper, and builds the Apple XCFramework path. Generated Swift artifacts land under:
 
 ```text
 bindings/swift/auki-uniffi-test/generated/
@@ -182,7 +228,7 @@ The XCFramework build requires macOS because it uses `xcodebuild` and `lipo`.
 just generate-python-bindings auki-uniffi-test
 ```
 
-The Python recipe builds the native UniFFI library, runs the crate-local `uniffi-bindgen` helper, patches the generated loader for the repo package layout, and builds/copies native libraries. Generated package files land under:
+The Python recipe builds the native UniFFI library, runs the crate-local `uniffi-bindgen` helper, patches the generated loader for the repo package layout, renders this crate's Python package templates, and builds/copies native libraries. Generated package files land under:
 
 ```text
 bindings/python/auki-uniffi-test/
@@ -208,7 +254,7 @@ Default Linux native-library builds use `cross`, so Docker must be running for t
 just generate-javascript-bindings auki-uniffi-test
 ```
 
-The JavaScript recipe runs `wasm-pack` against `crates/auki-uniffi-test` with:
+The JavaScript recipe runs `wasm-pack` against `crates/auki-uniffi-test` with the crate-configured `wasm_pack` generator:
 
 ```bash
 --target web --no-default-features --features wasm
@@ -220,7 +266,7 @@ Generated package files land under:
 bindings/javascript/auki-uniffi-test/
 ```
 
-The package contains the ESM glue, TypeScript declarations, compiled `.wasm`, and `smoke.mjs`. The recipe stages output in a temporary directory, replaces the final package only after generation succeeds, and runs the smoke test at the end.
+The package contains the ESM glue, TypeScript declarations, compiled `.wasm`, rendered package metadata, rendered README, and crate-owned `smoke.mjs`. The recipe stages output in a temporary directory, replaces the final package only after generation succeeds, and runs the smoke test at the end.
 
 ## How to make another crate follow this standard
 
@@ -231,8 +277,9 @@ The package contains the ESM glue, TypeScript declarations, compiled `.wasm`, an
 5. Configure `[lib]` with `staticlib`, `cdylib`, and `rlib`.
 6. Keep `uniffi`, `cli`, and `wasm` features separate, with binding-generator dependencies marked `optional = true`.
 7. Add the crate-local `src/bin/uniffi-bindgen.rs` helper and gate it behind `required-features = ["cli"]`.
-8. Add Rust tests for the core behavior and at least one native surface test behind `required-features = ["uniffi"]`.
-9. Run the relevant root recipe:
+8. Add `bindings.toml` and crate-local templates/smoke tests under `bindings/<language>/`.
+9. Add Rust tests for the core behavior and at least one native surface test behind `required-features = ["uniffi"]`.
+10. Run the relevant root recipe:
 
 ```bash
 just generate-swift-bindings <crate>
@@ -240,9 +287,9 @@ just generate-python-bindings <crate>
 just generate-javascript-bindings <crate>
 ```
 
-10. Update the crate README, `src/README.md`, `src/sprint.md`, and changelogs according to the repo propagation rules.
+11. Update the crate README, `src/README.md`, `src/sprint.md`, and changelogs according to the repo propagation rules.
 
-Do not copy this crate's toy API into production crates. Copy the structure, feature contract, generation path, and separation between core logic and binding adapters.
+Do not copy this crate's toy API into production crates. Copy the structure, feature contract, crate-local binding contract, generation path, and separation between core logic and binding adapters.
 
 ## Local verification
 

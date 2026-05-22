@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 22, HKT, 2026
 
+**Binding generation now uses crate-owned binding contracts.** Added a generic metadata-driven generator and migrated `auki-uniffi-test` so JavaScript, Python, and Swift package templates/smoke assets live under the Rust crate while generated packages still land under `bindings/`. See [`crates/changelog.md`](crates/changelog.md) and [`bindings/changelog.md`](bindings/changelog.md) for propagation.
+
+### Nils's codex · May 22, HKT, 2026
+
 **JavaScript `auki-identity` bindings generated and smoke-tested.** The generic JavaScript generation script now emits an identity-specific smoke file that exercises wallet, signing, deterministic derivation, canonical JSON signing, creation-cert verification, and the web seed-persistence export. See [`bindings/changelog.md`](bindings/changelog.md) for binding-level propagation.
 
 ### Nils's codex · May 22, HKT, 2026

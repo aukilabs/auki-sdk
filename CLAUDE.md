@@ -33,8 +33,8 @@ All work is tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/project
    - `Exploring → Done` when it was research-only and the conclusion is captured in the card.
    - `Exploring → Questions` if the research surfaced a blocker that needs a human decision.
    - `Tasks → In progress` when starting work. Assign yourself (or the developer), then create the branch off `develop`.
-   - `In progress → In review` when opening the PR. Put `Closes #N` in the PR body so GitHub auto-links it.
-   - `In review → Done` is normally automatic on merge. Only move manually if automation didn't fire.
+   - `In progress → In review` immediately after opening the PR — **move it yourself; do not rely on automation.** Put `Closes #N` in the PR body so GitHub auto-links the PR to the issue (and auto-closes it on merge).
+   - `In review → Done` — verify after merge. If automation didn't fire, move it manually.
 
 3. **Questions move when assigned.** An unassigned Question is awaiting a decision — don't touch it. Once a Question is assigned (to you, the developer, or anyone), the assignee owns it and may move it onward: `Questions → Exploring` (will research), `Questions → Tasks` (now scoped), `Questions → In progress` (small enough to just do), or `Questions → Done` (won't-do). Agents do not self-assign — wait for the developer to assign it.
 

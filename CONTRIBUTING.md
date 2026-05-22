@@ -66,8 +66,8 @@ All work — questions, research, tasks, in-flight implementation — is tracked
 - **Questions exit when assigned.** The assignee decides where it goes: Exploring (will research), Tasks (now scoped), In progress (just do it now), or Done (won't-do).
 - **Exploring exits when the research wraps up.** Destinations: Tasks (now scoped), Done (research-only, conclusion captured in the card), or Questions (surfaced a blocker that needs a decision).
 - **Tasks exit when someone picks the card up to implement it.**
-- **In progress → In review** when the PR opens. Use `Closes #N` in the PR body so GitHub auto-links it.
-- **In review → Done** happens automatically on merge.
+- **In progress → In review** — move the card manually right after opening the PR. Use `Closes #N` in the PR body to auto-link the PR to the issue (and auto-close on merge). Do not rely on automation to move the card.
+- **In review → Done** — verify after merge. If automation didn't fire, move it manually.
 
 Rules for AI agents touching the board are in [`CLAUDE.md`](CLAUDE.md#project-board).
 

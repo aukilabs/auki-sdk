@@ -863,6 +863,7 @@ dependencies = [
 name = "auki-network-browser-wasm"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
  "auki-domain",
  "auki-identity",
  "auki-network",
@@ -872,6 +873,7 @@ dependencies = [
  "js-sys",
  "libp2p",
  "libp2p-stream",
+ "prost",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

@@ -142,7 +142,7 @@ The per-recording metadata sidecar — a JCS-canonical UTF-8 JSON file at the ro
 
 ## SpatialTransform
 
-The data type at the core of [convert_pose](#convert_pose) — a translation `Vec3 { x, y, z }` plus a rotation quaternion `Quat { x, y, z, w }` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the `(from_frame_id, to_frame_id)` identity lives in the manifest, not on each sample. Implementation is `auki_datatypes::pose::SpatialTransform` (prost-encoded); the rename from the pre-migration `TransformSample` shape (per-sample frame labels) landed at Step 5 of the [auki-datatypes migration](crates/auki-datatypes/src/sprint.md) on 2026-05-08.
+The data type at the core of [convert_pose](#convert_pose) — a translation `Vec3 { x, y, z }` plus a rotation quaternion `Quat { x, y, z, w }` (Hamilton convention). Stored as a flat segment entry in the [Pose Log](#pose-log); the `(from_frame_id, to_frame_id)` identity lives in the manifest, not on each sample. Implementation is `auki_datatypes::pose::SpatialTransform` (prost-encoded); the rename from the pre-migration `TransformSample` shape (per-sample frame labels) landed at Step 5 of the auki-datatypes migration on 2026-05-08.
 
 ## Pose Log
 

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package auki.info;
+
+// libp2p substream protocol messages for `/auki/info/0.0.1`.
+
+message InfoRequest {}
+
+message InfoResponse {
+  string participant_info_json = 1;
+}

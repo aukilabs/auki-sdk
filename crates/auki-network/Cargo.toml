@@ -26,7 +26,7 @@ swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings"]
 # Join protocol wire types/framing are shared by native and browser runtimes.
 # Keeping this separate from `swarm` lets wasm/browser packaging reuse the
 # canonical `/auki/join/0.0.1` shapes without pulling in native Tokio transport.
-join_protocol = ["dep:futures", "dep:thiserror"]
+join_protocol = ["dep:futures", "dep:thiserror", "dep:auki-datatypes", "dep:prost"]
 # Stream protocol wire types live in `auki-datatypes` (Step 2 of the
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed

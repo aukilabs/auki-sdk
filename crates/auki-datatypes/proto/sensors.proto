@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package auki.sensors;
+
+// libp2p substream protocol messages for `/auki/sensors/0.0.1`.
+
+message SensorsRequest {
+  bool include_registry_entries = 1;
+  bool include_frame_entries = 2;
+}
+
+message SensorsResponse {
+  repeated SensorEntry sensors = 1;
+}
+
+message SensorEntry {
+  string sensor_id = 1;
+  string sensor_hash = 2;
+  string kind = 3;
+  optional string sensor_entry_json = 4;
+  optional string frame_entry_json = 5;
+}

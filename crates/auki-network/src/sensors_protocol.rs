@@ -38,7 +38,7 @@
 //!
 //! ## Wire format
 //!
-//! Length-prefixed JSON, same framing as the other Hagall protocols.
+//! Length-prefixed protobuf, same framing as the other Hagall protocols.
 //! [`MAX_SENSORS_FRAME_BYTES`] caps each side at 512 KiB. A plain
 //! catalog of a few dozen sensors is much smaller; the larger cap
 //! leaves room for optional embedded Sensor / Frame Registry JSON while
@@ -46,8 +46,10 @@
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::StreamProtocol;
-use serde::{Deserialize, Serialize};
+use prost::Message;
 use thiserror::Error;
+
+pub use auki_datatypes::sensors::{SensorEntry, SensorsRequest, SensorsResponse};
 
 /// libp2p protocol id for "what sensors are you currently
 /// publishing?". Stable; bump version only on an incompatible
@@ -61,140 +63,24 @@ pub const SENSORS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/sensors/
 /// senders.
 pub const MAX_SENSORS_FRAME_BYTES: u32 = 512 * 1024;
 
-/// Body of the request the initiator sends.
-///
-/// Default `{}` preserves the original catalog-only request. Set
-/// `include_registry_entries` to ask the producer to attach the exact
-/// Sensor Registry JSON for each row when it has it locally. Set
-/// `include_frame_entries` to additionally attach the exact Frame
-/// Registry JSON referenced by spatial sensor bodies (`camera` and
-/// `point_cloud`). Receivers MUST tolerate unknown future fields
-/// (serde JSON is permissive by default).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SensorsRequest {
-    /// Include canonical Sensor Registry JSON in
-    /// [`SensorEntry::sensor_entry_json`] when the producer can resolve
-    /// `sensor_id + sensor_hash` locally.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub include_registry_entries: bool,
-    /// Include canonical Frame Registry JSON in
-    /// [`SensorEntry::frame_entry_json`] for spatial sensors when the
-    /// producer can resolve the frame reference from the sensor entry.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub include_frame_entries: bool,
-}
-
-impl SensorsRequest {
-    /// Catalog-only request. Serializes as `{}` for v0 compatibility.
-    pub fn catalog() -> Self {
-        Self::default()
-    }
-
-    /// Ask for sensor registry entries embedded by value.
-    pub fn with_registry_entries() -> Self {
-        Self {
-            include_registry_entries: true,
-            include_frame_entries: false,
-        }
-    }
-
-    /// Ask for sensor registry entries and their referenced frame
-    /// registry entries embedded by value.
-    pub fn with_frame_entries() -> Self {
-        Self {
-            include_registry_entries: true,
-            include_frame_entries: true,
-        }
-    }
-}
-
-/// Body of the response the responder sends. Carries the snapshot of
-/// sensors the producer is currently publishing.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SensorsResponse {
-    /// The producer's current catalog. Empty list = "I have a
-    /// catalog, and right now it's empty" (NOT an error — a daemon
-    /// that's started but hasn't mounted any sensors yet is a valid
-    /// state).
-    pub sensors: Vec<SensorEntry>,
-}
-
-/// One row in a [`SensorsResponse`].
-///
-/// Lightweight by default: consumers that need the full
-/// sensor-registry entry can fetch it separately via
-/// `/auki/registries/0.0.1` using `sensor_id + sensor_hash`. Callers
-/// that want fewer round trips can request embedded registry JSON by
-/// value with [`SensorsRequest::with_registry_entries`] or
-/// [`SensorsRequest::with_frame_entries`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SensorEntry {
-    /// Producer-scoped sensor identifier (e.g.
-    /// `"K1-LIVE01/head_left_cam"`). Stable for the lifetime of the
-    /// producer's session. Pair with `peer_id` from
-    /// `/auki/info/0.0.1` for cluster-wide uniqueness.
-    pub sensor_id: String,
-    /// Content-addressed hash pinning the registry entry that
-    /// describes this sensor's geometry. Empty string if the
-    /// producer hasn't registered it yet. Allows Park (and any
-    /// consumer) to fetch the full `SensorRegistryEntry` from
-    /// `auki-registry` separately.
-    pub sensor_hash: String,
-    /// Sensor kind — the `#[serde(tag = "type")]` value from
-    /// `auki_registry::SensorBody` flowed through verbatim. Current
-    /// SensorBody variants emit `"camera"`, `"point_cloud"`,
-    /// `"joint_encoders"`, `"audio"`. Open string by contract:
-    /// new SensorBody variants flow through without a wire bump, and
-    /// consumers MUST handle unrecognised kinds gracefully (e.g. a
-    /// generic-tile fallback) rather than reject. For tile-renderer
-    /// dispatch in operator UIs — Park's session viewer uses it to
-    /// pick a JPEG renderer vs. point-cloud renderer vs.
-    /// joint-encoder gauge.
-    ///
-    /// Renaming a `SensorBody` variant is a coordinated registry +
-    /// sensors-protocol wire break (the tag flows verbatim through
-    /// this field); the four current tags above are pinned to keep
-    /// such a rename loud.
-    pub kind: String,
-    /// Optional canonical Sensor Registry JSON matching
-    /// `sensor_id + sensor_hash`. Present only when requested and
-    /// available from the producer's registered app root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sensor_entry_json: Option<String>,
-    /// Optional canonical Frame Registry JSON matching the
-    /// `frame_id + frame_hash` referenced by the embedded or locally
-    /// resolved sensor registry entry. Present only for spatial
-    /// sensors when requested and available from the producer's
-    /// registered app root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame_entry_json: Option<String>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 /// Failure modes for the framed read/write helpers below.
 #[derive(Debug, Error)]
 pub enum SensorsProtocolError {
     /// Underlying I/O on the libp2p substream failed.
     #[error("io: {0}")]
     Io(#[source] std::io::Error),
-    /// JSON encode (write side) failed.
+    /// Protobuf encode (write side) failed.
     #[error("encode: {0}")]
-    Encode(#[source] serde_json::Error),
-    /// JSON decode (read side) failed.
+    Encode(#[source] prost::EncodeError),
+    /// Protobuf decode (read side) failed.
     #[error("decode: {0}")]
-    Decode(#[source] serde_json::Error),
-    /// Length prefix is zero.
-    #[error("frame is empty (length prefix is zero)")]
-    EmptyFrame,
+    Decode(#[source] prost::DecodeError),
     /// Length prefix exceeds [`MAX_SENSORS_FRAME_BYTES`].
     #[error("frame too large: {actual} bytes (max {max})")]
     FrameTooLarge { actual: u64, max: u64 },
 }
 
-/// Write a [`SensorsRequest`] to `stream`, length-prefixed JSON.
+/// Write a [`SensorsRequest`] to `stream`, length-prefixed protobuf.
 pub async fn write_sensors_request<S>(
     stream: &mut S,
     msg: &SensorsRequest,
@@ -202,10 +88,10 @@ pub async fn write_sensors_request<S>(
 where
     S: AsyncWriteExt + Unpin,
 {
-    write_json(stream, msg).await
+    write_frame(stream, msg).await
 }
 
-/// Write a [`SensorsResponse`] to `stream`, length-prefixed JSON.
+/// Write a [`SensorsResponse`] to `stream`, length-prefixed protobuf.
 pub async fn write_sensors_response<S>(
     stream: &mut S,
     msg: &SensorsResponse,
@@ -213,7 +99,7 @@ pub async fn write_sensors_response<S>(
 where
     S: AsyncWriteExt + Unpin,
 {
-    write_json(stream, msg).await
+    write_frame(stream, msg).await
 }
 
 /// Read a [`SensorsRequest`] from `stream`.
@@ -221,7 +107,7 @@ pub async fn read_sensors_request<S>(stream: &mut S) -> Result<SensorsRequest, S
 where
     S: AsyncReadExt + Unpin,
 {
-    read_json(stream).await
+    read_frame(stream).await
 }
 
 /// Read a [`SensorsResponse`] from `stream`.
@@ -231,15 +117,17 @@ pub async fn read_sensors_response<S>(
 where
     S: AsyncReadExt + Unpin,
 {
-    read_json(stream).await
+    read_frame(stream).await
 }
 
-async fn write_json<S, T>(stream: &mut S, msg: &T) -> Result<(), SensorsProtocolError>
+async fn write_frame<S, T>(stream: &mut S, msg: &T) -> Result<(), SensorsProtocolError>
 where
     S: AsyncWriteExt + Unpin,
-    T: Serialize,
+    T: Message,
 {
-    let bytes = serde_json::to_vec(msg).map_err(SensorsProtocolError::Encode)?;
+    let mut bytes = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut bytes)
+        .map_err(SensorsProtocolError::Encode)?;
     if bytes.len() as u64 > MAX_SENSORS_FRAME_BYTES as u64 {
         return Err(SensorsProtocolError::FrameTooLarge {
             actual: bytes.len() as u64,
@@ -259,10 +147,10 @@ where
     Ok(())
 }
 
-async fn read_json<S, T>(stream: &mut S) -> Result<T, SensorsProtocolError>
+async fn read_frame<S, T>(stream: &mut S) -> Result<T, SensorsProtocolError>
 where
     S: AsyncReadExt + Unpin,
-    T: for<'de> Deserialize<'de>,
+    T: Message + Default,
 {
     let mut len_buf = [0u8; 4];
     stream
@@ -270,9 +158,6 @@ where
         .await
         .map_err(SensorsProtocolError::Io)?;
     let len = u32::from_be_bytes(len_buf);
-    if len == 0 {
-        return Err(SensorsProtocolError::EmptyFrame);
-    }
     if len > MAX_SENSORS_FRAME_BYTES {
         return Err(SensorsProtocolError::FrameTooLarge {
             actual: len as u64,
@@ -284,7 +169,7 @@ where
         .read_exact(&mut payload)
         .await
         .map_err(SensorsProtocolError::Io)?;
-    serde_json::from_slice(&payload).map_err(SensorsProtocolError::Decode)
+    T::decode(&*payload).map_err(SensorsProtocolError::Decode)
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -303,19 +188,31 @@ mod tests {
         assert_eq!(req, back);
     }
 
-    #[test]
-    fn default_request_serializes_as_empty_object() {
-        let json = serde_json::to_string(&SensorsRequest::catalog()).unwrap();
-        assert_eq!(json, "{}");
+    #[tokio::test]
+    async fn sensors_response_payload_is_protobuf_not_json() {
+        let resp = SensorsResponse {
+            sensors: vec![SensorEntry {
+                sensor_id: "audio".to_string(),
+                sensor_hash: "hash".to_string(),
+                kind: "audio".to_string(),
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            }],
+        };
+        let mut buf = Vec::new();
+        write_sensors_response(&mut buf, &resp).await.unwrap();
+
+        assert_ne!(
+            buf.get(4),
+            Some(&b'{'),
+            "sensors protocol payload must be generated protobuf, not JSON"
+        );
     }
 
     #[test]
-    fn detail_request_serializes_requested_flags() {
-        let json = serde_json::to_string(&SensorsRequest::with_frame_entries()).unwrap();
-        assert_eq!(
-            json,
-            r#"{"include_registry_entries":true,"include_frame_entries":true}"#
-        );
+    fn detail_request_encodes_requested_flags() {
+        let bytes = SensorsRequest::with_frame_entries().encode_to_vec();
+        assert_eq!(bytes, vec![0x08, 0x01, 0x10, 0x01]);
     }
 
     #[tokio::test]
@@ -367,15 +264,9 @@ mod tests {
         assert!(matches!(err, SensorsProtocolError::FrameTooLarge { .. }));
     }
 
-    /// Future-compat: a `SensorsRequest` with extra fields decodes
-    /// cleanly into today's empty struct (serde ignores unknown
-    /// fields). Lets us add filter fields like `kind` later without a
-    /// protocol-id bump.
     #[test]
-    fn request_decodes_with_future_unknown_fields() {
-        let forward_json = r#"{"kind":"camera","since_session_now_ns":12345}"#;
-        let back: SensorsRequest = serde_json::from_str(forward_json).unwrap();
-        assert_eq!(back, SensorsRequest::default());
+    fn catalog_request_encodes_as_empty_protobuf_message() {
+        assert!(SensorsRequest::catalog().encode_to_vec().is_empty());
     }
 
     #[tokio::test]

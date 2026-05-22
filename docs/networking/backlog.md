@@ -35,7 +35,9 @@ Implementable now:
 - peer authorization model;
 - lifecycle handshake stream behavior and message shape;
 - Offer Catalog, Get, Subscribe, and message-envelope object shapes;
+- catalog filter semantics;
 - registry-reference hash format;
+- payload-type matching;
 - status object shapes;
 - time and clock semantics.
 
@@ -48,8 +50,7 @@ Baseline path:
 
 1. `P1-1`: Tighten deterministic failure mapping where interop needs exact
    outcomes.
-2. `P1-2`: Tighten payload-type matching.
-3. Start compatibility examples, expected results, and validation transcripts.
+2. Start compatibility examples, expected results, and validation transcripts.
 
 ## P1
 
@@ -80,29 +81,6 @@ Done when:
 - Common bad inputs produce predictable failure codes without forcing every
   diagnostic path to become a protocol requirement.
 
-### P1-2: Payload-Type Matching
-
-Owner sections:
-
-- `RFC-0024: Offer Catalog`
-- `RFC-0027: Spatial Message Envelope`
-- `RFC-0028: Get And Subscribe Common Path Rules`
-- `RFC-0029: Get`
-- `RFC-0030: Subscribe`
-
-Patch:
-
-- Define whether `accepted_payload_types` matches `payload.type` by exact string
-  equality.
-- Define how responders choose a payload type when more than one is possible.
-- Clarify how Get response payloads and Subscribe data-message payloads relate
-  to offer and Subscribe accept payload descriptors.
-
-Done when:
-
-- A responder can decide whether it can satisfy `accepted_payload_types`.
-- A receiver can reject an unexpected payload family deterministically.
-
 ## Drafts Outside The Baseline
 
 Detailed draft text lives in [`drafts.md`](drafts.md).
@@ -120,7 +98,7 @@ These do not block the baseline configured/manual peer-to-peer path.
 
 ## Interop/Test Work
 
-Do this after P0 and P1 patches.
+Do this after the remaining deterministic failure-mapping cleanup.
 
 Create compatibility examples and expected results for:
 

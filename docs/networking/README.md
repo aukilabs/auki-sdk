@@ -4,8 +4,7 @@ This directory contains the draft peer-to-peer cluster lifecycle RFCs.
 
 Read in this order:
 
-1. [`baseline.md`](baseline.md) is the draft baseline for the first
-   implementable protocol.
+1. [`baseline.md`](baseline.md) is the draft implementable baseline.
 2. [`drafts.md`](drafts.md) parks future extension drafts.
 3. [`backlog.md`](backlog.md) is the working task list. It is not part of the
    protocol requirements.
@@ -60,11 +59,12 @@ not required for the baseline peer-to-peer path.
 The authority and identity path is implementable now: peer bindings, domain
 ids, domain declarations, domain delegations, authority-chain validation,
 served-domain-set computation, peer authorization, handshake stream behavior,
-handshake message shape, offer objects, registry-reference hashes, message
-envelopes, and status objects are specified.
+handshake message shape, offer objects, catalog filters, registry-reference
+hashes, payload-type matching, message envelopes, and status objects are
+specified.
 
 End-to-end clean-room implementation still needs deterministic failure-mapping
-and payload-type matching cleanup before broad compatibility work.
+cleanup before broad compatibility work.
 
 ## Drafts And Parked Work
 

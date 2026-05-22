@@ -233,6 +233,9 @@ A transport path used when peers cannot connect directly.
 
 A peer connectivity or session graph used for operational coordination.
 
+In this RFC set, a cluster is not an authority object, membership object,
+leader, owner, or cluster-wide state machine.
+
 ## Time Terms
 
 ### Timestamp

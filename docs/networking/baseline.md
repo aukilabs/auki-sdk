@@ -1,6 +1,6 @@
 # Peer-To-Peer Cluster Baseline
 
-Status: draft baseline for the first implementable version.
+Status: draft implementable baseline.
 
 Last updated: 2026-05-22.
 
@@ -21,8 +21,13 @@ domains when they expose domain-scoped data, configure or optionally discover
 reachable peers, authorize connections, and exchange domain-scoped data through
 simple peer-to-peer relationships.
 
-The goal is a small protocol foundation that lets peers form clusters and
-exchange domain-scoped data directly, without centralized authority.
+The goal is a small protocol foundation that lets peers form operational peer
+relationship graphs and exchange domain-scoped data directly, without
+centralized authority.
+
+V1 does not define a cluster membership object, cluster authority, cluster
+leader, cluster owner, or cluster-wide state machine. A cluster is an
+operational description of peer relationships.
 
 This baseline intentionally uses a small, explicit protocol surface. Recurring
 rules should be defined once in their owner RFC and referenced elsewhere
@@ -1191,7 +1196,9 @@ delegation with `domain.missing_delegation`.
 A receiver SHOULD fail a handshake whose `supported_lifecycle_versions` omits
 `auki.cluster_lifecycle.v1` with `protocol.unsupported_version`.
 
-#### Lifecycle Examples
+#### Lifecycle Examples, Explanatory
+
+These examples explain the rules above and do not add requirements.
 
 In the happy path, Park dials Robot, uses lifecycle version
 `auki.cluster_lifecycle.v1`, verifies Robot's peer binding, authorizes Robot,
@@ -1419,13 +1426,25 @@ A requester SHOULD set `domain_ids` to the domains it accepted in the remote
 peer's served domain set when it wants the responder to return only offers the
 requester may treat as usable.
 
+If `domain_ids` is present and non-empty, the responder MUST NOT return offers
+outside those domain ids. Requested domains that the responder does not serve
+to the requester produce no offers for those domains.
+
 If `kinds` is omitted or empty, the responder SHOULD consider all offer kinds
 it is willing to advertise to the requester.
 
+If `kinds` is present and non-empty, the responder MUST NOT return offers
+outside those kinds.
+
 If `include_inline_registry_entries` is omitted, it defaults to false.
 
-The `kinds` values are open strings. Unknown or unsupported kind filters SHOULD
+The `kinds` values are open strings. Unknown or unsupported kind filters
 produce an empty matching result, not a protocol failure.
+
+A request that mixes served and unserved `domain_ids` produces a partial
+catalog for served matching domains. The responder SHOULD include diagnostics
+for requested domains it does not serve to the requester, using
+`offer.domain_not_served`.
 
 If `include_inline_registry_entries` is true, the responder MAY attach
 canonical registry JSON to matching registry references when it has the exact
@@ -1450,6 +1469,10 @@ The `offers` array MAY be empty. An empty array means the responder understood
 the request but has no matching offers currently visible to the requester.
 
 The `generated_at` timestamp follows `RFC-0035`.
+
+An offer-catalog response does not need to echo the request filters.
+Diagnostics are the mechanism for reporting unserved requested domains or
+other filtered-empty cases.
 
 #### Diagnostics
 
@@ -1542,6 +1565,8 @@ The payload descriptor helps a consumer decide whether it can decode Get or
 Subscribe payloads. The Subscribe accept start result and the Get response
 envelope may further commit to exact payload details.
 
+Baseline payload-type matching is defined in `RFC-0028`.
+
 The payload descriptor describes the expected payload family. It MUST NOT carry
 the payload bytes or structured payload value; those belong in the spatial
 message envelope's payload object defined in `RFC-0027`.
@@ -1619,8 +1644,8 @@ authoritative for the lifetime of that subscription.
 
 #### Snapshot And Updates
 
-Each offer-catalog response is a complete snapshot for the request filters the
-responder accepted.
+Each offer-catalog response is a complete snapshot for the request filters
+applied by the responder.
 
 If a later complete snapshot for the same peer, domain filter, and kind filter
 omits a previously advertised offer, the consumer SHOULD treat that offer as
@@ -1778,7 +1803,8 @@ A v1 payload object MAY include:
 - `bytes`: base64url without padding;
 - `json`: JSON value.
 
-The `payload.type`, `payload.encoding`, `payload.schema_version`, and
+For Get and Subscribe, `payload.type` MUST follow the selected-payload-type
+rules in `RFC-0028`. The `payload.encoding`, `payload.schema_version`, and
 `payload.media_type` fields SHOULD be compatible with the offer's payload
 descriptor, with the Get response envelope, and with metadata from a Subscribe
 accept start result.
@@ -1907,6 +1933,38 @@ The `params` object is offer-kind-specific. Receivers MUST ignore unknown
 The `accepted_payload_types` array lets the requester narrow the payload types
 it is willing to receive. If omitted or empty, the requester accepts any
 payload type advertised by the offer and supported by local policy.
+
+Payload-type matching uses exact string equality against a payload descriptor
+`type`. Baseline v1 does not define wildcard, prefix, subtype, or media-type
+matching for `accepted_payload_types`.
+
+In baseline v1, the offer's payload descriptor `type` is the only selectable
+payload type for the offer unless a later offer-kind RFC explicitly defines
+additional selectable payload types for that offer kind.
+
+To satisfy a Get or Subscribe request, the responder MUST select exactly one
+payload type that is compatible with the offer and accepted by the request. A
+selected payload type is accepted by the request when either:
+
+- `accepted_payload_types` is omitted or empty; or
+- `accepted_payload_types` contains the selected payload type by exact string
+  equality.
+
+Unknown payload type strings in `accepted_payload_types` are not protocol
+failures by themselves. They only matter if they leave the responder with no
+selectable payload type accepted by the request.
+
+For Get, the selected payload type is committed by `message.payload.type` in
+the successful response. For Subscribe, the selected payload type is committed
+by the Subscribe accept `payload.type`.
+
+After a payload type is selected, a producer MUST NOT send a payload object
+whose `payload.type` differs from the selected payload type unless a later
+offer-kind RFC explicitly allows per-message payload-type changes.
+
+Receivers MUST reject a Get response or Subscribe data message whose
+`payload.type` differs from the selected payload type with
+`message.invalid_payload`.
 
 Size limits are path-specific. This RFC owns the common enforcement rule. Each
 path RFC owns its size-limit field name and unit.
@@ -2038,6 +2096,9 @@ The `message` object MUST follow the spatial message envelope shape defined in
 The `message.domain_id` and `message.offer_id` MUST match the request
 `domain_id` and `offer_id`.
 
+The `message.payload.type` field MUST be the selected payload type for the
+request, as defined in `RFC-0028`.
+
 The response MUST be a complete response for the request. Get v1 has no
 continuation token, chunk list, or streaming body.
 
@@ -2080,7 +2141,9 @@ registry references, and any additional compatibility rules.
 A responder SHOULD fail malformed Get requests with `get.invalid_request`.
 
 Get SHOULD use the common offer-path failure mapping defined in
-`RFC-0028`.
+`RFC-0028`. Common offer-path failures, including
+`offer.unsupported_payload_type`, SHOULD be returned as a failed Get response
+when a structured response can be returned.
 
 A requester SHOULD use the message failure-code family from `RFC-0027` when a
 Get response includes `message` but the envelope, payload, or payload size is
@@ -2173,9 +2236,8 @@ A successful v1 start result MAY include:
 
 The `domain_id` and `offer_id` fields MUST match the request.
 
-The `payload` descriptor commits the payload family the producer will send for
-this subscription. It SHOULD be compatible with the offer's payload descriptor
-and with the requester's `accepted_payload_types`.
+The `payload` descriptor commits the selected payload type and payload family
+the producer will send for this subscription, as defined in `RFC-0028`.
 
 The `registry_refs` array commits the registry context for the subscription.
 When present, data messages on the subscription MUST NOT contradict it unless
@@ -2208,7 +2270,12 @@ message envelope shape defined in `RFC-0027`.
 Each data message MUST have `domain_id` and `offer_id` matching the accepted
 subscription.
 
-The data message payload fields SHOULD be compatible with the accepted
+Each data message `payload.type` MUST match the selected payload type committed
+by the Subscribe accept `payload.type`, unless a later offer-kind RFC
+explicitly allows per-message payload-type changes.
+
+The data message `payload.encoding`, `payload.schema_version`, and
+`payload.media_type` fields SHOULD be compatible with the accepted
 subscription payload descriptor.
 
 Sequence behavior follows `RFC-0027`, using `initial_sequence` when present.
@@ -2286,7 +2353,9 @@ A responder SHOULD fail malformed Subscribe requests with
 `subscribe.invalid_request`.
 
 Subscribe SHOULD use the common offer-path failure mapping defined in
-`RFC-0028`.
+`RFC-0028`. Common offer-path failures before acceptance, including
+`offer.unsupported_payload_type`, SHOULD be returned as a failed start result
+when a structured reject can be returned.
 
 A receiver SHOULD use the message failure-code family from `RFC-0027` when a
 Subscribe data message includes a spatial message envelope but the envelope,
@@ -2357,7 +2426,10 @@ For an existing protocol version, implementations:
 
 Incompatible wire changes MUST use a new protocol ID.
 
-#### Example
+#### Example, Explanatory
+
+This example explains the compatibility rule above and does not add
+requirements.
 
 If `/auki/example/0.0.1` originally accepted:
 

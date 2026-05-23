@@ -138,3 +138,79 @@ def test_convert_pose_convention_rejects_short_array() -> None:
             auki_registry.frame_ros_optical("camera"),
             auki_registry.frame_opengl("world"),
         )
+
+
+def test_inverse_then_compose_yields_identity() -> None:
+    import math
+
+    import auki_geometry
+
+    half = 1.0 / math.sqrt(2)
+    pose = [1.0, 2.0, 3.0, 0.0, 0.0, half, half]
+
+    inverse = auki_geometry.inverse_spatial_transform(pose)
+    composed = auki_geometry.compose_spatial_transforms(pose, inverse)
+
+    # Identity: zero translation, identity quaternion (sign may flip).
+    for i in range(3):
+        assert composed[i] == pytest.approx(0.0, abs=1e-9)
+    qx, qy, qz, qw = composed[3:]
+    # Identity quaternion is (0, 0, 0, ±1).
+    assert abs(qx) < 1e-9 and abs(qy) < 1e-9 and abs(qz) < 1e-9
+    assert abs(abs(qw) - 1.0) < 1e-9
+
+
+def test_compose_spatial_transforms_order() -> None:
+    """Compose (A → B) with (B → C); apply to origin → translation of A → C."""
+    import math
+
+    import auki_geometry
+
+    half = 1.0 / math.sqrt(2)
+    # A → B: rotate 90° around +Z, no translation.
+    a_to_b = [0.0, 0.0, 0.0, 0.0, 0.0, half, half]
+    # B → C: translate +1 along x (post-rotation), no rotation.
+    b_to_c = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+    a_to_c = auki_geometry.compose_spatial_transforms(a_to_b, b_to_c)
+
+    # Origin of A is (0, 0, 0). Apply A → B (rotation only): origin stays.
+    # Apply B → C: now translation (1, 0, 0) in C. So composed translation = (1, 0, 0).
+    assert a_to_c[0] == pytest.approx(1.0)
+    assert a_to_c[1] == pytest.approx(0.0)
+    assert a_to_c[2] == pytest.approx(0.0)
+
+
+def test_relative_spatial_transform_derives_from_to() -> None:
+    """Given common→A and common→B, derive A→B."""
+    import auki_geometry
+
+    # common → A: pure translation along +x.
+    common_to_a = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    # common → B: pure translation along +y.
+    common_to_b = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+    # A → B = inverse(common → A) ∘ (common → B) = translate (-1, 1, 0).
+    a_to_b = auki_geometry.relative_spatial_transform(common_to_a, common_to_b)
+    assert a_to_b[0] == pytest.approx(-1.0)
+    assert a_to_b[1] == pytest.approx(1.0)
+    assert a_to_b[2] == pytest.approx(0.0)
+
+
+def test_inverse_spatial_transform_rejects_zero_quaternion() -> None:
+    import auki_geometry
+
+    # Zero quaternion is invalid; Rust's normalize_quat surfaces ZeroQuaternion.
+    pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.inverse_spatial_transform(pose)
+
+
+def test_geometry_error_is_value_error_subclass() -> None:
+    import auki_geometry
+
+    assert issubclass(auki_geometry.GeometryError, ValueError)
+
+    # Catchable as ValueError too.
+    with pytest.raises(ValueError):
+        auki_geometry.inverse_spatial_transform([0.0] * 7)

@@ -253,6 +253,42 @@ fn convert_pose_convention(
     spatial_transform_to_pylist(py, &converted)
 }
 
+// ─── Spatial transform composition (PR #193) ────────────────────────
+
+#[pyfunction]
+fn inverse_spatial_transform(
+    py: Python<'_>,
+    transform: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let t = extract_spatial_transform_array(transform, "transform")?;
+    let inverse = map_err(geometry::inverse_spatial_transform(&t))?;
+    spatial_transform_to_pylist(py, &inverse)
+}
+
+#[pyfunction]
+fn compose_spatial_transforms(
+    py: Python<'_>,
+    from_to_mid: &Bound<'_, PyAny>,
+    mid_to_to: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let a = extract_spatial_transform_array(from_to_mid, "from_to_mid")?;
+    let b = extract_spatial_transform_array(mid_to_to, "mid_to_to")?;
+    let composed = map_err(geometry::compose_spatial_transforms(&a, &b))?;
+    spatial_transform_to_pylist(py, &composed)
+}
+
+#[pyfunction]
+fn relative_spatial_transform(
+    py: Python<'_>,
+    common_to_from: &Bound<'_, PyAny>,
+    common_to_to: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let a = extract_spatial_transform_array(common_to_from, "common_to_from")?;
+    let b = extract_spatial_transform_array(common_to_to, "common_to_to")?;
+    let relative = map_err(geometry::relative_spatial_transform(&a, &b))?;
+    spatial_transform_to_pylist(py, &relative)
+}
+
 #[pymodule]
 fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GeometryError", py.get_type_bound::<GeometryError>())?;
@@ -263,6 +299,9 @@ fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(convert_vector_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_direction_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_pose_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(inverse_spatial_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(compose_spatial_transforms, m)?)?;
+    m.add_function(wrap_pyfunction!(relative_spatial_transform, m)?)?;
     Ok(())
 }
 

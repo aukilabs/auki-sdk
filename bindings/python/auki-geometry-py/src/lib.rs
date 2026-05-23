@@ -289,6 +289,28 @@ fn relative_spatial_transform(
     spatial_transform_to_pylist(py, &relative)
 }
 
+// ─── 4x4 ↔ 7-array bridge ──────────────────────────────────────────
+
+#[pyfunction]
+fn spatial_transform_to_matrix4(
+    py: Python<'_>,
+    pose: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let t = extract_spatial_transform_array(pose, "pose")?;
+    let matrix = map_err(geometry::spatial_transform_to_matrix4(&t))?;
+    matrix4_to_pylist(py, matrix)
+}
+
+#[pyfunction]
+fn spatial_transform_from_matrix4(
+    py: Python<'_>,
+    matrix: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let m = extract_matrix4(matrix, "matrix")?;
+    let transform = map_err(geometry::spatial_transform_from_matrix4(m))?;
+    spatial_transform_to_pylist(py, &transform)
+}
+
 #[pymodule]
 fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GeometryError", py.get_type_bound::<GeometryError>())?;
@@ -302,6 +324,8 @@ fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inverse_spatial_transform, m)?)?;
     m.add_function(wrap_pyfunction!(compose_spatial_transforms, m)?)?;
     m.add_function(wrap_pyfunction!(relative_spatial_transform, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_transform_to_matrix4, m)?)?;
+    m.add_function(wrap_pyfunction!(spatial_transform_from_matrix4, m)?)?;
     Ok(())
 }
 

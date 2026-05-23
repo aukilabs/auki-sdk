@@ -214,3 +214,62 @@ def test_geometry_error_is_value_error_subclass() -> None:
     # Catchable as ValueError too.
     with pytest.raises(ValueError):
         auki_geometry.inverse_spatial_transform([0.0] * 7)
+
+
+def test_spatial_transform_to_matrix4_identity() -> None:
+    import auki_geometry
+
+    identity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    matrix = auki_geometry.spatial_transform_to_matrix4(identity)
+    assert matrix == [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def test_spatial_transform_matrix4_round_trip() -> None:
+    import math
+
+    import auki_geometry
+
+    half = 1.0 / math.sqrt(2)
+    poses = [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, half, 0.0, 0.0, half],
+        [0.0, 0.0, 0.0, 0.0, half, 0.0, half],
+        [1.0, 2.0, 3.0, 0.0, 0.0, half, half],
+    ]
+    for original in poses:
+        matrix = auki_geometry.spatial_transform_to_matrix4(original)
+        decoded = auki_geometry.spatial_transform_from_matrix4(matrix)
+        # Translation round-trips exactly.
+        for i in range(3):
+            assert decoded[i] == pytest.approx(original[i])
+        # Quaternion can equal ±original_quaternion (Hamilton sign).
+        same = all(abs(decoded[3 + i] - original[3 + i]) < 1e-9 for i in range(4))
+        negated = all(abs(decoded[3 + i] + original[3 + i]) < 1e-9 for i in range(4))
+        assert same or negated, f"pose {original} did not round-trip: {decoded}"
+
+
+def test_spatial_transform_from_matrix4_rejects_wrong_shape() -> None:
+    import auki_geometry
+
+    # 3x3 instead of 4x4.
+    with pytest.raises(ValueError, match="matrix: expected 4 rows"):
+        auki_geometry.spatial_transform_from_matrix4([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])
+
+    # 4 rows but inner row only 3 wide.
+    with pytest.raises(ValueError, match="matrix\\[0\\]: expected 4 floats"):
+        auki_geometry.spatial_transform_from_matrix4([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])

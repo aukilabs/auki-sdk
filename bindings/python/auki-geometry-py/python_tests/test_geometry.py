@@ -87,6 +87,23 @@ def test_convert_point_convention_applies_axes_and_units() -> None:
     assert converted == pytest.approx([1.0, -2.0, -3.0])
 
 
+def test_convert_vector_convention_applies_axes_and_units() -> None:
+    import auki_geometry
+    import auki_registry
+
+    source = {
+        "frame_id": "source",
+        "handedness": "right",
+        "axes": {"x": "right", "y": "down", "z": "forward"},
+        "units": "centimeters",
+    }
+    target = auki_registry.frame_opengl("target")
+    # Same axis flip + unit scale as the point conversion; binding seam
+    # is the same shape — both go through length_scaled_axis_matrix in Rust.
+    converted = auki_geometry.convert_vector_convention([100.0, 200.0, 300.0], source, target)
+    assert converted == pytest.approx([1.0, -2.0, -3.0])
+
+
 def test_convert_direction_convention_skips_unit_scale() -> None:
     import auki_geometry
     import auki_registry
@@ -273,3 +290,36 @@ def test_spatial_transform_from_matrix4_rejects_wrong_shape() -> None:
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ])
+
+
+def test_convention_matrix_raises_geometry_error_on_handedness_mismatch() -> None:
+    import auki_geometry
+
+    # Right-handed declaration but axes have determinant -1 (left-handed
+    # in fact — unity preset shape). Rust's validate_frame rejects this
+    # as GeometryError::HandednessMismatch.
+    inconsistent = {
+        "frame_id": "inconsistent",
+        "handedness": "right",
+        "axes": {"x": "right", "y": "up", "z": "forward"},
+        "units": "meters",
+    }
+    target = {
+        "frame_id": "target",
+        "handedness": "right",
+        "axes": {"x": "right", "y": "up", "z": "backward"},
+        "units": "meters",
+    }
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.convention_matrix(inconsistent, target)
+
+
+def test_axis_convention_matrix_raises_geometry_error_on_invalid_axes() -> None:
+    import auki_geometry
+
+    # Duplicate axis direction — x and y both "right". Rust's validate_axes
+    # rejects this as GeometryError::InvalidAxes.
+    duplicate = {"x": "right", "y": "right", "z": "forward"}
+    valid = {"x": "right", "y": "up", "z": "backward"}
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.axis_convention_matrix(duplicate, valid)

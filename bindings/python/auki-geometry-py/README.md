@@ -23,9 +23,9 @@ Categorical types (`FrameRegistryEntry`, `AxisConvention`, axis directions, leng
 - `convert_vector_convention(vector, from_entry, to_entry)` → 3-list (axis + unit).
 - `convert_direction_convention(direction, from_entry, to_entry)` → 3-list (axis only, no unit scale).
 - `convert_pose_convention(pose, from_entry, to_entry)` → 7-list.
-- `inverse_spatial_transform(pose)` → 7-list.
-- `compose_spatial_transforms(a_to_b, b_to_c)` → 7-list (`a_to_c`).
-- `relative_spatial_transform(common_to_a, common_to_b)` → 7-list (`a_to_b`).
+- `inverse_spatial_transform(transform)` → 7-list.
+- `compose_spatial_transforms(from_to_mid, mid_to_to)` → 7-list (the `from→to` composition).
+- `relative_spatial_transform(common_to_from, common_to_to)` → 7-list (the `from→to` derivation).
 - `spatial_transform_to_matrix4(pose)` → 4×4 nested list.
 - `spatial_transform_from_matrix4(matrix)` → 7-list.
 

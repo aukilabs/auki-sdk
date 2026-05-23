@@ -195,12 +195,74 @@ fn convention_matrix(
     matrix4_to_pylist(py, matrix)
 }
 
+// ─── Convention conversions ─────────────────────────────────────────
+
+#[pyfunction]
+fn convert_point_convention(
+    py: Python<'_>,
+    point: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let point = extract_vec3_array(point, "point")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_point_convention(point, &from, &to))?;
+    vec3_to_pylist(py, &converted)
+}
+
+#[pyfunction]
+fn convert_vector_convention(
+    py: Python<'_>,
+    vector: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let vector = extract_vec3_array(vector, "vector")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_vector_convention(vector, &from, &to))?;
+    vec3_to_pylist(py, &converted)
+}
+
+#[pyfunction]
+fn convert_direction_convention(
+    py: Python<'_>,
+    direction: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let direction = extract_vec3_array(direction, "direction")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_direction_convention(direction, &from, &to))?;
+    vec3_to_pylist(py, &converted)
+}
+
+#[pyfunction]
+fn convert_pose_convention(
+    py: Python<'_>,
+    pose: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let pose = extract_spatial_transform_array(pose, "pose")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_pose_convention(&pose, &from, &to))?;
+    spatial_transform_to_pylist(py, &converted)
+}
+
 #[pymodule]
 fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GeometryError", py.get_type_bound::<GeometryError>())?;
     m.add_function(wrap_pyfunction!(meters_per_unit, m)?)?;
     m.add_function(wrap_pyfunction!(axis_convention_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(convention_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_point_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_vector_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_direction_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_pose_convention, m)?)?;
     Ok(())
 }
 

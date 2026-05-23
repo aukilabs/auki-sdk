@@ -11,6 +11,14 @@
 //! `create_exception!` macro, matching the pattern `auki-network-py`
 //! uses for its custom exception types.
 
+// PyO3 0.22 macro expansion emits a handful of lints we can't fix in
+// user code without bumping the PyO3 minor version. All three go away
+// in newer PyO3; the binding pins to 0.22 to share an ABI with sibling
+// crates (auki-registry-py, auki-logs-py, etc.).
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(unexpected_cfgs)] // `create_exception!` references the gil-refs cfg
+#![allow(clippy::useless_conversion)] // `#[pyfunction]` wrapper emits `.into()`
+
 use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
 use auki_geometry_rs as geometry;
 use auki_registry_rs::{AxisConvention, FrameRegistryEntry};
@@ -81,10 +89,10 @@ fn spatial_transform_to_pylist(py: Python<'_>, t: &SpatialTransform) -> PyResult
     // Output always carries both translation and orientation per the
     // Rust crate's contract; if either were `None` here it would be a
     // bug in the upstream crate.
-    let translation = t.translation.clone().ok_or_else(|| {
+    let translation = t.translation.as_ref().ok_or_else(|| {
         PyRuntimeError::new_err("internal: SpatialTransform output missing translation")
     })?;
-    let orientation = t.orientation.clone().ok_or_else(|| {
+    let orientation = t.orientation.as_ref().ok_or_else(|| {
         PyRuntimeError::new_err("internal: SpatialTransform output missing orientation")
     })?;
     Ok(PyList::new_bound(
@@ -100,18 +108,12 @@ fn spatial_transform_to_pylist(py: Python<'_>, t: &SpatialTransform) -> PyResult
 // ─── Matrix marshal helpers ────────────────────────────────────────
 
 fn matrix3_to_pylist(py: Python<'_>, m: geometry::Matrix3) -> PyResult<PyObject> {
-    let rows: Vec<Bound<'_, PyList>> = m
-        .iter()
-        .map(|row| PyList::new_bound(py, row))
-        .collect();
+    let rows = m.iter().map(|row| PyList::new_bound(py, row));
     Ok(PyList::new_bound(py, rows).into())
 }
 
 fn matrix4_to_pylist(py: Python<'_>, m: geometry::Matrix4) -> PyResult<PyObject> {
-    let rows: Vec<Bound<'_, PyList>> = m
-        .iter()
-        .map(|row| PyList::new_bound(py, row))
-        .collect();
+    let rows = m.iter().map(|row| PyList::new_bound(py, row));
     Ok(PyList::new_bound(py, rows).into())
 }
 
@@ -126,11 +128,11 @@ fn extract_matrix4(any: &Bound<'_, PyAny>, name: &str) -> PyResult<geometry::Mat
         )));
     }
     let mut matrix = [[0.0_f64; 4]; 4];
-    for row in 0..4 {
+    for (row, slot) in matrix.iter_mut().enumerate() {
         let row_any = outer.get_item(row)?;
         let row_name = format!("{name}[{row}]");
         let row_floats = extract_floats(&row_any, 4, &row_name)?;
-        matrix[row].copy_from_slice(&row_floats);
+        slot.copy_from_slice(&row_floats);
     }
     Ok(matrix)
 }

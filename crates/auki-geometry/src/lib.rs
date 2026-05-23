@@ -152,13 +152,11 @@ pub fn convert_pose_convention(
 
     let translation = pose
         .translation
-        .clone()
         .map(|t| convert_vector_convention(t, from, to))
         .transpose()?;
 
     let orientation = pose
         .orientation
-        .clone()
         .map(|q| convert_orientation_convention(q, from, to))
         .transpose()?;
 
@@ -384,7 +382,7 @@ fn apply_matrix3_to_vec3(matrix: Matrix3, vector: Vec3) -> Result<Vec3> {
 }
 
 fn spatial_transform_translation(transform: &SpatialTransform) -> Vec3 {
-    transform.translation.clone().unwrap_or(Vec3 {
+    transform.translation.unwrap_or(Vec3 {
         x: 0.0,
         y: 0.0,
         z: 0.0,
@@ -392,7 +390,7 @@ fn spatial_transform_translation(transform: &SpatialTransform) -> Vec3 {
 }
 
 fn spatial_transform_rotation(transform: &SpatialTransform) -> Result<Matrix3> {
-    let orientation = transform.orientation.clone().unwrap_or(Quat {
+    let orientation = transform.orientation.unwrap_or(Quat {
         x: 0.0,
         y: 0.0,
         z: 0.0,

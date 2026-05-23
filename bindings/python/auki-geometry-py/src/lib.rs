@@ -160,11 +160,47 @@ fn parse_axis_convention(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -
     parse_py(py, value, name)
 }
 
-// ─── Module entry point (no pyfunctions yet) ───────────────────────
+// ─── Scalars and convention matrices ───────────────────────────────
+
+#[pyfunction]
+fn meters_per_unit(unit: &str) -> PyResult<f64> {
+    let parsed: auki_registry_rs::LengthUnit = serde_json::from_value(
+        serde_json::Value::String(unit.to_string()),
+    )
+    .map_err(|e| PyValueError::new_err(format!("unit: {e}")))?;
+    Ok(geometry::meters_per_unit(parsed))
+}
+
+#[pyfunction]
+fn axis_convention_matrix(
+    py: Python<'_>,
+    from_axes: &Bound<'_, PyAny>,
+    to_axes: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let from = parse_axis_convention(py, from_axes, "from_axes")?;
+    let to = parse_axis_convention(py, to_axes, "to_axes")?;
+    let matrix = map_err(geometry::axis_convention_matrix(&from, &to))?;
+    matrix3_to_pylist(py, matrix)
+}
+
+#[pyfunction]
+fn convention_matrix(
+    py: Python<'_>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let matrix = map_err(geometry::convention_matrix(&from, &to))?;
+    matrix4_to_pylist(py, matrix)
+}
 
 #[pymodule]
 fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("GeometryError", py.get_type_bound::<GeometryError>())?;
+    m.add_function(wrap_pyfunction!(meters_per_unit, m)?)?;
+    m.add_function(wrap_pyfunction!(axis_convention_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(convention_matrix, m)?)?;
     Ok(())
 }
 

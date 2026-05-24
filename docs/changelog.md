@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Added the Superpowers implementation plan for migrating SDK crates to the crate-owned UniFFI Python/Swift and wasm-bindgen JavaScript binding standard, with existing PyO3 wrappers treated as legacy compatibility surfaces.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Added the Superpowers implementation plan for the iOS Auki network UniFFI test app, sequencing generated Swift binding consumption, Rust-owned `auki-network` messaging, and browser-to-iOS `/auki/message/0.0.1` smoke testing.

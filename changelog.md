@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+**SDK-wide UniFFI bindings migration plan added.** The new plan sequences crate-owned generated Python/Swift UniFFI and JavaScript/WASM adoption across SDK crates, with existing PyO3 wrappers treated as legacy compatibility surfaces. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **`auki-network` iOS/browser generated-binding test path documented.** The crate source docs now point at the committed iOS generated Swift host and browser js-libp2p smoke harness, while tracking a live simulator/device interop run as the remaining follow-up. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

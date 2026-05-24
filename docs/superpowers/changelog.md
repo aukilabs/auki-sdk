@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Added the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md), covering crate order, generated Python/Swift/JavaScript testing, and PyO3 legacy coexistence.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Added the iOS Auki network UniFFI test app implementation plan under [`plans/`](plans/2026-05-22-ios-auki-network-uniffi-test-app.md), covering generated Swift bindings from Rust crates plus browser-to-iOS message interop.

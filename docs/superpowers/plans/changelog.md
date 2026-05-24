@@ -4,6 +4,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Created the SDK-wide UniFFI bindings migration plan, sequencing crate-owned Python/Swift UniFFI and JavaScript/WASM adoption while treating existing PyO3 packages as legacy compatibility surfaces.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Created the iOS Auki network UniFFI test app implementation plan, sequencing binding generator feature selection, Rust `auki-network` message-node exports, generated Swift packages, the iOS host app, and browser-to-iOS `/auki/message/0.0.1` smoke testing.

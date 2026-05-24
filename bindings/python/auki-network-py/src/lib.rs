@@ -132,6 +132,15 @@ impl PyClusterEntry {
     }
 
     #[getter]
+    fn relay_multiaddrs(&self) -> Vec<String> {
+        self.inner
+            .relay_multiaddrs
+            .iter()
+            .map(|m| m.to_string())
+            .collect()
+    }
+
+    #[getter]
     fn peer_count(&self) -> u32 {
         self.inner.peer_count
     }
@@ -148,9 +157,11 @@ impl PyClusterEntry {
 
     fn __repr__(&self) -> String {
         format!(
-            "ClusterEntry(name={:?}, manager_peer_id={:?}, peer_count={}, created_ns={}, last_liveness_check_ns={})",
+            "ClusterEntry(name={:?}, manager_peer_id={:?}, manager_multiaddrs={}, relay_multiaddrs={}, peer_count={}, created_ns={}, last_liveness_check_ns={})",
             self.inner.name,
             self.inner.manager_peer_id.to_string(),
+            self.inner.manager_multiaddrs.len(),
+            self.inner.relay_multiaddrs.len(),
             self.inner.peer_count,
             self.inner.created_ns,
             self.inner.last_liveness_check_ns,
@@ -262,6 +273,44 @@ impl PyDiscoveryClient {
         })
     }
 
+    /// Atomically create a cluster with relay hints. The caller becomes
+    /// its initial Manager. On 409 returns `CreateClusterOutcome` with
+    /// `is_already_exists = True`.
+    fn create_cluster_with_relay_multiaddrs(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        manager_peer_id: &str,
+        manager_multiaddrs: Vec<String>,
+        relay_multiaddrs: Vec<String>,
+    ) -> PyResult<PyCreateClusterOutcome> {
+        let peer_id = parse_peer_id(manager_peer_id)?;
+        let multiaddrs = parse_multiaddrs(&manager_multiaddrs)?;
+        let relay_multiaddrs = parse_multiaddrs(&relay_multiaddrs)?;
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            let outcome = cluster_tokio_runtime()
+                .block_on(client.create_cluster_with_relay_multiaddrs(
+                    name,
+                    peer_id,
+                    multiaddrs,
+                    relay_multiaddrs,
+                ))
+                .map_err(map_discovery_error)?;
+            Ok(match outcome {
+                RustCreateClusterOutcome::Created(e) => PyCreateClusterOutcome {
+                    is_already_exists: false,
+                    entry: Some(PyClusterEntry::from_rust(e)),
+                },
+                RustCreateClusterOutcome::AlreadyExists => PyCreateClusterOutcome {
+                    is_already_exists: true,
+                    entry: None,
+                },
+            })
+        })
+    }
+
     /// Manager push: report aggregate `peer_count` as a liveness check.
     /// Resets Discovery's 3s sweep window for this cluster.
     fn liveness_check(
@@ -296,6 +345,33 @@ impl PyDiscoveryClient {
         py.allow_threads(|| {
             cluster_tokio_runtime()
                 .block_on(client.rotate_manager(name, peer_id, multiaddrs))
+                .map(PyClusterEntry::from_rust)
+                .map_err(map_discovery_error)
+        })
+    }
+
+    /// Rotate the Manager hint and preserve relay hints.
+    fn rotate_manager_with_relay_multiaddrs(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        manager_peer_id: &str,
+        manager_multiaddrs: Vec<String>,
+        relay_multiaddrs: Vec<String>,
+    ) -> PyResult<PyClusterEntry> {
+        let peer_id = parse_peer_id(manager_peer_id)?;
+        let multiaddrs = parse_multiaddrs(&manager_multiaddrs)?;
+        let relay_multiaddrs = parse_multiaddrs(&relay_multiaddrs)?;
+        let client = self.inner.clone();
+        let name = name.to_string();
+        py.allow_threads(|| {
+            cluster_tokio_runtime()
+                .block_on(client.rotate_manager_with_relay_multiaddrs(
+                    name,
+                    peer_id,
+                    multiaddrs,
+                    relay_multiaddrs,
+                ))
                 .map(PyClusterEntry::from_rust)
                 .map_err(map_discovery_error)
         })
@@ -356,4 +432,31 @@ pub fn populate_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pymodule]
 fn auki_network(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     populate_module(m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cluster_entry_exposes_relay_multiaddrs() {
+        let relay_addr = Multiaddr::from_str(
+            "/ip4/127.0.0.1/tcp/4002/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n",
+        )
+        .unwrap();
+        let entry = PyClusterEntry::from_rust(RustClusterEntry {
+            name: "foo".to_string(),
+            manager_peer_id: PeerId::from_str(
+                "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw",
+            )
+            .unwrap(),
+            manager_multiaddrs: vec![Multiaddr::from_str("/ip4/127.0.0.1/tcp/4001").unwrap()],
+            relay_multiaddrs: vec![relay_addr.clone()],
+            peer_count: 1,
+            created_ns: 10,
+            last_liveness_check_ns: 20,
+        });
+
+        assert_eq!(entry.relay_multiaddrs(), vec![relay_addr.to_string()]);
+    }
 }

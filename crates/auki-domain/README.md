@@ -1,6 +1,6 @@
 # auki-domain
 
-App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, participant info, resource catalogs, transform edges, registry-entry fetch, stream open, and clean shutdown.
+App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalogs, transform edges, registry-entry fetch, stream open, and clean shutdown.
 
 A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Higher-level than [`auki-network`](../auki-network), which it composes on top of.
 
@@ -9,6 +9,7 @@ A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Hi
 ## Public surface
 
 - `ClusterManager` + `ClusterTarget`
+- Relay-aware cluster creation and Manager-rotation hint preservation
 - `ClusterMembership`, `ClusterMember`, `DaemonInfo`
 - `ResourceCatalogProvider`, `ResourceEntry`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
 - `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`

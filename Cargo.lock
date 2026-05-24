@@ -716,6 +716,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain-relay"
+version = "0.0.0"
+dependencies = [
+ "auki-network",
+ "futures",
+ "libp2p",
+ "multiaddr",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [

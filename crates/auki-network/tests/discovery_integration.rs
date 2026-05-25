@@ -122,7 +122,10 @@ async fn roundtrip_against_live_discovery() {
     );
 
     // 6. Deregister + verify gone.
-    client.deregister(name.clone()).await.expect("deregister succeeds");
+    client
+        .deregister(name.clone())
+        .await
+        .expect("deregister succeeds");
     let after = client.list_clusters().await.expect("list_clusters after");
     assert!(
         !after.iter().any(|c| c.name == name),

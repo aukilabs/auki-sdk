@@ -38,7 +38,8 @@
 //!   `oneof` of `Request | Accept | Decline | Entry | EndOfStream`;
 //!   each substream is mono-`T` with `T`'s prost bytes living inside
 //!   `StreamEntry.payload` — the SDK runtime knows which `T` to decode based
-//!   on the [`StreamManifest::sensor_hash`] handshake.
+//!   on the [`StreamManifest::sensor_hash`] or
+//!   [`StreamManifest::resource_id`] handshake.
 //!
 //! ## Why protobuf, why now
 //!
@@ -94,7 +95,7 @@ pub use auki_datatypes::stream::{
     DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
     decline_reason, end_reason, stream_message,
 };
-pub use auki_datatypes::{audio, joint_encoders, point_cloud};
+pub use auki_datatypes::{audio, joint_encoders, point_cloud, pose};
 
 /// libp2p protocol id for the typed-byte-stream protocol. Stable; do
 /// not change without coordinating with consumers (Boosterapp, Sentinel,
@@ -219,6 +220,7 @@ mod tests {
     fn request_msg(sensor_id: &str) -> StreamMessage {
         StreamMessage::request(StreamRequest {
             sensor_id: sensor_id.into(),
+            ..Default::default()
         })
     }
 
@@ -237,6 +239,7 @@ mod tests {
             clock_hash: clock_hash.into(),
             frame_id: frame_id.into(),
             frame_hash: frame_hash.into(),
+            ..Default::default()
         })
     }
 
@@ -283,6 +286,39 @@ mod tests {
         msg.encode(&mut bytes).unwrap();
         let back = StreamMessage::decode(&*bytes).unwrap();
         assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn pose_request_and_manifest_round_trip_resource_identity() {
+        let request = StreamRequest {
+            sensor_id: String::new(),
+            resource_id: "K1/base_link->K1/head_left_rgb_optical".into(),
+        };
+        let msg = StreamMessage::request(request.clone());
+        let bytes = msg.encode_to_vec();
+        let back = StreamMessage::decode(&*bytes).unwrap();
+        assert_eq!(back, StreamMessage::request(request));
+
+        let manifest = StreamManifest {
+            sensor_id: String::new(),
+            sensor_hash: String::new(),
+            clock_id: "K1/monotonic".into(),
+            clock_hash: "clockhash".into(),
+            frame_id: String::new(),
+            frame_hash: String::new(),
+            resource_id: "K1/base_link->K1/head_left_rgb_optical".into(),
+            payload: "spatial_transform".into(),
+            from_frame_id: "K1/base_link".into(),
+            from_frame_hash: "basehash".into(),
+            to_frame_id: "K1/head_left_rgb_optical".into(),
+            to_frame_hash: "headhash".into(),
+            writer_mode: "movable".into(),
+            expected_rate_hz: 30,
+        };
+        let msg = StreamMessage::accept(manifest.clone());
+        let bytes = msg.encode_to_vec();
+        let back = StreamMessage::decode(&*bytes).unwrap();
+        assert_eq!(back, StreamMessage::accept(manifest));
     }
 
     #[test]
@@ -584,6 +620,7 @@ mod tests {
         let order = vec![
             stream_message::Variant::Request(StreamRequest {
                 sensor_id: "ordered".into(),
+                ..Default::default()
             }),
             stream_message::Variant::Accept(StreamManifest {
                 sensor_id: "ordered".into(),
@@ -592,6 +629,7 @@ mod tests {
                 clock_hash: "ch".into(),
                 frame_id: "ordered/frame".into(),
                 frame_hash: "fh".into(),
+                ..Default::default()
             }),
             stream_message::Variant::Entry(StreamEntry {
                 timestamp_ns: 1,

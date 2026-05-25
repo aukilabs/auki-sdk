@@ -13,19 +13,29 @@ package auki.stream;
 //
 // Per-substream `T` (mono-T per grimsby D1 / Dagaz D1): the consumer
 // resolves the producer's `StreamManifest.sensor_hash` against its
-// Sensor Registry to learn which payload type `StreamEntry.payload` carries.
+// Sensor Registry, or `StreamManifest.resource_id` against the producer's
+// Resource Catalog, to learn which payload type `StreamEntry.payload` carries.
 // The SDK runtime decodes `StreamEntry.payload` (a length-bounded `bytes`
 // field) as the matching prost type from `auki-datatypes` (e.g.
-// `CameraFrame`, `PointCloudFrame`).
+// `CameraFrame`, `PointCloudFrame`, `SpatialTransform`).
 //
 // Field number ledger (never reuse, never renumber):
-//   StreamRequest.sensor_id    = 1
-//   StreamManifest.sensor_id    = 1
-//   StreamManifest.sensor_hash  = 2
-//   StreamManifest.clock_id     = 3
-//   StreamManifest.clock_hash   = 4
-//   StreamManifest.frame_id     = 5
-//   StreamManifest.frame_hash   = 6
+//   StreamRequest.sensor_id      = 1
+//   StreamRequest.resource_id    = 2
+//   StreamManifest.sensor_id          = 1
+//   StreamManifest.sensor_hash        = 2
+//   StreamManifest.clock_id           = 3
+//   StreamManifest.clock_hash         = 4
+//   StreamManifest.frame_id           = 5
+//   StreamManifest.frame_hash         = 6
+//   StreamManifest.resource_id        = 7
+//   StreamManifest.payload            = 8
+//   StreamManifest.from_frame_id      = 9
+//   StreamManifest.from_frame_hash    = 10
+//   StreamManifest.to_frame_id        = 11
+//   StreamManifest.to_frame_hash      = 12
+//   StreamManifest.writer_mode        = 13
+//   StreamManifest.expected_rate_hz   = 14
 //   StreamEntry.timestamp_ns         = 1
 //   StreamEntry.seq                  = 2
 //   StreamEntry.payload              = 3
@@ -33,6 +43,7 @@ package auki.stream;
 
 message StreamRequest {
   string sensor_id = 1;
+  string resource_id = 2;
 }
 
 message StreamManifest {
@@ -42,6 +53,14 @@ message StreamManifest {
   string clock_hash = 4;
   string frame_id = 5;
   string frame_hash = 6;
+  string resource_id = 7;
+  string payload = 8;
+  string from_frame_id = 9;
+  string from_frame_hash = 10;
+  string to_frame_id = 11;
+  string to_frame_hash = 12;
+  string writer_mode = 13;
+  uint32 expected_rate_hz = 14;
 }
 
 message DeclineReason {

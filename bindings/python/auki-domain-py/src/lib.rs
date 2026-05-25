@@ -1044,6 +1044,9 @@ fn resource_entry_to_py(py: Python<'_>, entry: RustResourceEntry) -> PyResult<Py
         RustResourceEntry::TransformEdge(inner) => {
             Ok(Py::new(py, PyTransformEdgeResource { inner })?.into_py(py))
         }
+        RustResourceEntry::PoseStream(_) => Err(PyTypeError::new_err(
+            "PoseStreamResource is not exposed by auki-domain-py yet",
+        )),
     }
 }
 
@@ -1871,6 +1874,7 @@ impl PyClusterManager {
                             kinds: kinds.unwrap_or_default(),
                             include_sensor_entries,
                             include_frame_entries,
+                            include_clock_entries: false,
                         },
                     )
                     .await
@@ -2025,6 +2029,7 @@ impl PyClusterManager {
         let peer_id_parsed = parse_peer_id(peer_id)?;
         let request = RustStreamRequest {
             sensor_id: sensor_id.to_string(),
+            ..Default::default()
         };
         let inner = self.inner.clone();
         py.allow_threads(|| {

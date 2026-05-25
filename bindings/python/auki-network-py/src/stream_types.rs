@@ -72,7 +72,10 @@ impl PyStreamRequest {
     #[pyo3(signature = (*, sensor_id))]
     fn new(sensor_id: String) -> Self {
         Self {
-            inner: RustStreamRequest { sensor_id },
+            inner: RustStreamRequest {
+                sensor_id,
+                ..Default::default()
+            },
         }
     }
 
@@ -120,6 +123,7 @@ impl PyStreamManifest {
                 clock_hash,
                 frame_id: frame_id.unwrap_or_default(),
                 frame_hash: frame_hash.unwrap_or_default(),
+                ..Default::default()
             },
         }
     }
@@ -1279,6 +1283,7 @@ fn manifest_from_retained_source(source: &RustRetainedStreamSource) -> RustStrea
         clock_hash: source.clock_hash.clone(),
         frame_id: source.frame_id.clone(),
         frame_hash: source.frame_hash.clone(),
+        ..Default::default()
     }
 }
 
@@ -2378,6 +2383,7 @@ def _make(cluster):
             let rust_provider = build_stream_provider(provider.unbind());
             let request = RustStreamRequest {
                 sensor_id: "any".into(),
+                ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason }
@@ -2410,6 +2416,7 @@ def _bad(peer, req):
             let rust_provider = build_stream_provider(bad.unbind());
             let request = RustStreamRequest {
                 sensor_id: "any".into(),
+                ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason } => match reason.kind {
@@ -2470,6 +2477,7 @@ def _make(cluster):
                 test_peer_id(),
                 RustStreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             ) {
                 RustStreamDispatch::AcceptCamera {
@@ -2529,6 +2537,7 @@ def _make(cluster):
                 test_peer_id(),
                 RustStreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             ) {
                 RustStreamDispatch::AcceptPointCloud {

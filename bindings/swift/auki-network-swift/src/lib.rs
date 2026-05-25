@@ -45,10 +45,10 @@
 //! `auki_network::stream_runtime::StreamError`/`OpenStreamError`
 //! variants that wrap non-FFI types are flattened to `message: String`.
 
+use auki_network_rs::HeartbeatTimestampSource;
 pub use auki_network_rs::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
-use auki_network_rs::HeartbeatTimestampSource;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use std::sync::Arc;
@@ -298,10 +298,7 @@ pub async fn spawn_for_swift(
         identity.as_ref(),
         auki_network_rs::swarm::SwarmConfig {
             listen_addresses: listen_multiaddrs,
-            agent_version: format!(
-                "auki-network-swift/{}",
-                env!("CARGO_PKG_VERSION")
-            ),
+            agent_version: format!("auki-network-swift/{}", env!("CARGO_PKG_VERSION")),
             enable_relay_server: false,
         },
     )
@@ -320,16 +317,25 @@ pub async fn spawn_for_swift(
     //    sensors_rx, registry_rx, diagnostic_rx). At v0 we only wire
     //    liveness_rx to the Swift listener; the others are dropped
     //    (their senders' errors are swallowed by run_task).
-    let (rt, _join_rx, liveness_rx, _membership_rx, _info_rx, _resources_rx, _sensors_rx, _registry_rx, _diagnostic_rx) =
-        auki_network_rs::NetworkRuntime::spawn(
-            swarm,
-            allowed_peers,
-            upstream_provider,
-            heartbeat_source,
-        )
-        .map_err(|e| SpawnSwiftError::RuntimeSpawn {
-            message: e.to_string(),
-        })?;
+    let (
+        rt,
+        _join_rx,
+        liveness_rx,
+        _membership_rx,
+        _info_rx,
+        _resources_rx,
+        _sensors_rx,
+        _registry_rx,
+        _diagnostic_rx,
+    ) = auki_network_rs::NetworkRuntime::spawn(
+        swarm,
+        allowed_peers,
+        upstream_provider,
+        heartbeat_source,
+    )
+    .map_err(|e| SpawnSwiftError::RuntimeSpawn {
+        message: e.to_string(),
+    })?;
 
     // 5. Drain liveness events to the Swift listener.
     tokio::spawn(drain_liveness_events(liveness_rx, peer_liveness_listener));
@@ -449,11 +455,7 @@ pub trait SwiftStreamProvider: Send + Sync {
     fn audio_source(&self, peer_id: String, request_bytes: Vec<u8>) -> Box<dyn SwiftAudioSource>;
 
     /// Provide the camera source for an accepted request.
-    fn camera_source(
-        &self,
-        peer_id: String,
-        request_bytes: Vec<u8>,
-    ) -> Box<dyn SwiftCameraSource>;
+    fn camera_source(&self, peer_id: String, request_bytes: Vec<u8>) -> Box<dyn SwiftCameraSource>;
 
     /// Provide the point-cloud source for an accepted request.
     fn point_cloud_source(
@@ -487,9 +489,7 @@ pub trait SwiftStreamProvider: Send + Sync {
 /// mpsc send fails, and the task exits.
 pub(crate) fn audio_source_to_stream(
     source: Box<dyn SwiftAudioSource>,
-) -> auki_network_rs::stream_runtime::SourceStream<
-    auki_network_rs::stream_protocol::audio::Data,
-> {
+) -> auki_network_rs::stream_runtime::SourceStream<auki_network_rs::stream_protocol::audio::Data> {
     let source: Arc<dyn SwiftAudioSource> = Arc::from(source);
     let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<
@@ -504,16 +504,15 @@ pub(crate) fn audio_source_to_stream(
             match source.next_item() {
                 Ok(Some(item)) => {
                     use prost::Message;
-                    let frame =
-                        match auki_network_rs::stream_protocol::audio::Data::decode(
-                            item.payload_bytes.as_slice(),
-                        ) {
-                            Ok(f) => f,
-                            Err(e) => {
-                                let _ = tx.send(Err(format!("AudioFrame decode: {e}"))).await;
-                                break;
-                            }
-                        };
+                    let frame = match auki_network_rs::stream_protocol::audio::Data::decode(
+                        item.payload_bytes.as_slice(),
+                    ) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("AudioFrame decode: {e}"))).await;
+                            break;
+                        }
+                    };
                     let upstream_item = auki_network_rs::stream_runtime::StreamItem {
                         timestamp_ns: item.timestamp_ns,
                         payload: frame,
@@ -538,9 +537,7 @@ pub(crate) fn audio_source_to_stream(
 /// swapped to `CameraFrame`.
 pub(crate) fn camera_source_to_stream(
     source: Box<dyn SwiftCameraSource>,
-) -> auki_network_rs::stream_runtime::SourceStream<
-    auki_network_rs::stream_protocol::CameraFrame,
-> {
+) -> auki_network_rs::stream_runtime::SourceStream<auki_network_rs::stream_protocol::CameraFrame> {
     let source: Arc<dyn SwiftCameraSource> = Arc::from(source);
     let (tx, rx) = tokio::sync::mpsc::channel::<
         Result<
@@ -555,16 +552,15 @@ pub(crate) fn camera_source_to_stream(
             match source.next_item() {
                 Ok(Some(item)) => {
                     use prost::Message;
-                    let frame =
-                        match auki_network_rs::stream_protocol::CameraFrame::decode(
-                            item.payload_bytes.as_slice(),
-                        ) {
-                            Ok(f) => f,
-                            Err(e) => {
-                                let _ = tx.send(Err(format!("CameraFrame decode: {e}"))).await;
-                                break;
-                            }
-                        };
+                    let frame = match auki_network_rs::stream_protocol::CameraFrame::decode(
+                        item.payload_bytes.as_slice(),
+                    ) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("CameraFrame decode: {e}"))).await;
+                            break;
+                        }
+                    };
                     let upstream_item = auki_network_rs::stream_runtime::StreamItem {
                         timestamp_ns: item.timestamp_ns,
                         payload: frame,
@@ -657,7 +653,9 @@ pub(crate) fn joint_encoders_source_to_stream(
                     ) {
                         Ok(f) => f,
                         Err(e) => {
-                            let _ = tx.send(Err(format!("JointEncodersFrame decode: {e}"))).await;
+                            let _ = tx
+                                .send(Err(format!("JointEncodersFrame decode: {e}")))
+                                .await;
                             break;
                         }
                     };
@@ -737,7 +735,8 @@ pub(crate) fn swift_provider_to_upstream(
     provider: Arc<dyn SwiftStreamProvider>,
 ) -> auki_network_rs::stream_runtime::StreamProvider {
     Arc::new(
-        move |peer: libp2p_identity::PeerId, request: auki_network_rs::stream_protocol::StreamRequest| {
+        move |peer: libp2p_identity::PeerId,
+              request: auki_network_rs::stream_protocol::StreamRequest| {
             use prost::Message;
             let peer_id_str = peer.to_string();
             let request_bytes = request.encode_to_vec();
@@ -810,7 +809,6 @@ pub(crate) fn swift_provider_to_upstream(
         },
     )
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -906,7 +904,10 @@ mod tests {
 
         let heartbeat_closed = PeerLivenessEvent::HeartbeatStreamClosed { peer_id: pid };
         let s = SwiftPeerLivenessEvent::from_upstream(&heartbeat_closed);
-        assert!(matches!(s, SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }));
+        assert!(matches!(
+            s,
+            SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }
+        ));
     }
 
     /// Smoke test: a no-op `PeerLivenessListener` impl compiles and can be
@@ -1013,8 +1014,7 @@ mod tests {
         }
 
         let wallet = auki_identity::Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed");
-        let identity =
-            std::sync::Arc::new(auki_network_rs::PeerIdentity::from_wallet(wallet));
+        let identity = std::sync::Arc::new(auki_network_rs::PeerIdentity::from_wallet(wallet));
 
         let listener: Box<dyn PeerLivenessListener> = Box::new(NoopListener);
         let heartbeat: Box<dyn HeartbeatTimestampProvider> = Box::new(WallClockProvider);

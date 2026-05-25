@@ -3,13 +3,14 @@
 //!
 //! Resources are the generalized discovery layer above one-off
 //! catalogs. A peer answers "what can I provide right now?" with an
-//! open set of resource rows. v0 ships two first-class rows:
+//! open set of resource rows. v0 ships three first-class rows:
 //! sensor streams (`kind = "sensor_stream"`) and rigid transform
-//! edges (`kind = "transform_edge"`). Sensor streams can also carry
-//! current pinhole intrinsics when the producer has them live. Future
-//! rows (pose streams, recordings, detection streams, calibration
-//! resources) add enum variants and/or open-string kinds without
-//! changing the cluster lifecycle machinery.
+//! edges (`kind = "transform_edge"`), plus movable pose streams
+//! (`kind = "pose_stream"`). Sensor streams can also carry current
+//! pinhole intrinsics when the producer has them live. Future rows
+//! (recordings, detection streams, calibration resources) add enum
+//! variants and/or open-string kinds without changing the cluster
+//! lifecycle machinery.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::StreamProtocol;
@@ -35,7 +36,7 @@ pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourcesRequest {
     /// Optional open-string resource kind filter. Examples:
-    /// `"sensor_stream"`, `"transform_edge"`.
+    /// `"sensor_stream"`, `"transform_edge"`, `"pose_stream"`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<String>,
     /// Include canonical Sensor Registry JSON in sensor-stream rows
@@ -47,6 +48,10 @@ pub struct ResourcesRequest {
     /// referenced frame entries.
     #[serde(default, skip_serializing_if = "is_false")]
     pub include_frame_entries: bool,
+    /// Include canonical Clock Registry JSON in pose-stream rows when
+    /// the producer can resolve `clock_id + clock_hash`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_clock_entries: bool,
 }
 
 impl ResourcesRequest {
@@ -71,10 +76,19 @@ impl ResourcesRequest {
         }
     }
 
-    /// Ask for sensor and frame registry details embedded by value.
+    /// Only pose-stream resources.
+    pub fn pose_streams() -> Self {
+        Self {
+            kinds: vec![ResourceKind::PoseStream.as_str().into()],
+            ..Self::default()
+        }
+    }
+
+    /// Ask for sensor, frame, and clock registry details embedded by value.
     pub fn with_registry_entries(mut self) -> Self {
         self.include_sensor_entries = true;
         self.include_frame_entries = true;
+        self.include_clock_entries = true;
         self
     }
 
@@ -99,6 +113,8 @@ pub enum ResourceKind {
     SensorStream,
     /// Direct frame transform edge.
     TransformEdge,
+    /// Live movable frame transform over `/auki/stream/0.1.0`.
+    PoseStream,
 }
 
 impl ResourceKind {
@@ -107,6 +123,7 @@ impl ResourceKind {
         match self {
             ResourceKind::SensorStream => "sensor_stream",
             ResourceKind::TransformEdge => "transform_edge",
+            ResourceKind::PoseStream => "pose_stream",
         }
     }
 }
@@ -123,6 +140,8 @@ pub enum ResourceEntry {
     SensorStream(SensorStreamResource),
     /// Direct transform edge resource.
     TransformEdge(TransformEdgeResource),
+    /// Live movable transform resource.
+    PoseStream(PoseStreamResource),
 }
 
 impl ResourceEntry {
@@ -131,6 +150,7 @@ impl ResourceEntry {
         match self {
             Self::SensorStream(_) => ResourceKind::SensorStream,
             Self::TransformEdge(_) => ResourceKind::TransformEdge,
+            Self::PoseStream(_) => ResourceKind::PoseStream,
         }
     }
 
@@ -139,6 +159,7 @@ impl ResourceEntry {
         match self {
             Self::SensorStream(r) => &r.id,
             Self::TransformEdge(r) => &r.id,
+            Self::PoseStream(r) => &r.id,
         }
     }
 }
@@ -216,6 +237,47 @@ pub struct TransformEdgeResource {
     /// Optional canonical Frame Registry JSON for `to_frame_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_frame_entry_json: Option<String>,
+}
+
+/// Live movable transform stream resource.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PoseStreamResource {
+    /// Resource id. Conventionally `<from_frame_id>-><to_frame_id>`.
+    pub id: String,
+    /// Parent/source frame id.
+    pub from_frame_id: String,
+    /// Content-addressed Frame Registry hash for `from_frame_id`.
+    pub from_frame_hash: String,
+    /// Child/target frame id.
+    pub to_frame_id: String,
+    /// Content-addressed Frame Registry hash for `to_frame_id`.
+    pub to_frame_hash: String,
+    /// Clock id used by `StreamEntry.timestamp_ns`.
+    pub clock_id: String,
+    /// Content-addressed Clock Registry hash for `clock_id`.
+    pub clock_hash: String,
+    /// Protocol used to open the stream.
+    pub stream_protocol: String,
+    /// Payload type hint for consumers choosing a decoder.
+    pub payload: String,
+    /// `"movable"` for live time-varying edges in v0; open string for
+    /// future writer modes.
+    pub writer_mode: String,
+    /// Expected producer cadence in Hz. Zero means unspecified.
+    pub expected_rate_hz: u32,
+    /// Producer/source identity. Mirrors PoseSource's tagged JSON
+    /// shape without making auki-network depend on auki-manifests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+    /// Optional canonical Frame Registry JSON for `from_frame_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_frame_entry_json: Option<String>,
+    /// Optional canonical Frame Registry JSON for `to_frame_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_frame_entry_json: Option<String>,
+    /// Optional canonical Clock Registry JSON for `clock_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_entry_json: Option<String>,
 }
 
 /// JSON-friendly counterpart of `auki_datatypes::pose::SpatialTransform`.
@@ -384,6 +446,15 @@ mod tests {
         let mut cursor = futures::io::Cursor::new(buf);
         let back = read_resources_request(&mut cursor).await.unwrap();
         assert_eq!(req, back);
+
+        let req = ResourcesRequest::pose_streams().with_registry_entries();
+        let mut buf = Vec::new();
+        write_resources_request(&mut buf, &req).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_resources_request(&mut cursor).await.unwrap();
+        assert_eq!(back.kinds, vec!["pose_stream"]);
+        assert!(back.include_frame_entries);
+        assert!(back.include_clock_entries);
     }
 
     #[tokio::test]
@@ -433,6 +504,26 @@ mod tests {
                     from_frame_entry_json: None,
                     to_frame_entry_json: None,
                 }),
+                ResourceEntry::PoseStream(PoseStreamResource {
+                    id: "K1-LIVE01/base_link->K1-LIVE01/head_left_rgb_optical".into(),
+                    from_frame_id: "K1-LIVE01/base_link".into(),
+                    from_frame_hash: "basehash".into(),
+                    to_frame_id: "K1-LIVE01/head_left_rgb_optical".into(),
+                    to_frame_hash: "headhash".into(),
+                    clock_id: "K1-LIVE01/monotonic".into(),
+                    clock_hash: "clockhash".into(),
+                    stream_protocol: "/auki/stream/0.1.0".into(),
+                    payload: "spatial_transform".into(),
+                    writer_mode: "movable".into(),
+                    expected_rate_hz: 30,
+                    source: Some(serde_json::json!({
+                        "kind": "ros2_tf",
+                        "publishers": ["robot_state_publisher"]
+                    })),
+                    from_frame_entry_json: None,
+                    to_frame_entry_json: None,
+                    clock_entry_json: None,
+                }),
             ],
         };
         let mut buf = Vec::new();
@@ -450,5 +541,6 @@ mod tests {
     fn resource_kinds_are_stable() {
         assert_eq!(ResourceKind::SensorStream.as_str(), "sensor_stream");
         assert_eq!(ResourceKind::TransformEdge.as_str(), "transform_edge");
+        assert_eq!(ResourceKind::PoseStream.as_str(), "pose_stream");
     }
 }

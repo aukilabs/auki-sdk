@@ -662,6 +662,7 @@ mod tests {
             clock_hash: clock_hash.into(),
             frame_id: frame_id.into(),
             frame_hash: frame_hash.into(),
+            ..Default::default()
         }
     }
 
@@ -936,6 +937,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "anything".into(),
+                    ..Default::default()
                 },
             ),
         )
@@ -1006,6 +1008,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/cam".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1092,6 +1095,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "does-not-exist".into(),
+                    ..Default::default()
                 },
             )
             .await;
@@ -1150,6 +1154,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1247,6 +1252,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1304,6 +1310,7 @@ mod tests {
                 id_unreachable.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             ),
         )
@@ -1364,6 +1371,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/pc".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1445,6 +1453,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/audio".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1527,6 +1536,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "camera".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1543,6 +1553,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "pointcloud".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1559,6 +1570,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "no-such-sensor".into(),
+                    ..Default::default()
                 },
             )
             .await;
@@ -1578,6 +1590,7 @@ mod tests {
         let provider: StreamProvider = decline_all_streams();
         let req = StreamRequest {
             sensor_id: "anything".into(),
+            ..Default::default()
         };
         let any_peer = libp2p_identity::Keypair::generate_ed25519()
             .public()

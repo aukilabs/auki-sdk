@@ -14,7 +14,7 @@ Root module:
 `auki_network.cluster` submodule (shared with `auki-domain-py`):
 
 - `StreamRequest`, `StreamManifest`
-- Payload pyclasses: `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`
+- Payload pyclasses: `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `SpatialTransformFrame`
 - `DeclineReason`, `EndReason`, `StreamItem`, `StreamEntry`, `StreamDecision`, `StreamSubscription`, `StreamEntryIterator`
 - Stream exceptions.
 

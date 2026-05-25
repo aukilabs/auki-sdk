@@ -27,7 +27,7 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Networking
 
-- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.1.0` streams for camera, point-cloud, joint-encoder, and audio payloads.
+- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.1.0` streams for camera, point-cloud, joint-encoder, and audio payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
 - **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources`, `/auki/sensors`, `/auki/registries`.
 - **`ClusterManager`** — single app-facing entry point for Discovery + cluster bootstrap, membership, Manager election, resource catalogs, registry fetch, and stream open.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).

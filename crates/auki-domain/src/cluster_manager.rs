@@ -3151,7 +3151,10 @@ fn enrich_resource_entries(
     request: &ResourcesRequest,
     app_root: &Path,
 ) {
-    if !request.include_sensor_entries && !request.include_frame_entries {
+    if !request.include_sensor_entries
+        && !request.include_frame_entries
+        && !request.include_clock_entries
+    {
         return;
     }
 
@@ -3214,7 +3217,41 @@ fn enrich_resource_entries(
                     Ok(Some(_)) | Ok(None) | Err(_) => {}
                 }
             }
-            ResourceEntry::PoseStream(_) => {}
+            ResourceEntry::PoseStream(pose) => {
+                if request.include_frame_entries {
+                    match auki_registry::read_frame(
+                        app_root,
+                        &pose.from_frame_id,
+                        &pose.from_frame_hash,
+                    ) {
+                        Ok(Some(frame)) if frame.hash() == pose.from_frame_hash => {
+                            pose.from_frame_entry_json =
+                                Some(canonical_json(frame.canonical_bytes()));
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {}
+                    }
+                    match auki_registry::read_frame(
+                        app_root,
+                        &pose.to_frame_id,
+                        &pose.to_frame_hash,
+                    ) {
+                        Ok(Some(frame)) if frame.hash() == pose.to_frame_hash => {
+                            pose.to_frame_entry_json =
+                                Some(canonical_json(frame.canonical_bytes()));
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {}
+                    }
+                }
+
+                if request.include_clock_entries {
+                    match auki_registry::read_clock(app_root, &pose.clock_id, &pose.clock_hash) {
+                        Ok(Some(clock)) if clock.hash() == pose.clock_hash => {
+                            pose.clock_entry_json = Some(canonical_json(clock.canonical_bytes()));
+                        }
+                        Ok(Some(_)) | Ok(None) | Err(_) => {}
+                    }
+                }
+            }
         }
     }
 }
@@ -4319,6 +4356,78 @@ mod tests {
             serde_json::from_str(edge.to_frame_entry_json.as_deref().unwrap()).unwrap();
         assert_eq!(decoded_from, from);
         assert_eq!(decoded_to, to);
+    }
+
+    #[test]
+    fn resource_enrichment_embeds_pose_stream_frame_and_clock_entries() {
+        use crate::PoseStreamResource;
+        use auki_registry::{ClockBody, ClockMeta, Scope};
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = FrameRegistryEntry::ros_body("K1/base_link");
+        let base_hash = auki_registry::write_frame(dir.path(), &base)
+            .unwrap()
+            .hash()
+            .to_string();
+        let head = FrameRegistryEntry::ros_optical("K1/head_left_rgb_optical");
+        let head_hash = auki_registry::write_frame(dir.path(), &head)
+            .unwrap()
+            .hash()
+            .to_string();
+        let clock = ClockRegistryEntry {
+            clock_id: "K1/monotonic".into(),
+            body: ClockBody::MonotonicClock(ClockMeta {
+                unit: "nanoseconds".into(),
+                monotonic: true,
+                epoch: None,
+                scope: Scope::DeviceLocal,
+            }),
+        };
+        let clock_hash = auki_registry::write_clock(dir.path(), &clock)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let mut resources = vec![ResourceEntry::PoseStream(PoseStreamResource {
+            id: "K1/base_link->K1/head_left_rgb_optical".into(),
+            from_frame_id: base.frame_id.clone(),
+            from_frame_hash: base_hash,
+            to_frame_id: head.frame_id.clone(),
+            to_frame_hash: head_hash,
+            clock_id: clock.clock_id.clone(),
+            clock_hash,
+            stream_protocol: STREAM_PROTOCOL.into(),
+            payload: "spatial_transform".into(),
+            writer_mode: "movable".into(),
+            expected_rate_hz: 30,
+            source: None,
+            from_frame_entry_json: None,
+            to_frame_entry_json: None,
+            clock_entry_json: None,
+        })];
+
+        enrich_resource_entries(
+            &mut resources,
+            &ResourcesRequest {
+                include_frame_entries: true,
+                include_clock_entries: true,
+                ..ResourcesRequest::pose_streams()
+            },
+            dir.path(),
+        );
+
+        let ResourceEntry::PoseStream(row) = &resources[0] else {
+            panic!("expected pose stream resource");
+        };
+        let decoded_from: FrameRegistryEntry =
+            serde_json::from_str(row.from_frame_entry_json.as_deref().unwrap()).unwrap();
+        let decoded_to: FrameRegistryEntry =
+            serde_json::from_str(row.to_frame_entry_json.as_deref().unwrap()).unwrap();
+        let decoded_clock: ClockRegistryEntry =
+            serde_json::from_str(row.clock_entry_json.as_deref().unwrap()).unwrap();
+        assert_eq!(decoded_from, base);
+        assert_eq!(decoded_to, head);
+        assert_eq!(decoded_clock, clock);
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

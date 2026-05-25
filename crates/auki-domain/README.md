@@ -11,7 +11,7 @@ A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Hi
 - `ClusterManager` + `ClusterTarget`
 - Relay-aware cluster creation and Manager-rotation hint preservation
 - `ClusterMembership`, `ClusterMember`, `DaemonInfo`
-- `ResourceCatalogProvider`, `ResourceEntry`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
+- `ResourceCatalogProvider`, `ResourceEntry`, `PoseStreamResource`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
 - `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`
 - Manager / election / bootstrap error types
 - `LIVENESS_CHECK_INTERVAL`, `elect_successor(...)`

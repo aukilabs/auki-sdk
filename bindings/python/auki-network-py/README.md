@@ -15,6 +15,7 @@ Root module:
 
 - `StreamRequest`, `StreamManifest`
 - Payload pyclasses: `CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `SpatialTransformFrame`
+- Pose stream helpers: `StreamManifest.pose_stream(...)` and `StreamDecision.accept_pose(...)`
 - `DeclineReason`, `EndReason`, `StreamItem`, `StreamEntry`, `StreamDecision`, `StreamSubscription`, `StreamEntryIterator`
 - Stream exceptions.
 

@@ -10,6 +10,8 @@ Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `
 
 - Types: `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`
 - Modules: `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `sensors_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`
+- Resource catalog rows: `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`
+- Typed stream payloads: camera, point cloud, joint encoders, audio, and pose `SpatialTransform`
 - Discovery: `ClusterEntry.relay_multiaddrs`, `create_cluster_with_relay_multiaddrs`, `rotate_manager_with_relay_multiaddrs`
 - Constants: `PEER_DERIVATION_LABEL = "peer/v1"`
 - Locked vectors pin `seed → PeerId` and the stream wire bytes across language reimplementations.

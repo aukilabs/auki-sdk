@@ -737,6 +737,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-geometry-py"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-geometry",
+ "auki-registry",
+ "pyo3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "auki-hash"
 version = "0.0.0"
 dependencies = [

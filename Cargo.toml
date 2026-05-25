@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/auki-hash",
     "crates/auki-geometry",
+    "bindings/python/auki-geometry-py",
     "crates/auki-identity",
     "bindings/python/auki-identity-py",
     "crates/auki-jcs",

@@ -173,6 +173,44 @@ pub enum BuildError {
     },
 }
 
+/// Errors from [`reserve_relay_circuit_addr`].
+#[derive(Debug, thiserror::Error)]
+pub enum RelayReservationError {
+    /// The relay address must carry the relay's peer id so libp2p can
+    /// dial the relay and later route the circuit reservation through
+    /// the same peer.
+    #[error("relay multiaddr is missing /p2p/<relay-peer-id>: {0}")]
+    MissingRelayPeerId(Multiaddr),
+    /// The dial address and advertised address point at different
+    /// relay peers. A Manager may reserve through one transport and
+    /// publish another transport for browsers, but both addresses must
+    /// identify the same relay node.
+    #[error(
+        "relay dial peer {dial_peer_id} does not match advertised relay peer {advertise_peer_id}"
+    )]
+    RelayPeerIdMismatch {
+        dial_peer_id: PeerId,
+        advertise_peer_id: PeerId,
+    },
+    /// The initial dial to the relay failed before any reservation
+    /// could be requested.
+    #[error("dial relay {peer_id}: {source}")]
+    Dial { peer_id: PeerId, source: DialError },
+    /// Starting the circuit-relay listen address failed.
+    #[error("listen on relay circuit address {addr}: {source}")]
+    Listen {
+        addr: Multiaddr,
+        source: libp2p::TransportError<std::io::Error>,
+    },
+    /// The relay did not accept the reservation within the requested
+    /// timeout.
+    #[error("timed out waiting for relay reservation through {relay_peer_id} after {timeout:?}")]
+    Timeout {
+        relay_peer_id: PeerId,
+        timeout: Duration,
+    },
+}
+
 /// Assemble a libp2p swarm. Constructed swarm starts listening on every
 /// address in `config.listen_addresses` before returning.
 ///
@@ -248,6 +286,135 @@ pub fn dial_peer(
 ) -> Result<(), DialError> {
     let opts = DialOpts::peer_id(peer).addresses(addresses).build();
     swarm.dial(opts)
+}
+
+/// Reserve a Circuit Relay v2 listener through `relay_multiaddr` and
+/// return the Manager multiaddr that should be advertised to peers.
+///
+/// `relay_multiaddr` must include `/p2p/<relay-peer-id>`. The helper
+/// dials that relay, waits for identify to complete, listens on
+/// `<relay>/p2p-circuit`, waits for
+/// `relay::client::Event::ReservationReqAccepted`, and returns
+/// `<relay>/p2p-circuit/p2p/<local-manager-peer-id>`.
+pub async fn reserve_relay_circuit_addr(
+    swarm: &mut Swarm<Behaviour>,
+    relay_multiaddr: Multiaddr,
+    timeout: Duration,
+) -> Result<Multiaddr, RelayReservationError> {
+    reserve_relay_circuit_addr_with_advertised_addr(
+        swarm,
+        relay_multiaddr.clone(),
+        relay_multiaddr,
+        timeout,
+    )
+    .await
+}
+
+/// Same as [`reserve_relay_circuit_addr`], but lets callers reserve
+/// through one relay transport and publish another address for the
+/// same relay peer. This is useful when the native Manager can reach a
+/// relay over native TCP/QUIC while browsers need the relay's
+/// WebSocket address in Discovery.
+pub async fn reserve_relay_circuit_addr_with_advertised_addr(
+    swarm: &mut Swarm<Behaviour>,
+    relay_dial_multiaddr: Multiaddr,
+    relay_advertise_multiaddr: Multiaddr,
+    timeout: Duration,
+) -> Result<Multiaddr, RelayReservationError> {
+    use futures::StreamExt as _;
+    use libp2p::multiaddr::Protocol;
+    use libp2p::swarm::SwarmEvent;
+
+    let relay_peer_id = peer_id_from_multiaddr(&relay_dial_multiaddr)
+        .ok_or_else(|| RelayReservationError::MissingRelayPeerId(relay_dial_multiaddr.clone()))?;
+    let advertise_peer_id =
+        peer_id_from_multiaddr(&relay_advertise_multiaddr).ok_or_else(|| {
+            RelayReservationError::MissingRelayPeerId(relay_advertise_multiaddr.clone())
+        })?;
+    if relay_peer_id != advertise_peer_id {
+        return Err(RelayReservationError::RelayPeerIdMismatch {
+            dial_peer_id: relay_peer_id,
+            advertise_peer_id,
+        });
+    }
+
+    let local_peer_id = *swarm.local_peer_id();
+    let circuit_listen_addr = relay_dial_multiaddr.clone().with(Protocol::P2pCircuit);
+    let advertised_manager_addr = relay_advertise_multiaddr
+        .clone()
+        .with(Protocol::P2pCircuit)
+        .with(Protocol::P2p(local_peer_id));
+
+    if !swarm.is_connected(&relay_peer_id) {
+        dial_peer(swarm, relay_peer_id, vec![relay_dial_multiaddr.clone()]).map_err(|source| {
+            RelayReservationError::Dial {
+                peer_id: relay_peer_id,
+                source,
+            }
+        })?;
+    }
+
+    let mut listen_started = false;
+    if swarm.is_connected(&relay_peer_id) {
+        swarm
+            .listen_on(circuit_listen_addr.clone())
+            .map_err(|source| RelayReservationError::Listen {
+                addr: circuit_listen_addr.clone(),
+                source,
+            })?;
+        listen_started = true;
+    }
+
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut deadline => {
+                return Err(RelayReservationError::Timeout {
+                    relay_peer_id,
+                    timeout,
+                });
+            }
+            event = swarm.next() => {
+                let Some(event) = event else {
+                    return Err(RelayReservationError::Timeout {
+                        relay_peer_id,
+                        timeout,
+                    });
+                };
+                match event {
+                    SwarmEvent::Behaviour(BehaviourEvent::Identify(
+                        identify::Event::Received { peer_id, .. }
+                    )) if peer_id == relay_peer_id && !listen_started => {
+                        swarm
+                            .listen_on(circuit_listen_addr.clone())
+                            .map_err(|source| RelayReservationError::Listen {
+                                addr: circuit_listen_addr.clone(),
+                                source,
+                            })?;
+                        listen_started = true;
+                    }
+                    SwarmEvent::Behaviour(BehaviourEvent::RelayClient(
+                        relay::client::Event::ReservationReqAccepted { relay_peer_id: accepted, .. }
+                    )) if accepted == relay_peer_id => {
+                        return Ok(advertised_manager_addr);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
+    use libp2p::multiaddr::Protocol;
+    addr.iter()
+        .filter_map(|protocol| match protocol {
+            Protocol::P2p(peer_id) => Some(peer_id),
+            _ => None,
+        })
+        .last()
 }
 
 /// `true` if `addr` carries an IP component that's routable on the
@@ -361,12 +528,13 @@ pub async fn collect_routable_listen_addrs(
 /// resolution was somehow empty by the time it landed here). Caller
 /// decides whether to error, retry, or fall back.
 ///
-/// **Out of scope (parking-lot for v2, see `parking_lot.md`):** SDK-side
-/// relay reservation. Today, operators behind NAT/firewall who need
-/// libp2p Circuit Relay v2 hand-assemble the relay multiaddr and pass
-/// it as `operator_override` themselves; the SDK doesn't yet provide a
-/// `reserve_relay_listen` helper to walk the dial + reserve + listen
-/// dance. v1 Hagall demo is LAN-only — this helper is sufficient.
+/// Relay reservation is a separate explicit step: callers that need a
+/// browser-dialable Manager address should call
+/// [`reserve_relay_circuit_addr`] first, append the returned
+/// `/p2p-circuit/p2p/<manager>` address to the manager address set,
+/// then pass that set through this helper or directly into
+/// `ClusterManager`. Discovery publishing derives the relay base from
+/// that circuit address.
 pub async fn resolve_advertise_multiaddrs(
     swarm: &mut Swarm<Behaviour>,
     operator_override: Option<&[Multiaddr]>,
@@ -678,6 +846,118 @@ mod tests {
         })
         .await;
         assert!(result.is_ok(), "relay reservation did not complete in time");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reserve_relay_circuit_addr_returns_manager_circuit_multiaddr() {
+        let id_relay = PeerIdentity::from_seed(&[14u8; 32]);
+        let id_manager = PeerIdentity::from_seed(&[15u8; 32]);
+
+        let mut relay_swarm = build_swarm(
+            &id_relay,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                agent_version: "relay/0".into(),
+                enable_relay_server: true,
+            },
+        )
+        .unwrap();
+        let mut manager = build_swarm(
+            &id_manager,
+            SwarmConfig {
+                listen_addresses: vec![],
+                agent_version: "manager/0".into(),
+                enable_relay_server: false,
+            },
+        )
+        .unwrap();
+
+        let relay_addr = wait_for_listen_addr(&mut relay_swarm).await;
+        relay_swarm.add_external_address(relay_addr.clone());
+        let relay_addr_with_pid =
+            relay_addr.with(libp2p::multiaddr::Protocol::P2p(id_relay.peer_id()));
+        let expected = relay_addr_with_pid
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(id_manager.peer_id()));
+
+        let result = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::select! {
+                reservation = reserve_relay_circuit_addr(
+                    &mut manager,
+                    relay_addr_with_pid,
+                    Duration::from_secs(10),
+                ) => reservation,
+                _ = async {
+                    loop {
+                        let _ = relay_swarm.next().await;
+                    }
+                } => unreachable!("relay swarm stream ended"),
+            }
+        })
+        .await
+        .expect("reservation helper timed out")
+        .expect("reservation helper succeeds");
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reserve_relay_circuit_addr_can_publish_alternate_relay_transport() {
+        let id_relay = PeerIdentity::from_seed(&[16u8; 32]);
+        let id_manager = PeerIdentity::from_seed(&[17u8; 32]);
+
+        let mut relay_swarm = build_swarm(
+            &id_relay,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                agent_version: "relay/0".into(),
+                enable_relay_server: true,
+            },
+        )
+        .unwrap();
+        let mut manager = build_swarm(
+            &id_manager,
+            SwarmConfig {
+                listen_addresses: vec![],
+                agent_version: "manager/0".into(),
+                enable_relay_server: false,
+            },
+        )
+        .unwrap();
+
+        let relay_addr = wait_for_listen_addr(&mut relay_swarm).await;
+        relay_swarm.add_external_address(relay_addr.clone());
+        let relay_dial_addr = relay_addr.with(libp2p::multiaddr::Protocol::P2p(id_relay.peer_id()));
+        let relay_advertise_addr: Multiaddr =
+            format!("/ip4/203.0.113.10/tcp/4002/ws/p2p/{}", id_relay.peer_id())
+                .parse()
+                .unwrap();
+        let expected = relay_advertise_addr
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(id_manager.peer_id()));
+
+        let result = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::select! {
+                reservation = reserve_relay_circuit_addr_with_advertised_addr(
+                    &mut manager,
+                    relay_dial_addr,
+                    relay_advertise_addr,
+                    Duration::from_secs(10),
+                ) => reservation,
+                _ = async {
+                    loop {
+                        let _ = relay_swarm.next().await;
+                    }
+                } => unreachable!("relay swarm stream ended"),
+            }
+        })
+        .await
+        .expect("reservation helper timed out")
+        .expect("reservation helper succeeds");
+
+        assert_eq!(result, expected);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

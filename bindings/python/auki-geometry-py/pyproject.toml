@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "auki-geometry-py"
+version = "0.0.0"
+description = "PyO3 bindings for auki-geometry's convention helpers and spatial transform composition — flat-array surface for Python robotics consumers."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Auki Labs Limited" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/aukilabs/auki-sdk"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "auki_geometry"
+
+[tool.pytest.ini_options]
+testpaths = ["python_tests"]

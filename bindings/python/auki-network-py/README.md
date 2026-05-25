@@ -8,8 +8,8 @@ PyO3 bindings for the value-shaped pieces of [`auki-network`](../../../crates/au
 
 Root module:
 
-- `DiscoveryClient` — HTTP client for the Discovery service.
-- `ClusterEntry`, `CreateClusterOutcome`.
+- `DiscoveryClient` — HTTP client for the Discovery service, including relay-aware create/rotate helpers.
+- `ClusterEntry`, `CreateClusterOutcome`; `ClusterEntry` exposes `relay_multiaddrs`.
 
 `auki_network.cluster` submodule (shared with `auki-domain-py`):
 

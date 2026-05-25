@@ -541,6 +541,7 @@ pub struct ClusterManager {
     runtime: NetworkRuntime,
     discovery: Arc<DiscoveryClient>,
     local_multiaddrs: Vec<Multiaddr>,
+    relay_multiaddrs: Vec<Multiaddr>,
     /// Static daemon-side identity fields. Stored at construction;
     /// combined with dynamic SDK-tracked fields (`session_now_ns`,
     /// `cluster_joined_at_ns`, `is_manager`, `manager_peer_id`,
@@ -829,6 +830,56 @@ impl ClusterManager {
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
+        Self::create_cluster_with_relay_hints(
+            cluster_name,
+            local_identity,
+            local_multiaddrs,
+            Vec::new(),
+            discovery_url,
+            swarm,
+            stream_provider,
+            daemon_info,
+        )
+        .await
+    }
+
+    /// Create a new cluster and publish relay hints alongside the
+    /// Manager's direct addresses in Discovery.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_cluster_with_relay_multiaddrs(
+        cluster_name: impl Into<String>,
+        local_identity: PeerIdentity,
+        local_multiaddrs: Vec<Multiaddr>,
+        relay_multiaddrs: Vec<Multiaddr>,
+        discovery_url: impl Into<String>,
+        swarm: Swarm<Behaviour>,
+        stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
+    ) -> Result<Self, CreateClusterError> {
+        Self::create_cluster_with_relay_hints(
+            cluster_name,
+            local_identity,
+            local_multiaddrs,
+            relay_multiaddrs,
+            discovery_url,
+            swarm,
+            stream_provider,
+            daemon_info,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_cluster_with_relay_hints(
+        cluster_name: impl Into<String>,
+        local_identity: PeerIdentity,
+        local_multiaddrs: Vec<Multiaddr>,
+        relay_multiaddrs: Vec<Multiaddr>,
+        discovery_url: impl Into<String>,
+        swarm: Swarm<Behaviour>,
+        stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
+    ) -> Result<Self, CreateClusterError> {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
@@ -852,10 +903,25 @@ impl ClusterManager {
         let advertised_domain_clock_source = Arc::new(Mutex::new(Some(initial_domain_clock)));
 
         // 1. Atomic create on Discovery.
-        match discovery
-            .create_cluster(cluster_name.clone(), local_peer_id, local_multiaddrs.clone())
-            .await?
-        {
+        let create_outcome = if relay_multiaddrs.is_empty() {
+            discovery
+                .create_cluster(
+                    cluster_name.clone(),
+                    local_peer_id,
+                    local_multiaddrs.clone(),
+                )
+                .await?
+        } else {
+            discovery
+                .create_cluster_with_relay_multiaddrs(
+                    cluster_name.clone(),
+                    local_peer_id,
+                    local_multiaddrs.clone(),
+                    relay_multiaddrs.clone(),
+                )
+                .await?
+        };
+        match create_outcome {
             CreateClusterOutcome::Created(_entry) => { /* proceed */ }
             CreateClusterOutcome::AlreadyExists => {
                 return Err(CreateClusterError::AlreadyExists(cluster_name));
@@ -930,6 +996,7 @@ impl ClusterManager {
             cluster_name.clone(),
             local_peer_id,
             local_multiaddrs.clone(),
+            relay_multiaddrs.clone(),
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
@@ -1016,6 +1083,7 @@ impl ClusterManager {
             runtime,
             discovery,
             local_multiaddrs,
+            relay_multiaddrs,
             daemon_info,
             session_clock,
             cluster_joined_at_ns,
@@ -1052,6 +1120,12 @@ impl ClusterManager {
     /// pointed at).
     pub fn local_multiaddrs(&self) -> &[Multiaddr] {
         &self.local_multiaddrs
+    }
+
+    /// Relay multiaddrs this cluster entry should preserve when the
+    /// local peer becomes Manager.
+    pub fn relay_multiaddrs(&self) -> &[Multiaddr] {
+        &self.relay_multiaddrs
     }
 
     /// Broadcast one best-effort diagnostic message to connected cluster peers.
@@ -1631,6 +1705,7 @@ impl ClusterManager {
             .ok_or_else(|| JoinClusterError::NotFound(cluster_name.clone()))?;
         let manager_peer = entry.manager_peer_id;
         let manager_multiaddrs = entry.manager_multiaddrs.clone();
+        let relay_multiaddrs = entry.relay_multiaddrs.clone();
 
         // 2. Spawn the runtime with the Manager pre-allowed (so we
         //    can dial it for the join handshake). The allow-list
@@ -1749,6 +1824,7 @@ impl ClusterManager {
             cluster_name.clone(),
             local_peer_id,
             local_multiaddrs.clone(),
+            relay_multiaddrs.clone(),
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
@@ -1833,6 +1909,7 @@ impl ClusterManager {
             runtime,
             discovery,
             local_multiaddrs,
+            relay_multiaddrs,
             daemon_info,
             session_clock,
             cluster_joined_at_ns,
@@ -2099,11 +2176,39 @@ fn note_watched_transport_closed(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ManagerRotationDiscoveryRequest {
+    DirectOnly {
+        manager_multiaddrs: Vec<Multiaddr>,
+    },
+    WithRelays {
+        manager_multiaddrs: Vec<Multiaddr>,
+        relay_multiaddrs: Vec<Multiaddr>,
+    },
+}
+
+fn manager_rotation_discovery_request(
+    manager_multiaddrs: &[Multiaddr],
+    relay_multiaddrs: &[Multiaddr],
+) -> ManagerRotationDiscoveryRequest {
+    if relay_multiaddrs.is_empty() {
+        ManagerRotationDiscoveryRequest::DirectOnly {
+            manager_multiaddrs: manager_multiaddrs.to_vec(),
+        }
+    } else {
+        ManagerRotationDiscoveryRequest::WithRelays {
+            manager_multiaddrs: manager_multiaddrs.to_vec(),
+            relay_multiaddrs: relay_multiaddrs.to_vec(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_domain_peer_lost(
     cluster_name: &str,
     local_peer_id: PeerId,
     local_multiaddrs: &[Multiaddr],
+    relay_multiaddrs: &[Multiaddr],
     session_clock: &SessionClock,
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
@@ -2157,10 +2262,32 @@ async fn handle_domain_peer_lost(
             }
 
             // Tell Discovery about the rotation.
-            if let Err(e) = discovery
-                .rotate_manager(cluster_name.to_string(), local_peer_id, local_multiaddrs.to_vec())
-                .await
-            {
+            let rotate_result =
+                match manager_rotation_discovery_request(local_multiaddrs, relay_multiaddrs) {
+                    ManagerRotationDiscoveryRequest::DirectOnly { manager_multiaddrs } => {
+                        discovery
+                            .rotate_manager(
+                                cluster_name.to_string(),
+                                local_peer_id,
+                                manager_multiaddrs,
+                            )
+                            .await
+                    }
+                    ManagerRotationDiscoveryRequest::WithRelays {
+                        manager_multiaddrs,
+                        relay_multiaddrs,
+                    } => {
+                        discovery
+                            .rotate_manager_with_relay_multiaddrs(
+                                cluster_name.to_string(),
+                                local_peer_id,
+                                manager_multiaddrs,
+                                relay_multiaddrs,
+                            )
+                            .await
+                    }
+                };
+            if let Err(e) = rotate_result {
                 eprintln!(
                     "auki-domain: rotate_manager failed for cluster \
                     {cluster_name:?}: {e}"
@@ -2299,6 +2426,7 @@ fn spawn_liveness_handler(
     cluster_name: String,
     local_peer_id: PeerId,
     local_multiaddrs: Vec<Multiaddr>,
+    relay_multiaddrs: Vec<Multiaddr>,
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
@@ -2389,6 +2517,7 @@ fn spawn_liveness_handler(
                             &cluster_name,
                             local_peer_id,
                             &local_multiaddrs,
+                            &relay_multiaddrs,
                             &session_clock,
                             &manager_peer_id,
                             &membership,
@@ -3507,6 +3636,35 @@ mod tests {
             app_instance: "abc".into(),
         };
         let _ = d.clone();
+    }
+
+    #[test]
+    fn manager_rotation_request_omits_empty_relay_multiaddrs() {
+        let manager_addr = "/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap();
+
+        assert_eq!(
+            manager_rotation_discovery_request(&[manager_addr.clone()], &[]),
+            ManagerRotationDiscoveryRequest::DirectOnly {
+                manager_multiaddrs: vec![manager_addr],
+            }
+        );
+    }
+
+    #[test]
+    fn manager_rotation_request_preserves_relay_multiaddrs() {
+        let manager_addr = "/ip4/127.0.0.1/tcp/4001".parse::<Multiaddr>().unwrap();
+        let relay_addr =
+            "/ip4/127.0.0.1/tcp/4002/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n"
+                .parse::<Multiaddr>()
+                .unwrap();
+
+        assert_eq!(
+            manager_rotation_discovery_request(&[manager_addr.clone()], &[relay_addr.clone()]),
+            ManagerRotationDiscoveryRequest::WithRelays {
+                manager_multiaddrs: vec![manager_addr],
+                relay_multiaddrs: vec![relay_addr],
+            }
+        );
     }
 
     #[test]

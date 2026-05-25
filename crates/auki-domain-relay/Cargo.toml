@@ -1,0 +1,21 @@
+[package]
+name = "auki-domain-relay"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Domain-aware relay capability for browser-reachable Auki Domains."
+
+[dependencies]
+auki-network = { path = "../auki-network" }
+futures = "0.3"
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "dns", "websocket", "noise", "yamux", "identify", "ping", "relay", "macros", "ed25519"] }
+multiaddr = "0.18"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
+
+[dev-dependencies]
+auki-domain = { path = "../auki-domain" }
+auki-network = { path = "../auki-network", features = ["discovery_client", "swarm"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

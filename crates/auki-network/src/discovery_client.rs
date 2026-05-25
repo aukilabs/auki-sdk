@@ -49,7 +49,9 @@ use thiserror::Error;
 /// One cluster's entry in Discovery's directory.
 ///
 /// `manager_peer_id` + `manager_multiaddrs` are the hint a newcomer
-/// uses to dial the current Manager over libp2p. `peer_count` is the
+/// uses to dial the current Manager over libp2p. `relay_multiaddrs`
+/// are optional relay hints a browser can use when direct Manager
+/// transport is not dialable. `peer_count` is the
 /// Manager's most-recent self-reported size (aggregate; no
 /// identities). `created_ns` is Discovery's server-stamped creation
 /// timestamp and the sort key for `list_clusters`.
@@ -66,8 +68,9 @@ pub struct ClusterEntry {
     /// Current Manager's dialable libp2p multiaddrs.
     pub manager_multiaddrs: Vec<Multiaddr>,
     /// Relay base multiaddrs associated with any relay-mediated
-    /// Manager addresses. Browsers use these to reserve and advertise
-    /// their own circuit address through the same Domain Relay.
+    /// Manager addresses, plus optional relay hints for browser and
+    /// constrained-network peers. Browsers use these to reserve and
+    /// advertise through the same Domain Relay.
     pub relay_multiaddrs: Vec<Multiaddr>,
     /// Manager's most-recent self-reported peer count (aggregate).
     pub peer_count: u32,
@@ -202,7 +205,39 @@ impl DiscoveryClient {
         manager_multiaddrs: Vec<Multiaddr>,
     ) -> Result<CreateClusterOutcome, DiscoveryError> {
         let url = format!("{}/clusters/{}", self.base_url, name);
-        let body = WireManagerRequest::from_multiaddrs(manager_peer_id, &manager_multiaddrs);
+        let body =
+            WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &manager_multiaddrs);
+        let resp = self.http.post(&url).json(&body).send().await?;
+        match resp.status() {
+            StatusCode::CREATED => {
+                let wire: WireClusterEntry = resp.json().await?;
+                Ok(CreateClusterOutcome::Created(parse_wire_entry(wire)?))
+            }
+            StatusCode::CONFLICT => Ok(CreateClusterOutcome::AlreadyExists),
+            status => Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            }),
+        }
+    }
+
+    /// Atomically create a new cluster with optional relay hints. Use
+    /// this when the Manager also wants Discovery to advertise browser
+    /// or constrained-network relay addresses alongside direct Manager
+    /// addresses.
+    pub async fn create_cluster_with_relay_multiaddrs(
+        &self,
+        name: String,
+        manager_peer_id: PeerId,
+        manager_multiaddrs: Vec<Multiaddr>,
+        relay_multiaddrs: Vec<Multiaddr>,
+    ) -> Result<CreateClusterOutcome, DiscoveryError> {
+        let url = format!("{}/clusters/{}", self.base_url, name);
+        let body = WireManagerRequest::from_multiaddrs_and_relay_multiaddrs(
+            manager_peer_id,
+            &manager_multiaddrs,
+            &relay_multiaddrs,
+        );
         let resp = self.http.post(&url).json(&body).send().await?;
         match resp.status() {
             StatusCode::CREATED => {
@@ -241,7 +276,28 @@ impl DiscoveryClient {
         manager_multiaddrs: Vec<Multiaddr>,
     ) -> Result<ClusterEntry, DiscoveryError> {
         let url = format!("{}/clusters/{}/manager", self.base_url, name);
-        let body = WireManagerRequest::from_multiaddrs(manager_peer_id, &manager_multiaddrs);
+        let body =
+            WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &manager_multiaddrs);
+        let resp = self.http.post(&url).json(&body).send().await?;
+        ok_or_status(resp).await
+    }
+
+    /// Rotate the Manager hint and preserve relay hints. Called by a
+    /// newly-elected Manager when Discovery should keep advertising
+    /// browser or constrained-network relay addresses.
+    pub async fn rotate_manager_with_relay_multiaddrs(
+        &self,
+        name: String,
+        manager_peer_id: PeerId,
+        manager_multiaddrs: Vec<Multiaddr>,
+        relay_multiaddrs: Vec<Multiaddr>,
+    ) -> Result<ClusterEntry, DiscoveryError> {
+        let url = format!("{}/clusters/{}/manager", self.base_url, name);
+        let body = WireManagerRequest::from_multiaddrs_and_relay_multiaddrs(
+            manager_peer_id,
+            &manager_multiaddrs,
+            &relay_multiaddrs,
+        );
         let resp = self.http.post(&url).json(&body).send().await?;
         ok_or_status(resp).await
     }
@@ -291,11 +347,28 @@ struct WireManagerRequest {
 }
 
 impl WireManagerRequest {
-    fn from_multiaddrs(manager_peer_id: PeerId, manager_multiaddrs: &[Multiaddr]) -> Self {
+    fn from_manager_multiaddrs(manager_peer_id: PeerId, manager_multiaddrs: &[Multiaddr]) -> Self {
+        Self::from_multiaddrs_and_relay_multiaddrs(manager_peer_id, manager_multiaddrs, &[])
+    }
+
+    fn from_multiaddrs_and_relay_multiaddrs(
+        manager_peer_id: PeerId,
+        manager_multiaddrs: &[Multiaddr],
+        relay_multiaddrs: &[Multiaddr],
+    ) -> Self {
+        let mut relay_multiaddrs = relay_multiaddrs
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>();
+        for relay in relay_multiaddrs_from_manager_multiaddrs(manager_multiaddrs) {
+            if !relay_multiaddrs.contains(&relay) {
+                relay_multiaddrs.push(relay);
+            }
+        }
         Self {
             manager_peer_id: manager_peer_id.to_string(),
             manager_multiaddrs: manager_multiaddrs.iter().map(|m| m.to_string()).collect(),
-            relay_multiaddrs: relay_multiaddrs_from_manager_multiaddrs(manager_multiaddrs),
+            relay_multiaddrs,
         }
     }
 }
@@ -423,6 +496,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_wire_entry_preserves_relay_multiaddrs() {
+        let json = r#"{
+            "name": "foo",
+            "manager_peer_id": "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw",
+            "manager_multiaddrs": ["/ip4/192.168.9.10/tcp/4001"],
+            "relay_multiaddrs": ["/ip4/192.168.9.20/tcp/4002/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n"],
+            "peer_count": 3,
+            "created_ns": 1715423400000000000,
+            "last_liveness_check_ns": 1715423500000000000
+        }"#;
+        let wire: WireClusterEntry = serde_json::from_str(json).unwrap();
+        let entry = parse_wire_entry(wire).expect("valid wire entry parses");
+
+        assert_eq!(
+            entry
+                .relay_multiaddrs
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "/ip4/192.168.9.20/tcp/4002/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n"
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_wire_entry_defaults_missing_relay_multiaddrs_to_empty() {
+        let json = r#"{
+            "name": "foo",
+            "manager_peer_id": "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw",
+            "manager_multiaddrs": ["/ip4/192.168.9.10/tcp/4001"],
+            "peer_count": 3,
+            "created_ns": 1715423400000000000,
+            "last_liveness_check_ns": 1715423500000000000
+        }"#;
+        let wire: WireClusterEntry = serde_json::from_str(json).unwrap();
+        let entry = parse_wire_entry(wire).expect("legacy wire entry parses");
+
+        assert!(entry.relay_multiaddrs.is_empty());
+    }
+
+    #[test]
     fn parse_wire_entry_rejects_garbage_peer_id() {
         let mut w = sample_wire_entry();
         w.manager_peer_id = "not-a-peer-id".to_string();
@@ -495,11 +610,25 @@ mod tests {
         let req = WireManagerRequest {
             manager_peer_id: "12D3KooW…".to_string(),
             manager_multiaddrs: vec!["/ip4/1.2.3.4/tcp/1".to_string()],
-            relay_multiaddrs: vec!["/ip4/1.2.3.4/tcp/2/ws/p2p/12D3KooWRelay".to_string()],
+            relay_multiaddrs: Vec::new(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"manager_peer_id\":"), "{json}");
         assert!(json.contains("\"manager_multiaddrs\":"), "{json}");
+        assert!(!json.contains("relay_multiaddrs"), "{json}");
+    }
+
+    #[test]
+    fn wire_manager_request_includes_relay_multiaddrs_when_present() {
+        let req = WireManagerRequest {
+            manager_peer_id: "12D3KooW…".to_string(),
+            manager_multiaddrs: vec!["/ip4/1.2.3.4/tcp/1".to_string()],
+            relay_multiaddrs: vec![
+                "/ip4/1.2.3.5/tcp/2/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n"
+                    .to_string(),
+            ],
+        };
+        let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"relay_multiaddrs\":"), "{json}");
     }
 
@@ -516,7 +645,7 @@ mod tests {
             .with(multiaddr::Protocol::P2pCircuit)
             .with(multiaddr::Protocol::P2p(manager_peer_id));
 
-        let req = WireManagerRequest::from_multiaddrs(manager_peer_id, &[native, circuit]);
+        let req = WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &[native, circuit]);
 
         assert_eq!(
             req.relay_multiaddrs,
@@ -526,11 +655,40 @@ mod tests {
     }
 
     #[test]
+    fn wire_manager_request_combines_explicit_and_derived_relay_multiaddrs() {
+        let manager_peer_id = crate::PeerIdentity::from_seed(&[206u8; 32]).peer_id();
+        let relay_peer_id = crate::PeerIdentity::from_seed(&[207u8; 32]).peer_id();
+        let explicit_relay: Multiaddr =
+            "/ip4/192.168.9.131/tcp/4002/ws/p2p/12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n"
+                .parse()
+                .unwrap();
+        let derived_relay: Multiaddr =
+            format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{relay_peer_id}")
+                .parse()
+                .unwrap();
+        let circuit = derived_relay
+            .clone()
+            .with(multiaddr::Protocol::P2pCircuit)
+            .with(multiaddr::Protocol::P2p(manager_peer_id));
+
+        let req = WireManagerRequest::from_multiaddrs_and_relay_multiaddrs(
+            manager_peer_id,
+            &[circuit],
+            &[explicit_relay.clone()],
+        );
+
+        assert_eq!(
+            req.relay_multiaddrs,
+            vec![explicit_relay.to_string(), derived_relay.to_string()]
+        );
+    }
+
+    #[test]
     fn wire_manager_request_omits_relay_multiaddrs_without_circuit_addr() {
         let manager_peer_id = crate::PeerIdentity::from_seed(&[204u8; 32]).peer_id();
         let native: Multiaddr = "/ip4/192.168.9.130/tcp/4001".parse().unwrap();
 
-        let req = WireManagerRequest::from_multiaddrs(manager_peer_id, &[native]);
+        let req = WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &[native]);
         let json = serde_json::to_string(&req).unwrap();
 
         assert!(!json.contains("relay_multiaddrs"), "{json}");
@@ -544,7 +702,8 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let req = WireManagerRequest::from_multiaddrs(manager_peer_id, &[malformed_circuit]);
+        let req =
+            WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &[malformed_circuit]);
         let json = serde_json::to_string(&req).unwrap();
 
         assert!(!json.contains("relay_multiaddrs"), "{json}");

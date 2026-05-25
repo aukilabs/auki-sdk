@@ -11,8 +11,9 @@
 //!   `.to_json()` method daemons serve verbatim on their HTTP
 //!   surface.
 //! - `ClusterManager(...)` — the daemon-side cluster handle. Sync
-//!   constructor (`create_cluster`) and methods, each `block_on`s
-//!   on a process-wide multi-thread tokio runtime.
+//!   constructors (`create_cluster`, `create_cluster_with_relay_multiaddrs`)
+//!   and methods, each `block_on`s on a process-wide multi-thread tokio
+//!   runtime.
 
 use auki_domain_rs::{
     AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
@@ -1325,9 +1326,10 @@ impl PyClusterManager {
     ///   provided and non-empty, the daemon advertises EXACTLY these
     ///   addresses to Discovery, skipping auto-detection. Use to
     ///   resolve multi-NIC ambiguity, container / VM host mappings,
-    ///   or to advertise a relay-mediated multiaddr in v1 (until the
-    ///   SDK ships a v2 relay-reservation helper). Replace-semantics:
-    ///   the SDK does NOT mix these with auto-detected addresses.
+    ///   or to advertise an explicitly managed address. Replace-semantics:
+    ///   the SDK does NOT mix these with auto-detected addresses. Use
+    ///   `create_cluster_with_relay_multiaddrs(...)` when the Manager
+    ///   should also publish separate browser-compatible Relay hints.
     #[staticmethod]
     #[pyo3(signature = (
         wallet_seed,
@@ -1381,6 +1383,85 @@ impl PyClusterManager {
                     cluster_name,
                     identity,
                     advertise_multiaddrs,
+                    discovery_url,
+                    swarm,
+                    provider,
+                    daemon,
+                )
+                .await
+                .map_err(map_create_cluster_error)?;
+
+                Ok::<_, PyErr>(Self {
+                    inner: Arc::new(Mutex::new(Some(manager))),
+                })
+            })
+        })
+    }
+
+    /// Create a new cluster and include separate browser-compatible
+    /// Relay hints in Discovery's cluster entry.
+    ///
+    /// All args match `create_cluster(...)`, with the additional
+    /// `relay_multiaddrs` list. These relay addresses are not local
+    /// Manager listen addresses; they are browser-dialable relay
+    /// multiaddrs suffixed with `/p2p/<relay-peer-id>`.
+    #[staticmethod]
+    #[pyo3(signature = (
+        wallet_seed,
+        cluster_name,
+        discovery_url,
+        listen_addresses,
+        relay_multiaddrs,
+        agent_version,
+        daemon_info,
+        stream_provider = None,
+        external_addresses = None,
+    ))]
+    fn create_cluster_with_relay_multiaddrs(
+        py: Python<'_>,
+        wallet_seed: Vec<u8>,
+        cluster_name: &str,
+        discovery_url: &str,
+        listen_addresses: Vec<String>,
+        relay_multiaddrs: Vec<String>,
+        agent_version: &str,
+        daemon_info: &PyDaemonInfo,
+        stream_provider: Option<Py<PyAny>>,
+        external_addresses: Option<Vec<String>>,
+    ) -> PyResult<Self> {
+        let seed: [u8; 32] = wallet_seed
+            .try_into()
+            .map_err(|_| PyValueError::new_err("wallet_seed must be 32 bytes"))?;
+        let cluster_name = cluster_name.to_string();
+        let discovery_url = discovery_url.to_string();
+        let agent_version = agent_version.to_string();
+        let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let relay_multiaddrs = parse_multiaddrs(&relay_multiaddrs)?;
+        let external_multiaddrs = match external_addresses {
+            Some(addrs) => Some(parse_multiaddrs(&addrs)?),
+            None => None,
+        };
+        let daemon = daemon_info.inner.clone();
+        let provider: StreamProvider = match stream_provider {
+            Some(callable) => stream_provider_from_python(py, callable)?,
+            None => decline_all_streams(),
+        };
+
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let (identity, swarm, advertise_multiaddrs) = build_identity_and_swarm(
+                    &seed,
+                    listen_multiaddrs,
+                    agent_version,
+                    external_multiaddrs.as_deref(),
+                )
+                .await?;
+
+                let manager = RustClusterManager::create_cluster_with_relay_multiaddrs(
+                    cluster_name,
+                    identity,
+                    advertise_multiaddrs,
+                    relay_multiaddrs,
                     discovery_url,
                     swarm,
                     provider,
@@ -2276,6 +2357,21 @@ mod tests {
             assert!(module.getattr("ResourceSpatialTransform").is_ok());
             assert!(module.getattr("SensorStreamResource").is_ok());
             assert!(module.getattr("TransformEdgeResource").is_ok());
+        });
+    }
+
+    #[test]
+    fn cluster_manager_exposes_relay_aware_create() {
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "auki_domain").unwrap();
+            auki_domain(py, &module).unwrap();
+
+            let manager = module.getattr("ClusterManager").unwrap();
+            assert!(
+                manager
+                    .getattr("create_cluster_with_relay_multiaddrs")
+                    .is_ok()
+            );
         });
     }
 

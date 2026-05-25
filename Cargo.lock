@@ -719,6 +719,7 @@ dependencies = [
 name = "auki-domain-relay"
 version = "0.0.0"
 dependencies = [
+ "auki-domain",
  "auki-network",
  "futures",
  "libp2p",

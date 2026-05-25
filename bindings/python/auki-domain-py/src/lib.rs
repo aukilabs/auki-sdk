@@ -22,7 +22,7 @@ use auki_domain_rs::{
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
     DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
-    JoinClusterError as RustJoinClusterError,
+    JoinClusterError as RustJoinClusterError, PoseStreamResource as RustPoseStreamResource,
     ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
     ResourcePinholeIntrinsics as RustResourcePinholeIntrinsics, ResourceQuat as RustResourceQuat,
     ResourceSpatialTransform as RustResourceSpatialTransform, ResourceVec3 as RustResourceVec3,
@@ -39,6 +39,7 @@ use auki_network::stream_protocol::{
     CameraFrame as RustCameraFrame, StreamManifest as RustStreamManifest,
     StreamRequest as RustStreamRequest, audio::Data as RustAudioFrame,
     joint_encoders::Data as RustJointEncodersFrame, point_cloud::Data as RustPointCloudFrame,
+    pose::SpatialTransform as RustPoseSpatialTransform,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
@@ -63,30 +64,42 @@ enum GenericStreamPayloadKind {
     PointCloud,
     JointEncoders,
     Audio,
+    Pose,
 }
 
 fn resolve_generic_stream_payload_kind(
     resources: &[RustResourceEntry],
-    sensor_id: &str,
+    stream_id: &str,
 ) -> Result<GenericStreamPayloadKind, PyErr> {
-    let Some(resource) = resources.iter().find_map(|resource| match resource {
-        RustResourceEntry::SensorStream(stream) if stream.sensor_id == sensor_id => Some(stream),
-        _ => None,
-    }) else {
-        return Err(PyFileNotFoundError::new_err(format!(
-            "sensor stream {sensor_id:?} not found in remote resource catalog"
-        )));
-    };
+    for resource in resources {
+        match resource {
+            RustResourceEntry::SensorStream(stream) if stream.sensor_id == stream_id => {
+                return generic_stream_payload_kind_for_sensor_resource(stream).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "sensor stream {stream_id:?} advertises unsupported payload {:?} for sensor kind {:?}",
+                        stream.payload, stream.sensor_kind
+                    ))
+                });
+            }
+            RustResourceEntry::PoseStream(stream) if stream.id == stream_id => {
+                if stream.payload == "spatial_transform" {
+                    return Ok(GenericStreamPayloadKind::Pose);
+                }
+                return Err(PyValueError::new_err(format!(
+                    "pose stream {:?} advertises unsupported payload {:?}",
+                    stream.id, stream.payload
+                )));
+            }
+            _ => {}
+        }
+    }
 
-    generic_stream_payload_kind_for_resource(resource).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "sensor stream {sensor_id:?} advertises unsupported payload {:?} for sensor kind {:?}",
-            resource.payload, resource.sensor_kind
-        ))
-    })
+    Err(PyFileNotFoundError::new_err(format!(
+        "stream {stream_id:?} not found in remote resource catalog"
+    )))
 }
 
-fn generic_stream_payload_kind_for_resource(
+fn generic_stream_payload_kind_for_sensor_resource(
     resource: &RustSensorStreamResource,
 ) -> Option<GenericStreamPayloadKind> {
     match resource.payload.as_str() {
@@ -986,9 +999,180 @@ impl PyTransformEdgeResource {
     }
 }
 
+/// Live movable pose stream resource row from `/auki/resources/0.0.1`.
+#[pyclass(name = "PoseStreamResource")]
+#[derive(Clone)]
+pub struct PyPoseStreamResource {
+    inner: RustPoseStreamResource,
+}
+
+#[pymethods]
+impl PyPoseStreamResource {
+    #[new]
+    #[pyo3(signature = (
+        id,
+        from_frame_id,
+        from_frame_hash,
+        to_frame_id,
+        to_frame_hash,
+        clock_id,
+        clock_hash,
+        stream_protocol,
+        payload,
+        writer_mode,
+        expected_rate_hz,
+        source_json = None,
+        from_frame_entry_json = None,
+        to_frame_entry_json = None,
+        clock_entry_json = None
+    ))]
+    fn new(
+        id: String,
+        from_frame_id: String,
+        from_frame_hash: String,
+        to_frame_id: String,
+        to_frame_hash: String,
+        clock_id: String,
+        clock_hash: String,
+        stream_protocol: String,
+        payload: String,
+        writer_mode: String,
+        expected_rate_hz: u32,
+        source_json: Option<String>,
+        from_frame_entry_json: Option<String>,
+        to_frame_entry_json: Option<String>,
+        clock_entry_json: Option<String>,
+    ) -> PyResult<Self> {
+        let source = match source_json {
+            Some(json) => Some(serde_json::from_str(&json).map_err(|e| {
+                PyValueError::new_err(format!("source_json must be valid JSON: {e}"))
+            })?),
+            None => None,
+        };
+        Ok(Self {
+            inner: RustPoseStreamResource {
+                id,
+                from_frame_id,
+                from_frame_hash,
+                to_frame_id,
+                to_frame_hash,
+                clock_id,
+                clock_hash,
+                stream_protocol,
+                payload,
+                writer_mode,
+                expected_rate_hz,
+                source,
+                from_frame_entry_json,
+                to_frame_entry_json,
+                clock_entry_json,
+            },
+        })
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        "pose_stream"
+    }
+
+    #[getter]
+    fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+
+    #[getter]
+    fn from_frame_id(&self) -> String {
+        self.inner.from_frame_id.clone()
+    }
+
+    #[getter]
+    fn from_frame_hash(&self) -> String {
+        self.inner.from_frame_hash.clone()
+    }
+
+    #[getter]
+    fn to_frame_id(&self) -> String {
+        self.inner.to_frame_id.clone()
+    }
+
+    #[getter]
+    fn to_frame_hash(&self) -> String {
+        self.inner.to_frame_hash.clone()
+    }
+
+    #[getter]
+    fn clock_id(&self) -> String {
+        self.inner.clock_id.clone()
+    }
+
+    #[getter]
+    fn clock_hash(&self) -> String {
+        self.inner.clock_hash.clone()
+    }
+
+    #[getter]
+    fn stream_protocol(&self) -> String {
+        self.inner.stream_protocol.clone()
+    }
+
+    #[getter]
+    fn payload(&self) -> String {
+        self.inner.payload.clone()
+    }
+
+    #[getter]
+    fn writer_mode(&self) -> String {
+        self.inner.writer_mode.clone()
+    }
+
+    #[getter]
+    fn expected_rate_hz(&self) -> u32 {
+        self.inner.expected_rate_hz
+    }
+
+    #[getter]
+    fn source_json(&self) -> Option<String> {
+        self.inner
+            .source
+            .as_ref()
+            .map(|value| serde_json::to_string(value).expect("serde_json::Value serializes"))
+    }
+
+    #[getter]
+    fn from_frame_entry_json(&self) -> Option<String> {
+        self.inner.from_frame_entry_json.clone()
+    }
+
+    #[getter]
+    fn to_frame_entry_json(&self) -> Option<String> {
+        self.inner.to_frame_entry_json.clone()
+    }
+
+    #[getter]
+    fn clock_entry_json(&self) -> Option<String> {
+        self.inner.clock_entry_json.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "PoseStreamResource(id={:?}, from_frame_id={:?}, to_frame_id={:?}, clock_id={:?}, payload={:?}, writer_mode={:?})",
+            self.inner.id,
+            self.inner.from_frame_id,
+            self.inner.to_frame_id,
+            self.inner.clock_id,
+            self.inner.payload,
+            self.inner.writer_mode
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 /// Adapter: wraps a Python callable returning a list containing
-/// `SensorStreamResource` and/or `TransformEdgeResource` objects in a
-/// Rust `ResourceCatalogProvider`.
+/// `SensorStreamResource`, `TransformEdgeResource`, and/or
+/// `PoseStreamResource` objects in a Rust `ResourceCatalogProvider`.
 struct PyResourceCatalogProvider {
     callable: Py<PyAny>,
 }
@@ -1015,7 +1199,7 @@ impl RustResourceCatalogProvider for PyResourceCatalogProvider {
 fn extract_resource_entries(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustResourceEntry>> {
     let iter = obj.iter().map_err(|_| {
         PyTypeError::new_err(
-            "resource catalog provider must return an iterable of SensorStreamResource or TransformEdgeResource",
+            "resource catalog provider must return an iterable of SensorStreamResource, TransformEdgeResource, or PoseStreamResource",
         )
     })?;
     let mut resources = Vec::new();
@@ -1029,8 +1213,12 @@ fn extract_resource_entries(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustResource
             resources.push(RustResourceEntry::TransformEdge(edge.inner.clone()));
             continue;
         }
+        if let Ok(pose) = item.extract::<PyRef<'_, PyPoseStreamResource>>() {
+            resources.push(RustResourceEntry::PoseStream(pose.inner.clone()));
+            continue;
+        }
         return Err(PyTypeError::new_err(
-            "resource catalog provider returned an item that is not SensorStreamResource or TransformEdgeResource",
+            "resource catalog provider returned an item that is not SensorStreamResource, TransformEdgeResource, or PoseStreamResource",
         ));
     }
     Ok(resources)
@@ -1044,9 +1232,9 @@ fn resource_entry_to_py(py: Python<'_>, entry: RustResourceEntry) -> PyResult<Py
         RustResourceEntry::TransformEdge(inner) => {
             Ok(Py::new(py, PyTransformEdgeResource { inner })?.into_py(py))
         }
-        RustResourceEntry::PoseStream(_) => Err(PyTypeError::new_err(
-            "PoseStreamResource is not exposed by auki-domain-py yet",
-        )),
+        RustResourceEntry::PoseStream(inner) => {
+            Ok(Py::new(py, PyPoseStreamResource { inner })?.into_py(py))
+        }
     }
 }
 
@@ -1682,15 +1870,38 @@ impl PyClusterManager {
         })
     }
 
-    /// Open a stream subscription on `peer_id` for `sensor_id` without
-    /// requiring the Python caller to choose a payload-specific opener.
+    /// Open a live pose stream subscription on `peer_id` for
+    /// `resource_id`. Returns a `StreamSubscription` whose `.entries()`
+    /// iterator yields `StreamEntry(payload=SpatialTransformFrame(...))`.
+    fn open_pose_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        resource_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream_with_request::<RustPoseSpatialTransform>(
+            py,
+            peer_id,
+            RustStreamRequest {
+                resource_id: resource_id.to_string(),
+                ..Default::default()
+            },
+            |sub| PyStreamSubscription::from_rust_pose(sub),
+        )
+    }
+
+    /// Open a stream subscription on `peer_id` for `sensor_id` /
+    /// `resource_id` without requiring the Python caller to choose a
+    /// payload-specific opener.
     ///
     /// The SDK fetches the peer's resource catalog, resolves the
-    /// matching `sensor_stream` row to the advertised stream payload,
+    /// matching `sensor_stream` or `pose_stream` row to the advertised
+    /// stream payload,
     /// then delegates internally to the typed Rust subscription. The
     /// returned `StreamSubscription.entries()` iterator still yields the
     /// existing typed payload pyclasses (`CameraFrame`,
-    /// `PointCloudFrame`, `JointEncodersFrame`, or `AudioFrame`).
+    /// `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, or
+    /// `SpatialTransformFrame`).
     fn open_stream(
         &self,
         py: Python<'_>,
@@ -1717,6 +1928,7 @@ impl PyClusterManager {
                     PyStreamSubscription::from_rust_audio(sub)
                 })
             }
+            GenericStreamPayloadKind::Pose => self.open_pose_stream(py, peer_id, sensor_id),
         }
     }
 
@@ -1772,9 +1984,9 @@ impl PyClusterManager {
     /// Register (or replace) the application-supplied resource
     /// catalog provider. `callable` must be a zero-argument Python
     /// callable returning a list containing `SensorStreamResource`
-    /// and/or `TransformEdgeResource` objects. Called by the SDK once
-    /// per inbound `/auki/resources/0.0.1` request from a cluster
-    /// peer.
+    /// and/or `TransformEdgeResource` and/or `PoseStreamResource`
+    /// objects. Called by the SDK once per inbound
+    /// `/auki/resources/0.0.1` request from a cluster peer.
     fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PyResourceCatalogProvider { callable });
         self.with_inner(|m| {
@@ -1841,15 +2053,17 @@ impl PyClusterManager {
 
     /// Fetch a cluster peer's current resource catalog over
     /// `/auki/resources/0.0.1`. Returns a Python list containing
-    /// `SensorStreamResource` and/or `TransformEdgeResource` objects.
+    /// `SensorStreamResource`, `TransformEdgeResource`, and/or
+    /// `PoseStreamResource` objects.
     ///
     /// `kinds` can filter by open-string kind, e.g.
-    /// `["sensor_stream"]` or `["transform_edge"]`.
+    /// `["sensor_stream"]`, `["transform_edge"]`, or `["pose_stream"]`.
     #[pyo3(signature = (
         peer_id,
         kinds = None,
         include_sensor_entries = false,
-        include_frame_entries = false
+        include_frame_entries = false,
+        include_clock_entries = false
     ))]
     fn fetch_resources_catalog(
         &self,
@@ -1858,6 +2072,7 @@ impl PyClusterManager {
         kinds: Option<Vec<String>>,
         include_sensor_entries: bool,
         include_frame_entries: bool,
+        include_clock_entries: bool,
     ) -> PyResult<Vec<PyObject>> {
         let peer_id_parsed = parse_peer_id(peer_id)?;
         let inner = self.inner.clone();
@@ -1874,7 +2089,7 @@ impl PyClusterManager {
                             kinds: kinds.unwrap_or_default(),
                             include_sensor_entries,
                             include_frame_entries,
-                            include_clock_entries: false,
+                            include_clock_entries,
                         },
                     )
                     .await
@@ -2026,11 +2241,32 @@ impl PyClusterManager {
     where
         T: prost::Message + Default + Send + 'static,
     {
+        self.open_typed_stream_with_request(
+            py,
+            peer_id,
+            RustStreamRequest {
+                sensor_id: sensor_id.to_string(),
+                ..Default::default()
+            },
+            to_py_sub,
+        )
+    }
+
+    fn open_typed_stream_with_request<T>(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        request: RustStreamRequest,
+        to_py_sub: impl FnOnce(
+            auki_network::stream_runtime::StreamSubscription<T>,
+        ) -> PyStreamSubscription
+        + Send
+        + 'static,
+    ) -> PyResult<PyStreamSubscription>
+    where
+        T: prost::Message + Default + Send + 'static,
+    {
         let peer_id_parsed = parse_peer_id(peer_id)?;
-        let request = RustStreamRequest {
-            sensor_id: sensor_id.to_string(),
-            ..Default::default()
-        };
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
@@ -2065,7 +2301,12 @@ impl PyClusterManager {
                 let resp = manager
                     .fetch_resources_catalog_with(
                         peer_id_parsed,
-                        RustResourcesRequest::sensor_streams(),
+                        RustResourcesRequest {
+                            kinds: vec!["sensor_stream".into(), "pose_stream".into()],
+                            include_sensor_entries: false,
+                            include_frame_entries: false,
+                            include_clock_entries: false,
+                        },
                     )
                     .await
                     .map_err(map_fetch_resources_catalog_error)?;
@@ -2300,6 +2541,7 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyResourceSpatialTransform>()?;
     m.add_class::<PySensorStreamResource>()?;
     m.add_class::<PyTransformEdgeResource>()?;
+    m.add_class::<PyPoseStreamResource>()?;
     m.add_class::<PyStreamManifestBuilder>()?;
     m.add_class::<PyClusterTarget>()?;
     m.add_class::<PyClusterManager>()?;
@@ -2362,6 +2604,14 @@ mod tests {
             assert!(module.getattr("ResourceSpatialTransform").is_ok());
             assert!(module.getattr("SensorStreamResource").is_ok());
             assert!(module.getattr("TransformEdgeResource").is_ok());
+            assert!(module.getattr("PoseStreamResource").is_ok());
+            assert!(
+                module
+                    .getattr("ClusterManager")
+                    .unwrap()
+                    .getattr("open_pose_stream")
+                    .is_ok()
+            );
         });
     }
 
@@ -2416,6 +2666,36 @@ mod tests {
             resolve_generic_stream_payload_kind(&resources, "K1-AABBCCDDEEFF/head_array_4mic")
                 .unwrap(),
             GenericStreamPayloadKind::Audio
+        );
+    }
+
+    #[test]
+    fn generic_stream_resolver_uses_pose_stream_resource_metadata() {
+        let resources = vec![RustResourceEntry::PoseStream(RustPoseStreamResource {
+            id: "K1/base_link->K1/head_left_rgb_optical".into(),
+            from_frame_id: "K1/base_link".into(),
+            from_frame_hash: "basehash".into(),
+            to_frame_id: "K1/head_left_rgb_optical".into(),
+            to_frame_hash: "headhash".into(),
+            clock_id: "K1/monotonic".into(),
+            clock_hash: "clockhash".into(),
+            stream_protocol: "/auki/stream/0.1.0".into(),
+            payload: "spatial_transform".into(),
+            writer_mode: "movable".into(),
+            expected_rate_hz: 30,
+            source: None,
+            from_frame_entry_json: None,
+            to_frame_entry_json: None,
+            clock_entry_json: None,
+        })];
+
+        assert_eq!(
+            resolve_generic_stream_payload_kind(
+                &resources,
+                "K1/base_link->K1/head_left_rgb_optical",
+            )
+            .unwrap(),
+            GenericStreamPayloadKind::Pose
         );
     }
 

@@ -27,9 +27,11 @@ def test_module_imports_current_surface() -> None:
     assert hasattr(auki_domain, "ResourceSpatialTransform")
     assert hasattr(auki_domain, "SensorStreamResource")
     assert hasattr(auki_domain, "TransformEdgeResource")
+    assert hasattr(auki_domain, "PoseStreamResource")
     assert hasattr(auki_domain, "StreamManifestBuilder")
     assert hasattr(auki_domain, "ClusterTarget")
     assert hasattr(auki_domain, "ClusterManager")
+    assert hasattr(auki_domain.ClusterManager, "open_pose_stream")
 
 
 def test_cluster_target_factories() -> None:
@@ -116,3 +118,22 @@ def test_resource_value_types() -> None:
     assert edge.kind == "transform_edge"
     assert edge.transform == transform
     assert edge.source_json == '{"kind":"ros2_tf"}'
+
+    pose = auki_domain.PoseStreamResource(
+        id="K1/base_link->K1/head_left_rgb_optical",
+        from_frame_id="K1/base_link",
+        from_frame_hash="basehash",
+        to_frame_id="K1/head_left_rgb_optical",
+        to_frame_hash="headhash",
+        clock_id="K1/monotonic",
+        clock_hash="clockhash",
+        stream_protocol="/auki/stream/0.1.0",
+        payload="spatial_transform",
+        writer_mode="movable",
+        expected_rate_hz=30,
+    )
+
+    assert pose.kind == "pose_stream"
+    assert pose.payload == "spatial_transform"
+    assert pose.from_frame_id == "K1/base_link"
+    assert pose.to_frame_id == "K1/head_left_rgb_optical"

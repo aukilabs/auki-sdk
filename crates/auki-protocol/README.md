@@ -19,6 +19,7 @@ runtime, Discovery client, or app-specific lifecycle facade.
 - `v1::json` — strict JSON object parsing with duplicate member rejection.
 - `v1::error` — stable v1 failure-code constants.
 - `vectors/v1_json_frames.json` — locked v1 JSON frame examples for cross-language conformance.
+- `vectors/v1_signed_objects.json` — locked signed-object examples and negative vectors.
 
 ## Depends on
 

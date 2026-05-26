@@ -7,6 +7,7 @@ members = [
     "crates/auki-identity",
     "bindings/python/auki-identity-py",
     "crates/auki-jcs",
+    "crates/auki-protocol",
     "crates/auki-logs",
     "bindings/python/auki-logs-py",
     "crates/auki-manifests",

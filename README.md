@@ -33,8 +33,8 @@ The Auki protocol is built around five questions any node should be able to answ
 - **RFC-first networking path** — `auki-protocol` owns the pure v1 protocol
   types and `auki-p2p` is the new clean libp2p runtime for configured peers,
   lifecycle authorization, offer loading, Get/Subscribe, local Get providers,
-  and status snapshots. It is intentionally separate from the shipped
-  `auki-network` / `ClusterManager` path while it matures.
+  local Subscribe providers, and status snapshots. It is intentionally separate
+  from the shipped `auki-network` / `ClusterManager` path while it matures.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics
@@ -61,7 +61,7 @@ Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
 | [`auki-network`](crates/auki-network) | libp2p substrate, typed streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
 | [`auki-protocol`](crates/auki-protocol) | RFC-first v1 protocol types, frames, signed authority objects, lifecycle, offers, Get, Subscribe, status | WIP (v0.0.0) |
-| [`auki-p2p`](crates/auki-p2p) | Clean RFC-first libp2p runtime with configured peers, lifecycle authorization, offer loading, Get/Subscribe, Get providers, status snapshots | WIP (v0.0.0) |
+| [`auki-p2p`](crates/auki-p2p) | Clean RFC-first libp2p runtime with configured peers, lifecycle authorization, offer loading, Get/Subscribe, Get and Subscribe providers, status snapshots | WIP (v0.0.0) |
 | [`auki-domain`](crates/auki-domain) | `ClusterManager` — app-facing cluster lifecycle facade with relay hint preservation | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |

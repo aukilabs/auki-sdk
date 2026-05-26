@@ -54,6 +54,10 @@ Current public surface:
 - `get_serving` accepts inbound `/auki/get/0.0.1` streams, decodes one Get
   request, writes one Get response, and lets `AukiNode` serve local offers
   through registered application providers without exposing raw frames.
+- `subscribe_serving` accepts inbound `/auki/subscribe/0.0.1` streams, decodes
+  one Subscribe request, writes accept/reject/data/end frames, and lets
+  `AukiNode` serve local subscriptions through registered application
+  providers without exposing raw frames.
 - `paths` defines high-level Get and Subscribe orchestration over loaded offers:
   request shaping, response validation, data-message validation, path status,
   and sequence-gap diagnostics before transport wiring.
@@ -72,3 +76,5 @@ Offer-catalog stream tests now cover one loopback catalog load into
 `AukiNode`'s remote offer cache after high-level lifecycle authorization.
 Get serving tests now cover a registered local provider responding to a remote
 `AukiNode::get(...)` over the RFC Get stream.
+Subscribe serving tests now cover a registered local provider accepting a remote
+`AukiNode::subscribe(...)`, sending a data message, and ending the stream.

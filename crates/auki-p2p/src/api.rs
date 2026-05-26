@@ -9,10 +9,13 @@ use crate::{
     OfferLoadContext, OfferLoadError, OfferLoadReport, PathClientError, PathContext,
     PathOrchestrationError, PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
     RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
-    RelationshipStatusOptions, SubscribeInput, accept_get_streams, accept_subscribe_data_frame,
-    build_relationship_status_snapshot, exchange_peer_handshake_strict, get_over_libp2p,
-    load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
-    subscribe_over_libp2p, validate_remote_handshake, write_get_response,
+    RelationshipStatusOptions, SubscribeInput, SubscribeServeError, accept_get_streams,
+    accept_subscribe_data_frame, accept_subscribe_streams, build_relationship_status_snapshot,
+    close_subscribe_stream, encode_subscribe_data_frame, exchange_peer_handshake_strict,
+    get_over_libp2p, load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
+    read_subscribe_request, subscribe_over_libp2p, validate_remote_handshake,
+    write_encoded_subscribe_frame, write_get_response, write_subscribe_end,
+    write_subscribe_start_result,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
@@ -28,6 +31,10 @@ use auki_protocol::v1::{
         OfferCatalogRequestError, OfferCatalogResponse, OfferCatalogResponseError,
     },
     status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
+    subscribe::{
+        SubscribeAccept, SubscribeEnd, SubscribeEndReason, SubscribeReject, SubscribeRequest,
+        SubscribeStartResult,
+    },
 };
 use futures::StreamExt as _;
 use libp2p::{Multiaddr, PeerId};
@@ -44,6 +51,8 @@ pub struct AukiNode {
     lifecycle_stream_guard: LifecycleStreamGuard,
     get_incoming: Option<libp2p_stream::IncomingStreams>,
     get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
+    subscribe_incoming: Option<libp2p_stream::IncomingStreams>,
+    subscribe_providers: BTreeMap<(String, String), Box<dyn AukiSubscribeProvider>>,
 }
 
 /// Local domain authority material registered with the high-level node.
@@ -61,6 +70,16 @@ pub struct LocalDomainRegistration {
 /// High-level accepted subscription handle.
 pub struct AukiSubscription {
     inner: Libp2pSubscription,
+}
+
+/// High-level accepted served subscription handle.
+pub struct AukiServedSubscription {
+    peer_id: PeerId,
+    request: SubscribeRequest,
+    accept: SubscribeAccept,
+    stream: libp2p::Stream,
+    max_message_bytes: Option<u64>,
+    ended: bool,
 }
 
 /// Application provider for one local Get offer.
@@ -93,6 +112,49 @@ pub struct ServedGet {
     pub success: bool,
     /// Stable failure code when a failed Get response was served.
     pub failure_code: Option<String>,
+}
+
+/// Application provider for one local Subscribe offer.
+pub trait AukiSubscribeProvider: Send {
+    /// Decide whether to accept one parsed Subscribe request.
+    fn accept(
+        &mut self,
+        request: &SubscribeRequest,
+        now: &str,
+    ) -> Result<AukiSubscribeProviderAccept, AukiSubscribeProviderError>;
+}
+
+/// Application Subscribe-provider accept metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AukiSubscribeProviderAccept {
+    /// Optional first sequence value for the accepted stream.
+    pub initial_sequence: Option<u64>,
+    /// Optional accept generation timestamp.
+    pub generated_at: Option<String>,
+    /// Optional non-authoritative metadata.
+    pub metadata: Option<Value>,
+}
+
+/// Application Subscribe-provider failure returned as a structured reject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AukiSubscribeProviderError {
+    /// Stable failure code to return to the requester.
+    pub code: String,
+}
+
+/// Result of serving one inbound Subscribe start stream.
+pub struct ServedSubscribe {
+    /// Requesting peer id.
+    pub peer_id: PeerId,
+    /// Requested domain id, when the request parsed.
+    pub domain_id: Option<String>,
+    /// Requested offer id, when the request parsed.
+    pub offer_id: Option<String>,
+    /// Whether a Subscribe accept was served.
+    pub accepted: bool,
+    /// Stable failure code when a reject was served.
+    pub failure_code: Option<String>,
+    subscription: Option<AukiServedSubscription>,
 }
 
 /// High-level remote offer-catalog load input. Callers do not pass protocol frames.
@@ -267,6 +329,10 @@ pub enum AukiNodeError {
     GetAccept(libp2p_stream::AlreadyRegistered),
     /// Inbound Get serving failed.
     GetServe(GetServeError),
+    /// Inbound Subscribe stream registration failed.
+    SubscribeAccept(libp2p_stream::AlreadyRegistered),
+    /// Inbound Subscribe serving failed.
+    SubscribeServe(SubscribeServeError),
     /// No loaded remote offers are available for the requested peer.
     RemoteOffersNotLoaded {
         /// Remote peer id.
@@ -378,6 +444,38 @@ impl AukiSubscription {
     }
 }
 
+impl AukiServedSubscription {
+    /// Requesting peer id.
+    pub fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    /// Served domain id.
+    pub fn domain_id(&self) -> &str {
+        &self.request.domain_id
+    }
+
+    /// Served offer id.
+    pub fn offer_id(&self) -> &str {
+        &self.request.offer_id
+    }
+
+    /// Selected payload type for this served stream.
+    pub fn payload_type(&self) -> &str {
+        &self.accept.payload.payload_type
+    }
+
+    /// Optional first sequence value advertised in the accept.
+    pub fn initial_sequence(&self) -> Option<u64> {
+        self.accept.initial_sequence
+    }
+
+    /// Effective message byte limit for this served stream.
+    pub fn max_message_bytes(&self) -> Option<u64> {
+        self.max_message_bytes
+    }
+}
+
 impl AukiGetProviderError {
     /// Create a provider failure with a stable response code.
     pub fn new(code: impl Into<String>) -> Self {
@@ -395,6 +493,54 @@ where
         now: &str,
     ) -> Result<SpatialMessage, AukiGetProviderError> {
         self(request, now)
+    }
+}
+
+impl AukiSubscribeProviderAccept {
+    /// Create default Subscribe-provider accept metadata.
+    pub fn new() -> Self {
+        Self {
+            initial_sequence: None,
+            generated_at: None,
+            metadata: None,
+        }
+    }
+}
+
+impl Default for AukiSubscribeProviderAccept {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AukiSubscribeProviderError {
+    /// Create a provider failure with a stable reject code.
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+impl<F> AukiSubscribeProvider for F
+where
+    F: FnMut(
+            &SubscribeRequest,
+            &str,
+        ) -> Result<AukiSubscribeProviderAccept, AukiSubscribeProviderError>
+        + Send,
+{
+    fn accept(
+        &mut self,
+        request: &SubscribeRequest,
+        now: &str,
+    ) -> Result<AukiSubscribeProviderAccept, AukiSubscribeProviderError> {
+        self(request, now)
+    }
+}
+
+impl ServedSubscribe {
+    /// Take the accepted served subscription handle, if the request was accepted.
+    pub fn into_subscription(mut self) -> Option<AukiServedSubscription> {
+        self.subscription.take()
     }
 }
 
@@ -509,6 +655,8 @@ impl AukiNode {
             lifecycle_stream_guard: LifecycleStreamGuard::default(),
             get_incoming: None,
             get_providers: BTreeMap::new(),
+            subscribe_incoming: None,
+            subscribe_providers: BTreeMap::new(),
         };
         for peer in this.node.configured_peers().to_vec() {
             this.relationship_mut(peer.peer_id).configured();
@@ -636,6 +784,33 @@ impl AukiNode {
         }
 
         self.get_providers
+            .insert((domain_id, offer_id), Box::new(provider));
+        Ok(())
+    }
+
+    /// Add or replace the local provider for a registered Subscribe offer.
+    pub fn upsert_subscribe_provider<P>(
+        &mut self,
+        domain_id: impl Into<String>,
+        offer_id: impl Into<String>,
+        provider: P,
+    ) -> Result<(), AukiNodeError>
+    where
+        P: AukiSubscribeProvider + 'static,
+    {
+        let domain_id = domain_id.into();
+        let offer_id = offer_id.into();
+        if !self
+            .local_offers
+            .contains_key(&(domain_id.clone(), offer_id.clone()))
+        {
+            return Err(AukiNodeError::LocalOfferNotRegistered {
+                domain_id,
+                offer_id,
+            });
+        }
+
+        self.subscribe_providers
             .insert((domain_id, offer_id), Box::new(provider));
         Ok(())
     }
@@ -886,6 +1061,161 @@ impl AukiNode {
         Ok(Some(served))
     }
 
+    /// Serve one inbound Subscribe start stream with a registered local provider.
+    pub async fn serve_next_subscribe(
+        &mut self,
+        now: &str,
+    ) -> Result<Option<ServedSubscribe>, AukiNodeError> {
+        self.ensure_subscribe_incoming()?;
+        let accepted = {
+            let node = &mut self.node;
+            let incoming = self
+                .subscribe_incoming
+                .as_mut()
+                .expect("subscribe incoming should be registered");
+            drive_node_until(node, incoming.next()).await
+        };
+        let Some((peer_id, mut stream)) = accepted else {
+            return Ok(None);
+        };
+
+        let max_body_len = self
+            .node
+            .config()
+            .p2p
+            .limits
+            .subscribe_message_frame_body_bytes;
+        let request = match drive_node_until(
+            &mut self.node,
+            read_subscribe_request(&mut stream, max_body_len),
+        )
+        .await
+        {
+            Ok(request) => request,
+            Err(SubscribeServeError::Request(error)) => {
+                let (start, served) =
+                    subscribe_reject_result(peer_id, None, None, error.failure_code());
+                drive_node_until(
+                    &mut self.node,
+                    write_subscribe_start_result(&mut stream, &start, max_body_len),
+                )
+                .await
+                .map_err(AukiNodeError::SubscribeServe)?;
+                drive_node_until(&mut self.node, close_subscribe_stream(&mut stream))
+                    .await
+                    .map_err(AukiNodeError::SubscribeServe)?;
+                return Ok(Some(served));
+            }
+            Err(error) => return Err(AukiNodeError::SubscribeServe(error)),
+        };
+
+        let start = self.local_subscribe_start(peer_id, &request, now);
+        drive_node_until(
+            &mut self.node,
+            write_subscribe_start_result(&mut stream, &start.response, max_body_len),
+        )
+        .await
+        .map_err(AukiNodeError::SubscribeServe)?;
+
+        let mut served = start.served;
+        if let Some(accepted) = start.accepted {
+            served.subscription = Some(AukiServedSubscription {
+                peer_id,
+                request,
+                accept: accepted.accept,
+                stream,
+                max_message_bytes: accepted.max_message_bytes,
+                ended: false,
+            });
+        } else {
+            drive_node_until(&mut self.node, close_subscribe_stream(&mut stream))
+                .await
+                .map_err(AukiNodeError::SubscribeServe)?;
+        }
+
+        Ok(Some(served))
+    }
+
+    /// Send one spatial message on an accepted served Subscribe stream.
+    pub async fn send_served_subscription_message(
+        &mut self,
+        subscription: &mut AukiServedSubscription,
+        message: &SpatialMessage,
+    ) -> Result<(), AukiNodeError> {
+        if subscription.ended {
+            return Err(AukiNodeError::SubscribeServe(
+                SubscribeServeError::AlreadyEnded,
+            ));
+        }
+
+        let max_body_len = self
+            .node
+            .config()
+            .p2p
+            .limits
+            .subscribe_message_frame_body_bytes;
+        let frame = encode_subscribe_data_frame(message, max_body_len)
+            .map_err(AukiNodeError::SubscribeServe)?;
+        subscription
+            .accept
+            .validate_data_message_with_body_len(
+                message,
+                frame.body_len(),
+                subscription.max_message_bytes,
+            )
+            .map_err(|error| AukiNodeError::SubscribeServe(SubscribeServeError::Data(error)))?;
+
+        drive_node_until(
+            &mut self.node,
+            write_encoded_subscribe_frame(&mut subscription.stream, &frame),
+        )
+        .await
+        .map_err(AukiNodeError::SubscribeServe)
+    }
+
+    /// End an accepted served Subscribe stream and close it.
+    pub async fn end_served_subscription(
+        &mut self,
+        mut subscription: AukiServedSubscription,
+        reason: SubscribeEndReason,
+        error_code: Option<String>,
+        retryable: Option<bool>,
+    ) -> Result<(), AukiNodeError> {
+        if subscription.ended {
+            return Err(AukiNodeError::SubscribeServe(
+                SubscribeServeError::AlreadyEnded,
+            ));
+        }
+
+        let error = error_code.map(ErrorObject::create);
+        let end = SubscribeEnd::create(
+            subscription.domain_id(),
+            subscription.offer_id(),
+            reason,
+            error,
+            retryable,
+            None,
+        )
+        .map_err(|error| AukiNodeError::SubscribeServe(SubscribeServeError::End(error)))?;
+        end.validate_for_offer(subscription.domain_id(), subscription.offer_id())
+            .map_err(|error| AukiNodeError::SubscribeServe(SubscribeServeError::End(error)))?;
+
+        let max_body_len = self
+            .node
+            .config()
+            .p2p
+            .limits
+            .subscribe_message_frame_body_bytes;
+        drive_node_until(
+            &mut self.node,
+            write_subscribe_end(&mut subscription.stream, &end, max_body_len),
+        )
+        .await
+        .map_err(AukiNodeError::SubscribeServe)?;
+        subscription.ended = true;
+        Ok(())
+    }
+
     /// Start one high-level Subscribe over the configured libp2p path.
     pub async fn subscribe(
         &mut self,
@@ -1031,6 +1361,17 @@ impl AukiNode {
         Ok(())
     }
 
+    fn ensure_subscribe_incoming(&mut self) -> Result<(), AukiNodeError> {
+        if self.subscribe_incoming.is_some() {
+            return Ok(());
+        }
+
+        let mut control = self.node.stream_control();
+        self.subscribe_incoming =
+            Some(accept_subscribe_streams(&mut control).map_err(AukiNodeError::SubscribeAccept)?);
+        Ok(())
+    }
+
     fn local_get_response(
         &mut self,
         peer_id: PeerId,
@@ -1106,6 +1447,130 @@ impl AukiNode {
                 failure_code: None,
             },
         )
+    }
+
+    fn local_subscribe_start(
+        &mut self,
+        peer_id: PeerId,
+        request: &SubscribeRequest,
+        now: &str,
+    ) -> LocalSubscribeStart {
+        let domain_id = request.domain_id.clone();
+        let offer_id = request.offer_id.clone();
+        let key = (domain_id.clone(), offer_id.clone());
+        let (payload, registry_refs, supports_subscribe) = match self.local_offers.get(&key) {
+            Some(offer) => (
+                offer.payload.clone(),
+                offer.registry_refs.clone(),
+                offer.access_modes.contains(&OfferAccessMode::Subscribe),
+            ),
+            None => {
+                return subscribe_reject_start(
+                    peer_id,
+                    Some(domain_id),
+                    Some(offer_id),
+                    error::OFFER_UNKNOWN_OFFER,
+                );
+            }
+        };
+
+        if !supports_subscribe {
+            return subscribe_reject_start(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_UNSUPPORTED_ACCESS_MODE,
+            );
+        }
+        if !request.accepts_payload_type(&payload.payload_type) {
+            return subscribe_reject_start(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_UNSUPPORTED_PAYLOAD_TYPE,
+            );
+        }
+
+        let Some(provider) = self.subscribe_providers.get_mut(&key) else {
+            return subscribe_reject_start(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_TEMPORARILY_UNAVAILABLE,
+            );
+        };
+        let provider_accept = match provider.accept(request, now) {
+            Ok(accept) => accept,
+            Err(error) => {
+                return subscribe_reject_start(
+                    peer_id,
+                    Some(domain_id),
+                    Some(offer_id),
+                    error.code,
+                );
+            }
+        };
+        let accept = match SubscribeAccept::create(
+            domain_id.clone(),
+            offer_id.clone(),
+            payload,
+            registry_refs,
+            provider_accept.initial_sequence,
+            provider_accept.generated_at,
+            provider_accept.metadata,
+        ) {
+            Ok(accept) => accept,
+            Err(error) => {
+                return subscribe_reject_start(
+                    peer_id,
+                    Some(domain_id),
+                    Some(offer_id),
+                    error.failure_code(),
+                );
+            }
+        };
+        if let Err(error) = accept.validate_for_request(request) {
+            return subscribe_reject_start(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error.failure_code(),
+            );
+        }
+
+        let max_message_bytes = Some(
+            request.max_message_bytes.map_or(
+                self.node
+                    .config()
+                    .p2p
+                    .limits
+                    .subscribe_message_frame_body_bytes,
+                |requested| {
+                    requested.min(
+                        self.node
+                            .config()
+                            .p2p
+                            .limits
+                            .subscribe_message_frame_body_bytes,
+                    )
+                },
+            ),
+        );
+        LocalSubscribeStart {
+            response: SubscribeStartResult::accept(accept.clone()),
+            served: ServedSubscribe {
+                peer_id,
+                domain_id: Some(domain_id),
+                offer_id: Some(offer_id),
+                accepted: true,
+                failure_code: None,
+                subscription: None,
+            },
+            accepted: Some(AcceptedSubscribeStart {
+                accept,
+                max_message_bytes,
+            }),
+        }
     }
 
     fn local_peer_handshake(&self) -> Result<PeerHandshake, AukiNodeError> {
@@ -1317,6 +1782,8 @@ impl fmt::Display for AukiNodeError {
             Self::HandshakePolicy(error) => write!(f, "{error}"),
             Self::GetAccept(error) => write!(f, "accept get streams: {error}"),
             Self::GetServe(error) => write!(f, "{error}"),
+            Self::SubscribeAccept(error) => write!(f, "accept subscribe streams: {error}"),
+            Self::SubscribeServe(error) => write!(f, "{error}"),
             Self::RemoteOffersNotLoaded { peer_id } => {
                 write!(f, "remote offers are not loaded for peer {peer_id}")
             }
@@ -1326,6 +1793,17 @@ impl fmt::Display for AukiNodeError {
 }
 
 impl std::error::Error for AukiNodeError {}
+
+struct LocalSubscribeStart {
+    response: SubscribeStartResult,
+    served: ServedSubscribe,
+    accepted: Option<AcceptedSubscribeStart>,
+}
+
+struct AcceptedSubscribeStart {
+    accept: SubscribeAccept,
+    max_message_bytes: Option<u64>,
+}
 
 fn get_failure_result(
     peer_id: PeerId,
@@ -1348,6 +1826,44 @@ fn get_failure_result(
 
 fn get_failure_response(code: impl Into<String>) -> GetResponse {
     GetResponse::failure(ErrorObject::create(code))
+}
+
+fn subscribe_reject_start(
+    peer_id: PeerId,
+    domain_id: Option<String>,
+    offer_id: Option<String>,
+    code: impl Into<String>,
+) -> LocalSubscribeStart {
+    let (response, served) = subscribe_reject_result(peer_id, domain_id, offer_id, code);
+    LocalSubscribeStart {
+        response,
+        served,
+        accepted: None,
+    }
+}
+
+fn subscribe_reject_result(
+    peer_id: PeerId,
+    domain_id: Option<String>,
+    offer_id: Option<String>,
+    code: impl Into<String>,
+) -> (SubscribeStartResult, ServedSubscribe) {
+    let code = code.into();
+    (
+        subscribe_reject_response(code.clone()),
+        ServedSubscribe {
+            peer_id,
+            domain_id,
+            offer_id,
+            accepted: false,
+            failure_code: Some(code),
+            subscription: None,
+        },
+    )
+}
+
+fn subscribe_reject_response(code: impl Into<String>) -> SubscribeStartResult {
+    SubscribeStartResult::reject(SubscribeReject::create(ErrorObject::create(code)))
 }
 
 fn relationship_loaded_offer(loaded: &LoadedRemoteOffer) -> RelationshipLoadedOffer {
@@ -1423,7 +1939,7 @@ mod tests {
         get::{GetRequest, GetResponse, GetResponseBody},
         message::{SPATIAL_MESSAGE_TYPE, SpatialMessage},
         offer::{OfferAccessMode, OfferStatus, PayloadDescriptor},
-        subscribe::{SubscribeAccept, SubscribeRequest},
+        subscribe::{SubscribeAccept, SubscribeEndReason, SubscribeRequest, SubscribeStartResult},
     };
     use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt};
     use serde_json::{Value, json};
@@ -1558,6 +2074,11 @@ mod tests {
             GetResponseBody::Error(error) => assert_eq!(error.code, expected_code),
             GetResponseBody::Message(_) => panic!("expected get failure"),
         }
+    }
+
+    fn assert_subscribe_reject(response: SubscribeStartResult, expected_code: &str) {
+        let reject = response.reject_body().expect("subscribe reject");
+        assert_eq!(reject.error.code, expected_code);
     }
 
     #[test]
@@ -2177,6 +2698,210 @@ mod tests {
         assert_get_failure(response, error::MESSAGE_INVALID_ENVELOPE);
         assert_eq!(
             served.failure_code.as_deref(),
+            Some(error::MESSAGE_INVALID_ENVELOPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_can_be_served_by_registered_provider() {
+        let listener_wallet = wallet(92);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[10; DOMAIN_NONCE_LEN],
+            Some("subscribe-provider"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(93), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        listener
+            .upsert_subscribe_provider(
+                domain_id.clone(),
+                "camera-main",
+                |_request: &SubscribeRequest, _now: &str| {
+                    Ok(AukiSubscribeProviderAccept {
+                        initial_sequence: Some(1),
+                        generated_at: Some(ISSUED_AT.to_owned()),
+                        metadata: None,
+                    })
+                },
+            )
+            .expect("subscribe provider");
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let served = listener
+                .serve_next_subscribe(ISSUED_AT)
+                .await
+                .expect("serve next subscribe")
+                .expect("served subscribe");
+            assert!(served.accepted);
+            assert_eq!(served.domain_id.as_deref(), Some(server_domain_id.as_str()));
+            assert_eq!(served.offer_id.as_deref(), Some("camera-main"));
+            let mut subscription = served.into_subscription().expect("accepted subscription");
+            assert_eq!(subscription.payload_type(), "auki.frame");
+            assert_eq!(subscription.initial_sequence(), Some(1));
+
+            let data = message(&server_domain_id, "camera-main", 1);
+            listener
+                .send_served_subscription_message(&mut subscription, &data)
+                .await
+                .expect("send subscription data");
+            listener
+                .end_served_subscription(subscription, SubscribeEndReason::Complete, None, None)
+                .await
+                .expect("end subscription");
+            served_tx.send(()).expect("send served subscribe");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = listener.next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let mut subscription = dialer
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscribe should start");
+        let data = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("subscription message");
+
+        served_rx.await.expect("served subscribe");
+        let _ = stop_tx.send(());
+        server.await.expect("server task");
+
+        assert_eq!(data.sequence, Some(1));
+        assert_eq!(subscription.last_sequence(), Some(1));
+        assert_eq!(subscription.sequence_gap_count(), 0);
+    }
+
+    #[test]
+    fn subscribe_provider_requires_registered_local_offer() {
+        let mut node =
+            AukiNode::new(identity(94), AukiP2pNodeConfig::dial_only_development()).unwrap();
+
+        let error = node
+            .upsert_subscribe_provider(
+                "missing-domain",
+                "camera-main",
+                |_request: &SubscribeRequest, _now: &str| {
+                    Err(AukiSubscribeProviderError::new(
+                        error::OFFER_TEMPORARILY_UNAVAILABLE,
+                    ))
+                },
+            )
+            .expect_err("provider should require local offer");
+
+        assert!(matches!(
+            error,
+            AukiNodeError::LocalOfferNotRegistered { domain_id, offer_id }
+                if domain_id == "missing-domain" && offer_id == "camera-main"
+        ));
+    }
+
+    #[test]
+    fn local_subscribe_start_returns_structured_provider_failures() {
+        let local_wallet = wallet(95);
+        let declaration = DomainDeclaration::create(
+            &local_wallet,
+            &[11; DOMAIN_NONCE_LEN],
+            Some("subscribe-failure"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut node = AukiNode::new(
+            identity_from_wallet(local_wallet),
+            AukiP2pNodeConfig::dial_only_development(),
+        )
+        .unwrap();
+        node.upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        node.upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        let request =
+            SubscribeRequest::create(domain_id.clone(), "camera-main", None, Vec::new(), None)
+                .expect("subscribe request");
+        let requester = identity(96).peer_id();
+
+        let start = node.local_subscribe_start(requester, &request, ISSUED_AT);
+        assert_subscribe_reject(start.response, error::OFFER_TEMPORARILY_UNAVAILABLE);
+        assert_eq!(
+            start.served.failure_code.as_deref(),
+            Some(error::OFFER_TEMPORARILY_UNAVAILABLE)
+        );
+
+        node.upsert_subscribe_provider(
+            domain_id.clone(),
+            "camera-main",
+            |_request: &SubscribeRequest, _now: &str| {
+                Err(AukiSubscribeProviderError::new("provider.busy"))
+            },
+        )
+        .expect("provider");
+        let start = node.local_subscribe_start(requester, &request, ISSUED_AT);
+        assert_subscribe_reject(start.response, "provider.busy");
+        assert_eq!(start.served.failure_code.as_deref(), Some("provider.busy"));
+
+        node.upsert_subscribe_provider(
+            domain_id.clone(),
+            "camera-main",
+            |_request: &SubscribeRequest, _now: &str| {
+                Ok(AukiSubscribeProviderAccept {
+                    initial_sequence: None,
+                    generated_at: None,
+                    metadata: Some(json!("not-object")),
+                })
+            },
+        )
+        .expect("provider");
+        let start = node.local_subscribe_start(requester, &request, ISSUED_AT);
+        assert_subscribe_reject(start.response, error::MESSAGE_INVALID_ENVELOPE);
+        assert_eq!(
+            start.served.failure_code.as_deref(),
             Some(error::MESSAGE_INVALID_ENVELOPE)
         );
     }

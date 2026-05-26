@@ -17,11 +17,14 @@ pub mod path_streams;
 pub mod paths;
 pub mod protocols;
 pub mod relationship;
+pub mod subscribe_serving;
 
 pub use api::{
     AukiGetProvider, AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent,
-    AukiSubscription, LifecycleDomainAccess, LifecycleInput, LocalDomainRegistration,
-    RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput, ServedGet,
+    AukiServedSubscription, AukiSubscribeProvider, AukiSubscribeProviderAccept,
+    AukiSubscribeProviderError, AukiSubscription, LifecycleDomainAccess, LifecycleInput,
+    LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
+    ServedGet, ServedSubscribe,
 };
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
@@ -66,4 +69,9 @@ pub use relationship::{
     RelationshipFailureScope, RelationshipLoadedOffer, RelationshipPathStatus,
     RelationshipRegistryReferenceStatus, RelationshipRejectedDomain, RelationshipStatusBuildError,
     RelationshipStatusOptions, build_relationship_status_snapshot,
+};
+pub use subscribe_serving::{
+    EncodedSubscribeFrame, SubscribeServeError, accept_subscribe_streams, close_subscribe_stream,
+    encode_subscribe_data_frame, read_subscribe_request, write_encoded_subscribe_frame,
+    write_subscribe_end, write_subscribe_start_result,
 };

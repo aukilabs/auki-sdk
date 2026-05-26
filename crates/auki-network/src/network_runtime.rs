@@ -567,6 +567,19 @@ pub enum UpdateError {
     RuntimeUnavailable,
 }
 
+/// Errors from reserving a relay-mediated listener through a running
+/// [`NetworkRuntime`].
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeRelayReservationError {
+    /// The runtime task isn't accepting commands — typically because
+    /// the runtime has shut down or is shutting down.
+    #[error("runtime shutting down")]
+    RuntimeUnavailable,
+    /// The underlying relay reservation failed.
+    #[error(transparent)]
+    Reservation(#[from] swarm::RelayReservationError),
+}
+
 /// Internal command from public methods to the driver task.
 enum RuntimeCmd {
     SetAllowedPeers {
@@ -576,6 +589,12 @@ enum RuntimeCmd {
     SetHeartbeatTargets {
         peers: Vec<PeerId>,
         ack: oneshot::Sender<Result<(), UpdateError>>,
+    },
+    ReserveRelayCircuitAddr {
+        relay_dial_multiaddr: Multiaddr,
+        relay_advertise_multiaddr: Multiaddr,
+        timeout: Duration,
+        ack: oneshot::Sender<Result<Multiaddr, RuntimeRelayReservationError>>,
     },
 }
 
@@ -673,6 +692,32 @@ impl NetworkRuntimeHandle {
             .await
             .map_err(|_| UpdateError::RuntimeUnavailable)?;
         ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
+    }
+
+    /// Reserve a Circuit Relay v2 listener through a relay from the
+    /// runtime-owned swarm and return the Manager circuit address to
+    /// publish. See
+    /// [`swarm::reserve_relay_circuit_addr_with_advertised_addr`] for
+    /// dial-vs-advertise semantics.
+    pub async fn reserve_relay_circuit_addr(
+        &self,
+        relay_dial_multiaddr: Multiaddr,
+        relay_advertise_multiaddr: Multiaddr,
+        timeout: Duration,
+    ) -> Result<Multiaddr, RuntimeRelayReservationError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.command_tx
+            .send(RuntimeCmd::ReserveRelayCircuitAddr {
+                relay_dial_multiaddr,
+                relay_advertise_multiaddr,
+                timeout,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| RuntimeRelayReservationError::RuntimeUnavailable)?;
+        ack_rx
+            .await
+            .map_err(|_| RuntimeRelayReservationError::RuntimeUnavailable)?
     }
 
     /// Same semantics as [`NetworkRuntime::connected_peers`].
@@ -1557,9 +1602,7 @@ impl StreamSubscriptionPointCloud {
 pub struct StreamSubscriptionJointEncoders {
     inner: tokio::sync::Mutex<
         Option<
-            crate::stream_runtime::StreamSubscription<
-                crate::stream_protocol::joint_encoders::Data,
-            >,
+            crate::stream_runtime::StreamSubscription<crate::stream_protocol::joint_encoders::Data>,
         >,
     >,
     manifest_bytes: Vec<u8>,
@@ -1650,9 +1693,7 @@ impl StreamSubscriptionDetection {
     /// Construct from an upstream typed subscription. Encodes the
     /// manifest once at construction.
     pub fn from_inner(
-        inner: crate::stream_runtime::StreamSubscription<
-            auki_datatypes::detection::DetectionFrame,
-        >,
+        inner: crate::stream_runtime::StreamSubscription<auki_datatypes::detection::DetectionFrame>,
     ) -> Arc<Self> {
         use prost::Message;
         let manifest_bytes = inner.manifest.encode_to_vec();
@@ -2154,7 +2195,7 @@ async fn run_task(
                     &liveness_tx,
                     &lifeline_rx,
                     &heartbeat_timestamps,
-                );
+                ).await;
             }
         }
     }
@@ -2232,7 +2273,7 @@ fn handle_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_command(
+async fn handle_command(
     cmd: RuntimeCmd,
     local_peer_id: PeerId,
     swarm: &mut Swarm<Behaviour>,
@@ -2281,6 +2322,22 @@ fn handle_command(
                 heartbeat_timestamps,
             );
             let _ = ack.send(Ok(()));
+        }
+        RuntimeCmd::ReserveRelayCircuitAddr {
+            relay_dial_multiaddr,
+            relay_advertise_multiaddr,
+            timeout,
+            ack,
+        } => {
+            let result = swarm::reserve_relay_circuit_addr_with_advertised_addr(
+                swarm,
+                relay_dial_multiaddr,
+                relay_advertise_multiaddr,
+                timeout,
+            )
+            .await
+            .map_err(RuntimeRelayReservationError::Reservation);
+            let _ = ack.send(result);
         }
     }
 }
@@ -3143,6 +3200,18 @@ mod tests {
         build_swarm(&identity, cfg).expect("build_swarm succeeds")
     }
 
+    async fn wait_for_test_listen_addr(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SwarmEvent::NewListenAddr { address, .. }) = swarm.next().await {
+                    return address;
+                }
+            }
+        })
+        .await
+        .expect("listen address did not appear within timeout")
+    }
+
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
@@ -3248,6 +3317,85 @@ mod tests {
 
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
+        rt.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_reserves_relay_circuit_addr_after_runtime_spawn() {
+        let relay_identity = PeerIdentity::from_seed(&[31u8; 32]);
+        let manager_identity = PeerIdentity::from_seed(&[32u8; 32]);
+
+        let mut relay_swarm = build_swarm(
+            &relay_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                agent_version: "relay/0".into(),
+                enable_relay_server: true,
+            },
+        )
+        .expect("relay swarm builds");
+        let relay_addr = wait_for_test_listen_addr(&mut relay_swarm).await;
+        relay_swarm.add_external_address(relay_addr.clone());
+        let relay_addr_with_peer =
+            relay_addr.with(libp2p::multiaddr::Protocol::P2p(relay_identity.peer_id()));
+        let advertised_relay_addr: Multiaddr = format!(
+            "/ip4/203.0.113.31/tcp/4002/ws/p2p/{}",
+            relay_identity.peer_id()
+        )
+        .parse()
+        .unwrap();
+        let expected = advertised_relay_addr
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(manager_identity.peer_id()));
+
+        let manager_swarm = build_swarm(
+            &manager_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                agent_version: "manager/0".into(),
+                enable_relay_server: false,
+            },
+        )
+        .expect("manager swarm builds");
+        let (
+            rt,
+            _join_events,
+            _liveness,
+            _membership_events,
+            _info_events,
+            _resources_events,
+            _sensors_events,
+            _registry_events,
+            _diagnostic_events,
+        ) = NetworkRuntime::spawn(
+            manager_swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .expect("spawn succeeds");
+        let handle = rt.handle();
+
+        let circuit_addr = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::select! {
+                reservation = handle.reserve_relay_circuit_addr(
+                    relay_addr_with_peer,
+                    advertised_relay_addr,
+                    Duration::from_secs(10),
+                ) => reservation,
+                _ = async {
+                    loop {
+                        let _ = relay_swarm.next().await;
+                    }
+                } => unreachable!("relay swarm stream ended"),
+            }
+        })
+        .await
+        .expect("runtime relay reservation timed out")
+        .expect("runtime relay reservation succeeds");
+
+        assert_eq!(circuit_addr, expected);
         rt.shutdown();
     }
 

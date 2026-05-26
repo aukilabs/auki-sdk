@@ -1,0 +1,236 @@
+{
+  "inputs": {
+    "delegate_peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+    "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+    "other_peer_id": "12D3KooWFU1bqozGMWdqN2Ckh2YHNbr9n5Lypw6uJrNkbm2ptVbF",
+    "verification_now": "2026-05-26T12:00:00Z"
+  },
+  "name": "auki.protocol.v1.handshake.vectors",
+  "negative": {
+    "duplicate_lifecycle_version": {
+      "expected": "handshake.invalid_message",
+      "object": {
+        "authorization_material": [
+          {
+            "expires_at": "2026-05-26T13:00:00Z",
+            "id": "fixture-auth",
+            "type": "local.fixture.authorization",
+            "value": {
+              "tier": "lab"
+            }
+          }
+        ],
+        "declared_domains": [
+          {
+            "delegation": {
+              "delegate_peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+              "delegate_wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+              "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+              "domain_owner_public_key": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+              "expires_at": "2026-05-26T13:00:00Z",
+              "label": "delegate-peer",
+              "scopes": [
+                "advertise",
+                "serve"
+              ],
+              "signature": "q0NrThvtd9Au0kDGAnpVYZWeELl7b_UNkOLQLQ596tYcfB9Wu4n8YYfctpjWDIh07vvnPcN7GXFMk76Jk3euAg",
+              "type": "auki.domain_delegation.v1",
+              "valid_from": "2026-05-26T11:00:00Z",
+              "wallet_signature_scheme": "ed25519"
+            },
+            "domain_declaration": {
+              "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+              "domain_owner_public_key": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+              "label": "warehouse-main",
+              "nonce": "BwcHBwcHBwcHBwcHBwcHBw",
+              "signature": "AVdKp8i53UP3ZJ5f9-3wWn2qfVh3NOdFom7SjJ_reqDg2x2m2pEMhWt9V67TLed90VS4Gwe_PcUb28YcOXnNAQ",
+              "type": "auki.domain_declaration.v1",
+              "wallet_signature_scheme": "ed25519"
+            },
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "metadata": {
+              "role": "producer"
+            }
+          }
+        ],
+        "diagnostics": {
+          "fixture": true
+        },
+        "metadata": {
+          "label": "delegate-peer"
+        },
+        "offer_catalog": {
+          "catalog_version": "auki.offer_catalog.v1",
+          "protocol_id": "/auki/offer-catalog/0.0.1",
+          "type": "auki.offer_catalog_path.v1"
+        },
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "auki.cluster_lifecycle.v1",
+          "auki.cluster_lifecycle.v1"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    },
+    "missing_delegation": {
+      "expected": "domain.missing_delegation",
+      "object": {
+        "declared_domains": [
+          {
+            "domain_declaration": {
+              "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+              "domain_owner_public_key": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+              "label": "warehouse-main",
+              "nonce": "BwcHBwcHBwcHBwcHBwcHBw",
+              "signature": "AVdKp8i53UP3ZJ5f9-3wWn2qfVh3NOdFom7SjJ_reqDg2x2m2pEMhWt9V67TLed90VS4Gwe_PcUb28YcOXnNAQ",
+              "type": "auki.domain_declaration.v1",
+              "wallet_signature_scheme": "ed25519"
+            },
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+          }
+        ],
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "auki.cluster_lifecycle.v1"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    },
+    "missing_required_lifecycle_version": {
+      "expected": "protocol.unsupported_version",
+      "object": {
+        "declared_domains": [],
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "future.lifecycle.v2"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    },
+    "wrong_authenticated_peer": {
+      "authenticated_peer_id": "12D3KooWFU1bqozGMWdqN2Ckh2YHNbr9n5Lypw6uJrNkbm2ptVbF",
+      "expected": "identity.peer_id_mismatch",
+      "object": {
+        "declared_domains": [],
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "auki.cluster_lifecycle.v1"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    }
+  },
+  "positive": {
+    "delegated_serving_peer": {
+      "expected": {
+        "accepted_served_domains": [
+          "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+        ],
+        "authority": "delegated",
+        "rejected_declared_domains": []
+      },
+      "object": {
+        "authorization_material": [
+          {
+            "expires_at": "2026-05-26T13:00:00Z",
+            "id": "fixture-auth",
+            "type": "local.fixture.authorization",
+            "value": {
+              "tier": "lab"
+            }
+          }
+        ],
+        "declared_domains": [
+          {
+            "delegation": {
+              "delegate_peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+              "delegate_wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+              "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+              "domain_owner_public_key": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+              "expires_at": "2026-05-26T13:00:00Z",
+              "label": "delegate-peer",
+              "scopes": [
+                "advertise",
+                "serve"
+              ],
+              "signature": "q0NrThvtd9Au0kDGAnpVYZWeELl7b_UNkOLQLQ596tYcfB9Wu4n8YYfctpjWDIh07vvnPcN7GXFMk76Jk3euAg",
+              "type": "auki.domain_delegation.v1",
+              "valid_from": "2026-05-26T11:00:00Z",
+              "wallet_signature_scheme": "ed25519"
+            },
+            "domain_declaration": {
+              "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+              "domain_owner_public_key": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+              "label": "warehouse-main",
+              "nonce": "BwcHBwcHBwcHBwcHBwcHBw",
+              "signature": "AVdKp8i53UP3ZJ5f9-3wWn2qfVh3NOdFom7SjJ_reqDg2x2m2pEMhWt9V67TLed90VS4Gwe_PcUb28YcOXnNAQ",
+              "type": "auki.domain_declaration.v1",
+              "wallet_signature_scheme": "ed25519"
+            },
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "metadata": {
+              "role": "producer"
+            }
+          }
+        ],
+        "diagnostics": {
+          "fixture": true
+        },
+        "metadata": {
+          "label": "delegate-peer"
+        },
+        "offer_catalog": {
+          "catalog_version": "auki.offer_catalog.v1",
+          "protocol_id": "/auki/offer-catalog/0.0.1",
+          "type": "auki.offer_catalog_path.v1"
+        },
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "auki.cluster_lifecycle.v1"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    }
+  },
+  "version": 1
+}

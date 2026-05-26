@@ -1,234 +1,179 @@
-# Data Products — peer discovery descriptors
+# Resources — peer discovery
 
-> **Status: WIP — working draft, not yet a committed spec.** Schemas, names,
-> and lifecycles in this document are subject to change. No code in the SDK
-> consumes or produces these structures yet.
+> **Status: v0 shipped.** The SDK ships peer-discovery descriptors through
+> [`/auki/resources/0.0.1`](crates/auki-network/src/resources_protocol.rs)
+> using the `ResourceEntry` enum (`SensorStream`, `TransformEdge`). The
+> earlier per-product proposal — `CameraLogProduct` and siblings — was
+> superseded; the historical sketch is preserved below the v0 section for
+> design context.
 
 ## Purpose
 
-A *data product* is one externally addressable thing a node can offer — a camera log, a point cloud log, a TimeTransform Log, a Pose Log, a Detection Log, or the live stream that could be materialized into the same shape later. Peers on the Auki network need to discover what data products a node holds: enough metadata to interpret the payload bytes, align timestamps with their own clock, locate the data in space, and decide whether to fetch.
+A *resource* is one externally addressable thing a peer can offer right now — a live sensor stream, a direct rigid transform edge between two frames, and (in time) recordings, pose streams, detection streams, and calibration resources. Peers on the Auki network need to discover what their cluster-mates can provide: enough metadata to interpret payload bytes, locate the data in space, align it with their own clock, and decide whether to fetch.
 
-This document drafts the **descriptor schema** — the serializable shape one peer sends to another to advertise a single data product. The wire transport (gossip, central registry, direct query, signing/trust) is a separate concern that depends on broader Auki Domain/Map architecture and is deliberately out of scope here.
-
-The descriptor's role: pack everything from the local registries + `LogManifest`/`StreamManifest` + log state that a peer would otherwise discover through multiple round-trips, so that one fetch resolves "what is this and how do I use it."
+This document describes the shipped `ResourceEntry` shape and where it falls short of the broader peer-discovery surface still being scoped.
 
 ---
 
-## `CameraLogProduct` — schema v1
+## Shipped: `ResourceEntry` over `/auki/resources/0.0.1`
 
-The first concrete descriptor, for an RGB camera sensor log. The shape generalizes — point clouds get a parallel `PointCloudLogProduct` with the same scaffolding minus camera-specific bits.
+A consumer opens `/auki/resources/0.0.1` against any cluster peer, sends a `ResourcesRequest`, and gets back a `ResourcesResponse { resources: Vec<ResourceEntry> }`. The wire shape is JSON, length-prefixed; full Rust types in [`crates/auki-network/src/resources_protocol.rs`](crates/auki-network/src/resources_protocol.rs).
+
+### `ResourcesRequest`
+
+```
+ResourcesRequest {
+  kinds:                  [string],   // open-string filter; [] = "every kind I produce"
+  include_sensor_entries: bool,       // embed canonical Sensor Registry JSON inline
+  include_frame_entries:  bool,       // embed canonical Frame Registry JSON inline
+}
+```
+
+The two `include_*` flags toggle eager-vs-lazy registry embedding. Default off — the consumer fetches registry entries through [`/auki/registries/0.0.1`](crates/auki-network) when it actually needs them. Turning them on collapses the round-trip when the consumer knows it will need every entry anyway (typical for browser-side viewers).
+
+### `ResourceEntry`
+
+A tagged enum (`"kind"` discriminator, open-string) with two v0 variants:
+
+```
+ResourceEntry { kind: "sensor_stream", ... } -> SensorStreamResource
+ResourceEntry { kind: "transform_edge", ... } -> TransformEdgeResource
+```
+
+Future variants (pose streams, recordings, detection streams, calibration resources) add new `kind` strings without changing the protocol version. Cross-language consumers that pre-date a variant simply skip rows with unknown kinds.
+
+### `SensorStreamResource` — live sensor stream over `/auki/stream/0.1.0`
+
+```
+SensorStreamResource {
+  id:                  string,   // resource id; defaults to sensor_id in v0
+  sensor_id:           string,
+  sensor_hash:         string,   // content-addressed Sensor Registry hash
+  sensor_kind:         string,   // "camera" / "point_cloud" / "joint_encoders" / "audio"
+                                 // (the SensorBody serde tag, carried through as open string)
+  stream_protocol:     string,   // "/auki/stream/0.1.0"
+  payload:             string,   // decoder hint; e.g. "auki.camera.CameraFrame"
+
+  // Optional live calibration. Producers that have a live calibration
+  // snapshot (e.g. ROS CameraInfo) advertise it here.
+  pinhole_intrinsics:  ResourcePinholeIntrinsics | null,
+
+  // Optional inline registry JSON — populated when the request set
+  // include_sensor_entries / include_frame_entries.
+  sensor_entry_json:   string | null,   // canonical JSON of the Sensor Registry entry
+  frame_entry_json:    string | null,   // canonical JSON of the camera's Frame Registry entry
+}
+```
+
+`ResourcePinholeIntrinsics` is the numeric `{ fx, fy, cx, cy }` projection matrix; full intrinsics + distortion model still live in the Sensor Registry entry referenced by `sensor_hash`.
+
+### `TransformEdgeResource` — direct rigid transform between two frames
+
+```
+TransformEdgeResource {
+  id:                    string,                    // conventionally "<from>-><to>"
+  from_frame_id:         string,
+  from_frame_hash:       string,
+  to_frame_id:           string,
+  to_frame_hash:         string,
+  writer_mode:           string,                    // "rigid" in v0; open string for future modes
+  source:                <PoseSource-shaped JSON>,  // optional provenance; mirrors auki-manifests' tagged shape
+  transform:             ResourceSpatialTransform,  // { translation: Vec3, orientation: Quat (Hamilton xyzw) }
+
+  // Optional inline registry JSON — populated when the request set
+  // include_frame_entries.
+  from_frame_entry_json: string | null,
+  to_frame_entry_json:   string | null,
+}
+```
+
+Pose Log semantics: the transform takes a point in `from_frame_id` into `to_frame_id`. `writer_mode: "rigid"` means stationary — one sample, no time series. The mutable / movable equivalent (a live pose stream) is a future resource kind.
+
+### Why this shape and not `CameraLogProduct`
+
+`CameraLogProduct` baked per-product-type descriptors with eager full registry embedding, coverage metadata, status (live/sealed/aborted), and time/spatial bridge menus. The shipped `ResourceEntry`:
+
+- **One envelope, many kinds.** Sensor streams, transform edges, and future kinds share one enum rather than a `*LogProduct` per payload type. Cross-language clients route by an open-string `kind` and ignore unknown rows.
+- **Live first.** v0 advertises what a peer can stream *now*. Recorded-log resources, with coverage and lifecycle, are a future variant — not the foundation.
+- **Lazy registry embedding.** Consumers opt into inline registry JSON; the default path is a small row + a `/auki/registries/0.0.1` round-trip when needed.
+- **No bridge menus.** Time-transform availability and frame-transform availability are first-class resources of their own (`transform_edge` ships in v0; pose streams + time-transform bridges will follow as new kinds). The producer doesn't pre-compute a Cartesian product of "this log × every clock × every pose chain" — the consumer composes the bridges it needs.
+
+---
+
+## Coverage gaps in v0
+
+The `ResourceEntry` set is intentionally narrow today. Live pose streams, recorded sensor logs, detection-resource rows, time-transform bridges, and calibration resources are all expected future variants — they extend the enum, not replace it. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
+
+The shipped Detection Log primitive (`Log<auki_datatypes::detection::DetectionFrame>` with `data` + `sensor_hash` + `type`, manifest built via `build_detection_log_manifest`) exists; what's missing is the `ResourceEntry` variant that advertises one. Same for Pose Logs (`Log<auki_datatypes::pose::SpatialTransform>` keyed per `(from, to)` frame pair) — the on-disk shape ships, the catalog row to discover them does not.
+
+---
+
+## Historical: `CameraLogProduct` — superseded proposal
+
+The pre-`ResourceEntry` design is kept here for context. **Do not implement against it; the shipped surface is the `ResourceEntry` enum above.**
+
+A *data product* was framed as one externally addressable recording a node had stored — a camera log, a point cloud log, a TimeTransform Log, a Pose Log, a Detection Log, or the live stream that could be materialized into the same shape later. The plan was one descriptor schema per product type:
 
 ```
 CameraLogProduct {
-  schema_version:  u32,                  // 1
-  app_id:          string,               // copied from LogManifest
-  session_id:      string,               // copied from LogManifest
-  log_id:          string,               // local fetch handle, not semantic identity
-  payload_type:    string,               // "auki.camera.CameraFrame"
+  schema_version:  u32,
+  app_id:          string,
+  session_id:      string,
+  log_id:          string,
+  payload_type:    string,                  // "auki.camera.CameraFrame"
 
-  // ── Sensor identity ─────────────────────────────────────────────
-  // Embedded by value (full registry entry, not just a hash reference)
-  // so the peer can interpret bytes without a follow-up registry fetch.
-  // The hash fields stay because they're cheap and let receivers cache.
   sensor_id:       string,
   sensor_hash:     string,
-  sensor_entry:    SensorRegistryEntry,
-                   // For RGB cameras carries:
-                   //   width, height, frame_rate_hz,
-                   //   pixel_format, color_space,
-                   //   intrinsics_model, distortion_model
-                   // Dynamic intrinsics, when present, live per-entry
-                   // in CameraFrame.dynamic_intrinsics.
+  sensor_entry:    SensorRegistryEntry,     // embedded by value
 
-  // ── Clock identity ──────────────────────────────────────────────
-  // The clock the log's framing timestamps are expressed in.
   clock_id:        string,
   clock_hash:      string,
-  clock_entry:     ClockRegistryEntry,
+  clock_entry:     ClockRegistryEntry,      // embedded by value
 
-  // ── Spatial frame identity ──────────────────────────────────────
-  // The Frame Registry entry for the sample convention
-  // (the camera optical frame for an RGB camera).
-  // The hash references a specific FrameRegistryEntry under
-  // <app_root>/registries/frames/<frame_id>/<hash>.json so a peer can
-  // resolve handedness / axes / units before consuming any pose data
-  // tagged with this frame.
   frame_id:        string,
   frame_hash:      string,
-  frame_entry:     FrameRegistryEntry,
-                   // Carries: handedness, axes (x/y/z directions),
-                   //          units. Tree structure (parent-child)
-                   //          lives in the Pose Log, not here.
+  frame_entry:     FrameRegistryEntry,      // embedded by value
 
-  // ── Time-alignment options ──────────────────────────────────────
-  // One entry per other clock this node tracks via a TimeTransform Log.
-  // Lets a peer pick a bridge clock and fetch the relevant log to
-  // convert this log's timestamps into their own clock space.
-  time_transforms: [TimeTransformAvailability],
+  time_transforms:  [TimeTransformAvailability],   // bridge menu, by clock
+  frame_transforms: [FrameTransformAvailability],  // bridge menu, by frame
 
-  // ── Spatial-alignment options ───────────────────────────────────
-  // One entry per pose chain available for `frame_id` (i.e. how this
-  // sensor's mounting frame relates to other frames over time).
-  frame_transforms: [FrameTransformAvailability],
-
-  // ── Log parameters (mirror log_manifest.json) ───────────────────
-  segment_duration_ns: i64,
-  retention_ns:        i64,              // 0 = unbounded
-
-  // ── Coverage (computed at scan time from segment files) ─────────
-  earliest_timestamp_ns: i64,            // first entry in OLDEST RETAINED segment
-  latest_timestamp_ns:   i64,            // last entry on disk
+  segment_duration_ns:   i64,
+  retention_ns:          i64,
+  earliest_timestamp_ns: i64,
+  latest_timestamp_ns:   i64,
   segment_count:         u32,
   total_bytes:           u64,
 
-  // ── Status ──────────────────────────────────────────────────────
-  status:           "live" | "sealed" | "aborted",
-  generated_at_ns:  i64,                 // wall-clock UTC ns when produced
+  status:               "live" | "sealed" | "aborted",
+  generated_at_ns:      i64,
 }
 ```
 
-### `TimeTransformAvailability`
+Sibling per-type descriptors (`PointCloudLogProduct`, `TimeTransformLogProduct`, …) would have followed the same shape minus camera-specific fields. The plan never landed — `ResourceEntry` collapsed the "one envelope, every payload" question and shipped first.
 
-```
-TimeTransformAvailability {
-  to_clock_id:           string,
-  to_clock_hash:         string,
-  to_clock_entry:        ClockRegistryEntry,    // embedded
-  log_handle:            string,                // identifier the peer uses to fetch the TimeTransform Log
-  earliest_timestamp_ns: i64,
-  latest_timestamp_ns:   i64,
-  status:                "live" | "sealed" | "aborted",
-}
-```
+### Schema details that did land
 
-### `FrameTransformAvailability`
+These pieces of the proposal made it into the shipped SDK, even though `CameraLogProduct` did not:
 
-```
-FrameTransformAvailability {
-  to_frame_id:           string,
-  to_frame_hash:         string,
-  to_frame_entry:        FrameRegistryEntry,    // embedded
-  log_handle:            string,                // e.g. "poselogs/<from_frame_id>__<to_frame_id>" — relative to <session_id>
-  earliest_timestamp_ns: i64,
-  latest_timestamp_ns:   i64,
-  status:                "live" | "sealed" | "aborted",
-}
-```
+- **`Camera` registry body** — `width`, `height`, `frame_rate_hz`, `pixel_format`, `color_space`, `intrinsics_model`, `distortion_model`, and an exact `frame_id` + `frame_hash` reference to the optical Frame Registry entry. Lives in `auki-registry::SensorBody::Camera`.
+- **`ClockMeta`** — `unit`, `monotonic`, `epoch`, `scope`. Lives in `auki-registry::ClockBody::{MonotonicClock, UtcClock}` (the variant carries the `monotonic` axis; `ClockMeta` carries the rest).
+- **`FrameRegistryEntry`** — `frame_id`, `handedness`, `axes` (per-axis direction map), `units`. Four preset constructors (`ros_body` / `ros_optical` / `opengl` / `unity`).
+- **`DetectionFrame`** — `data` (opaque per-detector bytes), `sensor_hash`, `type` (open-string discriminator). Detector identity lives in a `DetectorRegistryEntry` under `<app_root>/registries/detectors/<detector_id>/<hash>.json`, pinned from the Detection Log's manifest via `build_detection_log_manifest`.
+- **Pose Log capture** — `Log<auki_datatypes::pose::SpatialTransform>`, manifest built via `build_pose_log_manifest` with `(from_frame_id, from_frame_hash) + (to_frame_id, to_frame_hash) + PoseSource + PoseWriterMode + expected_rate_hz`. Path layout via `poselog_path`. `auki-geometry` ships convention-level conversion (`convert_pose_convention`); the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending.
 
-The Pose Log capture path uses `Log<auki_datatypes::pose::SpatialTransform>` with identity in `build_pose_log_manifest` (`from_frame_id/hash`, `to_frame_id/hash`, `PoseSource`, `PoseWriterMode`, `expected_rate_hz`) and pathing from `poselog_path`. There is no `PoseLogEntry` wrapper. `auki-geometry` ships convention-level helpers (`convert_pose_convention`, point/vector/direction conversion), while the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending. `FrameTransformAvailability` describes what is available; graph composition is the consumer's job today.
+### What didn't carry over
 
-Detection Logs use `Log<auki_datatypes::detection::DetectionFrame>`. The frame envelope is structured: `data` carries opaque detector-specific bytes (schema owned by the detector family, not the SDK), `sensor_hash` pins the source sensor's registry hash, and `type` is an open-string discriminator (`aruco`, `portal`, `esl`, `person`, ...). The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`. `detector_hash` resolves through the Detector Registry (`DetectorRegistryEntry`, stored at `<app_root>/registries/detectors/<detector_id>/<hash>.json`) the same way sensor / clock / frame hashes do.
+- **Coverage / lifecycle fields** (`earliest_timestamp_ns`, `latest_timestamp_ns`, `segment_count`, `total_bytes`, `status`) — `ResourceEntry` advertises live capability, not on-disk history. A future `RecordedSensorLog` variant will need its own coverage shape.
+- **`TimeTransformAvailability` / `FrameTransformAvailability` bridge menus** — the producer no longer pre-computes the Cartesian product. Consumers walk `transform_edge` rows (and future pose-stream rows) to compose the bridges they need.
+- **`log_id` per-recording handle** — `ResourceEntry` ids are resource-scoped (`sensor_id` for sensor streams, `<from>-><to>` for transform edges). Per-recording handles re-appear when recorded-log resources land.
 
 ---
 
-## What the peer gets in one fetch
+## Out of scope (for v0)
 
-- **Bytes** — full sensor identity (width, height, format, color space, intrinsics/distortion model) plus the payload type. Per-entry payload fields such as dynamic camera intrinsics stay in the payload stream/log itself.
-- **Time** — full clock identity for the log's timestamps.
-- **Space** — full frame identity (handedness, axes, units) for the sensor's mounting position.
-- **Time bridges** — a menu of TimeTransform Logs to align with the peer's own clock.
-- **Space bridges** — a menu of pose chains to align with the peer's own coordinate frame.
-- **Coverage** — what time range is on disk, how big.
-- **Lifecycle** — live, sealed, or aborted.
-
-Everything required to decide "do I want this, and how do I consume it" without further round-trips against the producing node's registry.
-
----
-
-## Coverage semantics
-
-- **Bounded** (`retention_ns > 0`): `earliest_timestamp_ns` reflects the *oldest retained* segment's first entry — older content has been evicted. Not the first-ever entry.
-- **Unbounded** (`retention_ns = 0`): nothing's been evicted; `earliest_timestamp_ns` is the absolute first.
-- **Live** captures: `latest_timestamp_ns` lags wall-clock by up to `segment_duration_ns` (last fsynced entry, not in-flight). `generated_at_ns` lets a peer reason about staleness.
-
-## Status
-
-| Value     | Meaning                                                                  |
-|-----------|--------------------------------------------------------------------------|
-| `live`    | Writer is still actively appending; descriptor is a snapshot.            |
-| `sealed`  | Writer closed cleanly; the recording is final.                           |
-| `aborted` | Writer crashed mid-recording (heuristic — see open questions).           |
-
----
-
-## Concrete example
-
-```json
-{
-  "schema_version": 1,
-  "app_id": "boosterapp",
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "log_id": "rec-456",
-  "payload_type": "auki.camera.CameraFrame",
-  "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-  "sensor_hash": "d798fa879c80a5b00cabc1ce47ca4f7a",
-  "sensor_entry": {
-    "type": "rgb_camera",
-    "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-    "width": 544, "height": 488, "frame_rate_hz": 20,
-    "pixel_format": "YUV_NV12", "color_space": "BT.709",
-    "intrinsics_model": "pinhole", "distortion_model": "plumb_bob",
-    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical"
-  },
-  "clock_id": "K1-AABBCCDDEEFF/utc",
-  "clock_hash": "89f84f4c2e09bef81d385b2af1d17e6c",
-  "clock_entry": {
-    "type": "utc_clock",
-    "clock_id": "K1-AABBCCDDEEFF/utc",
-    "unit": "milliseconds", "monotonic": false,
-    "epoch": "1970-01-01T00:00:00Z", "scope": "global"
-  },
-  "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
-  "frame_hash": "fd0dc3789e898b71b5e16ee122a81a44",
-  "frame_entry": {
-    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
-    "handedness": "right",
-    "axes": {"x": "right", "y": "down", "z": "forward"},
-    "units": "meters"
-  },
-  "time_transforms": [
-    {
-      "to_clock_id": "K1-AABBCCDDEEFF/monotonic",
-      "to_clock_hash": "1f2176888b1a6621315033f22659b9f3",
-      "to_clock_entry": {
-        "type": "monotonic_clock",
-        "clock_id": "K1-AABBCCDDEEFF/monotonic",
-        "unit": "milliseconds", "monotonic": true,
-        "epoch": null, "scope": "device-local"
-      },
-      "log_handle": "timetransform_logs/K1-AABBCCDDEEFF__utc__K1-AABBCCDDEEFF__monotonic",
-      "earliest_timestamp_ns": 1745000000000000000,
-      "latest_timestamp_ns":   1745000030000000000,
-      "status": "live"
-    }
-  ],
-  "frame_transforms": [],
-  "segment_duration_ns": 1000000000,
-  "retention_ns": 30000000000,
-  "earliest_timestamp_ns": 1745000000000000000,
-  "latest_timestamp_ns":   1745000030000000000,
-  "segment_count": 30,
-  "total_bytes": 1572864000,
-  "status": "live",
-  "generated_at_ns": 1745000030500000000
-}
-```
-
----
-
-## Open questions
-
-The Frame Registry shape question is resolved; Pose Log capture shape is resolved; graph-level `convert_pose` path finding and descriptor transport are still pending.
-
----
-
-## Out of scope (for v1)
-
-- **Wire transport** — gossip vs. Map-mediated central registry vs. direct query. Auki protocol decision.
-- **Trust / signing** — descriptor is just bytes; signing/authentication is a wrapper concern.
-- **Domain identity / Map endpoint** — the Domain context this node participates in.
-- **Connection info for fetching** — URL, peer ID, port. Depends on transport.
-- **Multi-product wrappers** (`NodeManifest { products: [...] }`) — a level up; needed eventually but distinct schema.
-- **Other product types** — `PointCloudLogProduct`, `TimeTransformLogProduct`, etc. Expected to be parallel to `CameraLogProduct` but designed once this one is locked.
-- **Raster / 2D frame conventions for image bytes** — see [#140](https://github.com/aukilabs/auki-sdk/issues/140). `frame_entry` here only describes the 3D optical frame; declaring the raster convention of the published bytes (mirrored vs. not, origin, axes) is a parallel concern that will likely extend the descriptor with a `raster_frame_entry`.
-- **Peer-level frame transform advertisement / scenegraph availability** — see [#141](https://github.com/aukilabs/auki-sdk/issues/141). `frame_transforms[]` here is the per-camera slice; #141 generalizes it to a peer-level advertisement of known transform edges and producer-derived output frames.
+- **Trust / signing** — the wire bytes are not signed yet. Wrapping discovery in a signed envelope is a separate concern.
+- **Domain identity / Map endpoint** — which Domain a peer participates in is a cluster-membership question, not a per-resource question.
+- **Recorded-log resources** — coverage, lifecycle, segment metadata. Future enum variant.
+- **Live pose-stream and detection-stream resources** — future enum variants; the on-disk shapes already exist, the catalog rows do not.
+- **Raster / 2D frame conventions for image bytes** — see [#140](https://github.com/aukilabs/auki-sdk/issues/140). `frame_entry_json` describes the 3D optical frame; the raster convention of the published bytes (mirrored vs. not, origin, axes) is a parallel concern.
+- **Peer-level frame-transform graph / scenegraph availability** — see [#141](https://github.com/aukilabs/auki-sdk/issues/141). The shipped `transform_edge` row is the per-edge slice; the peer-level view of all known edges + producer-derived output frames is future work.

@@ -5,9 +5,9 @@ use auki_protocol::v1::{
     frame::{self, FrameError},
     handshake::{HandshakeError, PeerHandshake},
 };
-use futures::{AsyncReadExt, AsyncWriteExt};
+use futures::{AsyncReadExt, AsyncWriteExt, FutureExt};
 use libp2p::PeerId;
-use std::{fmt, io};
+use std::{collections::HashSet, fmt, io};
 
 /// Result of a lifecycle handshake exchange over one libp2p stream.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +16,40 @@ pub struct LifecycleHandshakeExchange {
     pub authenticated_peer_id: PeerId,
     /// Remote handshake decoded from the stream.
     pub handshake: PeerHandshake,
+}
+
+/// Direction of a lifecycle stream from the local node's perspective.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleStreamDirection {
+    /// Local node opened the lifecycle stream.
+    Outbound,
+    /// Remote peer opened the lifecycle stream.
+    Inbound,
+}
+
+/// Tracks the one-lifecycle-stream-per-peer rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LifecycleStreamGuard {
+    in_progress: HashSet<PeerId>,
+    completed: HashSet<PeerId>,
+}
+
+/// Duplicate lifecycle stream policy error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleStreamGuardError {
+    /// Peer that attempted a duplicate lifecycle stream.
+    pub peer_id: PeerId,
+    /// Direction of the rejected stream.
+    pub direction: LifecycleStreamDirection,
+}
+
+/// Errors produced while opening a guarded outbound lifecycle stream.
+#[derive(Debug)]
+pub enum LifecycleOpenStreamError {
+    /// Local lifecycle stream policy rejected the stream.
+    Guard(LifecycleStreamGuardError),
+    /// libp2p failed to open the stream.
+    Open(libp2p_stream::OpenStreamError),
 }
 
 /// Errors produced while exchanging lifecycle handshake frames.
@@ -27,6 +61,8 @@ pub enum LifecycleProtocolError {
     Frame(FrameError),
     /// Decoded frame was not a valid peer handshake.
     Handshake(HandshakeError),
+    /// Extra data was observed after the one allowed lifecycle handshake frame.
+    ExtraFrame,
 }
 
 /// Build the local peer-handshake body for this identity.
@@ -49,6 +85,24 @@ pub async fn open_lifecycle_stream(
     control
         .open_stream(peer_id, cluster_lifecycle_protocol())
         .await
+}
+
+/// Open an outbound lifecycle stream after applying the single-stream guard.
+pub async fn open_lifecycle_stream_once(
+    control: &mut libp2p_stream::Control,
+    guard: &mut LifecycleStreamGuard,
+    peer_id: PeerId,
+) -> Result<libp2p::Stream, LifecycleOpenStreamError> {
+    guard
+        .begin(peer_id, LifecycleStreamDirection::Outbound)
+        .map_err(LifecycleOpenStreamError::Guard)?;
+    match open_lifecycle_stream(control, peer_id).await {
+        Ok(stream) => Ok(stream),
+        Err(error) => {
+            guard.fail(peer_id);
+            Err(LifecycleOpenStreamError::Open(error))
+        }
+    }
 }
 
 /// Write one peer-handshake JSON frame.
@@ -81,6 +135,19 @@ where
     PeerHandshake::from_value(value).map_err(LifecycleProtocolError::Handshake)
 }
 
+/// Read one peer-handshake frame and reject immediately buffered extra data.
+pub async fn read_peer_handshake_strict<S>(
+    stream: &mut S,
+    max_body_len: u64,
+) -> Result<PeerHandshake, LifecycleProtocolError>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let handshake = read_peer_handshake(stream, max_body_len).await?;
+    reject_immediate_extra_lifecycle_data(stream).await?;
+    Ok(handshake)
+}
+
 /// Send the local handshake frame first, then read the remote handshake frame.
 ///
 /// Both sides can call this concurrently without deadlocking. The protocol
@@ -100,6 +167,55 @@ where
         authenticated_peer_id,
         handshake,
     })
+}
+
+/// Strict lifecycle exchange that also rejects immediately buffered extra data.
+pub async fn exchange_peer_handshake_strict<S>(
+    stream: &mut S,
+    authenticated_peer_id: PeerId,
+    local_handshake: &PeerHandshake,
+    max_body_len: u64,
+) -> Result<LifecycleHandshakeExchange, LifecycleProtocolError>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    write_peer_handshake(stream, local_handshake, max_body_len).await?;
+    let handshake = read_peer_handshake_strict(stream, max_body_len).await?;
+    Ok(LifecycleHandshakeExchange {
+        authenticated_peer_id,
+        handshake,
+    })
+}
+
+impl LifecycleStreamGuard {
+    /// Begin one lifecycle stream for `peer_id`.
+    pub fn begin(
+        &mut self,
+        peer_id: PeerId,
+        direction: LifecycleStreamDirection,
+    ) -> Result<(), LifecycleStreamGuardError> {
+        if self.in_progress.contains(&peer_id) || self.completed.contains(&peer_id) {
+            return Err(LifecycleStreamGuardError { peer_id, direction });
+        }
+        self.in_progress.insert(peer_id);
+        Ok(())
+    }
+
+    /// Mark a lifecycle stream as successfully completed.
+    pub fn complete(&mut self, peer_id: PeerId) {
+        self.in_progress.remove(&peer_id);
+        self.completed.insert(peer_id);
+    }
+
+    /// Mark a lifecycle stream as failed before completion, allowing retry.
+    pub fn fail(&mut self, peer_id: PeerId) {
+        self.in_progress.remove(&peer_id);
+    }
+
+    /// Return whether lifecycle completed for `peer_id`.
+    pub fn is_completed(&self, peer_id: PeerId) -> bool {
+        self.completed.contains(&peer_id)
+    }
 }
 
 async fn read_json_frame<S>(
@@ -141,12 +257,74 @@ where
     }
 }
 
+async fn reject_immediate_extra_lifecycle_data<S>(
+    stream: &mut S,
+) -> Result<(), LifecycleProtocolError>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let mut byte = [0u8; 1];
+    match stream.read_exact(&mut byte).now_or_never() {
+        Some(Ok(_)) => Err(LifecycleProtocolError::ExtraFrame),
+        Some(Err(error)) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        Some(Err(error)) => Err(LifecycleProtocolError::Io(error)),
+        None => Ok(()),
+    }
+}
+
+impl LifecycleStreamDirection {
+    /// Stable direction string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Outbound => "outbound",
+            Self::Inbound => "inbound",
+        }
+    }
+}
+
+impl fmt::Display for LifecycleStreamDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for LifecycleStreamGuardError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "duplicate {} lifecycle stream for {}",
+            self.direction, self.peer_id
+        )
+    }
+}
+
+impl std::error::Error for LifecycleStreamGuardError {}
+
+impl fmt::Display for LifecycleOpenStreamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Guard(error) => write!(f, "{error}"),
+            Self::Open(error) => write!(f, "open lifecycle stream: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for LifecycleOpenStreamError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Guard(error) => Some(error),
+            Self::Open(error) => Some(error),
+        }
+    }
+}
+
 impl fmt::Display for LifecycleProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "lifecycle stream io: {error}"),
             Self::Frame(error) => write!(f, "lifecycle frame: {error}"),
             Self::Handshake(error) => write!(f, "lifecycle handshake: {error}"),
+            Self::ExtraFrame => write!(f, "lifecycle stream contained extra data"),
         }
     }
 }
@@ -157,6 +335,7 @@ impl std::error::Error for LifecycleProtocolError {
             Self::Io(error) => Some(error),
             Self::Frame(error) => Some(error),
             Self::Handshake(error) => Some(error),
+            Self::ExtraFrame => None,
         }
     }
 }
@@ -244,8 +423,13 @@ mod tests {
         wait_for_connection(&mut dialer, &mut listener, dialer_peer_id, listener_peer_id).await;
 
         let mut dialer_control = dialer.stream_control();
+        let mut dialer_guard = LifecycleStreamGuard::default();
+        dialer_guard
+            .begin(listener_peer_id, LifecycleStreamDirection::Outbound)
+            .expect("first outbound lifecycle stream");
         let open = open_lifecycle_stream(&mut dialer_control, listener_peer_id);
         tokio::pin!(open);
+        let mut listener_guard = LifecycleStreamGuard::default();
         let mut outbound = None;
         let mut inbound = None;
 
@@ -256,7 +440,11 @@ mod tests {
                         outbound = Some(result.expect("open lifecycle stream"));
                     }
                     accepted = incoming.next(), if inbound.is_none() => {
-                        inbound = Some(accepted.expect("inbound lifecycle stream"));
+                        let accepted = accepted.expect("inbound lifecycle stream");
+                        listener_guard
+                            .begin(accepted.0, LifecycleStreamDirection::Inbound)
+                            .expect("first inbound lifecycle stream");
+                        inbound = Some(accepted);
                     }
                     _ = dialer.next_event() => {}
                     _ = listener.next_event() => {}
@@ -280,13 +468,13 @@ mod tests {
         let listener_limit = listener.config().p2p.limits.handshake_frame_body_bytes;
 
         let (dialer_exchange, listener_exchange) = tokio::join!(
-            exchange_peer_handshake(
+            exchange_peer_handshake_strict(
                 &mut outbound,
                 listener_peer_id,
                 &dialer_handshake,
                 dialer_limit,
             ),
-            exchange_peer_handshake(
+            exchange_peer_handshake_strict(
                 &mut inbound,
                 accepted_peer_id,
                 &listener_handshake,
@@ -295,9 +483,13 @@ mod tests {
         );
         let dialer_exchange = dialer_exchange.expect("dialer exchange");
         let listener_exchange = listener_exchange.expect("listener exchange");
+        dialer_guard.complete(listener_peer_id);
+        listener_guard.complete(dialer_peer_id);
 
         assert_eq!(dialer_exchange.authenticated_peer_id, listener_peer_id);
         assert_eq!(listener_exchange.authenticated_peer_id, dialer_peer_id);
+        assert!(dialer_guard.is_completed(listener_peer_id));
+        assert!(listener_guard.is_completed(dialer_peer_id));
         assert_eq!(
             dialer_exchange.handshake.supported_lifecycle_versions,
             vec![CLUSTER_LIFECYCLE_V1.to_owned()]
@@ -341,5 +533,51 @@ mod tests {
             error,
             LifecycleProtocolError::Frame(FrameError::BodyTooLarge { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn strict_read_rejects_extra_lifecycle_frame() {
+        let handshake = build_local_peer_handshake(&identity(34));
+        let mut bytes = Vec::new();
+        write_peer_handshake(&mut bytes, &handshake, 64 * 1024)
+            .await
+            .unwrap();
+        write_peer_handshake(&mut bytes, &handshake, 64 * 1024)
+            .await
+            .unwrap();
+        let mut cursor = futures::io::Cursor::new(bytes);
+
+        let error = read_peer_handshake_strict(&mut cursor, 64 * 1024)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, LifecycleProtocolError::ExtraFrame));
+    }
+
+    #[test]
+    fn lifecycle_stream_guard_rejects_duplicate_streams() {
+        let peer_id = identity(35).peer_id();
+        let mut guard = LifecycleStreamGuard::default();
+
+        guard
+            .begin(peer_id, LifecycleStreamDirection::Outbound)
+            .expect("first stream starts");
+        let error = guard
+            .begin(peer_id, LifecycleStreamDirection::Inbound)
+            .expect_err("duplicate in-progress stream fails");
+        assert_eq!(error.peer_id, peer_id);
+        assert_eq!(error.direction, LifecycleStreamDirection::Inbound);
+
+        guard.fail(peer_id);
+        guard
+            .begin(peer_id, LifecycleStreamDirection::Inbound)
+            .expect("retry after failed stream is allowed");
+        guard.complete(peer_id);
+        assert!(guard.is_completed(peer_id));
+
+        let error = guard
+            .begin(peer_id, LifecycleStreamDirection::Outbound)
+            .expect_err("duplicate completed stream fails");
+        assert_eq!(error.direction, LifecycleStreamDirection::Outbound);
     }
 }

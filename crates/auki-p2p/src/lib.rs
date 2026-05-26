@@ -28,9 +28,11 @@ pub use handshake_policy::{
 };
 pub use identity::{LocalPeerIdentity, LocalPeerIdentityError, PEER_DERIVATION_LABEL};
 pub use lifecycle::{
-    LifecycleHandshakeExchange, LifecycleProtocolError, accept_lifecycle_streams,
-    build_local_peer_handshake, exchange_peer_handshake, open_lifecycle_stream,
-    read_peer_handshake, write_peer_handshake,
+    LifecycleHandshakeExchange, LifecycleOpenStreamError, LifecycleProtocolError,
+    LifecycleStreamDirection, LifecycleStreamGuard, LifecycleStreamGuardError,
+    accept_lifecycle_streams, build_local_peer_handshake, exchange_peer_handshake,
+    exchange_peer_handshake_strict, open_lifecycle_stream, open_lifecycle_stream_once,
+    read_peer_handshake, read_peer_handshake_strict, write_peer_handshake,
 };
 pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};
 pub use offer_loading::{

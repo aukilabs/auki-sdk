@@ -1,5 +1,7 @@
 //! Version 1 protocol types and helpers.
 
+/// Canonical base64url-without-padding helpers.
+pub mod base64url;
 /// Stable v1 failure-code constants.
 pub mod error;
 /// V1 JSON frame encoding and decoding.

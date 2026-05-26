@@ -1,9 +1,12 @@
+use auki_domain::cluster_manager::ManagerRelayReservation;
 use auki_domain::{ClusterManager, DaemonInfo};
 use auki_domain_relay::{DomainRelay, DomainRelayConfig, DomainRelayEvent};
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryClient;
 use auki_network::stream_runtime::decline_all_streams;
-use auki_network::swarm::{SwarmConfig, build_swarm};
+use auki_network::swarm::{
+    SwarmConfig, build_swarm, reserve_relay_circuit_addr_with_advertised_addr,
+};
 use libp2p::Swarm;
 use libp2p::swarm::SwarmEvent;
 use multiaddr::Multiaddr;
@@ -77,14 +80,83 @@ async fn wait_for_manager_listen_addr(
     .expect("manager listen addr did not appear within timeout")
 }
 
-async fn wait_for_relay_multiaddr(relay: &mut DomainRelay) -> Multiaddr {
-    let event = timeout(Duration::from_secs(5), relay.next_event())
-        .await
-        .expect("relay emits a listen event")
-        .expect("relay event stream stays open");
+async fn wait_for_native_and_browser_relay_multiaddrs(
+    relay: &mut DomainRelay,
+) -> (Multiaddr, Multiaddr) {
+    timeout(Duration::from_secs(5), async {
+        let mut native = None;
+        let mut browser = None;
+        while native.is_none() || browser.is_none() {
+            let event = relay
+                .next_event()
+                .await
+                .expect("relay event stream stays open");
+            let DomainRelayEvent::Listening { relay_multiaddr } = event;
+            if relay_multiaddr.to_string().contains("/ws") {
+                browser.get_or_insert(relay_multiaddr);
+            } else {
+                native.get_or_insert(relay_multiaddr);
+            }
+        }
+        (native.unwrap(), browser.unwrap())
+    })
+    .await
+    .expect("relay did not emit both native and browser listen addresses")
+}
 
-    let DomainRelayEvent::Listening { relay_multiaddr } = event;
-    relay_multiaddr
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manager_reserves_through_native_relay_addr_and_advertises_browser_addr() {
+    let relay_identity = PeerIdentity::from_seed(&[44u8; 32]);
+    let mut relay = DomainRelay::new(
+        &relay_identity,
+        DomainRelayConfig {
+            listen_addresses: vec![
+                "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
+                "/ip4/127.0.0.1/tcp/0/ws".parse().unwrap(),
+            ],
+            agent_version: "auki-domain-relay/test".to_string(),
+        },
+    )
+    .await
+    .expect("relay starts");
+    let (relay_dial_multiaddr, relay_advertise_multiaddr) =
+        wait_for_native_and_browser_relay_multiaddrs(&mut relay).await;
+
+    let manager_identity = PeerIdentity::from_seed(&[45u8; 32]);
+    let mut manager_swarm = build_swarm(
+        &manager_identity,
+        SwarmConfig {
+            listen_addresses: vec![],
+            agent_version: "auki-domain-relay-test-manager/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .expect("manager swarm builds");
+    let expected = relay_advertise_multiaddr
+        .clone()
+        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+        .with(libp2p::multiaddr::Protocol::P2p(manager_identity.peer_id()));
+
+    let circuit_addr = timeout(Duration::from_secs(15), async {
+        tokio::select! {
+            reservation = reserve_relay_circuit_addr_with_advertised_addr(
+                &mut manager_swarm,
+                relay_dial_multiaddr,
+                relay_advertise_multiaddr,
+                Duration::from_secs(10),
+            ) => reservation,
+            _ = async {
+                loop {
+                    let _ = relay.next_event().await;
+                }
+            } => unreachable!("relay event stream ended"),
+        }
+    })
+    .await
+    .expect("relay reservation timed out")
+    .expect("relay reservation succeeds");
+
+    assert_eq!(circuit_addr, expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -97,13 +169,17 @@ async fn relay_multiaddr_can_be_published_through_cluster_manager_to_discovery()
     let mut relay = DomainRelay::new(
         &relay_identity,
         DomainRelayConfig {
-            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0/ws".parse().unwrap()],
+            listen_addresses: vec![
+                "/ip4/127.0.0.1/tcp/0".parse().unwrap(),
+                "/ip4/127.0.0.1/tcp/0/ws".parse().unwrap(),
+            ],
             agent_version: "auki-domain-relay/smoke".to_string(),
         },
     )
     .await
     .expect("relay starts");
-    let relay_multiaddr = wait_for_relay_multiaddr(&mut relay).await;
+    let (relay_dial_multiaddr, relay_advertise_multiaddr) =
+        wait_for_native_and_browser_relay_multiaddrs(&mut relay).await;
 
     let manager_identity = PeerIdentity::from_seed(&[91u8; 32]);
     let mut manager_swarm = build_swarm(
@@ -116,20 +192,45 @@ async fn relay_multiaddr_can_be_published_through_cluster_manager_to_discovery()
     )
     .expect("manager swarm builds");
     let manager_multiaddr = wait_for_manager_listen_addr(&mut manager_swarm).await;
+    let expected_circuit = relay_advertise_multiaddr
+        .clone()
+        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+        .with(libp2p::multiaddr::Protocol::P2p(manager_identity.peer_id()));
 
-    let manager = ClusterManager::create_cluster_with_relay_multiaddrs(
-        cluster_name.clone(),
-        manager_identity.clone(),
-        vec![manager_multiaddr.clone()],
-        vec![relay_multiaddr.clone()],
-        discovery_url(),
-        manager_swarm,
-        decline_all_streams(),
-        sample_daemon_info("manager"),
-    )
+    let manager = timeout(Duration::from_secs(20), async {
+        tokio::select! {
+            manager = ClusterManager::create_cluster_with_relay_reservation(
+                cluster_name.clone(),
+                manager_identity.clone(),
+                vec![manager_multiaddr.clone()],
+                ManagerRelayReservation {
+                    relay_dial_multiaddr,
+                    relay_advertise_multiaddr: relay_advertise_multiaddr.clone(),
+                    timeout: StdDuration::from_secs(10),
+                },
+                discovery_url(),
+                manager_swarm,
+                decline_all_streams(),
+                sample_daemon_info("manager"),
+            ) => manager,
+            _ = async {
+                loop {
+                    let _ = relay.next_event().await;
+                }
+            } => unreachable!("relay event stream ended"),
+        }
+    })
     .await
-    .expect("cluster publishes relay multiaddrs");
-    assert_eq!(manager.relay_multiaddrs(), &[relay_multiaddr.clone()]);
+    .expect("cluster creation timed out")
+    .expect("cluster reserves through relay and publishes relay multiaddrs");
+    assert_eq!(
+        manager.local_multiaddrs(),
+        &[manager_multiaddr.clone(), expected_circuit.clone()]
+    );
+    assert_eq!(
+        manager.relay_multiaddrs(),
+        &[relay_advertise_multiaddr.clone()]
+    );
 
     let snapshot = discovery.list_clusters().await.expect("list clusters");
     let entry = snapshot
@@ -138,11 +239,14 @@ async fn relay_multiaddr_can_be_published_through_cluster_manager_to_discovery()
         .expect("created cluster appears in Discovery");
 
     assert_eq!(entry.manager_peer_id, manager_identity.peer_id());
-    assert_eq!(entry.manager_multiaddrs, vec![manager_multiaddr]);
+    assert_eq!(
+        entry.manager_multiaddrs,
+        vec![manager_multiaddr, expected_circuit]
+    );
     assert_eq!(
         entry.relay_multiaddrs,
-        vec![relay_multiaddr],
-        "Discovery did not preserve the relay_multiaddrs published by ClusterManager; \
+        vec![relay_advertise_multiaddr],
+        "Discovery did not preserve the browser relay_multiaddrs published by ClusterManager; \
          upgrade the Discovery deployment/server contract before browser peers can discover relays"
     );
 

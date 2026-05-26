@@ -26,6 +26,7 @@ Current public surface:
 - `AukiP2pConfig` captures RFC-shaped runtime limits and policy knobs.
 - `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
   advertised, and relay addresses separate; can dial explicit peer addresses;
+  applies local per-peer connection caps for duplicate/simultaneous dials;
   surfaces connection events; projects local peer status; and exposes a raw
   stream control for protocol runtimes.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and

@@ -7,12 +7,14 @@ use auki_protocol::v1::{
 };
 use futures::StreamExt as _;
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping,
-    swarm::{DialError, NetworkBehaviour, SwarmEvent, dial_opts::DialOpts},
+    Multiaddr, PeerId, Swarm, SwarmBuilder,
+    core::ConnectedPoint,
+    identify, noise, ping,
+    swarm::{ConnectionId, DialError, NetworkBehaviour, SwarmEvent, dial_opts::DialOpts},
     tcp, yamux,
 };
 use serde_json::{Map, Value};
-use std::{fmt, time::Duration};
+use std::{collections::HashMap, fmt, time::Duration};
 
 /// Identify protocol id used by the new RFC-first runtime.
 pub const IDENTIFY_PROTOCOL_ID: &str = "/auki/p2p/identify/0.0.1";
@@ -57,6 +59,11 @@ pub enum AukiP2pEvent {
     },
     /// A libp2p connection was established.
     ConnectionEstablished {
+        /// Transport-authenticated remote peer id.
+        peer_id: PeerId,
+    },
+    /// A connection exceeded the local per-peer cap and was scheduled for close.
+    DuplicateConnectionClosed {
         /// Transport-authenticated remote peer id.
         peer_id: PeerId,
     },
@@ -116,7 +123,38 @@ pub struct AukiP2pNode {
     identity: LocalPeerIdentity,
     config: AukiP2pNodeConfig,
     observed_listen_addresses: Vec<Multiaddr>,
+    connections: ConnectionTracker,
     swarm: Swarm<Behaviour>,
+}
+
+/// Local per-peer connection retention state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ConnectionTracker {
+    established: HashMap<PeerId, Vec<TrackedConnection>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrackedConnection {
+    connection_id: ConnectionId,
+    preference: ConnectionPreference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionPreference {
+    Preferred,
+    Fallback,
+}
+
+/// Decision for a newly established connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionRetention {
+    /// Keep the connection.
+    Retained,
+    /// Close a connection because the per-peer cap has already been reached.
+    CloseDuplicate {
+        /// Connection scheduled for close.
+        connection_id: ConnectionId,
+    },
 }
 
 impl Default for AukiP2pNodeConfig {
@@ -204,6 +242,7 @@ impl AukiP2pNode {
             identity,
             config,
             observed_listen_addresses: Vec::new(),
+            connections: ConnectionTracker::default(),
             swarm,
         })
     }
@@ -241,6 +280,11 @@ impl AukiP2pNode {
     /// Relay-mediated connectivity addresses.
     pub fn relay_addresses(&self) -> &[Multiaddr] {
         &self.config.relay_addresses
+    }
+
+    /// Number of retained active connections for one peer.
+    pub fn active_connection_count(&self, peer_id: PeerId) -> usize {
+        self.connections.active_count(peer_id)
     }
 
     /// Add one operator-supplied advertised address.
@@ -334,10 +378,42 @@ impl AukiP2pNode {
                     push_unique(&mut self.observed_listen_addresses, address.clone());
                     return Some(AukiP2pEvent::Listening { address });
                 }
-                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                    return Some(AukiP2pEvent::ConnectionEstablished { peer_id });
+                SwarmEvent::ConnectionEstablished {
+                    peer_id,
+                    connection_id,
+                    endpoint,
+                    ..
+                } => {
+                    let local_peer_id = self.peer_id();
+                    let preference =
+                        ConnectionPreference::for_endpoint(local_peer_id, peer_id, &endpoint);
+                    let retention = self.connections.established(
+                        peer_id,
+                        connection_id,
+                        preference,
+                        self.config.p2p.limits.active_connections_per_peer_id,
+                    );
+                    match retention {
+                        ConnectionRetention::Retained => {
+                            return Some(AukiP2pEvent::ConnectionEstablished { peer_id });
+                        }
+                        ConnectionRetention::CloseDuplicate {
+                            connection_id: close_connection_id,
+                        } => {
+                            self.swarm.close_connection(close_connection_id);
+                            if close_connection_id == connection_id {
+                                return Some(AukiP2pEvent::DuplicateConnectionClosed { peer_id });
+                            }
+                            return Some(AukiP2pEvent::ConnectionEstablished { peer_id });
+                        }
+                    }
                 }
-                SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                SwarmEvent::ConnectionClosed {
+                    peer_id,
+                    connection_id,
+                    ..
+                } => {
+                    self.connections.closed(peer_id, connection_id);
                     return Some(AukiP2pEvent::ConnectionClosed { peer_id });
                 }
                 SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -377,6 +453,89 @@ impl fmt::Display for AukiP2pNodeError {
 }
 
 impl std::error::Error for AukiP2pNodeError {}
+
+impl ConnectionTracker {
+    /// Track a newly established connection under the per-peer cap.
+    fn established(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+        preference: ConnectionPreference,
+        cap: usize,
+    ) -> ConnectionRetention {
+        if cap == 0 {
+            return ConnectionRetention::CloseDuplicate { connection_id };
+        }
+
+        let connections = self.established.entry(peer_id).or_default();
+        if connections
+            .iter()
+            .any(|connection| connection.connection_id == connection_id)
+        {
+            return ConnectionRetention::Retained;
+        }
+
+        let connection = TrackedConnection {
+            connection_id,
+            preference,
+        };
+
+        if connections.len() < cap {
+            connections.push(connection);
+            return ConnectionRetention::Retained;
+        }
+
+        if preference == ConnectionPreference::Preferred {
+            if let Some((index, replaced)) = connections
+                .iter()
+                .enumerate()
+                .find(|(_, connection)| connection.preference == ConnectionPreference::Fallback)
+            {
+                let replaced_connection_id = replaced.connection_id;
+                connections[index] = connection;
+                return ConnectionRetention::CloseDuplicate {
+                    connection_id: replaced_connection_id,
+                };
+            }
+        }
+
+        ConnectionRetention::CloseDuplicate { connection_id }
+    }
+}
+
+impl ConnectionPreference {
+    fn for_endpoint(
+        local_peer_id: PeerId,
+        remote_peer_id: PeerId,
+        endpoint: &ConnectedPoint,
+    ) -> Self {
+        let local_peer_should_dial = local_peer_id < remote_peer_id;
+        if endpoint.is_dialer() == local_peer_should_dial {
+            Self::Preferred
+        } else {
+            Self::Fallback
+        }
+    }
+}
+
+impl ConnectionTracker {
+    /// Remove a closed connection from tracking.
+    fn closed(&mut self, peer_id: PeerId, connection_id: ConnectionId) {
+        if let Some(connections) = self.established.get_mut(&peer_id) {
+            connections.retain(|connection| connection.connection_id != connection_id);
+            if connections.is_empty() {
+                self.established.remove(&peer_id);
+            }
+        }
+    }
+
+    /// Number of retained active connections for `peer_id`.
+    fn active_count(&self, peer_id: PeerId) -> usize {
+        self.established
+            .get(&peer_id)
+            .map_or(0, |connections| connections.len())
+    }
+}
 
 fn default_agent_version() -> String {
     format!("auki-p2p/{}", env!("CARGO_PKG_VERSION"))
@@ -431,6 +590,138 @@ mod tests {
         })
         .await
         .expect("listen address should be emitted")
+    }
+
+    #[test]
+    fn connection_tracker_rejects_connections_over_peer_cap() {
+        let peer_id = identity(20).peer_id();
+        let first = ConnectionId::new_unchecked(1);
+        let second = ConnectionId::new_unchecked(2);
+        let mut tracker = ConnectionTracker::default();
+
+        assert_eq!(
+            tracker.established(peer_id, first, ConnectionPreference::Preferred, 1),
+            ConnectionRetention::Retained
+        );
+        assert_eq!(tracker.active_count(peer_id), 1);
+        assert_eq!(
+            tracker.established(peer_id, second, ConnectionPreference::Fallback, 1),
+            ConnectionRetention::CloseDuplicate {
+                connection_id: second
+            }
+        );
+        assert_eq!(tracker.active_count(peer_id), 1);
+        tracker.closed(peer_id, second);
+        assert_eq!(tracker.active_count(peer_id), 1);
+
+        tracker.closed(peer_id, first);
+        assert_eq!(tracker.active_count(peer_id), 0);
+        assert_eq!(
+            tracker.established(peer_id, second, ConnectionPreference::Preferred, 1),
+            ConnectionRetention::Retained
+        );
+    }
+
+    #[test]
+    fn connection_tracker_replaces_fallback_with_preferred_connection() {
+        let local_peer_id = identity(30).peer_id();
+        let remote_peer_id = identity(31).peer_id();
+        let (lower_peer_id, higher_peer_id) = if local_peer_id < remote_peer_id {
+            (local_peer_id, remote_peer_id)
+        } else {
+            (remote_peer_id, local_peer_id)
+        };
+        let fallback = ConnectionId::new_unchecked(1);
+        let preferred = ConnectionId::new_unchecked(2);
+        let mut lower_peer_tracker = ConnectionTracker::default();
+        let mut higher_peer_tracker = ConnectionTracker::default();
+
+        assert_eq!(
+            lower_peer_tracker.established(
+                higher_peer_id,
+                fallback,
+                ConnectionPreference::Fallback,
+                1
+            ),
+            ConnectionRetention::Retained
+        );
+        assert_eq!(
+            lower_peer_tracker.established(
+                higher_peer_id,
+                preferred,
+                ConnectionPreference::Preferred,
+                1
+            ),
+            ConnectionRetention::CloseDuplicate {
+                connection_id: fallback
+            }
+        );
+        assert_eq!(
+            lower_peer_tracker.established[&higher_peer_id][0].connection_id,
+            preferred
+        );
+
+        assert_eq!(
+            higher_peer_tracker.established(
+                lower_peer_id,
+                fallback,
+                ConnectionPreference::Fallback,
+                1
+            ),
+            ConnectionRetention::Retained
+        );
+        assert_eq!(
+            higher_peer_tracker.established(
+                lower_peer_id,
+                preferred,
+                ConnectionPreference::Preferred,
+                1
+            ),
+            ConnectionRetention::CloseDuplicate {
+                connection_id: fallback
+            }
+        );
+        assert_eq!(
+            higher_peer_tracker.established[&lower_peer_id][0].connection_id,
+            preferred
+        );
+    }
+
+    #[test]
+    fn connection_preference_selects_lower_peer_dialer_side() {
+        let first_peer_id = identity(32).peer_id();
+        let second_peer_id = identity(33).peer_id();
+        let (lower_peer_id, higher_peer_id) = if first_peer_id < second_peer_id {
+            (first_peer_id, second_peer_id)
+        } else {
+            (second_peer_id, first_peer_id)
+        };
+        let dialer_endpoint = ConnectedPoint::Dialer {
+            address: "/ip4/127.0.0.1/tcp/1".parse().unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::New,
+        };
+        let listener_endpoint = ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/2".parse().unwrap(),
+            send_back_addr: "/ip4/127.0.0.1/tcp/3".parse().unwrap(),
+        };
+
+        assert_eq!(
+            ConnectionPreference::for_endpoint(lower_peer_id, higher_peer_id, &dialer_endpoint),
+            ConnectionPreference::Preferred
+        );
+        assert_eq!(
+            ConnectionPreference::for_endpoint(lower_peer_id, higher_peer_id, &listener_endpoint),
+            ConnectionPreference::Fallback
+        );
+        assert_eq!(
+            ConnectionPreference::for_endpoint(higher_peer_id, lower_peer_id, &listener_endpoint),
+            ConnectionPreference::Preferred
+        );
+        assert_eq!(
+            ConnectionPreference::for_endpoint(higher_peer_id, lower_peer_id, &dialer_endpoint),
+            ConnectionPreference::Fallback
+        );
     }
 
     #[tokio::test]

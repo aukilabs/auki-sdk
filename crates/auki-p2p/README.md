@@ -29,6 +29,9 @@ Current public surface:
   the lifecycle protocol.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
   exchange the first peer-handshake frame using the configured frame limit.
+- `handshake_policy` validates decoded remote handshakes without swarm access:
+  cheap limits, peer-binding freshness, peer admission, authority-chain checks,
+  local domain policy, and required authorization material.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.

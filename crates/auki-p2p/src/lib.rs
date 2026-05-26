@@ -5,6 +5,7 @@
 //! libp2p context; protocol truth remains in `auki-protocol`.
 
 pub mod config;
+pub mod handshake_policy;
 pub mod identity;
 pub mod lifecycle;
 pub mod node;
@@ -14,6 +15,12 @@ pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,
     PeerBindingFreshnessConfig, RuntimeLimits, StatusPrivacyConfig,
+};
+pub use handshake_policy::{
+    AppDomainAccess, HandshakeFailureDiagnostic, HandshakeFailureScope, HandshakeLifecycleState,
+    HandshakeMetadataField, HandshakePolicyError, HandshakeValidationInput,
+    HandshakeValidationResult, PolicyRejectedDomain, build_local_handshake,
+    validate_remote_handshake,
 };
 pub use identity::{LocalPeerIdentity, LocalPeerIdentityError, PEER_DERIVATION_LABEL};
 pub use lifecycle::{

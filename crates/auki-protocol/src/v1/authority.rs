@@ -8,9 +8,10 @@ use super::{
     error,
     identity::{PeerBinding, PeerBindingError, VerifiedPeerBinding},
 };
+use auki_identity::PublicKey as WalletPublicKey;
 use libp2p_identity::PeerId;
 use serde_json::Value;
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 const FIELD_DOMAIN_ID: &str = "domain_id";
 const FIELD_DOMAIN_DECLARATION: &str = "domain_declaration";
@@ -24,6 +25,156 @@ pub enum PeerAuthorization {
     Authorized,
     /// Reject this peer after peer-binding verification.
     Rejected,
+}
+
+/// Baseline peer authorization mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerAuthorizationMode {
+    /// Accept any peer with a valid peer binding.
+    All,
+    /// Accept only configured peer ids or wallet public keys.
+    WhitelistedOnly,
+    /// Defer allow or deny to application policy.
+    AppPolicy,
+}
+
+impl PeerAuthorizationMode {
+    /// Return the RFC string value for this authorization mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::WhitelistedOnly => "whitelisted-only",
+            Self::AppPolicy => "app-policy",
+        }
+    }
+}
+
+impl Default for PeerAuthorizationMode {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl fmt::Display for PeerAuthorizationMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PeerAuthorizationMode {
+    type Err = PeerAuthorizationModeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "all" => Ok(Self::All),
+            "whitelisted-only" => Ok(Self::WhitelistedOnly),
+            "app-policy" => Ok(Self::AppPolicy),
+            _ => Err(PeerAuthorizationModeError::UnsupportedMode {
+                actual: value.to_owned(),
+            }),
+        }
+    }
+}
+
+/// Errors produced while parsing peer authorization modes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerAuthorizationModeError {
+    /// Authorization mode string was unsupported.
+    UnsupportedMode {
+        /// Actual mode string.
+        actual: String,
+    },
+}
+
+impl fmt::Display for PeerAuthorizationModeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedMode { actual } => {
+                write!(f, "unsupported peer authorization mode {actual}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PeerAuthorizationModeError {}
+
+/// Local policy used to evaluate a verified peer binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerAuthorizationPolicy<'a> {
+    /// Accept any peer with a valid peer binding.
+    All,
+    /// Accept only peers whose peer id or wallet public key appears in a whitelist.
+    WhitelistedOnly {
+        /// Configured libp2p peer ids.
+        peer_ids: &'a [PeerId],
+        /// Configured wallet public keys.
+        wallet_public_keys: &'a [WalletPublicKey],
+    },
+    /// Application code supplies the already evaluated allow or deny decision.
+    AppPolicy {
+        /// Application policy decision.
+        decision: PeerAuthorization,
+    },
+}
+
+impl<'a> PeerAuthorizationPolicy<'a> {
+    /// Create an `all` authorization policy.
+    pub fn all() -> Self {
+        Self::All
+    }
+
+    /// Create a `whitelisted-only` authorization policy.
+    pub fn whitelisted_only(
+        peer_ids: &'a [PeerId],
+        wallet_public_keys: &'a [WalletPublicKey],
+    ) -> Self {
+        Self::WhitelistedOnly {
+            peer_ids,
+            wallet_public_keys,
+        }
+    }
+
+    /// Create an `app-policy` authorization policy from an application decision.
+    pub fn app_policy(decision: PeerAuthorization) -> Self {
+        Self::AppPolicy { decision }
+    }
+
+    /// Return the baseline mode represented by this policy.
+    pub fn mode(&self) -> PeerAuthorizationMode {
+        match self {
+            Self::All => PeerAuthorizationMode::All,
+            Self::WhitelistedOnly { .. } => PeerAuthorizationMode::WhitelistedOnly,
+            Self::AppPolicy { .. } => PeerAuthorizationMode::AppPolicy,
+        }
+    }
+
+    /// Evaluate this policy against a verified peer binding.
+    pub fn evaluate(&self, peer: &VerifiedPeerBinding) -> PeerAuthorization {
+        match self {
+            Self::All => PeerAuthorization::Authorized,
+            Self::WhitelistedOnly {
+                peer_ids,
+                wallet_public_keys,
+            } => {
+                let peer_allowed = peer_ids.iter().any(|peer_id| peer_id == &peer.peer_id);
+                let wallet_allowed = wallet_public_keys
+                    .iter()
+                    .any(|wallet_public_key| wallet_public_key == &peer.wallet_public_key);
+                if peer_allowed || wallet_allowed {
+                    PeerAuthorization::Authorized
+                } else {
+                    PeerAuthorization::Rejected
+                }
+            }
+            Self::AppPolicy { decision } => *decision,
+        }
+    }
+}
+
+impl Default for PeerAuthorizationPolicy<'_> {
+    fn default() -> Self {
+        Self::All
+    }
 }
 
 /// A declared-domain object from a v1 peer handshake.
@@ -113,6 +264,20 @@ pub struct AuthorityChainInput<'a> {
     pub authenticated_peer_id: &'a PeerId,
     /// Local peer authorization result.
     pub peer_authorization: PeerAuthorization,
+    /// Declared domains from the remote handshake.
+    pub declared_domains: &'a [DeclaredDomain],
+    /// Receiver's current UTC time as RFC3339 `Z` string.
+    pub now: &'a str,
+}
+
+/// Input for validating one remote peer authority chain with a peer authorization policy.
+pub struct AuthorityChainPolicyInput<'a> {
+    /// Remote peer binding object from the handshake.
+    pub peer_binding: Option<&'a PeerBinding>,
+    /// Transport-authenticated libp2p peer id for the remote connection.
+    pub authenticated_peer_id: &'a PeerId,
+    /// Local peer authorization policy.
+    pub peer_authorization_policy: PeerAuthorizationPolicy<'a>,
     /// Declared domains from the remote handshake.
     pub declared_domains: &'a [DeclaredDomain],
     /// Receiver's current UTC time as RFC3339 `Z` string.
@@ -226,22 +391,51 @@ impl DeclaredDomain {
 pub fn validate_authority_chain(
     input: AuthorityChainInput<'_>,
 ) -> Result<AuthorityChain, AuthorityChainError> {
-    let peer_binding = input
-        .peer_binding
-        .ok_or(AuthorityChainError::MissingPeerBinding)?;
-    let peer = peer_binding
-        .verify_for_peer_id(input.authenticated_peer_id)
-        .map_err(AuthorityChainError::InvalidPeerBinding)?;
+    let peer = verify_remote_peer(input.peer_binding, input.authenticated_peer_id)?;
 
-    if input.peer_authorization == PeerAuthorization::Rejected {
+    validate_verified_authority_chain(
+        peer,
+        input.peer_authorization,
+        input.declared_domains,
+        input.now,
+    )
+}
+
+/// Validate one remote peer authority chain and evaluate peer authorization from policy.
+pub fn validate_authority_chain_with_authorization_policy(
+    input: AuthorityChainPolicyInput<'_>,
+) -> Result<AuthorityChain, AuthorityChainError> {
+    let peer = verify_remote_peer(input.peer_binding, input.authenticated_peer_id)?;
+    let peer_authorization = input.peer_authorization_policy.evaluate(&peer);
+
+    validate_verified_authority_chain(peer, peer_authorization, input.declared_domains, input.now)
+}
+
+fn verify_remote_peer(
+    peer_binding: Option<&PeerBinding>,
+    authenticated_peer_id: &PeerId,
+) -> Result<VerifiedPeerBinding, AuthorityChainError> {
+    let peer_binding = peer_binding.ok_or(AuthorityChainError::MissingPeerBinding)?;
+    peer_binding
+        .verify_for_peer_id(authenticated_peer_id)
+        .map_err(AuthorityChainError::InvalidPeerBinding)
+}
+
+fn validate_verified_authority_chain(
+    peer: VerifiedPeerBinding,
+    peer_authorization: PeerAuthorization,
+    declared_domains: &[DeclaredDomain],
+    now: &str,
+) -> Result<AuthorityChain, AuthorityChainError> {
+    if peer_authorization == PeerAuthorization::Rejected {
         return Err(AuthorityChainError::PeerRejected);
     }
 
     let mut accepted_served_domains = Vec::new();
     let mut rejected_declared_domains = Vec::new();
 
-    for declared_domain in input.declared_domains {
-        match validate_declared_domain(declared_domain, &peer, input.now) {
+    for declared_domain in declared_domains {
+        match validate_declared_domain(declared_domain, &peer, now) {
             Ok(accepted) => accepted_served_domains.push(accepted),
             Err(rejected) => rejected_declared_domains.push(rejected),
         }
@@ -429,6 +623,66 @@ mod tests {
     }
 
     #[test]
+    fn parses_peer_authorization_modes() {
+        assert_eq!(
+            "all".parse::<PeerAuthorizationMode>().unwrap(),
+            PeerAuthorizationMode::All
+        );
+        assert_eq!(
+            "whitelisted-only".parse::<PeerAuthorizationMode>().unwrap(),
+            PeerAuthorizationMode::WhitelistedOnly
+        );
+        assert_eq!(
+            "app-policy".parse::<PeerAuthorizationMode>().unwrap(),
+            PeerAuthorizationMode::AppPolicy
+        );
+        assert_eq!(PeerAuthorizationMode::default(), PeerAuthorizationMode::All);
+        assert_eq!(PeerAuthorizationMode::AppPolicy.as_str(), "app-policy");
+        assert_eq!(
+            "open".parse::<PeerAuthorizationMode>(),
+            Err(PeerAuthorizationModeError::UnsupportedMode {
+                actual: "open".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn peer_authorization_policy_evaluates_all_whitelist_and_app_policy() {
+        let binding = peer_binding(&delegate_wallet(), &peer_id());
+        let verified = binding.verify_for_peer_id(&peer_id()).unwrap();
+        let allowed_peer_ids = vec![peer_id()];
+        let denied_peer_ids = vec![other_peer_id()];
+        let allowed_wallets = vec![delegate_wallet().public_key()];
+        let denied_wallets = vec![owner_wallet().public_key()];
+
+        assert_eq!(
+            PeerAuthorizationPolicy::all().evaluate(&verified),
+            PeerAuthorization::Authorized
+        );
+        assert_eq!(
+            PeerAuthorizationPolicy::whitelisted_only(&allowed_peer_ids, &[]).evaluate(&verified),
+            PeerAuthorization::Authorized
+        );
+        assert_eq!(
+            PeerAuthorizationPolicy::whitelisted_only(&[], &allowed_wallets).evaluate(&verified),
+            PeerAuthorization::Authorized
+        );
+        assert_eq!(
+            PeerAuthorizationPolicy::whitelisted_only(&denied_peer_ids, &denied_wallets)
+                .evaluate(&verified),
+            PeerAuthorization::Rejected
+        );
+        assert_eq!(
+            PeerAuthorizationPolicy::app_policy(PeerAuthorization::Rejected).evaluate(&verified),
+            PeerAuthorization::Rejected
+        );
+        assert_eq!(
+            PeerAuthorizationPolicy::whitelisted_only(&allowed_peer_ids, &[]).mode(),
+            PeerAuthorizationMode::WhitelistedOnly
+        );
+    }
+
+    #[test]
     fn validates_direct_owner_served_domain_without_delegation() {
         let binding = peer_binding(&owner_wallet(), &peer_id());
         let declared = DeclaredDomain::new(owner_domain_id(), owner_domain_declaration(), None);
@@ -500,6 +754,47 @@ mod tests {
             peer_binding: Some(&binding),
             authenticated_peer_id: &peer_id(),
             peer_authorization: PeerAuthorization::Rejected,
+            declared_domains: &[declared],
+            now: NOW,
+        })
+        .unwrap_err();
+
+        assert_eq!(error, AuthorityChainError::PeerRejected);
+        assert_eq!(error.failure_code(), error::AUTHORIZATION_PEER_REJECTED);
+    }
+
+    #[test]
+    fn validates_authority_chain_with_whitelisted_peer_authorization_policy() {
+        let binding = peer_binding(&delegate_wallet(), &peer_id());
+        let declared = delegated_domain();
+        let allowed_peer_ids = vec![peer_id()];
+
+        let result =
+            validate_authority_chain_with_authorization_policy(AuthorityChainPolicyInput {
+                peer_binding: Some(&binding),
+                authenticated_peer_id: &peer_id(),
+                peer_authorization_policy: PeerAuthorizationPolicy::whitelisted_only(
+                    &allowed_peer_ids,
+                    &[],
+                ),
+                declared_domains: &[declared],
+                now: NOW,
+            })
+            .unwrap();
+
+        assert_eq!(result.accepted_served_domains.len(), 1);
+        assert_eq!(result.rejected_declared_domains, vec![]);
+    }
+
+    #[test]
+    fn rejects_authority_chain_with_empty_whitelist_before_domains() {
+        let binding = peer_binding(&delegate_wallet(), &peer_id());
+        let declared = delegated_domain();
+
+        let error = validate_authority_chain_with_authorization_policy(AuthorityChainPolicyInput {
+            peer_binding: Some(&binding),
+            authenticated_peer_id: &peer_id(),
+            peer_authorization_policy: PeerAuthorizationPolicy::whitelisted_only(&[], &[]),
             declared_domains: &[declared],
             now: NOW,
         })

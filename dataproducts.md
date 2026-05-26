@@ -2,10 +2,10 @@
 
 > **Status: v0 shipped.** The SDK ships peer-discovery descriptors through
 > [`/auki/resources/0.0.1`](crates/auki-network/src/resources_protocol.rs)
-> using the `ResourceEntry` enum (`SensorStream`, `TransformEdge`). The
-> earlier per-product proposal — `CameraLogProduct` and siblings — was
-> superseded; the historical sketch is preserved below the v0 section for
-> design context.
+> using the `ResourceEntry` enum (`SensorStream`, `TransformEdge`,
+> `PoseStream`). The earlier per-product proposal — `CameraLogProduct`
+> and siblings — was superseded; the historical sketch is preserved
+> below the v0 section for design context.
 
 ## Purpose
 
@@ -33,14 +33,15 @@ The two `include_*` flags toggle eager-vs-lazy registry embedding. Default off �
 
 ### `ResourceEntry`
 
-A tagged enum (`"kind"` discriminator, open-string) with two v0 variants:
+A tagged enum (`"kind"` discriminator, open-string) with three v0 variants:
 
 ```
-ResourceEntry { kind: "sensor_stream", ... } -> SensorStreamResource
+ResourceEntry { kind: "sensor_stream", ... }  -> SensorStreamResource
 ResourceEntry { kind: "transform_edge", ... } -> TransformEdgeResource
+ResourceEntry { kind: "pose_stream", ... }    -> PoseStreamResource
 ```
 
-Future variants (pose streams, recordings, detection streams, calibration resources) add new `kind` strings without changing the protocol version. Cross-language consumers that pre-date a variant simply skip rows with unknown kinds.
+Future variants (recordings, detection streams, time-transform bridges, calibration resources) add new `kind` strings without changing the protocol version. Cross-language consumers that pre-date a variant simply skip rows with unknown kinds.
 
 ### `SensorStreamResource` — live sensor stream over `/auki/stream/0.1.0`
 
@@ -87,7 +88,33 @@ TransformEdgeResource {
 }
 ```
 
-Pose Log semantics: the transform takes a point in `from_frame_id` into `to_frame_id`. `writer_mode: "rigid"` means stationary — one sample, no time series. The mutable / movable equivalent (a live pose stream) is a future resource kind.
+Pose Log semantics: the transform takes a point in `from_frame_id` into `to_frame_id`. `writer_mode: "rigid"` means stationary — one sample, no time series. The mutable / movable equivalent is `PoseStreamResource` below.
+
+### `PoseStreamResource` — live movable transform over `/auki/stream/0.1.0`
+
+```
+PoseStreamResource {
+  id:                    string,                    // conventionally "<from>-><to>"
+  from_frame_id:         string,
+  from_frame_hash:       string,
+  to_frame_id:           string,
+  to_frame_hash:         string,
+  clock_id:              string,                    // clock used by StreamEntry.timestamp_ns
+  clock_hash:            string,
+  stream_protocol:       string,                    // "/auki/stream/0.1.0"
+  payload:               string,                    // decoder hint; e.g. "auki.pose.SpatialTransform"
+  writer_mode:           string,                    // "movable" in v0; open string for future modes
+  expected_rate_hz:      u32,                       // producer cadence; 0 = unspecified
+  source:                <PoseSource-shaped JSON>,  // optional provenance
+
+  // Optional inline registry JSON.
+  from_frame_entry_json: string | null,
+  to_frame_entry_json:   string | null,
+  clock_entry_json:      string | null,
+}
+```
+
+Parallel to `TransformEdgeResource` but for time-varying edges: the producer streams `SpatialTransform` payloads over `/auki/stream/0.1.0`, each tagged with a `timestamp_ns` on the named clock. Consumers compose live pose chains by walking these rows the same way they walk `transform_edge` rows.
 
 ### Why this shape and not `CameraLogProduct`
 
@@ -102,9 +129,9 @@ Pose Log semantics: the transform takes a point in `from_frame_id` into `to_fram
 
 ## Coverage gaps in v0
 
-The `ResourceEntry` set is intentionally narrow today. Live pose streams, recorded sensor logs, detection-resource rows, time-transform bridges, and calibration resources are all expected future variants — they extend the enum, not replace it. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
+Recorded sensor logs, detection-resource rows, time-transform bridges, and calibration resources are all expected future `ResourceEntry` variants — they extend the enum, not replace it. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
 
-The shipped Detection Log primitive (`Log<auki_datatypes::detection::DetectionFrame>` with `data` + `sensor_hash` + `type`, manifest built via `build_detection_log_manifest`) exists; what's missing is the `ResourceEntry` variant that advertises one. Same for Pose Logs (`Log<auki_datatypes::pose::SpatialTransform>` keyed per `(from, to)` frame pair) — the on-disk shape ships, the catalog row to discover them does not.
+The shipped Detection Log primitive (`Log<auki_datatypes::detection::DetectionFrame>` with `data` + `sensor_hash` + `type`, manifest built via `build_detection_log_manifest`) exists; what's missing is the `ResourceEntry` variant that advertises one. Pose Logs (`Log<auki_datatypes::pose::SpatialTransform>` keyed per `(from, to)` frame pair) ship on disk, and the live `PoseStreamResource` variant covers the streaming case; a recorded-pose-log resource row is still future work.
 
 ---
 
@@ -174,6 +201,6 @@ These pieces of the proposal made it into the shipped SDK, even though `CameraLo
 - **Trust / signing** — the wire bytes are not signed yet. Wrapping discovery in a signed envelope is a separate concern.
 - **Domain identity / Map endpoint** — which Domain a peer participates in is a cluster-membership question, not a per-resource question.
 - **Recorded-log resources** — coverage, lifecycle, segment metadata. Future enum variant.
-- **Live pose-stream and detection-stream resources** — future enum variants; the on-disk shapes already exist, the catalog rows do not.
+- **Detection-stream resources** — future enum variant; the on-disk Detection Log shape already exists, the catalog row does not.
 - **Raster / 2D frame conventions for image bytes** — see [#140](https://github.com/aukilabs/auki-sdk/issues/140). `frame_entry_json` describes the 3D optical frame; the raster convention of the published bytes (mirrored vs. not, origin, axes) is a parallel concern.
 - **Peer-level frame-transform graph / scenegraph availability** — see [#141](https://github.com/aukilabs/auki-sdk/issues/141). The shipped `transform_edge` row is the per-edge slice; the peer-level view of all known edges + producer-derived output frames is future work.

@@ -33,6 +33,9 @@ Current public surface:
   cheap limits, peer-binding freshness, peer admission, authority-chain checks,
   local domain policy, required authorization material, and handshake-time
   authority deadlines.
+- `relationship` tracks per-peer lifecycle state, accepted and rejected
+  domains, bounded failure history, path summaries, and projects pure state into
+  v1 status snapshots.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.

@@ -10,6 +10,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod node;
 pub mod protocols;
+pub mod relationship;
 
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
@@ -29,3 +30,9 @@ pub use lifecycle::{
     read_peer_handshake, write_peer_handshake,
 };
 pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};
+pub use relationship::{
+    OfferCatalogLoadState, PeerRelationship, PeerRelationshipState, RelationshipFailureRecord,
+    RelationshipFailureScope, RelationshipLoadedOffer, RelationshipPathStatus,
+    RelationshipRejectedDomain, RelationshipStatusBuildError, RelationshipStatusOptions,
+    build_relationship_status_snapshot,
+};

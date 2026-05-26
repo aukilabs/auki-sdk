@@ -95,6 +95,10 @@ def static_lib_file(lib_name: str) -> str:
 
 def package_metadata(root: Path, package_name: str) -> dict:
     package = cargo_package(root, package_name)
+    return package_metadata_from_package(root, package)
+
+
+def package_metadata_from_package(root: Path, package: dict) -> dict:
     target = lib_target(package)
     authors = package.get("authors") or []
     return {
@@ -159,6 +163,69 @@ def plan(root: Path, package_name: str, language: str) -> dict:
     }
 
 
+def binding_inventory(root: Path) -> list[dict]:
+    metadata = cargo_metadata(root)
+    crates = []
+    for package in sorted(metadata["packages"], key=lambda item: item["name"]):
+        package_crate_dir = crate_dir(package)
+        if not (package_crate_dir / "bindings.toml").exists():
+            continue
+
+        package_meta = package_metadata_from_package(root, package)
+        config = load_bindings_toml(package_crate_dir)
+        bindings = {}
+        for language, section in sorted(config.get("bindings", {}).items()):
+            if not section.get("enabled", False):
+                continue
+            generator = section["generator"]
+            generator_config = config.get("generators", {}).get(generator, {})
+            crate_assets_dir = package_crate_dir / section.get("template_dir", f"bindings/{language}")
+            output_dir = root / section.get("output_dir", f"bindings/{language}/{package_meta['package_name']}")
+            template_files = section.get("templates")
+            if template_files is None:
+                template_files = sorted(path.name for path in crate_assets_dir.glob("*.tmpl"))
+            smoke = section.get("smoke")
+            smoke_path = package_crate_dir / smoke if smoke else None
+            generator_features = generator_config.get("features", [])
+            build_features = section.get("build_features", [])
+            if not isinstance(build_features, list):
+                raise BindingError(f"{package_meta['package_name']} {language} build_features must be a list")
+            missing_features = [
+                feature
+                for feature in [*generator_features, *build_features]
+                if feature not in package_meta["features"]
+            ]
+
+            bindings[language] = {
+                "generator": generator,
+                "generator_features": generator_features,
+                "build_features": build_features,
+                "crate_assets_dir": rel(root, crate_assets_dir),
+                "output_dir": rel(root, output_dir),
+                "template_files": template_files,
+                "missing_templates": [
+                    template
+                    for template in template_files
+                    if not (crate_assets_dir / template).exists()
+                ],
+                "smoke": rel(root, smoke_path) if smoke_path else None,
+                "missing_smoke": bool(smoke_path and not smoke_path.exists()),
+                "missing_features": missing_features,
+            }
+
+        crates.append(
+            {
+                "package_name": package_meta["package_name"],
+                "crate_dir": package_meta["crate_dir"],
+                "lib_name": package_meta["lib_name"],
+                "features": package_meta["features"],
+                "enabled_languages": sorted(bindings.keys()),
+                "bindings": bindings,
+            }
+        )
+    return crates
+
+
 def render_text(text: str, context: dict[str, object]) -> str:
     flat = flatten_context(context)
     return Template(text).safe_substitute(flat)
@@ -203,7 +270,9 @@ def render_templates(root: Path, binding_plan: dict, dest: Path) -> None:
     template_names = binding_section(load_bindings_toml(root / binding_plan["metadata"]["crate_dir"]), binding_plan["binding_language"])[1].get("templates")
     templates = [assets / name for name in template_names] if template_names else sorted(assets.glob("*.tmpl"))
     for template in templates:
-        target = dest / template.name.removesuffix(".tmpl")
+        relative = template.relative_to(assets)
+        target = dest / relative.with_name(relative.name.removesuffix(".tmpl"))
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(render_text(template.read_text(), context), encoding="utf-8")
 
 
@@ -272,8 +341,9 @@ def generate_python(root: Path, package_name: str) -> None:
     target = host_target(root)
     lib_file = dynamic_lib_file(lib_name)
     library = root / "target" / "debug" / lib_file
+    build_features = binding_build_features(binding_plan)
 
-    run(["cargo", "build", "-p", package_name], cwd=root)
+    run(cargo_build_command(package_name, features=build_features), cwd=root)
     if not library.exists():
         raise BindingError(f"expected UniFFI library not found: {library}")
 
@@ -310,6 +380,7 @@ def build_python_native_libraries(root: Path, package_name: str, targets: list[s
     metadata = binding_plan["metadata"]
     lib_name = metadata["lib_name"]
     module_dir = root / binding_plan["output_dir"] / binding_plan["module_name"]
+    build_features = binding_build_features(binding_plan)
 
     if not (module_dir / "__init__.py").exists():
         raise BindingError(f"missing generated Python package: {module_dir / '__init__.py'}")
@@ -339,7 +410,10 @@ def build_python_native_libraries(root: Path, package_name: str, targets: list[s
         if builder == os.environ.get("CROSS", "cross") and platform.system() == "Darwin" and platform.machine() == "arm64":
             env.setdefault("CROSS_CONTAINER_OPTS", "--platform linux/amd64")
 
-        run([builder, "build", "--release", "-p", package_name, "--target", target], cwd=root, env=env)
+        cmd = [builder, "build", "--release", "-p", package_name, "--target", target]
+        if build_features:
+            cmd.extend(["--features", ",".join(build_features)])
+        run(cmd, cwd=root, env=env)
         library = root / "target" / target / "release" / lib_file
         if not library.exists():
             raise BindingError(f"expected UniFFI library not found: {library}")
@@ -558,6 +632,8 @@ def main(argv: list[str]) -> int:
     metadata_parser = subparsers.add_parser("metadata")
     metadata_parser.add_argument("crate")
 
+    subparsers.add_parser("list")
+
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("language", choices=sorted(LANGUAGES))
     plan_parser.add_argument("crate")
@@ -576,6 +652,8 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "metadata":
             print(json.dumps(package_metadata(root, args.crate), sort_keys=True))
+        elif args.command == "list":
+            print(json.dumps(binding_inventory(root), sort_keys=True))
         elif args.command == "plan":
             print(json.dumps(plan(root, args.crate, args.language), sort_keys=True))
         elif args.command == "generate":

@@ -1,0 +1,16 @@
+# @auki/$crate_package_name
+
+wasm-bindgen JavaScript bindings for `auki-registry`.
+
+```js
+import init, { frameRosBodyJson, frameEntryHash } from "./$generated_js_file";
+
+await init();
+
+const frameJson = frameRosBodyJson("K1-AABBCCDDEEFF/base_link");
+const frameHash = frameEntryHash(frameJson);
+```
+
+The package exposes web-safe JCS-canonical JSON and hash adapters for Sensor,
+Clock, Frame, and Detector Registry entries. Filesystem read/write helpers are
+native-only and intentionally not exported from the wasm package.

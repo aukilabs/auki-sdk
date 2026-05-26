@@ -4,7 +4,10 @@ Generic segmented ring-buffer log primitive. On-disk format spec: this crate's [
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs).
+- [`core.rs`](core.rs) — binding-free generic `Log<T: LogPayload>` implementation and pure segment helpers.
+- [`lib.rs`](lib.rs) — feature-gated module wiring and crate-root re-exports.
+- [`ffi.rs`](ffi.rs) — native UniFFI opaque-byte adapters for generated Python and Swift.
+- [`wasm.rs`](wasm.rs) — web-safe wasm-bindgen manifest and segment-byte helpers.
 
 ## On-disk layout
 
@@ -51,6 +54,10 @@ pub trait LogPayload: Sized {
     fn decode(bytes: &[u8]) -> Result<Self, String>;
 }
 
+pub struct BytesPayload {
+    pub bytes: Vec<u8>,
+}
+
 pub struct Log<T> { ... }
 
 impl<T: LogPayload> Log<T> {
@@ -83,7 +90,39 @@ pub struct Entry<T> {
     pub timestamp_ns: i64,
     pub payload: T,
 }
+
+pub fn canonical_manifest_json_str(manifest_json: &str) -> Result<String>;
+pub fn encode_segment_bytes(start_ns: i64, entries: &[Entry<BytesPayload>]) -> Result<Vec<u8>>;
+pub fn decode_segment_bytes(bytes: &[u8]) -> Result<Vec<Entry<BytesPayload>>>;
+pub fn bytes_entries_to_json(entries: &[Entry<BytesPayload>]) -> String;
+pub fn bytes_entries_from_json(entries_json: &str) -> Result<Vec<Entry<BytesPayload>>>;
 ```
+
+## Generated binding adapters
+
+Native generated bindings expose:
+
+```rust
+BytesLog::open(root, manifest_json) -> BytesLog
+BytesLog.append(timestamp_ns, payload)
+BytesLog.flush()
+BytesLog.set_retention(retention_ns)
+BytesLog.manifest_json()
+
+BytesTail::open(root) -> BytesTail
+BytesTail.try_next() -> Option<BytesLogEntry>
+
+read_bytes_log_entries(root) -> Vec<BytesLogEntry>
+read_bytes_log_manifest_json(root) -> String
+canonical_manifest_json(manifest_json) -> String
+encode_segment_entries_json(start_ns, entries_json) -> bytes
+decode_segment_entries_json(segment_bytes) -> entries_json
+```
+
+`entries_json` is an array of `{ "timestamp_ns": i64, "payload_hex": string }`
+objects. JavaScript/WASM exposes only the three pure helpers:
+`canonicalManifestJson`, `encodeSegmentEntriesJson`, and
+`decodeSegmentEntriesJson`.
 
 ## Manifest contract
 
@@ -92,7 +131,9 @@ The user's manifest JSON **must** include two integer fields:
 - `segment_duration_ns` — segment file rollover boundary in ns
 - `retention_ns` — how far back from the most recent timestamp to keep
 
-Both must be > 0. Other fields are user-defined; the log preserves them verbatim.
+`segment_duration_ns` must be > 0. `retention_ns` must be ≥ 0, with 0 meaning
+unbounded retention. Other fields are user-defined; the log preserves them
+verbatim.
 
 If `log_manifest.json` already exists at `root`, it is the source of truth and the `manifest` argument to `open()` is ignored. This means re-opening a log with a different manifest doesn't break the on-disk state.
 
@@ -127,10 +168,12 @@ pub enum Error {
 
 This crate previously pinned CBOR (via `ciborium`). The SDK's camera / pose / audio / time-transform payloads now use protobuf via the generated [`auki-proto`](../../auki-proto) crate. Rather than swap one hardcoded encoder for another, the crate exposes a tiny `LogPayload` trait — `encode(&self) -> Vec<u8>` and `decode(&[u8]) -> Result<Self, String>`. Consumers pick their encoder. Generated prost types use the `impl_log_payload!` macro to wire prost. The framing primitive stays out of the encoder's way.
 
-## Tests (21 total)
+## Tests
 
 | Test | Asserts |
 |------|---------|
+| `canonical_manifest_json_str_sorts_keys` | Pure manifest canonicalization helper for bindings |
+| `opaque_segment_bytes_round_trip` | In-memory opaque-byte segment encode/decode and entries JSON vector |
 | `open_creates_layout_and_writes_manifest` | First open produces `log_manifest.json` (JCS-canonical) + `segments/` dir |
 | `round_trip_single_segment` | Two appends in the same segment round-trip cleanly through read |
 | `rolls_over_at_segment_boundary` | Crossing `segment_duration_ns` triggers a new segment file |
@@ -151,6 +194,9 @@ This crate previously pinned CBOR (via `ciborium`). The SDK's camera / pose / au
 | `tail_tolerates_partial_entry_during_concurrent_append` | Mid-write torn read surfaces as `Ok(None)`, not `Err`; tail recovers on the next poll |
 | `tail_ignores_evicted_segments_and_resumes_at_newer_one` | Retention deletes a segment under the tailer; tail advances past the gap |
 | `tail_with_poll_interval_overrides_default` | `with_poll_interval` builder sets the poll cadence on the iterator |
+
+`tests/surface.rs` adds the binding-standard source-compatibility check for the
+crate-root Rust API when the default UniFFI feature is enabled.
 
 ## Consumers in this workspace
 

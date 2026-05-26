@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-registry` dependency out of default features after `auki-registry` adopted the binding standard, keeping ROS translation builds on the direct Rust registry API without inheriting generated binding dependencies.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Active ROS adapter docs now point payload readers at generated `auki-proto`.** No ROS translation behavior changed.

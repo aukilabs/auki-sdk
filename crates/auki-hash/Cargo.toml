@@ -7,5 +7,29 @@ repository.workspace = true
 authors.workspace = true
 description = "XXH3-128 wrapper — single function returning 32-character hex-encoded content hash."
 
+[lib]
+name = "auki_hash"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = ["dep:uniffi"]
+cli = ["uniffi", "uniffi/cli"]
+wasm = ["dep:wasm-bindgen"]
+
 [dependencies]
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = { version = "0.31", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]

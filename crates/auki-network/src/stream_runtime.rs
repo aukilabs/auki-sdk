@@ -419,7 +419,14 @@ pub(crate) async fn handle_inbound_substream(
     // 2. Invoke the provider — non-generic; closed enum tells us which
     //    `T` to pump. Pass the requester's PeerId through so producers
     //    can apply per-requester policy.
-    let dispatch = (provider)(peer, request);
+    //
+    // Binding providers often wait synchronously for a host-language
+    // accept/decline decision. Keep that wait off the async worker that
+    // owns the substream handshake.
+    let dispatch = match tokio::task::spawn_blocking(move || (provider)(peer, request)).await {
+        Ok(dispatch) => dispatch,
+        Err(_) => return,
+    };
 
     match dispatch {
         StreamDispatch::Decline { reason } => {

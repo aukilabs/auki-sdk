@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import initAukiDomain, {
+  clusterMembershipAdmitMemberJson,
+  clusterMembershipNewJson,
+  domainSuccessorJson,
+  validateMembershipJson,
+  validateParticipantInfoJson,
+  validateRegistryEntryJson,
+  validateResourceCatalogJson,
+  validateSensorCatalogJson,
+} from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+const peerA = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar";
+const peerB = "12D3KooWJ9vbKFRy2E8XcY3wsXjghWcdq7tCEx86HGMGLevrnhmG";
+
+test("domain helper exports validate memberships and elect a successor", () => {
+  let membership = clusterMembershipNewJson("demo");
+  membership = clusterMembershipAdmitMemberJson(
+    membership,
+    JSON.stringify({
+      peer_id: peerA,
+      multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+      join_ts_ns: 10,
+    }),
+  );
+
+  const validated = JSON.parse(validateMembershipJson(membership));
+  assert.equal(validated.cluster_name, "demo");
+  assert.equal(JSON.parse(domainSuccessorJson(membership, peerA)), peerA);
+});
+
+test("domain dto validators normalize browser-facing JSON", () => {
+  const participant = {
+    app: "browser-test",
+    name: "peer-a",
+    session_id: "session-a",
+    session_clock_id: "clock-a",
+    session_clock_hash: "hash-a",
+    session_now_ns: 123,
+    cluster_joined_at_ns: null,
+    peer_id: peerA,
+    app_instance: "00163eabcdef",
+    is_manager: true,
+    manager_peer_id: peerA,
+  };
+  assert.equal(JSON.parse(validateParticipantInfoJson(JSON.stringify(participant))).peer_id, peerA);
+
+  const sensors = {
+    sensors: [{ sensor_id: "camera", sensor_hash: "sensor-hash", kind: "camera" }],
+  };
+  assert.equal(JSON.parse(validateSensorCatalogJson(JSON.stringify(sensors))).sensors[0].kind, "camera");
+
+  const resources = {
+    resources: [{
+      kind: "sensor_stream",
+      id: "camera",
+      sensor_id: "camera",
+      sensor_hash: "sensor-hash",
+      sensor_kind: "camera",
+      stream_protocol: "/auki/stream/0.1.0",
+      payload: "camera_frame",
+    }],
+  };
+  assert.equal(JSON.parse(validateResourceCatalogJson(JSON.stringify(resources))).resources[0].payload, "camera_frame");
+
+  const registry = {
+    entry: {
+      kind: "sensor",
+      id: "camera",
+      hash: "sensor-hash",
+      canonical_json: JSON.stringify({ sensor_id: "camera", body: { type: "camera" } }),
+    },
+  };
+  assert.equal(JSON.parse(validateRegistryEntryJson(JSON.stringify(registry))).entry.id, "camera");
+
+  assert.throws(() => validateMembershipJson("{}"));
+});

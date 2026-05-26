@@ -11,6 +11,8 @@ Single source of truth for the Auki SDK's **log manifests** — schemas + builde
 
 Manifests stay JCS-JSON because (a) JCS gives free cross-language byte-equivalence for content-hashing the inline producer identities like [`PoseSource`](src/lib.rs); (b) manifests are operator-debugged via `cat`, browser-read by Park, and inspected by ad-hoc tooling — JSON is the universal denominator; (c) per-recording metadata doesn't benefit from protobuf's wire compactness (~500 bytes, written once, read by humans + code).
 
+The Rust API remains the canonical `serde_json::Value` builder surface. Generated Python, Swift, and JavaScript bindings expose JCS-canonical JSON strings so language hosts can parse into their native dictionary/object types without reimplementing the field layout.
+
 ## What this crate exports
 
 ```rust
@@ -67,6 +69,18 @@ pub enum TimeTransformSource {
 ```
 
 `PoseSource` lives **inline** in the Pose Log manifest under the `"source"` key — Pose Log has no separate registry because provenance is the only thing `source` describes (frame identity now lives in the manifest's `(from_frame_id, to_frame_id)` pair, not on the per-sample transforms). Carries `canonical_bytes()` + `hash()` for content-addressing if a future producer variant graduates to a sibling registry.
+
+## Multiplatform binding structure
+
+`auki-manifests` follows the SDK binding-generation standard:
+
+- [`src/core.rs`](src/core.rs) owns the binding-free Rust manifest builders, manifest DTOs, validation helpers, and source hash helpers.
+- [`src/lib.rs`](src/lib.rs) re-exports the Rust API unchanged and only wires feature-gated adapters.
+- [`src/ffi.rs`](src/ffi.rs) exposes UniFFI adapters for Python and Swift. The builders take nanosecond counts instead of `Duration` and return JCS-canonical JSON strings.
+- [`src/wasm.rs`](src/wasm.rs) exposes wasm-bindgen adapters for JavaScript/WebAssembly, also returning JCS-canonical JSON strings.
+- [`bindings.toml`](bindings.toml) and [`bindings/`](bindings) define the crate-owned Python, Swift, and JavaScript package assets used by the root generators.
+
+Rust dependents that only need the direct builders should depend on this crate with `default-features = false`.
 
 ## Manifest schemas
 

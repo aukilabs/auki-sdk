@@ -1,0 +1,23 @@
+# @auki/$crate_package_name
+
+wasm-bindgen JavaScript bindings for `auki-logs`.
+
+```js
+import init, { canonicalManifestJson, encodeSegmentEntriesJson } from "./$generated_js_file";
+
+await init();
+
+const manifest = canonicalManifestJson(JSON.stringify({
+  kind: "example",
+  segment_duration_ns: 1000000000,
+  retention_ns: 3000000000,
+}));
+const segment = encodeSegmentEntriesJson(
+  0,
+  JSON.stringify([{ timestamp_ns: 100, payload_hex: "7061796c6f6164" }]),
+);
+```
+
+The package exposes pure manifest and segment-byte helpers. Filesystem log
+read/write/tail helpers are native-only through UniFFI; browser persistence
+needs a storage adapter before it belongs in the wasm surface.

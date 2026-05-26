@@ -6,6 +6,28 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-time` now follows the multiplatform binding standard.** Time behavior moved behind the crate-root `core.rs` re-export with native UniFFI adapters in `ffi.rs`, browser-safe wasm-bindgen JSON adapters in `wasm.rs`, a crate-local `uniffi-bindgen` entrypoint, `bindings.toml`, and Python/Swift/JavaScript package templates. Native `SessionClock`, `SystemClock`, `tick`, `Sampler`, `auki-logs`, `auki-registry`, and `libc` stay gated away from wasm; generated languages get NTP math, best-sample selection, clock-sync state, domain-clock composition, and time-transform conversion.
+
+Tests: `cargo test -p auki-time --no-default-features`; `cargo test -p auki-time`; `cargo check -p auki-time --target wasm32-unknown-unknown --no-default-features --features wasm`; binding generator plans for Python/Swift/JavaScript; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-time` plus Python import smoke; `just generate-javascript-bindings auki-time`; `just generate-swift-bindings auki-time`; `swift build --package-path bindings/swift/auki-time`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-logs` dependency out of default features after `auki-logs` adopted the binding standard, keeping time sampler builds on the direct Rust `Log<T>` API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-registry` dependency out of default features after `auki-registry` adopted the binding standard, keeping session-clock registry entry construction on the direct Rust API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-manifests` dependency out of default features after `auki-manifests` adopted the binding standard, keeping time sampler tests and re-exports on the direct Rust manifest API without inheriting generated binding dependencies.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Active time docs now point `TimeTransformEntry` readers at generated `auki-proto`.** No sampler or time-transform behavior changed.

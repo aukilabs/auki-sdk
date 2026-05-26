@@ -13,7 +13,21 @@ The crate now follows the SDK multiplatform crate pattern:
 - Rust consumers that want only the direct Rust API should depend on `auki-network` with `default-features = false`.
 - Browser builds use `--no-default-features --features wasm`; the Rust wasm layer exposes identity and protocol helpers, while browser transport is implemented in the generated JavaScript package with jslibp2p.
 
-The native UniFFI adapter is intentionally small. It does not replace the existing PyO3 `auki-network-py` runtime package, which still owns Python access to the richer async swarm/discovery surface.
+The native UniFFI adapter is the crate-owned generated binding surface for Python and Swift. It exposes binding-safe runtime control, request/response protocols, event draining, discovery helpers, app-instance helpers, and byte streams without leaking `libp2p`, Tokio channels, or generic Rust stream types. The older PyO3 `auki-network-py` runtime package is legacy compatibility code and should not be expanded for new binding work.
+
+## Generated Python and Swift
+
+`just generate-python-bindings auki-network` and `just generate-swift-bindings auki-network` use the crate-owned UniFFI adapter. The generated packages expose:
+
+- peer identity derivation from wallet or peer seeds
+- libp2p public-key protobuf export
+- canonical networking capability strings
+- `AukiNetworkRuntime` for binding-safe native runtime spawn, listen-address inspection, connected-peer snapshots, allowed-peer updates, heartbeat targets, event draining, request/response JSON wrappers, responder-token replies, byte-stream open/accept/decline/push/finish, and shutdown
+- `AukiDiscoveryClient` for Discovery list/create/liveness/manager-rotation/deregister calls
+- app-instance JSON helpers
+- the synchronous `/auki/message/0.0.1` `AukiMessageNode` facade for native hosts
+
+The generated Python and Swift packages consume protobuf bytes at the boundary for message envelopes and live stream entries. Application-specific protobuf types come from the sibling `auki-proto` generated packages; bindings do not expose Rust prost structs directly.
 
 The binding-free core surface is intentionally small and WASM-friendly:
 
@@ -46,8 +60,10 @@ Discovery v1 is deliberately shape-checked rather than signature-verified. Succe
 
 The generated package has two layers:
 
-- wasm-bindgen exports for canonical peer derivation, libp2p private-key protobuf bytes, the browser-probe protocol id, and JSON request/response helpers;
+- wasm-bindgen exports for canonical peer derivation, libp2p private-key protobuf bytes, protocol constants, browser-probe framing, message-envelope bytes, and join/info/sensor/resource/registry request/response DTO byte helpers;
 - an `index.js` wrapper that lazily imports jslibp2p packages and creates a browser `Libp2p` node from the Rust-derived private key.
+
+The wrapper exports `AukiNetworkPeer`, whose browser-owned libp2p runtime can open framed `/auki/message/0.0.1`, `/auki/join/0.0.1`, `/auki/info/0.0.1`, `/auki/sensors/0.0.1`, `/auki/resources/0.0.1`, and `/auki/registries/0.0.1` streams. It also exports `dialBrowserProbe({ address, seed | walletSeed, nonce, payload })`, which opens `/auki/browser-probe/0.0.1` from js-libp2p to a native WebRTC Direct listener and round-trips length-prefixed JSON using the Rust wasm helpers. The generated package tests cover protocol constants, DTO bytes, and browser request/response framing; the generated `browser-probe-smoke.mjs` harness plus root `scripts/smoke-network-browser-probe.sh` prove the browser-to-native path against the native `browser_probe_listener` example.
 
 The browser package starts at the network layer. It is not a resurrected `auki-domain-browser` facade, and it does not implement browser Manager semantics. The first production target is a browser leaf peer dialing a native SDK peer through a browser-compatible multiaddr.
 

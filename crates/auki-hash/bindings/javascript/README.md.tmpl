@@ -1,0 +1,11 @@
+# $crate_package_name JavaScript bindings
+
+Generated wasm-bindgen JavaScript package for `$crate_package_name`.
+
+Generate the package from the repo root:
+
+```bash
+just generate-javascript-bindings $crate_package_name
+```
+
+The generated package exposes `hashJcsBytes(bytes)`, returning the SDK's 32-character lowercase XXH3-128 content hash for already-canonical bytes.

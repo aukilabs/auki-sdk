@@ -1,0 +1,15 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-layout`.
+
+The package exposes string adapters for the SDK's canonical on-disk path helpers:
+
+```python
+import $binding_module_name
+
+assert $binding_module_name.sensor_entry_path("/app", "K1/head", "abcd") == (
+    "/app/registries/sensors/K1__head/abcd.json"
+)
+```
+
+The Rust crate keeps the source-compatible `&Path -> PathBuf` API; generated languages use UTF-8 path strings.

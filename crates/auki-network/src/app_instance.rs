@@ -140,10 +140,29 @@ fn format_mac(mac: &[u8; 6]) -> String {
 /// Gather every MAC address visible on the host. Returns the raw 6-byte
 /// arrays in `mac_address`'s native iteration order; filtering and
 /// ordering are [`derive_from`]'s job.
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+)))]
 fn collect_macs() -> io::Result<Vec<[u8; 6]>> {
     let iter = mac_address::MacAddressIterator::new()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     Ok(iter.map(|m| m.bytes()).collect())
+}
+
+#[cfg(any(
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "visionos"
+))]
+fn collect_macs() -> io::Result<Vec<[u8; 6]>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "app_instance MAC derivation is unsupported on this target",
+    ))
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

@@ -10,6 +10,21 @@ This crate is the home for operations that *use* registry declarations and paylo
 
 It does not read registry files, fetch missing hashes, open logs, or speak libp2p. Callers resolve the relevant entries first; this crate only performs deterministic geometry.
 
+## Generated bindings
+
+The crate follows the SDK binding standard:
+
+- `src/core.rs` owns the typed Rust geometry implementation and JSON-string adapters.
+- `src/ffi.rs` exposes native UniFFI adapters for Python and Swift.
+- `src/wasm.rs` exposes wasm-bindgen adapters for JavaScript/WebAssembly.
+
+Rust callers keep the typed `FrameRegistryEntry`, `AxisConvention`,
+`SpatialTransform`, `Vec3`, and `Quat` API. Generated languages use JSON strings:
+Frame inputs are the same registry JSON entries that `auki-registry` hashes, and
+vectors/quaternions are small `{x,y,z}` / `{x,y,z,w}` objects. This keeps the
+binding surface deterministic without duplicating registry/protobuf types into
+each generated package.
+
 ## Phase 1: convention conversion
 
 `convert_pose_convention` re-expresses the same physical pose in another declared coordinate convention:

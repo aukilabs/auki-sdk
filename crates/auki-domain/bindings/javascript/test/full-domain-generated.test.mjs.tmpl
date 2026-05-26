@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import initAukiDomain, {
+  AukiDomainClient,
+  clusterMembershipAdmitMemberJson,
+  clusterMembershipNewJson,
+  validateMembershipJson,
+  validateResourceCatalogJson,
+  validateSensorCatalogJson,
+} from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+const peerId = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+test("generated domain package validates DTOs and composes a network peer", async () => {
+  const membership = clusterMembershipAdmitMemberJson(
+    clusterMembershipNewJson("full-domain"),
+    JSON.stringify({
+      peer_id: peerId,
+      multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+      join_ts_ns: 1,
+    }),
+  );
+  assert.equal(JSON.parse(validateMembershipJson(membership)).cluster_name, "full-domain");
+
+  const sensors = {
+    sensors: [{ sensor_id: "full-camera", sensor_hash: "sensor-hash", kind: "camera" }],
+  };
+  assert.equal(JSON.parse(validateSensorCatalogJson(JSON.stringify(sensors))).sensors[0].sensor_id, "full-camera");
+
+  const resources = {
+    resources: [{
+      kind: "sensor_stream",
+      id: "full-camera",
+      sensor_id: "full-camera",
+      sensor_hash: "sensor-hash",
+      sensor_kind: "camera",
+      stream_protocol: "/auki/stream/0.1.0",
+      payload: "camera_frame",
+    }],
+  };
+  assert.equal(JSON.parse(validateResourceCatalogJson(JSON.stringify(resources))).resources[0].payload, "camera_frame");
+
+  const calls = [];
+  const networkPeer = {
+    peerId,
+    async requestFramed(peerMultiaddr, protocol, payload) {
+      calls.push({ peerMultiaddr, protocol, request: JSON.parse(decoder.decode(payload)) });
+      return encoder.encode(JSON.stringify({ sensors: sensors.sensors }));
+    },
+  };
+  const client = new AukiDomainClient({ networkPeer, clusterName: "full-domain" });
+  const fetched = JSON.parse(await client.fetchSensorCatalog("/ip4/127.0.0.1/tcp/4001", { include: "all" }));
+  assert.equal(fetched.sensors[0].sensor_id, "full-camera");
+  assert.deepEqual(calls, [{
+    peerMultiaddr: "/ip4/127.0.0.1/tcp/4001",
+    protocol: "/auki/sensors/0.0.1",
+    request: { include: "all" },
+  }]);
+});

@@ -1,5 +1,5 @@
 [generators.uniffi]
-features = ["cli", "message_node"]
+features = ["cli", "message_node", "discovery_client", "app_instance"]
 bindgen_bin = "uniffi-bindgen"
 
 [generators.wasm_pack]
@@ -7,21 +7,35 @@ features = ["wasm"]
 target = "web"
 
 [bindings.python]
-# Disabled while the existing PyO3 `auki-network-py` package owns the rich
-# Python runtime surface. The UniFFI adapter is intentionally small and native.
-enabled = false
+# The legacy PyO3 `auki-network-py` package is intentionally ignored for the
+# crate-owned binding track. UniFFI exposes the same small native surface used
+# by Swift, including the optional message-node facade.
+enabled = true
 generator = "uniffi"
+template_dir = "bindings/python"
+templates = ["pyproject.toml.tmpl", "setup.py.tmpl", "README.md.tmpl"]
+build_features = ["message_node", "discovery_client", "app_instance"]
 
 [bindings.swift]
 enabled = true
 generator = "uniffi"
 template_dir = "bindings/swift"
 templates = ["Package.swift.tmpl"]
-build_features = ["message_node"]
+build_features = ["message_node", "discovery_client", "app_instance"]
 
 [bindings.javascript]
 enabled = true
 generator = "wasm_pack"
 template_dir = "bindings/javascript"
-templates = ["package.json.tmpl", "README.md.tmpl", "index.js.tmpl", "index.d.ts.tmpl"]
+templates = [
+    "package.json.tmpl",
+    "README.md.tmpl",
+    "index.js.tmpl",
+    "index.d.ts.tmpl",
+    "browser-probe-smoke.mjs.tmpl",
+    "test/protocol-helpers.test.mjs.tmpl",
+    "test/browser-message-smoke.test.mjs.tmpl",
+    "test/browser-request-response-smoke.test.mjs.tmpl",
+    "test/full-network-generated.test.mjs.tmpl",
+]
 smoke = "bindings/javascript/smoke.mjs"

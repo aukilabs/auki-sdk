@@ -6,6 +6,128 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+**Binding runtime-pair smokes refresh peer updates while connecting.** The Rust full-surface helper and generated Python smoke now reapply the same allowed-peer update while waiting for both runtimes to connect, use a wider local libp2p startup timeout, and the Rust helper gives shutdown's transport grace window time to finish before the next pair starts. This keeps local startup verification resilient to transient libp2p dial state while still exercising the generated `set_allowed_peers` path.
+
+Tests: `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance --test full_binding_surface -- --test-threads=1`; `python3 crates/auki-network/bindings/python/smoke_full_network.py` repeated five times; `swift run --package-path crates/auki-network/bindings/swift/SmokeFullNetwork SmokeFullNetwork`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Allowed-peer updates now drive due dials immediately.** `NetworkRuntime` now runs due dial attempts after initial protocol setup and immediately after `set_allowed_peers`, so generated hosts do not depend on the periodic reconnect tick to make the first connection attempt.
+
+Tests: `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance --test full_binding_surface -- --test-threads=1`; `python3 crates/auki-network/bindings/python/smoke_full_network.py` repeated five times; `swift run --package-path crates/auki-network/bindings/swift/SmokeFullNetwork SmokeFullNetwork`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Binding smoke runtimes now use fresh peer identities.** The Rust full-surface helper and generated Python smoke now create fresh runtime peer identities for runtime-pair tests, keeping rapid teardown/restart verification from reusing the same libp2p peer ids while old transports may still be closing.
+
+Tests: `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance --test full_binding_surface -- --test-threads=1` repeated three times.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Started dials keep retry schedules until connected.** The reconnect scheduler now keeps a short watchdog retry after libp2p accepts a dial attempt, clearing it only when a `ConnectionEstablished` event arrives, so generated hosts do not wait forever on a pending dial that neither connects nor errors promptly.
+
+Tests: red/green `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance pending_dials_keep_retry_after_started_dial_until_connected -- --nocapture`; `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance pending_dials_ -- --nocapture`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Python full-network smoke now applies peers after listeners are ready.** The generated Python smoke starts both `AukiNetworkRuntime` hosts with empty allow-lists on `/tcp/0`, waits for their concrete listen multiaddrs, then uses generated `set_allowed_peers` calls to connect them, removing avoidable startup races from the generated-package verification.
+
+Tests: `python3 crates/auki-network/bindings/python/smoke_full_network.py` repeated three times before the smoke stabilization; final generated-package smoke rerun covered by the full binding verification pass.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Pending dials now retry after immediate dial errors.** The runtime dial scheduler now preserves a retry schedule when `swarm.dial(...)` rejects a due dial immediately, preventing a binding startup path from clearing the only pending reconnect attempt after transient duplicate/in-progress dial state.
+
+Tests: red/green `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance pending_dials_retry_after_immediate_dial_error -- --nocapture`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Allowed-peer refresh now redials disconnected peers.** `NetworkRuntime::set_allowed_peers` now schedules an immediate dial when an existing allowed peer receives refreshed addresses while disconnected, closing a binding-surface startup flake where generated hosts could refresh addresses but never redial.
+
+Tests: `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance --test full_binding_surface -- --test-threads=1`; repeated the same full-surface command three times in a loop.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface documentation updated.** The crate README and source README now describe the generated Python/Swift operational `AukiNetworkRuntime` surface, browser JavaScript protocol helpers and `AukiNetworkPeer` facade, `auki-proto` byte boundaries for messages and streams, and the legacy status of the PyO3 package.
+
+Tests: documentation-only; `python3 scripts/bindings/check-full-surface.py`; `git diff --check`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Generated package smoke coverage added for the full binding surface.** The crate now owns generated Python, Swift, and JavaScript smoke coverage for the expanded binding surface: Python starts two generated `AukiNetworkRuntime` facades and completes a join request/response, Swift imports the generated SwiftPM package and starts/shuts down the runtime, and JavaScript imports the generated wasm package to validate protocol constants plus DTO bytes. Swift generated packages now link `SystemConfiguration.framework` for the native networking stack, and the `app_instance` MAC derivation dependency is unavailable on iOS-family targets instead of breaking iOS Swift generation.
+
+Tests: `AUKI_PYTHON_NATIVE_TARGETS="$(rustc -vV | awk '/host:/ {print $2}')" just generate-python-bindings auki-network`; `python3 crates/auki-network/bindings/python/smoke_full_network.py`; `cargo check -p auki-network --target aarch64-apple-ios --features message_node,discovery_client,app_instance`; `just generate-swift-bindings auki-network`; `swift run --package-path crates/auki-network/bindings/swift/SmokeFullNetwork SmokeFullNetwork`; `just generate-javascript-bindings auki-network`; `npm --prefix bindings/javascript/auki-network test`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Binding stream providers moved off the async substream worker.** Inbound stream provider callbacks now run through Tokio's blocking pool before the runtime writes the accept/decline response, so generated-language hosts can synchronously wait on binding responder decisions without occupying the async worker that owns the libp2p substream handshake.
+
+Tests: `cargo test -p auki-network --test full_binding_surface native_camera_stream_bytes_are_exposed --features swarm -- --test-threads=1 --nocapture`; repeated the same stream binding test five times after one cold-start connection-timeout flake.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Discovery, app-instance, and browser JavaScript binding surfaces added.** Native UniFFI now exposes the binding-safe peer identity helpers, a cluster-oriented `AukiDiscoveryClient` facade, and app-instance JSON helpers. The Python and Swift build features now include `discovery_client` and `app_instance` so generated native bindings see that surface. Browser wasm now exports protocol constants plus message-envelope, join, and catalog DTO byte helpers, and the generated JavaScript package's `AukiNetworkPeer` class now owns libp2p runtime methods for browser probe, message envelope, join, and catalog request/response streams. Generated package tests cover the protocol helpers and JavaScript-owned peer facade.
+
+Tests: `cargo test -p auki-network --features message_node,swarm,discovery_client,app_instance --test full_binding_surface -- --test-threads=1`; `cargo test -p auki-network --features message_node,swarm --test full_binding_surface -- --test-threads=1`; `cargo test -p auki-network --test full_binding_surface`; `python3 scripts/bindings/check-full-surface.py`; `just generate-javascript-bindings auki-network`; `npm --prefix bindings/javascript/auki-network test`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-network`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native byte-stream binding surface added.** `AukiNetworkRuntime` now exposes binding-safe stream request and entry records, an opaque `AukiStreamSubscription`, host-driven stream-open request draining, accept/decline responder methods, byte entry pushing, stream finishing, and consumer-side `open_stream_bytes`. The binding stream path exchanges `auki-proto` camera and detection protobuf bytes over real `/auki/stream/0.1.0` libp2p substreams. The runtime facade now also drops its inner network runtime before the Tokio executor, and the two-runtime test helper shuts down both facades explicitly to avoid stale in-process listeners between binding smoke tests.
+
+Tests: `cargo test -p auki-network --features message_node,swarm --test full_binding_surface -- --test-threads=1`; `cargo test -p auki-network --test full_binding_surface`; `python3 scripts/bindings/check-full-surface.py`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-network`; `git diff --check`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native request/response binding smoke coverage added.** The full binding surface tests now create two native `AukiNetworkRuntime` facades, connect them through binding-safe allowed-peer updates, and prove join, participant-info, sensor-catalog, resource-catalog, registry-entry, and diagnostic flows complete over real libp2p substreams using only binding facade methods. `AukiNetworkRuntime` now also exposes `broadcast_diagnostic_message_json`.
+
+Tests: `cargo test -p auki-network --features message_node,swarm --test full_binding_surface -- --test-threads=1`; `cargo test -p auki-network --features message_node,swarm full_binding_surface -- --ignored`; `cargo test -p auki-network --test full_binding_surface`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-network`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native event and request/response binding surface added.** `AukiNetworkRuntime` now exports binding records for runtime events and protocol responses, drains membership/liveness/diagnostic/request event queues, stores responder tokens for inbound join/info/sensor/resource/registry requests, exposes JSON outbound request wrappers, and rejects unknown responder ids with typed `Closed` errors. Two-runtime protocol smoke tests remain the next open item before Phase 3 is complete.
+
+Tests: `cargo test -p auki-network --features message_node,swarm --test full_binding_surface`; `cargo test -p auki-network --test full_binding_surface`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-network`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native runtime-control UniFFI facade added.** `AukiNetworkRuntime` now exposes binding-safe spawn, local peer id, emitted listen multiaddrs, connected peer snapshots, allowed-peer updates, heartbeat target updates, and shutdown. The underlying `NetworkRuntime` now records emitted listen addresses, and full binding surface tests activate the runtime-control slice.
+
+Tests: `cargo test -p auki-network --features message_node,swarm native_runtime_`; `cargo test -p auki-network --features message_node,swarm --test full_binding_surface`; `cargo test -p auki-network --test full_binding_surface`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface contract added.** Added `bindings/surface.md` and ignored `full_binding_surface` marker tests so native UniFFI and browser JavaScript requirements for runtime control, events, request/response protocols, discovery, app instances, streams, diagnostics, and browser protocol helpers are now measurable before implementation phases activate the tests.
+
+Tests: `python3 scripts/bindings/check-full-surface.py`; `cargo test -p auki-network --test full_binding_surface`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Browser-to-native probe smoke coverage added for generated JavaScript.** The generated `auki-network` JavaScript package now exports `dialBrowserProbe(...)`, carries a generated `browser-probe-smoke.mjs` harness, and is covered by `scripts/smoke-network-browser-probe.sh`, which starts the native WebRTC Direct listener and proves a js-libp2p peer can open `/auki/browser-probe/0.0.1` using Rust-derived key material and wasm-encoded request/response bytes.
+
+The native probe now serves the SDK protocol over a raw libp2p stream instead of request-response behaviour, matching the generated JS substream path. The workspace temporarily patches `webrtc 0.12.0` locally to avoid negotiating AES-256-GCM with node-datachannel, because the paired `webrtc-srtp 0.14.0` code panics on that profile.
+
+Tests: `just generate-javascript-bindings auki-network`; `npm install --prefix bindings/javascript/auki-network`; `bash scripts/smoke-network-browser-probe.sh`; `cargo test -p auki-network --features browser_probe browser_probe`.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Generated Python UniFFI bindings enabled for `auki-network`.** `bindings.toml` now treats the legacy PyO3 package as out of scope and enables the crate-owned Python package with the same `message_node` feature policy as Swift. Added Python package templates, documented the Python/Swift native binding surface, and fixed the generic binding generator so Python native libraries honor per-binding `build_features`.
+
+Tests: `cargo test -p auki-network --no-default-features`; `cargo test -p auki-network`; `cargo check -p auki-network --target wasm32-unknown-unknown --no-default-features --features wasm`; generator plans for Python/Swift/JavaScript; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-network` plus Python import smoke including `AukiMessageNode`; `just generate-javascript-bindings auki-network`; `just generate-swift-bindings auki-network`; `swift build --package-path bindings/swift/auki-network`. The local WebRTC Direct exchange test requires socket access and passed outside the sandbox with `cargo test -p auki-network --features message_node two_message_nodes_exchange_envelope_over_webrtc_direct -- --nocapture`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the optional `auki-time` dependency out of default features after `auki-time` adopted the binding standard, keeping heartbeat NTP sample plumbing on the direct Rust API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the optional `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, keeping Discovery-client canonicalization on the direct Rust API without pulling in the JCS UniFFI surface.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **iOS/browser generated-binding test path documented.** The source README now points at `examples/ios/AukiNetworkTestApp` as the generated Swift host for `AukiMessageNode` and the browser message smoke script; the sprint now treats the committed app/script as current state and leaves only a live simulator/device interop run as follow-up.

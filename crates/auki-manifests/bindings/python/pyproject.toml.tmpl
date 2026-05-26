@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "$crate_package_name"
+version = "$crate_version"
+description = "UniFFI-generated Python bindings for $crate_package_name."
+readme = "README.md"
+license = { text = "$crate_license" }
+authors = [$crate_authors_toml]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "$crate_repository"
+
+[tool.setuptools]
+packages = ["$binding_module_name"]
+
+[tool.setuptools.package-data]
+$binding_module_name = ["native/*/*"]

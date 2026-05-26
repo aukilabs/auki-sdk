@@ -7,15 +7,6 @@ pkg="bindings/python/auki-proto"
 rm -rf "$pkg"
 mkdir -p "$pkg"
 
-cat > "$pkg/pyproject.toml" <<'TOML'
-[project]
-name = "auki-proto"
-version = "0.0.0"
-description = "Generated Python protobuf bindings for Auki schemas."
-requires-python = ">=3.10"
-dependencies = ["protobuf>=5"]
-TOML
-
 cat > "$pkg/README.md" <<'MD'
 # auki-proto
 
@@ -30,3 +21,18 @@ protoc \
   proto/auki/*.proto
 
 find "$pkg" -type d -exec sh -c 'touch "$0/__init__.py"' {} \;
+
+protobuf_version="$(sed -n 's/^# Protobuf Python Version: //p' "$pkg/auki/message_pb2.py" | head -n 1)"
+if [[ -z "$protobuf_version" ]]; then
+  echo "Could not determine generated Python protobuf runtime version." >&2
+  exit 1
+fi
+
+cat > "$pkg/pyproject.toml" <<TOML
+[project]
+name = "auki-proto"
+version = "0.0.0"
+description = "Generated Python protobuf bindings for Auki schemas."
+requires-python = ">=3.10"
+dependencies = ["protobuf>=$protobuf_version"]
+TOML

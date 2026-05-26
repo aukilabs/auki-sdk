@@ -8,7 +8,7 @@ authors.workspace = true
 description = "Native diagnostic example app for Auki networking, clustering, and time-sync visibility."
 
 [dependencies]
-auki-domain = { path = "../../crates/auki-domain" }
+auki-domain = { path = "../../crates/auki-domain", default-features = false }
 auki-identity = { path = "../../crates/auki-identity", default-features = false }
 auki-network = { path = "../../crates/auki-network", features = ["swarm", "discovery_client", "app_instance"] }
 eframe = "0.30"

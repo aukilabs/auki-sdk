@@ -24,23 +24,26 @@ cli = ["uniffi", "uniffi/cli"]
 # transport is implemented by the generated JS package using jslibp2p.
 wasm = [
     "auki-identity/wasm",
+    "dep:auki-proto",
     "dep:getrandom",
     "dep:js-sys",
+    "dep:prost",
     "dep:wasm-bindgen",
 ]
 # Stream/message protocol wire types live in `auki-proto`; pulled in
 # alongside libp2p so substream protocols can encode/decode prost messages
 # directly. base64 is no longer needed under swarm — protobuf handles binary
 # natively.
-swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "dep:futures", "dep:auki-proto", "dep:auki-time", "dep:prost"]
+swarm = ["dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:thiserror", "dep:tokio", "tokio/rt-multi-thread", "dep:futures", "dep:auki-proto", "dep:auki-time", "dep:prost"]
 # Native-only probe for proving browser peers can dial an SDK-owned WebRTC
 # Direct listener before the Domain adapter stops failing closed.
 webrtc_direct = ["swarm", "dep:libp2p-webrtc", "dep:rand"]
 browser_probe = ["webrtc_direct"]
 message_node = ["webrtc_direct", "tokio/rt-multi-thread"]
-# Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
-# `mac_address` crate, which uses platform-specific syscalls
-# (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
+# Per-machine identifier derivation (ansuz #5). Non-WASM. Host targets that
+# allow interface enumeration pull in the `mac_address` crate. iOS-family
+# targets compile the binding surface but return an unsupported runtime error
+# when asked to enumerate MAC addresses.
 app_instance = ["dep:mac_address"]
 # Vinland Batch 1 piece #2 — REST client for Discovery
 # (`aukilabs/discovery`). Pulls in `reqwest` (async HTTP), `base64`
@@ -93,12 +96,9 @@ rand = { version = "0.8", optional = true }
 # `StreamMessage`, `MessageEnvelope`, and `MessageAck`.
 auki-proto = { path = "../auki-proto", optional = true }
 # NTP-style samples derived from heartbeat echoes.
-auki-time = { path = "../auki-time", optional = true }
+auki-time = { path = "../auki-time", default-features = false, optional = true }
 # Encode/decode prost messages on the substream wire.
 prost = { version = "0.13", optional = true }
-
-# `app_instance` feature
-mac_address = { version = "1", optional = true }
 
 # `discovery_client` feature
 # rustls-tls (not the default native-tls) keeps us off OpenSSL for
@@ -109,7 +109,7 @@ mac_address = { version = "1", optional = true }
 # `discovery_client::subscribe`.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
-auki-jcs = { path = "../auki-jcs", optional = true }
+auki-jcs = { path = "../auki-jcs", default-features = false, optional = true }
 # Parses Server-Sent Events from a `Stream<Item = Result<Bytes, _>>`
 # into a stream of typed SSE events. Picked over `reqwest-eventsource`
 # because the latter adds reconnection-on-drop, which the
@@ -125,6 +125,10 @@ percent-encoding = { version = "2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 uniffi = { version = "0.31", optional = true }
+
+[target.'cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos")))'.dependencies]
+# `app_instance` feature on targets where interface enumeration is supported.
+mac_address = { version = "1", optional = true }
 
 [[bin]]
 name = "uniffi-bindgen"

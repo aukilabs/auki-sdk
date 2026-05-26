@@ -4,7 +4,13 @@ SDK time primitives, time-transform math, NTP-style offset samples, peer-clock s
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs). The log payload definition lives in generated [`auki-proto`](../../auki-proto); this crate owns session clocks, the producer sampler, and pure time-transform math while re-exporting the canonical TimeTransform payload type.
+- [`core.rs`](core.rs) — binding-free Rust API for session clocks, transform math, NTP samples, peer-clock sync state, domain-clock composition, and the native sampler.
+- [`lib.rs`](lib.rs) — feature-gated module wiring that re-exports `core`.
+- [`ffi.rs`](ffi.rs) — UniFFI records/objects for generated Python and Swift packages.
+- [`wasm.rs`](wasm.rs) — wasm-bindgen JSON-string adapters for the browser-safe math and sync surface.
+- [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) — crate-local UniFFI CLI entrypoint.
+
+The log payload definition lives in generated [`auki-proto`](../../auki-proto); this crate owns session clocks, the producer sampler, and pure time-transform math while re-exporting the canonical TimeTransform payload type.
 
 The crate has six composable layers:
 1. The **session clock** ([`SessionClock`]) — SDK-owned session-monotonic identity and reader. Clock ids are `<peer_id>/<session_id>/monotonic`; the first segment is the authoring peer id, and the registry entry's epoch marker is the session id.
@@ -13,6 +19,18 @@ The crate has six composable layers:
 4. The **domain-clock composition API** (`DomainClockDescriptor`, `DomainClockEstimate`, `estimate_domain_clock`) — pure composition from `local -> backing` estimate plus `backing -> domain` descriptor into `local -> domain`.
 5. The **unit-testable local sampler primitive** ([`tick`]) — pure function over a `Clock` trait. Reads three clocks, builds one entry. No state.
 6. The **production thread** ([`Sampler`]) — wraps `tick` in a 1 Hz background loop.
+
+## Binding adapters
+
+The crate-owned binding contract lives in [`../bindings.toml`](../bindings.toml) with package templates under [`../bindings/`](../bindings/).
+
+Native UniFFI exposes:
+
+- records for `TimeTransform`, NTP exchanges/samples, clock-sync observations/config, transform estimates, and domain-clock descriptors/estimates
+- `ClockSyncState` as a shared object over the same retention/selection policy as Rust
+- `SessionClock` as a native object with `now_ns`, `clock_id`, `clock_hash`, and canonical registry-entry JSON
+
+Browser wasm intentionally omits host clocks, `clock_gettime`, sampler threads, and filesystem-backed logs. It exports JSON-string adapters for NTP sample math, best-sample selection, `ClockSyncState`, domain-clock composition, and time-transform conversion.
 
 ## Re-exports
 
@@ -211,7 +229,7 @@ impl Sampler {
 
 `stop` signals the thread, joins, and **returns the log back** so the caller can flush/drop it on the main thread (matters for fsync ordering during shutdown). Append failures are logged via `eprintln!` and the loop continues — a per-tick I/O hiccup shouldn't kill the sampler.
 
-## Tests (21 total)
+## Tests
 
 | Test | Asserts |
 |------|---------|
@@ -237,6 +255,7 @@ impl Sampler {
 | `clock_transform_estimate_identity_has_zero_offset_and_uncertainty` | Identity estimates use the same local/backing clock with zero offset and zero uncertainty. |
 | `tick_computes_offset_uncertainty_and_timestamp` | The math is right for one canned set of readings (offset, uncertainty, timestamp). |
 | `sampler_writes_entries_then_stops_cleanly` | Threaded integration test against `ScriptedClock`; entries are written and stop cleanly via the join handle. |
+| `tests/surface.rs` | Root Rust API remains source-compatible while the default build includes UniFFI wiring. |
 
 The Step 6 cleanup dropped 6 discontinuity-detection tests (logic moved to readers; no producer-side discontinuity to test in this crate any more), the snake-case `TimeTransformSource` test (moved to [`auki-manifests`](../../auki-manifests) where the type now lives), and the CBOR round-trip test (replaced by the prost round-trip in [`auki-proto::tests`](../../auki-proto/src/lib.rs)).
 

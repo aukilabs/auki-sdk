@@ -11,6 +11,7 @@ This crate provides:
 - The 1 Hz `local_clock_read` sampler that produces `TimeTransformEntry` records.
 - The three-read sampling protocol (`m1, r, m2`) and its `uncertainty_ns` computation.
 - A `Clock` trait + `SystemClock` impl wired to `clock_gettime` for `CLOCK_MONOTONIC` / `CLOCK_REALTIME`.
+- Crate-owned UniFFI bindings for Python/Swift and wasm-bindgen bindings for the browser-safe time math surface.
 
 `TimeTransformEntry` is generated from the root protobuf schemas into [`auki-proto`](../auki-proto). The log itself is an [`auki-logs`](../auki-logs) `Log<TimeTransformEntry>` opened at `<session>/timetransform_logs/<from_id>__<to_id>/`. One TimeTransform Log per ordered clock pair per session — clock offsets are time-localized, so the session is the natural retention boundary. See [`auki-layout`](../auki-layout) for path helpers and the full session shape.
 
@@ -50,6 +51,17 @@ uncertainty_ns = (local_receive_ns - local_send_ns)
 ```
 
 The formula is valid for independent monotonic epochs because it estimates the transform between the two clock readings, not the absolute time-of-day of either clock. `select_best_ntp_sample` picks the lowest-uncertainty sample, breaking ties by the newest local observation.
+
+## Generated bindings
+
+`auki-time` follows the SDK binding standard:
+
+- `src/core.rs` owns the binding-free Rust API.
+- `src/ffi.rs` exports UniFFI records/objects for Python and Swift.
+- `src/wasm.rs` exports wasm-bindgen JSON-string adapters for browser JavaScript.
+- `bindings.toml` and `bindings/{python,swift,javascript}/` define the crate-owned package contracts.
+
+Native UniFFI exposes the pure transform/NTP/sync/domain APIs plus `SessionClock` for host clock identity and registry-entry JSON. Browser wasm exposes only web-safe behavior: NTP math, best-sample selection, `ClockSyncState`, domain-clock composition, and timestamp conversion. `SystemClock`, `tick`, `Sampler`, and filesystem-backed log production stay native-only.
 
 ## Peer-clock sync state
 

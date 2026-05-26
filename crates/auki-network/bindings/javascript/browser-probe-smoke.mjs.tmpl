@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+
+import initAukiNetwork, { dialBrowserProbe } from "./index.js";
+
+function usage() {
+  console.log("Usage: node bindings/javascript/auki-network/browser-probe-smoke.mjs <native-browser-probe-multiaddr>");
+}
+
+const address = process.argv[2];
+if (address == null || address === "--help") {
+  usage();
+  process.exit(address === "--help" ? 0 : 1);
+}
+
+const wasmBytes = await readFile(new URL("./$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+const walletSeed = new Uint8Array(32);
+walletSeed.fill(3);
+
+const response = await dialBrowserProbe({
+  walletSeed,
+  address,
+  nonce: "browser-probe-smoke",
+  payload: new Uint8Array([7, 8, 9]),
+});
+
+if (response.nonce !== "browser-probe-smoke") {
+  throw new Error(`bad nonce: ${response.nonce}`);
+}
+if (JSON.stringify(response.payload) !== JSON.stringify([7, 8, 9])) {
+  throw new Error(`bad payload: ${JSON.stringify(response.payload)}`);
+}
+if (!response.responder.startsWith("native:")) {
+  throw new Error(`bad responder: ${response.responder}`);
+}
+
+console.log(`browser probe smoke ok: ${response.responder}`);

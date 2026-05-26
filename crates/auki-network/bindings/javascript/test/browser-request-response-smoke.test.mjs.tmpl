@@ -1,0 +1,80 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, { AukiNetworkPeer } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("AukiNetworkPeer opens join and catalog request-response streams", async () => {
+  const node = new FakeNode([
+    new Uint8Array([10, 11]),
+    new Uint8Array([12, 13]),
+  ]);
+  const peer = new AukiNetworkPeer(node);
+
+  const joinResponse = await peer.requestJoin({ id: "join-manager" }, new Uint8Array([1]));
+  const catalogResponse = await peer.requestCatalog({ id: "catalog-peer" }, new Uint8Array([2]));
+
+  assert.deepEqual([...joinResponse], [10, 11]);
+  assert.deepEqual([...catalogResponse], [12, 13]);
+  assert.deepEqual(node.protocols, [
+    "/auki/join/0.0.1",
+    "/auki/resources/0.0.1",
+  ]);
+  assert.deepEqual([...node.streams[0].sentPayload()], [1]);
+  assert.deepEqual([...node.streams[1].sentPayload()], [2]);
+});
+
+class FakeNode {
+  constructor(responses) {
+    this.peerId = { toString: () => "fake-peer" };
+    this.responses = responses;
+    this.protocols = [];
+    this.streams = [];
+  }
+
+  getMultiaddrs() {
+    return [];
+  }
+
+  async dialProtocol(_address, protocol) {
+    this.protocols.push(protocol);
+    const stream = new FakeStream(this.responses.shift());
+    this.streams.push(stream);
+    return stream;
+  }
+}
+
+class FakeStream {
+  constructor(responseBytes) {
+    this.sent = [];
+    this.responseFrame = frame(responseBytes);
+  }
+
+  send(bytes) {
+    this.sent.push(bytes);
+    return true;
+  }
+
+  sentPayload() {
+    const bytes = this.sent[0];
+    const length = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
+    assert.equal(length, bytes.length - 4);
+    return bytes.slice(4);
+  }
+
+  async *[Symbol.asyncIterator]() {
+    yield this.responseFrame;
+  }
+}
+
+function frame(payload) {
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, payload.length, false);
+  const out = new Uint8Array(length.length + payload.length);
+  out.set(length, 0);
+  out.set(payload, length.length);
+  return out;
+}

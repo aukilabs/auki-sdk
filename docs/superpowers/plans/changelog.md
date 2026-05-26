@@ -4,6 +4,70 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 10 of the full `auki-network` and `auki-domain` bindings plan complete after updating README/source documentation, sprint notes, changelog propagation, and the final verification command list.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 9 of the full `auki-network` and `auki-domain` bindings plan complete after adding generated Python, Swift, and JavaScript/Wasm smoke tests for the generated package surfaces.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 8 of the full `auki-network` and `auki-domain` bindings plan complete after adding browser-safe `auki-domain` DTO validators, the generated JavaScript `AukiDomainClient` facade over `auki-network` browser request framing, and generated package tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 7 of the full `auki-network` and `auki-domain` bindings plan complete after adding native `auki-domain` catalog/resource/registry providers, catalog and registry fetches, byte-stream producer/consumer controls, and regenerated Python/Swift binding surfaces.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 6 of the full `auki-network` and `auki-domain` bindings plan complete after adding the native domain cluster-control, diagnostics, membership snapshot, clock estimate, and regenerated Python binding surfaces.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 5 of the full `auki-network` and `auki-domain` bindings plan complete after adding the native Discovery/app-instance facades, browser wasm protocol helpers, JavaScript-owned libp2p peer methods, and generated package tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 4 of the full `auki-network` and `auki-domain` bindings plan complete after adding native byte-stream binding records, `AukiStreamSubscription`, host-driven stream provider events, and protobuf-byte stream smoke tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 3 of the full `auki-network` and `auki-domain` bindings plan complete after adding two-runtime native binding smoke tests for join, participant-info, catalog, registry, and diagnostic flows.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked the API-surface tasks in Phase 3 of the full `auki-network` and `auki-domain` bindings plan complete after adding native event records, responder-token registries, drain methods, JSON request wrappers, and response methods; two-runtime smoke tests remain open.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 2 of the full `auki-network` and `auki-domain` bindings plan complete after adding the native `AukiNetworkRuntime` runtime-control UniFFI facade and active binding-surface tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Marked Phase 1 of the full `auki-network` and `auki-domain` bindings plan complete after adding surface inventories, marker tests, and the root binding-surface checker.
+
+### Nils's codex · May 25, HKT, 2026
+
+Created the full `auki-network` and `auki-domain` bindings implementation plan, defining binding-safe parity for native UniFFI, browser wasm/JavaScript, request/response protocols, streams, providers, generated-language smoke tests, and the explicit exclusion of `auki-ros-adapter`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Marked the SDK-wide UniFFI plan's browser-probe smoke coverage item complete after the generated JavaScript package successfully dialed the native WebRTC Direct `/auki/browser-probe/0.0.1` listener.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI plan status to reflect completed crate migrations, the legacy PyO3 out-of-scope decision, and the JavaScript-owned browser transport split while leaving real browser-probe interop smoke coverage open.
+
+### Nils's codex · May 24, HKT, 2026
+
+Marked the SDK-wide UniFFI plan's generator inventory helper and all-crate binding contract test items complete after widening `scripts/test-binding-generator-contract.sh`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan to stop the current pass at `auki-domain` and defer `auki-ros-adapter` to a separate adapter-specific binding decision.
+
 ### Nils's codex · May 24, HKT, 2026
 
 Created the SDK-wide UniFFI bindings migration plan, sequencing crate-owned Python/Swift UniFFI and JavaScript/WASM adoption while treating existing PyO3 packages as legacy compatibility surfaces.

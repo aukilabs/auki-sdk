@@ -9,9 +9,9 @@ description = "Generated Rust protobuf bindings for Auki SDK schemas from root p
 
 [dependencies]
 prost = "0.13"
-auki-logs = { path = "../auki-logs" }
+auki-logs = { path = "../auki-logs", default-features = false }
 
 [dev-dependencies]
-auki-hash = { path = "../auki-hash" }
+auki-hash = { path = "../auki-hash", default-features = false }
 serde_json = "1"
 tempfile = "3"

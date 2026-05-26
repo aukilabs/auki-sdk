@@ -36,6 +36,39 @@ mod ffi;
 #[doc(hidden)]
 pub use ffi::UniFfiTag;
 
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use ffi::{
+    NetworkError, PeerIdentity as BindingPeerIdentity, networking_capabilities,
+    peer_derivation_label, peer_id_from_wallet_seed,
+};
+
+#[cfg(all(feature = "uniffi", feature = "swarm", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use ffi::{
+    AukiNetworkRuntime, BindingAllowedPeer, BindingNetworkError, BindingProtocolResponse,
+    BindingRuntimeEvent, BindingStreamEntry, BindingStreamRequest, BindingSwarmConfig,
+    BindingUpdateReport,
+};
+
+#[cfg(all(
+    feature = "uniffi",
+    feature = "discovery_client",
+    feature = "swarm",
+    not(target_arch = "wasm32")
+))]
+#[doc(hidden)]
+pub use ffi::{AukiDiscoveryClient, discovery_client};
+
+#[cfg(all(
+    feature = "uniffi",
+    feature = "app_instance",
+    feature = "swarm",
+    not(target_arch = "wasm32")
+))]
+#[doc(hidden)]
+pub use ffi::{app_instance_peer_id, derive_app_instance_json};
+
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod wasm;
 

@@ -1,38 +1,33 @@
 //! Cluster lifecycle for the Auki SDK.
 //!
-//! Owns the cluster membership document ([`ClusterMembership`]),
-//! the join protocol, the Manager state machine, peer-side heartbeat,
-//! successor election, and Manager-handoff orchestration.
-//!
-//! Not the home for `convert_time` / `convert_pose` — those operate
-//! inside a cluster but live elsewhere. Not the home for log-writing
-//! session lifecycle either.
-//!
-//! ## Status
-//!
-//! Cluster membership document type lands first. Manager state
-//! machine, join protocol, heartbeat, election, and handoff follow.
+//! The stable Rust API is re-exported from [`core`]. Native UniFFI exposes a
+//! bounded cluster-manager facade plus cluster membership helpers. Browser
+//! WebAssembly exposes only web-safe membership JSON and election helpers.
 
 #![warn(missing_docs)]
 
-pub mod cluster_manager;
-pub mod cluster_membership;
-pub mod stream_manifest;
+#[cfg(all(target_arch = "wasm32", feature = "uniffi"))]
+compile_error!(
+    "auki-domain does not support UniFFI on wasm32; build wasm with --no-default-features --features wasm"
+);
 
-pub use auki_network::registries_protocol::RegistryKind;
-pub use auki_network::resources_protocol::{
-    ResourceEntry, ResourceKind, ResourcePinholeIntrinsics, ResourceQuat, ResourceSpatialTransform,
-    ResourceVec3, ResourcesRequest, ResourcesResponse, SensorStreamResource, TransformEdgeResource,
+pub mod core;
+pub use core::*;
+
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+mod ffi;
+
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use ffi::UniFfiTag;
+
+#[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
+#[doc(hidden)]
+pub use ffi::{
+    BindingDomainError, BindingRegistryEntryProvider, BindingResourceCatalogProvider,
+    BindingSensorCatalogProvider, ClusterTargetMode, DomainClusterManager, DomainRuntimeEvent,
+    DomainStreamEntry, DomainStreamSubscription, bootstrap_domain_cluster_manager,
 };
-pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
-pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
-pub use cluster_manager::{
-    AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
-    DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
-    DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
-    FetchResourcesCatalogError, FetchSensorsCatalogError, InboundDiagnosticMessage,
-    JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
-    SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
-};
-pub use cluster_membership::{ClusterMember, ClusterMembership};
-pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};
+
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+mod wasm;

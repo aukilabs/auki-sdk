@@ -7,9 +7,10 @@ Current work and next steps to close the gap between [`src/readme.md`](readme.md
 The crate is the low-level networking substrate. The current implementation has these layers:
 
 - **Core identity and reachability, `default-features = false`.** `PeerIdentity` derives the libp2p key from `Wallet::derive_child("peer/v1")`; `ReachabilityRecord`, `Capability`, and `ParticipantInfo` remain the small serializable shapes available without native transport dependencies. `PeerIdentity::private_key_protobuf()` is the bridge that lets jslibp2p import the same key material in browser JavaScript.
-- **Native and browser binding adapters.** The default native feature set enables a small UniFFI surface. The `wasm` feature exposes identity/protocol helpers to wasm-bindgen. Crate-owned JavaScript templates generate a package whose runtime imports jslibp2p lazily; browser transport is not implemented by Rust `NetworkRuntime`.
-- **Browser probe, `browser_probe` feature.** The crate exposes shared `/auki/browser-probe/0.0.1` request/response structs and a native WebRTC Direct listener example that prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs. This is a proof surface for browser peers only; production Domain join still lives above it.
-- **Native message node, `message_node` feature.** The crate now owns a small synchronous WebRTC Direct `/auki/message/0.0.1` facade for UniFFI hosts. It uses generated `auki-proto` message bytes at the boundary, keeps protobuf conversion platform-local, exposes `AukiMessageNode` in generated Swift, backs the iOS generated-binding test app, and proves native-to-native message/ack exchange with a local WebRTC Direct test.
+- **Native and browser binding adapters.** The default native feature set enables UniFFI identity helpers plus, with the native runtime feature set, `AukiNetworkRuntime` for binding-safe spawn, listen-address inspection, connected-peer snapshots, allowed-peer updates, heartbeat target updates, event draining, request/response JSON wrappers, responder-token replies, and shutdown. The `wasm` feature exposes identity/protocol helpers to wasm-bindgen. Crate-owned JavaScript templates generate a package whose runtime imports jslibp2p lazily; browser transport is not implemented by Rust `NetworkRuntime`.
+- **Generated binding smoke coverage.** The crate carries generated-package smoke tests for Python, Swift, and JavaScript/Wasm. The Python smoke starts two generated `AukiNetworkRuntime` objects and completes a join request/response; the Swift smoke imports the generated Swift package and starts/shuts down the runtime; the JavaScript tests import the generated wasm package and validate protocol constants plus DTO bytes.
+- **Browser probe, `browser_probe` feature.** The crate exposes shared `/auki/browser-probe/0.0.1` request/response structs, a native WebRTC Direct listener example that prints browser-dialable `/webrtc-direct/certhash/.../p2p/<peer-id>` multiaddrs, generated JavaScript `dialBrowserProbe(...)`, and a root smoke script that proves generated js-libp2p can open the SDK-owned stream. This is a proof surface for browser peers only; production Domain join still lives above it.
+- **Native message node, `message_node` feature.** The crate now owns a small synchronous WebRTC Direct `/auki/message/0.0.1` facade for UniFFI hosts. It uses generated `auki-proto` message bytes at the boundary, keeps protobuf conversion platform-local, exposes `AukiMessageNode` in generated Python and Swift, backs the iOS generated-binding test app, and proves native-to-native message/ack exchange with a local WebRTC Direct test.
 - **Swarm and protocols, `swarm` feature.** `swarm::build_swarm` builds TCP + QUIC + Noise + Yamux with identify, ping, relay-client, optional relay-server, and the raw-substream behaviour. `NetworkRuntime` owns the swarm task, dynamic allowed peers, connected-peer snapshots, membership broadcast, join requests, peer-info requests, sensor-catalog requests, registry-entry requests, typed stream opening, and shutdown.
 - **Discovery client, `discovery_client` feature.** `DiscoveryClient` wraps Discovery's cluster directory endpoints: list, atomic create, liveness check, Manager rotation, and deregistration.
 
@@ -35,6 +36,7 @@ type StreamProvider =
 ```
 
 `StreamDispatch` supports JPEG, PointCloud, JointEncoders, Audio, and decline paths. Each accepted substream is still mono-`T`; the consumer chooses the expected payload type when opening the stream.
+Binding provider callbacks are dispatched off the async worker so generated-language hosts can make synchronous accept/decline decisions without stalling the substream handshake.
 
 Cluster lifecycle policy is intentionally one layer up in [`auki-domain`](../../auki-domain). App daemons should normally use `ClusterManager`; this crate remains the transport/protocol toolbox.
 
@@ -54,8 +56,9 @@ In priority order:
 
 - Expose only the `SwarmConfig` knobs that real daemons need; keep idle/ping/connection-limit tuning private until there is pressure.
 - Decide whether transport build errors should stay stringly typed or preserve structured sources.
-- Keep the Python stream-provider bridge aligned when new `StreamDispatch` payload variants land.
+- Keep generated Python and Swift UniFFI message-node surfaces aligned when native host APIs change.
 - Keep the generated JavaScript package at the network layer; add a separate facade only if an app needs one after browser leaf-peer join works.
+- Track upstream `libp2p-webrtc` / `webrtc-srtp` SRTP profile fixes and remove the local `webrtc` crate patch once AES-256-GCM no longer panics with node-datachannel.
 
 ## Open Items
 

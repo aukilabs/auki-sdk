@@ -1,0 +1,34 @@
+[generators.uniffi]
+features = ["cli"]
+bindgen_bin = "uniffi-bindgen"
+
+[generators.wasm_pack]
+features = ["wasm"]
+target = "web"
+
+[bindings.python]
+enabled = true
+generator = "uniffi"
+template_dir = "bindings/python"
+templates = ["pyproject.toml.tmpl", "setup.py.tmpl", "README.md.tmpl"]
+
+[bindings.swift]
+enabled = true
+generator = "uniffi"
+template_dir = "bindings/swift"
+templates = ["Package.swift.tmpl"]
+
+[bindings.javascript]
+enabled = true
+generator = "wasm_pack"
+template_dir = "bindings/javascript"
+templates = [
+  "package.json.tmpl",
+  "README.md.tmpl",
+  "index.js.tmpl",
+  "index.d.ts.tmpl",
+  "test/domain-helpers.test.mjs.tmpl",
+  "test/domain-client-request-response.test.mjs.tmpl",
+  "test/full-domain-generated.test.mjs.tmpl",
+]
+smoke = "bindings/javascript/smoke.mjs"

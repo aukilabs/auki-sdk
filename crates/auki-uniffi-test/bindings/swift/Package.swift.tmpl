@@ -15,6 +15,7 @@ let package = Package(
             name: "$crate_lib_name",
             dependencies: ["${crate_lib_name}FFI"],
             path: "generated",
+            exclude: ["$crate_lib_name.xcframework"],
             sources: ["$crate_lib_name.swift"]
         ),
         .binaryTarget(

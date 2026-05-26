@@ -6,6 +6,30 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the dev-only `auki-logs` dependency out of default features after `auki-logs` adopted the binding standard, keeping manifest round-trip tests on the direct Rust log API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** The manifest DTOs, builders, validation helpers, and source canonicalization/hash helpers moved into binding-free `src/core.rs`; `src/lib.rs` now only wires feature-gated modules and re-exports the existing Rust `serde_json::Value` builder API. Native `src/ffi.rs` exposes UniFFI adapters for Python and Swift, taking nanosecond counts instead of `Duration` and returning JCS-canonical JSON strings. `src/wasm.rs` exposes wasm-bindgen adapters for JavaScript/WebAssembly with the same JSON-string return shape. The crate now declares `staticlib` / `cdylib` / `rlib`, default `uniffi`, `cli`, and `wasm` features, a crate-local `uniffi-bindgen` binary, `bindings.toml`, and crate-owned Python, Swift, and JavaScript package templates plus a JavaScript smoke vector.
+
+**Compatibility.** Rust call sites continue to import the same crate-root builders, enums, DTOs, and validators. Consumers that do not need generated bindings should depend on `auki-manifests` with `default-features = false`; the in-workspace `auki-time` dependency has been updated that way.
+
+**Tests.** Added `tests/surface.rs` to pin crate-root source compatibility. Existing core unit tests remain the manifest/vector behavior lock; generated package checks cover Python import, JavaScript wasm smoke, and SwiftPM build output.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, keeping manifest source hashing on the direct Rust canonicalization API without pulling in UniFFI.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-hash` dependency out of default features after `auki-hash` adopted the binding standard, keeping manifest construction on the direct Rust hash API without pulling in UniFFI.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Manifest docs no longer link to removed datatypes crate.** Current README, sprint, and parking-lot text now describe segment payload protobuf ownership as `auki-proto` / root `proto/auki` while preserving the May 8 migration history.

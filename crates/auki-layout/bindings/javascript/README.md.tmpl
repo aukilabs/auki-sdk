@@ -1,0 +1,12 @@
+# @auki/$crate_package_name
+
+wasm-bindgen JavaScript bindings for `auki-layout`.
+
+```js
+import init, { sensorEntryPath } from "./$generated_js_file";
+
+await init();
+console.log(sensorEntryPath("/app", "K1/head", "abcd"));
+```
+
+The package exposes string adapters over the same binding-free path helpers used by Rust.

@@ -1,0 +1,31 @@
+{
+  "name": "@aukilabs/$crate_package_name",
+  "type": "module",
+  "collaborators": $crate_authors_json,
+  "description": "Browser JavaScript bindings for $crate_package_name, pairing wasm domain DTO helpers with an auki-network transport facade.",
+  "version": "$crate_version",
+  "license": "$crate_license",
+  "repository": {
+    "type": "git",
+    "url": "$crate_repository"
+  },
+  "files": [
+    "$generated_wasm_file",
+    "$generated_js_file",
+    "$generated_types_file",
+    "$generated_wasm_types_file",
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "test",
+    "smoke.mjs"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

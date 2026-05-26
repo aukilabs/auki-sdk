@@ -1,0 +1,28 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-logs`.
+
+The generated package exposes an opaque-byte log adapter over the Rust segment
+framing implementation:
+
+```python
+import json
+import tempfile
+import $binding_module_name
+
+manifest = json.dumps({
+    "kind": "example",
+    "segment_duration_ns": 1_000_000_000,
+    "retention_ns": 3_000_000_000,
+})
+
+with tempfile.TemporaryDirectory() as root:
+    log = $binding_module_name.BytesLog.open(root, manifest)
+    log.append(100, b"payload")
+    log.flush()
+    entries = $binding_module_name.read_bytes_log_entries(root)
+```
+
+Rust keeps the generic `Log<T: LogPayload>` API. Generated languages use
+`BytesLog` for already-encoded payload bytes plus segment JSON helpers for
+portable conformance vectors.

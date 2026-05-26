@@ -1,0 +1,121 @@
+import initWasm, * as wasm from "./$generated_js_file";
+
+export {
+  clusterMembershipAdmitMemberJson,
+  clusterMembershipFilenameJson,
+  clusterMembershipNewJson,
+  clusterMembershipPeerCountJson,
+  domainSuccessorJson,
+  electSuccessorJson,
+  validateMembershipJson,
+  validateParticipantInfoJson,
+  validateRegistryEntryJson,
+  validateResourceCatalogJson,
+  validateSensorCatalogJson,
+} from "./$generated_js_file";
+
+const JOIN_PROTOCOL = "/auki/join/0.0.1";
+const INFO_PROTOCOL = "/auki/info/0.0.1";
+const SENSORS_PROTOCOL = "/auki/sensors/0.0.1";
+const RESOURCES_PROTOCOL = "/auki/resources/0.0.1";
+const REGISTRIES_PROTOCOL = "/auki/registries/0.0.1";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+export default async function initAukiDomain(input) {
+  await initWasm(input);
+  return wasm;
+}
+
+export class AukiDomainClient {
+  constructor({ networkPeer, clusterName } = {}) {
+    if (networkPeer == null) {
+      throw new TypeError("AukiDomainClient requires networkPeer");
+    }
+    if (clusterName == null || clusterName === "") {
+      throw new TypeError("AukiDomainClient requires clusterName");
+    }
+    this.networkPeer = networkPeer;
+    this._clusterName = clusterName;
+  }
+
+  get clusterName() {
+    return this._clusterName;
+  }
+
+  get localPeerId() {
+    return this.networkPeer.peerId;
+  }
+
+  validateMembership(membershipJson) {
+    return wasm.validateMembershipJson(jsonString(membershipJson));
+  }
+
+  successor(membershipJson, peerId) {
+    return JSON.parse(wasm.domainSuccessorJson(jsonString(membershipJson), peerId));
+  }
+
+  async requestJoin(peerMultiaddr, requestJson = {}) {
+    return compactJson(await this.requestProtocolJson(peerMultiaddr, JOIN_PROTOCOL, requestJson));
+  }
+
+  async fetchParticipantInfo(peerMultiaddr, requestJson = {}) {
+    const responseJson = await this.requestProtocolJson(peerMultiaddr, INFO_PROTOCOL, requestJson);
+    const response = JSON.parse(responseJson);
+    const participantJson =
+      typeof response.participant_info_json === "string"
+        ? response.participant_info_json
+        : responseJson;
+    return wasm.validateParticipantInfoJson(participantJson);
+  }
+
+  async fetchSensorCatalog(peerMultiaddr, requestJson = {}) {
+    const responseJson = await this.requestProtocolJson(peerMultiaddr, SENSORS_PROTOCOL, requestJson);
+    return wasm.validateSensorCatalogJson(responseJson);
+  }
+
+  async fetchResourceCatalog(peerMultiaddr, requestJson = {}) {
+    const responseJson = await this.requestProtocolJson(peerMultiaddr, RESOURCES_PROTOCOL, requestJson);
+    return wasm.validateResourceCatalogJson(responseJson);
+  }
+
+  async fetchRegistryEntry(peerMultiaddr, requestJson = {}) {
+    const responseJson = await this.requestProtocolJson(peerMultiaddr, REGISTRIES_PROTOCOL, requestJson);
+    return wasm.validateRegistryEntryJson(responseJson);
+  }
+
+  async requestProtocolJson(peerMultiaddr, protocol, requestJson = {}) {
+    if (typeof this.networkPeer.requestFramed !== "function") {
+      throw new TypeError("networkPeer must expose requestFramed(peerMultiaddr, protocol, payload)");
+    }
+    const requestBytes = encoder.encode(jsonString(requestJson));
+    const responseBytes = await this.networkPeer.requestFramed(peerMultiaddr, protocol, requestBytes);
+    return decoder.decode(bytes(responseBytes));
+  }
+}
+
+function jsonString(value) {
+  if (typeof value === "string") {
+    JSON.parse(value);
+    return value;
+  }
+  return JSON.stringify(value ?? {});
+}
+
+function compactJson(value) {
+  return JSON.stringify(JSON.parse(value));
+}
+
+function bytes(value) {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (typeof value?.subarray === "function") {
+    return value.subarray();
+  }
+  throw new TypeError(`unsupported byte payload: ${Object.prototype.toString.call(value)}`);
+}

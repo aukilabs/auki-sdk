@@ -1,0 +1,11 @@
+# $crate_package_name JavaScript bindings
+
+Generated wasm-bindgen JavaScript package for `$crate_package_name`.
+
+Generate the package from the repo root:
+
+```bash
+just generate-javascript-bindings $crate_package_name
+```
+
+The generated package exposes `canonicalizeJson(json)`, returning RFC 8785 canonical UTF-8 bytes for a JSON document.

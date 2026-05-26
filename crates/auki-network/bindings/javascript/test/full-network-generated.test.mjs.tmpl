@@ -1,0 +1,46 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, {
+  aukiNetworkProtocolsJson,
+  decodeJoinResponseJson,
+  decodeMessageEnvelopeJson,
+  encodeJoinRequestBytes,
+  encodeMessageEnvelopeBytes,
+  joinProtocol,
+  messageProtocol,
+  peerIdFromWalletSeed,
+} from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("generated network package exposes protocol constants and DTO bytes", () => {
+  assert.equal(
+    peerIdFromWalletSeed(new Uint8Array(32).fill(3)),
+    "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+  );
+
+  const protocols = JSON.parse(aukiNetworkProtocolsJson());
+  assert.equal(protocols.message, messageProtocol());
+  assert.equal(protocols.join, joinProtocol());
+
+  const envelopeBytes = encodeMessageEnvelopeBytes(JSON.stringify({
+    type_url: "auki.test/full-smoke",
+    body: [1, 2, 3],
+    request_id: "full-network",
+  }));
+  assert.equal(JSON.parse(decodeMessageEnvelopeJson(envelopeBytes)).request_id, "full-network");
+
+  const joinBytes = encodeJoinRequestBytes(JSON.stringify({
+    multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+  }));
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(joinBytes)), {
+    multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+  });
+  assert.deepEqual(
+    JSON.parse(decodeJoinResponseJson(new TextEncoder().encode('{"kind":"reject","reason":"full-network"}'))),
+    { kind: "reject", reason: "full-network" },
+  );
+});

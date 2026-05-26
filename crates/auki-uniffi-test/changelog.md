@@ -4,6 +4,10 @@ Append-only timeline of changes for the UniFFI proving crate. Latest entry on to
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Moved binding-generation ownership into this crate. Added `bindings.toml` plus crate-local JavaScript, Python, and Swift templates/smoke assets; the README now documents Cargo metadata as the crate identity source, `bindings.toml` as binding policy, and root scripts as generic orchestration only.

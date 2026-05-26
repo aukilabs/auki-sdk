@@ -11,16 +11,40 @@ description = "Single source of truth for the Auki SDK's log manifests — schem
 # JCS-canonical JSON encoding for content-hashed manifest fields
 # (`PoseSource::canonical_bytes` / `hash`). Manifests on disk are
 # JCS-canonical JSON via this crate.
-auki-jcs = { path = "../auki-jcs" }
+auki-jcs = { path = "../auki-jcs", default-features = false }
 # Content-addressable hashing for `PoseSource::hash`.
-auki-hash = { path = "../auki-hash" }
+auki-hash = { path = "../auki-hash", default-features = false }
 # Manifests are JSON values that auki-logs accepts.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+wasm-bindgen = { version = "0.2", optional = true }
+
+[lib]
+name = "auki_manifests"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = ["dep:uniffi"]
+cli = ["uniffi", "uniffi/cli"]
+wasm = ["dep:wasm-bindgen"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = { version = "0.31", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]
 
 [dev-dependencies]
 # End-to-end round-trip tests open an auki-logs Log<T> with a manifest
 # this crate built; verifying the manifest survives write/read.
-auki-logs = { path = "../auki-logs" }
+auki-logs = { path = "../auki-logs", default-features = false }
 ciborium = "0.2"
 tempfile = "3"

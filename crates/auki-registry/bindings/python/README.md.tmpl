@@ -1,0 +1,28 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-registry`.
+
+The generated package exposes JSON-string adapters for registry entries:
+
+```python
+import json
+import $binding_module_name
+
+frame_json = $binding_module_name.frame_ros_body_json("K1-AABBCCDDEEFF/base_link")
+frame_hash = $binding_module_name.frame_entry_hash(frame_json)
+
+entry = {
+    "clock_id": "K1-AABBCCDDEEFF/utc",
+    "type": "utc_clock",
+    "unit": "milliseconds",
+    "monotonic": False,
+    "epoch": "1970-01-01T00:00:00Z",
+    "scope": "global",
+}
+clock_hash = $binding_module_name.clock_entry_hash(json.dumps(entry))
+```
+
+Rust keeps the typed `SensorRegistryEntry`, `ClockRegistryEntry`,
+`FrameRegistryEntry`, and `DetectorRegistryEntry` API. Generated languages pass
+entry JSON strings through the same canonicalization, hashing, and native
+read/write implementation.

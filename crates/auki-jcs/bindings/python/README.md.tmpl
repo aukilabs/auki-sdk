@@ -1,0 +1,13 @@
+# $crate_package_name Python package
+
+UniFFI-generated Python package for the [`$crate_package_name`](../../../crates/$crate_package_name) JSON canonicalization primitive.
+
+Generate the package from the repo root:
+
+```bash
+just generate-python-bindings $crate_package_name
+```
+
+The generated module exposes `canonicalize_json(json: str) -> bytes`, returning RFC 8785 canonical UTF-8 bytes for a JSON document.
+
+`setup.py` marks the distribution as binary so wheel builds are platform-tagged instead of `py3-none-any`.

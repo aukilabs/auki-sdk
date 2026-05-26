@@ -31,6 +31,17 @@ Any implementation that produces these outputs for these inputs is conformant. T
 
 Centralizing the hash function means every consumer in the workspace hashes the same way (same algorithm, same seed, same encoding). Algorithm swaps are a one-file change.
 
+## Binding generation
+
+`auki-hash` follows the SDK's multiplatform crate standard:
+
+- shared Rust logic lives in [`src/core.rs`](src/core.rs);
+- native Python and Swift exports live in [`src/ffi.rs`](src/ffi.rs) behind the `uniffi` feature;
+- JavaScript/WebAssembly exports live in [`src/wasm.rs`](src/wasm.rs) behind the `wasm` feature;
+- crate-owned binding policy and package templates live under [`bindings.toml`](bindings.toml) and [`bindings/`](bindings/).
+
+The generated Python, Swift, and JavaScript packages expose the same locked-vector hash behavior as the Rust root API. Rust workspace consumers should depend on this crate with `default-features = false` unless they are intentionally exercising generated binding support.
+
 ## See also
 
 - [`auki-jcs`](../auki-jcs) — produces the canonical bytes that this crate hashes.

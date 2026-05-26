@@ -4,7 +4,11 @@ XXH3-128 content hash for already-canonical bytes — typically the output of [`
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs).
+- [`core.rs`](core.rs) — binding-free XXH3-128 implementation and locked-vector tests.
+- [`ffi.rs`](ffi.rs) — UniFFI export used by generated Python and Swift packages.
+- [`wasm.rs`](wasm.rs) — wasm-bindgen export used by generated JavaScript/WebAssembly packages.
+- [`lib.rs`](lib.rs) — feature-gated module wiring and Rust root API re-export.
+- [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) — crate-local UniFFI CLI helper for the generic binding generator.
 
 ## Public API
 
@@ -26,7 +30,7 @@ Centralizing the hash function means every consumer in the workspace hashes the 
 
 ## Tests (6 total)
 
-`#[cfg(test)] mod tests` in `lib.rs`:
+`#[cfg(test)] mod tests` in `core.rs`:
 
 | Test | Asserts |
 |------|---------|
@@ -43,3 +47,19 @@ The two locked vectors are regression guards: if the upstream `xxhash-rust` crat
 
 - `auki-registry` — hashes JCS-canonical Sensor + Clock entries to produce on-disk filenames (`<id>/<hash>.json`)
 - `auki-time` (transitively) — manifests reference clock registry entries by hash
+
+## Binding surface
+
+Native UniFFI exports:
+
+```rust
+pub fn hash_jcs_bytes(bytes: Vec<u8>) -> String;
+```
+
+JavaScript/WebAssembly exports:
+
+```javascript
+hashJcsBytes(bytes: Uint8Array) -> string
+```
+
+Both binding paths use the same core function and carry smoke tests for the empty-input and `b"abc"` locked vectors.

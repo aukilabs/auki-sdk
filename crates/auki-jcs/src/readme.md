@@ -4,7 +4,11 @@ RFC 8785 JSON Canonicalization Scheme — produces canonical UTF-8 bytes for con
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs).
+- [`core.rs`](core.rs) — binding-free RFC 8785 canonicalization and locked behavior tests.
+- [`ffi.rs`](ffi.rs) — UniFFI JSON-string adapter used by generated Python and Swift packages.
+- [`wasm.rs`](wasm.rs) — wasm-bindgen JSON-string adapter used by generated JavaScript/WebAssembly packages.
+- [`lib.rs`](lib.rs) — feature-gated module wiring and Rust root API re-export.
+- [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) — crate-local UniFFI CLI helper for the generic binding generator.
 
 ## Public API
 
@@ -13,6 +17,14 @@ pub fn canonicalize(value: &serde_json::Value) -> Vec<u8>;
 ```
 
 That's it. One function, one input type, one output type.
+
+Generated bindings use this adapter shape:
+
+```rust
+pub fn canonicalize_json(json: String) -> Result<Vec<u8>, JcsError>;
+```
+
+The adapter parses JSON text into `serde_json::Value` and then calls the same core canonicalizer.
 
 ## How it works
 
@@ -33,7 +45,7 @@ Per RFC 8785:
 
 ## Tests (8 total)
 
-`#[cfg(test)] mod tests` in `lib.rs`:
+`#[cfg(test)] mod tests` in `core.rs`:
 
 | Test | Asserts |
 |------|---------|
@@ -45,8 +57,26 @@ Per RFC 8785:
 | `non_ascii_passes_through_as_utf8` | `€`, `汉` emit as raw UTF-8 |
 | `forward_slash_is_not_escaped` | `/` preserved verbatim |
 | `round_trip_is_stable` | Value → bytes → re-parse → bytes is identical |
+| `canonicalize_json_str_parses_then_canonicalizes` | Binding adapter parse path matches the direct Rust root API |
+| `canonicalize_json_str_reports_parse_errors` | Invalid JSON fails before canonicalization |
 
 ## Consumers in this workspace
 
 - `auki-registry` — canonicalizes Sensor + Clock entries before hashing
 - `auki-logs` — canonicalizes log manifests before writing them to disk
+
+## Binding surface
+
+Native UniFFI exports:
+
+```rust
+pub fn canonicalize_json(json: String) -> Result<Vec<u8>, JcsError>;
+```
+
+JavaScript/WebAssembly exports:
+
+```javascript
+canonicalizeJson(json: string) -> Uint8Array
+```
+
+Both binding paths use the same core function and carry smoke tests for sorted-object output, slash preservation, and invalid-JSON rejection.

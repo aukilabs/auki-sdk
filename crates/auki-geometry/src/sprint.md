@@ -7,6 +7,7 @@ Current work and next steps to close the gap between [`src/readme.md`](readme.md
 - `convert_pose_convention` shipped as the convention-only layer under future `convert_pose`.
 - Point/vector/direction convention helpers shipped.
 - Preset conversion and quaternion basis-change tests shipped.
+- The crate now follows the SDK binding standard. Rust keeps the typed geometry API in `core.rs`; UniFFI and wasm-bindgen adapters expose JSON-string conversion helpers for generated Python, Swift, and JavaScript packages.
 
 ## Next
 

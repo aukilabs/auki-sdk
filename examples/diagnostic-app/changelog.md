@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+**Domain dependency opts out of generated binding defaults.** The diagnostic app now depends on `auki-domain` with `default-features = false`, keeping the app on the direct Rust lifecycle API instead of inheriting the domain crate's generated UniFFI default feature.
+
+Tests: `cargo check -p auki-diagnostic-app`.
+
 ### Nils's codex · May 21, HKT, 2026
 
 **Domain flash mode now uses live cluster domain time.** The runtime snapshot reads `ClusterManager::domain_clock_estimate()` and `ClusterManager::domain_time_now()`, carries domain status/offset/uncertainty into the UI, and enables Domain flash mode only when an explicit domain-time reading exists. The flash panel now uses domain time for the Domain mode instead of showing the old placeholder unavailable state, with no wall-clock fallback.

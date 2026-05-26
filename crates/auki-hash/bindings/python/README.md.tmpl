@@ -1,0 +1,13 @@
+# $crate_package_name Python package
+
+UniFFI-generated Python package for the [`$crate_package_name`](../../../crates/$crate_package_name) content-hash primitive.
+
+Generate the package from the repo root:
+
+```bash
+just generate-python-bindings $crate_package_name
+```
+
+The generated module exposes `hash_jcs_bytes(bytes) -> str`, returning the SDK's 32-character lowercase XXH3-128 content hash.
+
+`setup.py` marks the distribution as binary so wheel builds are platform-tagged instead of `py3-none-any`.

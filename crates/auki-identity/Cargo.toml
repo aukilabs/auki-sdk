@@ -26,8 +26,8 @@ wasm = [
 ]
 
 [dependencies]
-auki-hash = { path = "../auki-hash" }
-auki-jcs = { path = "../auki-jcs" }
+auki-hash = { path = "../auki-hash", default-features = false }
+auki-jcs = { path = "../auki-jcs", default-features = false }
 ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "zeroize", "rand_core"] }
 getrandom = { version = "0.2", features = ["js"], optional = true }
 js-sys = { version = "0.3", optional = true }

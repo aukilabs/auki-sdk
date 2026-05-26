@@ -14,7 +14,7 @@ default = []
 ros2 = ["dep:r2r", "dep:tokio", "dep:futures"]
 
 [dependencies]
-auki-registry = { path = "../auki-registry" }
+auki-registry = { path = "../auki-registry", default-features = false }
 # Camera log payload types (`CameraFrame`, `DynamicIntrinsics`)
 # moved from auki-registry into auki-proto at Step 1 of the migration.
 auki-proto = { path = "../auki-proto" }

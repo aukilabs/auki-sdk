@@ -1,0 +1,75 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, {
+  aukiNetworkProtocolsJson,
+  browserProbeProtocol,
+  decodeCatalogResponseJson,
+  decodeJoinResponseJson,
+  decodeMessageEnvelopeJson,
+  encodeCatalogRequestBytes,
+  encodeJoinRequestBytes,
+  encodeMessageEnvelopeBytes,
+  joinProtocol,
+  messageProtocol,
+  resourcesProtocol,
+  sensorsProtocol,
+} from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("protocol constants are exposed", () => {
+  const protocols = JSON.parse(aukiNetworkProtocolsJson());
+  assert.equal(browserProbeProtocol(), "/auki/browser-probe/0.0.1");
+  assert.equal(messageProtocol(), "/auki/message/0.0.1");
+  assert.equal(joinProtocol(), "/auki/join/0.0.1");
+  assert.equal(resourcesProtocol(), "/auki/resources/0.0.1");
+  assert.equal(sensorsProtocol(), "/auki/sensors/0.0.1");
+  assert.equal(protocols.message, messageProtocol());
+  assert.equal(protocols.resources, resourcesProtocol());
+});
+
+test("message envelope protobuf helpers round-trip JSON", () => {
+  const bytes = encodeMessageEnvelopeBytes(JSON.stringify({
+    type_url: "auki.test/hello",
+    body: [1, 2, 3],
+    request_id: "req-1",
+  }));
+  const decoded = JSON.parse(decodeMessageEnvelopeJson(bytes));
+  assert.deepEqual(decoded, {
+    type_url: "auki.test/hello",
+    body: [1, 2, 3],
+    request_id: "req-1",
+  });
+});
+
+test("JSON request/response helpers canonicalize DTO bytes", () => {
+  const joinBytes = encodeJoinRequestBytes(JSON.stringify({
+    multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+  }));
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(joinBytes)), {
+    multiaddrs: ["/ip4/127.0.0.1/tcp/4001"],
+  });
+
+  const joinResponse = JSON.parse(decodeJoinResponseJson(new TextEncoder().encode(JSON.stringify({
+    kind: "reject",
+    reason: "busy",
+  }))));
+  assert.deepEqual(joinResponse, { kind: "reject", reason: "busy" });
+
+  const catalogBytes = encodeCatalogRequestBytes(JSON.stringify({
+    kinds: ["sensor_stream"],
+    include_sensor_entries: true,
+  }));
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(catalogBytes)), {
+    kinds: ["sensor_stream"],
+    include_sensor_entries: true,
+  });
+
+  const catalogResponse = JSON.parse(decodeCatalogResponseJson(new TextEncoder().encode(JSON.stringify({
+    resources: [],
+  }))));
+  assert.deepEqual(catalogResponse, { resources: [] });
+});

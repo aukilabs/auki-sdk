@@ -8,25 +8,34 @@ authors.workspace = true
 description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
 
 [dependencies]
+libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
+multiaddr = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = { version = "0.2", optional = true }
+
+[lib]
+name = "auki_domain"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = ["dep:uniffi"]
+cli = ["uniffi", "uniffi/cli"]
+wasm = ["dep:wasm-bindgen"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 auki-identity = { path = "../auki-identity", default-features = false }
-auki-hash = { path = "../auki-hash" }
-auki-jcs = { path = "../auki-jcs" }
+auki-hash = { path = "../auki-hash", default-features = false }
+auki-jcs = { path = "../auki-jcs", default-features = false }
 # `swarm` brings the libp2p Swarm + Behaviour and the NetworkRuntime
 # the cluster manager drives; `discovery_client` brings the HTTP
 # client. Both required for `ClusterManager::create_cluster`.
 auki-network = { path = "../auki-network", default-features = false, features = ["discovery_client", "swarm"] }
-auki-registry = { path = "../auki-registry" }
-auki-time = { path = "../auki-time" }
-# `ClusterMembership` carries libp2p `PeerId`s on the wire; the
-# `serde` feature pins their canonical string form so the JSON
-# document is interoperable across languages.
-libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
-multiaddr = "0.18"
-serde = { version = "1", features = ["derive"] }
-# Cluster Manager's join handler serializes the membership document
-# into the wire response; cluster_manager's join_cluster parses the
-# Manager's gossiped membership_json. Promoted from dev-dep.
-serde_json = "1"
+auki-proto = { path = "../auki-proto", default-features = false }
+auki-registry = { path = "../auki-registry", default-features = false }
+auki-time = { path = "../auki-time", default-features = false }
+futures = "0.3"
 thiserror = "2"
 # `tokio::spawn` + `tokio::time::interval` drive the Manager-side
 # Discovery heartbeat tick.
@@ -36,9 +45,10 @@ tokio = { version = "1", features = ["rt", "time", "macros"] }
 # directly so the public method signature can name it without
 # requiring callers to dep on auki-network.
 prost = "0.13"
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [dev-dependencies]
-auki-layout = { path = "../auki-layout" }
+auki-layout = { path = "../auki-layout", default-features = false }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
 tempfile = "3"
@@ -48,3 +58,13 @@ tempfile = "3"
 # feature set.
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
 futures = "0.3"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]

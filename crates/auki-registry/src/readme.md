@@ -2,11 +2,14 @@
 
 Sensor + Clock + Frame Registry entries with content-addressed multi-version-by-hash on-disk storage.
 
-> **Scope shrink complete.** This crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame registries) and their content-addressed IO. Log payload types live in generated [`auki-proto`](../../auki-proto) modules sourced from root [`proto/auki`](../../../proto/auki). Both `serde_bytes` and `ciborium` deps dropped along the way.
+> **Scope shrink complete.** This crate's role has narrowed back to its canonical definition: identity catalogs (Sensor / Clock / Frame / Detector registries) and their content-addressed IO. Log payload types live in generated [`auki-proto`](../../auki-proto) modules sourced from root [`proto/auki`](../../../proto/auki). Both `serde_bytes` and `ciborium` deps dropped along the way.
 
 ## What's here
 
-A single source file: [`lib.rs`](lib.rs).
+- [`core.rs`](core.rs) — binding-free typed Rust API and native on-disk storage.
+- [`lib.rs`](lib.rs) — feature-gated module wiring and crate-root re-exports.
+- [`ffi.rs`](ffi.rs) — native UniFFI adapters for generated Python and Swift.
+- [`wasm.rs`](wasm.rs) — web-safe wasm-bindgen adapters for generated JavaScript/WebAssembly.
 
 ## Storage layout
 
@@ -14,9 +17,10 @@ A single source file: [`lib.rs`](lib.rs).
 <app_root>/registries/sensors/<id-with-slashes-replaced-by-__>/<hash>.json
 <app_root>/registries/clocks/<id-with-slashes-replaced-by-__>/<hash>.json
 <app_root>/registries/frames/<id-with-slashes-replaced-by-__>/<hash>.json
+<app_root>/registries/detectors/<id-with-slashes-replaced-by-__>/<hash>.json
 ```
 
-Paths come from [`auki-layout`](../../auki-layout) (`sensor_entry_path` / `clock_entry_path` / `frame_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
+Paths come from [`auki-layout`](../../auki-layout) (`sensor_entry_path` / `clock_entry_path` / `frame_entry_path` / `detector_entry_path`) — this crate doesn't compute them itself. The `app_root` argument to `write_*` / `read_*` is the integrator's app root, shared across all sessions of that app.
 
 The hash *is* the version. There are no version counters. Re-writing identical content is a no-op (`WriteOutcome::AlreadyExists`); writing different content under the same `id` produces a sibling file (`WriteOutcome::Created` with a different hash).
 
@@ -160,6 +164,36 @@ FrameRegistryEntry::unity(frame_id)        // left,  x=right y=up z=forward,   m
 
 The on-disk JSON is fully spelled-out either way — presets are pure ergonomics, not shorthand on the wire.
 
+### `DetectorRegistryEntry`
+
+```rust
+pub struct DetectorRegistryEntry {
+    pub detector_id: String,
+    #[serde(flatten)]
+    pub body: DetectorBody,
+    pub output_types: Vec<String>,
+}
+
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DetectorBody {
+    Aruco(Aruco),
+    Qr(Qr),
+    Esl(Esl),
+}
+
+pub struct Aruco {
+    pub dictionary: String,
+}
+
+pub struct Qr {}
+pub struct Esl {}
+```
+
+Detector entries mirror sensor entries: a stable namespaced `detector_id`, a
+closed typed body for the demo-supported detector families, and an
+`output_types` capability list that matches the detection `type` strings the
+detector emits.
+
 ### `SensorBody::Audio`
 
 ```rust
@@ -194,7 +228,7 @@ Deliberately minimal — `joint_count` is the deserialization invariant (matches
 
 ## Log payload types
 
-All log payload types live in [`auki-proto`](../../auki-proto) now. The `serde_bytes` and `ciborium` deps dropped from this crate at the same time. The crate's surface narrowed back to identity catalogs only (Sensor / Clock / Frame registry types and IO).
+All log payload types live in [`auki-proto`](../../auki-proto) now. The `serde_bytes` and `ciborium` deps dropped from this crate at the same time. The crate's surface narrowed back to identity catalogs only (Sensor / Clock / Frame / Detector registry types and IO).
 
 ## Public functions
 
@@ -202,9 +236,11 @@ All log payload types live in [`auki-proto`](../../auki-proto) now. The `serde_b
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome>;
 pub fn write_clock(app_root: &Path,  entry: &ClockRegistryEntry)  -> Result<WriteOutcome>;
 pub fn write_frame(app_root: &Path,  entry: &FrameRegistryEntry)  -> Result<WriteOutcome>;
+pub fn write_detector(app_root: &Path, entry: &DetectorRegistryEntry) -> Result<WriteOutcome>;
 pub fn read_sensor(app_root: &Path, sensor_id: &str, hash: &str) -> Result<Option<SensorRegistryEntry>>;
 pub fn read_clock(app_root: &Path,  clock_id: &str,  hash: &str) -> Result<Option<ClockRegistryEntry>>;
 pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Option<FrameRegistryEntry>>;
+pub fn read_detector(app_root: &Path, detector_id: &str, hash: &str) -> Result<Option<DetectorRegistryEntry>>;
 
 // Manifest builders moved to `auki-manifests` (Step 0, 2026-05-08):
 //   build_sensor_log_manifest, build_pose_log_manifest
@@ -213,6 +249,32 @@ pub fn read_frame(app_root: &Path,  frame_id: &str,  hash: &str) -> Result<Optio
 Each entry type also exposes `canonical_bytes()` and `hash()` directly for callers that want to compute identity without writing.
 
 `write_sensor` validates frame-bearing bodies before writing. `Camera` and `PointCloud` must carry non-empty `frame_id` and `frame_hash`, and the exact frame file must already exist at `<app_root>/registries/frames/<frame_id>/<frame_hash>.json`. Non-spatial bodies (`Audio`, `JointEncoders`) do not carry frame fields.
+
+## Generated binding adapters
+
+Generated Python, Swift, and JavaScript receive JSON-string adapters instead of
+the full nested Rust enum/record graph:
+
+```rust
+sensor_entry_canonical_json(entry_json) -> Result<String, RegistryError>
+sensor_entry_hash(entry_json) -> Result<String, RegistryError>
+clock_entry_canonical_json(entry_json) -> Result<String, RegistryError>
+clock_entry_hash(entry_json) -> Result<String, RegistryError>
+frame_entry_canonical_json(entry_json) -> Result<String, RegistryError>
+frame_entry_hash(entry_json) -> Result<String, RegistryError>
+detector_entry_canonical_json(entry_json) -> Result<String, RegistryError>
+detector_entry_hash(entry_json) -> Result<String, RegistryError>
+
+frame_ros_body_json(frame_id) -> String
+frame_ros_optical_json(frame_id) -> String
+frame_opengl_json(frame_id) -> String
+frame_unity_json(frame_id) -> String
+```
+
+Native UniFFI additionally exposes `write_*_entry_json` and
+`read_*_entry_json` helpers over the existing filesystem implementation. The
+wasm-bindgen module exports only pure canonicalization, hash, and frame-preset
+helpers; it has no filesystem surface.
 
 ## `WriteOutcome`
 
@@ -237,7 +299,7 @@ pub enum Error {
 }
 ```
 
-`IdMismatch` fires on read when the on-disk file's `sensor_id` / `clock_id` / `frame_id` doesn't match the requested ID. This catches misplaced or tampered files — content addressing is meant to make tampering detectable.
+`IdMismatch` fires on read when the on-disk file's `sensor_id` / `clock_id` / `frame_id` / `detector_id` doesn't match the requested ID. This catches misplaced or tampered files — content addressing is meant to make tampering detectable.
 
 `InvalidAxes` fires on `write_frame` (and on the `FrameRegistryEntry::validate()` standalone call) when an `AxisConvention` triplet has two axes from the same axis-pair. The on-disk write doesn't happen.
 
@@ -247,7 +309,7 @@ pub enum Error {
 
 Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leaves either nothing or the complete file; never a half-written one.
 
-## Tests (38 total)
+## Tests
 
 | Test | Asserts |
 |------|---------|
@@ -255,7 +317,7 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `monotonic_clock_canonical_bytes_match_m1_example` | Same, monotonic clock |
 | `utc_clock_canonical_bytes_match_m1_example` | Same, UTC clock |
 | `frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | Byte-exact JCS output for the locked Frame Registry vector (`ros_body("K1-AABBCCDDEEFF/base_link")`) |
-| `sensor_entry_hash_is_locked` | `69f37478490cf1c0b226dbb86d3454fc` (recomputed with `frame_hash`) |
+| `sensor_entry_hash_is_locked` | `5559c9648e31eee2410b692fef393489` (recomputed with `frame_hash` and the `"camera"` tag) |
 | `point_cloud_entry_hash_is_locked` | `2c480838a9be0b14608a8a0d72ee319f` (recomputed with `frame_hash`) |
 | `frame_entry_hash_is_locked` | `fd0dc3789e898b71b5e16ee122a81a44` |
 | `monotonic_clock_hash_is_locked` | `1f2176888b1a6621315033f22659b9f3` |
@@ -280,8 +342,17 @@ Writes go to `.<filename>.tmp` first, fsync, then rename. A crash mid-write leav
 | `read_frame_returns_none_for_missing_entry` | Absent file is `Ok(None)` |
 | `write_sensor_rejects_missing_frame_reference` | Spatial sensors cannot be written before their exact frame entry exists |
 | `write_sensor_rejects_empty_frame_hash` | Spatial sensors cannot be written with an empty frame hash |
+| `detector_entry_canonical_bytes_lock_the_aruco_shape` | Byte-exact JCS output for the Cuba ArUco detector entry |
+| `detector_entry_round_trips_through_disk` | Detector entry write/read round trip |
+| `detector_entry_write_is_idempotent_on_hash` | Same detector input is a no-op on second write |
+| `detector_entry_two_dictionaries_get_distinct_hashes` | ArUco dictionary changes produce distinct detector hashes |
+| `detector_entry_slash_in_id_becomes_double_underscore` | Detector ID path encoding stays flat |
+| `detector_entry_supports_multiple_output_types` | QR detector capability list can carry multiple emitted types |
 
 The locked hashes serve as cross-cutting regression guards: if any of `auki-jcs`, `auki-hash`, or this crate's serde shape drifts, multiple tests fail at once.
+
+`tests/surface.rs` adds the binding-standard source-compatibility check for the
+crate-root Rust API when the default UniFFI feature is enabled.
 
 ## Consumers in this workspace
 

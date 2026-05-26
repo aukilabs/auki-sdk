@@ -1,8 +1,8 @@
 # auki-registry
 
-The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
+The Auki SDK's **identity catalog** — content-addressed Sensor / Frame / Clock / Detector registry entries plus the cross-language storage contract that backs them. Per the [Notion Registries doc](https://www.notion.so/34e5c8e96592809d8977feb17c32e5d0): *"a shared, versioned catalog of identities + definitions that other data streams can reference without repeating metadata."*
 
-> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Log payload types live in generated [`auki-proto`](../auki-proto) modules sourced from root [`proto/auki`](../../proto/auki); `auki-registry` holds the Sensor / Clock / Frame registry types and IO only.
+> **Scope shrink complete (decided 2026-05-07).** This crate is back to its canonical role: identity catalogs only. Log payload types live in generated [`auki-proto`](../auki-proto) modules sourced from root [`proto/auki`](../../proto/auki); `auki-registry` holds the Sensor / Clock / Frame / Detector registry types and IO only.
 
 ## Two kinds of typed data (today, with one departing)
 
@@ -25,6 +25,7 @@ All log payload types now live in [`auki-proto`](../auki-proto), protobuf via pr
 <app_root>/registries/sensors/<sensor_id>/<hash>.json
 <app_root>/registries/clocks/<clock_id>/<hash>.json
 <app_root>/registries/frames/<frame_id>/<hash>.json
+<app_root>/registries/detectors/<detector_id>/<hash>.json
 ```
 
 Registries live at the **app root**, shared across every session of that app. Hash-keyed writes are idempotent, so a sensor entry that doesn't change between app starts produces the same `<hash>.json` regardless of session — re-writing it would be wasted work.
@@ -36,6 +37,21 @@ The full session shape (registries + per-session log directories) is documented 
 The hash *is* the version. Re-writing identical content is a no-op; writing different content under the same `id` produces a sibling file with a different hash. There are no version counters.
 
 Hashes come from [`auki-hash`](../auki-hash) over the JCS-canonical bytes from [`auki-jcs`](../auki-jcs). All three crates form one indivisible content-addressing contract.
+
+### Generated bindings
+
+The crate follows the SDK binding standard:
+
+- `src/core.rs` owns the typed Rust API and on-disk storage implementation.
+- `src/ffi.rs` exposes native UniFFI adapters for Python and Swift.
+- `src/wasm.rs` exposes web-safe wasm-bindgen adapters for JavaScript/WebAssembly.
+
+Generated languages pass registry entries as JSON strings. The adapters parse
+those strings into the same Rust entry types, then return JCS-canonical JSON or
+XXH3-128 hashes. Native UniFFI also exposes `write_*_entry_json` and
+`read_*_entry_json` helpers for filesystem storage. The wasm surface deliberately
+does not export filesystem read/write helpers; browser storage needs a real
+adapter before it belongs in this crate.
 
 ### Recommended sensor_id naming convention
 
@@ -192,4 +208,4 @@ Each `from_frame_id` / `to_frame_id` in a Pose Log manifest references an entry 
 
 ## Versioning
 
-Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`CameraFrame` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-proto`](../auki-proto)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.
+Schema version is **1** for all types in this crate today (`SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `DetectorRegistryEntry`, `PointCloud`/`PointField`, `Audio`). `PoseSource` (now in [`auki-manifests`](../auki-manifests)) and the on-disk log payload types (`CameraFrame` / `DynamicIntrinsics` / `PointCloudLogEntry` / `AudioLogEntry` / `SpatialTransform` / `Vec3` / `Quat`, all now in [`auki-proto`](../auki-proto)) version independently. Bump on incompatible field changes. The auki-logs segment format version is independent of all of these.

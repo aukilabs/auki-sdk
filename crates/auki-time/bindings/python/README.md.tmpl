@@ -1,0 +1,37 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-time`.
+
+The generated package exposes time-transform records, NTP sample helpers,
+peer-clock sync state, domain-clock composition, and native session-clock
+identity:
+
+```python
+import $binding_module_name
+
+sample = $binding_module_name.compute_ntp_sample(
+    $binding_module_name.NtpExchange(
+        local_send_ns=1000,
+        remote_receive_ns=1001050,
+        remote_send_ns=1001080,
+        local_receive_ns=1130,
+    )
+)
+
+state = $binding_module_name.ClockSyncState(
+    $binding_module_name.default_clock_sync_config()
+)
+estimate = state.observe(
+    $binding_module_name.ClockSyncObservation(
+        local_clock_id="peer-a/session-1/monotonic",
+        local_clock_hash="hash-a",
+        remote_clock_id="peer-b/session-7/monotonic",
+        remote_clock_hash="hash-b",
+        sample=sample,
+    )
+)
+```
+
+Host clocks, registry-entry construction, and the sampler thread are native
+APIs. Browser JavaScript bindings expose only the pure math and stateful
+selection surface.

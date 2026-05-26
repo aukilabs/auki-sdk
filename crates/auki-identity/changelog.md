@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, preserving `auki-identity`'s direct Rust and wasm builds without inheriting another crate's UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-hash` dependency out of default features after `auki-hash` adopted the binding standard, preserving `auki-identity`'s direct Rust and wasm builds without inheriting another crate's UniFFI surface.
+
 ### Nils's codex · May 22, 12:20 HKT, 2026
 
 **Crate-owned binding generation contract added.** [`bindings.toml`](bindings.toml) now declares the `auki-identity` generator policy for UniFFI Python/Swift and wasm-pack JavaScript/WebAssembly, including the `cli` and `wasm` feature flags consumed by the generic root scripts. Added crate-local package assets under [`bindings/`](bindings/): JavaScript `package.json`/README templates plus an identity smoke test that exercises wallet construction, signing, deterministic child derivation, canonical JSON signing, creation-cert verification, and the `loadOrMintSeed` export; Python `pyproject.toml`/`setup.py`/README templates; and the Swift `Package.swift` template. The root scripts can now generate `auki-identity` packages from crate metadata and crate-local policy instead of hardcoded identity-specific script branches.

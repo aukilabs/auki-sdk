@@ -1,0 +1,24 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-network`.
+
+This package is the crate-owned generated binding surface. It does not depend
+on the legacy PyO3 `auki-network-py` package.
+
+The generated module exposes the same compact native API used by Swift:
+
+- peer identity derivation from wallet or peer seeds
+- libp2p public-key protobuf export
+- networking capability constants
+- optional `/auki/message/0.0.1` `AukiMessageNode` facade when generated with `message_node`
+
+```python
+import $binding_module_name
+
+seed = bytes([3]) * 32
+peer_id = $binding_module_name.peer_id_from_wallet_seed(seed)
+assert peer_id == "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar"
+```
+
+The rich cluster runtime remains a direct Rust API behind the `swarm` feature.
+Browser transport remains JavaScript-owned in the generated wasm/js package.

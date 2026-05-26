@@ -2,7 +2,9 @@
 
 > **For agentic workers:** Use the existing `auki-uniffi-test` standard as the template. The current PyO3 packages under `bindings/python/auki-*-py` are legacy compatibility surfaces for this migration and should not block the new crate-owned UniFFI Python path.
 
-**Goal:** Convert SDK Rust crates to the repo's multiplatform binding standard: crate-owned UniFFI bindings for Python and Swift, plus wasm-bindgen bindings for JavaScript/WebAssembly where the crate has a web-safe surface.
+**Goal:** Convert SDK Rust crates in the main SDK surface to the repo's multiplatform binding standard: crate-owned UniFFI bindings for Python and Swift, plus wasm-bindgen bindings for JavaScript/WebAssembly where the crate has a web-safe surface.
+
+**Current pass scope:** This pass stops at `auki-domain`. `auki-ros-adapter` is deliberately deferred because it is an adapter crate with ROS2 host constraints; its useful binding shape should be decided separately rather than forced into the main SDK binding migration.
 
 **Architecture:** Product behavior stays binding-free in `core.rs`. Native binding adapters live in `ffi.rs` behind the `uniffi` feature. Browser/JavaScript adapters live in `wasm.rs` behind the `wasm` feature. Each crate owns its binding policy in `bindings.toml` and owns language package assets under `crates/<crate>/bindings/`.
 
@@ -33,60 +35,60 @@ Use `auki-uniffi-test` as the mechanical reference and `auki-identity` / `auki-n
 
 ### Phase 0: Harness Hardening
 
-- [ ] Add a generator contract test that can validate every UniFFI-enabled crate, not only `auki-uniffi-test`.
-- [ ] Add a repo-local helper that lists crates with `bindings.toml`, enabled languages, features, and missing package assets.
-- [ ] Keep PyO3 packages buildable during transition, but document them as legacy surfaces in binding docs once their UniFFI replacements exist.
+- [x] Add a generator contract test that can validate every UniFFI-enabled crate, not only `auki-uniffi-test`.
+- [x] Add a repo-local helper that lists crates with `bindings.toml`, enabled languages, features, and missing package assets.
+- [x] Treat current PyO3 packages as legacy/out-of-scope for this binding pass, and document generated UniFFI replacements without making the legacy wrappers migration blockers.
 
 ### Phase 1: Foundation Crates
 
-- [ ] `auki-hash`
-- [ ] `auki-jcs`
-- [ ] `auki-layout`
-- [ ] Verify `auki-identity` fully matches the standard.
+- [x] `auki-hash`
+- [x] `auki-jcs`
+- [x] `auki-layout`
+- [x] Verify `auki-identity` fully matches the standard.
 
 These are the lowest-risk crates. They prove byte vectors, string/path helpers, JSON canonicalization, simple DTOs, and deterministic smoke tests before larger crates adopt the pattern.
 
 ### Phase 2: Data Contract Crates
 
-- [ ] `auki-manifests`
-- [ ] `auki-registry`
-- [ ] `auki-logs`
+- [x] `auki-manifests`
+- [x] `auki-registry`
+- [x] `auki-logs`
 
 These introduce record/enums, JSON-shaped adapters, file IO, opaque bytes, and log round trips. For wasm, expose only web-safe behavior. Do not expose filesystem APIs in browser wasm unless there is a real browser storage adapter.
 
 ### Phase 3: Transform Primitives
 
-- [ ] `auki-geometry`
-- [ ] `auki-time`
+- [x] `auki-geometry`
+- [x] `auki-time`
 
 These are closest to the SDK's core operations: `convert_pose` support and `convert_time` support. Bind pure math first. Gate native clocks, sampler threads, and filesystem-backed log production behind native features.
 
 ### Phase 4: Protobuf Boundary
 
-- [ ] Keep `auki-proto` as generated protobuf output, not a normal UniFFI wrapper by default.
-- [ ] Test it through `just generate-proto` and per-language protobuf smoke vectors.
-- [ ] Use generated protobuf packages beside generated UniFFI packages for Python, Swift, and JavaScript consumers.
+- [x] Keep `auki-proto` as generated protobuf output, not a normal UniFFI wrapper by default.
+- [x] Test it through per-language protobuf generation and smoke vectors.
+- [x] Use generated protobuf packages beside generated UniFFI packages for Python, Swift, and JavaScript consumers.
 
 `auki-proto` is a schema-generated package family, not a hand-authored SDK crate. Treat it as a sibling binding track.
 
 ### Phase 5: Network Runtime
 
-- [ ] Finish `auki-network` as the production reference for async/native plus wasm split.
-- [ ] Enable UniFFI Python generation for `auki-network`; the existing `auki-network-py` PyO3 package is legacy.
-- [ ] Keep browser transport JavaScript-owned where needed, with Rust wasm exposing canonical identity and protocol bytes.
-- [ ] Add real browser-to-native smoke coverage for the browser-probe path.
+- [x] Finish `auki-network` as the production reference for async/native plus wasm split.
+- [x] Enable UniFFI Python generation for `auki-network`; the existing `auki-network-py` PyO3 package is legacy.
+- [x] Keep browser transport JavaScript-owned where needed, with Rust wasm exposing canonical identity and protocol bytes.
+- [x] Add real browser-to-native smoke coverage for the browser-probe path.
 
 ### Phase 6: Domain Orchestration
 
-- [ ] `auki-domain`
+- [x] `auki-domain`
 
 Do this after network, time, registry, and log surfaces are stable. The first binding should be a bounded `ClusterManager` surface through UniFFI, not the entire internal runtime. Browser wasm should expose only behavior the runtime can actually support.
 
-### Phase 7: Adapter Crates
+### Deferred: Adapter Crates
 
-- [ ] `auki-ros-adapter`
+- [ ] `auki-ros-adapter` — out of scope for this pass.
 
-Bind translation-only APIs first. Keep `ros2` / `r2r` subscriber code native-only and feature-gated. There is no meaningful browser wasm surface for ROS2 runtime code.
+When this is picked up later, bind translation-only APIs first. Keep `ros2` / `r2r` subscriber code native-only and feature-gated. There is no meaningful browser wasm surface for ROS2 runtime code, and the adapter should not become a blocker for the main SDK Python/Swift/wasm binding pass.
 
 ## Per-crate Test Gate
 

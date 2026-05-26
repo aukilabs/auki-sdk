@@ -1,0 +1,38 @@
+export default function initAukiDomain(input?: unknown): Promise<typeof import("./$generated_js_file")>;
+
+export function clusterMembershipNewJson(clusterName: string): string;
+export function clusterMembershipFilenameJson(membershipJson: string): string;
+export function clusterMembershipPeerCountJson(membershipJson: string): bigint;
+export function clusterMembershipAdmitMemberJson(membershipJson: string, memberJson: string): string;
+export function electSuccessorJson(membershipJson: string, localPeerId: string, connectedPeerIds: string[]): string | undefined;
+export function validateMembershipJson(membershipJson: string): string;
+export function validateParticipantInfoJson(json: string): string;
+export function validateSensorCatalogJson(json: string): string;
+export function validateResourceCatalogJson(json: string): string;
+export function validateRegistryEntryJson(json: string): string;
+export function domainSuccessorJson(membershipJson: string, peerId: string): string;
+
+export interface AukiNetworkPeerLike {
+  readonly peerId?: string;
+  requestFramed(peerMultiaddr: string, protocol: string, payload: Uint8Array): Promise<Uint8Array | ArrayBuffer>;
+}
+
+export interface AukiDomainClientOptions {
+  networkPeer: AukiNetworkPeerLike;
+  clusterName: string;
+}
+
+export class AukiDomainClient {
+  constructor(options: AukiDomainClientOptions);
+  readonly networkPeer: AukiNetworkPeerLike;
+  readonly clusterName: string;
+  readonly localPeerId: string | undefined;
+  validateMembership(membershipJson: string | object): string;
+  successor(membershipJson: string | object, peerId: string): string | null;
+  requestJoin(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchParticipantInfo(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchSensorCatalog(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchResourceCatalog(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchRegistryEntry(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  requestProtocolJson(peerMultiaddr: string, protocol: string, requestJson?: string | object): Promise<string>;
+}

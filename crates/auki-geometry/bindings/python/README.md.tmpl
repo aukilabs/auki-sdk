@@ -1,0 +1,35 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-geometry`.
+
+The generated package exposes JSON-string adapters over the Rust convention
+conversion helpers:
+
+```python
+import json
+import $binding_module_name
+
+point = json.dumps({"x": 100.0, "y": 200.0, "z": 300.0})
+from_frame = json.dumps({
+    "frame_id": "camera",
+    "handedness": "right",
+    "axes": {"x": "right", "y": "down", "z": "forward"},
+    "units": "centimeters",
+})
+to_frame = json.dumps({
+    "frame_id": "world",
+    "handedness": "right",
+    "axes": {"x": "right", "y": "up", "z": "backward"},
+    "units": "meters",
+})
+
+converted = json.loads($binding_module_name.convert_point_convention_json(
+    point,
+    from_frame,
+    to_frame,
+))
+```
+
+Rust keeps the typed `FrameRegistryEntry` + `SpatialTransform` API. Generated
+languages use the same registry JSON shapes and small `{x,y,z}` /
+`{x,y,z,w}` objects for vectors and quaternions.

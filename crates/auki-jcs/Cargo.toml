@@ -7,6 +7,31 @@ repository.workspace = true
 authors.workspace = true
 description = "RFC 8785 JSON Canonicalization Scheme — canonical UTF-8 bytes for content-addressed hashing."
 
+[lib]
+name = "auki_jcs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["uniffi"]
+uniffi = ["dep:uniffi", "dep:thiserror"]
+cli = ["uniffi", "uniffi/cli"]
+wasm = ["dep:wasm-bindgen"]
+
 [dependencies]
 serde_json = "1"
 serde_jcs = "0.2"
+wasm-bindgen = { version = "0.2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uniffi = { version = "0.31", optional = true }
+thiserror = { version = "2", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "surface"
+path = "tests/surface.rs"
+required-features = ["uniffi"]

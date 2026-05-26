@@ -4,6 +4,70 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 10 complete after documenting generated native/browser binding surfaces and propagating sprint/changelog updates.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 9 complete after adding generated Python, Swift, and JavaScript/Wasm smoke coverage for `auki-network` and `auki-domain`.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 8 complete after adding browser-safe `auki-domain` DTO validators and the generated JavaScript domain client facade over the `auki-network` browser transport.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 7 complete after adding native `auki-domain` provider callbacks, catalog/resource/registry fetches, and byte-stream binding controls.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 6 complete after adding native `auki-domain` cluster-control, diagnostics, membership snapshot, and clock estimate bindings.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 5 complete after adding native `auki-network` Discovery/app-instance bindings and generated browser JavaScript runtime tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 4 complete after adding native `auki-network` byte-stream binding APIs and protobuf-byte stream smoke tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 3 complete after adding two-runtime native binding smoke tests for `auki-network` request/response and diagnostic flows.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to record partial Phase 3 completion for native `auki-network` event draining, responder-token registries, JSON request wrappers, and response methods.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 2 complete after adding the native `auki-network` runtime-control UniFFI facade.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the Superpowers full network/domain binding plan to mark Phase 1 complete after adding measurable binding surface inventories, marker tests, and the checker script.
+
+### Nils's codex · May 25, HKT, 2026
+
+Added the Superpowers implementation plan for fully exposing `auki-network` and `auki-domain` through binding-safe native UniFFI and browser wasm/JavaScript surfaces, with generated-language smoke tests and `auki-ros-adapter` excluded from this pass.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan status to mark generated JavaScript browser-probe smoke coverage complete.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan status to mark completed crate migrations and the JavaScript-owned browser transport split, while keeping browser-probe interop smoke coverage open.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan to record the completed generator inventory helper and all-crate binding contract test.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan to defer `auki-ros-adapter` out of the current pass and treat it as a later adapter-specific binding decision.
+
 ### Nils's codex · May 24, HKT, 2026
 
 Added the Superpowers implementation plan for migrating SDK crates to the crate-owned UniFFI Python/Swift and wasm-bindgen JavaScript binding standard, with existing PyO3 wrappers treated as legacy compatibility surfaces.

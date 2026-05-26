@@ -667,6 +667,7 @@ dependencies = [
  "auki-jcs",
  "auki-layout",
  "auki-network",
+ "auki-proto",
  "auki-registry",
  "auki-time",
  "futures",
@@ -679,6 +680,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -707,12 +710,19 @@ version = "0.0.0"
 dependencies = [
  "auki-proto",
  "auki-registry",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
 name = "auki-hash"
 version = "0.0.0"
 dependencies = [
+ "uniffi",
+ "wasm-bindgen",
  "xxhash-rust",
 ]
 
@@ -752,11 +762,18 @@ version = "0.0.0"
 dependencies = [
  "serde_jcs",
  "serde_json",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
 name = "auki-layout"
 version = "0.0.0"
+dependencies = [
+ "uniffi",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "auki-layout-py"
@@ -775,6 +792,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -798,6 +818,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -892,6 +914,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -935,7 +960,12 @@ dependencies = [
  "auki-proto",
  "auki-registry",
  "libc",
+ "serde",
+ "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
+ "uniffi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -7357,8 +7387,6 @@ dependencies = [
 [[package]]
 name = "webrtc"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30367074d9f18231d28a74fab0120856b2b665da108d71a12beab7185a36f97b"
 dependencies = [
  "arc-swap",
  "async-trait",

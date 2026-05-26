@@ -119,6 +119,7 @@ pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// observation) live on the ClusterManager — not on `DaemonInfo` —
 /// so daemons aren't responsible for keeping them fresh.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DaemonInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, `"park"`).
     pub app: String,
@@ -319,6 +320,14 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
         }
         resources
     }
+}
+
+/// Application-supplied source for canonical registry entries served over
+/// `/auki/registries/0.0.1`.
+pub trait RegistryEntryProvider: Send + Sync + 'static {
+    /// Return the exact entry envelope for `request`, or `None` when this
+    /// producer does not have that `(kind, id, hash)` entry.
+    fn entry(&self, request: &RegistryRequest) -> Option<RegistryEntryEnvelope>;
 }
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
@@ -625,6 +634,9 @@ pub struct ClusterManager {
     /// `None` until the daemon calls [`Self::set_registry_app_root`];
     /// inbound registry fetches return `entry: None` while unset.
     registry_app_root: Arc<Mutex<Option<PathBuf>>>,
+    /// Application-supplied dynamic registry provider. When present, inbound
+    /// registry fetches consult this before falling back to `registry_app_root`.
+    registry_entry_provider: Arc<Mutex<Option<Arc<dyn RegistryEntryProvider>>>>,
     /// Set to `true` by [`Self::shutdown`] before any teardown
     /// begins. Pub I/O methods (`admit_peer`,
     /// `fetch_participant_info`) check this and fast-fail with a
@@ -969,6 +981,8 @@ impl ClusterManager {
         )));
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let registry_entry_provider: Arc<Mutex<Option<Arc<dyn RegistryEntryProvider>>>> =
+            Arc::new(Mutex::new(None));
 
         // 9. Drain inbound /auki/resources/0.0.1 requests. Sensor
         //    streams are lifted from the sensor catalog provider;
@@ -1000,6 +1014,7 @@ impl ClusterManager {
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
+            registry_entry_provider.clone(),
             registry_app_root.clone(),
         )));
         let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
@@ -1034,6 +1049,7 @@ impl ClusterManager {
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
+            registry_entry_provider,
             stopped: AtomicBool::new(false),
         })
     }
@@ -1392,6 +1408,15 @@ impl ClusterManager {
             .registry_app_root
             .lock()
             .expect("registry_app_root lock") = Some(app_root.into());
+    }
+
+    /// Register (or replace) an application-supplied registry entry provider.
+    /// Dynamic providers are consulted before the app-root file fallback.
+    pub fn set_registry_entry_provider(&self, provider: Arc<dyn RegistryEntryProvider>) {
+        *self
+            .registry_entry_provider
+            .lock()
+            .expect("registry_entry_provider lock") = Some(provider);
     }
 
     /// Fetch a cluster peer's current sensor catalog over the
@@ -1786,6 +1811,8 @@ impl ClusterManager {
         )));
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
+        let registry_entry_provider: Arc<Mutex<Option<Arc<dyn RegistryEntryProvider>>>> =
+            Arc::new(Mutex::new(None));
 
         // 10. Drain inbound /auki/resources/0.0.1 requests. Sensor
         //     streams are lifted from the sensor catalog provider;
@@ -1817,6 +1844,7 @@ impl ClusterManager {
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
+            registry_entry_provider.clone(),
             registry_app_root.clone(),
         )));
         let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
@@ -1851,6 +1879,7 @@ impl ClusterManager {
             sensor_catalog_provider,
             resource_catalog_provider,
             registry_app_root,
+            registry_entry_provider,
             stopped: AtomicBool::new(false),
         })
     }
@@ -3196,10 +3225,20 @@ fn spawn_sensors_handler(
 /// the protocol but does not have that exact `(kind, id, hash)` entry.
 fn spawn_registry_handler(
     mut rx: mpsc::Receiver<RegistryRequestEvent>,
+    provider: Arc<Mutex<Option<Arc<dyn RegistryEntryProvider>>>>,
     app_root: Arc<Mutex<Option<PathBuf>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(RegistryRequestEvent { peer, request, ack }) = rx.recv().await {
+            let provider_entry = {
+                let guard = provider.lock().expect("registry_entry_provider lock");
+                guard.as_ref().and_then(|provider| provider.entry(&request))
+            };
+            if let Some(entry) = provider_entry {
+                let _ = ack.send(RegistryResponse { entry: Some(entry) });
+                continue;
+            }
+
             let root = app_root.lock().expect("registry_app_root lock").clone();
             let entry = match root {
                 Some(root) => match read_registry_envelope(&root, &request) {

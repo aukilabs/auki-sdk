@@ -20,7 +20,8 @@ cat > "$pkg/package.json" <<'JSON'
     "@bufbuild/protobuf": "^2.0.0"
   },
   "devDependencies": {
-    "@bufbuild/protoc-gen-es": "^2.0.0"
+    "@bufbuild/protoc-gen-es": "^2.0.0",
+    "typescript": "^5.9.0"
   }
 }
 JSON

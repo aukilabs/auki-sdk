@@ -8,6 +8,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** The path-helper implementation moved into binding-free `src/core.rs`, while `src/lib.rs` now only wires feature-gated modules and re-exports the existing Rust `&Path` / `PathBuf` API. Native `src/ffi.rs` exposes UniFFI string adapters for Python and Swift; `src/wasm.rs` exposes wasm-bindgen camelCase string adapters for JavaScript/WebAssembly. The crate now declares `staticlib` / `cdylib` / `rlib`, default `uniffi`, `cli`, and `wasm` features, a crate-local `uniffi-bindgen` binary, `bindings.toml`, and crate-owned Python, Swift, and JavaScript package templates plus a JavaScript smoke vector.
+
+**Compatibility.** Rust call sites continue to import the same crate-root path helpers. Consumers that do not need generated bindings should depend on `auki-layout` with `default-features = false`; the in-workspace `auki-registry` dependency and `auki-domain` dev-dependency have been updated that way.
+
+**Tests.** Added `tests/surface.rs` to pin crate-root source compatibility. The existing core unit tests remain the path behavior lock; generated package checks cover Python import, JavaScript wasm smoke, and SwiftPM build output.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Pose-log docs stop pointing at the deprecated datatypes migration path.** The path contract is unchanged; comments now describe the current per-`(from, to)` identity directly.

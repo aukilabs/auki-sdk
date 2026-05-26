@@ -1,0 +1,65 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import initAukiDomain, { AukiDomainClient } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+const peerId = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar";
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+test("AukiDomainClient composes request/response flows through a network peer", async () => {
+  const participant = {
+    app: "browser-test",
+    name: "peer-a",
+    session_id: "session-a",
+    session_clock_id: "clock-a",
+    session_clock_hash: "hash-a",
+    session_now_ns: 123,
+    cluster_joined_at_ns: null,
+    peer_id: peerId,
+    app_instance: "00163eabcdef",
+    is_manager: true,
+    manager_peer_id: peerId,
+  };
+  const responses = new Map([
+    ["/auki/join/0.0.1", { accepted: true }],
+    ["/auki/info/0.0.1", { participant_info_json: JSON.stringify(participant) }],
+    ["/auki/sensors/0.0.1", { sensors: [{ sensor_id: "camera", sensor_hash: "sensor-hash", kind: "camera" }] }],
+    ["/auki/resources/0.0.1", { resources: [] }],
+    ["/auki/registries/0.0.1", {
+      entry: {
+        kind: "sensor",
+        id: "camera",
+        hash: "sensor-hash",
+        canonical_json: JSON.stringify({ sensor_id: "camera", body: { type: "camera" } }),
+      },
+    }],
+  ]);
+  const calls = [];
+  const networkPeer = {
+    peerId,
+    async requestFramed(peerMultiaddr, protocol, payload) {
+      calls.push({ peerMultiaddr, protocol, request: JSON.parse(decoder.decode(payload)) });
+      return encoder.encode(JSON.stringify(responses.get(protocol)));
+    },
+  };
+
+  const client = new AukiDomainClient({ networkPeer, clusterName: "demo" });
+  assert.equal(client.clusterName, "demo");
+  assert.equal(client.localPeerId, peerId);
+  assert.deepEqual(JSON.parse(await client.requestJoin("/ip4/127.0.0.1/tcp/4001", { join: true })), { accepted: true });
+  assert.equal(JSON.parse(await client.fetchParticipantInfo("/ip4/127.0.0.1/tcp/4001")).peer_id, peerId);
+  assert.equal(JSON.parse(await client.fetchSensorCatalog("/ip4/127.0.0.1/tcp/4001")).sensors[0].sensor_id, "camera");
+  assert.deepEqual(JSON.parse(await client.fetchResourceCatalog("/ip4/127.0.0.1/tcp/4001")).resources, []);
+  assert.equal(JSON.parse(await client.fetchRegistryEntry("/ip4/127.0.0.1/tcp/4001")).entry.id, "camera");
+  assert.deepEqual(calls.map((call) => call.protocol), [
+    "/auki/join/0.0.1",
+    "/auki/info/0.0.1",
+    "/auki/sensors/0.0.1",
+    "/auki/resources/0.0.1",
+    "/auki/registries/0.0.1",
+  ]);
+});

@@ -6,6 +6,28 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** The generic log primitive and on-disk segment implementation moved into binding-free `src/core.rs`; `src/lib.rs` now only wires feature-gated modules and re-exports the existing Rust `Log<T: LogPayload>` API. Added `BytesPayload` and pure segment helpers (`canonical_manifest_json_str`, `encode_segment_bytes`, `decode_segment_bytes`, `bytes_entries_to_json`, `bytes_entries_from_json`) so generated languages can exercise opaque-byte log vectors without taking a dependency on any specific payload schema.
+
+**Native bindings.** `src/ffi.rs` exposes UniFFI adapters for Python and Swift: `BytesLog` for append/flush/retention, `BytesTail` for non-blocking tail reads, read-all helpers, and segment JSON encode/decode helpers.
+
+**WASM bindings.** `src/wasm.rs` exposes only web-safe manifest canonicalization and segment encode/decode helpers. Filesystem log read/write/tail stays native-only until a real browser storage adapter exists.
+
+**Binding assets.** The crate now declares `staticlib` / `cdylib` / `rlib`, default `uniffi`, `cli`, and `wasm` features, a crate-local `uniffi-bindgen` binary, `bindings.toml`, and crate-owned Python, Swift, and JavaScript package templates plus a JavaScript smoke vector.
+
+**Compatibility.** Rust call sites continue to import the same crate-root `Log<T>`, `LogPayload`, `LogReader`, `TailIter`, `Entry`, and `Error` API. Consumers that do not need generated bindings should depend on `auki-logs` with `default-features = false`; the in-workspace `auki-time`, `auki-proto`, `auki-registry` dev-dependency, and `auki-manifests` dev-dependency have been updated that way.
+
+**Tests.** Added pure opaque-byte segment vectors in the core tests and `tests/surface.rs` to pin crate-root source compatibility. Generated package checks cover Python import/bytes-log/tail smoke, JavaScript wasm segment smoke, and SwiftPM build output.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, keeping log manifest writes on the direct Rust canonicalization API without pulling in UniFFI.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Active log docs now point payload readers at `auki-proto`.** The log framing docs describe root protobuf schemas and generated `auki-proto` payload impls as the active prost path; no segment format behavior changed.

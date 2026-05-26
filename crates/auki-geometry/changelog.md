@@ -4,6 +4,22 @@ Detailed changes for `auki-geometry`. Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** The typed geometry implementation moved into binding-free `src/core.rs`; `src/lib.rs` now only wires feature-gated modules and re-exports the existing Rust API. Native `src/ffi.rs` exposes UniFFI adapters for Python and Swift; `src/wasm.rs` exposes wasm-bindgen adapters for JavaScript/WebAssembly. Generated languages use JSON-string helpers for frame entries, axis conventions, vectors, quaternions, and poses while Rust keeps the typed `FrameRegistryEntry` / `SpatialTransform` API.
+
+**Binding assets.** The crate now declares `staticlib` / `cdylib` / `rlib`, default `uniffi`, `cli`, and `wasm` features, a crate-local `uniffi-bindgen` binary, `bindings.toml`, and crate-owned Python, Swift, and JavaScript package templates plus a JavaScript smoke vector.
+
+**Tests.** Added JSON adapter locked vectors in the core tests and `tests/surface.rs` to pin crate-root source compatibility. Existing convention/quaternion tests remain the Rust behavior lock; generated package checks cover Python import/conversion smoke, JavaScript wasm smoke, and SwiftPM build output.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-registry` dependency out of default features after `auki-registry` adopted the binding standard, keeping geometry conversion builds on the direct Rust registry types without inheriting generated binding dependencies.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Active geometry docs now point pose payload readers at generated `auki-proto`.

@@ -1,0 +1,26 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-manifests`.
+
+The generated package exposes JSON-string adapters for the SDK's canonical log manifest builders:
+
+```python
+import json
+import $binding_module_name
+
+manifest = json.loads($binding_module_name.build_detection_log_manifest_json(
+    "boosterapp",
+    "session-1",
+    "aukilabs/qr/v1",
+    "detectorhash",
+    "input-log",
+    "K1/head",
+    "sensorhash",
+    "K1/utc",
+    "clockhash",
+    1_000_000_000,
+    30_000_000_000,
+))
+```
+
+The Rust crate keeps the source-compatible `serde_json::Value` builder API; generated languages receive JCS-canonical JSON strings.

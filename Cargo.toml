@@ -33,3 +33,10 @@ license = "MIT"
 repository = "https://github.com/aukilabs/auki-sdk"
 authors = ["Auki Labs Limited"]
 version = "0.0.1"
+
+[patch.crates-io]
+# libp2p-webrtc 0.9.0-alpha.1 pulls webrtc 0.12.0, whose default SRTP
+# profile list can negotiate AES-256-GCM with node-datachannel. Its paired
+# webrtc-srtp 0.14.0 implementation panics on that profile, so keep the
+# dependency local until upstream ships a compatible fix.
+webrtc = { path = "vendor/webrtc-0.12.0-auki" }

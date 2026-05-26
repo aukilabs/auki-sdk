@@ -6,8 +6,8 @@ Implementation status for [`auki-network`](../README.md).
 
 - [`lib.rs`](lib.rs) - feature gates, binding adapter wiring, module exports, and root re-exports.
 - [`core.rs`](core.rs) - binding-free peer identity, reachability, capability types, and locked identity tests.
-- [`ffi.rs`](ffi.rs) - native UniFFI adapter for identity/capabilities and the `message_node` Swift host surface, behind `uniffi`.
-- [`wasm.rs`](wasm.rs) - wasm-bindgen adapter for browser identity/protocol helpers, behind `wasm`.
+- [`ffi.rs`](ffi.rs) - native UniFFI adapter for identity/capabilities, `AukiNetworkRuntime`, request/response/event facades, byte streams, Discovery, app-instance helpers, and the `message_node` Swift host surface, behind `uniffi`.
+- [`wasm.rs`](wasm.rs) - wasm-bindgen adapter for browser identity/protocol helpers, DTO byte helpers, and browser-probe framing, behind `wasm`.
 - [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) - crate-local UniFFI CLI entry point used by the root binding generator.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
 - [`browser_probe_protocol.rs`](browser_probe_protocol.rs) - shared `/auki/browser-probe/0.0.1` request/response structs for the browser WebRTC probe.
@@ -96,6 +96,15 @@ browserProbeProtocol() -> string
 messageProtocol() -> string
 encodeBrowserProbeRequest(nonce, payload) -> Uint8Array
 decodeBrowserProbeResponse(bytes) -> string
+joinProtocol() -> string
+infoProtocol() -> string
+sensorsProtocol() -> string
+resourcesProtocol() -> string
+registriesProtocol() -> string
+encodeMessageEnvelopeJson(json) -> Uint8Array
+decodeMessageEnvelopeJson(bytes) -> string
+encodeJoinRequestJson(json) -> Uint8Array
+decodeJoinResponseJson(bytes) -> string
 ```
 
 Behind `browser_probe`:
@@ -142,7 +151,36 @@ pub mod message_node {
 }
 ```
 
-Behind `uniffi,message_node`, generated Swift bindings expose:
+Behind `uniffi`, generated Python and Swift bindings expose the native binding
+surface. Identity helpers are always available. `AukiNetworkRuntime` wraps the
+operational libp2p runtime with binding-safe strings, JSON, byte vectors,
+opaque subscriptions, and responder ids for host-language decisions. The
+message-node and stream APIs use protobuf bytes so hosts can pair them with
+generated `auki-proto` packages in their language.
+
+Native runtime shape:
+
+```text
+AukiNetworkRuntime.spawn(config)
+runtime.local_peer_id()
+runtime.listen_multiaddrs()
+runtime.connected_peers()
+runtime.set_allowed_peers(peers)
+runtime.set_heartbeat_targets(peer_ids)
+runtime.drain_membership_events(max)
+runtime.drain_liveness_events(max)
+runtime.drain_join_requests(max)
+runtime.respond_join_json(responder_id, response_json)
+runtime.send_join_request_json(peer_id, request_json, timeout_ms)
+runtime.open_stream_bytes(peer_id, request_json, payload_kind, timeout_ms)
+runtime.drain_stream_open_requests(max)
+runtime.accept_stream_open(responder_id, manifest_json)
+runtime.push_stream_entry(stream_id, entry)
+runtime.finish_stream(stream_id)
+runtime.shutdown()
+```
+
+Swift shape:
 
 ```swift
 public class AukiMessageNode {
@@ -161,9 +199,26 @@ public struct AukiMessageEvent {
 }
 ```
 
-`just generate-swift-bindings auki-network` generates the local ignored SwiftPM package under `bindings/swift/auki-network/` and verifies the iOS/macOS XCFramework build. The package is a generated artifact; crate-owned source policy lives in `bindings.toml`, `ffi.rs`, and `bindings/swift/Package.swift.tmpl`.
+Python shape:
+
+```python
+import auki_network
+
+seed = bytes([3]) * 32
+peer_id = auki_network.peer_id_from_wallet_seed(seed)
+capabilities = auki_network.networking_capabilities()
+node = auki_network.AukiMessageNode.from_wallet_seed(
+    seed=seed,
+    listen_addrs=[],
+    agent_version="auki-python-host/0.0.0",
+)
+```
+
+`just generate-python-bindings auki-network` generates the local ignored Python package under `bindings/python/auki-network/`. `just generate-swift-bindings auki-network` generates the local ignored SwiftPM package under `bindings/swift/auki-network/` and verifies the iOS/macOS XCFramework build. These packages are generated artifacts; crate-owned source policy lives in `bindings.toml`, `ffi.rs`, and `bindings/{python,swift}/`.
 
 [`examples/ios/AukiNetworkTestApp`](../../../examples/ios/AukiNetworkTestApp) is the committed iOS host for this generated package. It imports generated `auki_network` and generated SwiftProtobuf `AukiProto`; it does not import a separate `auki_identity` Swift package because wallet seed handling stays behind the Rust `AukiMessageNode` facade. The companion `browser-message-smoke.mjs` script uses the generated browser package and js-libp2p to send a length-prefixed `MessageEnvelope` to the iOS app over `/auki/message/0.0.1`.
+
+The generated JavaScript package also exposes `dialBrowserProbe(...)`. It creates a js-libp2p WebRTC Direct peer from Rust-derived key material, dials the native `/auki/browser-probe/0.0.1` protocol, sends a wasm-encoded length-prefixed request, and decodes the native response. The generated `browser-probe-smoke.mjs` plus root `scripts/smoke-network-browser-probe.sh` run that path against the native `browser_probe_listener` example.
 
 Behind `swarm`:
 
@@ -311,7 +366,10 @@ cargo check -p auki-network --target wasm32-unknown-unknown --no-default-feature
 cargo test -p auki-network --features swarm,discovery_client
 cargo check -p auki-network --features browser_probe --example browser_probe_listener
 cargo test -p auki-network --features browser_probe browser_probe
+bash scripts/smoke-network-browser-probe.sh
 cargo test -p auki-network --features message_node message_node
+python3 scripts/bindings/generate_bindings.py plan python auki-network
+just generate-python-bindings auki-network
 just generate-javascript-bindings auki-network
 DISCOVERY_URL=http://127.0.0.1:8080 cargo test -p auki-network --features discovery_client --test discovery_integration -- --ignored
 ```

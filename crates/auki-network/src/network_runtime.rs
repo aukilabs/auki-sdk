@@ -574,6 +574,7 @@ struct PeerSchedule {
 /// module-level docs for the design rationale.
 pub struct NetworkRuntime {
     local_peer_id: PeerId,
+    listen_addrs: Arc<Mutex<Vec<Multiaddr>>>,
     connected: Arc<Mutex<HashSet<PeerId>>>,
     /// Driver-task teardown channel. Wrapped in `Mutex<Option<_>>`
     /// so [`Self::shutdown`] can `.take()` from `&self` and remain
@@ -738,6 +739,7 @@ impl NetworkRuntime {
         let handle =
             tokio::runtime::Handle::try_current().map_err(|_| SpawnError::NoTokioRuntime)?;
         let local_peer_id = *swarm.local_peer_id();
+        let listen_addrs = Arc::new(Mutex::new(Vec::new()));
         let connected = Arc::new(Mutex::new(HashSet::new()));
         let outbound_control = swarm.behaviour().stream.new_control();
         let inbound_control = outbound_control.clone();
@@ -756,6 +758,7 @@ impl NetworkRuntime {
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
+            listen_addrs.clone(),
             connected.clone(),
             stream_provider,
             heartbeat_timestamps,
@@ -776,6 +779,7 @@ impl NetworkRuntime {
         Ok((
             Self {
                 local_peer_id,
+                listen_addrs,
                 connected,
                 shutdown_tx: Mutex::new(Some(shutdown_tx)),
                 task: Mutex::new(Some(task)),
@@ -1030,6 +1034,14 @@ impl NetworkRuntime {
         self.local_peer_id
     }
 
+    /// Listen addresses emitted by libp2p for this runtime.
+    pub fn listen_addrs(&self) -> Vec<Multiaddr> {
+        self.listen_addrs
+            .lock()
+            .expect("listen addr set mutex poisoned")
+            .clone()
+    }
+
     /// Cloneable handle for command-style operations
     /// ([`set_allowed_peers`](NetworkRuntimeHandle::set_allowed_peers),
     /// [`set_heartbeat_targets`](NetworkRuntimeHandle::set_heartbeat_targets),
@@ -1194,6 +1206,7 @@ impl Drop for NetworkRuntime {
 async fn run_task(
     swarm: Swarm<Behaviour>,
     initial_peers: Vec<AllowedPeer>,
+    listen_addrs: Arc<Mutex<Vec<Multiaddr>>>,
     connected: Arc<Mutex<HashSet<PeerId>>>,
     stream_provider: StreamProvider,
     heartbeat_timestamps: HeartbeatTimestampSource,
@@ -1338,6 +1351,8 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
+    drive_pending_dials(&mut swarm, &known_peers, &mut schedules);
+
     loop {
         tokio::select! {
             biased;
@@ -1355,6 +1370,7 @@ async fn run_task(
                     &mut swarm,
                     &known_peers,
                     &mut schedules,
+                    &listen_addrs,
                     &connected,
                     &inbound_control,
                     &lifeline_rx,
@@ -1541,6 +1557,7 @@ fn handle_event(
     _swarm: &mut Swarm<Behaviour>,
     known_peers: &HashMap<PeerId, Vec<Multiaddr>>,
     schedules: &mut HashMap<PeerId, PeerSchedule>,
+    listen_addrs: &Arc<Mutex<Vec<Multiaddr>>>,
     connected: &Arc<Mutex<HashSet<PeerId>>>,
     stream_control: &Control,
     lifeline_rx: &watch::Receiver<()>,
@@ -1551,6 +1568,12 @@ fn handle_event(
     heartbeat_timestamps: &HeartbeatTimestampSource,
 ) {
     match event {
+        SwarmEvent::NewListenAddr { address, .. } => {
+            let mut addrs = listen_addrs.lock().expect("listen addr set mutex poisoned");
+            if !addrs.contains(&address) {
+                addrs.push(address);
+            }
+        }
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             if known_peers.contains_key(&peer_id) {
                 if let Some(sched) = schedules.get_mut(&peer_id) {
@@ -1625,6 +1648,7 @@ fn handle_command(
         RuntimeCmd::SetAllowedPeers { new_peers, ack } => {
             let report = apply_peer_update(swarm, known_peers, schedules, connected, new_peers);
             prune_inbound_heartbeat_tasks(known_peers, inbound_heartbeat_tasks);
+            drive_pending_dials(swarm, known_peers, schedules);
             reconcile_heartbeat_tasks(
                 local_peer_id,
                 swarm,
@@ -1834,6 +1858,15 @@ fn apply_peer_update(
         } else {
             // Refresh addresses for existing peers.
             known_peers.insert(ap.peer_id, ap.multiaddrs.clone());
+            if !ap.multiaddrs.is_empty() && !swarm.is_connected(&ap.peer_id) {
+                schedules.insert(
+                    ap.peer_id,
+                    PeerSchedule {
+                        next_dial_at: Some(now),
+                        backoff: INITIAL_BACKOFF,
+                    },
+                );
+            }
         }
     }
 
@@ -1859,6 +1892,7 @@ fn drive_pending_dials(
         }
         if let Some(addrs) = known_peers.get(&pid) {
             let _ = swarm::dial_peer(swarm, pid, addrs.clone());
+            schedule_dial_watchdog(schedules, pid);
         }
     }
 }
@@ -2501,6 +2535,14 @@ fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId
     sched.backoff = std::cmp::min(sched.backoff.mul_f32(2.0), MAX_BACKOFF);
 }
 
+fn schedule_dial_watchdog(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {
+    let sched = schedules.entry(peer_id).or_insert(PeerSchedule {
+        next_dial_at: None,
+        backoff: INITIAL_BACKOFF,
+    });
+    sched.next_dial_at = Some(Instant::now() + INITIAL_BACKOFF);
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2623,6 +2665,57 @@ mod tests {
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
         rt.shutdown();
+    }
+
+    #[tokio::test]
+    async fn pending_dials_retry_after_immediate_dial_error() {
+        let mut swarm = build_test_swarm().await;
+        let peer_id = PeerIdentity::from_seed(&[11u8; 32]).peer_id();
+        let addr = "/ip4/127.0.0.1/tcp/1".parse().unwrap();
+        swarm::dial_peer(&mut swarm, peer_id, vec![addr])
+            .expect("first dial starts and leaves peer in dialing state");
+        let known_peers = HashMap::from([(peer_id, vec!["/ip4/127.0.0.1/tcp/1".parse().unwrap()])]);
+        let mut schedules = HashMap::from([(
+            peer_id,
+            PeerSchedule {
+                next_dial_at: Some(Instant::now()),
+                backoff: INITIAL_BACKOFF,
+            },
+        )]);
+
+        drive_pending_dials(&mut swarm, &known_peers, &mut schedules);
+
+        let schedule = schedules
+            .get(&peer_id)
+            .expect("failed immediate dial keeps a retry schedule");
+        assert!(
+            schedule.next_dial_at.is_some(),
+            "failed immediate dial should schedule a retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_dials_keep_retry_after_started_dial_until_connected() {
+        let mut swarm = build_test_swarm().await;
+        let peer_id = PeerIdentity::from_seed(&[12u8; 32]).peer_id();
+        let known_peers = HashMap::from([(peer_id, vec!["/ip4/127.0.0.1/tcp/1".parse().unwrap()])]);
+        let mut schedules = HashMap::from([(
+            peer_id,
+            PeerSchedule {
+                next_dial_at: Some(Instant::now()),
+                backoff: INITIAL_BACKOFF,
+            },
+        )]);
+
+        drive_pending_dials(&mut swarm, &known_peers, &mut schedules);
+
+        let schedule = schedules
+            .get(&peer_id)
+            .expect("started dial keeps a retry schedule until connected");
+        assert!(
+            schedule.next_dial_at.is_some(),
+            "started dial should keep a retry until a connection event clears it"
+        );
     }
 
     #[test]

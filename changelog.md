@@ -6,6 +6,170 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+**Domain DaemonInfo no longer has duplicate binding and Rust exports.** `auki-domain` now derives the generated binding record from the stable core `DaemonInfo`, fixing default-feature Rust test compilation while preserving generated Python and Swift bootstrap APIs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network runtime-pair smokes refresh peer updates while connecting.** `auki-network` full-surface and generated Python smokes now reapply `set_allowed_peers` while waiting for both local runtimes to connect, reducing transient local libp2p startup flakes. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network allowed-peer updates now drive due dials immediately.** `auki-network` generated hosts no longer depend on the periodic reconnect tick for the first dial after initial setup or `set_allowed_peers`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network binding smoke runtimes now use fresh peer identities.** `auki-network` full-surface and generated Python runtime-pair smoke tests no longer rapidly reuse the same libp2p peer ids during teardown/restart verification. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network started dials keep retry schedules until connected.** `auki-network` now keeps short reconnect watchdog attempts alive after libp2p accepts a dial, preventing pending dial state from leaving generated hosts waiting indefinitely. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network Python smoke now waits for listeners before peer updates.** The generated `auki-network` Python smoke now binds `/tcp/0`, starts both runtimes, and applies allow-list updates only after concrete listener addresses are reported, removing avoidable startup races from generated-package verification. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network pending dials now retry after immediate dial errors.** `auki-network` keeps reconnect attempts scheduled when libp2p rejects a due dial synchronously, reducing generated-binding startup flakes around duplicate or in-progress dial state. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network allowed-peer refresh now redials disconnected peers.** `auki-network` now schedules an immediate reconnect when a known allowed peer receives refreshed addresses while disconnected, fixing a generated-binding startup flake. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full network/domain binding documentation completed.** `auki-network` and `auki-domain` README/source docs now describe the generated native and browser binding surfaces, and the full binding plan marks Phase 10 complete. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Generated package smoke coverage added for network/domain bindings.** `auki-network` and `auki-domain` now have generated Python, Swift, and JavaScript/Wasm smoke tests for their full binding surfaces, completing Phase 9 of the full binding plan. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Browser domain facade bindings added.** `auki-domain` generated JavaScript now exposes browser-safe DTO validators and an `AukiDomainClient` facade over the `auki-network` browser transport, completing Phase 8 of the full binding plan. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Binding stream providers moved off the async substream worker.** `auki-network` now dispatches inbound stream provider callbacks through Tokio's blocking pool so generated-language responder decisions do not stall libp2p substream handshakes. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native domain provider, registry, catalog, and stream bindings added.** `auki-domain` generated native bindings now expose catalog/resource/registry provider callbacks, static JSON installers, catalog and registry fetches, and camera/detection byte streams through `DomainClusterManager`; the full binding plan marks Phase 7 complete. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native domain cluster-control bindings expanded.** `auki-domain` generated native bindings now expose manager admission, diagnostics, membership snapshots, clock sync estimates, and domain-clock estimates through `DomainClusterManager`; the full binding plan marks Phase 6 complete. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Network Discovery, app-instance, and browser binding surfaces added.** `auki-network` native bindings now include Discovery/app-instance helpers, and the generated JavaScript package now covers browser protocol constants, DTO byte helpers, and JavaScript-owned libp2p peer methods, completing Phase 5 of the full binding plan. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native network byte-stream bindings added.** `auki-network` now exposes binding-safe byte stream open/accept/decline/push/finish APIs plus `AukiStreamSubscription`, with camera and detection protobuf-byte smoke tests over real libp2p substreams; the full binding plan marks Phase 4 complete. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native network request/response binding smoke coverage added.** Two `AukiNetworkRuntime` binding facades now prove join, participant-info, catalog, registry, and diagnostic flows over real libp2p substreams, completing the Phase 3 request/event binding plan item. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native network event/request bindings added.** `auki-network` now exposes binding-safe event records, drain methods, outbound JSON request wrappers, and responder-token reply methods on `AukiNetworkRuntime`; two-runtime protocol smoke coverage remains open. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native network runtime-control bindings added.** `auki-network` now exposes a binding-safe `AukiNetworkRuntime` facade for generated native clients, covering spawn, listen/peer inspection, allowed-peer updates, heartbeat targets, and shutdown. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface contracts added.** `auki-network` and `auki-domain` now have measurable binding surface inventories, ignored marker tests, and a root checker before the full native UniFFI and browser JavaScript exposure work activates each surface. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full network/domain binding plan added.** The saved plan now defines how `auki-network` and `auki-domain` reach binding-safe parity for native UniFFI, browser wasm/JavaScript, request/response protocols, streams, providers, and generated-language smoke tests while keeping `auki-ros-adapter` out of scope. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**JavaScript protobuf TypeScript dependency pinned.** `auki-proto` generated JS protobuf packages now declare a current TypeScript dev dependency so `@bufbuild/protobuf` 2.x declarations type-check after install. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Swift binding package templates suppress generated XCFramework warnings.** Crate-owned Swift package templates now exclude generated XCFramework directories from source targets while retaining binary-target linkage. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Generated JavaScript browser-probe smoke coverage added.** `auki-network` now proves generated js-libp2p can dial the native WebRTC Direct `/auki/browser-probe/0.0.1` listener, and the SDK-wide UniFFI plan marks that coverage complete. See [`crates/changelog.md`](crates/changelog.md) and [`docs/changelog.md`](docs/changelog.md) for propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**SDK-wide UniFFI plan status reconciled.** The plan now marks completed in-scope crate migrations and the JavaScript-owned browser transport split, while leaving real browser-probe interop smoke coverage open. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Binding generator inventory and all-crate contract test added.** The generator can now list crate-owned binding configs with missing asset/feature checks, and the contract test validates every configured binding crate instead of only `auki-uniffi-test`.
+
+### Nils's codex · May 24, HKT, 2026
+
+**SDK-wide UniFFI harness plan updated.** The saved plan now records the completed generator inventory helper and all-crate binding contract test. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**SDK-wide UniFFI pass scope narrowed.** The saved migration plan now stops the current pass at `auki-domain` and defers `auki-ros-adapter` to a later adapter-specific binding decision. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-domain` binding-standard migration added.** Domain lifecycle logic now has binding-free Rust core wiring plus a bounded generated Python/Swift UniFFI facade and browser-safe wasm-bindgen membership/election helpers. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Diagnostic app avoids domain generated-binding defaults.** The example keeps using direct Rust domain APIs with `default-features = false` after `auki-domain` adopted UniFFI as its default feature. See [`examples/changelog.md`](examples/changelog.md) for example-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-network` generated Python UniFFI bindings enabled.** The network crate now generates a crate-owned Python package with the `message_node` feature, matching the existing Swift native binding surface and ignoring the legacy PyO3 wrapper. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Binding generator feature/runtime fixes added.** Python UniFFI native library builds now honor binding-specific feature sets, and generated Python protobuf packages now declare the runtime required by generated gencode. See [`crates/changelog.md`](crates/changelog.md) for related crate propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-proto` protobuf binding track audited.** The protobuf crate remains the schema-generated sibling to UniFFI crates, ignored Swift/Python/JavaScript protobuf outputs were regenerated and checked, and the Python generator now emits a protobuf runtime dependency matching generated gencode. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-time` binding-standard migration added.** The time crate now has binding-free core time/NTP/sync/domain logic plus native UniFFI and browser-safe wasm-bindgen adapters, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-geometry` binding-standard migration added.** The geometry crate now has binding-free core conversion logic plus native UniFFI and wasm-bindgen JSON-string adapters. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-logs` binding-standard migration added.** The log crate now has binding-free core log/segment logic plus native UniFFI opaque-byte adapters and wasm-bindgen manifest/segment helpers, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-registry` binding-standard migration added.** The registry crate now has binding-free core registry/storage logic plus native UniFFI and wasm-bindgen JSON-string adapters, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-manifests` binding-standard migration added.** The manifest crate now has binding-free core builders plus native UniFFI and wasm-bindgen JSON-string adapters, and `auki-time` opts out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-layout` binding-standard migration added.** The layout crate now has binding-free core path helpers plus native UniFFI and wasm-bindgen string adapters, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-jcs` binding-standard migration added.** The JCS crate now has binding-free core logic plus native UniFFI and wasm-bindgen JSON-string adapters, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 24, HKT, 2026
+
+**`auki-hash` binding-standard migration started.** The hash crate now has binding-free core logic plus native UniFFI and wasm-bindgen adapters, and current Rust consumers opt out of the new binding default feature. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 24, HKT, 2026
 
 **SDK-wide UniFFI bindings migration plan added.** The new plan sequences crate-owned generated Python/Swift UniFFI and JavaScript/WASM adoption across SDK crates, with existing PyO3 wrappers treated as legacy compatibility surfaces. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

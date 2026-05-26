@@ -4,6 +4,22 @@ Generic segmented ring-buffer log primitive. Two of the SDK's four logs — the 
 
 Payload encoding is the consumer's choice via the [`LogPayload`](src/lib.rs) trait — this crate handles framing only. Prost types in [`auki-proto`](../auki-proto) get a blanket impl through the `impl_log_payload!` macro.
 
+## Generated bindings
+
+The crate follows the SDK binding standard:
+
+- `src/core.rs` owns the generic Rust `Log<T: LogPayload>` implementation and pure segment helpers.
+- `src/ffi.rs` exposes native UniFFI adapters for Python and Swift.
+- `src/wasm.rs` exposes web-safe wasm-bindgen helpers for JavaScript/WebAssembly.
+
+Generated languages use an opaque-byte adapter rather than the generic Rust
+`Log<T>` trait. Native UniFFI exposes `BytesLog` for append/flush/retention,
+`BytesTail` for non-blocking tail reads, and free functions for read-all
+entries plus manifest and segment-byte vectors. The wasm package intentionally
+does not expose filesystem log read/write/tail operations; it only exposes pure
+manifest canonicalization and segment encode/decode helpers. Browser persistence
+needs a real storage adapter before it belongs in this crate.
+
 The rest of this README is the **on-disk format spec, version 1** — implementations in any language must read and write segment files that conform to it.
 
 ## Filesystem layout

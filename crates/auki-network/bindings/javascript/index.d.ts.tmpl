@@ -10,8 +10,18 @@ export function peerPrivateKeyProtobufFromSeed(seed: Uint8Array): Uint8Array;
 export function peerPrivateKeyProtobufFromWalletSeed(seed: Uint8Array): Uint8Array;
 export function browserProbeProtocol(): string;
 export function messageProtocol(): string;
+export function joinProtocol(): string;
+export function resourcesProtocol(): string;
+export function sensorsProtocol(): string;
+export function aukiNetworkProtocolsJson(): string;
 export function encodeBrowserProbeRequest(nonce: string, payload: Uint8Array): Uint8Array;
 export function decodeBrowserProbeResponse(bytes: Uint8Array): string;
+export function encodeMessageEnvelopeBytes(json: string): Uint8Array;
+export function decodeMessageEnvelopeJson(bytes: Uint8Array): string;
+export function encodeJoinRequestBytes(json: string): Uint8Array;
+export function decodeJoinResponseJson(bytes: Uint8Array): string;
+export function encodeCatalogRequestBytes(json: string): Uint8Array;
+export function decodeCatalogResponseJson(bytes: Uint8Array): string;
 
 export interface AukiNetworkPeerOptions {
   seed?: Uint8Array;
@@ -28,8 +38,23 @@ export interface AukiNetworkPeerOptions {
 export function importAukiPeerPrivateKey(seedInput: Pick<AukiNetworkPeerOptions, "seed" | "walletSeed">): Promise<unknown>;
 export function createAukiNetworkPeer(options?: AukiNetworkPeerOptions): Promise<AukiNetworkPeer>;
 
+export interface BrowserProbeOptions extends AukiNetworkPeerOptions {
+  address: string;
+  nonce?: string;
+  payload?: Uint8Array;
+}
+
+export interface BrowserProbeResponse {
+  nonce: string;
+  payload: number[];
+  responder: string;
+}
+
+export function dialBrowserProbe(options: BrowserProbeOptions): Promise<BrowserProbeResponse>;
+
 export class AukiNetworkPeer {
   constructor(node: Libp2p);
+  static create(options?: AukiNetworkPeerOptions): Promise<AukiNetworkPeer>;
   readonly node: Libp2p;
   readonly peerId: string;
   readonly multiaddrs: string[];
@@ -38,4 +63,8 @@ export class AukiNetworkPeer {
   dialProtocol(address: string, protocol: string, options?: unknown): Promise<unknown>;
   handle(protocol: string, handler: unknown, options?: unknown): Promise<void>;
   unhandle(protocol: string): Promise<void>;
+  dialBrowserProbe(peerMultiaddr: string, options?: { nonce?: string; payload?: Uint8Array }): Promise<BrowserProbeResponse>;
+  sendMessageEnvelope(peerMultiaddr: string, envelopeBytes: Uint8Array): Promise<Uint8Array>;
+  requestJoin(peerMultiaddr: string, requestBytes: Uint8Array): Promise<Uint8Array>;
+  requestCatalog(peerMultiaddr: string, requestBytes: Uint8Array): Promise<Uint8Array>;
 }

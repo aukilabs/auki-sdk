@@ -1,0 +1,20 @@
+# $crate_package_name
+
+UniFFI-generated Python bindings for `auki-domain`.
+
+This package exposes cluster membership JSON helpers and a bounded native
+`DomainClusterManager` facade. The generated manager can bootstrap a cluster
+with an internally-built network runtime and a no-stream provider. Typed stream
+providers, resource providers, and custom registry serving remain direct Rust
+APIs.
+
+```python
+import json
+import $binding_module_name
+
+membership = $binding_module_name.cluster_membership_new_json("demo")
+assert json.loads(membership)["cluster_name"] == "demo"
+```
+
+The legacy PyO3 `auki-domain-py` package is not part of this generated binding
+track.

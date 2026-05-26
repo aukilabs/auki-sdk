@@ -4,6 +4,70 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 10 complete after documenting the generated binding surfaces and propagating sprint/changelog updates.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 9 complete after adding generated Python, Swift, and JavaScript/Wasm smoke coverage for the generated package surfaces.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 8 complete after adding browser-safe `auki-domain` DTO validators and the generated JavaScript `AukiDomainClient` facade over the `auki-network` browser transport.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 7 complete after adding native `auki-domain` provider callbacks, catalog/resource/registry fetches, and byte-stream bindings.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 6 complete after adding native `auki-domain` cluster-control, diagnostics, membership snapshot, and clock estimate bindings.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 5 complete after adding native Discovery/app-instance binding facades and generated browser JavaScript runtime tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 4 complete after adding native byte-stream bindings and protobuf-byte stream smoke coverage.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 3 complete after adding two-runtime native binding smoke tests for request/response and diagnostic flows.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to record partial Phase 3 completion for the native network event and request/response binding API surface, with two-runtime smoke tests still open.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 2 complete after adding the native network runtime-control UniFFI facade.
+
+### Nils's codex · May 25, HKT, 2026
+
+Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 1 complete after adding measurable surface inventories and marker tests.
+
+### Nils's codex · May 25, HKT, 2026
+
+Added the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md), covering native UniFFI runtime parity, browser wasm/JavaScript facades, request/response protocols, streams, providers, and generated-language smoke tests while keeping `auki-ros-adapter` out of scope.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md) to mark browser-probe interop smoke coverage complete after generated JavaScript passed against the native WebRTC Direct listener.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md) to mark completed crate migrations and the JavaScript-owned browser transport split, while keeping browser-probe interop smoke coverage open.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md) to record the completed generator inventory helper and all-crate binding contract test.
+
+### Nils's codex · May 24, HKT, 2026
+
+Updated the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md) so the current pass stops at `auki-domain` and leaves `auki-ros-adapter` for a later adapter-specific decision.
+
 ### Nils's codex · May 24, HKT, 2026
 
 Added the SDK-wide UniFFI bindings migration plan under [`plans/`](plans/2026-05-24-sdk-wide-uniffi-bindings.md), covering crate order, generated Python/Swift/JavaScript testing, and PyO3 legacy coexistence.

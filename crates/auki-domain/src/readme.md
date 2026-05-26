@@ -4,10 +4,15 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 
 ## Files
 
-- [`lib.rs`](lib.rs) - module exports and public re-exports.
+- [`lib.rs`](lib.rs) - feature-gated module wiring and public re-exports.
+- [`core.rs`](core.rs) - binding-free Rust API, module declarations, re-exports, and shared JSON adapters.
+- [`ffi.rs`](ffi.rs) - native UniFFI records/errors/functions and bounded `DomainClusterManager` facade.
+- [`wasm.rs`](wasm.rs) - wasm-bindgen wrappers for browser-safe membership JSON and election helpers.
 - [`cluster_membership.rs`](cluster_membership.rs) - `ClusterMembership`, `ClusterMember`, membership JSON shape, filename helper, admission ordering.
 - [`cluster_manager.rs`](cluster_manager.rs) - `ClusterManager`, `ClusterTarget`, daemon info, sensor/resource catalog provider traits, Discovery bootstrap logic, Manager/member state, join/liveness/membership/info/resources/sensors tasks, heartbeat-derived clock-sync forwarding, stream opener, shutdown, and election helper.
 - [`stream_manifest.rs`](stream_manifest.rs) - producer-side `StreamManifestBuilder` that derives accept metadata from local Sensor / Frame registries.
+- [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) - crate-local UniFFI CLI entry point used by binding generation.
+- [`../bindings.toml`](../bindings.toml) - binding generation policy for Python, Swift, and JavaScript.
 
 ## Implemented
 
@@ -30,6 +35,9 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `StreamManifestBuilder::from_registry`, which constructs stream accept manifests from a producer's local registry and verifies exact frame references for spatial sensors.
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
 - Shared-reference, idempotent `shutdown`.
+- Shared JSON adapters for membership construction, filename/count reads, member admission, and deterministic successor election.
+- Native generated bindings for Python and Swift through UniFFI. The exported `DomainClusterManager` bootstraps with an internally-built network runtime and exposes cluster state, manager admission, diagnostics, membership events, participant info JSON, domain time and clock estimates, catalog/resource/registry providers, catalog/resource/registry fetches, camera/detection byte streams, and shutdown through binding-safe records.
+- Browser generated bindings through wasm-bindgen for membership/election helpers and domain DTO validation helpers. The generated JavaScript package also exports `AukiDomainClient`, which composes a `requestFramed`-compatible `auki-network` browser peer for domain request/response flows.
 
 ## Public Re-exports
 
@@ -67,6 +75,11 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `LIVENESS_CHECK_INTERVAL`
 - Error types for bootstrap/create/join/admit/fetch paths
 - `elect_successor`
+- `cluster_membership_new_json`
+- `cluster_membership_filename_json`
+- `cluster_membership_peer_count_json`
+- `cluster_membership_admit_member_json`
+- `elect_successor_json`
 
 ## Timekeeping
 
@@ -83,6 +96,18 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 For implementation changes:
 
 ```bash
+cargo test -p auki-domain --no-default-features
 cargo test -p auki-domain
+cargo check -p auki-domain --target wasm32-unknown-unknown --no-default-features --features wasm
+python3 scripts/bindings/generate_bindings.py plan python auki-domain
+python3 scripts/bindings/generate_bindings.py plan swift auki-domain
+python3 scripts/bindings/generate_bindings.py plan javascript auki-domain
+AUKI_PYTHON_NATIVE_TARGETS="$(rustc -vV | awk '/host:/ {print $2}')" just generate-python-bindings auki-domain
+just generate-javascript-bindings auki-domain
+just generate-swift-bindings auki-domain
+swift build --package-path bindings/swift/auki-domain
+python3 crates/auki-domain/bindings/python/smoke_full_domain.py
+swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain SmokeFullDomain
+npm --prefix bindings/javascript/auki-domain test
 DISCOVERY_URL=http://127.0.0.1:8080 cargo test -p auki-domain --test cluster_manager_integration -- --ignored
 ```

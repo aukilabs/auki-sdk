@@ -6,6 +6,78 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+**Core DaemonInfo now owns the generated binding record.** The generated UniFFI domain bootstrap now uses the stable `core::DaemonInfo` directly instead of a duplicate FFI-only record, so default-feature Rust consumers still resolve `auki_domain::DaemonInfo` to the Rust API type while Python and Swift keep the generated `DaemonInfo` record.
+
+Tests: `cargo test -p auki-domain full_binding_surface`; `cargo test -p auki-domain --test full_binding_surface -- --test-threads=1`; `AUKI_PYTHON_NATIVE_TARGETS="$(rustc -vV | awk '/host:/ {print $2}')" just generate-python-bindings auki-domain`; `python3 crates/auki-domain/bindings/python/smoke_full_domain.py`; `just generate-swift-bindings auki-domain`; `swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain SmokeFullDomain`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface documentation updated.** The crate README and source README now describe the generated Python/Swift operational `DomainClusterManager` surface, browser membership/DTO helpers, `AukiDomainClient` over a `requestFramed` network peer, catalog/registry/participant-info/diagnostic/time/stream coverage, `auki-proto` byte boundaries, and the legacy status of the PyO3 wrapper.
+
+Tests: documentation-only; `python3 scripts/bindings/check-full-surface.py`; `git diff --check`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Generated package smoke coverage added for the full binding surface.** The crate now owns generated Python, Swift, and JavaScript smoke coverage for the expanded binding surface: Python bootstraps generated `DomainClusterManager` facades against a mock Discovery server and exercises membership, participant-info, sensor-catalog, and resource-catalog flows; Swift imports generated `auki_domain` and `auki_network` packages and bootstraps a manager; JavaScript imports the generated wasm package and composes `AukiDomainClient` with a `requestFramed`-compatible network peer. Swift generated packages now link `SystemConfiguration.framework` for native networking dependencies.
+
+Tests: `AUKI_PYTHON_NATIVE_TARGETS="$(rustc -vV | awk '/host:/ {print $2}')" just generate-python-bindings auki-domain`; `python3 crates/auki-domain/bindings/python/smoke_full_domain.py`; `just generate-swift-bindings auki-domain`; `swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain SmokeFullDomain`; `just generate-javascript-bindings auki-domain`; `npm --prefix bindings/javascript/auki-domain test`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Browser domain facade bindings added.** Browser wasm now exports membership, successor-election, participant-info, sensor-catalog, resource-catalog, and registry-entry JSON validation helpers. The generated JavaScript package now ships an `AukiDomainClient` facade that composes a `requestFramed`-compatible `auki-network` browser peer for join, participant-info, catalog, resource, and registry request/response flows, plus generated package tests for the helper and client contracts.
+
+Tests: `cargo check -p auki-domain --target wasm32-unknown-unknown --no-default-features --features wasm`; `just generate-javascript-bindings auki-domain`; `npm --prefix bindings/javascript/auki-domain test`; `cargo test -p auki-domain --test full_binding_surface -- --test-threads=1`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native provider, catalog, registry, and stream bindings added.** `DomainClusterManager` generated native bindings now expose sensor/resource catalog providers, registry entry providers, static JSON provider installers, catalog and registry fetches, and camera/detection byte-stream opening with domain-local stream subscriptions and host-driven stream producer controls. The generated Python and Swift packages include the expanded surface; browser JavaScript domain helpers remain the next phase.
+
+Tests: `cargo test -p auki-domain --test full_binding_surface -- --test-threads=1`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-domain`; `just generate-swift-bindings auki-domain`; `swift build --package-path bindings/swift/auki-domain`; `python3 scripts/bindings/check-full-surface.py`; `git diff --check`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Native cluster-control binding surface expanded.** `DomainClusterManager` generated native bindings now expose manager admission, diagnostics broadcast/drain, membership snapshots, clock sync estimate inspection, domain-clock estimate inspection, and a binding-safe `BindingDomainError` enum. The generated Python package includes the expanded surface; catalog/registry provider and stream bindings remain the next phase.
+
+Tests: `cargo test -p auki-domain --test full_binding_surface -- --test-threads=1`; `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-domain`; `python3 scripts/bindings/check-full-surface.py`; `git diff --check`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface contract added.** Added `bindings/surface.md` and ignored `full_binding_surface` marker tests so native UniFFI and browser JavaScript requirements for cluster lifecycle, admission, membership, participant info, time estimates, diagnostics, providers, fetches, streams, and browser domain helpers are now measurable before implementation phases activate the tests.
+
+Tests: `python3 scripts/bindings/check-full-surface.py`; `cargo test -p auki-domain --test full_binding_surface`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** The domain crate now splits direct Rust lifecycle logic into `core.rs`, exposes a bounded native UniFFI `DomainClusterManager` facade for generated Python and Swift, and exposes browser-safe membership/election helpers through wasm-bindgen. Provider installation, registry serving, and typed stream opening remain Rust-only; legacy PyO3 wrappers are treated as compatibility surfaces outside this generated binding track.
+
+Tests: `cargo test -p auki-domain --no-default-features`, `cargo test -p auki-domain`, `cargo check -p auki-domain --target wasm32-unknown-unknown --no-default-features --features wasm`, `python3 scripts/bindings/generate_bindings.py plan python auki-domain`, `python3 scripts/bindings/generate_bindings.py plan swift auki-domain`, `python3 scripts/bindings/generate_bindings.py plan javascript auki-domain`, `just generate-javascript-bindings auki-domain`, `AUKI_PYTHON_NATIVE_TARGETS=aarch64-apple-darwin just generate-python-bindings auki-domain`, generated Python smoke, `just generate-swift-bindings auki-domain`, `swift build --package-path bindings/swift/auki-domain`.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-time` dependency out of default features after `auki-time` adopted the binding standard, keeping domain-clock composition and heartbeat sample handling on the direct Rust API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-registry` dependency out of default features after `auki-registry` adopted the binding standard, keeping domain lifecycle builds on the direct Rust registry API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the dev-only `auki-layout` dependency out of default features after `auki-layout` adopted the binding standard, keeping domain integration tests on the direct Rust path-helper API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, keeping domain lifecycle builds on the direct Rust canonicalization API without pulling in the JCS UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-hash` dependency out of default features after `auki-hash` adopted the binding standard, keeping domain lifecycle builds on the direct Rust hash API without pulling in the hash UniFFI surface.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Successor-token parking-lot option updated to `auki-proto`.** The v2 hardening question now frames the prost option as a root-proto / generated-`auki-proto` message instead of pointing at the removed `auki-datatypes` crate.

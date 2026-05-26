@@ -17,10 +17,15 @@
     "index.js",
     "index.d.ts",
     "README.md",
-    "smoke.mjs"
+    "smoke.mjs",
+    "browser-probe-smoke.mjs",
+    "test"
   ],
   "main": "index.js",
   "types": "index.d.ts",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "sideEffects": [
     "./snippets/*"
   ],

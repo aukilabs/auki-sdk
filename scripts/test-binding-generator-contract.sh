@@ -5,20 +5,23 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 metadata_json="$(python3 scripts/bindings/generate_bindings.py metadata auki-uniffi-test)"
+inventory_json="$(python3 scripts/bindings/generate_bindings.py list)"
 javascript_plan_json="$(python3 scripts/bindings/generate_bindings.py plan javascript auki-uniffi-test)"
 python_plan_json="$(python3 scripts/bindings/generate_bindings.py plan python auki-uniffi-test)"
 swift_plan_json="$(python3 scripts/bindings/generate_bindings.py plan swift auki-uniffi-test)"
 swift_xcframework_plan_json="$(python3 scripts/bindings/generate_bindings.py plan swift-xcframework auki-uniffi-test)"
 
-python3 - "$metadata_json" "$javascript_plan_json" "$python_plan_json" "$swift_plan_json" "$swift_xcframework_plan_json" <<'PY'
+python3 - "$metadata_json" "$inventory_json" "$javascript_plan_json" "$python_plan_json" "$swift_plan_json" "$swift_xcframework_plan_json" <<'PY'
 import json
+import subprocess
 import sys
 
 metadata = json.loads(sys.argv[1])
-javascript_plan = json.loads(sys.argv[2])
-python_plan = json.loads(sys.argv[3])
-swift_plan = json.loads(sys.argv[4])
-swift_xcframework_plan = json.loads(sys.argv[5])
+inventory = json.loads(sys.argv[2])
+javascript_plan = json.loads(sys.argv[3])
+python_plan = json.loads(sys.argv[4])
+swift_plan = json.loads(sys.argv[5])
+swift_xcframework_plan = json.loads(sys.argv[6])
 
 assert metadata["package_name"] == "auki-uniffi-test"
 assert metadata["version"] == "0.0.0"
@@ -56,6 +59,54 @@ assert swift_xcframework_plan["language"] == "swift-xcframework"
 assert swift_xcframework_plan["binding_language"] == "swift"
 assert swift_xcframework_plan["generator"] == "uniffi"
 assert swift_xcframework_plan["output_dir"] == "bindings/swift/auki-uniffi-test"
+
+names = {crate["package_name"] for crate in inventory}
+assert "auki-uniffi-test" in names
+assert len(inventory) >= 2
+
+for crate in inventory:
+    assert crate["enabled_languages"], f"{crate['package_name']} has no enabled bindings"
+    for language in crate["enabled_languages"]:
+        binding = crate["bindings"][language]
+        assert not binding["missing_templates"], (
+            f"{crate['package_name']} {language} missing templates: "
+            f"{binding['missing_templates']}"
+        )
+        assert not binding["missing_smoke"], f"{crate['package_name']} {language} missing smoke file"
+        assert not binding["missing_features"], (
+            f"{crate['package_name']} {language} missing features: "
+            f"{binding['missing_features']}"
+        )
+        planned = json.loads(
+            subprocess.check_output(
+                [
+                    "python3",
+                    "scripts/bindings/generate_bindings.py",
+                    "plan",
+                    language,
+                    crate["package_name"],
+                ],
+                text=True,
+            )
+        )
+        assert planned["crate_assets_dir"] == binding["crate_assets_dir"]
+        assert planned["output_dir"] == binding["output_dir"]
+        assert planned["template_files"] == binding["template_files"]
+    if "swift" in crate["enabled_languages"]:
+        swift_xcframework = json.loads(
+            subprocess.check_output(
+                [
+                    "python3",
+                    "scripts/bindings/generate_bindings.py",
+                    "plan",
+                    "swift-xcframework",
+                    crate["package_name"],
+                ],
+                text=True,
+            )
+        )
+        assert swift_xcframework["binding_language"] == "swift"
+        assert swift_xcframework["output_dir"] == crate["bindings"]["swift"]["output_dir"]
 PY
 
 echo "binding generator contract ok"

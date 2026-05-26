@@ -6,6 +6,182 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — core DaemonInfo now owns the generated binding record.** The domain UniFFI bootstrap no longer shadows the stable Rust `auki_domain::DaemonInfo` export while keeping generated Python and Swift `DaemonInfo` construction intact.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — binding runtime-pair smokes refresh peer updates while connecting.** Full-surface and generated Python smokes reapply `set_allowed_peers` while waiting for both local runtimes to connect, reducing transient local libp2p startup flakes.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — allowed-peer updates now drive due dials immediately.** Generated hosts no longer depend on the periodic reconnect tick for the first dial after initial setup or `set_allowed_peers`.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — binding smoke runtimes now use fresh peer identities.** Full-surface and generated Python runtime-pair smoke tests avoid rapid reuse of the same libp2p peer ids during teardown/restart verification.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — started dials keep retry schedules until connected.** Short watchdog reconnect attempts now remain scheduled after libp2p accepts a dial, so pending dials that do not promptly connect or error no longer leave generated hosts waiting indefinitely.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Python full-network smoke now applies peers after listeners are ready.** The generated Python smoke removes avoidable startup races by binding `/tcp/0` and connecting the two generated runtimes through `set_allowed_peers` only after both listeners report concrete addresses.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — pending dials now retry after immediate dial errors.** The runtime scheduler keeps reconnect attempts alive when libp2p rejects a due dial synchronously, reducing generated-binding startup flakes around duplicate or in-progress dial state.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — allowed-peer refresh now redials disconnected peers.** Existing allowed peers with refreshed addresses now get an immediate reconnect attempt when disconnected, fixing a generated-binding startup flake.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — full binding surface documentation updated.** The domain README files now document the generated native `DomainClusterManager`, browser helper/client surfaces, exposed catalog/registry/time/diagnostic/stream flows, and legacy PyO3 status.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — full binding surface documentation updated.** The network README files now document the generated native `AukiNetworkRuntime`, browser helper/peer surfaces, `auki-proto` byte boundary, and legacy PyO3 status.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — generated package smoke coverage added.** Generated Python, Swift, and JavaScript/Wasm smoke tests now exercise `DomainClusterManager`, membership, participant-info, catalog flows, and browser `AukiDomainClient` composition from generated packages.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — generated package smoke coverage added.** Generated Python, Swift, and JavaScript/Wasm smoke tests now exercise `AukiNetworkRuntime`, join request/response, protocol constants, and DTO bytes, with Swift packages linking native networking frameworks.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — browser domain facade bindings added.** Generated JavaScript now exposes domain DTO validators and an `AukiDomainClient` facade over a `requestFramed`-compatible `auki-network` browser peer for join, participant-info, catalog, resource, and registry request/response flows.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — binding stream providers moved off the async substream worker.** Inbound stream provider callbacks now run through Tokio's blocking pool so generated-language responder decisions do not occupy the libp2p substream handshake worker.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — native provider, catalog, registry, and stream binding surfaces added.** Generated native bindings now expose catalog/resource/registry providers, static JSON installers, catalog and registry fetches, and camera/detection byte streams through `DomainClusterManager`, with Python and Swift packages regenerated.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — native cluster-control binding surface expanded.** Generated native bindings now expose manager admission, diagnostics, membership snapshots, clock sync estimates, and domain-clock estimates through `DomainClusterManager`, with the Python package regenerated.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — discovery, app-instance, and browser JavaScript binding surfaces added.** Generated native bindings now include Discovery and app-instance helpers, while the generated browser package exposes protocol DTO helpers and JavaScript-owned libp2p peer methods for browser probe, message, join, and catalog streams.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native byte-stream binding surface added.** `AukiNetworkRuntime` now exposes binding-safe byte stream open/accept/decline/push/finish APIs and `AukiStreamSubscription`, with camera and detection protobuf-byte smoke tests over real libp2p substreams.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native request/response binding smoke coverage added.** Two native `AukiNetworkRuntime` facades now prove join, participant info, sensor/resource catalogs, registry entry fetches, and diagnostic broadcasts through binding-safe APIs over real libp2p substreams.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native event and request/response binding surface added.** `AukiNetworkRuntime` now drains binding-safe event records, exposes JSON request wrappers, and stores responder-token channels for inbound protocol requests.
+
+### Nils's codex · May 25, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native runtime-control UniFFI facade added.** Generated native bindings can now spawn and control `AukiNetworkRuntime`, inspect peer/listen state, update allowed peers and heartbeat targets, and shut the runtime down through binding-safe records and errors.
+
+### Nils's codex · May 25, HKT, 2026
+
+**Full binding surface contracts added.** `auki-network` and `auki-domain` now carry binding surface inventories plus ignored marker tests, with a root checker that proves every required native UniFFI and browser JavaScript surface item has a test marker before implementation phases activate those tests.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-proto`](auki-proto/changelog.md) — JavaScript protobuf TypeScript dependency pinned.** Generated JS protobuf packages now declare a current TypeScript dev dependency so `@bufbuild/protobuf` 2.x declarations type-check after install.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Swift binding package templates suppress generated XCFramework warnings.** All crate-owned Swift package templates now exclude the generated XCFramework directory from their source target while retaining it as the binary target, so generated package builds stay warning-clean.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — generated JavaScript browser-probe smoke added.** The generated browser package now exposes `dialBrowserProbe(...)`, and a root smoke script proves js-libp2p can open the native `/auki/browser-probe/0.0.1` WebRTC Direct stream.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — multiplatform binding standard added.** Domain lifecycle logic now lives behind `core.rs`, with a bounded native UniFFI `DomainClusterManager` facade for generated Python/Swift and browser-safe wasm-bindgen membership/election helpers.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — generated Python UniFFI bindings enabled.** The network crate now owns Python templates and generation with the `message_node` feature, matching Swift while leaving the legacy PyO3 package out of the binding-standard path.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Binding/proto generators tightened for feature/version correctness.** Python UniFFI native library builds now honor per-binding `build_features`, and Python protobuf package metadata now pins its runtime dependency to the generated gencode version.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-proto`](auki-proto/changelog.md) — protobuf binding track audited.** `auki-proto` remains schema-generated prost output instead of a UniFFI crate; ignored Swift/Python/JavaScript protobuf outputs were regenerated and smoke-checked, and the Python generator now pins its protobuf runtime requirement to generated gencode.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-time`](auki-time/changelog.md) — multiplatform binding standard added.** Time primitives now live behind `core.rs`, with native UniFFI records/objects and browser-safe wasm-bindgen JSON adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Time consumers opted out of binding defaults.** `auki-domain` and optional `auki-network` heartbeat plumbing now depend on `auki-time` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-geometry`](auki-geometry/changelog.md) — multiplatform binding standard added.** Geometry conversion now lives in `core.rs`, with native UniFFI and wasm-bindgen JSON-string adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-logs`](auki-logs/changelog.md) — multiplatform binding standard added.** The generic log primitive now lives in `core.rs`, with native UniFFI opaque-byte log/tail adapters and wasm-bindgen manifest/segment-byte helpers plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Log consumers opted out of binding defaults.** `auki-time`, `auki-proto`, `auki-registry`'s dev-dependency, and `auki-manifests`' dev-dependency now depend on `auki-logs` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-registry`](auki-registry/changelog.md) — multiplatform binding standard added.** Registry entries and storage now live in `core.rs`, with native UniFFI JSON-string/read-write adapters and wasm-bindgen JSON-string/hash adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Registry consumers opted out of binding defaults.** `auki-geometry`, `auki-time`, `auki-domain`, and `auki-ros-adapter` now depend on `auki-registry` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-manifests`](auki-manifests/changelog.md) — multiplatform binding standard added.** The manifest builders now live in `core.rs`, with native UniFFI and wasm-bindgen JSON-string adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Manifest consumer opted out of binding defaults.** `auki-time` now depends on `auki-manifests` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-layout`](auki-layout/changelog.md) — multiplatform binding standard added.** The layout path helpers now live in `core.rs`, with native UniFFI and wasm-bindgen string adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Layout consumers opted out of binding defaults.** `auki-registry` and `auki-domain`'s dev-dependency now depend on `auki-layout` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-jcs`](auki-jcs/changelog.md) — multiplatform binding standard added.** The RFC 8785 implementation now lives in `core.rs`, with native UniFFI and wasm-bindgen JSON-string adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**JCS consumers opted out of binding defaults.** `auki-logs`, `auki-domain`, `auki-registry`, `auki-manifests`, `auki-identity`, and `auki-network` now depend on `auki-jcs` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
+### Nils's codex · May 24, HKT, 2026
+
+**[`auki-hash`](auki-hash/changelog.md) — multiplatform binding standard added.** The hash implementation now lives in `core.rs`, with native UniFFI and wasm-bindgen adapters plus crate-owned Python, Swift, and JavaScript binding contracts.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Hash consumers opted out of binding defaults.** `auki-identity`, `auki-manifests`, `auki-registry`, `auki-domain`, and `auki-proto` now depend on `auki-hash` with `default-features = false` so direct Rust builds do not inherit the new UniFFI surface.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **[`auki-network`](auki-network/changelog.md) — iOS/browser generated-binding test path documented.** The crate source docs now point at the iOS generated Swift host and browser js-libp2p smoke harness, with live simulator/device interop as the remaining follow-up.

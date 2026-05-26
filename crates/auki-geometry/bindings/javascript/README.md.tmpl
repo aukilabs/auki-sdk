@@ -1,0 +1,28 @@
+# @auki/$crate_package_name
+
+wasm-bindgen JavaScript bindings for `auki-geometry`.
+
+```js
+import init, { convertPointConventionJson } from "./$generated_js_file";
+
+await init();
+
+const converted = JSON.parse(convertPointConventionJson(
+  JSON.stringify({ x: 100.0, y: 200.0, z: 300.0 }),
+  JSON.stringify({
+    frame_id: "camera",
+    handedness: "right",
+    axes: { x: "right", y: "down", z: "forward" },
+    units: "centimeters",
+  }),
+  JSON.stringify({
+    frame_id: "world",
+    handedness: "right",
+    axes: { x: "right", y: "up", z: "backward" },
+    units: "meters",
+  }),
+));
+```
+
+The package exposes JSON-string adapters over pure convention math. It does not
+read registry files, open logs, or fetch frame entries.

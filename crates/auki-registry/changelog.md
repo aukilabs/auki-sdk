@@ -6,6 +6,36 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 24, HKT, 2026
+
+Swift package template now excludes the generated XCFramework directory from the source target while retaining it as a binary target, removing SwiftPM unhandled-file warnings from generated package builds.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the dev-only `auki-logs` dependency out of default features after `auki-logs` adopted the binding standard, keeping registry tests on the direct Rust log API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+**Multiplatform binding standard added.** Registry types and content-addressed storage moved into binding-free `src/core.rs`; `src/lib.rs` now only wires feature-gated modules and re-exports the existing Rust API. Native `src/ffi.rs` exposes UniFFI adapters for Python and Swift: JSON-string canonicalization/hash helpers for Sensor, Clock, Frame, and Detector entries, frame preset constructors, and native filesystem `write_*_entry_json` / `read_*_entry_json` helpers. `src/wasm.rs` exposes web-safe wasm-bindgen canonicalization, hash, and frame-preset helpers without filesystem I/O.
+
+**Binding assets.** The crate now declares `staticlib` / `cdylib` / `rlib`, default `uniffi`, `cli`, and `wasm` features, a crate-local `uniffi-bindgen` binary, `bindings.toml`, and crate-owned Python, Swift, and JavaScript package templates plus a JavaScript smoke vector.
+
+**Compatibility.** Rust call sites continue to import the same crate-root `SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntry`, `DetectorRegistryEntry`, read/write helpers, and hash/canonicalization methods. Consumers that do not need generated bindings should depend on `auki-registry` with `default-features = false`; the in-workspace `auki-geometry`, `auki-time`, `auki-domain`, and `auki-ros-adapter` dependencies have been updated that way.
+
+**Tests.** Added `tests/surface.rs` to pin crate-root source compatibility. Existing core unit tests remain the registry/vector behavior lock; generated package checks cover Python import/read-write smoke, JavaScript wasm smoke, and SwiftPM build output.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-layout` dependency out of default features after `auki-layout` adopted the binding standard, keeping registry storage paths on the direct Rust API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-jcs` dependency out of default features after `auki-jcs` adopted the binding standard, keeping registry canonicalization on the direct Rust API without inheriting generated binding dependencies.
+
+### Nils's codex · May 24, HKT, 2026
+
+Opted the `auki-hash` dependency out of default features after `auki-hash` adopted the binding standard, keeping registry hashing on the direct Rust API without inheriting generated binding dependencies.
+
 ### Nils's codex · May 22, HKT, 2026
 
 **Obsolete log-payload migration parking-lot item removed.** With payload schemas now rooted in `proto/auki` and generated Rust bindings in `auki-proto`, the old registry-to-datatypes migration question no longer belongs in the live parking lot.

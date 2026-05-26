@@ -82,6 +82,21 @@ Producer-side stream providers can use `StreamManifestBuilder::from_registry(app
 
 `shutdown()` deregisters from Discovery only when this peer is the last member. If a Manager exits while peers remain, the survivors detect the lost peer, elect a successor, rotate the Manager hint in Discovery, and gossip the new Manager peer id with the updated membership snapshot.
 
+## Binding Surfaces
+
+`auki-domain` follows the SDK binding standard:
+
+- `src/core.rs` holds the direct Rust API and is re-exported from `lib.rs`.
+- `src/ffi.rs` exposes a bounded native UniFFI surface for Python and Swift.
+- `src/wasm.rs` exposes browser-safe membership helpers through wasm-bindgen.
+- `bindings.toml` plus crate-owned package templates under `bindings/` drive generated Python, Swift, and JavaScript packages.
+
+The native UniFFI facade exposes the operational cluster-manager surface through binding-safe strings, JSON, bytes, opaque subscriptions, provider callback interfaces, and responder ids. It provides `bootstrap_domain_cluster_manager(...)` plus a `DomainClusterManager` object for cluster snapshots, manager admission, diagnostics, membership events, participant info JSON, domain time and clock estimates, remote participant-info fetches, sensor/resource catalog providers and fetches, registry entry providers and fetches, camera/detection byte streams, and shutdown. Stream payloads cross the boundary as generated `auki-proto` bytes rather than Rust prost structs.
+
+Browser WebAssembly exposes cluster membership JSON construction, filename/count/member admission helpers, deterministic successor election, and DTO validation helpers. The generated JavaScript package also ships `AukiDomainClient`, a browser facade that composes any `requestFramed`-compatible `auki-network` browser peer for join, participant-info, sensor/resource catalog, and registry-entry request/response flows. There is no browser `ClusterManager` runtime in this crate; browser transport remains owned by the JavaScript/network side until a real web runtime exists.
+
+Rust consumers that do not need generated bindings should depend on this crate with `default-features = false`. The existing PyO3 package under `bindings/python/auki-domain-py` is a legacy compatibility surface and is not part of the generated binding track.
+
 ## Membership
 
 `ClusterMembership` is the cluster's in-memory membership document:
@@ -106,7 +121,7 @@ Admission order is preserved. Election sorts by `(join_ts_ns, peer_id)` and choo
 
 - [`auki-network`](../auki-network) provides the swarm, protocols, typed stream runtime, and Discovery HTTP client. This crate owns the lifecycle policy using those primitives.
 - [`auki-time`](../auki-time) provides the `SessionClock` used for SDK-owned session time and clock identity.
-- [`auki-domain-py`](../auki-domain-py) mirrors this crate for Python daemons.
+- Generated Python and Swift UniFFI packages expose the operational `DomainClusterManager` facade; legacy PyO3 wrappers are compatibility-only.
 - [`auki-identity`](../auki-identity) supplies wallets; `PeerIdentity` is still derived in `auki-network`.
 
 See [`src/readme.md`](src/readme.md) for implementation detail and [`src/sprint.md`](src/sprint.md) for current work.

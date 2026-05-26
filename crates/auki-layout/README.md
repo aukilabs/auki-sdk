@@ -4,6 +4,8 @@ Path helpers for the Auki SDK's on-disk session shape. Single source of truth fo
 
 > **Renamed from `auki-session` 2026-05-08.** The previous name implied a runtime `Session` abstraction (lifecycle, clock binding, sensor-id minting) that this crate doesn't provide; this crate is the *layout contract*. `auki-session` is now reserved for the future Rust counterpart of [`auki-session-py`](../auki-session-py)'s in-process `Session` surface — see the [root `Session.open` Propagate item](../../parking_lot.md) for the planned shape.
 
+The Rust API remains `&Path` / `PathBuf`. Generated Python, Swift, and JavaScript bindings expose the same helpers as UTF-8 path strings through crate-owned UniFFI and wasm-bindgen adapters.
+
 ## On-disk layout
 
 ```text
@@ -73,12 +75,22 @@ None is derivable from the others.
 | `registries_root(app_root)`                                     | `<app_root>/registries`                                              |
 | `sensor_entry_path(app_root, sensor_id, hash)`                  | `<app_root>/registries/sensors/<sensor_id>/<hash>.json`              |
 | `clock_entry_path(app_root, clock_id, hash)`                    | `<app_root>/registries/clocks/<clock_id>/<hash>.json`                |
+| `frame_entry_path(app_root, frame_id, hash)`                    | `<app_root>/registries/frames/<frame_id>/<hash>.json`                |
+| `detector_entry_path(app_root, detector_id, hash)`              | `<app_root>/registries/detectors/<detector_id>/<hash>.json`          |
 | `session_root(app_root, session_id)`                            | `<app_root>/<session_id>`                                            |
 | `timetransform_log_path(session_root, from_id, to_id)`          | `<session_id>/timetransform_logs/<from>__<to>`                       |
 | `sensorlog_path(session_root, sensor_log_id)`                   | `<session_id>/sensorlogs/<sensor_log_id>`                            |
 | `poselog_path(session_root, from_frame_id, to_frame_id)`        | `<session_id>/poselogs/<from>__<to>`                                 |
 | `detection_log_path(session_root, detector_id, input_log_id)`   | `<session_id>/detection_logs/<detector_id>__<input_log_id>` (2026-05-09) |
 | `id_to_segment(id)`                                             | id with `/` replaced by `__`                                         |
+
+## Binding generation
+
+`bindings.toml` enables all three generated package families:
+
+- Python and Swift use UniFFI from the native `ffi.rs` string adapters.
+- JavaScript uses wasm-bindgen from `wasm.rs`.
+- Rust dependents that only need the direct path helpers should depend on this crate with `default-features = false`.
 
 ## Versioning
 

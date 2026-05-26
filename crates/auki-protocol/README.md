@@ -23,6 +23,7 @@ runtime, Discovery client, or app-specific lifecycle facade.
 - `vectors/v1_json_frames.json` — locked v1 JSON frame examples for cross-language conformance.
 - `vectors/v1_signed_objects.json` — locked signed-object examples and negative vectors.
 - `vectors/v1_handshakes.json` — locked handshake examples and authority-validation vectors.
+- `vectors/v1_offer_catalogs.json` — locked offer-catalog request, response, and offer vectors.
 
 ## Depends on
 

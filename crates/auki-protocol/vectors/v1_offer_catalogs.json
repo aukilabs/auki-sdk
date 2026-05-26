@@ -1,0 +1,200 @@
+{
+  "inputs": {
+    "canonical_clock_json": "{\"id\":\"clock-main\",\"rate\":30}",
+    "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+    "registry_hash": "sha256:S8HmmZgtphz6U43WrRdH4Mckm2EZx5_5WCKqOOkbVSU"
+  },
+  "name": "auki.protocol.v1.offer_catalog.vectors",
+  "negative": {
+    "request_invalid_domain_id": {
+      "expected": "offer.invalid_catalog_request",
+      "object": {
+        "domain_ids": [
+          "bad"
+        ],
+        "type": "auki.offer_catalog_request.v1"
+      }
+    },
+    "response_duplicate_offer": {
+      "expected": "offer.invalid_catalog_response",
+      "object": {
+        "offers": [
+          {
+            "access_modes": [
+              "get",
+              "subscribe"
+            ],
+            "display_name": "Main Camera",
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "expires_at": "2026-05-26T13:00:00Z",
+            "kind": "sensor.frame",
+            "metadata": {
+              "fixture": true
+            },
+            "offer_id": "camera-main",
+            "payload": {
+              "encoding": "json",
+              "media_type": "application/json",
+              "schema_version": "1",
+              "type": "auki.frame"
+            },
+            "registry_refs": [
+              {
+                "canonical_json": "{\"id\":\"clock-main\",\"rate\":30}",
+                "hash": "sha256:S8HmmZgtphz6U43WrRdH4Mckm2EZx5_5WCKqOOkbVSU",
+                "id": "clock-main",
+                "registry": "clock",
+                "role": "clock"
+              }
+            ],
+            "status": "available",
+            "updated_at": "2026-05-26T12:00:00Z"
+          },
+          {
+            "access_modes": [
+              "get",
+              "subscribe"
+            ],
+            "display_name": "Main Camera",
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "expires_at": "2026-05-26T13:00:00Z",
+            "kind": "sensor.frame",
+            "metadata": {
+              "fixture": true
+            },
+            "offer_id": "camera-main",
+            "payload": {
+              "encoding": "json",
+              "media_type": "application/json",
+              "schema_version": "1",
+              "type": "auki.frame"
+            },
+            "registry_refs": [
+              {
+                "canonical_json": "{\"id\":\"clock-main\",\"rate\":30}",
+                "hash": "sha256:S8HmmZgtphz6U43WrRdH4Mckm2EZx5_5WCKqOOkbVSU",
+                "id": "clock-main",
+                "registry": "clock",
+                "role": "clock"
+              }
+            ],
+            "status": "available",
+            "updated_at": "2026-05-26T12:00:00Z"
+          }
+        ],
+        "type": "auki.offer_catalog_response.v1"
+      }
+    },
+    "response_registry_hash_mismatch": {
+      "expected": "offer.invalid_catalog_response",
+      "expected_offer": "offer.invalid_offer",
+      "object": {
+        "offers": [
+          {
+            "access_modes": [
+              "get",
+              "subscribe"
+            ],
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "kind": "sensor.frame",
+            "offer_id": "camera-main",
+            "payload": {
+              "type": "auki.frame"
+            },
+            "registry_refs": [
+              {
+                "canonical_json": "{\"id\":\"clock-main\",\"rate\":30}",
+                "hash": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "id": "clock-main",
+                "registry": "clock",
+                "role": "clock"
+              }
+            ],
+            "status": "available"
+          }
+        ],
+        "type": "auki.offer_catalog_response.v1"
+      }
+    }
+  },
+  "positive": {
+    "filtered_request": {
+      "expected": {
+        "domain_ids": [
+          "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+        ],
+        "include_inline_registry_entries": true,
+        "kinds": [
+          "sensor.frame"
+        ]
+      },
+      "object": {
+        "domain_ids": [
+          "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+        ],
+        "include_inline_registry_entries": true,
+        "kinds": [
+          "sensor.frame"
+        ],
+        "type": "auki.offer_catalog_request.v1"
+      }
+    },
+    "response_with_offer": {
+      "expected": {
+        "diagnostic_code": "offer.domain_not_served",
+        "generated_at": "2026-05-26T12:00:01Z",
+        "offer_id": "camera-main",
+        "registry_hash": "sha256:S8HmmZgtphz6U43WrRdH4Mckm2EZx5_5WCKqOOkbVSU"
+      },
+      "object": {
+        "diagnostics": [
+          {
+            "code": "offer.domain_not_served",
+            "details": {
+              "requested": true
+            },
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "message": "not served for requester",
+            "retryable": false
+          }
+        ],
+        "generated_at": "2026-05-26T12:00:01Z",
+        "offers": [
+          {
+            "access_modes": [
+              "get",
+              "subscribe"
+            ],
+            "display_name": "Main Camera",
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "expires_at": "2026-05-26T13:00:00Z",
+            "kind": "sensor.frame",
+            "metadata": {
+              "fixture": true
+            },
+            "offer_id": "camera-main",
+            "payload": {
+              "encoding": "json",
+              "media_type": "application/json",
+              "schema_version": "1",
+              "type": "auki.frame"
+            },
+            "registry_refs": [
+              {
+                "canonical_json": "{\"id\":\"clock-main\",\"rate\":30}",
+                "hash": "sha256:S8HmmZgtphz6U43WrRdH4Mckm2EZx5_5WCKqOOkbVSU",
+                "id": "clock-main",
+                "registry": "clock",
+                "role": "clock"
+              }
+            ],
+            "status": "available",
+            "updated_at": "2026-05-26T12:00:00Z"
+          }
+        ],
+        "type": "auki.offer_catalog_response.v1"
+      }
+    }
+  },
+  "version": 1
+}

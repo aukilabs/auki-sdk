@@ -20,6 +20,7 @@ runtime, Discovery client, or app-specific lifecycle facade.
 - `v1::identity` — wallet-signed peer binding creation and verification.
 - `v1::message` — v1 spatial message, payload, and error-object helpers.
 - `v1::offer` — v1 offer-catalog, offer, payload, and registry-reference helpers.
+- `v1::status` — v1 status snapshot and diagnostic status helpers.
 - `v1::subscribe` — v1 Subscribe request, start result, data, and end helpers.
 - `v1::json` — strict JSON object parsing with duplicate member rejection.
 - `v1::error` — stable v1 failure-code constants.

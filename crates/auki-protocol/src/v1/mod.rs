@@ -22,5 +22,7 @@ pub mod json;
 pub mod message;
 /// Offer-catalog protocol helpers.
 pub mod offer;
+/// Status snapshot and diagnostic status helpers.
+pub mod status;
 /// Subscribe protocol helpers.
 pub mod subscribe;

@@ -7,13 +7,13 @@ PyO3 bindings for [`auki-domain`](../../../crates/auki-domain) — the Python da
 ## Public surface
 
 - `ClusterTarget` — list-existing / create-new / join-by-id.
-- `ClusterManager.list_clusters(...)`, `ClusterManager.bootstrap(...)`, `ClusterManager.create_cluster(...)`, `ClusterManager.create_cluster_with_relay_multiaddrs(...)`, `ClusterManager.join_cluster(...)`.
+- `ClusterManager.list_clusters(...)`, `ClusterManager.bootstrap(...)`, `ClusterManager.create_cluster(...)`, `ClusterManager.create_cluster_with_relay_multiaddrs(...)`, `ClusterManager.create_cluster_with_relay_reservation(...)`, `ClusterManager.join_cluster(...)`.
 - `participant_info`, peer info fetches, resource / sensor catalog fetches.
 - Resource value types for `sensor_stream`, `transform_edge`, and live `pose_stream` rows.
 - Registry serving root registration.
 - `StreamManifestBuilder.from_registry(...)` — registry-backed manifest construction.
 - Stream provider wiring + typed stream openers (`open_camera_stream`, `open_point_cloud_stream`, `open_joint_encoders_stream`, `open_audio_stream`, `open_pose_stream`).
-- `external_addresses` advertisement override and separate `relay_multiaddrs` Discovery hints for browser-dialable Domain Relays.
+- `external_addresses` advertisement override, separate `relay_multiaddrs` Discovery hints, and relay-reserved Manager circuit addresses for browser-dialable Domain Relays.
 
 ## Depends on
 

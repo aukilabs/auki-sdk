@@ -152,13 +152,11 @@ pub fn convert_pose_convention(
 
     let translation = pose
         .translation
-        .clone()
         .map(|t| convert_vector_convention(t, from, to))
         .transpose()?;
 
     let orientation = pose
         .orientation
-        .clone()
         .map(|q| convert_orientation_convention(q, from, to))
         .transpose()?;
 
@@ -215,6 +213,50 @@ pub fn relative_spatial_transform(
 ) -> Result<SpatialTransform> {
     let from_to_common = inverse_spatial_transform(common_to_from)?;
     compose_spatial_transforms(&from_to_common, common_to_to)
+}
+
+/// Build a 4×4 homogeneous transformation matrix from a `SpatialTransform`.
+///
+/// The matrix has the rotation in the upper-left 3×3, the translation in
+/// the right column, and `[0, 0, 0, 1]` as the bottom row. Missing
+/// translation is treated as zero; missing orientation is treated as
+/// identity — matching the input contract of the PR #193 composition
+/// helpers.
+pub fn spatial_transform_to_matrix4(transform: &SpatialTransform) -> Result<Matrix4> {
+    let rotation = spatial_transform_rotation(transform)?;
+    let translation = spatial_transform_translation(transform);
+    Ok([
+        [rotation[0][0], rotation[0][1], rotation[0][2], translation.x],
+        [rotation[1][0], rotation[1][1], rotation[1][2], translation.y],
+        [rotation[2][0], rotation[2][1], rotation[2][2], translation.z],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+/// Decompose a 4×4 homogeneous transformation matrix into a
+/// `SpatialTransform`.
+///
+/// Translation comes from the right column (`matrix[0..3][3]`).
+/// Rotation comes from the upper-left 3×3 submatrix via `matrix_to_quat`,
+/// which normalizes the result — small numerical drift in the rotation
+/// submatrix is tolerated. The bottom row of the input is not validated;
+/// callers are responsible for supplying a proper homogeneous transform.
+pub fn spatial_transform_from_matrix4(matrix: Matrix4) -> Result<SpatialTransform> {
+    let rotation: Matrix3 = [
+        [matrix[0][0], matrix[0][1], matrix[0][2]],
+        [matrix[1][0], matrix[1][1], matrix[1][2]],
+        [matrix[2][0], matrix[2][1], matrix[2][2]],
+    ];
+    let translation = Vec3 {
+        x: matrix[0][3],
+        y: matrix[1][3],
+        z: matrix[2][3],
+    };
+    let orientation = matrix_to_quat(rotation)?;
+    Ok(SpatialTransform {
+        translation: Some(translation),
+        orientation: Some(orientation),
+    })
 }
 
 fn convert_orientation_convention(
@@ -340,7 +382,7 @@ fn apply_matrix3_to_vec3(matrix: Matrix3, vector: Vec3) -> Result<Vec3> {
 }
 
 fn spatial_transform_translation(transform: &SpatialTransform) -> Vec3 {
-    transform.translation.clone().unwrap_or(Vec3 {
+    transform.translation.unwrap_or(Vec3 {
         x: 0.0,
         y: 0.0,
         z: 0.0,
@@ -348,7 +390,7 @@ fn spatial_transform_translation(transform: &SpatialTransform) -> Vec3 {
 }
 
 fn spatial_transform_rotation(transform: &SpatialTransform) -> Result<Matrix3> {
-    let orientation = transform.orientation.clone().unwrap_or(Quat {
+    let orientation = transform.orientation.unwrap_or(Quat {
         x: 0.0,
         y: 0.0,
         z: 0.0,
@@ -452,6 +494,19 @@ mod tests {
                 assert!(
                     (actual[row][col] - expected[row][col]).abs() < 1.0e-9,
                     "matrix mismatch at [{row}][{col}]: actual={} expected={}",
+                    actual[row][col],
+                    expected[row][col]
+                );
+            }
+        }
+    }
+
+    fn assert_matrix4_close(actual: Matrix4, expected: Matrix4) {
+        for row in 0..4 {
+            for col in 0..4 {
+                assert!(
+                    (actual[row][col] - expected[row][col]).abs() < 1.0e-9,
+                    "matrix4 mismatch at [{row}][{col}]: actual={} expected={}",
                     actual[row][col],
                     expected[row][col]
                 );
@@ -833,5 +888,103 @@ mod tests {
             compose_spatial_transforms(&bad, &identity_transform()),
             Err(GeometryError::ZeroQuaternion)
         ));
+    }
+
+    #[test]
+    fn spatial_transform_to_matrix4_identity() {
+        let identity = SpatialTransform {
+            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
+            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+        };
+        assert_matrix4_close(
+            spatial_transform_to_matrix4(&identity).unwrap(),
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn spatial_transform_to_matrix4_translation_only() {
+        let t = SpatialTransform {
+            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
+            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+        };
+        assert_matrix4_close(
+            spatial_transform_to_matrix4(&t).unwrap(),
+            [
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 2.0],
+                [0.0, 0.0, 1.0, 3.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn spatial_transform_to_matrix4_rotation_only() {
+        // 90° rotation around +Z: x→y, y→−x
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let t = SpatialTransform {
+            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
+            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+        };
+        assert_matrix4_close(
+            spatial_transform_to_matrix4(&t).unwrap(),
+            [
+                [0.0, -1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn spatial_transform_to_matrix4_treats_missing_as_zero_identity() {
+        // Both None: should produce 4x4 identity.
+        let none = SpatialTransform { translation: None, orientation: None };
+        assert_matrix4_close(
+            spatial_transform_to_matrix4(&none).unwrap(),
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn spatial_transform_from_matrix4_round_trip() {
+        // Build a pose, send it to matrix4, decode it back. Should round-trip.
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let original = SpatialTransform {
+            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
+            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+        };
+        let matrix = spatial_transform_to_matrix4(&original).unwrap();
+        let decoded = spatial_transform_from_matrix4(matrix).unwrap();
+        assert_vec3_close(decoded.translation.unwrap(), original.translation.unwrap());
+        assert_quat_equivalent(decoded.orientation.unwrap(), original.orientation.unwrap());
+    }
+
+    #[test]
+    fn spatial_transform_from_matrix4_identity() {
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let decoded = spatial_transform_from_matrix4(identity).unwrap();
+        assert_vec3_close(decoded.translation.unwrap(), Vec3 { x: 0.0, y: 0.0, z: 0.0 });
+        assert_quat_equivalent(
+            decoded.orientation.unwrap(),
+            Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+        );
     }
 }

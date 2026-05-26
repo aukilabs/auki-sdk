@@ -1,19 +1,22 @@
 //! SDK-facing high-level node API.
 
 use crate::{
-    AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiP2pNode, AukiP2pNodeConfig,
-    AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, GetServeError, HandshakePolicyError,
-    HandshakeValidationInput, HandshakeValidationResult, Libp2pOfferCatalogClient,
-    Libp2pPathClient, Libp2pSubscription, LifecycleOpenStreamError, LifecycleProtocolError,
-    LifecycleStreamGuard, LoadedRemoteOffer, LocalPeerIdentity, OfferCatalogLoadState,
-    OfferLoadContext, OfferLoadError, OfferLoadReport, PathClientError, PathContext,
-    PathOrchestrationError, PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
-    RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
-    RelationshipStatusOptions, SubscribeInput, SubscribeServeError, accept_get_streams,
-    accept_subscribe_data_frame, accept_subscribe_streams, build_relationship_status_snapshot,
-    close_subscribe_stream, encode_subscribe_data_frame, exchange_peer_handshake_strict,
-    get_over_libp2p, load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
-    read_subscribe_request, subscribe_over_libp2p, validate_remote_handshake,
+    AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiP2pConfig, AukiP2pNode,
+    AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, GetServeError,
+    HandshakePolicyError, HandshakeValidationInput, HandshakeValidationResult,
+    Libp2pOfferCatalogClient, Libp2pPathClient, Libp2pSubscription, LifecycleHandshakeExchange,
+    LifecycleOpenStreamError, LifecycleProtocolError, LifecycleStreamDirection,
+    LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer, LocalPeerIdentity,
+    OfferCatalogLoadState, OfferCatalogServeError, OfferLoadContext, OfferLoadError,
+    OfferLoadReport, PathClientError, PathContext, PathOrchestrationError, PeerRelationship,
+    RelationshipFailureRecord, RelationshipFailureScope, RelationshipLoadedOffer,
+    RelationshipRegistryReferenceStatus, RelationshipStatusBuildError, RelationshipStatusOptions,
+    SubscribeInput, SubscribeServeError, accept_get_streams, accept_lifecycle_streams,
+    accept_offer_catalog_streams, accept_subscribe_data_frame, accept_subscribe_streams,
+    build_relationship_status_snapshot, close_subscribe_stream, encode_subscribe_data_frame,
+    exchange_peer_handshake_strict, get_over_libp2p, load_remote_offers_over_libp2p,
+    open_lifecycle_stream_once, read_get_request, read_subscribe_request,
+    serve_offer_catalog_response, subscribe_over_libp2p, validate_remote_handshake,
     write_encoded_subscribe_frame, write_get_response, write_subscribe_end,
     write_subscribe_start_result,
 };
@@ -49,6 +52,8 @@ pub struct AukiNode {
     remote_offer_reports: BTreeMap<PeerId, OfferLoadReport>,
     relationships: BTreeMap<PeerId, PeerRelationship>,
     lifecycle_stream_guard: LifecycleStreamGuard,
+    lifecycle_incoming: Option<libp2p_stream::IncomingStreams>,
+    offer_catalog_incoming: Option<libp2p_stream::IncomingStreams>,
     get_incoming: Option<libp2p_stream::IncomingStreams>,
     get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
     subscribe_incoming: Option<libp2p_stream::IncomingStreams>,
@@ -112,6 +117,19 @@ pub struct ServedGet {
     pub success: bool,
     /// Stable failure code when a failed Get response was served.
     pub failure_code: Option<String>,
+}
+
+/// Result of serving one inbound offer-catalog request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedOfferCatalog {
+    /// Requesting peer id.
+    pub peer_id: PeerId,
+    /// Requested domain filters. Empty means all visible domains.
+    pub domain_ids: Vec<String>,
+    /// Requested kind filters. Empty means all kinds.
+    pub kinds: Vec<String>,
+    /// Whether inline canonical registry entries were requested.
+    pub include_inline_registry_entries: bool,
 }
 
 /// Application provider for one local Subscribe offer.
@@ -323,8 +341,16 @@ pub enum AukiNodeError {
     LifecycleOpen(LifecycleOpenStreamError),
     /// Lifecycle stream exchange failed.
     Lifecycle(LifecycleProtocolError),
+    /// Inbound lifecycle stream registration failed.
+    LifecycleAccept(libp2p_stream::AlreadyRegistered),
+    /// Local lifecycle stream policy rejected an inbound stream.
+    LifecycleGuard(LifecycleStreamGuardError),
     /// Remote handshake failed local policy validation.
     HandshakePolicy(HandshakePolicyError),
+    /// Inbound offer-catalog stream registration failed.
+    OfferCatalogAccept(libp2p_stream::AlreadyRegistered),
+    /// Inbound offer-catalog serving failed.
+    OfferCatalogServe(OfferCatalogServeError),
     /// Inbound Get stream registration failed.
     GetAccept(libp2p_stream::AlreadyRegistered),
     /// Inbound Get serving failed.
@@ -653,6 +679,8 @@ impl AukiNode {
             remote_offer_reports: BTreeMap::new(),
             relationships: BTreeMap::new(),
             lifecycle_stream_guard: LifecycleStreamGuard::default(),
+            lifecycle_incoming: None,
+            offer_catalog_incoming: None,
             get_incoming: None,
             get_providers: BTreeMap::new(),
             subscribe_incoming: None,
@@ -859,42 +887,50 @@ impl AukiNode {
             }
         };
 
-        let required_material_types = input
-            .required_authorization_material_types
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        let allowed_domain_ids = input.app_domain_access.allowed_domain_refs();
-        let mut validation_input = HandshakeValidationInput::new(
-            &exchange.authenticated_peer_id,
-            &exchange.handshake,
-            &p2p_config,
-            now,
-        );
-        validation_input.app_peer_authorization = input.app_peer_authorization;
-        validation_input.app_domain_access = input
-            .app_domain_access
-            .as_app_domain_access(&allowed_domain_ids);
-        validation_input.required_authorization_material_types = &required_material_types;
+        self.validate_lifecycle_exchange(exchange, input, &p2p_config, now)
+    }
 
-        match validate_remote_handshake(validation_input) {
-            Ok(result) => {
-                self.lifecycle_stream_guard.complete(peer_id);
-                self.relationship_mut(peer_id)
-                    .handshake_accepted(result.clone());
-                Ok(result)
-            }
+    /// Serve one inbound v1 lifecycle exchange and authorize the remote peer.
+    pub async fn serve_next_lifecycle(
+        &mut self,
+        input: LifecycleInput,
+        now: &str,
+    ) -> Result<Option<HandshakeValidationResult>, AukiNodeError> {
+        let local_handshake = self.local_peer_handshake()?;
+        let p2p_config = self.node.config().p2p.clone();
+        self.ensure_lifecycle_incoming()?;
+        let accepted = {
+            let node = &mut self.node;
+            let incoming = self
+                .lifecycle_incoming
+                .as_mut()
+                .expect("lifecycle incoming should be registered");
+            drive_node_until(node, incoming.next()).await
+        };
+        let Some((peer_id, mut stream)) = accepted else {
+            return Ok(None);
+        };
+
+        self.lifecycle_stream_guard
+            .begin(peer_id, LifecycleStreamDirection::Inbound)
+            .map_err(AukiNodeError::LifecycleGuard)?;
+        let exchange = exchange_peer_handshake_strict(
+            &mut stream,
+            peer_id,
+            &local_handshake,
+            p2p_config.limits.handshake_frame_body_bytes,
+        );
+        let exchange = match drive_node_until(&mut self.node, exchange).await {
+            Ok(exchange) => exchange,
             Err(error) => {
                 self.lifecycle_stream_guard.fail(peer_id);
-                let failure_cap = self.node.config().p2p.limits.retained_status_failures;
-                self.relationship_mut(peer_id).handshake_failed(
-                    &error,
-                    now.to_owned(),
-                    failure_cap,
-                );
-                Err(AukiNodeError::HandshakePolicy(error))
+                self.record_lifecycle_failure(peer_id, &error, now);
+                return Err(AukiNodeError::Lifecycle(error));
             }
-        }
+        };
+
+        self.validate_lifecycle_exchange(exchange, input, &p2p_config, now)
+            .map(Some)
     }
 
     /// Load and validate one remote peer's offer catalog over libp2p.
@@ -944,6 +980,40 @@ impl AukiNode {
 
         self.remote_offer_reports.insert(peer_id, report.clone());
         Ok(report)
+    }
+
+    /// Serve one inbound offer-catalog request from registered local offers.
+    pub async fn serve_next_offer_catalog(
+        &mut self,
+        generated_at: Option<&str>,
+    ) -> Result<Option<ServedOfferCatalog>, AukiNodeError> {
+        let response = self.local_offer_catalog_response(generated_at)?;
+        let limits = self.node.config().p2p.limits;
+        self.ensure_offer_catalog_incoming()?;
+        let accepted = {
+            let node = &mut self.node;
+            let incoming = self
+                .offer_catalog_incoming
+                .as_mut()
+                .expect("offer-catalog incoming should be registered");
+            drive_node_until(node, incoming.next()).await
+        };
+        let Some((peer_id, mut stream)) = accepted else {
+            return Ok(None);
+        };
+
+        let request = drive_node_until(
+            &mut self.node,
+            serve_offer_catalog_response(&mut stream, &response, limits),
+        )
+        .await
+        .map_err(AukiNodeError::OfferCatalogServe)?;
+        Ok(Some(ServedOfferCatalog {
+            peer_id,
+            domain_ids: request.domain_ids,
+            kinds: request.kinds,
+            include_inline_registry_entries: request.include_inline_registry_entries,
+        }))
     }
 
     /// Add or replace a loaded remote offer report for one peer.
@@ -1361,6 +1431,30 @@ impl AukiNode {
         Ok(())
     }
 
+    fn ensure_lifecycle_incoming(&mut self) -> Result<(), AukiNodeError> {
+        if self.lifecycle_incoming.is_some() {
+            return Ok(());
+        }
+
+        let mut control = self.node.stream_control();
+        self.lifecycle_incoming =
+            Some(accept_lifecycle_streams(&mut control).map_err(AukiNodeError::LifecycleAccept)?);
+        Ok(())
+    }
+
+    fn ensure_offer_catalog_incoming(&mut self) -> Result<(), AukiNodeError> {
+        if self.offer_catalog_incoming.is_some() {
+            return Ok(());
+        }
+
+        let mut control = self.node.stream_control();
+        self.offer_catalog_incoming = Some(
+            accept_offer_catalog_streams(&mut control)
+                .map_err(AukiNodeError::OfferCatalogAccept)?,
+        );
+        Ok(())
+    }
+
     fn ensure_subscribe_incoming(&mut self) -> Result<(), AukiNodeError> {
         if self.subscribe_incoming.is_some() {
             return Ok(());
@@ -1370,6 +1464,50 @@ impl AukiNode {
         self.subscribe_incoming =
             Some(accept_subscribe_streams(&mut control).map_err(AukiNodeError::SubscribeAccept)?);
         Ok(())
+    }
+
+    fn validate_lifecycle_exchange(
+        &mut self,
+        exchange: LifecycleHandshakeExchange,
+        input: LifecycleInput,
+        p2p_config: &AukiP2pConfig,
+        now: &str,
+    ) -> Result<HandshakeValidationResult, AukiNodeError> {
+        let required_material_types = input
+            .required_authorization_material_types
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let allowed_domain_ids = input.app_domain_access.allowed_domain_refs();
+        let mut validation_input = HandshakeValidationInput::new(
+            &exchange.authenticated_peer_id,
+            &exchange.handshake,
+            p2p_config,
+            now,
+        );
+        validation_input.app_peer_authorization = input.app_peer_authorization;
+        validation_input.app_domain_access = input
+            .app_domain_access
+            .as_app_domain_access(&allowed_domain_ids);
+        validation_input.required_authorization_material_types = &required_material_types;
+
+        match validate_remote_handshake(validation_input) {
+            Ok(result) => {
+                self.lifecycle_stream_guard
+                    .complete(exchange.authenticated_peer_id);
+                self.relationship_mut(exchange.authenticated_peer_id)
+                    .handshake_accepted(result.clone());
+                Ok(result)
+            }
+            Err(error) => {
+                self.lifecycle_stream_guard
+                    .fail(exchange.authenticated_peer_id);
+                let failure_cap = self.node.config().p2p.limits.retained_status_failures;
+                self.relationship_mut(exchange.authenticated_peer_id)
+                    .handshake_failed(&error, now.to_owned(), failure_cap);
+                Err(AukiNodeError::HandshakePolicy(error))
+            }
+        }
     }
 
     fn local_get_response(
@@ -1779,7 +1917,13 @@ impl fmt::Display for AukiNodeError {
             Self::LocalHandshake(error) => write!(f, "{error}"),
             Self::LifecycleOpen(error) => write!(f, "{error}"),
             Self::Lifecycle(error) => write!(f, "{error}"),
+            Self::LifecycleAccept(error) => write!(f, "accept lifecycle streams: {error}"),
+            Self::LifecycleGuard(error) => write!(f, "{error}"),
             Self::HandshakePolicy(error) => write!(f, "{error}"),
+            Self::OfferCatalogAccept(error) => {
+                write!(f, "accept offer-catalog streams: {error}")
+            }
+            Self::OfferCatalogServe(error) => write!(f, "{error}"),
             Self::GetAccept(error) => write!(f, "accept get streams: {error}"),
             Self::GetServe(error) => write!(f, "{error}"),
             Self::SubscribeAccept(error) => write!(f, "accept subscribe streams: {error}"),
@@ -2335,6 +2479,217 @@ mod tests {
 
         server.await.expect("server task");
         listener_task.abort();
+    }
+
+    #[tokio::test]
+    async fn auki_node_two_peer_flow_runs_lifecycle_offer_get_and_subscribe() {
+        let provider_wallet = wallet(97);
+        let provider_identity = identity_from_wallet(provider_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &provider_wallet,
+            &[12; DOMAIN_NONCE_LEN],
+            Some("full-flow-provider"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut consumer =
+            AukiNode::new(identity(98), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut provider = AukiNode::new(
+            provider_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let consumer_peer_id = consumer.peer_id();
+        let provider_peer_id = provider.peer_id();
+        let provider_addr = wait_for_listen_addr(&mut provider).await;
+        let mut provider_peer = ConfiguredPeer::new(provider_peer_id);
+        provider_peer.dial_addresses.push(provider_addr);
+
+        provider
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        provider
+            .upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        let get_domain_id = domain_id.clone();
+        provider
+            .upsert_get_provider(
+                domain_id.clone(),
+                "camera-main",
+                move |_request: &GetRequest, _now: &str| {
+                    Ok(message(&get_domain_id, "camera-main", 31))
+                },
+            )
+            .expect("get provider");
+        provider
+            .upsert_subscribe_provider(
+                domain_id.clone(),
+                "camera-main",
+                |_request: &SubscribeRequest, _now: &str| {
+                    Ok(AukiSubscribeProviderAccept {
+                        initial_sequence: Some(41),
+                        generated_at: Some(ISSUED_AT.to_owned()),
+                        metadata: None,
+                    })
+                },
+            )
+            .expect("subscribe provider");
+        provider
+            .ensure_lifecycle_incoming()
+            .expect("lifecycle incoming");
+        provider
+            .ensure_offer_catalog_incoming()
+            .expect("offer catalog incoming");
+        provider.ensure_get_incoming().expect("get incoming");
+        provider
+            .ensure_subscribe_incoming()
+            .expect("subscribe incoming");
+
+        let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let lifecycle = provider
+                .serve_next_lifecycle(LifecycleInput::new(), ISSUED_AT)
+                .await
+                .expect("serve lifecycle")
+                .expect("served lifecycle");
+            assert_eq!(lifecycle.authenticated_peer_id, consumer_peer_id);
+
+            let served_catalog = provider
+                .serve_next_offer_catalog(Some(ISSUED_AT))
+                .await
+                .expect("serve offer catalog")
+                .expect("served offer catalog");
+            assert_eq!(served_catalog.peer_id, consumer_peer_id);
+            assert_eq!(served_catalog.domain_ids, vec![server_domain_id.clone()]);
+            assert_eq!(served_catalog.kinds, vec!["frame".to_owned()]);
+
+            let served_get = provider
+                .serve_next_get(ISSUED_AT)
+                .await
+                .expect("serve get")
+                .expect("served get");
+            assert!(served_get.success);
+            assert_eq!(served_get.peer_id, consumer_peer_id);
+            assert_eq!(
+                served_get.domain_id.as_deref(),
+                Some(server_domain_id.as_str())
+            );
+            assert_eq!(served_get.offer_id.as_deref(), Some("camera-main"));
+
+            let served_subscribe = provider
+                .serve_next_subscribe(ISSUED_AT)
+                .await
+                .expect("serve subscribe")
+                .expect("served subscribe");
+            assert!(served_subscribe.accepted);
+            let mut served_subscription = served_subscribe
+                .into_subscription()
+                .expect("accepted served subscription");
+            let data = message(&server_domain_id, "camera-main", 41);
+            provider
+                .send_served_subscription_message(&mut served_subscription, &data)
+                .await
+                .expect("send served subscription message");
+            provider
+                .end_served_subscription(
+                    served_subscription,
+                    SubscribeEndReason::Complete,
+                    None,
+                    None,
+                )
+                .await
+                .expect("end served subscription");
+            server_done_tx.send(()).expect("send server done");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = provider.next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        consumer
+            .upsert_configured_peer(provider_peer)
+            .expect("configured peer");
+        consumer
+            .dial_configured_peer(provider_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut consumer, provider_peer_id).await;
+
+        let lifecycle = consumer
+            .run_lifecycle(provider_peer_id, LifecycleInput::new(), ISSUED_AT)
+            .await
+            .expect("run lifecycle");
+        assert_eq!(lifecycle.accepted_served_domains.len(), 1);
+        assert_eq!(lifecycle.accepted_served_domains[0].domain_id, domain_id);
+
+        let mut offer_input = RemoteOfferLoadInput::new();
+        offer_input.domain_ids.push(domain_id.clone());
+        offer_input.kinds.push("frame".to_owned());
+        offer_input
+            .supported_payload_types
+            .push("auki.frame".to_owned());
+        let report = consumer
+            .load_remote_offers(provider_peer_id, offer_input, ISSUED_AT)
+            .await
+            .expect("load remote offers");
+        assert_eq!(report.offers.len(), 1);
+        assert!(report.offers[0].usable);
+
+        let get = consumer
+            .get(
+                provider_peer_id,
+                GetInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("get");
+        assert_eq!(get.message.sequence, Some(31));
+
+        let mut subscription = consumer
+            .subscribe(
+                provider_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscribe");
+        let message = consumer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("subscription data");
+        assert_eq!(message.sequence, Some(41));
+        assert_eq!(subscription.last_sequence(), Some(41));
+
+        server_done_rx.await.expect("server done");
+        let relationship = consumer
+            .relationship(provider_peer_id)
+            .expect("relationship");
+        assert_eq!(relationship.state, PeerRelationshipState::Ready);
+        assert_eq!(
+            relationship.offer_catalog_state,
+            OfferCatalogLoadState::Loaded
+        );
+        assert!(relationship.paths.iter().any(|path| {
+            path.path_type.as_deref() == Some("get") && path.state.as_deref() == Some("succeeded")
+        }));
+        assert!(relationship.paths.iter().any(|path| {
+            path.path_type.as_deref() == Some("subscribe")
+                && path.state.as_deref() == Some("active")
+                && path.last_sequence == Some(41)
+        }));
+
+        let _ = stop_tx.send(());
+        server.await.expect("server task");
     }
 
     #[test]

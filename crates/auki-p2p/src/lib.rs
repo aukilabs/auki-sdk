@@ -24,7 +24,7 @@ pub use api::{
     AukiServedSubscription, AukiSubscribeProvider, AukiSubscribeProviderAccept,
     AukiSubscribeProviderError, AukiSubscription, LifecycleDomainAccess, LifecycleInput,
     LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
-    ServedGet, ServedSubscribe,
+    ServedGet, ServedOfferCatalog, ServedSubscribe,
 };
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,

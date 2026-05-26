@@ -26,9 +26,10 @@ Current public surface:
 - `AukiP2pConfig` captures RFC-shaped runtime limits and policy knobs.
 - `AukiNode` is the SDK-facing runtime handle for configured peer management,
   dialing, local domain/offer registration, high-level lifecycle
-  authorization, remote offer loading, SDK-facing Get/Subscribe, high-level
-  peer events, relationship tracking, and in-process status snapshots without
-  exposing protocol frames or stream internals.
+  authorization and serving, remote offer loading and catalog serving,
+  SDK-facing Get/Subscribe consumers and providers, high-level peer events,
+  relationship tracking, and in-process status snapshots without exposing
+  protocol frames or stream internals.
 - `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
   advertised, and relay addresses separate; can dial explicit peer addresses;
   applies local per-peer connection caps for duplicate/simultaneous dials;
@@ -78,3 +79,6 @@ Get serving tests now cover a registered local provider responding to a remote
 `AukiNode::get(...)` over the RFC Get stream.
 Subscribe serving tests now cover a registered local provider accepting a remote
 `AukiNode::subscribe(...)`, sending a data message, and ending the stream.
+The full `AukiNode` smoke test now covers configured dial, lifecycle
+authorization, offer loading, Get, Subscribe data, and relationship/status
+assertions in one two-peer flow.

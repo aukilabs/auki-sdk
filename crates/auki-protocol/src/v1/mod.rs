@@ -1,5 +1,7 @@
 //! Version 1 protocol types and helpers.
 
+/// Authority-chain validation helpers.
+pub mod authority;
 /// Canonical base64url-without-padding helpers.
 pub mod base64url;
 /// Domain authority helpers.

@@ -11,6 +11,7 @@ runtime, Discovery client, or app-specific lifecycle facade.
 
 ## Public surface
 
+- `v1::authority` — authority-chain validation for peer bindings, declarations, and delegations.
 - `v1::base64url` — canonical base64url-without-padding encode/decode helpers.
 - `v1::domain` — v1 domain id, declaration, and delegation helpers.
 - `v1::frame` — unsigned LEB128 length prefixes plus v1 JSON frame encode/decode.

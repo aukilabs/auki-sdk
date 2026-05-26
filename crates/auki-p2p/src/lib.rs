@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod identity;
+pub mod node;
 pub mod protocols;
 
 pub use config::{
@@ -14,3 +15,4 @@ pub use config::{
     PeerBindingFreshnessConfig, RuntimeLimits, StatusPrivacyConfig,
 };
 pub use identity::{LocalPeerIdentity, LocalPeerIdentityError, PEER_DERIVATION_LABEL};
+pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};

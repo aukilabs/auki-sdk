@@ -2,6 +2,7 @@ use auki_protocol::v1::{
     authority::{PeerAuthorization, ServedDomainAuthority},
     error,
     handshake::{CLUSTER_LIFECYCLE_V1, HandshakeError, PEER_HANDSHAKE_TYPE, PeerHandshake},
+    offer::{OFFER_CATALOG_PATH_TYPE, OFFER_CATALOG_PROTOCOL_ID, OFFER_CATALOG_VERSION},
 };
 use libp2p_identity::PeerId;
 use serde_json::{Value, json};
@@ -58,11 +59,11 @@ fn positive_handshake_vectors_match_authority_validation() {
     );
     assert_eq!(handshake.authorization_material.as_ref().unwrap().len(), 1);
     assert_eq!(
-        handshake.offer_catalog,
-        Some(json!({
-            "catalog_version": "auki.offer_catalog.v1",
-            "protocol_id": "/auki/offer-catalog/0.0.1",
-            "type": "auki.offer_catalog_path.v1"
+        handshake.offer_catalog.as_ref().map(|path| path.value()),
+        Some(&json!({
+            "catalog_version": OFFER_CATALOG_VERSION,
+            "protocol_id": OFFER_CATALOG_PROTOCOL_ID,
+            "type": OFFER_CATALOG_PATH_TYPE
         }))
     );
 
@@ -121,6 +122,22 @@ fn negative_handshake_parse_vectors_fail_as_locked() {
     );
     assert_eq!(
         duplicate_version.failure_code(),
+        error::HANDSHAKE_INVALID_MESSAGE
+    );
+
+    assert_eq!(
+        expected_negative(&fixture, "invalid_offer_catalog_path"),
+        error::HANDSHAKE_INVALID_MESSAGE
+    );
+    let invalid_offer_catalog =
+        PeerHandshake::from_value(negative_object(&fixture, "invalid_offer_catalog_path").clone())
+            .unwrap_err();
+    assert!(matches!(
+        invalid_offer_catalog,
+        HandshakeError::InvalidOfferCatalog(_)
+    ));
+    assert_eq!(
+        invalid_offer_catalog.failure_code(),
         error::HANDSHAKE_INVALID_MESSAGE
     );
 }

@@ -16,3 +16,5 @@ pub mod handshake;
 pub mod identity;
 /// Strict JSON parsing helpers.
 pub mod json;
+/// Offer-catalog protocol helpers.
+pub mod offer;

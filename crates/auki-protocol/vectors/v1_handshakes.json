@@ -80,6 +80,30 @@
         "type": "auki.peer_handshake.v1"
       }
     },
+    "invalid_offer_catalog_path": {
+      "expected": "handshake.invalid_message",
+      "object": {
+        "declared_domains": [],
+        "offer_catalog": {
+          "catalog_version": "auki.offer_catalog.v1",
+          "protocol_id": "/future/offer-catalog/1.0.0",
+          "type": "auki.offer_catalog_path.v1"
+        },
+        "peer_binding": {
+          "issued_at": "2026-05-26T12:00:00Z",
+          "label": "delegate-peer",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "signature": "bSpLAydTKwxxgWncNL9NOqPqhvrWZQj_wUIJAV2F70xndJRYlnP691FUomlbiJnAmNzcqSggm3piu_FM2kW5CA",
+          "type": "auki.peer_binding.v1",
+          "wallet_public_key": "ypOsFwUYcHHWe4PH_w7-gQjo7EUwV113JoeTM9vavnw",
+          "wallet_signature_scheme": "ed25519"
+        },
+        "supported_lifecycle_versions": [
+          "auki.cluster_lifecycle.v1"
+        ],
+        "type": "auki.peer_handshake.v1"
+      }
+    },
     "missing_delegation": {
       "expected": "domain.missing_delegation",
       "object": {

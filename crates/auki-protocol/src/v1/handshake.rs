@@ -7,6 +7,7 @@ use super::{
     },
     error,
     identity::PeerBinding,
+    offer::OfferCatalogPath,
 };
 use libp2p_identity::PeerId;
 use serde_json::{Map, Value};
@@ -38,8 +39,8 @@ pub struct PeerHandshake {
     pub declared_domains: Vec<DeclaredDomain>,
     /// Optional authorization material for local peer policy.
     pub authorization_material: Option<Vec<Value>>,
-    /// Optional offer-catalog fetch path object.
-    pub offer_catalog: Option<Value>,
+    /// Optional offer-catalog fetch path.
+    pub offer_catalog: Option<OfferCatalogPath>,
     /// Optional diagnostics object.
     pub diagnostics: Option<Value>,
     /// Optional metadata object.
@@ -86,6 +87,8 @@ pub enum HandshakeError {
         /// Error detail.
         error: String,
     },
+    /// Offer-catalog fetch path was malformed.
+    InvalidOfferCatalog(String),
 }
 
 impl HandshakeError {
@@ -125,6 +128,7 @@ impl fmt::Display for HandshakeError {
             Self::InvalidDeclaredDomain { index, error } => {
                 write!(f, "invalid declared domain at index {index}: {error}")
             }
+            Self::InvalidOfferCatalog(error) => write!(f, "invalid offer catalog path: {error}"),
         }
     }
 }
@@ -185,7 +189,13 @@ impl PeerHandshake {
         let declared_domains = parse_declared_domains(object)?;
         let authorization_material =
             parse_optional_object_array(object, FIELD_AUTHORIZATION_MATERIAL)?;
-        let offer_catalog = optional_object(object, FIELD_OFFER_CATALOG)?;
+        let offer_catalog = object
+            .get(FIELD_OFFER_CATALOG)
+            .map(|value| {
+                OfferCatalogPath::from_value(value.clone())
+                    .map_err(|error| HandshakeError::InvalidOfferCatalog(error.to_string()))
+            })
+            .transpose()?;
         let diagnostics = optional_object(object, FIELD_DIAGNOSTICS)?;
         let metadata = optional_object(object, FIELD_METADATA)?;
 
@@ -376,6 +386,7 @@ mod tests {
     use crate::v1::{
         domain::{DelegationScope, DomainDeclaration, DomainDelegation, derive_domain_id},
         error,
+        offer::{OFFER_CATALOG_PATH_TYPE, OFFER_CATALOG_PROTOCOL_ID, OFFER_CATALOG_VERSION},
     };
     use auki_identity::Wallet;
     use serde_json::json;
@@ -481,7 +492,12 @@ mod tests {
             FIELD_AUTHORIZATION_MATERIAL.to_owned(),
             json!([{"type": "local.test", "value": true}]),
         );
-        object.insert(FIELD_OFFER_CATALOG.to_owned(), json!({"type": "path"}));
+        let catalog_path = json!({
+            "catalog_version": OFFER_CATALOG_VERSION,
+            "protocol_id": OFFER_CATALOG_PROTOCOL_ID,
+            "type": OFFER_CATALOG_PATH_TYPE,
+        });
+        object.insert(FIELD_OFFER_CATALOG.to_owned(), catalog_path.clone());
         object.insert(FIELD_DIAGNOSTICS.to_owned(), json!({"ok": true}));
         object.insert(FIELD_METADATA.to_owned(), json!({"label": "node"}));
 
@@ -491,7 +507,10 @@ mod tests {
             parsed.authorization_material,
             Some(vec![json!({"type": "local.test", "value": true})])
         );
-        assert_eq!(parsed.offer_catalog, Some(json!({"type": "path"})));
+        assert_eq!(
+            parsed.offer_catalog.as_ref().map(|path| path.value()),
+            Some(&catalog_path)
+        );
         assert_eq!(parsed.diagnostics, Some(json!({"ok": true})));
         assert_eq!(parsed.metadata, Some(json!({"label": "node"})));
     }
@@ -551,5 +570,19 @@ mod tests {
             PeerHandshake::from_value(value),
             Err(HandshakeError::InvalidDeclaredDomain { index: 0, .. })
         ));
+    }
+
+    #[test]
+    fn parse_rejects_malformed_offer_catalog_path() {
+        let mut value = PeerHandshake::create(peer_binding(&owner_wallet()), vec![]).into_value();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert(FIELD_OFFER_CATALOG.to_owned(), json!({"type": "path"}));
+
+        let error = PeerHandshake::from_value(value).unwrap_err();
+
+        assert!(matches!(error, HandshakeError::InvalidOfferCatalog(_)));
+        assert_eq!(error.failure_code(), error::HANDSHAKE_INVALID_MESSAGE);
     }
 }

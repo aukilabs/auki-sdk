@@ -2,17 +2,17 @@
 
 use crate::{
     AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiP2pNode, AukiP2pNodeConfig,
-    AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, HandshakePolicyError,
+    AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, GetServeError, HandshakePolicyError,
     HandshakeValidationInput, HandshakeValidationResult, Libp2pOfferCatalogClient,
     Libp2pPathClient, Libp2pSubscription, LifecycleOpenStreamError, LifecycleProtocolError,
     LifecycleStreamGuard, LoadedRemoteOffer, LocalPeerIdentity, OfferCatalogLoadState,
     OfferLoadContext, OfferLoadError, OfferLoadReport, PathClientError, PathContext,
     PathOrchestrationError, PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
     RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
-    RelationshipStatusOptions, SubscribeInput, accept_subscribe_data_frame,
+    RelationshipStatusOptions, SubscribeInput, accept_get_streams, accept_subscribe_data_frame,
     build_relationship_status_snapshot, exchange_peer_handshake_strict, get_over_libp2p,
-    load_remote_offers_over_libp2p, open_lifecycle_stream_once, subscribe_over_libp2p,
-    validate_remote_handshake,
+    load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
+    subscribe_over_libp2p, validate_remote_handshake, write_get_response,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
@@ -20,14 +20,16 @@ use auki_protocol::v1::{
     domain::{DelegationScope, DomainDeclaration, DomainDelegation, DomainError},
     error,
     frame::FrameError,
+    get::{GetRequest, GetResponse},
     handshake::{HandshakeError, PeerHandshake},
-    message::SpatialMessage,
+    message::{ErrorObject, SpatialMessage},
     offer::{
         Offer, OfferAccessMode, OfferCatalogPath, OfferCatalogPathError, OfferCatalogRequest,
         OfferCatalogRequestError, OfferCatalogResponse, OfferCatalogResponseError,
     },
     status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
 };
+use futures::StreamExt as _;
 use libp2p::{Multiaddr, PeerId};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, fmt, future::Future};
@@ -40,6 +42,8 @@ pub struct AukiNode {
     remote_offer_reports: BTreeMap<PeerId, OfferLoadReport>,
     relationships: BTreeMap<PeerId, PeerRelationship>,
     lifecycle_stream_guard: LifecycleStreamGuard,
+    get_incoming: Option<libp2p_stream::IncomingStreams>,
+    get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
 }
 
 /// Local domain authority material registered with the high-level node.
@@ -57,6 +61,38 @@ pub struct LocalDomainRegistration {
 /// High-level accepted subscription handle.
 pub struct AukiSubscription {
     inner: Libp2pSubscription,
+}
+
+/// Application provider for one local Get offer.
+pub trait AukiGetProvider: Send {
+    /// Produce one spatial message for a parsed Get request.
+    fn get(
+        &mut self,
+        request: &GetRequest,
+        now: &str,
+    ) -> Result<SpatialMessage, AukiGetProviderError>;
+}
+
+/// Application Get-provider failure returned as a structured Get response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AukiGetProviderError {
+    /// Stable failure code to return to the requester.
+    pub code: String,
+}
+
+/// Result of serving one inbound Get stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedGet {
+    /// Requesting peer id.
+    pub peer_id: PeerId,
+    /// Requested domain id, when the request parsed.
+    pub domain_id: Option<String>,
+    /// Requested offer id, when the request parsed.
+    pub offer_id: Option<String>,
+    /// Whether a successful Get response was served.
+    pub success: bool,
+    /// Stable failure code when a failed Get response was served.
+    pub failure_code: Option<String>,
 }
 
 /// High-level remote offer-catalog load input. Callers do not pass protocol frames.
@@ -204,6 +240,13 @@ pub enum AukiNodeError {
         /// Producer-scoped offer id.
         offer_id: String,
     },
+    /// Local provider references an offer that is not registered locally.
+    LocalOfferNotRegistered {
+        /// Offer domain id.
+        domain_id: String,
+        /// Producer-scoped offer id.
+        offer_id: String,
+    },
     /// Local offer catalog projection failed.
     OfferCatalog(OfferCatalogResponseError),
     /// Local offer-catalog path construction failed.
@@ -220,6 +263,10 @@ pub enum AukiNodeError {
     Lifecycle(LifecycleProtocolError),
     /// Remote handshake failed local policy validation.
     HandshakePolicy(HandshakePolicyError),
+    /// Inbound Get stream registration failed.
+    GetAccept(libp2p_stream::AlreadyRegistered),
+    /// Inbound Get serving failed.
+    GetServe(GetServeError),
     /// No loaded remote offers are available for the requested peer.
     RemoteOffersNotLoaded {
         /// Remote peer id.
@@ -328,6 +375,26 @@ impl AukiSubscription {
     /// Observed sequence-gap count.
     pub fn sequence_gap_count(&self) -> u64 {
         self.inner.handle().sequence_gap_count()
+    }
+}
+
+impl AukiGetProviderError {
+    /// Create a provider failure with a stable response code.
+    pub fn new(code: impl Into<String>) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+impl<F> AukiGetProvider for F
+where
+    F: FnMut(&GetRequest, &str) -> Result<SpatialMessage, AukiGetProviderError> + Send,
+{
+    fn get(
+        &mut self,
+        request: &GetRequest,
+        now: &str,
+    ) -> Result<SpatialMessage, AukiGetProviderError> {
+        self(request, now)
     }
 }
 
@@ -440,6 +507,8 @@ impl AukiNode {
             remote_offer_reports: BTreeMap::new(),
             relationships: BTreeMap::new(),
             lifecycle_stream_guard: LifecycleStreamGuard::default(),
+            get_incoming: None,
+            get_providers: BTreeMap::new(),
         };
         for peer in this.node.configured_peers().to_vec() {
             this.relationship_mut(peer.peer_id).configured();
@@ -541,6 +610,33 @@ impl AukiNode {
         }
         self.local_offers
             .insert((offer.domain_id.clone(), offer.offer_id.clone()), offer);
+        Ok(())
+    }
+
+    /// Add or replace the local provider for a registered Get offer.
+    pub fn upsert_get_provider<P>(
+        &mut self,
+        domain_id: impl Into<String>,
+        offer_id: impl Into<String>,
+        provider: P,
+    ) -> Result<(), AukiNodeError>
+    where
+        P: AukiGetProvider + 'static,
+    {
+        let domain_id = domain_id.into();
+        let offer_id = offer_id.into();
+        if !self
+            .local_offers
+            .contains_key(&(domain_id.clone(), offer_id.clone()))
+        {
+            return Err(AukiNodeError::LocalOfferNotRegistered {
+                domain_id,
+                offer_id,
+            });
+        }
+
+        self.get_providers
+            .insert((domain_id, offer_id), Box::new(provider));
         Ok(())
     }
 
@@ -739,6 +835,57 @@ impl AukiNode {
             .map_err(AukiNodeError::Path)
     }
 
+    /// Serve one inbound Get stream with a registered local provider.
+    pub async fn serve_next_get(&mut self, now: &str) -> Result<Option<ServedGet>, AukiNodeError> {
+        self.ensure_get_incoming()?;
+        let accepted = {
+            let node = &mut self.node;
+            let incoming = self
+                .get_incoming
+                .as_mut()
+                .expect("get incoming should be registered");
+            drive_node_until(node, incoming.next()).await
+        };
+        let Some((peer_id, mut stream)) = accepted else {
+            return Ok(None);
+        };
+
+        let max_body_len = self.node.config().p2p.limits.get_response_frame_body_bytes;
+        let request =
+            match drive_node_until(&mut self.node, read_get_request(&mut stream, max_body_len))
+                .await
+            {
+                Ok(request) => request,
+                Err(GetServeError::Request(error)) => {
+                    let response = get_failure_response(error.failure_code());
+                    let served = ServedGet {
+                        peer_id,
+                        domain_id: None,
+                        offer_id: None,
+                        success: false,
+                        failure_code: Some(error.failure_code().to_owned()),
+                    };
+                    drive_node_until(
+                        &mut self.node,
+                        write_get_response(&mut stream, &response, max_body_len),
+                    )
+                    .await
+                    .map_err(AukiNodeError::GetServe)?;
+                    return Ok(Some(served));
+                }
+                Err(error) => return Err(AukiNodeError::GetServe(error)),
+            };
+
+        let (response, served) = self.local_get_response(peer_id, &request, now);
+        drive_node_until(
+            &mut self.node,
+            write_get_response(&mut stream, &response, max_body_len),
+        )
+        .await
+        .map_err(AukiNodeError::GetServe)?;
+        Ok(Some(served))
+    }
+
     /// Start one high-level Subscribe over the configured libp2p path.
     pub async fn subscribe(
         &mut self,
@@ -871,6 +1018,94 @@ impl AukiNode {
         self.relationships
             .entry(peer_id)
             .or_insert_with(|| PeerRelationship::new(peer_id))
+    }
+
+    fn ensure_get_incoming(&mut self) -> Result<(), AukiNodeError> {
+        if self.get_incoming.is_some() {
+            return Ok(());
+        }
+
+        let mut control = self.node.stream_control();
+        self.get_incoming =
+            Some(accept_get_streams(&mut control).map_err(AukiNodeError::GetAccept)?);
+        Ok(())
+    }
+
+    fn local_get_response(
+        &mut self,
+        peer_id: PeerId,
+        request: &GetRequest,
+        now: &str,
+    ) -> (GetResponse, ServedGet) {
+        let domain_id = request.domain_id.clone();
+        let offer_id = request.offer_id.clone();
+        let key = (domain_id.clone(), offer_id.clone());
+        let (payload_type, supports_get) = match self.local_offers.get(&key) {
+            Some(offer) => (
+                offer.payload.payload_type.clone(),
+                offer.access_modes.contains(&OfferAccessMode::Get),
+            ),
+            None => {
+                return get_failure_result(
+                    peer_id,
+                    Some(domain_id),
+                    Some(offer_id),
+                    error::OFFER_UNKNOWN_OFFER,
+                );
+            }
+        };
+
+        if !supports_get {
+            return get_failure_result(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_UNSUPPORTED_ACCESS_MODE,
+            );
+        }
+        if !request.accepts_payload_type(&payload_type) {
+            return get_failure_result(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_UNSUPPORTED_PAYLOAD_TYPE,
+            );
+        }
+
+        let Some(provider) = self.get_providers.get_mut(&key) else {
+            return get_failure_result(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error::OFFER_TEMPORARILY_UNAVAILABLE,
+            );
+        };
+        let message = match provider.get(request, now) {
+            Ok(message) => message,
+            Err(error) => {
+                return get_failure_result(peer_id, Some(domain_id), Some(offer_id), error.code);
+            }
+        };
+        let response = GetResponse::success(message);
+        if let Err(error) = response.validate_success_for_request(request, &payload_type) {
+            return get_failure_result(
+                peer_id,
+                Some(domain_id),
+                Some(offer_id),
+                error.failure_code(),
+            );
+        }
+
+        (
+            response,
+            ServedGet {
+                peer_id,
+                domain_id: Some(domain_id),
+                offer_id: Some(offer_id),
+                success: true,
+                failure_code: None,
+            },
+        )
     }
 
     fn local_peer_handshake(&self) -> Result<PeerHandshake, AukiNodeError> {
@@ -1068,6 +1303,10 @@ impl fmt::Display for AukiNodeError {
                 f,
                 "local offer {offer_id} references unregistered domain {domain_id}"
             ),
+            Self::LocalOfferNotRegistered {
+                domain_id,
+                offer_id,
+            } => write!(f, "local offer {domain_id}/{offer_id} is not registered"),
             Self::OfferCatalog(error) => write!(f, "{error}"),
             Self::OfferCatalogPath(error) => write!(f, "{error}"),
             Self::OfferCatalogRequest(error) => write!(f, "{error}"),
@@ -1076,6 +1315,8 @@ impl fmt::Display for AukiNodeError {
             Self::LifecycleOpen(error) => write!(f, "{error}"),
             Self::Lifecycle(error) => write!(f, "{error}"),
             Self::HandshakePolicy(error) => write!(f, "{error}"),
+            Self::GetAccept(error) => write!(f, "accept get streams: {error}"),
+            Self::GetServe(error) => write!(f, "{error}"),
             Self::RemoteOffersNotLoaded { peer_id } => {
                 write!(f, "remote offers are not loaded for peer {peer_id}")
             }
@@ -1085,6 +1326,29 @@ impl fmt::Display for AukiNodeError {
 }
 
 impl std::error::Error for AukiNodeError {}
+
+fn get_failure_result(
+    peer_id: PeerId,
+    domain_id: Option<String>,
+    offer_id: Option<String>,
+    code: impl Into<String>,
+) -> (GetResponse, ServedGet) {
+    let code = code.into();
+    (
+        get_failure_response(code.clone()),
+        ServedGet {
+            peer_id,
+            domain_id,
+            offer_id,
+            success: false,
+            failure_code: Some(code),
+        },
+    )
+}
+
+fn get_failure_response(code: impl Into<String>) -> GetResponse {
+    GetResponse::failure(ErrorObject::create(code))
+}
 
 fn relationship_loaded_offer(loaded: &LoadedRemoteOffer) -> RelationshipLoadedOffer {
     RelationshipLoadedOffer {
@@ -1156,12 +1420,12 @@ mod tests {
     use auki_protocol::v1::{
         domain::DOMAIN_NONCE_LEN,
         frame::{decode_json_frame, decode_length, encode_json_frame},
-        get::{GetRequest, GetResponse},
+        get::{GetRequest, GetResponse, GetResponseBody},
         message::{SPATIAL_MESSAGE_TYPE, SpatialMessage},
         offer::{OfferAccessMode, OfferStatus, PayloadDescriptor},
         subscribe::{SubscribeAccept, SubscribeRequest},
     };
-    use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt, StreamExt as _};
+    use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt};
     use serde_json::{Value, json};
     use std::sync::Arc;
     use tokio::time::{Duration, timeout};
@@ -1287,6 +1551,13 @@ mod tests {
         let (value, consumed) = decode_json_frame(frame, max_body_len).expect("request frame");
         assert_eq!(consumed, frame.len());
         value
+    }
+
+    fn assert_get_failure(response: GetResponse, expected_code: &str) {
+        match response.body {
+            GetResponseBody::Error(error) => assert_eq!(error.code, expected_code),
+            GetResponseBody::Message(_) => panic!("expected get failure"),
+        }
     }
 
     #[test]
@@ -1735,6 +2006,179 @@ mod tests {
         );
         server.await.expect("server task");
         listener_task.abort();
+    }
+
+    #[tokio::test]
+    async fn get_can_be_served_by_registered_provider() {
+        let listener_wallet = wallet(87);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[8; DOMAIN_NONCE_LEN],
+            Some("get-provider"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(88), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        let provider_domain_id = domain_id.clone();
+        listener
+            .upsert_get_provider(
+                domain_id.clone(),
+                "camera-main",
+                move |_request: &GetRequest, _now: &str| {
+                    Ok(message(&provider_domain_id, "camera-main", 21))
+                },
+            )
+            .expect("get provider");
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let served = listener
+                .serve_next_get(ISSUED_AT)
+                .await
+                .expect("serve next get")
+                .expect("served get");
+            assert!(served.success);
+            assert_eq!(served.domain_id.as_deref(), Some(server_domain_id.as_str()));
+            assert_eq!(served.offer_id.as_deref(), Some("camera-main"));
+            served_tx.send(served).expect("send served get");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = listener.next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let outcome = dialer
+            .get(
+                listener_peer_id,
+                GetInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await;
+        let served = served_rx.await.expect("served get");
+        let _ = stop_tx.send(());
+        server.await.expect("server task");
+        let outcome = outcome.expect("get should succeed");
+
+        assert!(served.success);
+        assert_eq!(outcome.message.sequence, Some(21));
+    }
+
+    #[test]
+    fn get_provider_requires_registered_local_offer() {
+        let mut node =
+            AukiNode::new(identity(89), AukiP2pNodeConfig::dial_only_development()).unwrap();
+
+        let error = node
+            .upsert_get_provider(
+                "missing-domain",
+                "camera-main",
+                |_request: &GetRequest, _now: &str| {
+                    Err(AukiGetProviderError::new(
+                        error::OFFER_TEMPORARILY_UNAVAILABLE,
+                    ))
+                },
+            )
+            .expect_err("provider should require local offer");
+
+        assert!(matches!(
+            error,
+            AukiNodeError::LocalOfferNotRegistered { domain_id, offer_id }
+                if domain_id == "missing-domain" && offer_id == "camera-main"
+        ));
+    }
+
+    #[test]
+    fn local_get_response_returns_structured_provider_failures() {
+        let local_wallet = wallet(90);
+        let declaration =
+            DomainDeclaration::create(&local_wallet, &[9; DOMAIN_NONCE_LEN], Some("get-failure"))
+                .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut node = AukiNode::new(
+            identity_from_wallet(local_wallet),
+            AukiP2pNodeConfig::dial_only_development(),
+        )
+        .unwrap();
+        node.upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        node.upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        let request = GetRequest::create(domain_id.clone(), "camera-main", None, Vec::new(), None)
+            .expect("get request");
+        let requester = identity(91).peer_id();
+
+        let (response, served) = node.local_get_response(requester, &request, ISSUED_AT);
+        assert_get_failure(response, error::OFFER_TEMPORARILY_UNAVAILABLE);
+        assert_eq!(
+            served.failure_code.as_deref(),
+            Some(error::OFFER_TEMPORARILY_UNAVAILABLE)
+        );
+
+        node.upsert_get_provider(
+            domain_id.clone(),
+            "camera-main",
+            |_request: &GetRequest, _now: &str| Err(AukiGetProviderError::new("provider.busy")),
+        )
+        .expect("provider");
+        let (response, served) = node.local_get_response(requester, &request, ISSUED_AT);
+        assert_get_failure(response, "provider.busy");
+        assert_eq!(served.failure_code.as_deref(), Some("provider.busy"));
+
+        let provider_domain_id = domain_id.clone();
+        node.upsert_get_provider(
+            domain_id.clone(),
+            "camera-main",
+            move |_request: &GetRequest, _now: &str| {
+                Ok(message(&provider_domain_id, "wrong-offer", 1))
+            },
+        )
+        .expect("provider");
+        let (response, served) = node.local_get_response(requester, &request, ISSUED_AT);
+        assert_get_failure(response, error::MESSAGE_INVALID_ENVELOPE);
+        assert_eq!(
+            served.failure_code.as_deref(),
+            Some(error::MESSAGE_INVALID_ENVELOPE)
+        );
     }
 
     #[tokio::test]

@@ -51,6 +51,9 @@ Current public surface:
 - `offer_catalog_streams` wires offer loading to `/auki/offer-catalog/0.0.1`
   libp2p streams and includes a small serving helper for local catalog
   responses.
+- `get_serving` accepts inbound `/auki/get/0.0.1` streams, decodes one Get
+  request, writes one Get response, and lets `AukiNode` serve local offers
+  through registered application providers without exposing raw frames.
 - `paths` defines high-level Get and Subscribe orchestration over loaded offers:
   request shaping, response validation, data-message validation, path status,
   and sequence-gap diagnostics before transport wiring.
@@ -67,3 +70,5 @@ Path stream tests now cover one loopback Get and one loopback Subscribe start
 followed by a data frame.
 Offer-catalog stream tests now cover one loopback catalog load into
 `AukiNode`'s remote offer cache after high-level lifecycle authorization.
+Get serving tests now cover a registered local provider responding to a remote
+`AukiNode::get(...)` over the RFC Get stream.

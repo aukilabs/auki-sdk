@@ -6,6 +6,7 @@
 
 pub mod api;
 pub mod config;
+pub mod get_serving;
 pub mod handshake_policy;
 pub mod identity;
 pub mod lifecycle;
@@ -18,15 +19,16 @@ pub mod protocols;
 pub mod relationship;
 
 pub use api::{
-    AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LifecycleDomainAccess,
-    LifecycleInput, LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy,
-    RemoteOfferLoadInput,
+    AukiGetProvider, AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent,
+    AukiSubscription, LifecycleDomainAccess, LifecycleInput, LocalDomainRegistration,
+    RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput, ServedGet,
 };
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,
     PeerBindingFreshnessConfig, RuntimeLimits, StatusPrivacyConfig,
 };
+pub use get_serving::{GetServeError, accept_get_streams, read_get_request, write_get_response};
 pub use handshake_policy::{
     AppDomainAccess, HandshakeFailureDiagnostic, HandshakeFailureScope, HandshakeLifecycleState,
     HandshakeMetadataField, HandshakePolicyError, HandshakeValidationInput,

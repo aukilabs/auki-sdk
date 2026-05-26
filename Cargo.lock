@@ -951,6 +951,9 @@ dependencies = [
 name = "auki-protocol"
 version = "0.0.0"
 dependencies = [
+ "auki-identity",
+ "auki-jcs",
+ "libp2p-identity",
  "serde",
  "serde_json",
 ]

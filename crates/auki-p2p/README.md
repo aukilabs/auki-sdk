@@ -27,6 +27,11 @@ Current public surface:
 - `AukiP2pNode` is a small libp2p node wrapper that can listen, dial explicit
   peer addresses, surface connection events, and expose a raw stream control for
   the lifecycle protocol.
+- `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
+  exchange the first peer-handshake frame using the configured frame limit.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.
+The lifecycle stream test then proves the same peers can exchange RFC
+`PeerHandshake` frames both ways without pulling in offers, Get, Subscribe,
+Discovery, or app adapters.

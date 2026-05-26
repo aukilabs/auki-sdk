@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod identity;
+pub mod lifecycle;
 pub mod node;
 pub mod protocols;
 
@@ -15,4 +16,9 @@ pub use config::{
     PeerBindingFreshnessConfig, RuntimeLimits, StatusPrivacyConfig,
 };
 pub use identity::{LocalPeerIdentity, LocalPeerIdentityError, PEER_DERIVATION_LABEL};
+pub use lifecycle::{
+    LifecycleHandshakeExchange, LifecycleProtocolError, accept_lifecycle_streams,
+    build_local_peer_handshake, exchange_peer_handshake, open_lifecycle_stream,
+    read_peer_handshake, write_peer_handshake,
+};
 pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};

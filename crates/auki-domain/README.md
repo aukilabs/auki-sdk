@@ -1,6 +1,6 @@
 # auki-domain
 
-App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalogs, transform edges, registry-entry fetch, stream open, and clean shutdown.
+App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalogs, transform edges, pose streams, registry-entry fetch, stream open, and clean shutdown.
 
 A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Higher-level than [`auki-network`](../auki-network), which it composes on top of.
 
@@ -11,7 +11,8 @@ A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Hi
 - `ClusterManager` + `ClusterTarget`
 - Relay-aware cluster creation and Manager-rotation hint preservation
 - `ClusterMembership`, `ClusterMember`, `DaemonInfo`
-- `ResourceCatalogProvider`, `ResourceEntry`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
+- `ResourceCatalogProvider`, `ResourceEntry`, `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
+- `ResourcesRequest::sensor_streams()` and `ResourcesRequest::pose_streams()` helpers for catalog discovery
 - `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`
 - Manager / election / bootstrap error types
 - `LIVENESS_CHECK_INTERVAL`, `elect_successor(...)`

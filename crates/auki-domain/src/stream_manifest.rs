@@ -68,6 +68,7 @@ impl StreamManifestBuilder {
             clock_hash: clock_hash.into(),
             frame_id,
             frame_hash,
+            ..Default::default()
         })
     }
 }

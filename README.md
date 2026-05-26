@@ -27,16 +27,16 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Networking
 
-- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.1.0` streams for camera, point-cloud, joint-encoder, and audio payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
+- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.1.0` streams for camera, point-cloud, joint-encoder, audio, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
 - **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources`, `/auki/sensors`, `/auki/registries`.
-- **`ClusterManager`** — single app-facing entry point for Discovery + cluster bootstrap, membership, Manager election, relay hint preservation, resource catalogs, registry fetch, and stream open.
+- **`ClusterManager`** — single app-facing entry point for Discovery + cluster bootstrap, membership, Manager election, relay hint preservation, resource catalogs, registry fetch, and stream open. The resource catalog exposes live `sensor_stream`, rigid `transform_edge`, and movable `pose_stream` rows.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics
 
 - Not implemented. The `Wallet` under Identity is the on-device primitive future payment / billing rails will bind to.
 
-Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction tying clock + sensor-id minting + recording lifecycle together, the Detector binding API, and live pose-stream / detection-resource rows in `/auki/resources/0.0.1`. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
+Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction tying clock + sensor-id minting + recording lifecycle together, the Detector binding API, and detection-resource rows in `/auki/resources/0.0.1`. The first live pose-stream hardware target is Galbot G1 using RoboStreamer to publish `base_link -> head_left_rgb_optical` pose logs into Park. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
 
 ## Crate map
 
@@ -54,8 +54,8 @@ Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction
 | [`auki-manifests`](crates/auki-manifests) | JCS-JSON log-manifest builders (sensor / pose / TT / detection) | ✓ |
 | [`auki-layout`](crates/auki-layout) | On-disk path helpers for session/log layout | ✓ |
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
-| [`auki-network`](crates/auki-network) | libp2p substrate, typed streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
-| [`auki-domain`](crates/auki-domain) | `ClusterManager` — app-facing cluster lifecycle facade with relay hint preservation | ✓ |
+| [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
+| [`auki-domain`](crates/auki-domain) | `ClusterManager` — app-facing cluster lifecycle facade with relay hint preservation and resource-catalog stream discovery | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
 | [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Browser/WASM libp2p transport probe | WIP (v0.0.0) |
@@ -71,8 +71,8 @@ Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction
 | [`auki-registry-py`](bindings/python/auki-registry-py) | Sensor / Clock / Frame registry IO | ✓ |
 | [`auki-manifests-py`](bindings/python/auki-manifests-py) | Log-manifest builders | ✓ |
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
-| [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses | ✓ |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade | ✓ |
+| [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
+| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `PoseStreamResource` and `open_pose_stream` | ✓ |
 | [`auki-session-py`](bindings/python/auki-session-py) | Source-of-truth Python control-plane surface | WIP (scaffolding) |
 
 ### `bindings/swift/` — UniFFI

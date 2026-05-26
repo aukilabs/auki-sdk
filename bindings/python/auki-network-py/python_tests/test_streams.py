@@ -98,6 +98,13 @@ def test_audio_frame_carries_bytes() -> None:
     assert "AudioFrame" in repr(f)
 
 
+def test_pose_stream_surface_is_exposed() -> None:
+    frame = cluster.SpatialTransformFrame([1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0])
+    assert frame.values == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]
+    assert len(frame) == 7
+    assert hasattr(cluster.StreamDecision, "accept_pose")
+
+
 def test_decline_reason_factories() -> None:
     nf = cluster.DeclineReason.sensor_not_found()
     assert nf.kind == "sensor_not_found"
@@ -164,6 +171,16 @@ def test_stream_decision_factory_tags() -> None:
     manifest = cluster.StreamManifest(
         sensor_id="sensor", sensor_hash="h", clock_id="c", clock_hash="ch"
     )
+    pose_manifest = cluster.StreamManifest.pose_stream(
+        resource_id="K1/base_link->K1/head_left_rgb_optical",
+        clock_id="K1/monotonic",
+        clock_hash="clockhash",
+        from_frame_id="K1/base_link",
+        from_frame_hash="basehash",
+        to_frame_id="K1/head_left_rgb_optical",
+        to_frame_hash="headhash",
+        expected_rate_hz=30,
+    )
 
     async def _empty():
         return
@@ -177,6 +194,9 @@ def test_stream_decision_factory_tags() -> None:
 
     acc_audio = cluster.StreamDecision.accept_audio(manifest=manifest, source=_empty())
     assert acc_audio.kind == "accept_audio"
+
+    acc_pose = cluster.StreamDecision.accept_pose(manifest=pose_manifest, source=_empty())
+    assert acc_pose.kind == "accept_pose"
 
     dec = cluster.StreamDecision.decline(cluster.DeclineReason.sensor_not_found())
     assert dec.kind == "decline"

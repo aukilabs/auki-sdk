@@ -533,6 +533,7 @@ async fn subscribe_audio_stream(
         &mut substream,
         &StreamMessage::request(StreamRequest {
             sensor_id: sensor_id.clone(),
+            ..Default::default()
         }),
     )
     .await

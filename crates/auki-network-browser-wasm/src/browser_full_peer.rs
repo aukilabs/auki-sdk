@@ -365,6 +365,7 @@ impl BrowserFullPeer {
             || request
                 != (StreamRequest {
                     sensor_id: "audio".to_string(),
+                    ..Default::default()
                 })
         {
             let _ = write_message(
@@ -382,6 +383,7 @@ impl BrowserFullPeer {
             clock_hash: String::new(),
             frame_id: String::new(),
             frame_hash: String::new(),
+            ..Default::default()
         });
         if write_message(&mut stream, &accept).await.is_err() {
             return;

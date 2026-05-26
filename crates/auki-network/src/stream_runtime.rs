@@ -8,9 +8,10 @@
 //! variant that pairs the typed source-stream with the [`StreamManifest`],
 //! or [`StreamDispatch::Decline`] with a typed reason. The
 //! dispatch enum is *closed* over the SDK-supported `T`s (`CameraFrame`,
-//! `point_cloud::Data` today; new variants added per coordinated
+//! `point_cloud::Data`, `pose::SpatialTransform`, etc.; new variants added per coordinated
 //! SDK + consumer release). Each substream is mono-`T`; the producer's
-//! callback decides which `T` based on `request.sensor_id`.
+//! callback decides which `T` based on `request.sensor_id` or
+//! `request.resource_id`.
 //!
 //! Consumer side: [`NetworkRuntime::open_stream`] returns a typed
 //! [`StreamSubscription<T>`] containing the [`StreamManifest`] from the
@@ -36,7 +37,7 @@
 //! the producer's callback was `StreamProvider<CameraFrame>`, returning
 //! `StreamDecision<CameraFrame>`. Dagaz lifts that pinning so a single
 //! daemon can serve multiple `T`s (camera + pointcloud, today). The
-//! producer dispatches on `request.sensor_id` and returns a
+//! producer dispatches on `request.sensor_id` / `request.resource_id` and returns a
 //! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
 //! New `T` = new `StreamDispatch` variant + a coordinated SDK-consumer
 //! release; on the wire each substream stays purely typed end-to-end.
@@ -45,7 +46,7 @@ use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
     CameraFrame, DeclineReason, EndReason, STREAM_PROTOCOL, StreamEntry as WireStreamEntry,
     StreamManifest, StreamMessage, StreamProtocolError, StreamRequest, audio, joint_encoders,
-    point_cloud, read_message, stream_message, write_message,
+    point_cloud, pose, read_message, stream_message, write_message,
 };
 use auki_datatypes::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
@@ -88,7 +89,8 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// Closed over the `T`s the SDK supports today: `CameraFrame` (grimsby v1),
 /// `point_cloud::Data` (Dagaz Batch 1, raw CDR per D2),
 /// `joint_encoders::Data` (sawslin Phase B — `repeated float angles_rad`),
-/// and `audio::Data` (Dialogue Batch 1 — opaque interleaved PCM bytes).
+/// `audio::Data` (Dialogue Batch 1 — opaque interleaved PCM bytes), and
+/// `pose::SpatialTransform` (live movable pose resources).
 /// One proto message per payload module is used on both disk (Sensor
 /// Log segment) and wire (this substream) — the disk/wire mirror split
 /// was collapsed in #176. Adding a new `T` is a coordinated SDK +
@@ -102,7 +104,8 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// `Decline { reason }` and closes the substream.
 ///
 /// SDK-supported `T`s: `CameraFrame`, `point_cloud::Data`,
-/// `joint_encoders::Data`, `audio::Data`, and (Cuba T8) `DetectionFrame`.
+/// `joint_encoders::Data`, `audio::Data`, `pose::SpatialTransform`,
+/// and (Cuba T8) `DetectionFrame`.
 pub enum StreamDispatch {
     /// Accept the request with a Camera source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
@@ -142,6 +145,16 @@ pub enum StreamDispatch {
         manifest: StreamManifest,
         source: SourceStream<audio::Data>,
     },
+    /// Accept the request with a Pose source-Stream. Each
+    /// [`pose::SpatialTransform`] carries one transform sample for the
+    /// `(from_frame_id, to_frame_id)` pair committed in the
+    /// [`StreamManifest`]. This is the live version of a movable Pose
+    /// Log: Park can subscribe by `resource_id` and receive
+    /// `base_link -> head_left_rgb_optical` updates from RoboStreamer.
+    AcceptPose {
+        manifest: StreamManifest,
+        source: SourceStream<pose::SpatialTransform>,
+    },
     /// Accept the request with a Detection source-Stream — Cuba T8.
     /// Each [`DetectionFrame`] is the same on-disk Detection Log
     /// payload reused on the wire — `bytes data` (opaque per-detector
@@ -171,9 +184,10 @@ pub enum StreamDispatch {
 /// allocating buffers) lives *inside* the source-Stream the app
 /// constructs and returns.
 ///
-/// The producer dispatches on `request.sensor_id` to pick which
-/// [`StreamDispatch`] variant to return — each substream is mono-`T`
-/// end-to-end (per grimsby D1: substream lifetime IS the subscription).
+/// The producer dispatches on `request.sensor_id` or `request.resource_id`
+/// to pick which [`StreamDispatch`] variant to return — each substream is
+/// mono-`T` end-to-end (per grimsby D1: substream lifetime IS the
+/// subscription).
 ///
 /// The first argument is the libp2p [`PeerId`] of the requester. The
 /// SDK has known the requester since the inbound substream landed on
@@ -439,6 +453,9 @@ pub(crate) async fn handle_inbound_substream(
         StreamDispatch::AcceptAudio { manifest, source } => {
             pump_typed::<audio::Data>(substream, manifest, source, shutdown_rx).await;
         }
+        StreamDispatch::AcceptPose { manifest, source } => {
+            pump_typed::<pose::SpatialTransform>(substream, manifest, source, shutdown_rx).await;
+        }
         StreamDispatch::AcceptDetection { manifest, source } => {
             pump_typed::<DetectionFrame>(substream, manifest, source, shutdown_rx).await;
         }
@@ -455,9 +472,9 @@ pub(crate) async fn handle_inbound_substream(
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
-/// (`CameraFrame`, `point_cloud::Data`, `joint_encoders::Data`). Adding a new
-/// variant means adding a new monomorphization plus extending
-/// [`StreamDispatch`].
+/// (`CameraFrame`, `point_cloud::Data`, `joint_encoders::Data`,
+/// `audio::Data`, `pose::SpatialTransform`). Adding a new variant means
+/// adding a new monomorphization plus extending [`StreamDispatch`].
 async fn pump_typed<T>(
     mut substream: libp2p::Stream,
     manifest: StreamManifest,
@@ -587,6 +604,7 @@ const _: fn() = || {
     fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
     assert_message_send_static::<CameraFrame>();
     assert_message_send_static::<point_cloud::Data>();
+    assert_message_send_static::<pose::SpatialTransform>();
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -598,6 +616,7 @@ mod tests {
     use crate::network_runtime::AllowedPeer;
     use crate::stream_protocol::{decline_reason, end_reason};
     use crate::swarm::{Behaviour, SwarmConfig, build_swarm};
+    use auki_datatypes::pose;
     use futures::stream;
     use libp2p::Swarm;
     use libp2p::swarm::SwarmEvent;
@@ -662,6 +681,23 @@ mod tests {
             clock_hash: clock_hash.into(),
             frame_id: frame_id.into(),
             frame_hash: frame_hash.into(),
+            ..Default::default()
+        }
+    }
+
+    fn pose_manifest(resource_id: &str) -> StreamManifest {
+        StreamManifest {
+            resource_id: resource_id.into(),
+            payload: "spatial_transform".into(),
+            from_frame_id: "galbot/base_link".into(),
+            from_frame_hash: "base-frame-hash".into(),
+            to_frame_id: "galbot/head_left_rgb_optical".into(),
+            to_frame_hash: "head-frame-hash".into(),
+            clock_id: "galbot/monotonic".into(),
+            clock_hash: "galbot-clock-hash".into(),
+            writer_mode: "movable".into(),
+            expected_rate_hz: 30,
+            ..Default::default()
         }
     }
 
@@ -778,6 +814,72 @@ mod tests {
                     "pc-frame-hash-3",
                 ),
                 source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    fn pose_provider_yielding_three_transforms() -> StreamProvider {
+        Arc::new(|_peer, req| {
+            if req.resource_id != "galbot/base_link->galbot/head_left_rgb_optical" {
+                return StreamDispatch::Decline {
+                    reason: DeclineReason::sensor_not_found(),
+                };
+            }
+
+            let transforms = vec![
+                Ok(StreamItem {
+                    timestamp_ns: 100_000,
+                    payload: pose::SpatialTransform {
+                        translation: Some(pose::Vec3 {
+                            x: 0.1,
+                            y: 0.0,
+                            z: 1.2,
+                        }),
+                        orientation: Some(pose::Quat {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                            w: 1.0,
+                        }),
+                    },
+                }),
+                Ok(StreamItem {
+                    timestamp_ns: 133_333,
+                    payload: pose::SpatialTransform {
+                        translation: Some(pose::Vec3 {
+                            x: 0.2,
+                            y: 0.0,
+                            z: 1.25,
+                        }),
+                        orientation: Some(pose::Quat {
+                            x: 0.0,
+                            y: 0.1,
+                            z: 0.0,
+                            w: 0.995,
+                        }),
+                    },
+                }),
+                Ok(StreamItem {
+                    timestamp_ns: 166_666,
+                    payload: pose::SpatialTransform {
+                        translation: Some(pose::Vec3 {
+                            x: 0.3,
+                            y: 0.0,
+                            z: 1.3,
+                        }),
+                        orientation: Some(pose::Quat {
+                            x: 0.0,
+                            y: 0.2,
+                            z: 0.0,
+                            w: 0.98,
+                        }),
+                    },
+                }),
+            ];
+
+            StreamDispatch::AcceptPose {
+                manifest: pose_manifest(&req.resource_id),
+                source: Box::pin(stream::iter(transforms)),
             }
         })
     }
@@ -936,6 +1038,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "anything".into(),
+                    ..Default::default()
                 },
             ),
         )
@@ -1006,6 +1109,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/cam".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1092,6 +1196,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "does-not-exist".into(),
+                    ..Default::default()
                 },
             )
             .await;
@@ -1150,6 +1255,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1247,6 +1353,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1304,6 +1411,7 @@ mod tests {
                 id_unreachable.peer_id(),
                 StreamRequest {
                     sensor_id: "any".into(),
+                    ..Default::default()
                 },
             ),
         )
@@ -1364,6 +1472,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/pc".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1395,6 +1504,125 @@ mod tests {
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// Pose streams address a live resource instead of a sensor id. This
+    /// exercises the Galbot G1 hardware-test shape: Park subscribes to a
+    /// movable base_link -> head_left_rgb_optical `SpatialTransform` stream.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_pose_samples() {
+        let id_p = PeerIdentity::from_seed(&[131u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[132u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-pose-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-pose-consumer/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
+            pose_provider_yielding_three_transforms(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("consumer spawn");
+
+        let connected = poll_until(
+            || consumer.connected_peers().contains(&id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected);
+
+        let sub: StreamSubscription<pose::SpatialTransform> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    resource_id: "galbot/base_link->galbot/head_left_rgb_optical".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open_stream<pose::SpatialTransform>");
+
+        assert_eq!(
+            sub.manifest.resource_id,
+            "galbot/base_link->galbot/head_left_rgb_optical"
+        );
+        assert_eq!(sub.manifest.payload, "spatial_transform");
+        assert_eq!(sub.manifest.from_frame_id, "galbot/base_link");
+        assert_eq!(sub.manifest.from_frame_hash, "base-frame-hash");
+        assert_eq!(sub.manifest.to_frame_id, "galbot/head_left_rgb_optical");
+        assert_eq!(sub.manifest.to_frame_hash, "head-frame-hash");
+        assert_eq!(sub.manifest.clock_id, "galbot/monotonic");
+        assert_eq!(sub.manifest.clock_hash, "galbot-clock-hash");
+        assert_eq!(sub.manifest.writer_mode, "movable");
+        assert_eq!(sub.manifest.expected_rate_hz, 30);
+
+        let mut entries = sub.entries;
+        let f0 = entries.next().await.unwrap().expect("pose sample 0");
+        assert_eq!(f0.seq, 0);
+        assert_eq!(f0.timestamp_ns, 100_000);
+        assert_eq!(
+            f0.payload.translation,
+            Some(pose::Vec3 {
+                x: 0.1,
+                y: 0.0,
+                z: 1.2
+            })
+        );
+        assert_eq!(
+            f0.payload.orientation,
+            Some(pose::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0
+            })
+        );
+
+        let f1 = entries.next().await.unwrap().expect("pose sample 1");
+        assert_eq!(f1.seq, 1);
+        assert_eq!(f1.timestamp_ns, 133_333);
+
+        let f2 = entries.next().await.unwrap().expect("pose sample 2");
+        assert_eq!(f2.seq, 2);
+        assert_eq!(f2.timestamp_ns, 166_666);
+        assert_eq!(
+            f2.payload.translation,
+            Some(pose::Vec3 {
+                x: 0.3,
+                y: 0.0,
+                z: 1.3
+            })
+        );
+
+        let end = entries
+            .next()
+            .await
+            .unwrap()
+            .expect_err("expected EndOfStream");
+        match end {
+            StreamError::EndOfStream { reason }
+                if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
+            other => panic!("expected SourceEnded, got {other:?}"),
+        }
+
+        assert!(entries.next().await.is_none());
 
         producer.shutdown();
         consumer.shutdown();
@@ -1445,6 +1673,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "test/audio".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1527,6 +1756,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "camera".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1543,6 +1773,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "pointcloud".into(),
+                    ..Default::default()
                 },
             )
             .await
@@ -1559,6 +1790,7 @@ mod tests {
                 id_p.peer_id(),
                 StreamRequest {
                     sensor_id: "no-such-sensor".into(),
+                    ..Default::default()
                 },
             )
             .await;
@@ -1578,6 +1810,7 @@ mod tests {
         let provider: StreamProvider = decline_all_streams();
         let req = StreamRequest {
             sensor_id: "anything".into(),
+            ..Default::default()
         };
         let any_peer = libp2p_identity::Keypair::generate_ed25519()
             .public()

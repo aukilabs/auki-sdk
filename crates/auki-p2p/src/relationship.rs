@@ -126,10 +126,35 @@ pub struct RelationshipLoadedOffer {
     pub offer_id: Option<String>,
     /// Offer kind.
     pub kind: Option<String>,
+    /// Producer-reported offer status.
+    pub status: Option<String>,
+    /// Supported access modes.
+    pub access_modes: Vec<String>,
+    /// Payload type string, when known.
+    pub payload_type: Option<String>,
+    /// Registry-reference summaries.
+    pub registry_refs: Vec<RelationshipRegistryReferenceStatus>,
     /// Whether the offer is usable locally.
     pub usable: Option<bool>,
     /// Stable unusable reason code.
     pub unusable_reason: Option<String>,
+    /// Offer update timestamp.
+    pub updated_at: Option<String>,
+    /// Offer expiry timestamp.
+    pub expires_at: Option<String>,
+}
+
+/// Registry-reference status summary for a loaded offer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationshipRegistryReferenceStatus {
+    /// Registry namespace.
+    pub registry: String,
+    /// Role of the referenced entry.
+    pub role: String,
+    /// Registry-local entry id.
+    pub id: String,
+    /// `sha256:<base64url>` content hash.
+    pub hash: String,
 }
 
 /// Active or retained path status tracked for projection.
@@ -732,18 +757,60 @@ fn loaded_offer_value(peer_id: PeerId, offer: &RelationshipLoadedOffer) -> Value
     if let Some(kind) = &offer.kind {
         object.insert("kind".to_owned(), Value::String(kind.clone()));
     }
+    if let Some(status) = &offer.status {
+        object.insert("status".to_owned(), Value::String(status.clone()));
+    }
+    object.insert(
+        "access_modes".to_owned(),
+        Value::Array(
+            offer
+                .access_modes
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    if let Some(payload_type) = &offer.payload_type {
+        object.insert(
+            "payload_type".to_owned(),
+            Value::String(payload_type.clone()),
+        );
+    }
+    object.insert(
+        "registry_refs".to_owned(),
+        Value::Array(
+            offer
+                .registry_refs
+                .iter()
+                .map(registry_reference_status_value)
+                .collect(),
+        ),
+    );
     if let Some(usable) = offer.usable {
         object.insert("usable".to_owned(), Value::Bool(usable));
     }
     if let Some(reason) = &offer.unusable_reason {
         object.insert("unusable_reason".to_owned(), Value::String(reason.clone()));
     }
-    object
-        .entry("access_modes".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    object
-        .entry("registry_refs".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(updated_at) = &offer.updated_at {
+        object.insert("updated_at".to_owned(), Value::String(updated_at.clone()));
+    }
+    if let Some(expires_at) = &offer.expires_at {
+        object.insert("expires_at".to_owned(), Value::String(expires_at.clone()));
+    }
+    Value::Object(object)
+}
+
+fn registry_reference_status_value(reference: &RelationshipRegistryReferenceStatus) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "registry".to_owned(),
+        Value::String(reference.registry.clone()),
+    );
+    object.insert("role".to_owned(), Value::String(reference.role.clone()));
+    object.insert("id".to_owned(), Value::String(reference.id.clone()));
+    object.insert("hash".to_owned(), Value::String(reference.hash.clone()));
     Value::Object(object)
 }
 

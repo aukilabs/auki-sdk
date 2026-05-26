@@ -9,6 +9,7 @@ pub mod handshake_policy;
 pub mod identity;
 pub mod lifecycle;
 pub mod node;
+pub mod offer_loading;
 pub mod protocols;
 pub mod relationship;
 
@@ -30,9 +31,14 @@ pub use lifecycle::{
     read_peer_handshake, write_peer_handshake,
 };
 pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};
+pub use offer_loading::{
+    AppAllowedOffer, AppOfferPolicy, LoadedRemoteOffer, OfferCatalogClient,
+    OfferCatalogClientError, OfferLoadContext, OfferLoadError, OfferLoadReport, OfferLookupError,
+    load_remote_offers_from_frame, load_remote_offers_with_client,
+};
 pub use relationship::{
     OfferCatalogLoadState, PeerRelationship, PeerRelationshipState, RelationshipFailureRecord,
     RelationshipFailureScope, RelationshipLoadedOffer, RelationshipPathStatus,
-    RelationshipRejectedDomain, RelationshipStatusBuildError, RelationshipStatusOptions,
-    build_relationship_status_snapshot,
+    RelationshipRegistryReferenceStatus, RelationshipRejectedDomain, RelationshipStatusBuildError,
+    RelationshipStatusOptions, build_relationship_status_snapshot,
 };

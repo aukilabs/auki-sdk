@@ -36,6 +36,9 @@ Current public surface:
 - `relationship` tracks per-peer lifecycle state, accepted and rejected
   domains, bounded failure history, path summaries, and projects pure state into
   v1 status snapshots.
+- `offer_loading` fetches one catalog response through an internal client
+  boundary, enforces runtime limits, evaluates offer usability, and updates the
+  relationship without exposing catalog frames to SDK callers.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.

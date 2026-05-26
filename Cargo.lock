@@ -948,6 +948,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-p2p"
+version = "0.0.0"
+dependencies = [
+ "auki-identity",
+ "auki-protocol",
+ "futures",
+ "libp2p",
+ "libp2p-identity",
+ "libp2p-stream",
+ "multiaddr",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "auki-protocol"
 version = "0.0.0"
 dependencies = [

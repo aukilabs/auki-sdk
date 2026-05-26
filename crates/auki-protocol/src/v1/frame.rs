@@ -197,6 +197,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
     #[test]
     fn length_encoding_uses_single_byte_for_small_values() {
         assert_eq!(encode_length(0), vec![0x00]);
@@ -231,6 +235,24 @@ mod tests {
             decode_length(&[0x81, 0x00], 1024),
             Err(FrameError::NonMinimalLength)
         );
+    }
+
+    #[test]
+    fn locked_length_prefix_vectors() {
+        let cases = [
+            (0, "00"),
+            (1, "01"),
+            (127, "7f"),
+            (128, "8001"),
+            (255, "ff01"),
+            (300, "ac02"),
+            (16_384, "808001"),
+            (u64::MAX, "ffffffffffffffffff01"),
+        ];
+
+        for (value, expected_hex) in cases {
+            assert_eq!(hex(&encode_length(value)), expected_hex);
+        }
     }
 
     #[test]
@@ -311,6 +333,17 @@ mod tests {
             decode_json_frame(&frame, 1024),
             Err(FrameError::InvalidJson(_))
         ));
+    }
+
+    #[test]
+    fn json_frame_accepts_insignificant_whitespace() {
+        let body = b"{\n  \"a\": 1\n}";
+        let mut frame = encode_length(body.len() as u64);
+        frame.extend_from_slice(body);
+
+        let (decoded, consumed) = decode_json_frame(&frame, 1024).unwrap();
+        assert_eq!(decoded, json!({"a": 1}));
+        assert_eq!(consumed, frame.len());
     }
 
     #[test]

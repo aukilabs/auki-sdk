@@ -12,11 +12,14 @@ runtime, Discovery client, or app-specific lifecycle facade.
 ## Public surface
 
 - `v1::frame` — unsigned LEB128 length prefixes plus v1 JSON frame encode/decode.
+- `v1::json` — strict JSON object parsing with duplicate member rejection.
 - `v1::error` — stable v1 failure-code constants.
+- `vectors/v1_json_frames.json` — locked v1 JSON frame examples for cross-language conformance.
 
 ## Depends on
 
-Nothing in the workspace yet. Future slices may depend on:
+No workspace crates yet. The current slice uses `serde` and `serde_json`.
+Future slices may depend on:
 
 - [`auki-identity`](../auki-identity) for wallet signatures and verification;
 - [`auki-jcs`](../auki-jcs) for RFC 8785 canonical JSON;

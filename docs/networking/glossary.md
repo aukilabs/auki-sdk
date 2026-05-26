@@ -123,6 +123,10 @@ A namespace and authority boundary for domain-scoped data.
 
 The stable identifier of a domain.
 
+In v1, a domain id is derived from the domain owner wallet public key plus a
+nonce. The concrete hash input, hash function, and base64url encoding are
+defined by `RFC-0007` in `baseline.md`.
+
 ### Domain Owner Wallet
 
 The wallet that controls a domain namespace.

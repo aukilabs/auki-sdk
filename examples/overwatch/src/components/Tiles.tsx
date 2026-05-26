@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 export type StageTileSpec = {
   kind: string;
   peerId: string;
@@ -57,23 +59,79 @@ export function Tile({
         <div>
           <p className="text-xs uppercase text-slate-500">{paused ? "paused" : "streaming"}</p>
           <p className="mt-2 font-mono text-sm text-slate-200">{shortPeer(tile.peerId)}</p>
-          <pre className="mt-3 max-h-24 max-w-full overflow-hidden rounded-control bg-panel p-2 text-left text-[11px] text-slate-400">
-            {JSON.stringify(tile.latestMessage ?? { waiting: true }, null, 2)}
-          </pre>
+          <TilePayload tile={tile} />
         </div>
       </div>
     </article>
   );
 }
 
+function TilePayload({ tile }: { tile: StageTileSpec }) {
+  const cameraFrameUrl = useCameraFrameUrl(tile);
+  if (tile.kind === "camera" && cameraFrameUrl != null) {
+    return (
+      <img
+        alt={`camera frame ${tile.sensorId}`}
+        className="mt-3 max-h-64 w-full rounded-control border border-line object-contain"
+        src={cameraFrameUrl}
+      />
+    );
+  }
+
+  return (
+    <pre className="mt-3 max-h-24 max-w-full overflow-hidden rounded-control bg-panel p-2 text-left text-[11px] text-slate-400">
+      {JSON.stringify(tile.latestMessage ?? { waiting: true }, null, 2)}
+    </pre>
+  );
+}
+
+function useCameraFrameUrl(tile: StageTileSpec): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const payload = tile.kind === "camera" ? extractPayloadBytes(tile.latestMessage) : null;
+    if (payload == null) {
+      setUrl(null);
+      return undefined;
+    }
+    const nextUrl = URL.createObjectURL(new Blob([payload], { type: "image/jpeg" }));
+    setUrl(nextUrl);
+    return () => {
+      URL.revokeObjectURL(nextUrl);
+    };
+  }, [tile.kind, tile.latestMessage]);
+  return url;
+}
+
 function downloadSnapshot(tile: StageTileSpec) {
-  const blob = new Blob([JSON.stringify(tile, null, 2)], { type: "application/json" });
+  const cameraPayload = tile.kind === "camera" ? extractPayloadBytes(tile.latestMessage) : null;
+  const blob =
+    cameraPayload == null
+      ? new Blob([JSON.stringify(tile, null, 2)], { type: "application/json" })
+      : new Blob([cameraPayload], { type: "image/jpeg" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${tile.sensorId.replaceAll("/", "_")}.json`;
+  anchor.download = `${tile.sensorId.replaceAll("/", "_")}.${cameraPayload == null ? "json" : "jpg"}`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function extractPayloadBytes(message: unknown): Uint8Array | null {
+  if (typeof message !== "object" || message == null || !("entry" in message)) {
+    return null;
+  }
+  const entry = (message as { entry?: unknown }).entry;
+  if (typeof entry !== "object" || entry == null || !("payload" in entry)) {
+    return null;
+  }
+  const payload = (entry as { payload?: unknown }).payload;
+  if (payload instanceof Uint8Array) {
+    return payload;
+  }
+  if (Array.isArray(payload) && payload.every((value) => Number.isInteger(value))) {
+    return Uint8Array.from(payload);
+  }
+  return null;
 }
 
 function shortPeer(peerId: string): string {

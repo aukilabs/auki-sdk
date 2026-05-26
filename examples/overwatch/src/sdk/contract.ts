@@ -5,11 +5,19 @@ export type SensorSummary = {
   label?: string;
 };
 
-export type SensorSource = {
-  kind: "generated-bytes";
-  frames: number[][];
-  interval_ms: number;
+export type SensorStreamEntry = {
+  timestamp_ns?: number;
+  seq?: number;
+  payload: number[] | Uint8Array;
 };
+
+export type SensorSource =
+  | {
+      kind: "generated-bytes";
+      frames: number[][];
+      interval_ms: number;
+    }
+  | AsyncIterable<SensorStreamEntry>;
 
 export type StreamHandle = {
   nextMessage(): Promise<unknown>;

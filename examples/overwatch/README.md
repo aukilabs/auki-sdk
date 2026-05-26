@@ -14,6 +14,8 @@ just overwatch
 
 The app imports the generated SDK bindings directly through local `file:` package dependencies. It does not use a fake peer, app backend, or app-specific signaling service.
 
+The webcam stream is browser-owned: Overwatch captures frames with `getUserMedia`, encodes them to JPEG in a canvas, and publishes the resulting async byte stream through the generated SDK `publishSensor` binding.
+
 Run the acceptance smoke with:
 
 ```bash

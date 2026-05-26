@@ -18,15 +18,13 @@ export function SensorStrip({
   }, [peerId]);
 
   function toggle(sensor: SensorSummary) {
-    setEnabled((current) => {
-      const next = new Set(current);
-      const willEnable = !next.has(sensor.sensor_id);
-      if (willEnable) next.add(sensor.sensor_id);
-      else next.delete(sensor.sensor_id);
-      saveToggled(peerId, next);
-      onToggleSensor(sensor, willEnable);
-      return next;
-    });
+    const next = new Set(enabled);
+    const willEnable = !next.has(sensor.sensor_id);
+    if (willEnable) next.add(sensor.sensor_id);
+    else next.delete(sensor.sensor_id);
+    setEnabled(next);
+    saveToggled(peerId, next);
+    onToggleSensor(sensor, willEnable);
   }
 
   return (

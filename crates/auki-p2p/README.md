@@ -24,9 +24,10 @@ Current public surface:
 - `LocalPeerIdentity` derives deterministic libp2p peer keys from the wallet
   and maintains the wallet-signed `PeerBinding`.
 - `AukiP2pConfig` captures RFC-shaped runtime limits and policy knobs.
-- `AukiP2pNode` is a small libp2p node wrapper that can listen, dial explicit
-  peer addresses, surface connection events, and expose a raw stream control for
-  the lifecycle protocol.
+- `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
+  advertised, and relay addresses separate; can dial explicit peer addresses;
+  surfaces connection events; projects local peer status; and exposes a raw
+  stream control for protocol runtimes.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
   exchange the first peer-handshake frame using the configured frame limit,
   with optional strict helpers for duplicate lifecycle streams and extra

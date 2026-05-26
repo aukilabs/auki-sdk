@@ -1,12 +1,17 @@
 //! Minimal libp2p node wrapper for the RFC-first runtime.
 
 use crate::{AukiP2pConfig, ConfigError, DialPolicyError, LocalPeerIdentity};
+use auki_protocol::v1::{
+    base64url,
+    status::{LocalPeerStatus, StatusError},
+};
 use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, identify, noise, ping,
     swarm::{DialError, NetworkBehaviour, SwarmEvent, dial_opts::DialOpts},
     tcp, yamux,
 };
+use serde_json::{Map, Value};
 use std::{fmt, time::Duration};
 
 /// Identify protocol id used by the new RFC-first runtime.
@@ -31,8 +36,13 @@ pub struct Behaviour {
 pub struct AukiP2pNodeConfig {
     /// RFC-shaped policy and limit configuration.
     pub p2p: AukiP2pConfig,
-    /// Multiaddrs to bind during construction.
+    /// Multiaddrs to bind locally during construction. These are not
+    /// automatically advertised to remote peers.
     pub listen_addresses: Vec<Multiaddr>,
+    /// Operator-supplied dialable addresses to advertise to intended peers.
+    pub advertised_addresses: Vec<Multiaddr>,
+    /// Relay-mediated connectivity addresses. These are operational hints, not authority.
+    pub relay_addresses: Vec<Multiaddr>,
     /// Identify agent version advertised to remote libp2p peers.
     pub agent_version: String,
 }
@@ -74,6 +84,8 @@ pub enum AukiP2pEvent {
 pub enum AukiP2pNodeError {
     /// P2P config is invalid.
     Config(ConfigError),
+    /// Status projection failed.
+    Status(StatusError),
     /// Transport stack failed to assemble.
     Transport {
         /// Transport stage that failed.
@@ -103,6 +115,7 @@ pub enum AukiP2pNodeError {
 pub struct AukiP2pNode {
     identity: LocalPeerIdentity,
     config: AukiP2pNodeConfig,
+    observed_listen_addresses: Vec<Multiaddr>,
     swarm: Swarm<Behaviour>,
 }
 
@@ -118,6 +131,8 @@ impl AukiP2pNodeConfig {
         Self {
             p2p: AukiP2pConfig::development(),
             listen_addresses: Vec::new(),
+            advertised_addresses: Vec::new(),
+            relay_addresses: Vec::new(),
             agent_version: default_agent_version(),
         }
     }
@@ -131,6 +146,8 @@ impl AukiP2pNodeConfig {
                     .parse()
                     .expect("static loopback listen multiaddr is valid"),
             ],
+            advertised_addresses: Vec::new(),
+            relay_addresses: Vec::new(),
             agent_version: default_agent_version(),
         }
     }
@@ -186,6 +203,7 @@ impl AukiP2pNode {
         Ok(Self {
             identity,
             config,
+            observed_listen_addresses: Vec::new(),
             swarm,
         })
     }
@@ -205,6 +223,72 @@ impl AukiP2pNode {
         &self.config
     }
 
+    /// Configured local bind addresses.
+    pub fn configured_listen_addresses(&self) -> &[Multiaddr] {
+        &self.config.listen_addresses
+    }
+
+    /// Listen addresses observed from libp2p after binding.
+    pub fn observed_listen_addresses(&self) -> &[Multiaddr] {
+        &self.observed_listen_addresses
+    }
+
+    /// Operator-supplied advertised addresses.
+    pub fn advertised_addresses(&self) -> &[Multiaddr] {
+        &self.config.advertised_addresses
+    }
+
+    /// Relay-mediated connectivity addresses.
+    pub fn relay_addresses(&self) -> &[Multiaddr] {
+        &self.config.relay_addresses
+    }
+
+    /// Add one operator-supplied advertised address.
+    pub fn add_advertised_address(&mut self, address: Multiaddr) {
+        push_unique(&mut self.config.advertised_addresses, address);
+    }
+
+    /// Add one relay-mediated connectivity address.
+    pub fn add_relay_address(&mut self, address: Multiaddr) {
+        push_unique(&mut self.config.relay_addresses, address);
+    }
+
+    /// Project local peer identity and address state into RFC status.
+    pub fn local_peer_status(&self) -> Result<LocalPeerStatus, AukiP2pNodeError> {
+        let mut object = Map::new();
+        object.insert(
+            "peer_id".to_owned(),
+            Value::String(self.peer_id().to_string()),
+        );
+        object.insert(
+            "wallet_public_key".to_owned(),
+            Value::String(base64url::encode(&self.identity.wallet_public_key().0)),
+        );
+        if let Ok(issued_at) = self.identity.peer_binding().issued_at() {
+            object.insert(
+                "peer_binding_issued_at".to_owned(),
+                Value::String(issued_at.to_owned()),
+            );
+        }
+        object.insert(
+            "authorization_mode".to_owned(),
+            Value::String(self.config.p2p.peer_admission.mode().as_str().to_owned()),
+        );
+
+        if !self.config.p2p.status_privacy.redact_addresses {
+            object.insert(
+                "listen_addresses".to_owned(),
+                multiaddr_array(self.status_listen_addresses()),
+            );
+            object.insert(
+                "advertised_addresses".to_owned(),
+                multiaddr_array(&self.config.advertised_addresses),
+            );
+        }
+
+        LocalPeerStatus::from_value(Value::Object(object)).map_err(AukiP2pNodeError::Status)
+    }
+
     /// Create a cloneable raw-stream control handle for protocol runtimes.
     pub fn stream_control(&self) -> libp2p_stream::Control {
         self.swarm.behaviour().stream.new_control()
@@ -215,9 +299,10 @@ impl AukiP2pNode {
         self.swarm
             .listen_on(address.clone())
             .map_err(|source| AukiP2pNodeError::Listen {
-                address,
+                address: address.clone(),
                 source: source.to_string(),
             })?;
+        push_unique(&mut self.config.listen_addresses, address);
         Ok(())
     }
 
@@ -246,6 +331,7 @@ impl AukiP2pNode {
         while let Some(event) = self.swarm.next().await {
             match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
+                    push_unique(&mut self.observed_listen_addresses, address.clone());
                     return Some(AukiP2pEvent::Listening { address });
                 }
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -277,6 +363,7 @@ impl fmt::Display for AukiP2pNodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(error) => write!(f, "invalid p2p config: {error}"),
+            Self::Status(error) => write!(f, "local peer status projection failed: {error}"),
             Self::Transport { stage, source } => {
                 write!(f, "libp2p transport setup failed at {stage}: {source}")
             }
@@ -293,6 +380,31 @@ impl std::error::Error for AukiP2pNodeError {}
 
 fn default_agent_version() -> String {
     format!("auki-p2p/{}", env!("CARGO_PKG_VERSION"))
+}
+
+fn push_unique(addresses: &mut Vec<Multiaddr>, address: Multiaddr) {
+    if !addresses.contains(&address) {
+        addresses.push(address);
+    }
+}
+
+fn multiaddr_array(addresses: &[Multiaddr]) -> Value {
+    Value::Array(
+        addresses
+            .iter()
+            .map(|address| Value::String(address.to_string()))
+            .collect(),
+    )
+}
+
+impl AukiP2pNode {
+    fn status_listen_addresses(&self) -> &[Multiaddr] {
+        if self.observed_listen_addresses.is_empty() {
+            &self.config.listen_addresses
+        } else {
+            &self.observed_listen_addresses
+        }
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +472,59 @@ mod tests {
         })
         .await
         .expect("both peers should observe an authenticated connection");
+    }
+
+    #[test]
+    fn node_config_keeps_address_roles_separate() {
+        let advertised: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().unwrap();
+        let relay: Multiaddr = "/ip4/198.51.100.10/tcp/4001/p2p-circuit".parse().unwrap();
+        let mut config = AukiP2pNodeConfig::dial_only_development();
+        config.advertised_addresses.push(advertised.clone());
+        config.relay_addresses.push(relay.clone());
+        let node = AukiP2pNode::new(identity(25), config).unwrap();
+
+        assert!(node.configured_listen_addresses().is_empty());
+        assert!(node.observed_listen_addresses().is_empty());
+        assert_eq!(node.advertised_addresses(), &[advertised]);
+        assert_eq!(node.relay_addresses(), &[relay]);
+
+        let status = node.local_peer_status().expect("local status");
+        assert!(status.listen_addresses.is_empty());
+        assert_eq!(
+            status.advertised_addresses,
+            vec!["/ip4/203.0.113.10/tcp/4001"]
+        );
+    }
+
+    #[tokio::test]
+    async fn loopback_listener_is_not_auto_advertised() {
+        let mut listener =
+            AukiP2pNode::new(identity(26), AukiP2pNodeConfig::loopback_tcp_development()).unwrap();
+
+        assert!(listener.advertised_addresses().is_empty());
+        let address = wait_for_listen_addr(&mut listener).await;
+
+        assert_eq!(listener.configured_listen_addresses().len(), 1);
+        assert_eq!(listener.observed_listen_addresses(), &[address.clone()]);
+        assert!(listener.advertised_addresses().is_empty());
+
+        let status = listener.local_peer_status().expect("local status");
+        assert_eq!(status.listen_addresses, vec![address.to_string()]);
+        assert!(status.advertised_addresses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_peer_status_redacts_addresses_under_privacy_policy() {
+        let mut config = AukiP2pNodeConfig::dial_only_development();
+        config.listen_addresses = vec!["/ip4/0.0.0.0/tcp/0".parse().unwrap()];
+        config.advertised_addresses = vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()];
+        config.p2p.status_privacy = crate::StatusPrivacyConfig::production_recommended();
+        let node = AukiP2pNode::new(identity(27), config).unwrap();
+
+        let status = node.local_peer_status().expect("local status");
+
+        assert!(status.listen_addresses.is_empty());
+        assert!(status.advertised_addresses.is_empty());
     }
 
     #[tokio::test]

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { PeerId } from "./contract.js";
 import { createJsLibp2pBrowserPeer, type BrowserPeerTransport, type ProtocolStream } from "./jsLibp2pPeer.js";
+import {
+  INFO_PROTOCOL,
+  InfoRequest,
+  InfoResponse,
+  SENSORS_PROTOCOL,
+  SensorsRequest,
+  SensorsResponse,
+  readFrame,
+  writeFrame,
+} from "./protocol/control.js";
 
 describe("js-libp2p browser peer control plane", () => {
   it("serves and fetches remote info and sensors over native Auki protocols", async () => {
@@ -204,6 +214,110 @@ describe("js-libp2p browser peer control plane", () => {
       value: undefined,
     });
     expect(network.openedProtocols.filter((protocol) => protocol === "/auki/stream/0.1.0")).toHaveLength(2);
+  });
+
+  it("rejects local sensors with unsupported kinds", async () => {
+    const network = new MemoryNetwork();
+    const transport = network.createTransport("peer-a", ["/memory/peer-a"]);
+    const peer = await createJsLibp2pBrowserPeer({
+      peerId: "peer-a",
+      transport,
+      resolveJoinTarget: async () => ({
+        domainName: "demo",
+        managerPeerId: "manager-peer",
+        managerMultiaddrs: ["/memory/manager"],
+      }),
+    });
+
+    await expect(
+      peer.declareLocalSensors([
+        {
+          id: "legacy-head",
+          kind: "rgb_camera",
+          label: "Legacy head",
+          publishable: true,
+          subscribable: true,
+        },
+      ] as never),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "sensor_publish_failed",
+        message: expect.stringContaining('unsupported sensor kind "rgb_camera"'),
+      },
+    });
+  });
+
+  it("drops remote sensor catalog entries with unsupported kinds", async () => {
+    const network = new MemoryNetwork();
+    const transportA = network.createTransport("peer-a", ["/memory/peer-a"]);
+    const transportB = network.createTransport("peer-b", ["/memory/peer-b"]);
+    network.setJoinMembership({
+      managerPeerId: "manager-peer",
+      membershipJson: JSON.stringify({
+        cluster_name: "demo",
+        peers: [
+          { peer_id: "peer-a", multiaddrs: ["/memory/peer-a"] },
+          { peer_id: "peer-b", multiaddrs: ["/memory/peer-b"] },
+        ],
+      }),
+    });
+
+    await transportB.handleProtocol(INFO_PROTOCOL, async (stream) => {
+      await readFrame(stream, InfoRequest);
+      await writeFrame(stream, InfoResponse, {
+        participantInfoJson: JSON.stringify({
+          app: "park",
+          name: "Native B",
+          peer_id: "peer-b",
+        }),
+      });
+      await stream.close();
+    });
+    await transportB.handleProtocol(SENSORS_PROTOCOL, async (stream) => {
+      await readFrame(stream, SensorsRequest);
+      await writeFrame(stream, SensorsResponse, {
+        sensors: [
+          { sensorId: "head", sensorHash: "camera-hash", kind: "camera" },
+          { sensorId: "legacy-head", sensorHash: "legacy-camera-hash", kind: "rgb_camera" },
+        ],
+      });
+      await stream.close();
+    });
+
+    const peerA = await createJsLibp2pBrowserPeer({
+      peerId: "peer-a",
+      transport: transportA,
+      resolveJoinTarget: async () => ({
+        domainName: "demo",
+        managerPeerId: "manager-peer",
+        managerMultiaddrs: ["/memory/manager"],
+      }),
+    });
+    const snapshots: unknown[] = [];
+    peerA.observeParticipants((snapshot) => snapshots.push(snapshot));
+
+    await expect(peerA.joinDomain("inline-manager://ignored", "demo")).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    });
+
+    expect(snapshots.at(-1)).toMatchObject({
+      participants: expect.arrayContaining([
+        expect.objectContaining({
+          peerId: "peer-b",
+          sensors: [
+            {
+              id: "head",
+              kind: "camera",
+              label: "head",
+              publishable: true,
+              subscribable: true,
+            },
+          ],
+        }),
+      ]),
+    });
   });
 });
 

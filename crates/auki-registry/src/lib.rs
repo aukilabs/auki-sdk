@@ -127,7 +127,7 @@ impl PointFieldDataType {
 ///
 /// Named `Audio` (signal-type) rather than `Microphone` (instrument) for
 /// consistency with the other sensor bodies (`PointCloud`, `JointEncoders`)
-/// and the `SensorEntry.kind` open-string contract in
+/// and the closed `SensorEntry.kind` contract in
 /// [`auki-network::sensors_protocol`](../../../auki-network/src/sensors_protocol.rs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Audio {

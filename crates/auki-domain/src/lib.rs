@@ -42,7 +42,7 @@ pub use cluster_manager::{
     DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
     FetchResourcesCatalogError, FetchSensorsCatalogError, InboundDiagnosticMessage,
     JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
-    SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
+    SensorEntry, SensorKind, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]

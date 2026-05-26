@@ -51,6 +51,42 @@ use thiserror::Error;
 
 pub use auki_datatypes::sensors::{SensorEntry, SensorsRequest, SensorsResponse};
 
+/// Closed set of sensor kinds the SDK accepts in `/auki/sensors/0.0.1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensorKind {
+    /// RGB or color camera frames.
+    Camera,
+    /// Point-cloud frames.
+    PointCloud,
+    /// Joint-angle encoder frames.
+    JointEncoders,
+    /// Audio frames.
+    Audio,
+}
+
+impl SensorKind {
+    /// Canonical wire/catalog spelling for this sensor kind.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Camera => "camera",
+            Self::PointCloud => "point_cloud",
+            Self::JointEncoders => "joint_encoders",
+            Self::Audio => "audio",
+        }
+    }
+
+    /// Parse a canonical SDK sensor kind.
+    pub fn parse(kind: &str) -> Option<Self> {
+        match kind {
+            "camera" => Some(Self::Camera),
+            "point_cloud" => Some(Self::PointCloud),
+            "joint_encoders" => Some(Self::JointEncoders),
+            "audio" => Some(Self::Audio),
+            _ => None,
+        }
+    }
+}
+
 /// libp2p protocol id for "what sensors are you currently
 /// publishing?". Stable; bump version only on an incompatible
 /// wire-shape change.
@@ -213,6 +249,21 @@ mod tests {
     fn detail_request_encodes_requested_flags() {
         let bytes = SensorsRequest::with_frame_entries().encode_to_vec();
         assert_eq!(bytes, vec![0x08, 0x01, 0x10, 0x01]);
+    }
+
+    #[test]
+    fn sensor_kinds_are_closed_and_stable() {
+        assert_eq!(SensorKind::Camera.as_str(), "camera");
+        assert_eq!(SensorKind::PointCloud.as_str(), "point_cloud");
+        assert_eq!(SensorKind::JointEncoders.as_str(), "joint_encoders");
+        assert_eq!(SensorKind::Audio.as_str(), "audio");
+
+        assert!(SensorKind::parse("camera").is_some());
+        assert!(SensorKind::parse("point_cloud").is_some());
+        assert!(SensorKind::parse("joint_encoders").is_some());
+        assert!(SensorKind::parse("audio").is_some());
+        assert!(SensorKind::parse("rgb_camera").is_none());
+        assert!(SensorKind::parse("custom_sensor").is_none());
     }
 
     #[tokio::test]

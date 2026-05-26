@@ -22,3 +22,5 @@ pub mod json;
 pub mod message;
 /// Offer-catalog protocol helpers.
 pub mod offer;
+/// Subscribe protocol helpers.
+pub mod subscribe;

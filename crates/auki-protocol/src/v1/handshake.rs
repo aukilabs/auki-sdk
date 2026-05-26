@@ -2,8 +2,9 @@
 
 use super::{
     authority::{
-        AuthorityChain, AuthorityChainError, AuthorityChainInput, DeclaredDomain,
-        PeerAuthorization, validate_authority_chain,
+        AuthorityChain, AuthorityChainError, AuthorityChainInput, AuthorityChainPolicyInput,
+        DeclaredDomain, PeerAuthorization, PeerAuthorizationPolicy, validate_authority_chain,
+        validate_authority_chain_with_authorization_policy,
     },
     error,
     identity::PeerBinding,
@@ -232,6 +233,22 @@ impl PeerHandshake {
             peer_binding: Some(&self.peer_binding),
             authenticated_peer_id,
             peer_authorization,
+            declared_domains: &self.declared_domains,
+            now,
+        })
+    }
+
+    /// Validate this handshake's authority chain and evaluate peer authorization from policy.
+    pub fn validate_authority_with_authorization_policy(
+        &self,
+        authenticated_peer_id: &PeerId,
+        peer_authorization_policy: PeerAuthorizationPolicy<'_>,
+        now: &str,
+    ) -> Result<AuthorityChain, AuthorityChainError> {
+        validate_authority_chain_with_authorization_policy(AuthorityChainPolicyInput {
+            peer_binding: Some(&self.peer_binding),
+            authenticated_peer_id,
+            peer_authorization_policy,
             declared_domains: &self.declared_domains,
             now,
         })
@@ -467,6 +484,15 @@ mod tests {
 
         assert_eq!(authority.accepted_served_domains.len(), 1);
         assert_eq!(authority.rejected_declared_domains, vec![]);
+
+        let policy_authority = parsed
+            .validate_authority_with_authorization_policy(
+                &peer_id(),
+                PeerAuthorizationPolicy::all(),
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(policy_authority, authority);
     }
 
     #[test]

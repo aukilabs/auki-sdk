@@ -1,5 +1,5 @@
 use auki_protocol::v1::{
-    authority::{PeerAuthorization, ServedDomainAuthority},
+    authority::{PeerAuthorization, PeerAuthorizationPolicy, ServedDomainAuthority},
     error,
     handshake::{CLUSTER_LIFECYCLE_V1, HandshakeError, PEER_HANDSHAKE_TYPE, PeerHandshake},
     offer::{OFFER_CATALOG_PATH_TYPE, OFFER_CATALOG_PROTOCOL_ID, OFFER_CATALOG_VERSION},
@@ -70,8 +70,12 @@ fn positive_handshake_vectors_match_authority_validation() {
     let authority = handshake
         .validate_authority(&peer_id, PeerAuthorization::Authorized, now)
         .expect("valid authority chain");
+    let policy_authority = handshake
+        .validate_authority_with_authorization_policy(&peer_id, PeerAuthorizationPolicy::all(), now)
+        .expect("valid authority chain from policy");
 
     assert_eq!(authority.peer.peer_id, peer_id);
+    assert_eq!(policy_authority, authority);
     assert_eq!(authority.accepted_served_domains.len(), 1);
     assert_eq!(authority.rejected_declared_domains, vec![]);
 

@@ -55,6 +55,20 @@
       },
       "request_max_message_bytes": 32
     },
+    "data_message_frame_body_too_large": {
+      "actual_message_body_len": 1024,
+      "expected": "message.payload_too_large",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "camera-main",
+        "payload": {
+          "bytes": "AQID",
+          "type": "auki.frame"
+        },
+        "type": "auki.spatial_message.v1"
+      },
+      "request_max_message_bytes": 512
+    },
     "data_message_payload_type_mismatch": {
       "expected": "message.invalid_payload",
       "object": {

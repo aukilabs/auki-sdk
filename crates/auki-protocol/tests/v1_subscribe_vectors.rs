@@ -264,6 +264,28 @@ fn negative_subscribe_data_vectors_fail_as_locked() {
         .validate_data_message(&too_large, Some(max))
         .unwrap_err();
     assert_eq!(size_error.failure_code(), error::MESSAGE_PAYLOAD_TOO_LARGE);
+
+    assert_eq!(
+        expected_negative(&fixture, "data_message_frame_body_too_large"),
+        error::MESSAGE_PAYLOAD_TOO_LARGE
+    );
+    let frame_body_too_large = SpatialMessage::from_value(
+        negative_object(&fixture, "data_message_frame_body_too_large").clone(),
+    )
+    .unwrap();
+    let max = fixture["negative"]["data_message_frame_body_too_large"]["request_max_message_bytes"]
+        .as_u64()
+        .unwrap();
+    let actual = fixture["negative"]["data_message_frame_body_too_large"]["actual_message_body_len"]
+        .as_u64()
+        .unwrap() as usize;
+    let frame_body_size_error = accept
+        .validate_data_message_with_body_len(&frame_body_too_large, actual, Some(max))
+        .unwrap_err();
+    assert_eq!(
+        frame_body_size_error.failure_code(),
+        error::MESSAGE_PAYLOAD_TOO_LARGE
+    );
 }
 
 #[test]

@@ -579,11 +579,11 @@ impl std::error::Error for SubscribeEndError {}
 pub enum SubscribeDataError {
     /// Spatial message envelope was malformed or mismatched.
     InvalidMessage(SpatialMessageError),
-    /// Serialized spatial message envelope bytes exceeded a request limit.
+    /// Spatial-message JSON body bytes exceeded a request limit.
     MessageTooLarge {
-        /// Actual serialized spatial message byte count.
+        /// Actual spatial-message JSON body byte count.
         actual: usize,
-        /// Maximum allowed serialized spatial message byte count.
+        /// Maximum allowed spatial-message JSON body byte count.
         max: u64,
     },
 }
@@ -932,9 +932,28 @@ impl SubscribeAccept {
     }
 
     /// Validate a subsequent Subscribe data message against this accepted stream.
+    ///
+    /// This helper reserializes the parsed message to measure its compact JSON
+    /// size. Runtime stream receivers should prefer
+    /// [`Self::validate_data_message_with_body_len`] so they can enforce the
+    /// exact received frame body byte length.
     pub fn validate_data_message(
         &self,
         message: &SpatialMessage,
+        max_message_bytes: Option<u64>,
+    ) -> Result<(), SubscribeDataError> {
+        self.validate_data_message_with_body_len(
+            message,
+            serialized_message_len(message),
+            max_message_bytes,
+        )
+    }
+
+    /// Validate a Subscribe data message using the actual received frame body length.
+    pub fn validate_data_message_with_body_len(
+        &self,
+        message: &SpatialMessage,
+        actual_body_len: usize,
         max_message_bytes: Option<u64>,
     ) -> Result<(), SubscribeDataError> {
         message
@@ -942,9 +961,11 @@ impl SubscribeAccept {
             .map_err(SubscribeDataError::InvalidMessage)?;
 
         if let Some(max) = max_message_bytes {
-            let actual = serialized_message_len(message);
-            if actual as u64 > max {
-                return Err(SubscribeDataError::MessageTooLarge { actual, max });
+            if actual_body_len as u64 > max {
+                return Err(SubscribeDataError::MessageTooLarge {
+                    actual: actual_body_len,
+                    max,
+                });
             }
         }
 
@@ -1793,6 +1814,21 @@ mod tests {
 
         let too_large = accept.validate_data_message(&message, Some(1)).unwrap_err();
         assert_eq!(too_large.failure_code(), error::MESSAGE_PAYLOAD_TOO_LARGE);
+
+        let raw_body_too_large = accept
+            .validate_data_message_with_body_len(&message, 512, Some(128))
+            .unwrap_err();
+        assert_eq!(
+            raw_body_too_large,
+            SubscribeDataError::MessageTooLarge {
+                actual: 512,
+                max: 128,
+            }
+        );
+        assert_eq!(
+            raw_body_too_large.failure_code(),
+            error::MESSAGE_PAYLOAD_TOO_LARGE
+        );
     }
 
     #[test]

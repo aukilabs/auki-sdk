@@ -166,6 +166,11 @@ pub enum GetResponseError {
         /// Stable error code from the failed response.
         code: String,
     },
+    /// Selected response payload type was not accepted by the request.
+    PayloadTypeNotAccepted {
+        /// Actual selected payload type.
+        payload_type: String,
+    },
     /// Message raw payload bytes exceeded a request limit.
     PayloadTooLarge {
         /// Actual raw payload byte count.
@@ -200,6 +205,12 @@ impl fmt::Display for GetResponseError {
             Self::InvalidMessage(error) => write!(f, "invalid get response message: {error}"),
             Self::InvalidError(error) => write!(f, "invalid get response error object: {error}"),
             Self::ErrorResponse { code } => write!(f, "get response failed with {code}"),
+            Self::PayloadTypeNotAccepted { payload_type } => {
+                write!(
+                    f,
+                    "get response payload type was not requested: {payload_type}"
+                )
+            }
             Self::PayloadTooLarge { actual, max } => {
                 write!(f, "get response payload too large: {actual} > {max}")
             }
@@ -411,6 +422,12 @@ impl GetResponse {
                 });
             }
         };
+
+        if !request.accepts_payload_type(selected_payload_type) {
+            return Err(GetResponseError::PayloadTypeNotAccepted {
+                payload_type: selected_payload_type.to_owned(),
+            });
+        }
 
         message
             .validate_for_offer(&request.domain_id, &request.offer_id, selected_payload_type)
@@ -694,6 +711,28 @@ mod tests {
         assert_eq!(
             payload_mismatch.failure_code(),
             error::MESSAGE_INVALID_PAYLOAD
+        );
+
+        let request = GetRequest::create(
+            DOMAIN_ID,
+            "camera-main",
+            None,
+            vec!["other.payload".to_owned()],
+            Some(8),
+        )
+        .unwrap();
+        let payload_not_accepted = response
+            .validate_success_for_request(&request, "auki.frame")
+            .unwrap_err();
+        assert_eq!(
+            payload_not_accepted,
+            GetResponseError::PayloadTypeNotAccepted {
+                payload_type: "auki.frame".to_owned(),
+            }
+        );
+        assert_eq!(
+            payload_not_accepted.failure_code(),
+            error::MESSAGE_INVALID_ENVELOPE
         );
 
         let tiny_request =

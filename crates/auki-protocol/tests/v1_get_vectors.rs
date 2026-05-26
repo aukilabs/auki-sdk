@@ -158,6 +158,33 @@ fn negative_get_response_vectors_fail_as_locked() {
     assert_eq!(payload_error.failure_code(), error::MESSAGE_INVALID_PAYLOAD);
 
     assert_eq!(
+        expected_negative(&fixture, "response_payload_type_not_accepted"),
+        error::MESSAGE_INVALID_ENVELOPE
+    );
+    let payload_type_not_accepted = GetResponse::from_value(
+        negative_object(&fixture, "response_payload_type_not_accepted").clone(),
+    )
+    .unwrap();
+    let payload_type_not_accepted_error = payload_type_not_accepted
+        .validate_success_for_request(
+            &request,
+            fixture["negative"]["response_payload_type_not_accepted"]["selected_payload_type"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        payload_type_not_accepted_error,
+        GetResponseError::PayloadTypeNotAccepted {
+            payload_type: "other.payload".to_owned(),
+        }
+    );
+    assert_eq!(
+        payload_type_not_accepted_error.failure_code(),
+        error::MESSAGE_INVALID_ENVELOPE
+    );
+
+    assert_eq!(
         expected_negative(&fixture, "response_payload_too_large"),
         error::MESSAGE_PAYLOAD_TOO_LARGE
     );

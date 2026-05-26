@@ -73,6 +73,22 @@
       },
       "request_max_payload_bytes": 2
     },
+    "response_payload_type_not_accepted": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "camera-main",
+          "payload": {
+            "bytes": "AQID",
+            "type": "other.payload"
+          },
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      },
+      "selected_payload_type": "other.payload"
+    },
     "response_payload_type_mismatch": {
       "expected": "message.invalid_payload",
       "object": {

@@ -1,6 +1,9 @@
 //! Peer identity authority objects for v1.
 
-use super::base64url::{self, Base64UrlError};
+use super::{
+    base64url::{self, Base64UrlError},
+    error,
+};
 use auki_identity::{PublicKey as WalletPublicKey, Signature, VerifyError, Wallet, verify};
 use libp2p_identity::PeerId;
 use serde_json::{Map, Value};
@@ -36,6 +39,33 @@ pub struct VerifiedPeerBinding {
     pub issued_at: String,
     /// Optional operator/application label.
     pub label: Option<String>,
+}
+
+/// Local freshness policy for verified peer bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerBindingFreshnessPolicy {
+    /// Maximum accepted age from `issued_at`, in milliseconds.
+    pub max_age_ms: Option<u64>,
+    /// Maximum accepted future clock skew from `issued_at`, in milliseconds.
+    pub future_tolerance_ms: Option<u64>,
+}
+
+impl PeerBindingFreshnessPolicy {
+    /// Create a policy that does not enforce freshness.
+    pub fn disabled() -> Self {
+        Self {
+            max_age_ms: None,
+            future_tolerance_ms: None,
+        }
+    }
+
+    /// Create the production-profile recommended policy.
+    pub fn production_recommended() -> Self {
+        Self {
+            max_age_ms: Some(60 * 60 * 1000),
+            future_tolerance_ms: Some(5 * 60 * 1000),
+        }
+    }
 }
 
 /// Errors produced while creating, parsing, or verifying v1 peer bindings.
@@ -95,6 +125,56 @@ pub enum PeerBindingError {
     },
 }
 
+/// Errors produced while applying local freshness policy to a verified binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerBindingFreshnessError {
+    /// Verified binding carried an invalid `issued_at` timestamp.
+    InvalidIssuedAtTimestamp {
+        /// Actual `issued_at` value.
+        issued_at: String,
+    },
+    /// Local `now` argument was not an RFC3339 UTC string with `Z` suffix.
+    InvalidNowTimestamp {
+        /// Actual `now` value.
+        now: String,
+    },
+    /// Binding was older than the local maximum age.
+    BindingTooOld {
+        /// Binding `issued_at` value.
+        issued_at: String,
+        /// Local verification time.
+        now: String,
+        /// Actual binding age in milliseconds.
+        age_ms: u64,
+        /// Maximum accepted age in milliseconds.
+        max_age_ms: u64,
+    },
+    /// Binding was issued too far in the future under local clock-skew policy.
+    BindingFromFuture {
+        /// Binding `issued_at` value.
+        issued_at: String,
+        /// Local verification time.
+        now: String,
+        /// Actual future skew in milliseconds.
+        future_ms: u64,
+        /// Maximum accepted future skew in milliseconds.
+        future_tolerance_ms: u64,
+    },
+}
+
+impl PeerBindingFreshnessError {
+    /// Stable RFC failure code for this freshness error.
+    pub fn failure_code(&self) -> &'static str {
+        match self {
+            Self::BindingTooOld { .. } => error::IDENTITY_BINDING_TOO_OLD,
+            Self::BindingFromFuture { .. } => error::IDENTITY_BINDING_FROM_FUTURE,
+            Self::InvalidIssuedAtTimestamp { .. } | Self::InvalidNowTimestamp { .. } => {
+                error::IDENTITY_INVALID_PEER_BINDING
+            }
+        }
+    }
+}
+
 impl fmt::Display for PeerBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -133,6 +213,88 @@ impl fmt::Display for PeerBindingError {
 }
 
 impl std::error::Error for PeerBindingError {}
+
+impl fmt::Display for PeerBindingFreshnessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidIssuedAtTimestamp { issued_at } => {
+                write!(f, "invalid peer binding issued_at timestamp {issued_at}")
+            }
+            Self::InvalidNowTimestamp { now } => {
+                write!(f, "invalid peer binding freshness now timestamp {now}")
+            }
+            Self::BindingTooOld {
+                issued_at,
+                now,
+                age_ms,
+                max_age_ms,
+            } => write!(
+                f,
+                "peer binding issued at {issued_at} is too old at {now}: {age_ms}ms > {max_age_ms}ms"
+            ),
+            Self::BindingFromFuture {
+                issued_at,
+                now,
+                future_ms,
+                future_tolerance_ms,
+            } => write!(
+                f,
+                "peer binding issued at {issued_at} is too far in the future at {now}: {future_ms}ms > {future_tolerance_ms}ms"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PeerBindingFreshnessError {}
+
+impl VerifiedPeerBinding {
+    /// Apply local freshness policy to this already verified binding.
+    pub fn validate_freshness(
+        &self,
+        now: &str,
+        policy: PeerBindingFreshnessPolicy,
+    ) -> Result<(), PeerBindingFreshnessError> {
+        let issued_at_ms = parse_rfc3339_z_timestamp_millis(&self.issued_at).ok_or_else(|| {
+            PeerBindingFreshnessError::InvalidIssuedAtTimestamp {
+                issued_at: self.issued_at.clone(),
+            }
+        })?;
+        let now_ms = parse_rfc3339_z_timestamp_millis(now).ok_or_else(|| {
+            PeerBindingFreshnessError::InvalidNowTimestamp {
+                now: now.to_owned(),
+            }
+        })?;
+
+        if issued_at_ms > now_ms {
+            let future_ms = saturating_u64(issued_at_ms - now_ms);
+            if let Some(future_tolerance_ms) = policy.future_tolerance_ms
+                && future_ms > future_tolerance_ms
+            {
+                return Err(PeerBindingFreshnessError::BindingFromFuture {
+                    issued_at: self.issued_at.clone(),
+                    now: now.to_owned(),
+                    future_ms,
+                    future_tolerance_ms,
+                });
+            }
+            return Ok(());
+        }
+
+        let age_ms = saturating_u64(now_ms - issued_at_ms);
+        if let Some(max_age_ms) = policy.max_age_ms
+            && age_ms > max_age_ms
+        {
+            return Err(PeerBindingFreshnessError::BindingTooOld {
+                issued_at: self.issued_at.clone(),
+                now: now.to_owned(),
+                age_ms,
+                max_age_ms,
+            });
+        }
+
+        Ok(())
+    }
+}
 
 impl PeerBinding {
     /// Create and sign a v1 peer binding.
@@ -379,6 +541,82 @@ fn is_rfc3339_z_timestamp(value: &str) -> bool {
         return false;
     };
     hour <= 23 && minute <= 59 && second <= 60
+}
+
+fn parse_rfc3339_z_timestamp_millis(value: &str) -> Option<i128> {
+    let value = value.strip_suffix('Z')?;
+    let (date, time) = value.split_once('T')?;
+    let (year, month, day) = parse_date(date)?;
+    if year > 9999 || month == 0 || month > 12 {
+        return None;
+    }
+    if day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+
+    let (hour, minute, second, fraction_ms) = parse_time_millis(time)?;
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    let days = days_from_civil(year, month, day);
+    let seconds =
+        days * 86_400 + i128::from(hour) * 3_600 + i128::from(minute) * 60 + i128::from(second);
+    Some(seconds * 1000 + i128::from(fraction_ms))
+}
+
+fn parse_time_millis(value: &str) -> Option<(u32, u32, u32, u32)> {
+    let (base, fraction) = match value.split_once('.') {
+        Some((base, fraction)) => {
+            if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            (base, Some(fraction))
+        }
+        None => (value, None),
+    };
+
+    if base.len() != 8 {
+        return None;
+    }
+    if base.as_bytes().get(2) != Some(&b':') || base.as_bytes().get(5) != Some(&b':') {
+        return None;
+    }
+    let hour = parse_fixed_digits(&base[0..2])?;
+    let minute = parse_fixed_digits(&base[3..5])?;
+    let second = parse_fixed_digits(&base[6..8])?;
+    Some((
+        hour,
+        minute,
+        second,
+        fraction_millis(fraction.unwrap_or("")),
+    ))
+}
+
+fn fraction_millis(fraction: &str) -> u32 {
+    let mut millis = 0;
+    for index in 0..3 {
+        millis *= 10;
+        if let Some(byte) = fraction.as_bytes().get(index) {
+            millis += u32::from(byte - b'0');
+        }
+    }
+    millis
+}
+
+fn days_from_civil(year: u32, month: u32, day: u32) -> i128 {
+    let year = i128::from(year) - if month <= 2 { 1 } else { 0 };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = i128::from(month);
+    let day = i128::from(day);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn saturating_u64(value: i128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn parse_date(value: &str) -> Option<(u32, u32, u32)> {
@@ -665,5 +903,57 @@ mod tests {
     #[test]
     fn timestamp_validator_accepts_fractional_seconds_and_leap_year() {
         assert!(is_rfc3339_z_timestamp("2024-02-29T00:00:00.123Z"));
+    }
+
+    #[test]
+    fn peer_binding_freshness_accepts_policy_window() {
+        let binding = PeerBinding::create(&wallet(), &peer_id(), ISSUED_AT, None).unwrap();
+        let verified = binding.verify_for_peer_id(&peer_id()).unwrap();
+        let policy = PeerBindingFreshnessPolicy::production_recommended();
+
+        verified
+            .validate_freshness("2026-05-26T13:00:00Z", policy)
+            .unwrap();
+        verified
+            .validate_freshness("2026-05-26T11:55:00Z", policy)
+            .unwrap();
+    }
+
+    #[test]
+    fn peer_binding_freshness_rejects_old_or_future_binding() {
+        let binding = PeerBinding::create(&wallet(), &peer_id(), ISSUED_AT, None).unwrap();
+        let verified = binding.verify_for_peer_id(&peer_id()).unwrap();
+        let policy = PeerBindingFreshnessPolicy::production_recommended();
+
+        let too_old = verified
+            .validate_freshness("2026-05-26T13:00:01Z", policy)
+            .unwrap_err();
+        assert_eq!(
+            too_old,
+            PeerBindingFreshnessError::BindingTooOld {
+                issued_at: ISSUED_AT.to_owned(),
+                now: "2026-05-26T13:00:01Z".to_owned(),
+                age_ms: 3_601_000,
+                max_age_ms: 3_600_000,
+            }
+        );
+        assert_eq!(too_old.failure_code(), error::IDENTITY_BINDING_TOO_OLD);
+
+        let from_future = verified
+            .validate_freshness("2026-05-26T11:54:59Z", policy)
+            .unwrap_err();
+        assert_eq!(
+            from_future,
+            PeerBindingFreshnessError::BindingFromFuture {
+                issued_at: ISSUED_AT.to_owned(),
+                now: "2026-05-26T11:54:59Z".to_owned(),
+                future_ms: 301_000,
+                future_tolerance_ms: 300_000,
+            }
+        );
+        assert_eq!(
+            from_future.failure_code(),
+            error::IDENTITY_BINDING_FROM_FUTURE
+        );
     }
 }

@@ -39,6 +39,9 @@ Current public surface:
 - `offer_loading` fetches one catalog response through an internal client
   boundary, enforces runtime limits, evaluates offer usability, and updates the
   relationship without exposing catalog frames to SDK callers.
+- `paths` defines high-level Get and Subscribe orchestration over loaded offers:
+  request shaping, response validation, data-message validation, path status,
+  and sequence-gap diagnostics before transport wiring.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.

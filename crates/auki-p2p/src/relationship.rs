@@ -158,7 +158,7 @@ pub struct RelationshipRegistryReferenceStatus {
 }
 
 /// Active or retained path status tracked for projection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct RelationshipPathStatus {
     /// Implementation-defined path id.
     pub path_id: Option<String>,
@@ -170,8 +170,22 @@ pub struct RelationshipPathStatus {
     pub offer_id: Option<String>,
     /// Path state.
     pub state: Option<String>,
+    /// Path start timestamp.
+    pub started_at: Option<String>,
+    /// Last accepted data-message timestamp.
+    pub last_message_at: Option<String>,
+    /// Selected payload type.
+    pub payload_type: Option<String>,
+    /// Last observed sequence value.
+    pub last_sequence: Option<u64>,
     /// Sequence gaps observed on this path.
     pub sequence_gap_count: u64,
+    /// Last envelope-level failure.
+    pub last_envelope_failure: Option<RelationshipFailureRecord>,
+    /// Last payload-level failure.
+    pub last_payload_failure: Option<RelationshipFailureRecord>,
+    /// Last path-level failure.
+    pub last_failure: Option<RelationshipFailureRecord>,
 }
 
 /// Options for status projection.
@@ -538,6 +552,20 @@ impl PeerRelationship {
         }
     }
 
+    /// Insert or replace a path by `path_id` with history cap enforcement.
+    pub fn upsert_path(&mut self, path: RelationshipPathStatus, cap: usize) {
+        if let Some(path_id) = &path.path_id
+            && let Some(existing) = self
+                .paths
+                .iter_mut()
+                .find(|existing| existing.path_id.as_ref() == Some(path_id))
+        {
+            *existing = path;
+            return;
+        }
+        self.retain_path(path, cap);
+    }
+
     /// Project this relationship into an RFC status object.
     pub fn to_remote_peer_status(
         &self,
@@ -629,7 +657,11 @@ impl PeerRelationship {
 }
 
 impl RelationshipPathStatus {
-    fn to_status_value(&self, peer_id: PeerId) -> Value {
+    fn to_status_value(
+        &self,
+        peer_id: PeerId,
+        privacy: StatusPrivacyConfig,
+    ) -> Result<Value, StatusError> {
         let mut object = Map::new();
         if let Some(path_id) = &self.path_id {
             object.insert("path_id".to_owned(), Value::String(path_id.clone()));
@@ -647,11 +679,50 @@ impl RelationshipPathStatus {
         if let Some(state) = &self.state {
             object.insert("state".to_owned(), Value::String(state.clone()));
         }
+        if let Some(started_at) = &self.started_at {
+            object.insert("started_at".to_owned(), Value::String(started_at.clone()));
+        }
+        if let Some(last_message_at) = &self.last_message_at {
+            object.insert(
+                "last_message_at".to_owned(),
+                Value::String(last_message_at.clone()),
+            );
+        }
+        if let Some(payload_type) = &self.payload_type {
+            object.insert(
+                "payload_type".to_owned(),
+                Value::String(payload_type.clone()),
+            );
+        }
+        if let Some(last_sequence) = self.last_sequence {
+            object.insert(
+                "last_sequence".to_owned(),
+                Value::String(last_sequence.to_string()),
+            );
+        }
         object.insert(
             "sequence_gap_count".to_owned(),
             Value::Number(self.sequence_gap_count.into()),
         );
-        Value::Object(object)
+        if let Some(failure) = &self.last_envelope_failure {
+            object.insert(
+                "last_envelope_failure".to_owned(),
+                failure.to_status(privacy)?.into_value(),
+            );
+        }
+        if let Some(failure) = &self.last_payload_failure {
+            object.insert(
+                "last_payload_failure".to_owned(),
+                failure.to_status(privacy)?.into_value(),
+            );
+        }
+        if let Some(failure) = &self.last_failure {
+            object.insert(
+                "last_failure".to_owned(),
+                failure.to_status(privacy)?.into_value(),
+            );
+        }
+        Ok(Value::Object(object))
     }
 }
 
@@ -683,10 +754,10 @@ pub fn build_relationship_status_snapshot(
                 .paths
                 .iter()
                 .rev()
-                .map(|path| path.to_status_value(relationship.peer_id))
+                .map(|path| path.to_status_value(relationship.peer_id, options.privacy))
         })
         .take(options.completed_path_history)
-        .map(PathStatus::from_value)
+        .map(|value| value.and_then(PathStatus::from_value))
         .collect::<Result<Vec<_>, _>>()
         .map_err(RelationshipStatusBuildError::Status)?;
     let last_failures = relationships
@@ -1051,6 +1122,7 @@ mod tests {
                 offer_id: Some("offer-1".to_owned()),
                 state: Some("active".to_owned()),
                 sequence_gap_count: 2,
+                ..RelationshipPathStatus::default()
             },
             8,
         );
@@ -1092,6 +1164,7 @@ mod tests {
                     offer_id: None,
                     state: Some("failed".to_owned()),
                     sequence_gap_count: 0,
+                    ..RelationshipPathStatus::default()
                 },
                 8,
             );
@@ -1103,6 +1176,7 @@ mod tests {
                     offer_id: None,
                     state: Some("ended".to_owned()),
                     sequence_gap_count: index,
+                    ..RelationshipPathStatus::default()
                 },
                 8,
             );

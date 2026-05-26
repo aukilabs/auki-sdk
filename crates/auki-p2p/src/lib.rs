@@ -10,6 +10,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod node;
 pub mod offer_loading;
+pub mod paths;
 pub mod protocols;
 pub mod relationship;
 
@@ -35,6 +36,11 @@ pub use offer_loading::{
     AppAllowedOffer, AppOfferPolicy, LoadedRemoteOffer, OfferCatalogClient,
     OfferCatalogClientError, OfferLoadContext, OfferLoadError, OfferLoadReport, OfferLookupError,
     load_remote_offers_from_frame, load_remote_offers_with_client,
+};
+pub use paths::{
+    GetClient, GetInput, GetOutcome, PathClientError, PathContext, PathOrchestrationError,
+    SubscribeClient, SubscribeInput, SubscriptionHandle, accept_subscribe_data_frame,
+    end_subscription_from_frame, get, subscribe,
 };
 pub use relationship::{
     OfferCatalogLoadState, PeerRelationship, PeerRelationshipState, RelationshipFailureRecord,

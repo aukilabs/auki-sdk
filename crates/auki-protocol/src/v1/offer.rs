@@ -8,7 +8,7 @@ use super::{
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, fmt, str::FromStr};
+use std::{cmp::Ordering, collections::HashSet, fmt, str::FromStr};
 
 /// V1 offer-catalog fetch-path object type.
 pub const OFFER_CATALOG_PATH_TYPE: &str = "auki.offer_catalog_path.v1";
@@ -644,6 +644,140 @@ impl fmt::Display for RegistryReferenceError {
 
 impl std::error::Error for RegistryReferenceError {}
 
+/// Local policy decision for offer usability evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyDecision {
+    /// Allow this policy layer.
+    Allow,
+    /// Reject this policy layer with the supplied stable failure code.
+    Reject {
+        /// Stable failure code to surface for this policy rejection.
+        failure_code: &'static str,
+    },
+}
+
+/// Input for evaluating whether one parsed offer is usable for a requested path.
+pub struct OfferUsabilityInput<'a> {
+    /// Parsed offer to evaluate.
+    pub offer: &'a Offer,
+    /// Accepted served-domain ids for the producing peer relationship.
+    pub accepted_served_domain_ids: &'a [String],
+    /// Access mode the caller intends to use, if one is already known.
+    pub requested_access_mode: Option<OfferAccessMode>,
+    /// Locally supported offer kinds. `None` means this check is deferred.
+    pub supported_kinds: Option<&'a [String]>,
+    /// Locally supported payload types. `None` means this check is deferred.
+    pub supported_payload_types: Option<&'a [String]>,
+    /// Current UTC time for freshness checks. `None` defers expiry checks.
+    pub now: Option<&'a str>,
+    /// Local domain access policy decision.
+    pub domain_policy: PolicyDecision,
+    /// Local offer policy decision.
+    pub offer_policy: PolicyDecision,
+}
+
+/// A successfully usable offer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UsableOffer<'a> {
+    /// The offer that passed usability evaluation.
+    pub offer: &'a Offer,
+}
+
+/// Errors produced while evaluating offer usability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OfferUsabilityError {
+    /// Offer domain is not in the accepted served-domain set.
+    DomainNotServed {
+        /// Offer domain id.
+        domain_id: String,
+    },
+    /// Local domain access policy rejected the offer.
+    DomainPolicyRejected {
+        /// Stable policy failure code.
+        failure_code: &'static str,
+    },
+    /// Local offer policy rejected the offer.
+    OfferPolicyRejected {
+        /// Stable policy failure code.
+        failure_code: &'static str,
+    },
+    /// Offer kind is not supported by the caller.
+    UnsupportedKind {
+        /// Offer kind.
+        kind: String,
+    },
+    /// Requested access mode is not present in the offer.
+    UnsupportedAccessMode {
+        /// Requested access mode.
+        access_mode: OfferAccessMode,
+    },
+    /// Payload type is not supported by the caller.
+    UnsupportedPayloadType {
+        /// Payload descriptor type.
+        payload_type: String,
+    },
+    /// Offer status is temporarily unavailable.
+    TemporarilyUnavailable,
+    /// Offer expired before the supplied `now`.
+    Stale {
+        /// Offer expiry timestamp.
+        expires_at: String,
+        /// Current timestamp used for the check.
+        now: String,
+    },
+    /// Supplied `now` was not an RFC3339 UTC string with `Z` suffix.
+    InvalidNowTimestamp {
+        /// Invalid current timestamp.
+        now: String,
+    },
+}
+
+impl OfferUsabilityError {
+    /// Stable RFC failure code for this offer-usability error.
+    pub fn failure_code(&self) -> &'static str {
+        match self {
+            Self::DomainNotServed { .. } => error::OFFER_DOMAIN_NOT_SERVED,
+            Self::DomainPolicyRejected { failure_code }
+            | Self::OfferPolicyRejected { failure_code } => failure_code,
+            Self::UnsupportedKind { .. } => error::OFFER_UNSUPPORTED_KIND,
+            Self::UnsupportedAccessMode { .. } => error::OFFER_UNSUPPORTED_ACCESS_MODE,
+            Self::UnsupportedPayloadType { .. } => error::OFFER_UNSUPPORTED_PAYLOAD_TYPE,
+            Self::TemporarilyUnavailable => error::OFFER_TEMPORARILY_UNAVAILABLE,
+            Self::Stale { .. } | Self::InvalidNowTimestamp { .. } => error::OFFER_STALE,
+        }
+    }
+}
+
+impl fmt::Display for OfferUsabilityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DomainNotServed { domain_id } => {
+                write!(f, "offer domain is not served: {domain_id}")
+            }
+            Self::DomainPolicyRejected { failure_code } => {
+                write!(f, "domain policy rejected offer with {failure_code}")
+            }
+            Self::OfferPolicyRejected { failure_code } => {
+                write!(f, "offer policy rejected offer with {failure_code}")
+            }
+            Self::UnsupportedKind { kind } => write!(f, "unsupported offer kind {kind}"),
+            Self::UnsupportedAccessMode { access_mode } => {
+                write!(f, "unsupported offer access mode {access_mode}")
+            }
+            Self::UnsupportedPayloadType { payload_type } => {
+                write!(f, "unsupported offer payload type {payload_type}")
+            }
+            Self::TemporarilyUnavailable => write!(f, "offer is temporarily unavailable"),
+            Self::Stale { expires_at, now } => {
+                write!(f, "offer expired at {expires_at} before {now}")
+            }
+            Self::InvalidNowTimestamp { now } => write!(f, "invalid now timestamp {now}"),
+        }
+    }
+}
+
+impl std::error::Error for OfferUsabilityError {}
+
 impl OfferCatalogPath {
     /// Create a v1 offer-catalog fetch path.
     pub fn create(metadata: Option<Value>) -> Result<Self, OfferCatalogPathError> {
@@ -1123,6 +1257,75 @@ impl RegistryReference {
     pub fn into_value(self) -> Value {
         self.value
     }
+}
+
+/// Evaluate whether an offer is usable for one requested path.
+pub fn evaluate_offer_usability(
+    input: OfferUsabilityInput<'_>,
+) -> Result<UsableOffer<'_>, OfferUsabilityError> {
+    if !input
+        .accepted_served_domain_ids
+        .iter()
+        .any(|domain_id| domain_id == &input.offer.domain_id)
+    {
+        return Err(OfferUsabilityError::DomainNotServed {
+            domain_id: input.offer.domain_id.clone(),
+        });
+    }
+
+    if let PolicyDecision::Reject { failure_code } = input.domain_policy {
+        return Err(OfferUsabilityError::DomainPolicyRejected { failure_code });
+    }
+
+    if let PolicyDecision::Reject { failure_code } = input.offer_policy {
+        return Err(OfferUsabilityError::OfferPolicyRejected { failure_code });
+    }
+
+    if input.offer.status == OfferStatus::TemporarilyUnavailable {
+        return Err(OfferUsabilityError::TemporarilyUnavailable);
+    }
+
+    if let Some(requested_access_mode) = input.requested_access_mode
+        && !input.offer.access_modes.contains(&requested_access_mode)
+    {
+        return Err(OfferUsabilityError::UnsupportedAccessMode {
+            access_mode: requested_access_mode,
+        });
+    }
+
+    if let Some(supported_kinds) = input.supported_kinds
+        && !supported_kinds.iter().any(|kind| kind == &input.offer.kind)
+    {
+        return Err(OfferUsabilityError::UnsupportedKind {
+            kind: input.offer.kind.clone(),
+        });
+    }
+
+    if let Some(supported_payload_types) = input.supported_payload_types
+        && !supported_payload_types
+            .iter()
+            .any(|payload_type| payload_type == &input.offer.payload.payload_type)
+    {
+        return Err(OfferUsabilityError::UnsupportedPayloadType {
+            payload_type: input.offer.payload.payload_type.clone(),
+        });
+    }
+
+    if let (Some(expires_at), Some(now)) = (&input.offer.expires_at, input.now) {
+        let ordering = compare_rfc3339_z_timestamps(now, expires_at).ok_or_else(|| {
+            OfferUsabilityError::InvalidNowTimestamp {
+                now: now.to_owned(),
+            }
+        })?;
+        if ordering != Ordering::Less {
+            return Err(OfferUsabilityError::Stale {
+                expires_at: expires_at.clone(),
+                now: now.to_owned(),
+            });
+        }
+    }
+
+    Ok(UsableOffer { offer: input.offer })
 }
 
 fn required_string<'a>(
@@ -1663,10 +1866,62 @@ fn is_rfc3339_z_timestamp(value: &str) -> bool {
         return false;
     }
 
-    let Some((hour, minute, second)) = parse_time(time) else {
+    let Some((hour, minute, second, _fraction)) = parse_time(time) else {
         return false;
     };
     hour <= 23 && minute <= 59 && second <= 60
+}
+
+fn compare_rfc3339_z_timestamps(left: &str, right: &str) -> Option<Ordering> {
+    let left = parse_rfc3339_z_timestamp(left)?;
+    let right = parse_rfc3339_z_timestamp(right)?;
+
+    Some(
+        left.year
+            .cmp(&right.year)
+            .then_with(|| left.month.cmp(&right.month))
+            .then_with(|| left.day.cmp(&right.day))
+            .then_with(|| left.hour.cmp(&right.hour))
+            .then_with(|| left.minute.cmp(&right.minute))
+            .then_with(|| left.second.cmp(&right.second))
+            .then_with(|| compare_fractional_seconds(left.fraction, right.fraction)),
+    )
+}
+
+struct Rfc3339ZTimestamp<'a> {
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    fraction: &'a str,
+}
+
+fn parse_rfc3339_z_timestamp(value: &str) -> Option<Rfc3339ZTimestamp<'_>> {
+    let value = value.strip_suffix('Z')?;
+    let (date, time) = value.split_once('T')?;
+    let (year, month, day) = parse_date(date)?;
+    if year > 9999 || month == 0 || month > 12 {
+        return None;
+    }
+    if day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    let (hour, minute, second, fraction) = parse_time(time)?;
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    Some(Rfc3339ZTimestamp {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        fraction,
+    })
 }
 
 fn parse_date(value: &str) -> Option<(u32, u32, u32)> {
@@ -1682,15 +1937,15 @@ fn parse_date(value: &str) -> Option<(u32, u32, u32)> {
     Some((year, month, day))
 }
 
-fn parse_time(value: &str) -> Option<(u32, u32, u32)> {
+fn parse_time(value: &str) -> Option<(u32, u32, u32, &str)> {
     let (base, fraction) = match value.split_once('.') {
         Some((base, fraction)) => {
             if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
                 return None;
             }
-            (base, Some(fraction))
+            (base, fraction)
         }
-        None => (value, None),
+        None => (value, ""),
     };
 
     if base.len() != 8 {
@@ -1702,8 +1957,19 @@ fn parse_time(value: &str) -> Option<(u32, u32, u32)> {
     let hour = parse_fixed_digits(&base[0..2])?;
     let minute = parse_fixed_digits(&base[3..5])?;
     let second = parse_fixed_digits(&base[6..8])?;
-    let _ = fraction;
-    Some((hour, minute, second))
+    Some((hour, minute, second, fraction))
+}
+
+fn compare_fractional_seconds(left: &str, right: &str) -> Ordering {
+    let left = left.trim_end_matches('0');
+    let right = right.trim_end_matches('0');
+    for (left_digit, right_digit) in left.bytes().zip(right.bytes()) {
+        match left_digit.cmp(&right_digit) {
+            Ordering::Equal => {}
+            ordering => return ordering,
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 fn parse_fixed_digits(value: &str) -> Option<u32> {
@@ -2130,5 +2396,193 @@ mod tests {
                 PayloadDescriptorError::MissingField { field: FIELD_TYPE }
             ))
         );
+    }
+
+    #[test]
+    fn offer_usability_accepts_supported_available_offer() {
+        let offer = Offer::from_value(offer_value()).unwrap();
+        let accepted_domains = vec![DOMAIN_ID.to_owned()];
+        let supported_kinds = vec!["sensor.frame".to_owned()];
+        let supported_payloads = vec!["auki.frame".to_owned()];
+
+        let usable = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: Some(OfferAccessMode::Subscribe),
+            supported_kinds: Some(&supported_kinds),
+            supported_payload_types: Some(&supported_payloads),
+            now: Some("2026-05-26T12:30:00Z"),
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap();
+
+        assert_eq!(usable.offer.offer_id, "camera-main");
+    }
+
+    #[test]
+    fn offer_usability_rejects_unserved_domain() {
+        let offer = Offer::from_value(offer_value()).unwrap();
+        let accepted_domains = vec![];
+
+        let error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: None,
+            supported_kinds: None,
+            supported_payload_types: None,
+            now: None,
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            OfferUsabilityError::DomainNotServed {
+                domain_id: DOMAIN_ID.to_owned()
+            }
+        );
+        assert_eq!(error.failure_code(), error::OFFER_DOMAIN_NOT_SERVED);
+    }
+
+    #[test]
+    fn offer_usability_rejects_policy_denial() {
+        let offer = Offer::from_value(offer_value()).unwrap();
+        let accepted_domains = vec![DOMAIN_ID.to_owned()];
+
+        let error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: None,
+            supported_kinds: None,
+            supported_payload_types: None,
+            now: None,
+            domain_policy: PolicyDecision::Reject {
+                failure_code: error::POLICY_DOMAIN_REJECTED,
+            },
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            OfferUsabilityError::DomainPolicyRejected {
+                failure_code: error::POLICY_DOMAIN_REJECTED,
+            }
+        );
+        assert_eq!(error.failure_code(), error::POLICY_DOMAIN_REJECTED);
+    }
+
+    #[test]
+    fn offer_usability_rejects_unsupported_access_kind_and_payload() {
+        let mut offer_value = offer_value();
+        offer_value
+            .as_object_mut()
+            .unwrap()
+            .insert(FIELD_ACCESS_MODES.to_owned(), json!(["get"]));
+        let offer = Offer::from_value(offer_value).unwrap();
+        let accepted_domains = vec![DOMAIN_ID.to_owned()];
+        let supported_kinds = vec!["other.kind".to_owned()];
+        let supported_payloads = vec!["other.payload".to_owned()];
+
+        let access_error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: Some(OfferAccessMode::Subscribe),
+            supported_kinds: None,
+            supported_payload_types: None,
+            now: None,
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+        assert_eq!(
+            access_error,
+            OfferUsabilityError::UnsupportedAccessMode {
+                access_mode: OfferAccessMode::Subscribe,
+            }
+        );
+        assert_eq!(
+            access_error.failure_code(),
+            error::OFFER_UNSUPPORTED_ACCESS_MODE
+        );
+
+        let kind_error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: Some(OfferAccessMode::Get),
+            supported_kinds: Some(&supported_kinds),
+            supported_payload_types: None,
+            now: None,
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+        assert_eq!(kind_error.failure_code(), error::OFFER_UNSUPPORTED_KIND);
+
+        let payload_error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &offer,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: Some(OfferAccessMode::Get),
+            supported_kinds: None,
+            supported_payload_types: Some(&supported_payloads),
+            now: None,
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+        assert_eq!(
+            payload_error.failure_code(),
+            error::OFFER_UNSUPPORTED_PAYLOAD_TYPE
+        );
+    }
+
+    #[test]
+    fn offer_usability_rejects_unavailable_and_stale_offers() {
+        let mut unavailable_value = offer_value();
+        unavailable_value
+            .as_object_mut()
+            .unwrap()
+            .insert(FIELD_STATUS.to_owned(), json!("temporarily_unavailable"));
+        let unavailable = Offer::from_value(unavailable_value).unwrap();
+        let accepted_domains = vec![DOMAIN_ID.to_owned()];
+
+        let unavailable_error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &unavailable,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: None,
+            supported_kinds: None,
+            supported_payload_types: None,
+            now: None,
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+        assert_eq!(
+            unavailable_error.failure_code(),
+            error::OFFER_TEMPORARILY_UNAVAILABLE
+        );
+
+        let stale = Offer::from_value(offer_value()).unwrap();
+        let stale_error = evaluate_offer_usability(OfferUsabilityInput {
+            offer: &stale,
+            accepted_served_domain_ids: &accepted_domains,
+            requested_access_mode: None,
+            supported_kinds: None,
+            supported_payload_types: None,
+            now: Some("2026-05-26T13:00:00Z"),
+            domain_policy: PolicyDecision::Allow,
+            offer_policy: PolicyDecision::Allow,
+        })
+        .unwrap_err();
+        assert_eq!(
+            stale_error,
+            OfferUsabilityError::Stale {
+                expires_at: "2026-05-26T13:00:00Z".to_owned(),
+                now: "2026-05-26T13:00:00Z".to_owned(),
+            }
+        );
+        assert_eq!(stale_error.failure_code(), error::OFFER_STALE);
     }
 }

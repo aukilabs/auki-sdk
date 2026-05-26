@@ -173,8 +173,9 @@ pub struct SensorStreamResource {
     pub sensor_id: String,
     /// Content-addressed Sensor Registry hash.
     pub sensor_hash: String,
-    /// Sensor kind - the `SensorBody` serde tag carried through as an
-    /// open string (`"camera"`, `"point_cloud"`, ...).
+    /// Sensor kind - the closed SDK `SensorBody` serde tag carried
+    /// through as a canonical string (`"camera"`, `"point_cloud"`,
+    /// `"joint_encoders"`, or `"audio"`).
     pub sensor_kind: String,
     /// Protocol used to open the stream.
     pub stream_protocol: String,

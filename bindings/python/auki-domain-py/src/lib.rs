@@ -36,6 +36,7 @@ use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
+use auki_network::sensors_protocol::SensorKind as RustSensorKind;
 use auki_network::stream_protocol::{
     CameraFrame as RustCameraFrame, StreamManifest as RustStreamManifest,
     StreamRequest as RustStreamRequest, audio::Data as RustAudioFrame,
@@ -467,7 +468,7 @@ impl PyParticipantInfo {
 /// and supplied by the daemon's catalog provider callable
 /// (producer side, via `ClusterManager.set_sensor_catalog_provider`).
 #[pyclass(name = "SensorEntry")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PySensorEntry {
     inner: RustSensorEntry,
 }
@@ -482,8 +483,13 @@ impl PySensorEntry {
         kind: String,
         sensor_entry_json: Option<String>,
         frame_entry_json: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        if RustSensorKind::parse(&kind).is_none() {
+            return Err(PyValueError::new_err(format!(
+                "sensor kind must be one of camera, point_cloud, joint_encoders, or audio; got {kind:?}"
+            )));
+        }
+        Ok(Self {
             inner: RustSensorEntry {
                 sensor_id,
                 sensor_hash,
@@ -491,7 +497,7 @@ impl PySensorEntry {
                 sensor_entry_json,
                 frame_entry_json,
             },
-        }
+        })
     }
 
     #[getter]
@@ -2886,6 +2892,24 @@ mod tests {
         let err = resolve_generic_stream_payload_kind(&resources, "robot/camera").unwrap_err();
         Python::with_gil(|py| {
             assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn sensor_entry_constructor_rejects_unknown_sensor_kind() {
+        let err = PySensorEntry::new(
+            "K1-FAKE/head".into(),
+            "sensor-hash".into(),
+            "rgb_camera".into(),
+            None,
+            None,
+        )
+        .unwrap_err();
+
+        Python::with_gil(|py| {
+            assert!(err.is_instance_of::<PyValueError>(py));
+            assert!(err.to_string().contains("sensor kind"));
+            assert!(err.to_string().contains("rgb_camera"));
         });
     }
 

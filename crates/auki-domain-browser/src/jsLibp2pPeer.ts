@@ -244,6 +244,10 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
   }
 
   async declareLocalSensors(sensors: SensorSummary[]): Promise<Result<void>> {
+    const unsupported = sensors.find((sensor) => !isSensorKind(sensor.kind));
+    if (unsupported) {
+      return fail("sensor_publish_failed", `unsupported sensor kind ${JSON.stringify(unsupported.kind)}`);
+    }
     this.sensors = sensors;
     this.refreshSelfParticipant();
     return ok(undefined);
@@ -533,7 +537,9 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
       ...this.snapshot,
       participants: this.snapshot.participants.map((participant) => {
         if (participant.peerId !== peerId) return participant;
-        const sensorSummaries = sensors.sensors.map((sensor) => sensorSummaryFromEntry(sensor));
+        const sensorSummaries = sensors.sensors
+          .map((sensor) => sensorSummaryFromEntry(sensor))
+          .filter((sensor): sensor is SensorSummary => sensor !== null);
         return {
           ...participant,
           appId: info.app ?? participant.appId,
@@ -728,12 +734,12 @@ function parseMembership(membershipJson: string): MembershipDocument {
   return membership;
 }
 
-function sensorSummaryFromEntry(sensor: { sensorId: string; kind: string }): SensorSummary {
-  const kind = isSensorKind(sensor.kind) ? sensor.kind : "unknown";
+function sensorSummaryFromEntry(sensor: { sensorId: string; kind: string }): SensorSummary | null {
+  if (!isSensorKind(sensor.kind)) return null;
   return {
     id: sensor.sensorId,
-    kind,
-    label: sensor.sensorId || kind,
+    kind: sensor.kind,
+    label: sensor.sensorId || sensor.kind,
     publishable: true,
     subscribable: true,
   };
@@ -744,9 +750,7 @@ function isSensorKind(value: string): value is SensorKind {
     value === "camera" ||
     value === "point_cloud" ||
     value === "joint_encoders" ||
-    value === "audio" ||
-    value === "detection" ||
-    value === "unknown"
+    value === "audio"
   );
 }
 

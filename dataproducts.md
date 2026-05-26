@@ -163,7 +163,7 @@ Everything required to decide "do I want this, and how do I consume it" without 
   "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
   "sensor_hash": "d798fa879c80a5b00cabc1ce47ca4f7a",
   "sensor_entry": {
-    "type": "rgb_camera",
+    "type": "camera",
     "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
     "width": 544, "height": 488, "frame_rate_hz": 20,
     "pixel_format": "YUV_NV12", "color_space": "BT.709",

@@ -80,7 +80,9 @@ use auki_network::network_runtime::{
     RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
     SensorsRequestEvent, SpawnError,
 };
-pub use auki_network::sensors_protocol::{SensorEntry, SensorsRequest, SensorsResponse};
+pub use auki_network::sensors_protocol::{
+    SensorEntry, SensorKind, SensorsRequest, SensorsResponse,
+};
 use auki_network::stream_protocol::STREAM_PROTOCOL;
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
@@ -287,16 +289,17 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     fn snapshot(&self) -> Vec<SensorEntry>;
 
     /// Snapshot the catalog for a concrete request. The default
-    /// implementation preserves the lightweight catalog path for
-    /// existing providers, and enriches rows from the producer's
-    /// registered app root only when the requester asks for embedded
-    /// registry entries.
+    /// implementation enforces the SDK's closed sensor-kind set,
+    /// preserves the lightweight catalog path, and enriches rows from
+    /// the producer's registered app root only when the requester asks
+    /// for embedded registry entries.
     fn snapshot_for_request(
         &self,
         request: &SensorsRequest,
         registry_app_root: Option<&Path>,
     ) -> Vec<SensorEntry> {
         let mut sensors = self.snapshot();
+        filter_sensor_entries(&mut sensors);
         if !request.include_registry_entries && !request.include_frame_entries {
             return sensors;
         }
@@ -3203,27 +3206,31 @@ fn canonical_json(bytes: Vec<u8>) -> String {
     String::from_utf8(bytes).expect("JCS output is UTF-8 JSON")
 }
 
-fn sensor_resource_from_entry(sensor: SensorEntry) -> ResourceEntry {
-    ResourceEntry::SensorStream(SensorStreamResource {
+fn filter_sensor_entries(sensors: &mut Vec<SensorEntry>) {
+    sensors.retain(|sensor| SensorKind::parse(&sensor.kind).is_some());
+}
+
+fn sensor_resource_from_entry(sensor: SensorEntry) -> Option<ResourceEntry> {
+    let payload = stream_payload_for_sensor_kind(&sensor.kind)?;
+    Some(ResourceEntry::SensorStream(SensorStreamResource {
         id: sensor.sensor_id.clone(),
         sensor_id: sensor.sensor_id,
         sensor_hash: sensor.sensor_hash,
         sensor_kind: sensor.kind.clone(),
         stream_protocol: STREAM_PROTOCOL.into(),
-        payload: stream_payload_for_sensor_kind(&sensor.kind).into(),
+        payload: payload.into(),
         pinhole_intrinsics: None,
         sensor_entry_json: sensor.sensor_entry_json,
         frame_entry_json: sensor.frame_entry_json,
-    })
+    }))
 }
 
-fn stream_payload_for_sensor_kind(kind: &str) -> &'static str {
-    match kind {
-        "camera" => "camera_frame",
-        "point_cloud" => "point_cloud_frame",
-        "joint_encoders" => "joint_encoders_frame",
-        "audio" => "audio_frame",
-        _ => "unknown",
+fn stream_payload_for_sensor_kind(kind: &str) -> Option<&'static str> {
+    match SensorKind::parse(kind)? {
+        SensorKind::Camera => Some("camera_frame"),
+        SensorKind::PointCloud => Some("point_cloud_frame"),
+        SensorKind::JointEncoders => Some("joint_encoders_frame"),
+        SensorKind::Audio => Some("audio_frame"),
     }
 }
 
@@ -3380,7 +3387,7 @@ fn spawn_resources_handler(
                     include_registry_entries: request.include_sensor_entries,
                     include_frame_entries: request.include_frame_entries,
                 };
-                let sensors = {
+                let mut sensors = {
                     let guard = sensor_provider
                         .lock()
                         .expect("sensor_catalog_provider lock");
@@ -3389,7 +3396,8 @@ fn spawn_resources_handler(
                         None => Vec::new(),
                     }
                 };
-                resources.extend(sensors.into_iter().map(sensor_resource_from_entry));
+                filter_sensor_entries(&mut sensors);
+                resources.extend(sensors.into_iter().filter_map(sensor_resource_from_entry));
             }
 
             let provider_resources = {
@@ -3431,13 +3439,14 @@ fn spawn_sensors_handler(
                 .lock()
                 .expect("registry_app_root lock")
                 .clone();
-            let sensors = {
+            let mut sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
                     Some(p) => p.snapshot_for_request(&request, root.as_deref()),
                     None => Vec::new(),
                 }
             };
+            filter_sensor_entries(&mut sensors);
             let _ = ack.send(SensorsResponse { sensors });
         }
     })
@@ -4444,6 +4453,40 @@ mod tests {
     }
 
     #[test]
+    fn sensor_catalog_provider_enforces_closed_sensor_kinds() {
+        struct FixedCatalog(Vec<SensorEntry>);
+
+        impl SensorCatalogProvider for FixedCatalog {
+            fn snapshot(&self) -> Vec<SensorEntry> {
+                self.0.clone()
+            }
+        }
+
+        let provider = FixedCatalog(vec![
+            SensorEntry {
+                sensor_id: "K1-FAKE/head".into(),
+                sensor_hash: "camera-hash".into(),
+                kind: "camera".into(),
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            },
+            SensorEntry {
+                sensor_id: "K1-FAKE/legacy-head".into(),
+                sensor_hash: "legacy-camera-hash".into(),
+                kind: "rgb_camera".into(),
+                sensor_entry_json: None,
+                frame_entry_json: None,
+            },
+        ]);
+
+        let sensors = provider.snapshot_for_request(&SensorsRequest::catalog(), None);
+
+        assert_eq!(sensors.len(), 1);
+        assert_eq!(sensors[0].kind, "camera");
+        assert_eq!(sensors[0].sensor_id, "K1-FAKE/head");
+    }
+
+    #[test]
     fn sensor_entry_lifts_to_sensor_stream_resource() {
         let resource = sensor_resource_from_entry(SensorEntry {
             sensor_id: "K1-FAKE/head_left_cam".into(),
@@ -4451,7 +4494,8 @@ mod tests {
             kind: "camera".into(),
             sensor_entry_json: None,
             frame_entry_json: None,
-        });
+        })
+        .expect("camera is a supported sensor kind");
 
         let ResourceEntry::SensorStream(sensor) = resource else {
             panic!("expected sensor stream resource");

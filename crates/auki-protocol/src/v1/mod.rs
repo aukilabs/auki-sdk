@@ -10,11 +10,15 @@ pub mod domain;
 pub mod error;
 /// V1 JSON frame encoding and decoding.
 pub mod frame;
+/// Get protocol helpers.
+pub mod get;
 /// V1 peer handshake message helpers.
 pub mod handshake;
 /// Peer identity authority objects.
 pub mod identity;
 /// Strict JSON parsing helpers.
 pub mod json;
+/// Spatial message and error-object helpers.
+pub mod message;
 /// Offer-catalog protocol helpers.
 pub mod offer;

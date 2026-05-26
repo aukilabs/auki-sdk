@@ -15,8 +15,10 @@ runtime, Discovery client, or app-specific lifecycle facade.
 - `v1::base64url` — canonical base64url-without-padding encode/decode helpers.
 - `v1::domain` — v1 domain id, declaration, and delegation helpers.
 - `v1::frame` — unsigned LEB128 length prefixes plus v1 JSON frame encode/decode.
+- `v1::get` — v1 Get request and response helpers.
 - `v1::handshake` — v1 peer handshake parsing and authority validation entrypoint.
 - `v1::identity` — wallet-signed peer binding creation and verification.
+- `v1::message` — v1 spatial message, payload, and error-object helpers.
 - `v1::offer` — v1 offer-catalog, offer, payload, and registry-reference helpers.
 - `v1::json` — strict JSON object parsing with duplicate member rejection.
 - `v1::error` — stable v1 failure-code constants.

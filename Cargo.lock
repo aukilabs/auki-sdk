@@ -956,6 +956,7 @@ dependencies = [
  "libp2p-identity",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

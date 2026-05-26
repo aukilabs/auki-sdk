@@ -2,6 +2,8 @@
 
 /// Canonical base64url-without-padding helpers.
 pub mod base64url;
+/// Domain authority helpers.
+pub mod domain;
 /// Stable v1 failure-code constants.
 pub mod error;
 /// V1 JSON frame encoding and decoding.

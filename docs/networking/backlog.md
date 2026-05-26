@@ -5,7 +5,7 @@ protocol requirements.
 
 Owner: TBD.
 
-Last updated: 2026-05-22.
+Last updated: 2026-05-26.
 
 Related baseline:
 [`baseline.md`](baseline.md).
@@ -25,35 +25,51 @@ in `drafts.md`. This file is only the work queue.
 
 ## Current State
 
-The baseline text is ready to drive a first SDK implementation path for
-configured/manual peer-to-peer connectivity.
+The first RFC-shaped SDK foundation now exists in `auki-protocol` and
+`auki-p2p`.
 
-Discovery remains optional and does not block the baseline path.
+`auki-protocol` owns the pure v1 protocol surface: JSON frames, signed peer and
+domain authority objects, lifecycle handshakes, offer catalogs, Get,
+Subscribe, spatial messages, status snapshots, and locked vectors.
+
+`auki-p2p` owns the clean libp2p runtime path: configured peer dialing,
+lifecycle authorization, local domain and offer registration, offer loading,
+Get and Subscribe consumers/providers, relationship status, and a full
+two-peer smoke flow. It does not reuse `NetworkRuntime`, Discovery, Manager
+election, or legacy cluster membership semantics.
+
+Discovery remains optional and non-authoritative. The next work is proving the
+new path against real SDK app surfaces without breaking the shipped
+`auki-network` / `auki-domain` runtime.
 
 ## Next Work
 
-Start implementing a first SDK path from `baseline.md`.
+Build migration adapters and one app-facing proof without replacing shipped
+legacy behavior.
 
-Suggested first vertical slice:
+Suggested next vertical slice: browser-first Sentinel preview.
 
-1. Configured peer dial to a known peer id and multiaddr.
-2. V1 JSON frame encode/decode.
-3. Peer binding creation and verification.
-4. Lifecycle handshake over `/auki/cluster-lifecycle/0.0.1`.
-5. Authority-chain validation for zero or more declared domains.
-6. Accepted served-domain set computation.
-7. Ready/degraded peer relationship state.
-8. Minimal status surface for local peer, remote peer, served domains, and last
-   failures.
+1. Define a small RFC offer profile for Sentinel's live RGB preview:
+   `subscribe` access, JPEG payload bytes in `auki.spatial_message.v1`, and
+   Sensor / Clock / Frame registry references.
+2. Add a producer adapter that maps Sentinel's existing preview latch to an
+   `AukiNode` Subscribe provider.
+3. Add a browser-compatible consumer experiment that uses `auki-protocol`
+   frames and browser libp2p transports instead of Park's Rust HTTP cache.
+4. For the localhost MVP, have the browser dial Sentinel and open Subscribe;
+   Sentinel then sends preview frames directly on that stream.
+5. Keep Park's current backend path as legacy compatibility while the browser
+   peer path is proven.
 
-Suggested second vertical slice:
+Transport questions for the browser slice:
 
-1. Offer-catalog request/response over `/auki/offer-catalog/0.0.1`.
-2. Offer usability evaluation.
-3. Get request/response over `/auki/get/0.0.1`.
-4. Subscribe request/accept/reject/data/end over `/auki/subscribe/0.0.1`.
-5. Spatial message envelope validation.
-6. Deterministic failure-code reporting for common bad inputs.
+- Which browser transport is selected first: WebRTC Direct, WebTransport, or
+  WebSocket?
+- Is any relay/signaling service required only for setup, or do frame bytes
+  continue to flow through it?
+- What multiaddr shape should Sentinel advertise for a localhost/browser MVP?
+- Does `auki-p2p` need a browser-specific crate/feature, or should the browser
+  experiment pair `auki-protocol` with a JS/libp2p runtime first?
 
 ## Interop/Test Work
 

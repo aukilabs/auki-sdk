@@ -1,0 +1,154 @@
+{
+  "inputs": {
+    "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+    "max_payload_bytes": 8,
+    "offer_id": "camera-main",
+    "selected_payload_type": "auki.frame"
+  },
+  "name": "auki.protocol.v1.get.vectors",
+  "negative": {
+    "request_invalid_domain_id": {
+      "expected": "get.invalid_request",
+      "object": {
+        "domain_id": "bad",
+        "offer_id": "camera-main",
+        "type": "auki.get_request.v1"
+      }
+    },
+    "request_zero_max_payload_bytes": {
+      "expected": "get.invalid_request",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "max_payload_bytes": 0,
+        "offer_id": "camera-main",
+        "type": "auki.get_request.v1"
+      }
+    },
+    "response_multiple_bodies": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "error": {
+          "code": "offer.unknown_offer"
+        },
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "camera-main",
+          "payload": {
+            "bytes": "AQID",
+            "type": "auki.frame"
+          },
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      }
+    },
+    "response_offer_mismatch": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "other-offer",
+          "payload": {
+            "bytes": "AQID",
+            "type": "auki.frame"
+          },
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      }
+    },
+    "response_payload_too_large": {
+      "expected": "message.payload_too_large",
+      "object": {
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "camera-main",
+          "payload": {
+            "bytes": "AQID",
+            "type": "auki.frame"
+          },
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      },
+      "request_max_payload_bytes": 2
+    },
+    "response_payload_type_mismatch": {
+      "expected": "message.invalid_payload",
+      "object": {
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "camera-main",
+          "payload": {
+            "bytes": "AQID",
+            "type": "other.payload"
+          },
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      }
+    }
+  },
+  "positive": {
+    "failure_response": {
+      "expected": {
+        "code": "offer.unknown_offer"
+      },
+      "object": {
+        "error": {
+          "code": "offer.unknown_offer",
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "message": "unknown offer",
+          "offer_id": "camera-main",
+          "retryable": false
+        },
+        "type": "auki.get_response.v1"
+      }
+    },
+    "request": {
+      "expected": {
+        "accepted_payload_types": [
+          "auki.frame"
+        ],
+        "max_payload_bytes": 8
+      },
+      "object": {
+        "accepted_payload_types": [
+          "auki.frame"
+        ],
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "max_payload_bytes": 8,
+        "offer_id": "camera-main",
+        "params": {
+          "frame": "latest"
+        },
+        "type": "auki.get_request.v1"
+      }
+    },
+    "success_response": {
+      "expected": {
+        "generated_at": "2026-05-26T12:00:00Z",
+        "raw_payload_len": 3
+      },
+      "object": {
+        "message": {
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "generated_at": "2026-05-26T12:00:00Z",
+          "metadata": {
+            "fixture": true
+          },
+          "offer_id": "camera-main",
+          "payload": {
+            "bytes": "AQID",
+            "encoding": "binary",
+            "type": "auki.frame"
+          },
+          "timestamp_ns": "123456789",
+          "type": "auki.spatial_message.v1"
+        },
+        "type": "auki.get_response.v1"
+      }
+    }
+  },
+  "version": 1
+}

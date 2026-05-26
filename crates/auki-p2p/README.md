@@ -25,9 +25,10 @@ Current public surface:
   and maintains the wallet-signed `PeerBinding`.
 - `AukiP2pConfig` captures RFC-shaped runtime limits and policy knobs.
 - `AukiNode` is the SDK-facing runtime handle for configured peer management,
-  dialing, local domain/offer registration, remote offer loading, SDK-facing
-  Get/Subscribe, high-level peer events, relationship tracking, and in-process
-  status snapshots without exposing protocol frames or stream internals.
+  dialing, local domain/offer registration, high-level lifecycle
+  authorization, remote offer loading, SDK-facing Get/Subscribe, high-level
+  peer events, relationship tracking, and in-process status snapshots without
+  exposing protocol frames or stream internals.
 - `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
   advertised, and relay addresses separate; can dial explicit peer addresses;
   applies local per-peer connection caps for duplicate/simultaneous dials;
@@ -65,4 +66,4 @@ Discovery, or app adapters.
 Path stream tests now cover one loopback Get and one loopback Subscribe start
 followed by a data frame.
 Offer-catalog stream tests now cover one loopback catalog load into
-`AukiNode`'s remote offer cache.
+`AukiNode`'s remote offer cache after high-level lifecycle authorization.

@@ -18,8 +18,9 @@ pub mod protocols;
 pub mod relationship;
 
 pub use api::{
-    AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LocalDomainRegistration,
-    RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
+    AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LifecycleDomainAccess,
+    LifecycleInput, LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy,
+    RemoteOfferLoadInput,
 };
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,

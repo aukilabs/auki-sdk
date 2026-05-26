@@ -166,6 +166,25 @@ impl PeerHandshake {
         }
     }
 
+    /// Create a v1 peer handshake that advertises an offer-catalog fetch path.
+    pub fn create_with_offer_catalog(
+        peer_binding: PeerBinding,
+        declared_domains: Vec<DeclaredDomain>,
+        offer_catalog: OfferCatalogPath,
+    ) -> Self {
+        let mut handshake = Self::create(peer_binding, declared_domains);
+        let object = handshake
+            .value
+            .as_object_mut()
+            .expect("created peer handshake value is always an object");
+        object.insert(
+            FIELD_OFFER_CATALOG.to_owned(),
+            offer_catalog.value().clone(),
+        );
+        handshake.offer_catalog = Some(offer_catalog);
+        handshake
+    }
+
     /// Parse a v1 peer handshake from a JSON value.
     pub fn from_value(value: Value) -> Result<Self, HandshakeError> {
         let object = value.as_object().ok_or(HandshakeError::NotObject)?;
@@ -539,6 +558,19 @@ mod tests {
         );
         assert_eq!(parsed.diagnostics, Some(json!({"ok": true})));
         assert_eq!(parsed.metadata, Some(json!({"label": "node"})));
+    }
+
+    #[test]
+    fn create_with_offer_catalog_sets_typed_path() {
+        let catalog_path = OfferCatalogPath::create(None).unwrap();
+        let handshake = PeerHandshake::create_with_offer_catalog(
+            peer_binding(&owner_wallet()),
+            vec![],
+            catalog_path.clone(),
+        );
+        let parsed = PeerHandshake::from_value(handshake.into_value()).unwrap();
+
+        assert_eq!(parsed.offer_catalog, Some(catalog_path));
     }
 
     #[test]

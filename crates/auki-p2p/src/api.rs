@@ -1,24 +1,30 @@
 //! SDK-facing high-level node API.
 
 use crate::{
-    AppAllowedOffer, AppOfferPolicy, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError,
-    ConfiguredPeer, GetInput, GetOutcome, Libp2pOfferCatalogClient, Libp2pPathClient,
-    Libp2pSubscription, LoadedRemoteOffer, LocalPeerIdentity, OfferCatalogLoadState,
+    AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiP2pNode, AukiP2pNodeConfig,
+    AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, HandshakePolicyError,
+    HandshakeValidationInput, HandshakeValidationResult, Libp2pOfferCatalogClient,
+    Libp2pPathClient, Libp2pSubscription, LifecycleOpenStreamError, LifecycleProtocolError,
+    LifecycleStreamGuard, LoadedRemoteOffer, LocalPeerIdentity, OfferCatalogLoadState,
     OfferLoadContext, OfferLoadError, OfferLoadReport, PathClientError, PathContext,
     PathOrchestrationError, PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
     RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
     RelationshipStatusOptions, SubscribeInput, accept_subscribe_data_frame,
-    build_relationship_status_snapshot, get_over_libp2p, load_remote_offers_over_libp2p,
-    subscribe_over_libp2p,
+    build_relationship_status_snapshot, exchange_peer_handshake_strict, get_over_libp2p,
+    load_remote_offers_over_libp2p, open_lifecycle_stream_once, subscribe_over_libp2p,
+    validate_remote_handshake,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
+    authority::{DeclaredDomain, PeerAuthorization},
     domain::{DelegationScope, DomainDeclaration, DomainDelegation, DomainError},
     error,
+    frame::FrameError,
+    handshake::{HandshakeError, PeerHandshake},
     message::SpatialMessage,
     offer::{
-        Offer, OfferAccessMode, OfferCatalogRequest, OfferCatalogRequestError,
-        OfferCatalogResponse, OfferCatalogResponseError,
+        Offer, OfferAccessMode, OfferCatalogPath, OfferCatalogPathError, OfferCatalogRequest,
+        OfferCatalogRequestError, OfferCatalogResponse, OfferCatalogResponseError,
     },
     status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
 };
@@ -33,6 +39,7 @@ pub struct AukiNode {
     local_offers: BTreeMap<(String, String), Offer>,
     remote_offer_reports: BTreeMap<PeerId, OfferLoadReport>,
     relationships: BTreeMap<PeerId, PeerRelationship>,
+    lifecycle_stream_guard: LifecycleStreamGuard,
 }
 
 /// Local domain authority material registered with the high-level node.
@@ -99,6 +106,28 @@ pub struct RemoteAllowedOffer {
     pub domain_id: String,
     /// Producer-scoped offer id.
     pub offer_id: String,
+}
+
+/// High-level lifecycle input. Callers do not pass handshake frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleInput {
+    /// Application peer-admission decision when config uses app-policy.
+    pub app_peer_authorization: Option<PeerAuthorization>,
+    /// Application domain-access decision when config uses app-policy.
+    pub app_domain_access: LifecycleDomainAccess,
+    /// Authorization-material `type` values required by local policy.
+    pub required_authorization_material_types: Vec<String>,
+}
+
+/// Application domain-access input for one lifecycle validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LifecycleDomainAccess {
+    /// No application domain-access decision was supplied.
+    NotProvided,
+    /// Application policy allows every authority-valid served domain.
+    AllowAll,
+    /// Application policy allows only these domain ids.
+    AllowOnly(Vec<String>),
 }
 
 /// High-level node events that do not expose libp2p stream or frame internals.
@@ -177,10 +206,20 @@ pub enum AukiNodeError {
     },
     /// Local offer catalog projection failed.
     OfferCatalog(OfferCatalogResponseError),
+    /// Local offer-catalog path construction failed.
+    OfferCatalogPath(OfferCatalogPathError),
     /// Local offer-catalog request construction failed.
     OfferCatalogRequest(OfferCatalogRequestError),
     /// Remote offer loading failed.
     OfferLoad(OfferLoadError),
+    /// Local peer-handshake construction failed.
+    LocalHandshake(HandshakeError),
+    /// Lifecycle stream open failed.
+    LifecycleOpen(LifecycleOpenStreamError),
+    /// Lifecycle stream exchange failed.
+    Lifecycle(LifecycleProtocolError),
+    /// Remote handshake failed local policy validation.
+    HandshakePolicy(HandshakePolicyError),
     /// No loaded remote offers are available for the requested peer.
     RemoteOffersNotLoaded {
         /// Remote peer id.
@@ -353,6 +392,40 @@ impl RemoteAllowedOffer {
     }
 }
 
+impl LifecycleInput {
+    /// Create lifecycle input without app-policy decisions or required material.
+    pub fn new() -> Self {
+        Self {
+            app_peer_authorization: None,
+            app_domain_access: LifecycleDomainAccess::NotProvided,
+            required_authorization_material_types: Vec::new(),
+        }
+    }
+}
+
+impl Default for LifecycleInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LifecycleDomainAccess {
+    fn allowed_domain_refs(&self) -> Vec<&str> {
+        match self {
+            Self::AllowOnly(domain_ids) => domain_ids.iter().map(String::as_str).collect(),
+            Self::NotProvided | Self::AllowAll => Vec::new(),
+        }
+    }
+
+    fn as_app_domain_access<'a>(&self, allowed_domain_ids: &'a [&'a str]) -> AppDomainAccess<'a> {
+        match self {
+            Self::NotProvided => AppDomainAccess::NotProvided,
+            Self::AllowAll => AppDomainAccess::AllowAll,
+            Self::AllowOnly(_) => AppDomainAccess::AllowOnly(allowed_domain_ids),
+        }
+    }
+}
+
 impl AukiNode {
     /// Build a high-level node from a local identity and runtime config.
     pub fn new(
@@ -366,6 +439,7 @@ impl AukiNode {
             local_offers: BTreeMap::new(),
             remote_offer_reports: BTreeMap::new(),
             relationships: BTreeMap::new(),
+            lifecycle_stream_guard: LifecycleStreamGuard::default(),
         };
         for peer in this.node.configured_peers().to_vec() {
             this.relationship_mut(peer.peer_id).configured();
@@ -481,6 +555,75 @@ impl AukiNode {
             Vec::new(),
         )
         .map_err(AukiNodeError::OfferCatalog)
+    }
+
+    /// Run the v1 lifecycle exchange and authorize one connected peer.
+    pub async fn run_lifecycle(
+        &mut self,
+        peer_id: PeerId,
+        input: LifecycleInput,
+        now: &str,
+    ) -> Result<HandshakeValidationResult, AukiNodeError> {
+        let local_handshake = self.local_peer_handshake()?;
+        let p2p_config = self.node.config().p2p.clone();
+        let mut control = self.node.stream_control();
+        let open =
+            open_lifecycle_stream_once(&mut control, &mut self.lifecycle_stream_guard, peer_id);
+        let mut stream = drive_node_until(&mut self.node, open)
+            .await
+            .map_err(AukiNodeError::LifecycleOpen)?;
+
+        let exchange = exchange_peer_handshake_strict(
+            &mut stream,
+            peer_id,
+            &local_handshake,
+            p2p_config.limits.handshake_frame_body_bytes,
+        );
+        let exchange = match drive_node_until(&mut self.node, exchange).await {
+            Ok(exchange) => exchange,
+            Err(error) => {
+                self.lifecycle_stream_guard.fail(peer_id);
+                self.record_lifecycle_failure(peer_id, &error, now);
+                return Err(AukiNodeError::Lifecycle(error));
+            }
+        };
+
+        let required_material_types = input
+            .required_authorization_material_types
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let allowed_domain_ids = input.app_domain_access.allowed_domain_refs();
+        let mut validation_input = HandshakeValidationInput::new(
+            &exchange.authenticated_peer_id,
+            &exchange.handshake,
+            &p2p_config,
+            now,
+        );
+        validation_input.app_peer_authorization = input.app_peer_authorization;
+        validation_input.app_domain_access = input
+            .app_domain_access
+            .as_app_domain_access(&allowed_domain_ids);
+        validation_input.required_authorization_material_types = &required_material_types;
+
+        match validate_remote_handshake(validation_input) {
+            Ok(result) => {
+                self.lifecycle_stream_guard.complete(peer_id);
+                self.relationship_mut(peer_id)
+                    .handshake_accepted(result.clone());
+                Ok(result)
+            }
+            Err(error) => {
+                self.lifecycle_stream_guard.fail(peer_id);
+                let failure_cap = self.node.config().p2p.limits.retained_status_failures;
+                self.relationship_mut(peer_id).handshake_failed(
+                    &error,
+                    now.to_owned(),
+                    failure_cap,
+                );
+                Err(AukiNodeError::HandshakePolicy(error))
+            }
+        }
     }
 
     /// Load and validate one remote peer's offer catalog over libp2p.
@@ -730,6 +873,54 @@ impl AukiNode {
             .or_insert_with(|| PeerRelationship::new(peer_id))
     }
 
+    fn local_peer_handshake(&self) -> Result<PeerHandshake, AukiNodeError> {
+        let declared_domains = self
+            .local_domains
+            .values()
+            .map(|registration| {
+                DeclaredDomain::new(
+                    registration.domain_id.clone(),
+                    registration.declaration.clone(),
+                    registration.delegation.clone(),
+                )
+            })
+            .collect();
+
+        if self.local_offers.is_empty() {
+            Ok(PeerHandshake::create(
+                self.identity().peer_binding().clone(),
+                declared_domains,
+            ))
+        } else {
+            let catalog_path =
+                OfferCatalogPath::create(None).map_err(AukiNodeError::OfferCatalogPath)?;
+            let handshake = PeerHandshake::create_with_offer_catalog(
+                self.identity().peer_binding().clone(),
+                declared_domains,
+                catalog_path,
+            );
+            PeerHandshake::from_value(handshake.into_value()).map_err(AukiNodeError::LocalHandshake)
+        }
+    }
+
+    fn record_lifecycle_failure(
+        &mut self,
+        peer_id: PeerId,
+        error: &LifecycleProtocolError,
+        observed_at: &str,
+    ) {
+        let mut failure = RelationshipFailureRecord::new(
+            lifecycle_protocol_failure_code(error),
+            observed_at.to_owned(),
+            RelationshipFailureScope::Peer,
+        );
+        failure.peer_id = Some(peer_id);
+        failure.message = Some(error.to_string());
+        let failure_cap = self.node.config().p2p.limits.retained_status_failures;
+        self.relationship_mut(peer_id)
+            .degraded(failure, failure_cap);
+    }
+
     fn validate_local_domain_registration(
         &self,
         registration: &LocalDomainRegistration,
@@ -878,8 +1069,13 @@ impl fmt::Display for AukiNodeError {
                 "local offer {offer_id} references unregistered domain {domain_id}"
             ),
             Self::OfferCatalog(error) => write!(f, "{error}"),
+            Self::OfferCatalogPath(error) => write!(f, "{error}"),
             Self::OfferCatalogRequest(error) => write!(f, "{error}"),
             Self::OfferLoad(error) => write!(f, "{error}"),
+            Self::LocalHandshake(error) => write!(f, "{error}"),
+            Self::LifecycleOpen(error) => write!(f, "{error}"),
+            Self::Lifecycle(error) => write!(f, "{error}"),
+            Self::HandshakePolicy(error) => write!(f, "{error}"),
             Self::RemoteOffersNotLoaded { peer_id } => {
                 write!(f, "remote offers are not loaded for peer {peer_id}")
             }
@@ -925,6 +1121,18 @@ fn path_client_read_error(error: PathClientError) -> PathOrchestrationError {
     PathOrchestrationError::SubscribeClient(error)
 }
 
+fn lifecycle_protocol_failure_code(error: &LifecycleProtocolError) -> &'static str {
+    match error {
+        LifecycleProtocolError::Io(_) => error::TRANSPORT_FAILED,
+        LifecycleProtocolError::Frame(FrameError::BodyTooLarge { .. }) => {
+            error::MESSAGE_PAYLOAD_TOO_LARGE
+        }
+        LifecycleProtocolError::Frame(_) => error::TRANSPORT_FAILED,
+        LifecycleProtocolError::Handshake(error) => error.failure_code(),
+        LifecycleProtocolError::ExtraFrame => error::HANDSHAKE_INVALID_MESSAGE,
+    }
+}
+
 async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output = T>) -> T {
     tokio::pin!(future);
     loop {
@@ -939,7 +1147,8 @@ async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output 
 mod tests {
     use super::*;
     use crate::{
-        OfferPolicy, PeerRelationshipState, accept_offer_catalog_streams,
+        OfferPolicy, PeerRelationshipState, accept_lifecycle_streams, accept_offer_catalog_streams,
+        exchange_peer_handshake_strict,
         protocols::{get_protocol, subscribe_protocol},
         serve_offer_catalog_response,
     };
@@ -1003,15 +1212,6 @@ mod tests {
             diagnostics: Vec::new(),
             generated_at: Some(ISSUED_AT.to_owned()),
         }
-    }
-
-    fn mark_authorized_for_domain(node: &mut AukiNode, peer_id: PeerId, domain_id: &str) {
-        let relationship = node.relationship_mut(peer_id);
-        relationship.state = PeerRelationshipState::Authorized;
-        relationship.connected = true;
-        relationship.authorized = true;
-        relationship.accepted_served_domains = vec![domain_id.to_owned()];
-        relationship.offer_catalog_state = OfferCatalogLoadState::Available;
     }
 
     fn message_value(domain_id: &str, offer_id: &str, sequence: u64) -> Value {
@@ -1239,6 +1439,8 @@ mod tests {
             LocalDomainRegistration::owner(declaration, true).expect("owner registration");
         let domain_id = registration.domain_id().to_owned();
         let mut dialer_config = AukiP2pNodeConfig::dial_only_development();
+        dialer_config.p2p.peer_admission = crate::PeerAdmissionConfig::AppPolicy;
+        dialer_config.p2p.domain_access_policy = crate::DomainAccessPolicy::AppPolicy;
         dialer_config.p2p.offer_policy = OfferPolicy::AppPolicy;
         let mut dialer = AukiNode::new(identity(86), dialer_config).unwrap();
         let mut listener = AukiNode::new(
@@ -1250,8 +1452,11 @@ mod tests {
         let listener_peer_id = listener.peer_id();
         let listener_addr = wait_for_listen_addr(&mut listener).await;
         let limits = dialer.node.config().p2p.limits;
-        let mut incoming = accept_offer_catalog_streams(&mut listener.node.stream_control())
-            .expect("accept offer catalog streams");
+        let mut lifecycle_incoming = accept_lifecycle_streams(&mut listener.node.stream_control())
+            .expect("accept lifecycle streams");
+        let mut catalog_incoming =
+            accept_offer_catalog_streams(&mut listener.node.stream_control())
+                .expect("accept offer catalog streams");
         let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
         listener_peer.dial_addresses.push(listener_addr);
 
@@ -1264,6 +1469,7 @@ mod tests {
         let response = listener
             .local_offer_catalog_response(Some(ISSUED_AT))
             .expect("local offer catalog");
+        let listener_handshake = listener.local_peer_handshake().expect("local handshake");
 
         dialer
             .upsert_configured_peer(listener_peer)
@@ -1273,11 +1479,40 @@ mod tests {
             .expect("dial configured peer");
         let listener_task = tokio::spawn(drain_node(listener));
         wait_for_peer_connected(&mut dialer, listener_peer_id).await;
-        mark_authorized_for_domain(&mut dialer, listener_peer_id, &domain_id);
+
+        let lifecycle_server = tokio::spawn(async move {
+            let (peer_id, mut stream) = lifecycle_incoming.next().await.expect("lifecycle stream");
+            assert_eq!(peer_id, dialer_peer_id);
+            exchange_peer_handshake_strict(
+                &mut stream,
+                peer_id,
+                &listener_handshake,
+                limits.handshake_frame_body_bytes,
+            )
+            .await
+            .expect("exchange lifecycle handshake");
+        });
+
+        let mut lifecycle_input = LifecycleInput::new();
+        lifecycle_input.app_peer_authorization = Some(PeerAuthorization::Authorized);
+        lifecycle_input.app_domain_access =
+            LifecycleDomainAccess::AllowOnly(vec![domain_id.clone()]);
+        let lifecycle = dialer
+            .run_lifecycle(listener_peer_id, lifecycle_input, ISSUED_AT)
+            .await
+            .expect("run lifecycle");
+        assert_eq!(lifecycle.accepted_served_domains.len(), 1);
+        assert_eq!(lifecycle.accepted_served_domains[0].domain_id, domain_id);
+        assert_eq!(
+            dialer.relationship(listener_peer_id).unwrap().state,
+            PeerRelationshipState::Authorized
+        );
+        lifecycle_server.await.expect("lifecycle server task");
 
         let server_domain_id = domain_id.clone();
         let server = tokio::spawn(async move {
-            let (peer_id, mut stream) = incoming.next().await.expect("offer catalog stream");
+            let (peer_id, mut stream) =
+                catalog_incoming.next().await.expect("offer catalog stream");
             assert_eq!(peer_id, dialer_peer_id);
             let request = serve_offer_catalog_response(&mut stream, &response, limits)
                 .await

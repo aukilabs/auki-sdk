@@ -11,10 +11,11 @@
 //!   `.to_json()` method daemons serve verbatim on their HTTP
 //!   surface.
 //! - `ClusterManager(...)` — the daemon-side cluster handle. Sync
-//!   constructors (`create_cluster`, `create_cluster_with_relay_multiaddrs`)
-//!   and methods, each `block_on`s on a process-wide multi-thread tokio
-//!   runtime.
+//!   constructors (`create_cluster`, `create_cluster_with_relay_multiaddrs`,
+//!   `create_cluster_with_relay_reservation`) and methods, each `block_on`s
+//!   on a process-wide multi-thread tokio runtime.
 
+use auki_domain_rs::cluster_manager::ManagerRelayReservation as RustManagerRelayReservation;
 use auki_domain_rs::{
     AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
     BuildStreamManifestError as RustBuildStreamManifestError, ClusterManager as RustClusterManager,
@@ -1668,6 +1669,111 @@ impl PyClusterManager {
         })
     }
 
+    /// Create a new cluster after reserving a relay-mediated Manager
+    /// address through a Domain Relay.
+    ///
+    /// All args match `create_cluster(...)`, with the additional
+    /// `relay_dial_multiaddr`, `relay_advertise_multiaddr`, and
+    /// optional `relay_reservation_timeout_ms`.
+    ///
+    /// - `relay_dial_multiaddr`: native-dialable relay address used by
+    ///   the Manager to reserve the circuit, suffixed with
+    ///   `/p2p/<relay-peer-id>`.
+    /// - `relay_advertise_multiaddr`: browser-dialable relay base
+    ///   address, also suffixed with `/p2p/<relay-peer-id>`. Discovery
+    ///   receives this as both a relay hint and a Manager circuit
+    ///   address after the reservation succeeds.
+    #[staticmethod]
+    #[pyo3(signature = (
+        wallet_seed,
+        cluster_name,
+        discovery_url,
+        listen_addresses,
+        relay_dial_multiaddr,
+        relay_advertise_multiaddr,
+        agent_version,
+        daemon_info,
+        stream_provider = None,
+        external_addresses = None,
+        relay_reservation_timeout_ms = 10000,
+    ))]
+    fn create_cluster_with_relay_reservation(
+        py: Python<'_>,
+        wallet_seed: Vec<u8>,
+        cluster_name: &str,
+        discovery_url: &str,
+        listen_addresses: Vec<String>,
+        relay_dial_multiaddr: &str,
+        relay_advertise_multiaddr: &str,
+        agent_version: &str,
+        daemon_info: &PyDaemonInfo,
+        stream_provider: Option<Py<PyAny>>,
+        external_addresses: Option<Vec<String>>,
+        relay_reservation_timeout_ms: u64,
+    ) -> PyResult<Self> {
+        let seed: [u8; 32] = wallet_seed
+            .try_into()
+            .map_err(|_| PyValueError::new_err("wallet_seed must be 32 bytes"))?;
+        let cluster_name = cluster_name.to_string();
+        let discovery_url = discovery_url.to_string();
+        let agent_version = agent_version.to_string();
+        let listen_multiaddrs = parse_multiaddrs(&listen_addresses)?;
+        let relay_dial_multiaddr = Multiaddr::from_str(relay_dial_multiaddr).map_err(|e| {
+            PyValueError::new_err(format!(
+                "invalid relay_dial_multiaddr {relay_dial_multiaddr:?}: {e}"
+            ))
+        })?;
+        let relay_advertise_multiaddr =
+            Multiaddr::from_str(relay_advertise_multiaddr).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "invalid relay_advertise_multiaddr {relay_advertise_multiaddr:?}: {e}"
+                ))
+            })?;
+        let external_multiaddrs = match external_addresses {
+            Some(addrs) => Some(parse_multiaddrs(&addrs)?),
+            None => None,
+        };
+        let daemon = daemon_info.inner.clone();
+        let provider: StreamProvider = match stream_provider {
+            Some(callable) => stream_provider_from_python(py, callable)?,
+            None => decline_all_streams(),
+        };
+        let relay_reservation = RustManagerRelayReservation {
+            relay_dial_multiaddr,
+            relay_advertise_multiaddr,
+            timeout: std::time::Duration::from_millis(relay_reservation_timeout_ms),
+        };
+
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let (identity, swarm, advertise_multiaddrs) = build_identity_and_swarm(
+                    &seed,
+                    listen_multiaddrs,
+                    agent_version,
+                    external_multiaddrs.as_deref(),
+                )
+                .await?;
+
+                let manager = RustClusterManager::create_cluster_with_relay_reservation(
+                    cluster_name,
+                    identity,
+                    advertise_multiaddrs,
+                    relay_reservation,
+                    discovery_url,
+                    swarm,
+                    provider,
+                    daemon,
+                )
+                .await
+                .map_err(map_create_cluster_error)?;
+
+                Ok::<_, PyErr>(Self {
+                    inner: Arc::new(Mutex::new(Some(manager))),
+                })
+            })
+        })
+    }
+
     /// Join an existing cluster by talking to its Manager. Looks
     /// the cluster up in Discovery, opens a libp2p
     /// `/auki/join/0.0.1` substream to the Manager, sends a join
@@ -2427,6 +2533,9 @@ fn map_bootstrap_error(e: RustBootstrapError) -> PyErr {
         RustBootstrapError::Runtime(err) => {
             PyRuntimeError::new_err(format!("runtime spawn failed: {err}"))
         }
+        RustBootstrapError::RelayReservation(err) => {
+            PyOSError::new_err(format!("relay reservation failed: {err}"))
+        }
     }
 }
 
@@ -2438,6 +2547,9 @@ fn map_create_cluster_error(e: RustCreateClusterError) -> PyErr {
         )),
         RustCreateClusterError::Runtime(err) => {
             PyRuntimeError::new_err(format!("runtime spawn failed: {err}"))
+        }
+        RustCreateClusterError::RelayReservation(err) => {
+            PyOSError::new_err(format!("relay reservation failed: {err}"))
         }
     }
 }
@@ -2627,6 +2739,46 @@ mod tests {
                     .getattr("create_cluster_with_relay_multiaddrs")
                     .is_ok()
             );
+            assert!(
+                manager
+                    .getattr("create_cluster_with_relay_reservation")
+                    .is_ok()
+            );
+        });
+    }
+
+    #[test]
+    fn relay_reservation_create_validates_relay_multiaddrs_before_network() {
+        Python::with_gil(|py| {
+            let daemon = PyDaemonInfo::new(
+                "test-app".into(),
+                "test-daemon".into(),
+                "session".into(),
+                "clock".into(),
+                "clock-hash".into(),
+                "instance".into(),
+            );
+
+            let err = match PyClusterManager::create_cluster_with_relay_reservation(
+                py,
+                vec![7; 32],
+                "relay-validation",
+                "http://127.0.0.1:0",
+                vec!["/ip4/0.0.0.0/tcp/0".into()],
+                "not-a-multiaddr",
+                "/ip4/127.0.0.1/tcp/4002/ws/p2p/12D3KooWJfVjn3XAFv5XnuACSMsPB3Uh8nCqC7zkKMNpJkgjKZBW",
+                "test/0.0.0",
+                &daemon,
+                None,
+                Some(vec!["/ip4/127.0.0.1/tcp/4001".into()]),
+                1,
+            ) {
+                Ok(_) => panic!("invalid relay dial multiaddr should fail before network work"),
+                Err(err) => err,
+            };
+
+            assert!(err.is_instance_of::<PyValueError>(py));
+            assert!(err.to_string().contains("relay_dial_multiaddr"));
         });
     }
 

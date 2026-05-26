@@ -28,6 +28,7 @@ runtime, Discovery client, or app-specific lifecycle facade.
 - `vectors/v1_handshakes.json` — locked handshake examples and authority-validation vectors.
 - `vectors/v1_offer_catalogs.json` — locked offer-catalog request, response, and offer vectors.
 - `vectors/v1_get.json` — locked Get request and response vectors.
+- `vectors/v1_subscribe.json` — locked Subscribe request, start, data, and end vectors.
 
 ## Depends on
 

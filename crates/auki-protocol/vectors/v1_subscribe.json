@@ -1,0 +1,226 @@
+{
+  "inputs": {
+    "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+    "initial_sequence": 7,
+    "max_message_bytes": 512,
+    "offer_id": "camera-main",
+    "selected_payload_type": "auki.frame"
+  },
+  "name": "auki.protocol.v1.subscribe.vectors",
+  "negative": {
+    "accept_offer_mismatch": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "other-offer",
+        "payload": {
+          "type": "auki.frame"
+        },
+        "type": "auki.subscribe_accept.v1"
+      }
+    },
+    "accept_payload_type_not_accepted": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "camera-main",
+        "payload": {
+          "type": "other.payload"
+        },
+        "type": "auki.subscribe_accept.v1"
+      }
+    },
+    "data_message_offer_mismatch": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "other-offer",
+        "payload": {
+          "bytes": "AQID",
+          "type": "auki.frame"
+        },
+        "type": "auki.spatial_message.v1"
+      }
+    },
+    "data_message_payload_too_large": {
+      "expected": "message.payload_too_large",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "camera-main",
+        "payload": {
+          "bytes": "AQID",
+          "type": "auki.frame"
+        },
+        "type": "auki.spatial_message.v1"
+      },
+      "request_max_message_bytes": 32
+    },
+    "data_message_payload_type_mismatch": {
+      "expected": "message.invalid_payload",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "camera-main",
+        "payload": {
+          "bytes": "AQID",
+          "type": "other.payload"
+        },
+        "type": "auki.spatial_message.v1"
+      }
+    },
+    "end_path_mismatch": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "other-offer",
+        "reason": "cancelled",
+        "type": "auki.subscribe_end.v1"
+      }
+    },
+    "end_unknown_reason": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "offer_id": "camera-main",
+        "reason": "unknown",
+        "type": "auki.subscribe_end.v1"
+      }
+    },
+    "request_invalid_domain_id": {
+      "expected": "subscribe.invalid_request",
+      "object": {
+        "domain_id": "bad",
+        "offer_id": "camera-main",
+        "type": "auki.subscribe_request.v1"
+      }
+    },
+    "request_zero_max_message_bytes": {
+      "expected": "subscribe.invalid_request",
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "max_message_bytes": 0,
+        "offer_id": "camera-main",
+        "type": "auki.subscribe_request.v1"
+      }
+    },
+    "start_unsupported_type": {
+      "expected": "message.invalid_envelope",
+      "object": {
+        "type": "auki.subscribe_pending.v1"
+      }
+    }
+  },
+  "positive": {
+    "accept_start_result": {
+      "expected": {
+        "generated_at": "2026-05-26T12:00:00Z",
+        "initial_sequence": 7,
+        "registry_refs": 1
+      },
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "generated_at": "2026-05-26T12:00:00Z",
+        "initial_sequence": "7",
+        "metadata": {
+          "fixture": true
+        },
+        "offer_id": "camera-main",
+        "payload": {
+          "encoding": "binary",
+          "media_type": "application/octet-stream",
+          "schema_version": "1",
+          "type": "auki.frame"
+        },
+        "registry_refs": [
+          {
+            "hash": "sha256:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+            "id": "camera-main",
+            "registry": "sensor",
+            "role": "primary"
+          }
+        ],
+        "type": "auki.subscribe_accept.v1"
+      }
+    },
+    "data_message": {
+      "expected": {
+        "raw_payload_len": 3,
+        "sequence": 7
+      },
+      "object": {
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "generated_at": "2026-05-26T12:00:01Z",
+        "metadata": {
+          "fixture": true
+        },
+        "offer_id": "camera-main",
+        "payload": {
+          "bytes": "AQID",
+          "encoding": "binary",
+          "type": "auki.frame"
+        },
+        "sequence": "7",
+        "timestamp_ns": "123456789",
+        "type": "auki.spatial_message.v1"
+      }
+    },
+    "end_message": {
+      "expected": {
+        "reason": "offer_withdrawn",
+        "retryable": true
+      },
+      "object": {
+        "details": {
+          "retry_after_ms": 1000
+        },
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "error": {
+          "code": "offer.temporarily_unavailable",
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "offer_id": "camera-main",
+          "retryable": true
+        },
+        "offer_id": "camera-main",
+        "reason": "offer_withdrawn",
+        "retryable": true,
+        "type": "auki.subscribe_end.v1"
+      }
+    },
+    "reject_start_result": {
+      "expected": {
+        "code": "offer.unknown_offer"
+      },
+      "object": {
+        "error": {
+          "code": "offer.unknown_offer",
+          "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+          "message": "unknown offer",
+          "offer_id": "camera-main",
+          "retryable": false
+        },
+        "type": "auki.subscribe_reject.v1"
+      }
+    },
+    "request": {
+      "expected": {
+        "accepted_payload_types": [
+          "auki.frame"
+        ],
+        "max_message_bytes": 512
+      },
+      "object": {
+        "accepted_payload_types": [
+          "auki.frame"
+        ],
+        "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+        "max_message_bytes": 512,
+        "offer_id": "camera-main",
+        "params": {
+          "frame": "latest",
+          "stream": "live"
+        },
+        "type": "auki.subscribe_request.v1"
+      }
+    }
+  },
+  "version": 1
+}

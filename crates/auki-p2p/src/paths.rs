@@ -17,7 +17,7 @@ use auki_protocol::v1::{
 };
 use libp2p_identity::PeerId;
 use serde_json::Value;
-use std::fmt;
+use std::{fmt, future::Future};
 
 const GET_PATH_TYPE: &str = "get";
 const SUBSCRIBE_PATH_TYPE: &str = "subscribe";
@@ -32,7 +32,11 @@ const SUBSCRIBE_ENDED: &str = "ended";
 /// Internal client boundary for one Get operation.
 pub trait GetClient {
     /// Execute one high-level Get request and return one encoded Get response frame.
-    fn get(&mut self, peer_id: PeerId, request: GetRequest) -> Result<Vec<u8>, PathClientError>;
+    fn get(
+        &mut self,
+        peer_id: PeerId,
+        request: GetRequest,
+    ) -> impl Future<Output = Result<Vec<u8>, PathClientError>>;
 }
 
 /// Internal client boundary for one Subscribe start operation.
@@ -42,7 +46,7 @@ pub trait SubscribeClient {
         &mut self,
         peer_id: PeerId,
         request: SubscribeRequest,
-    ) -> Result<Vec<u8>, PathClientError>;
+    ) -> impl Future<Output = Result<Vec<u8>, PathClientError>>;
 }
 
 /// Transport/client failure while running a path operation.
@@ -390,7 +394,7 @@ impl fmt::Display for PathOrchestrationError {
 impl std::error::Error for PathOrchestrationError {}
 
 /// Run one high-level Get operation.
-pub fn get<C: GetClient>(
+pub async fn get<C: GetClient>(
     relationship: &mut PeerRelationship,
     offers: &OfferLoadReport,
     client: &mut C,
@@ -453,7 +457,7 @@ pub fn get<C: GetClient>(
         }
     };
 
-    let frame = match client.get(relationship.peer_id, request.clone()) {
+    let frame = match client.get(relationship.peer_id, request.clone()).await {
         Ok(frame) => frame,
         Err(error) => {
             let error = PathOrchestrationError::GetClient(error);
@@ -541,7 +545,7 @@ pub fn get<C: GetClient>(
 }
 
 /// Start one high-level Subscribe operation.
-pub fn subscribe<C: SubscribeClient>(
+pub async fn subscribe<C: SubscribeClient>(
     relationship: &mut PeerRelationship,
     offers: &OfferLoadReport,
     client: &mut C,
@@ -604,7 +608,10 @@ pub fn subscribe<C: SubscribeClient>(
         }
     };
 
-    let frame = match client.subscribe(relationship.peer_id, request.clone()) {
+    let frame = match client
+        .subscribe(relationship.peer_id, request.clone())
+        .await
+    {
         Ok(frame) => frame,
         Err(error) => {
             let error = PathOrchestrationError::SubscribeClient(error);
@@ -1144,13 +1151,14 @@ mod tests {
             &mut self,
             _peer_id: PeerId,
             request: GetRequest,
-        ) -> Result<Vec<u8>, PathClientError> {
+        ) -> impl Future<Output = Result<Vec<u8>, PathClientError>> {
             self.request = Some(request);
-            if let Some(error) = self.error.clone() {
+            let result = if let Some(error) = self.error.clone() {
                 Err(error)
             } else {
                 Ok(self.frame.clone().expect("test frame"))
-            }
+            };
+            async move { result }
         }
     }
 
@@ -1166,13 +1174,14 @@ mod tests {
             &mut self,
             _peer_id: PeerId,
             request: SubscribeRequest,
-        ) -> Result<Vec<u8>, PathClientError> {
+        ) -> impl Future<Output = Result<Vec<u8>, PathClientError>> {
             self.request = Some(request);
-            if let Some(error) = self.error.clone() {
+            let result = if let Some(error) = self.error.clone() {
                 Err(error)
             } else {
                 Ok(self.frame.clone().expect("test frame"))
-            }
+            };
+            async move { result }
         }
     }
 
@@ -1271,8 +1280,8 @@ mod tests {
         PathContext::new(config, NOW)
     }
 
-    #[test]
-    fn get_builds_high_level_request_and_tracks_success() {
+    #[tokio::test]
+    async fn get_builds_high_level_request_and_tracks_success() {
         let config = test_config();
         let mut relationship = test_relationship();
         let response = GetResponse::success(message(DOMAIN_ID, "camera-main", "auki.frame", 7));
@@ -1295,6 +1304,7 @@ mod tests {
             input,
             context(&config),
         )
+        .await
         .expect("get succeeds");
 
         assert_eq!(outcome.message.sequence, Some(7));
@@ -1310,8 +1320,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn get_uses_lower_payload_limit_and_validates_selected_payload() {
+    #[tokio::test]
+    async fn get_uses_lower_payload_limit_and_validates_selected_payload() {
         let mut config = test_config();
         config.limits.get_response_frame_body_bytes = 32;
         let mut relationship = test_relationship();
@@ -1330,6 +1340,7 @@ mod tests {
             input,
             context(&config),
         )
+        .await
         .expect_err("frame body exceeds local limit");
 
         assert!(matches!(
@@ -1355,6 +1366,7 @@ mod tests {
             GetInput::new(DOMAIN_ID, "camera-main"),
             context(&config),
         )
+        .await
         .expect_err("payload mismatch");
 
         assert!(matches!(
@@ -1364,8 +1376,8 @@ mod tests {
         assert_eq!(relationship.paths[0].state.as_deref(), Some(PATH_FAILED));
     }
 
-    #[test]
-    fn get_records_unknown_unusable_and_remote_failures_without_trusting_retryable() {
+    #[tokio::test]
+    async fn get_records_unknown_unusable_and_remote_failures_without_trusting_retryable() {
         let config = test_config();
         let mut relationship = test_relationship();
         let mut client = StaticGetClient::default();
@@ -1377,6 +1389,7 @@ mod tests {
             GetInput::new(DOMAIN_ID, "missing"),
             context(&config),
         )
+        .await
         .expect_err("unknown offer");
         assert_eq!(error.failure_code(), error::OFFER_UNKNOWN_OFFER);
 
@@ -1387,6 +1400,7 @@ mod tests {
             GetInput::new(DOMAIN_ID, "camera-main"),
             context(&config),
         )
+        .await
         .expect_err("unusable offer");
         assert_eq!(error.failure_code(), error::OFFER_STALE);
 
@@ -1412,6 +1426,7 @@ mod tests {
             GetInput::new(DOMAIN_ID, "camera-main"),
             context(&config),
         )
+        .await
         .expect_err("remote get rejection");
 
         assert_eq!(error.failure_code(), error::OFFER_UNKNOWN_OFFER);
@@ -1431,8 +1446,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subscribe_returns_handle_and_tracks_active_path() {
+    #[tokio::test]
+    async fn subscribe_returns_handle_and_tracks_active_path() {
         let config = test_config();
         let mut relationship = test_relationship();
         let accept = SubscribeAccept::create(
@@ -1462,6 +1477,7 @@ mod tests {
             input,
             context(&config),
         )
+        .await
         .expect("subscribe accepted");
 
         assert_eq!(handle.payload_type(), "auki.frame");
@@ -1476,8 +1492,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subscribe_uses_lower_message_limit_and_validates_accept_payload() {
+    #[tokio::test]
+    async fn subscribe_uses_lower_message_limit_and_validates_accept_payload() {
         let mut config = test_config();
         config.limits.subscribe_message_frame_body_bytes = 512;
         let mut relationship = test_relationship();
@@ -1505,6 +1521,7 @@ mod tests {
             input,
             context(&config),
         )
+        .await
         .expect("subscribe accepted");
 
         assert_eq!(
@@ -1539,6 +1556,7 @@ mod tests {
             SubscribeInput::new(DOMAIN_ID, "camera-main"),
             context(&config),
         )
+        .await
         .expect_err("accept payload not requested");
 
         assert!(matches!(
@@ -1549,8 +1567,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn subscribe_reject_records_structured_failure_without_remote_retryable() {
+    #[tokio::test]
+    async fn subscribe_reject_records_structured_failure_without_remote_retryable() {
         let config = test_config();
         let mut relationship = test_relationship();
         let reject = SubscribeReject::create(
@@ -1576,6 +1594,7 @@ mod tests {
             SubscribeInput::new(DOMAIN_ID, "camera-main"),
             context(&config),
         )
+        .await
         .expect_err("subscribe rejected");
 
         assert_eq!(error.failure_code(), error::OFFER_UNKNOWN_OFFER);

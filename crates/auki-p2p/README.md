@@ -42,9 +42,14 @@ Current public surface:
 - `paths` defines high-level Get and Subscribe orchestration over loaded offers:
   request shaping, response validation, data-message validation, path status,
   and sequence-gap diagnostics before transport wiring.
+- `path_streams` wires that orchestration to `/auki/get/0.0.1` and
+  `/auki/subscribe/0.0.1` libp2p streams, opening one stream per logical path
+  and applying frame limits before handing frames to the pure validators.
 
 The first runtime test proves two deterministic local peers can connect over an
 OS-assigned loopback TCP port and observe each other's authenticated `PeerId`.
 The lifecycle stream test then proves the same peers can exchange RFC
 `PeerHandshake` frames both ways without pulling in offers, Get, Subscribe,
 Discovery, or app adapters.
+Path stream tests now cover one loopback Get and one loopback Subscribe start
+followed by a data frame.

@@ -10,6 +10,7 @@ pub mod identity;
 pub mod lifecycle;
 pub mod node;
 pub mod offer_loading;
+pub mod path_streams;
 pub mod paths;
 pub mod protocols;
 pub mod relationship;
@@ -36,6 +37,9 @@ pub use offer_loading::{
     AppAllowedOffer, AppOfferPolicy, LoadedRemoteOffer, OfferCatalogClient,
     OfferCatalogClientError, OfferLoadContext, OfferLoadError, OfferLoadReport, OfferLookupError,
     load_remote_offers_from_frame, load_remote_offers_with_client,
+};
+pub use path_streams::{
+    Libp2pPathClient, Libp2pSubscription, get_over_libp2p, subscribe_over_libp2p,
 };
 pub use paths::{
     GetClient, GetInput, GetOutcome, PathClientError, PathContext, PathOrchestrationError,

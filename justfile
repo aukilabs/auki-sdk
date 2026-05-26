@@ -1,6 +1,16 @@
 diagnostic-app:
     cargo run -p auki-diagnostic-app
 
+overwatch:
+    node examples/overwatch/scripts/stage-sdk.mjs
+    npm --prefix examples/overwatch install
+    npm --prefix examples/overwatch run dev
+
+overwatch-smoke:
+    node examples/overwatch/scripts/stage-sdk.mjs
+    npm --prefix examples/overwatch install
+    npm --prefix examples/overwatch run smoke
+
 install-toolchain:
     bash scripts/install-toolchain.sh
 
@@ -13,6 +23,12 @@ generate-python-bindings crate:
 
 generate-javascript-bindings crate:
     bash scripts/generate-javascript-bindings.sh "{{crate}}"
+
+binding-api-coverage *crates:
+    python3 scripts/bindings/check-binding-api-coverage.py {{crates}}
+
+check-binding-api-coverage *crates:
+    python3 scripts/bindings/check-binding-api-coverage.py --fail-on-gaps {{crates}}
 
 generate-rust-proto:
     bash scripts/generate-rust-proto.sh

@@ -29,6 +29,7 @@ wasm = [
     "dep:js-sys",
     "dep:prost",
     "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
 ]
 # Stream/message protocol wire types live in `auki-proto`; pulled in
 # alongside libp2p so substream protocols can encode/decode prost messages
@@ -65,6 +66,7 @@ serde_json = "1"
 getrandom = { version = "0.2", features = ["js"], optional = true }
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 
 # `swarm` feature
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }

@@ -1,0 +1,106 @@
+import type { Libp2p } from "libp2p";
+
+export interface AukiNetworkPeerOptions {
+  seed?: Uint8Array;
+  walletSeed?: Uint8Array;
+  listenAddresses?: string[];
+  announceAddresses?: string[];
+  transports?: unknown[];
+  connectionEncrypters?: unknown[];
+  streamMuxers?: unknown[];
+  services?: Record<string, unknown>;
+  start?: boolean;
+}
+
+export interface DiscoverySignalingOptions {
+  discoveryUrl: string;
+  discovery?: {
+    sendSignalJson(signalJson: string): Promise<string>;
+    pollSignalsJson(queryJson: string): Promise<string>;
+  };
+  startPolling?: boolean;
+  pollTimeoutMs?: number;
+  pollBackoffMs?: number;
+  rtcConfiguration?: RTCConfiguration;
+  clusterName?: string;
+}
+
+export interface BrowserProbeOptions extends AukiNetworkPeerOptions {
+  address: string;
+  nonce?: string;
+  payload?: Uint8Array;
+}
+
+export interface BrowserProbeResponse {
+  nonce: string;
+  payload: number[];
+  responder: string;
+}
+
+export declare function importAukiPeerPrivateKey(
+  seedInput: Pick<AukiNetworkPeerOptions, "seed" | "walletSeed">,
+): Promise<unknown>;
+
+export declare function createAukiNetworkPeer(options?: AukiNetworkPeerOptions): Promise<AukiNetworkPeer>;
+
+export declare function dialBrowserProbe(options: BrowserProbeOptions): Promise<BrowserProbeResponse>;
+
+export declare class AukiNetworkPeer {
+  constructor(node: Libp2p);
+  static create(options?: AukiNetworkPeerOptions): Promise<AukiNetworkPeer>;
+  readonly node: Libp2p;
+  readonly peerId: string;
+  readonly multiaddrs: string[];
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  configureDiscoverySignaling(options: DiscoverySignalingOptions): Promise<void>;
+  dialProtocol(address: string, protocol: string, options?: unknown): Promise<unknown>;
+  handle(protocol: string, handler: unknown, options?: unknown): Promise<void>;
+  unhandle(protocol: string): Promise<void>;
+  dialBrowserProbe(peerMultiaddr: string, options?: { nonce?: string; payload?: Uint8Array }): Promise<BrowserProbeResponse>;
+  sendMessageEnvelope(peerMultiaddr: string, envelopeBytes: Uint8Array): Promise<Uint8Array>;
+  requestJoin(peerMultiaddr: string, requestBytes: Uint8Array): Promise<Uint8Array>;
+  requestCatalog(peerMultiaddr: string, requestBytes: Uint8Array): Promise<Uint8Array>;
+  openStream(peerMultiaddr: string, requestJson: string | { sensor_id: string }): Promise<AukiBrowserStream>;
+  handleStream(
+    protocol: string,
+    handler: (request: { sensor_id: string }, context: { protocol: string; connection: unknown; stream: AukiBrowserStream }) => AukiBrowserStream | null | undefined | Promise<AukiBrowserStream | null | undefined>,
+    options?: unknown,
+  ): Promise<void>;
+  handleStream(
+    handler: (request: { sensor_id: string }, context: { protocol: string; connection: unknown; stream: AukiBrowserStream }) => AukiBrowserStream | null | undefined | Promise<AukiBrowserStream | null | undefined>,
+    options?: unknown,
+  ): Promise<void>;
+  requestFramed(peerMultiaddr: string, protocol: string, payload: Uint8Array): Promise<Uint8Array>;
+  handleFramed(
+    protocol: string,
+    handler: (payload: Uint8Array, context: { protocol: string; connection: unknown }) => Uint8Array | null | undefined | Promise<Uint8Array | null | undefined>,
+    options?: unknown,
+  ): Promise<void>;
+  requestFramedJson(peerMultiaddr: string, protocol: string, requestJson?: string | object): Promise<unknown>;
+}
+
+export interface AukiStreamMessage {
+  request?: { sensor_id: string };
+  accept?: {
+    sensor_id: string;
+    sensor_hash: string;
+    clock_id: string;
+    clock_hash: string;
+    frame_id: string;
+    frame_hash: string;
+  };
+  entry?: {
+    timestamp_ns: number;
+    seq: number;
+    payload: number[] | Uint8Array;
+  };
+  decline?: { kind: string; detail?: string };
+  end_of_stream?: { kind: string; detail?: string };
+}
+
+export declare class AukiBrowserStream {
+  constructor(stream: unknown);
+  nextMessage(): Promise<AukiStreamMessage>;
+  writeMessage(message: AukiStreamMessage | string): Promise<void>;
+}

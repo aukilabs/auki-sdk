@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex - May 26, HKT, 2026
+
+**Auki binding validation skill added.** Repo-local skills now include a binding-validation workflow for regenerating enabled targets, checking generated public APIs, and proving behavior through smoke tests or example apps. See [`skills/changelog.md`](skills/changelog.md) for skills-level propagation.
+
+### Nils's codex · May 26, HKT, 2026
+
+**Binding API coverage reporter added.** Repo tooling now derives binding coverage gaps from public crate APIs instead of hand-written surface inventories, recognizes code-adjacent `binding-exclude:` comments with required reasons, and exposes non-strict and strict Justfile recipes for triage and CI-style checks.
+
 ### Nils's codex · May 25, HKT, 2026
 
 **Domain DaemonInfo no longer has duplicate binding and Rust exports.** `auki-domain` now derives the generated binding record from the stable core `DaemonInfo`, fixing default-feature Rust test compilation while preserving generated Python and Swift bootstrap APIs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.

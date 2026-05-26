@@ -1,0 +1,50 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiDomain, { AukiBrowserDomainPeer, AukiBrowserDomainPeerCore } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+test("AukiBrowserDomainPeerCore owns the browser peer snapshot state", () => {
+  const core = new AukiBrowserDomainPeerCore(JSON.stringify({
+    peer_id: "peer-a",
+    app_id: "overwatch",
+    display_name: "Browser A",
+    multiaddrs: ["/webrtc/p2p/peer-a"],
+  }));
+
+  const snapshot = JSON.parse(core.snapshotJson());
+  const debug = JSON.parse(core.debugStateJson());
+
+  assert.equal(snapshot.selfPeerId, "peer-a");
+  assert.equal(snapshot.participants[0].peer_id, "peer-a");
+  assert.equal(snapshot.participants[0].name, "Browser A");
+  assert.deepEqual(debug.advertisedMultiaddrs, ["/webrtc/p2p/peer-a"]);
+});
+
+test("AukiBrowserDomainPeer delegates snapshots to the wasm core", () => {
+  const peer = new AukiBrowserDomainPeer({
+    networkPeer: fakeNetworkPeer("peer-a", ["/webrtc/p2p/peer-a"]),
+    discovery: fakeDiscovery(),
+    appId: "overwatch",
+    displayName: "Browser A",
+  });
+
+  assert.equal(peer.peerId, "peer-a");
+  assert.deepEqual(peer.debugState().advertisedMultiaddrs, ["/webrtc/p2p/peer-a"]);
+  assert.equal(peer.snapshot().participants[0].peer_id, "peer-a");
+});
+
+function fakeNetworkPeer(peerId, multiaddrs) {
+  return {
+    peerId,
+    multiaddrs,
+    async handleFramed() {},
+  };
+}
+
+function fakeDiscovery() {
+  return {};
+}

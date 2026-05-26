@@ -276,6 +276,25 @@ def render_templates(root: Path, binding_plan: dict, dest: Path) -> None:
         target.write_text(render_text(template.read_text(), context), encoding="utf-8")
 
 
+def render_javascript_type_sources(root: Path, binding_plan: dict, dest: Path) -> None:
+    assets = root / binding_plan["crate_assets_dir"]
+    _, section = binding_section(
+        load_bindings_toml(root / binding_plan["metadata"]["crate_dir"]),
+        binding_plan["binding_language"],
+    )
+    type_sources = section.get("type_sources", [])
+    context = template_context(binding_plan)
+    for source_name in type_sources:
+        source = assets / source_name
+        relative = source.relative_to(assets)
+        target_relative = relative.with_name(relative.name.removesuffix(".tmpl"))
+        if target_relative.suffix == ".ts":
+            target_relative = target_relative.with_suffix(".d.ts")
+        target = dest / target_relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(render_text(source.read_text(encoding="utf-8"), context), encoding="utf-8")
+
+
 def render_asset(root: Path, source_rel: str, dest: Path, binding_plan: dict) -> None:
     source = root / source_rel
     context = template_context(binding_plan)
@@ -464,6 +483,7 @@ def generate_javascript(root: Path, package_name: str) -> None:
             gitignore.unlink()
 
         render_templates(root, binding_plan, tmp_dir)
+        render_javascript_type_sources(root, binding_plan, tmp_dir)
         if binding_plan["smoke"]:
             render_asset(root, binding_plan["smoke"], tmp_dir / Path(binding_plan["smoke"]).name, binding_plan)
 

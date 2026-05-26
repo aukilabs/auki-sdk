@@ -216,7 +216,8 @@ fn native_discovery_client_is_exposed() {
             serde_json::json!({
                 "name": "demo",
                 "manager_peer_id": manager_peer_id,
-                "manager_multiaddrs": ["/ip4/127.0.0.1/tcp/4001"]
+                "manager_multiaddrs": ["/ip4/127.0.0.1/tcp/4001"],
+                "relay_multiaddrs": ["/ip4/127.0.0.1/tcp/4002"]
             })
             .to_string(),
             2_000,
@@ -230,6 +231,20 @@ fn native_discovery_client_is_exposed() {
     let discovered = client.discover_peers_json("{}".into(), 2_000).unwrap();
     let discovered: serde_json::Value = serde_json::from_str(&discovered).unwrap();
     assert_eq!(discovered["clusters"][0]["name"], "demo");
+    assert_eq!(
+        discovered["clusters"][0]["relay_multiaddrs"][0],
+        "/ip4/127.0.0.1/tcp/4002"
+    );
+
+    let nodes = client
+        .discover_nodes_json(serde_json::json!({ "type": "relay" }).to_string(), 2_000)
+        .unwrap();
+    let nodes: serde_json::Value = serde_json::from_str(&nodes).unwrap();
+    assert_eq!(nodes["nodes"][0]["node_type"], "relay");
+    assert_eq!(
+        nodes["nodes"][0]["multiaddrs"][0],
+        "/ip4/127.0.0.1/tcp/4002"
+    );
 
     client.unregister_peer_json("demo".into(), 2_000).unwrap();
 }
@@ -841,7 +856,7 @@ impl MockDiscoveryServer {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let request = read_http_request(&mut stream);
                 let (status, body) = if request.starts_with("POST /clusters/demo ") {
@@ -853,6 +868,8 @@ impl MockDiscoveryServer {
                     )
                 } else if request.starts_with("DELETE /clusters/demo ") {
                     ("204 No Content", String::new())
+                } else if request.starts_with("GET /nodes?type=relay ") {
+                    ("200 OK", discovery_nodes_body())
                 } else {
                     (
                         "404 Not Found",
@@ -912,9 +929,27 @@ fn discovery_entry_body() -> String {
         "name": "demo",
         "manager_peer_id": peer_id,
         "manager_multiaddrs": ["/ip4/127.0.0.1/tcp/4001"],
+        "relay_multiaddrs": ["/ip4/127.0.0.1/tcp/4002"],
         "peer_count": 1,
         "created_ns": 1,
         "last_liveness_check_ns": 1
+    })
+    .to_string()
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn discovery_nodes_body() -> String {
+    let peer_id = auki_network::PeerIdentity::from_seed(&[54u8; 32])
+        .peer_id()
+        .to_string();
+    serde_json::json!({
+        "nodes": [{
+            "peer_id": peer_id,
+            "node_type": "relay",
+            "multiaddrs": ["/ip4/127.0.0.1/tcp/4002"],
+            "created_ns": 2,
+            "last_liveness_check_ns": 3
+        }]
     })
     .to_string()
 }

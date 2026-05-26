@@ -852,6 +852,7 @@ impl AukiDiscoveryClient {
             name: String,
             manager_peer_id: Option<String>,
             manager_multiaddrs: Option<Vec<String>>,
+            relay_multiaddrs: Option<Vec<String>>,
             peer_count: Option<u32>,
             mode: Option<String>,
         }
@@ -868,10 +869,16 @@ impl AukiDiscoveryClient {
                     registration.manager_multiaddrs,
                     "manager_multiaddrs",
                 )?)?;
+                let relays =
+                    parse_binding_multiaddrs(registration.relay_multiaddrs.unwrap_or_default())?;
                 let outcome = self.block_on_discovery(
                     timeout_ms,
-                    self.inner
-                        .create_cluster(&registration.name, &peer_id, &addrs),
+                    self.inner.create_cluster_with_relays(
+                        &registration.name,
+                        &peer_id,
+                        &addrs,
+                        &relays,
+                    ),
                 )?;
                 match outcome {
                     CreateClusterOutcome::Created(entry) => {
@@ -894,10 +901,16 @@ impl AukiDiscoveryClient {
                     registration.manager_multiaddrs,
                     "manager_multiaddrs",
                 )?)?;
+                let relays =
+                    parse_binding_multiaddrs(registration.relay_multiaddrs.unwrap_or_default())?;
                 let entry = self.block_on_discovery(
                     timeout_ms,
-                    self.inner
-                        .rotate_manager(&registration.name, &peer_id, &addrs),
+                    self.inner.rotate_manager_with_relays(
+                        &registration.name,
+                        &peer_id,
+                        &addrs,
+                        &relays,
+                    ),
                 )?;
                 json_result_string(&serde_json::json!({
                     "kind": "updated",
@@ -943,6 +956,27 @@ impl AukiDiscoveryClient {
         }
         let clusters = entries.iter().map(discovery_entry_json).collect::<Vec<_>>();
         json_result_string(&serde_json::json!({ "clusters": clusters }))
+    }
+
+    pub fn discover_nodes_json(
+        &self,
+        query_json: String,
+        timeout_ms: u64,
+    ) -> Result<String, BindingNetworkError> {
+        #[derive(serde::Deserialize)]
+        struct Query {
+            #[serde(rename = "type")]
+            node_type: Option<String>,
+        }
+
+        let query = parse_json::<Query>(&query_json)?;
+        let entries = if let Some(node_type) = query.node_type {
+            self.block_on_discovery(timeout_ms, self.inner.list_nodes_by_type(&node_type))?
+        } else {
+            self.block_on_discovery(timeout_ms, self.inner.list_nodes())?
+        };
+        let nodes = entries.iter().map(discovery_node_json).collect::<Vec<_>>();
+        json_result_string(&serde_json::json!({ "nodes": nodes }))
     }
 
     pub fn unregister_peer_json(
@@ -1598,7 +1632,27 @@ fn discovery_entry_json(entry: &discovery_client::ClusterEntry) -> serde_json::V
             .iter()
             .map(|addr| addr.to_string())
             .collect::<Vec<_>>(),
+        "relay_multiaddrs": entry
+            .relay_multiaddrs
+            .iter()
+            .map(|addr| addr.to_string())
+            .collect::<Vec<_>>(),
         "peer_count": entry.peer_count,
+        "created_ns": entry.created_ns,
+        "last_liveness_check_ns": entry.last_liveness_check_ns,
+    })
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn discovery_node_json(entry: &discovery_client::NodeEntry) -> serde_json::Value {
+    serde_json::json!({
+        "peer_id": entry.peer_id.to_string(),
+        "node_type": entry.node_type,
+        "multiaddrs": entry
+            .multiaddrs
+            .iter()
+            .map(|addr| addr.to_string())
+            .collect::<Vec<_>>(),
         "created_ns": entry.created_ns,
         "last_liveness_check_ns": entry.last_liveness_check_ns,
     })

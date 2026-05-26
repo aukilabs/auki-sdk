@@ -7,10 +7,15 @@ export {
   decodeBrowserProbeResponse,
   decodeJoinResponseJson,
   decodeMessageEnvelopeJson,
+  decodeStreamMessageJson,
+  DiscoveryDirectoryClient,
   encodeCatalogRequestBytes,
   encodeBrowserProbeRequest,
   encodeJoinRequestBytes,
   encodeMessageEnvelopeBytes,
+  encodeStreamAcceptBytes,
+  encodeStreamEntryBytes,
+  encodeStreamRequestBytes,
   joinProtocol,
   messageProtocol,
   peerDerivationLabel,
@@ -21,6 +26,7 @@ export {
   peerPublicKeyProtobufFromSeed,
   resourcesProtocol,
   sensorsProtocol,
+  streamProtocol,
 } from "./$generated_js_file";
 
 export default async function initAukiNetwork(input) {
@@ -54,6 +60,9 @@ export async function dialBrowserProbe(options = {}) {
 export class AukiNetworkPeer {
   constructor(node) {
     this.node = node;
+    this.framedHandlers = new Map();
+    this.streamHandlers = new Map();
+    this.signaling = null;
   }
 
   static async create(options = {}) {
@@ -101,7 +110,11 @@ export class AukiNetworkPeer {
   }
 
   get multiaddrs() {
-    return this.node.getMultiaddrs().map((addr) => addr.toString());
+    const nodeAddrs = typeof this.node.getMultiaddrs === "function"
+      ? this.node.getMultiaddrs().map((addr) => addr.toString())
+      : [];
+    const signalingAddr = this.signaling?.address;
+    return [...new Set(signalingAddr ? [...nodeAddrs, signalingAddr] : nodeAddrs)];
   }
 
   async start() {
@@ -109,7 +122,42 @@ export class AukiNetworkPeer {
   }
 
   async stop() {
-    await this.node.stop();
+    this._stopDiscoverySignaling();
+    if (typeof this.node.stop === "function") {
+      await this.node.stop();
+    }
+  }
+
+  async configureDiscoverySignaling(options = {}) {
+    const discoveryUrl = trimDiscoveryUrl(options.discoveryUrl);
+    if (!discoveryUrl) {
+      throw new TypeError("configureDiscoverySignaling requires discoveryUrl");
+    }
+    if (this.signaling?.discoveryUrl === discoveryUrl) {
+      if (options.startPolling !== false) {
+        this._startSignalPolling();
+      }
+      return;
+    }
+
+    this._stopDiscoverySignaling();
+    const discovery = options.discovery ?? new wasm.DiscoveryDirectoryClient(discoveryUrl);
+    this.signaling = {
+      discovery,
+      discoveryUrl,
+      address: signalingAddress(discoveryUrl, this.peerId),
+      cursor: 0,
+      pollTimeoutMs: options.pollTimeoutMs ?? 25_000,
+      pollBackoffMs: options.pollBackoffMs ?? 250,
+      rtcConfiguration: options.rtcConfiguration ?? { iceServers: [] },
+      stopped: false,
+      polling: null,
+      connectionsById: new Map(),
+      connectionsByPeer: new Map(),
+    };
+    if (options.startPolling !== false) {
+      this._startSignalPolling();
+    }
   }
 
   async dialProtocol(address, protocol, options) {
@@ -147,10 +195,427 @@ export class AukiNetworkPeer {
     return this.requestFramed(peerMultiaddr, wasm.resourcesProtocol(), requestBytes);
   }
 
+  async openStream(peerMultiaddr, requestJson) {
+    if (isSignalingAddress(peerMultiaddr)) {
+      const stream = await this._openSignalingDataChannel(peerMultiaddr, wasm.streamProtocol());
+      const browserStream = new AukiBrowserStream(stream);
+      await browserStream.writeMessage({ request: requestJson });
+      return browserStream;
+    }
+    const stream = await this.dialProtocol(await toMultiaddr(peerMultiaddr), wasm.streamProtocol());
+    const browserStream = new AukiBrowserStream(stream);
+    await browserStream.writeMessage({ request: requestJson });
+    return browserStream;
+  }
+
+  async handleStream(protocolOrHandler, handlerOrOptions, maybeOptions) {
+    const protocol = typeof protocolOrHandler === "string" ? protocolOrHandler : wasm.streamProtocol();
+    const handler = typeof protocolOrHandler === "string" ? handlerOrOptions : protocolOrHandler;
+    const options = typeof protocolOrHandler === "string" ? maybeOptions : handlerOrOptions;
+    if (typeof handler !== "function") {
+      throw new TypeError("handleStream requires a handler");
+    }
+    this.streamHandlers.set(protocol, handler);
+    return this.handle(protocol, async ({ stream, connection }) => {
+      await this._handleIncomingStream(protocol, handler, stream, connection);
+    }, options);
+  }
+
   async requestFramed(peerMultiaddr, protocol, payload) {
+    if (isSignalingAddress(peerMultiaddr)) {
+      const stream = await this._openSignalingDataChannel(peerMultiaddr, protocol);
+      await writeLengthPrefixed(stream, payload);
+      return readLengthPrefixed(stream);
+    }
     const stream = await this.dialProtocol(await toMultiaddr(peerMultiaddr), protocol);
     await writeLengthPrefixed(stream, payload);
     return readLengthPrefixed(stream);
+  }
+
+  async handleFramed(protocol, handler, options) {
+    this.framedHandlers.set(protocol, handler);
+    return this.handle(protocol, async ({ stream, connection }) => {
+      await this._handleIncomingFramed(protocol, handler, stream, connection);
+    }, options);
+  }
+
+  async requestFramedJson(peerMultiaddr, protocol, requestJson = {}) {
+    const payload = new TextEncoder().encode(JSON.stringify(requestJson ?? {}));
+    const response = await this.requestFramed(peerMultiaddr, protocol, payload);
+    return JSON.parse(new TextDecoder().decode(response));
+  }
+
+  _stopDiscoverySignaling() {
+    if (this.signaling == null) {
+      return;
+    }
+    this.signaling.stopped = true;
+    for (const state of this.signaling.connectionsById.values()) {
+      try {
+        state.pc.close();
+      } catch {
+        // Best effort shutdown.
+      }
+    }
+  }
+
+  _startSignalPolling() {
+    const signaling = this.signaling;
+    if (signaling == null || signaling.polling != null || signaling.stopped) {
+      return;
+    }
+    signaling.polling = (async () => {
+      while (!signaling.stopped) {
+        try {
+          const response = JSON.parse(await signaling.discovery.pollSignalsJson(JSON.stringify({
+            peer_id: this.peerId,
+            since: signaling.cursor,
+            timeout_ms: signaling.pollTimeoutMs,
+          })));
+          for (const message of response.messages ?? []) {
+            signaling.cursor = Math.max(signaling.cursor, Number(message.id ?? 0));
+            await this._handleSignalMessage(message);
+          }
+        } catch (error) {
+          if (!signaling.stopped) {
+            await delay(signaling.pollBackoffMs);
+          }
+        }
+      }
+    })();
+  }
+
+  async _sendSignal(recipientPeerId, connectionId, kind, payload) {
+    if (this.signaling == null) {
+      throw new Error("Discovery signaling is not configured");
+    }
+    await this.signaling.discovery.sendSignalJson(JSON.stringify({
+      recipient_peer_id: recipientPeerId,
+      from_peer_id: this.peerId,
+      connection_id: connectionId,
+      kind,
+      payload,
+    }));
+  }
+
+  async _handleSignalMessage(message) {
+    if (message.from_peer_id === this.peerId) {
+      return;
+    }
+    switch (message.kind) {
+      case "offer":
+        await this._handleSignalOffer(message);
+        break;
+      case "answer":
+        await this._handleSignalAnswer(message);
+        break;
+      case "candidate":
+        await this._handleSignalCandidate(message);
+        break;
+      default:
+        break;
+    }
+  }
+
+  async _handleSignalOffer(message) {
+    const signaling = this.signaling;
+    if (signaling == null) {
+      return;
+    }
+    let state = signaling.connectionsById.get(message.connection_id);
+    if (state == null) {
+      state = this._createConnectionState(message.from_peer_id, message.connection_id, false);
+      signaling.connectionsById.set(message.connection_id, state);
+      signaling.connectionsByPeer.set(message.from_peer_id, state);
+    }
+    await state.pc.setRemoteDescription({ type: "offer", sdp: message.payload?.sdp });
+    await this._flushQueuedCandidates(state);
+    const answer = await state.pc.createAnswer();
+    await state.pc.setLocalDescription(answer);
+    await this._sendSignal(message.from_peer_id, message.connection_id, "answer", {
+      type: "answer",
+      sdp: state.pc.localDescription?.sdp ?? answer.sdp,
+    });
+  }
+
+  async _handleSignalAnswer(message) {
+    const state = this.signaling?.connectionsById.get(message.connection_id);
+    if (state == null) {
+      return;
+    }
+    await state.pc.setRemoteDescription({ type: "answer", sdp: message.payload?.sdp });
+    await this._flushQueuedCandidates(state);
+  }
+
+  async _handleSignalCandidate(message) {
+    const state = this.signaling?.connectionsById.get(message.connection_id);
+    if (state == null || message.payload?.candidate == null) {
+      return;
+    }
+    const candidate = message.payload.candidate;
+    if (state.pc.remoteDescription == null) {
+      state.pendingCandidates.push(candidate);
+      return;
+    }
+    await state.pc.addIceCandidate(candidate);
+  }
+
+  async _openSignalingDataChannel(peerMultiaddr, protocol) {
+    const { discoveryUrl, peerId } = parseSignalingAddress(peerMultiaddr);
+    if (this.signaling == null) {
+      await this.configureDiscoverySignaling({ discoveryUrl });
+    }
+    const state = await this._connectSignalingPeer(peerId);
+    const channel = state.pc.createDataChannel(protocol);
+    return AukiWebRtcDataChannelStream.fromChannel(channel, {
+      remotePeerId: peerId,
+      protocol,
+    });
+  }
+
+  async _connectSignalingPeer(remotePeerId) {
+    const signaling = this.signaling;
+    if (signaling == null) {
+      throw new Error("Discovery signaling is not configured");
+    }
+    const existing = signaling.connectionsByPeer.get(remotePeerId);
+    if (existing != null) {
+      await existing.ready;
+      return existing;
+    }
+
+    const connectionId = randomConnectionId();
+    const state = this._createConnectionState(remotePeerId, connectionId, true);
+    signaling.connectionsById.set(connectionId, state);
+    signaling.connectionsByPeer.set(remotePeerId, state);
+    const control = state.pc.createDataChannel("__auki-control");
+    control.binaryType = "arraybuffer";
+    const offer = await state.pc.createOffer();
+    await state.pc.setLocalDescription(offer);
+    await this._sendSignal(remotePeerId, connectionId, "offer", {
+      type: "offer",
+      sdp: state.pc.localDescription?.sdp ?? offer.sdp,
+    });
+    await state.ready;
+    return state;
+  }
+
+  _createConnectionState(remotePeerId, connectionId, initiator) {
+    const RTCPeerConnectionCtor = globalThis.RTCPeerConnection;
+    if (typeof RTCPeerConnectionCtor !== "function") {
+      throw new Error("Discovery signaling requires RTCPeerConnection");
+    }
+    const pc = new RTCPeerConnectionCtor(this.signaling?.rtcConfiguration ?? { iceServers: [] });
+    const state = {
+      connectionId,
+      remotePeerId,
+      initiator,
+      pc,
+      pendingCandidates: [],
+      ready: null,
+      resolveReady: null,
+      rejectReady: null,
+    };
+    state.ready = new Promise((resolve, reject) => {
+      state.resolveReady = resolve;
+      state.rejectReady = reject;
+      setTimeout(() => reject(new Error(`WebRTC signaling timed out for ${remotePeerId}`)), 15_000);
+    });
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate != null) {
+        this._sendSignal(remotePeerId, connectionId, "candidate", {
+          candidate: typeof candidate.toJSON === "function" ? candidate.toJSON() : candidate,
+        }).catch((error) => state.rejectReady(error));
+      }
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") {
+        state.resolveReady(state);
+      }
+      if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+        state.rejectReady(new Error(`WebRTC connection ${pc.connectionState}`));
+      }
+    };
+    pc.ondatachannel = ({ channel }) => {
+      this._handleSignalingDataChannel(channel, state).catch((error) => state.rejectReady(error));
+    };
+    return state;
+  }
+
+  async _flushQueuedCandidates(state) {
+    const queued = state.pendingCandidates.splice(0);
+    for (const candidate of queued) {
+      await state.pc.addIceCandidate(candidate);
+    }
+  }
+
+  async _handleSignalingDataChannel(channel, state) {
+    if (channel.label === "__auki-control") {
+      if (channel.readyState === "open") {
+        state.resolveReady(state);
+      } else {
+        channel.onopen = () => state.resolveReady(state);
+      }
+      return;
+    }
+    const stream = await AukiWebRtcDataChannelStream.fromChannel(channel, {
+      remotePeerId: state.remotePeerId,
+      protocol: channel.label,
+    });
+    const connection = {
+      remotePeer: state.remotePeerId,
+      remoteAddr: signalingAddress(this.signaling?.discoveryUrl ?? "", state.remotePeerId),
+    };
+    const streamHandler = this.streamHandlers.get(channel.label);
+    if (streamHandler != null) {
+      await this._handleIncomingStream(channel.label, streamHandler, stream, connection);
+      return;
+    }
+    const framedHandler = this.framedHandlers.get(channel.label);
+    if (framedHandler != null) {
+      await this._handleIncomingFramed(channel.label, framedHandler, stream, connection);
+    }
+  }
+
+  async _handleIncomingFramed(protocol, handler, stream, connection) {
+    const request = await readLengthPrefixed(stream);
+    const response = await handler(request, { protocol, connection });
+    if (response != null) {
+      await writeLengthPrefixed(stream, response);
+    }
+  }
+
+  async _handleIncomingStream(protocol, handler, stream, connection) {
+    const browserStream = new AukiBrowserStream(stream);
+    const firstMessage = await browserStream.nextMessage();
+    if (firstMessage?.request == null) {
+      throw new Error("stream session must start with a request message");
+    }
+    const responseStream = await handler(firstMessage.request, { protocol, connection, stream: browserStream });
+    if (responseStream == null || typeof responseStream.nextMessage !== "function") {
+      return;
+    }
+    while (true) {
+      const message = await responseStream.nextMessage();
+      if (message == null) {
+        break;
+      }
+      await browserStream.writeMessage(message);
+    }
+  }
+}
+
+export class AukiBrowserStream {
+  constructor(stream) {
+    this.stream = stream;
+    this.reader = stream[Symbol.asyncIterator]();
+    this.pending = new Uint8Array();
+  }
+
+  async nextMessage() {
+    const payload = await readLengthPrefixedFromState(this);
+    return JSON.parse(wasm.decodeStreamMessageJson(payload));
+  }
+
+  async writeMessage(message) {
+    const payload = encodeStreamMessage(message);
+    await writeLengthPrefixed(this.stream, payload);
+  }
+}
+
+class AukiWebRtcDataChannelStream {
+  constructor(channel, metadata = {}) {
+    this.channel = channel;
+    this.remotePeerId = metadata.remotePeerId;
+    this.protocol = metadata.protocol ?? channel.label;
+    this.queue = [];
+    this.waiters = [];
+    this.closed = false;
+    this.error = null;
+    this.ready = new Promise((resolve, reject) => {
+      if (channel.readyState === "open") {
+        resolve(this);
+        return;
+      }
+      const timeout = setTimeout(() => reject(new Error(`WebRTC data channel open timed out for ${this.protocol}`)), 15_000);
+      channel.addEventListener("open", () => {
+        clearTimeout(timeout);
+        resolve(this);
+      }, { once: true });
+      channel.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error(`WebRTC data channel error for ${this.protocol}`));
+      }, { once: true });
+    });
+    channel.binaryType = "arraybuffer";
+    channel.addEventListener("message", (event) => this._push(chunkBytes(event.data)));
+    channel.addEventListener("close", () => this._close());
+    channel.addEventListener("error", () => this._fail(new Error(`WebRTC data channel error for ${this.protocol}`)));
+  }
+
+  static async fromChannel(channel, metadata) {
+    const stream = new AukiWebRtcDataChannelStream(channel, metadata);
+    await stream.ready;
+    return stream;
+  }
+
+  send(bytes) {
+    if (this.channel.readyState !== "open") {
+      return false;
+    }
+    this.channel.send(bytes);
+    return true;
+  }
+
+  async onDrain() {
+    await delay(0);
+  }
+
+  close() {
+    this.channel.close();
+  }
+
+  _push(bytes) {
+    const waiter = this.waiters.shift();
+    if (waiter != null) {
+      waiter({ value: bytes, done: false });
+      return;
+    }
+    this.queue.push(bytes);
+  }
+
+  _close() {
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()({ value: undefined, done: true });
+    }
+  }
+
+  _fail(error) {
+    this.error = error;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()(Promise.reject(error));
+    }
+  }
+
+  async *[Symbol.asyncIterator]() {
+    while (true) {
+      if (this.error != null) {
+        throw this.error;
+      }
+      if (this.queue.length > 0) {
+        yield this.queue.shift();
+        continue;
+      }
+      if (this.closed) {
+        return;
+      }
+      const next = await new Promise((resolve) => this.waiters.push(resolve));
+      if (next.done) {
+        return;
+      }
+      yield next.value;
+    }
   }
 }
 
@@ -181,28 +646,46 @@ async function toMultiaddr(address) {
 }
 
 async function readLengthPrefixed(source) {
-  const reader = source[Symbol.asyncIterator]();
-  let pending = new Uint8Array();
+  return readLengthPrefixedFromState({
+    reader: source[Symbol.asyncIterator](),
+    pending: new Uint8Array(),
+  });
+}
 
+async function readLengthPrefixedFromState(state) {
   async function readExactly(size) {
-    while (pending.length < size) {
-      const { value, done } = await reader.next();
+    while (state.pending.length < size) {
+      const { value, done } = await state.reader.next();
       if (done) {
         throw new Error(`stream ended before ${size} bytes were available`);
       }
-      pending = concatBytes([pending, chunkBytes(value)]);
+      state.pending = concatBytes([state.pending, chunkBytes(value)]);
     }
-    const out = pending.slice(0, size);
-    pending = pending.slice(size);
+    const out = state.pending.slice(0, size);
+    state.pending = state.pending.slice(size);
     return out;
   }
 
   const lengthBytes = await readExactly(4);
   const length = new DataView(lengthBytes.buffer, lengthBytes.byteOffset, lengthBytes.byteLength).getUint32(0, false);
   if (length === 0) {
-    throw new Error("browser probe response frame is empty");
+    throw new Error("length-prefixed frame is empty");
   }
   return readExactly(length);
+}
+
+function encodeStreamMessage(message) {
+  const value = typeof message === "string" ? JSON.parse(message) : message;
+  if (value?.request != null) {
+    return wasm.encodeStreamRequestBytes(JSON.stringify(value.request));
+  }
+  if (value?.accept != null) {
+    return wasm.encodeStreamAcceptBytes(JSON.stringify(value.accept));
+  }
+  if (value?.entry != null) {
+    return wasm.encodeStreamEntryBytes(JSON.stringify(value.entry));
+  }
+  throw new TypeError("stream message must contain request, accept, or entry");
 }
 
 function chunkBytes(chunk) {
@@ -227,4 +710,60 @@ function concatBytes(chunks) {
     offset += chunk.length;
   }
   return out;
+}
+
+function trimDiscoveryUrl(url) {
+  return String(url ?? "").trim().replace(/\/+$/, "");
+}
+
+function signalingAddress(discoveryUrl, peerId) {
+  return `/auki-webrtc-signaling/${base64UrlEncode(trimDiscoveryUrl(discoveryUrl))}/p2p/${peerId}`;
+}
+
+function isSignalingAddress(address) {
+  return typeof address === "string" && address.startsWith("/auki-webrtc-signaling/");
+}
+
+function parseSignalingAddress(address) {
+  const match = String(address).match(/^\/auki-webrtc-signaling\/([^/]+)\/p2p\/(.+)$/);
+  if (match == null) {
+    throw new TypeError(`invalid Discovery signaling address: ${address}`);
+  }
+  return {
+    discoveryUrl: base64UrlDecode(match[1]),
+    peerId: match[2],
+  };
+}
+
+function base64UrlEncode(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  const base64 = typeof btoa === "function"
+    ? btoa(binary)
+    : Buffer.from(bytes).toString("base64");
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(text) {
+  const base64 = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
+  if (typeof atob === "function") {
+    const binary = atob(base64);
+    return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+  }
+  return Buffer.from(base64, "base64").toString("utf8");
+}
+
+function randomConnectionId() {
+  if (globalThis.crypto?.randomUUID != null) {
+    return globalThis.crypto.randomUUID();
+  }
+  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16)) ?? Uint8Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -1,0 +1,115 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, { AukiNetworkPeer } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("AukiNetworkPeer.handleFramed decodes one request and writes one response", async () => {
+  const request = new TextEncoder().encode(JSON.stringify({ hello: "manager" }));
+  const stream = new FakeStream(request);
+  const peer = new AukiNetworkPeer(new FakeNode(stream));
+  const seen = [];
+
+  await peer.handleFramed("/auki/test/0.0.1", async (payload, context) => {
+    seen.push({ payload: JSON.parse(new TextDecoder().decode(payload)), protocol: context.protocol });
+    return new TextEncoder().encode(JSON.stringify({ ok: true }));
+  });
+
+  await stream.run();
+
+  assert.deepEqual(seen, [{ payload: { hello: "manager" }, protocol: "/auki/test/0.0.1" }]);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(stream.sentPayload())), { ok: true });
+});
+
+test("AukiNetworkPeer.requestFramedJson sends JSON and parses JSON response", async () => {
+  const stream = new FakeStream(new TextEncoder().encode(JSON.stringify({ accepted: true })));
+  const peer = new AukiNetworkPeer(new FakeNode(stream));
+
+  const response = await peer.requestFramedJson({ id: "peer" }, "/auki/test/0.0.1", { join: true });
+
+  assert.deepEqual(response, { accepted: true });
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(stream.sentPayload())), { join: true });
+});
+
+test("AukiNetworkPeer advertises a Discovery signaling address after configuration", async () => {
+  const peer = new AukiNetworkPeer(new FakeNode(new FakeStream(new Uint8Array())));
+
+  await peer.configureDiscoverySignaling({
+    discoveryUrl: "http://discovery.local",
+    discovery: new FakeDiscovery(),
+    startPolling: false,
+  });
+
+  assert.equal(peer.multiaddrs.length, 1);
+  assert.match(peer.multiaddrs[0], /^\/auki-webrtc-signaling\//);
+  assert.match(peer.multiaddrs[0], /\/p2p\/fake-peer$/);
+});
+
+class FakeDiscovery {
+  async sendSignalJson() {
+    throw new Error("unexpected sendSignalJson");
+  }
+
+  async pollSignalsJson() {
+    throw new Error("unexpected pollSignalsJson");
+  }
+}
+
+class FakeNode {
+  constructor(stream) {
+    this.peerId = { toString: () => "fake-peer" };
+    this.stream = stream;
+  }
+
+  getMultiaddrs() {
+    return [];
+  }
+
+  async handle(protocol, handler) {
+    this.stream.handler = () => handler({ stream: this.stream, connection: { protocol } });
+  }
+
+  async dialProtocol() {
+    return this.stream;
+  }
+}
+
+class FakeStream {
+  constructor(requestBytes) {
+    this.requestFrame = frame(requestBytes);
+    this.sent = [];
+    this.handler = null;
+  }
+
+  send(bytes) {
+    this.sent.push(bytes);
+    return true;
+  }
+
+  async run() {
+    await this.handler();
+  }
+
+  sentPayload() {
+    const bytes = this.sent[0];
+    const length = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
+    assert.equal(length, bytes.length - 4);
+    return bytes.slice(4);
+  }
+
+  async *[Symbol.asyncIterator]() {
+    yield this.requestFrame;
+  }
+}
+
+function frame(payload) {
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, payload.length, false);
+  const out = new Uint8Array(length.length + payload.length);
+  out.set(length, 0);
+  out.set(payload, length.length);
+  return out;
+}

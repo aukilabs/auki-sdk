@@ -11,9 +11,9 @@ just generate-javascript-bindings $crate_package_name
 The package has two layers:
 
 - `$generated_js_file` and `$generated_wasm_file` expose Rust-owned identity and protocol helpers through wasm-bindgen.
-- `index.js` composes those helpers with jslibp2p for browser transport.
+- `index.js` composes those helpers with jslibp2p for browser-to-native WebRTC Direct probes and with browser `RTCPeerConnection` plus Discovery signaling for browser-to-browser transport.
 
-Browser transport is intentionally JavaScript-owned. Native Rust targets keep using rust-libp2p through the crate's `swarm` feature; browser targets import the same identity/protocol bytes and create a jslibp2p node with WebRTC Direct transport.
+Browser transport is intentionally JavaScript-owned. Native Rust targets keep using rust-libp2p through the crate's `swarm` feature; browser targets import the same identity/protocol bytes, create a jslibp2p node for native WebRTC Direct paths, and can advertise `/auki-webrtc-signaling/.../p2p/{peer}` addresses for Discovery-signaled WebRTC data channels.
 
 ## Minimal use
 
@@ -29,8 +29,9 @@ const walletSeed = crypto.getRandomValues(new Uint8Array(32));
 console.log(peerIdFromWalletSeed(walletSeed));
 
 const peer = await createAukiNetworkPeer({ walletSeed });
+await peer.configureDiscoverySignaling({ discoveryUrl: "http://127.0.0.1:8080" });
 console.log(peer.peerId, peer.multiaddrs);
 await peer.stop();
 ```
 
-The first browser target is a leaf peer dialing a native SDK peer over a browser-compatible multiaddr. Browser Manager behavior and Domain-level orchestration are intentionally out of scope for this package slice.
+Domain behavior is intentionally outside this package slice. `auki-domain` owns browser Manager/member semantics; this package provides the generated wasm helpers, Discovery client, framed request/response, and stream transport.

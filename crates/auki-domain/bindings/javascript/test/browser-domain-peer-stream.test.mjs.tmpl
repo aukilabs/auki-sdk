@@ -1,0 +1,101 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiDomain, { AukiBrowserDomainPeer } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+test("AukiBrowserDomainPeer publishes and subscribes to sensor streams through the network peer", async () => {
+  const providerNetwork = fakeNetworkPeer("peer-a", ["/webrtc/p2p/peer-a"]);
+  const consumerNetwork = fakeNetworkPeer("peer-b", ["/webrtc/p2p/peer-b"]);
+  const provider = new AukiBrowserDomainPeer({
+    networkPeer: providerNetwork,
+    appId: "overwatch",
+    displayName: "Browser A",
+  });
+  const consumer = new AukiBrowserDomainPeer({
+    networkPeer: consumerNetwork,
+    appId: "overwatch",
+    displayName: "Browser B",
+  });
+
+  await provider.declareSensors([{
+    sensor_id: "browser-a/audio",
+    sensor_hash: "audio-hash",
+    kind: "audio",
+    label: "Microphone",
+  }]);
+  await provider.publishSensor("browser-a/audio", {
+    kind: "generated-bytes",
+    frames: [[9, 8, 7], [6, 5, 4]],
+    interval_ms: 20,
+  });
+  consumer.core.mergeParticipantJson(JSON.stringify({
+    peer_id: "peer-a",
+    app: "overwatch",
+    name: "Browser A",
+    is_manager: true,
+    connected: true,
+    multiaddrs: ["/webrtc/p2p/peer-a"],
+    sensors: [{
+      sensor_id: "browser-a/audio",
+      sensor_hash: "audio-hash",
+      kind: "audio",
+      label: "Microphone",
+    }],
+  }));
+
+  const stream = await consumer.subscribeToSensor("peer-a", "browser-a/audio");
+
+  assert.deepEqual(await stream.nextMessage(), {
+    accept: {
+      sensor_id: "browser-a/audio",
+      sensor_hash: "audio-hash",
+      clock_id: "browser-a/audio/clock",
+      clock_hash: "audio-hash:clock",
+      frame_id: "browser-a/audio/frame",
+      frame_hash: "audio-hash:frame",
+    },
+  });
+  assert.deepEqual(await stream.nextMessage(), {
+    entry: {
+      timestamp_ns: 100,
+      seq: 0,
+      payload: [9, 8, 7],
+    },
+  });
+  assert.deepEqual(await stream.nextMessage(), {
+    entry: {
+      timestamp_ns: 101,
+      seq: 1,
+      payload: [6, 5, 4],
+    },
+  });
+});
+
+const peersByAddress = new Map();
+
+function fakeNetworkPeer(peerId, multiaddrs) {
+  const streamHandlers = new Map();
+  const peer = {
+    peerId,
+    multiaddrs,
+    async handleStream(protocol, handler) {
+      streamHandlers.set(protocol, handler);
+    },
+    async openStream(peerMultiaddr, requestJson) {
+      const remote = peersByAddress.get(peerMultiaddr);
+      if (!remote) throw new Error(`no fake peer at ${peerMultiaddr}`);
+      const handler = remote.streamHandlers.get("/auki/stream/0.1.0");
+      if (!handler) throw new Error("no stream handler");
+      return handler(requestJson, { connection: { remotePeer: peerId } });
+    },
+    streamHandlers,
+  };
+  for (const multiaddr of multiaddrs) {
+    peersByAddress.set(multiaddr, peer);
+  }
+  return peer;
+}

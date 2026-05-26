@@ -23,7 +23,7 @@ The native UniFFI adapter is the crate-owned generated binding surface for Pytho
 - libp2p public-key protobuf export
 - canonical networking capability strings
 - `AukiNetworkRuntime` for binding-safe native runtime spawn, listen-address inspection, connected-peer snapshots, allowed-peer updates, heartbeat targets, event draining, request/response JSON wrappers, responder-token replies, byte-stream open/accept/decline/push/finish, and shutdown
-- `AukiDiscoveryClient` for Discovery list/create/liveness/manager-rotation/deregister calls
+- `AukiDiscoveryClient` for Discovery cluster list/create/liveness/manager-rotation/deregister calls plus infrastructure node discovery
 - app-instance JSON helpers
 - the synchronous `/auki/message/0.0.1` `AukiMessageNode` facade for native hosts
 
@@ -48,9 +48,17 @@ The `discovery_client` feature adds `DiscoveryClient`, the HTTP client for [`auk
 |---|---|---|
 | `list_clusters()` | `GET /clusters` | Directory snapshot sorted newest-first |
 | `create_cluster(name, manager_peer_id, manager_multiaddrs)` | `POST /clusters/{name}` | Atomic create; caller becomes initial Manager |
+| `create_cluster_with_relays(name, manager_peer_id, manager_multiaddrs, relay_multiaddrs)` | `POST /clusters/{name}` | Atomic create with relay/circuit hints for browser or NAT-constrained peers |
 | `liveness_check(name, peer_count)` | `POST /clusters/{name}/liveness` | Manager push that resets Discovery's sweep window |
 | `rotate_manager(name, manager_peer_id, manager_multiaddrs)` | `POST /clusters/{name}/manager` | Successor publishes the new Manager hint |
+| `rotate_manager_with_relays(name, manager_peer_id, manager_multiaddrs, relay_multiaddrs)` | `POST /clusters/{name}/manager` | Successor publishes the new Manager hint with relay/circuit hints |
+| `list_nodes()` | `GET /nodes` | Live infrastructure node snapshot |
+| `list_nodes_by_type(node_type)` | `GET /nodes?type=...` | Live infrastructure nodes filtered by role, for example `relay` |
 | `deregister(name)` | `DELETE /clusters/{name}` | Graceful removal when the last member exits |
+| `sendSignalJson(...)` | `POST /signals/{peer_id}` | Browser WebRTC signaling mailbox write from the wasm JS client |
+| `pollSignalsJson(...)` | `GET /signals/{peer_id}?since=...` | Browser WebRTC signaling mailbox poll from the wasm JS client |
+
+Cluster entries include `relay_multiaddrs` alongside the Manager's direct dial hints. Node entries expose stable infrastructure nodes such as relays. Browser SDK peers can also advertise `/auki-webrtc-signaling/.../p2p/{peer}` addresses and use Discovery's generic signaling mailbox to establish WebRTC data channels without an app backend.
 
 Discovery v1 is deliberately shape-checked rather than signature-verified. Successor-token and challenge/response hardening are future work.
 
@@ -63,9 +71,9 @@ The generated package has two layers:
 - wasm-bindgen exports for canonical peer derivation, libp2p private-key protobuf bytes, protocol constants, browser-probe framing, message-envelope bytes, and join/info/sensor/resource/registry request/response DTO byte helpers;
 - an `index.js` wrapper that lazily imports jslibp2p packages and creates a browser `Libp2p` node from the Rust-derived private key.
 
-The wrapper exports `AukiNetworkPeer`, whose browser-owned libp2p runtime can open framed `/auki/message/0.0.1`, `/auki/join/0.0.1`, `/auki/info/0.0.1`, `/auki/sensors/0.0.1`, `/auki/resources/0.0.1`, and `/auki/registries/0.0.1` streams. It also exports `dialBrowserProbe({ address, seed | walletSeed, nonce, payload })`, which opens `/auki/browser-probe/0.0.1` from js-libp2p to a native WebRTC Direct listener and round-trips length-prefixed JSON using the Rust wasm helpers. The generated package tests cover protocol constants, DTO bytes, and browser request/response framing; the generated `browser-probe-smoke.mjs` harness plus root `scripts/smoke-network-browser-probe.sh` prove the browser-to-native path against the native `browser_probe_listener` example.
+The wrapper exports `AukiNetworkPeer`, whose browser-owned runtime can open framed `/auki/message/0.0.1`, `/auki/join/0.0.1`, `/auki/info/0.0.1`, `/auki/sensors/0.0.1`, `/auki/resources/0.0.1`, and `/auki/registries/0.0.1` streams. It keeps the js-libp2p path for browser-to-native WebRTC Direct probes and adds Discovery-signaled browser-to-browser WebRTC data channels for `/auki-webrtc-signaling/...` addresses. The generated package tests cover protocol constants, DTO bytes, Discovery signaling fetches, and browser request/response framing; the generated `browser-probe-smoke.mjs` harness plus root `scripts/smoke-network-browser-probe.sh` prove the browser-to-native path against the native `browser_probe_listener` example.
 
-The browser package starts at the network layer. It is not a resurrected `auki-domain-browser` facade, and it does not implement browser Manager semantics. The first production target is a browser leaf peer dialing a native SDK peer through a browser-compatible multiaddr.
+The browser package starts at the network layer. Domain behavior still lives in `auki-domain`; `AukiNetworkPeer` only supplies the generated wasm DTO helpers, Discovery client, framed request/response, and stream transport needed by higher layers.
 
 ## Protocols
 

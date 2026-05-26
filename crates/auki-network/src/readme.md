@@ -7,7 +7,7 @@ Implementation status for [`auki-network`](../README.md).
 - [`lib.rs`](lib.rs) - feature gates, binding adapter wiring, module exports, and root re-exports.
 - [`core.rs`](core.rs) - binding-free peer identity, reachability, capability types, and locked identity tests.
 - [`ffi.rs`](ffi.rs) - native UniFFI adapter for identity/capabilities, `AukiNetworkRuntime`, request/response/event facades, byte streams, Discovery, app-instance helpers, and the `message_node` Swift host surface, behind `uniffi`.
-- [`wasm.rs`](wasm.rs) - wasm-bindgen adapter for browser identity/protocol helpers, DTO byte helpers, and browser-probe framing, behind `wasm`.
+- [`wasm.rs`](wasm.rs) - wasm-bindgen adapter for browser identity/protocol helpers, DTO byte helpers, Discovery fetch helpers, and browser-probe framing, behind `wasm`.
 - [`bin/uniffi-bindgen.rs`](bin/uniffi-bindgen.rs) - crate-local UniFFI CLI entry point used by the root binding generator.
 - [`participant.rs`](participant.rs) - `ParticipantInfo`, the SDK-owned `/api/info` JSON shape.
 - [`browser_probe_protocol.rs`](browser_probe_protocol.rs) - shared `/auki/browser-probe/0.0.1` request/response structs for the browser WebRTC probe.
@@ -105,6 +105,19 @@ encodeMessageEnvelopeJson(json) -> Uint8Array
 decodeMessageEnvelopeJson(bytes) -> string
 encodeJoinRequestJson(json) -> Uint8Array
 decodeJoinResponseJson(bytes) -> string
+encodeStreamRequestBytes(json) -> Uint8Array
+encodeStreamAcceptBytes(json) -> Uint8Array
+encodeStreamEntryBytes(json) -> Uint8Array
+decodeStreamMessageJson(bytes) -> string
+
+class DiscoveryDirectoryClient {
+    constructor(baseUrl: string)
+    registerPeerJson(json: string) -> Promise<string>
+    discoverPeersJson(json: string) -> Promise<string>
+    listNodesJson(json: string) -> Promise<string>
+    sendSignalJson(json: string) -> Promise<string>
+    pollSignalsJson(json: string) -> Promise<string>
+}
 ```
 
 Behind `browser_probe`:
@@ -220,6 +233,8 @@ node = auki_network.AukiMessageNode.from_wallet_seed(
 
 The generated JavaScript package also exposes `dialBrowserProbe(...)`. It creates a js-libp2p WebRTC Direct peer from Rust-derived key material, dials the native `/auki/browser-probe/0.0.1` protocol, sends a wasm-encoded length-prefixed request, and decodes the native response. The generated `browser-probe-smoke.mjs` plus root `scripts/smoke-network-browser-probe.sh` run that path against the native `browser_probe_listener` example.
 
+For browser-to-browser examples, `AukiNetworkPeer.configureDiscoverySignaling({ discoveryUrl })` advertises `/auki-webrtc-signaling/.../p2p/{peer}` and polls Discovery's generic `/signals` mailbox. `requestFramed`, `handleFramed`, `openStream`, and `handleStream` use WebRTC data channels for those addresses while keeping the same SDK protocol bytes from wasm.
+
 Behind `swarm`:
 
 ```rust
@@ -331,7 +346,16 @@ pub struct ClusterEntry {
     pub name: String,
     pub manager_peer_id: libp2p_identity::PeerId,
     pub manager_multiaddrs: Vec<multiaddr::Multiaddr>,
+    pub relay_multiaddrs: Vec<multiaddr::Multiaddr>,
     pub peer_count: u32,
+    pub created_ns: i64,
+    pub last_liveness_check_ns: i64,
+}
+
+pub struct NodeEntry {
+    pub peer_id: libp2p_identity::PeerId,
+    pub node_type: String,
+    pub multiaddrs: Vec<multiaddr::Multiaddr>,
     pub created_ns: i64,
     pub last_liveness_check_ns: i64,
 }
@@ -344,11 +368,17 @@ impl DiscoveryClient {
     pub fn base_url(&self) -> &str;
     pub async fn list_clusters(&self) -> Result<Vec<ClusterEntry>, DiscoveryError>;
     pub async fn create_cluster(...);
+    pub async fn create_cluster_with_relays(...);
     pub async fn liveness_check(...);
     pub async fn rotate_manager(...);
+    pub async fn rotate_manager_with_relays(...);
+    pub async fn list_nodes(...);
+    pub async fn list_nodes_by_type(...);
     pub async fn deregister(...);
 }
 ```
+
+Discovery cluster entries now carry `relay_multiaddrs`, and the client exposes `/nodes` so SDK consumers can discover stable infrastructure nodes such as relays without using app-specific rendezvous endpoints. The wasm JavaScript client additionally exposes `sendSignalJson` / `pollSignalsJson` for browser WebRTC signaling; native `DiscoveryClient` remains focused on the typed cluster and node directory.
 
 ## Trust Model
 

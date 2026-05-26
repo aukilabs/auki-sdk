@@ -1,6 +1,7 @@
 import initWasm, * as wasm from "./$generated_js_file";
 
 export {
+  AukiBrowserDomainPeerCore,
   clusterMembershipAdmitMemberJson,
   clusterMembershipFilenameJson,
   clusterMembershipNewJson,
@@ -19,6 +20,7 @@ const INFO_PROTOCOL = "/auki/info/0.0.1";
 const SENSORS_PROTOCOL = "/auki/sensors/0.0.1";
 const RESOURCES_PROTOCOL = "/auki/resources/0.0.1";
 const REGISTRIES_PROTOCOL = "/auki/registries/0.0.1";
+const STREAM_PROTOCOL = "/auki/stream/0.1.0";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -95,6 +97,325 @@ export class AukiDomainClient {
   }
 }
 
+export class AukiBrowserDomainPeer {
+  constructor({ networkPeer, discovery, discoveryFactory, core, appId = "overwatch", displayName = "Overwatch Browser", livenessIntervalMs = 1_000 } = {}) {
+    if (networkPeer == null) {
+      throw new TypeError("AukiBrowserDomainPeer requires networkPeer");
+    }
+    this.networkPeer = networkPeer;
+    this.discovery = discovery ?? null;
+    this.discoveryFactory = discoveryFactory ?? null;
+    this.core = core ?? new wasm.AukiBrowserDomainPeerCore(JSON.stringify({
+      peer_id: networkPeer.peerId,
+      app_id: appId,
+      display_name: displayName,
+      multiaddrs: networkPeer.multiaddrs ?? [],
+    }));
+    this.observers = new Set();
+    this.streamSources = new Map();
+    this.livenessIntervalMs = livenessIntervalMs;
+    this.livenessTimer = null;
+  }
+
+  get peerId() {
+    return this.networkPeer.peerId;
+  }
+
+  snapshot() {
+    return JSON.parse(this.core.snapshotJson());
+  }
+
+  debugState() {
+    return JSON.parse(this.core.debugStateJson());
+  }
+
+  observeParticipants(callback) {
+    this.observers.add(callback);
+    callback(this.snapshot());
+    return () => this.observers.delete(callback);
+  }
+
+  declareSensors(sensors) {
+    const snapshot = JSON.parse(this.core.declareSensorsJson(JSON.stringify(sensors ?? [])));
+    this.#emit(snapshot);
+    return Promise.resolve();
+  }
+
+  sensorCatalogJson() {
+    return this.core.sensorCatalogJson();
+  }
+
+  resourceCatalogJson() {
+    return this.core.resourceCatalogJson();
+  }
+
+  async publishSensor(sensorId, source) {
+    if (!sensorId) {
+      throw new TypeError("publishSensor requires sensorId");
+    }
+    if (source == null) {
+      throw new TypeError("publishSensor requires a source");
+    }
+    this.streamSources.set(sensorId, source);
+    await this.#registerStreamHandler();
+  }
+
+  async subscribeToSensor(peerId, sensorId) {
+    if (typeof this.networkPeer.openStream !== "function") {
+      throw new TypeError("networkPeer must expose openStream(peerMultiaddr, requestJson)");
+    }
+    const participant = this.snapshot().participants.find((candidate) => candidate.peer_id === peerId);
+    const address = participant?.multiaddrs?.[0];
+    if (!address) {
+      throw new Error(`participant ${peerId} has no stream multiaddr`);
+    }
+    return this.networkPeer.openStream(address, { sensor_id: sensorId });
+  }
+
+  async createOrJoin({ discoveryUrl, clusterName } = {}) {
+    if (!clusterName) {
+      throw new TypeError("createOrJoin requires clusterName");
+    }
+    const discovery = this.#discovery(discoveryUrl);
+    await this.#registerHandlers();
+    if (typeof this.networkPeer.configureDiscoverySignaling === "function") {
+      await this.networkPeer.configureDiscoverySignaling({ discoveryUrl, clusterName });
+      this.core.mergeParticipantJson(JSON.stringify({
+        peer_id: this.peerId,
+        connected: true,
+        multiaddrs: this.networkPeer.multiaddrs ?? [],
+      }));
+    }
+    const registration = {
+      name: clusterName,
+      manager_peer_id: this.peerId,
+      manager_multiaddrs: this.networkPeer.multiaddrs ?? [],
+      relay_multiaddrs: [],
+    };
+    const outcome = JSON.parse(await discovery.registerPeerJson(JSON.stringify(registration)));
+    if (outcome.kind === "created") {
+      const snapshot = JSON.parse(this.core.createDomainJson(clusterName));
+      this.#startDiscoveryLiveness(discovery, clusterName);
+      this.#emit(snapshot);
+      return;
+    }
+    if (outcome.kind !== "already_exists") {
+      throw new Error(`unsupported Discovery create outcome: ${outcome.kind}`);
+    }
+
+    const listed = JSON.parse(await discovery.discoverPeersJson(JSON.stringify({ name: clusterName })));
+    const cluster = (listed.clusters ?? []).find((entry) => entry.name === clusterName);
+    const managerAddress = cluster?.manager_multiaddrs?.[0];
+    if (!managerAddress) {
+      throw new Error(`Discovery cluster ${clusterName} has no Manager multiaddr`);
+    }
+    const request = {
+      peer_id: this.peerId,
+      multiaddrs: this.networkPeer.multiaddrs ?? [],
+      participant_info_json: JSON.stringify(this.#participantInfo(cluster.manager_peer_id)),
+    };
+    const responseBytes = await this.networkPeer.requestFramed(
+      managerAddress,
+      JOIN_PROTOCOL,
+      encoder.encode(JSON.stringify(request)),
+    );
+    const response = JSON.parse(decoder.decode(bytes(responseBytes)));
+    if (response.kind !== "accept") {
+      throw new Error(response.reason ?? "join rejected");
+    }
+    this.core.applyJoinAcceptJson(JSON.stringify(response));
+    const snapshot = await this.#refreshRemoteCatalogs();
+    this.#emit(snapshot);
+  }
+
+  #emit(snapshot = this.snapshot()) {
+    for (const callback of this.observers) {
+      callback(snapshot);
+    }
+  }
+
+  #discovery(discoveryUrl) {
+    if (this.discovery != null) {
+      return this.discovery;
+    }
+    if (typeof this.discoveryFactory === "function") {
+      return this.discoveryFactory(discoveryUrl);
+    }
+    throw new TypeError("AukiBrowserDomainPeer requires discovery or discoveryFactory");
+  }
+
+  #startDiscoveryLiveness(discovery, clusterName) {
+    if (this.livenessTimer != null) {
+      clearInterval(this.livenessTimer);
+      this.livenessTimer = null;
+    }
+    const tick = async () => {
+      try {
+        await discovery.registerPeerJson(JSON.stringify({
+          name: clusterName,
+          mode: "liveness",
+          peer_count: this.snapshot().participants.length,
+        }));
+      } catch {
+        // Discovery liveness is best-effort; the next tick retries.
+      }
+    };
+    void tick();
+    this.livenessTimer = setInterval(tick, this.livenessIntervalMs);
+    this.livenessTimer.unref?.();
+  }
+
+  async #registerHandlers() {
+    if (this.handlersRegistered) {
+      return;
+    }
+    if (typeof this.networkPeer.handleFramed !== "function") {
+      throw new TypeError("networkPeer must expose handleFramed(protocol, handler)");
+    }
+    await this.networkPeer.handleFramed(JOIN_PROTOCOL, async (payload) => {
+      const responseJson = this.core.handleJoinRequestJson(decoder.decode(bytes(payload)));
+      this.#emit();
+      queueMicrotask(() => {
+        this.#refreshRemoteCatalogs()
+          .then((snapshot) => this.#emit(snapshot))
+          .catch(() => {});
+      });
+      return encoder.encode(responseJson);
+    });
+    await this.networkPeer.handleFramed(INFO_PROTOCOL, async () => {
+      return encoder.encode(JSON.stringify({
+        participant_info_json: JSON.stringify(this.#participantInfo(this.snapshot().managerPeerId)),
+      }));
+    });
+    await this.networkPeer.handleFramed(SENSORS_PROTOCOL, async () => {
+      return encoder.encode(this.sensorCatalogJson());
+    });
+    await this.networkPeer.handleFramed(RESOURCES_PROTOCOL, async () => {
+      return encoder.encode(this.resourceCatalogJson());
+    });
+    await this.networkPeer.handleFramed(REGISTRIES_PROTOCOL, async () => {
+      return encoder.encode(JSON.stringify({ entry: null }));
+    });
+    this.handlersRegistered = true;
+  }
+
+  async #registerStreamHandler() {
+    if (this.streamHandlerRegistered) {
+      return;
+    }
+    if (typeof this.networkPeer.handleStream !== "function") {
+      throw new TypeError("networkPeer must expose handleStream(protocol, handler)");
+    }
+    await this.networkPeer.handleStream(STREAM_PROTOCOL, async (request) => {
+      return this.#localSensorStream(request.sensor_id);
+    });
+    this.streamHandlerRegistered = true;
+  }
+
+  #localSensorStream(sensorId) {
+    const source = this.streamSources.get(sensorId);
+    if (source == null) {
+      throw new Error(`no published source for sensor ${sensorId}`);
+    }
+    return new AukiLocalSensorStream(this.#streamManifest(sensorId), source);
+  }
+
+  #streamManifest(sensorId) {
+    const selfParticipant = this.snapshot().participants.find((participant) => participant.is_self);
+    const sensor = selfParticipant?.sensors?.find((candidate) => candidate.sensor_id === sensorId) ?? {};
+    const sensorHash = sensor.sensor_hash ?? `${sensorId}:sensor`;
+    return {
+      sensor_id: sensorId,
+      sensor_hash: sensorHash,
+      clock_id: `${sensorId}/clock`,
+      clock_hash: `${sensorHash}:clock`,
+      frame_id: `${sensorId}/frame`,
+      frame_hash: `${sensorHash}:frame`,
+    };
+  }
+
+  async #refreshRemoteCatalogs() {
+    let snapshot = this.snapshot();
+    for (const participant of snapshot.participants) {
+      if (participant.is_self) {
+        continue;
+      }
+      const address = participant.multiaddrs?.[0];
+      if (!address) {
+        continue;
+      }
+      const [infoBytes, sensorsBytes] = await Promise.all([
+        this.networkPeer.requestFramed(address, INFO_PROTOCOL, encoder.encode("{}")),
+        this.networkPeer.requestFramed(address, SENSORS_PROTOCOL, encoder.encode("{}")),
+      ]);
+      const infoResponse = JSON.parse(decoder.decode(bytes(infoBytes)));
+      const participantInfo = typeof infoResponse.participant_info_json === "string"
+        ? JSON.parse(infoResponse.participant_info_json)
+        : infoResponse;
+      const sensorCatalog = JSON.parse(decoder.decode(bytes(sensorsBytes)));
+      snapshot = JSON.parse(this.core.mergeParticipantJson(JSON.stringify({
+        peer_id: participant.peer_id,
+        app: participantInfo.app,
+        name: participantInfo.name,
+        is_manager: participant.is_manager,
+        connected: true,
+        multiaddrs: participant.multiaddrs ?? [],
+        sensors: sensorCatalog.sensors ?? [],
+      })));
+    }
+    return snapshot;
+  }
+
+  #participantInfo(managerPeerId) {
+    return {
+      app: this.debugState().appId ?? "overwatch",
+      name: this.debugState().displayName ?? "Overwatch Browser",
+      session_id: `${this.peerId}/browser-session`,
+      session_clock_id: `${this.peerId}/browser-session/monotonic`,
+      session_clock_hash: "browser-session-clock",
+      session_now_ns: 1,
+      cluster_joined_at_ns: 1,
+      peer_id: this.peerId,
+      app_instance: `${this.peerId}/browser`,
+      is_manager: false,
+      manager_peer_id: managerPeerId ?? "",
+    };
+  }
+}
+
+class AukiLocalSensorStream {
+  constructor(manifest, source) {
+    this.manifest = manifest;
+    this.source = source;
+    this.sentAccept = false;
+    this.seq = 0;
+    this.iterator = null;
+  }
+
+  async nextMessage() {
+    if (!this.sentAccept) {
+      this.sentAccept = true;
+      return { accept: this.manifest };
+    }
+    if (this.iterator == null) {
+      this.iterator = asyncIterator(this.source);
+    }
+    const { value, done } = await this.iterator.next();
+    if (done) {
+      return null;
+    }
+    const seq = value.seq ?? this.seq;
+    this.seq = seq + 1;
+    return {
+      entry: {
+        timestamp_ns: value.timestamp_ns ?? 0,
+        seq,
+        payload: byteArray(value.payload ?? value.data ?? []),
+      },
+    };
+  }
+}
+
 function jsonString(value) {
   if (typeof value === "string") {
     JSON.parse(value);
@@ -114,8 +435,48 @@ function bytes(value) {
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
   }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
+  }
   if (typeof value?.subarray === "function") {
     return value.subarray();
   }
   throw new TypeError(`unsupported byte payload: ${Object.prototype.toString.call(value)}`);
+}
+
+function asyncIterator(source) {
+  const materialized = typeof source === "function" ? source() : source;
+  if (materialized?.kind === "generated-bytes" && Array.isArray(materialized.frames)) {
+    let index = 0;
+    return {
+      async next() {
+        if (index >= materialized.frames.length) {
+          return { done: true, value: undefined };
+        }
+        const frame = materialized.frames[index];
+        const timestampBase = materialized.start_timestamp_ns ?? 100;
+        const value = Array.isArray(frame)
+          ? { timestamp_ns: timestampBase + index, seq: index, payload: frame }
+          : frame;
+        index += 1;
+        return { done: false, value };
+      },
+    };
+  }
+  if (materialized?.[Symbol.asyncIterator] != null) {
+    return materialized[Symbol.asyncIterator]();
+  }
+  if (materialized?.[Symbol.iterator] != null) {
+    const iterator = materialized[Symbol.iterator]();
+    return {
+      async next() {
+        return iterator.next();
+      },
+    };
+  }
+  throw new TypeError("published sensor source must be an iterable, async iterable, or producer function");
+}
+
+function byteArray(value) {
+  return Array.from(bytes(value));
 }

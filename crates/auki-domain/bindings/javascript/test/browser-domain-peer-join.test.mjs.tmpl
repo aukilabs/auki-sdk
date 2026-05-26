@@ -1,0 +1,112 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiDomain, { AukiBrowserDomainPeer } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiDomain({ module_or_path: wasmBytes });
+
+test("AukiBrowserDomainPeer creates a browser Domain and admits a joining browser peer", async () => {
+  const discovery = new FakeDiscovery();
+  const managerPeer = new AukiBrowserDomainPeer({
+    networkPeer: fakeNetworkPeer("peer-a", ["/webrtc/p2p/peer-a"]),
+    discovery,
+    appId: "overwatch",
+    displayName: "Browser A",
+  });
+  const joinerPeer = new AukiBrowserDomainPeer({
+    networkPeer: fakeNetworkPeer("peer-b", ["/webrtc/p2p/peer-b"]),
+    discovery,
+    appId: "overwatch",
+    displayName: "Browser B",
+  });
+
+  await managerPeer.createOrJoin({ discoveryUrl: "http://discovery", clusterName: "overwatch" });
+  await joinerPeer.createOrJoin({ discoveryUrl: "http://discovery", clusterName: "overwatch" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(managerPeer.snapshot().participants.length, 2);
+  assert.equal(joinerPeer.snapshot().participants.length, 2);
+  assert.equal(managerPeer.snapshot().managerPeerId, managerPeer.peerId);
+  assert.equal(joinerPeer.snapshot().managerPeerId, managerPeer.peerId);
+  assert.ok(discovery.registrations.some((registration) => registration.mode === "liveness"));
+});
+
+test("AukiBrowserDomainPeer configures Discovery signaling before cluster registration", async () => {
+  const discovery = new FakeDiscovery();
+  const networkPeer = fakeNetworkPeer("peer-signaled", []);
+  networkPeer.configureDiscoverySignaling = async ({ discoveryUrl }) => {
+    networkPeer.multiaddrs = [`/auki-webrtc-signaling/${encodeURIComponent(discoveryUrl)}/p2p/${networkPeer.peerId}`];
+  };
+  const peer = new AukiBrowserDomainPeer({
+    networkPeer,
+    discovery,
+    appId: "overwatch",
+    displayName: "Browser Signaled",
+  });
+
+  await peer.createOrJoin({ discoveryUrl: "http://discovery", clusterName: "overwatch" });
+
+  assert.equal(discovery.registrations[0].manager_multiaddrs.length, 1);
+  assert.match(discovery.registrations[0].manager_multiaddrs[0], /peer-signaled$/);
+  assert.equal(peer.snapshot().participants[0].multiaddrs.length, 1);
+  assert.match(peer.snapshot().participants[0].multiaddrs[0], /peer-signaled$/);
+});
+
+class FakeDiscovery {
+  constructor() {
+    this.clusters = new Map();
+    this.registrations = [];
+  }
+
+  async registerPeerJson(registrationJson) {
+    const registration = JSON.parse(registrationJson);
+    this.registrations.push(registration);
+    if (this.clusters.has(registration.name)) {
+      return JSON.stringify({ kind: "already_exists" });
+    }
+    const entry = {
+      name: registration.name,
+      manager_peer_id: registration.manager_peer_id,
+      manager_multiaddrs: registration.manager_multiaddrs,
+      relay_multiaddrs: registration.relay_multiaddrs ?? [],
+      peer_count: 1,
+      created_ns: 1,
+      last_liveness_check_ns: 1,
+    };
+    this.clusters.set(registration.name, entry);
+    return JSON.stringify({ kind: "created", entry });
+  }
+
+  async discoverPeersJson(queryJson) {
+    const query = JSON.parse(queryJson);
+    const clusters = [...this.clusters.values()].filter((entry) => !query.name || entry.name === query.name);
+    return JSON.stringify({ clusters });
+  }
+}
+
+const peersByAddress = new Map();
+
+function fakeNetworkPeer(peerId, multiaddrs) {
+  const handlers = new Map();
+  const peer = {
+    peerId,
+    multiaddrs,
+    async handleFramed(protocol, handler) {
+      handlers.set(protocol, handler);
+    },
+    async requestFramed(peerMultiaddr, protocol, payload) {
+      const remote = peersByAddress.get(peerMultiaddr);
+      if (!remote) throw new Error(`no fake peer at ${peerMultiaddr}`);
+      const handler = remote.handlers.get(protocol);
+      if (!handler) throw new Error(`no handler for ${protocol}`);
+      return handler(payload, { protocol, connection: { remotePeer: peerId } });
+    },
+    handlers,
+  };
+  for (const multiaddr of multiaddrs) {
+    peersByAddress.set(multiaddr, peer);
+  }
+  return peer;
+}

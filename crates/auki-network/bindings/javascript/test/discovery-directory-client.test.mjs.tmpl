@@ -1,0 +1,158 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, { DiscoveryDirectoryClient } from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("DiscoveryDirectoryClient lists clusters and relay nodes through fetch", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      method: init.method ?? "GET",
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    if (String(url).endsWith("/clusters/overwatch") && init.method === "POST") {
+      return jsonResponse({
+        name: "overwatch",
+        manager_peer_id: "peer-manager",
+        manager_multiaddrs: ["/webrtc/p2p/peer-manager"],
+        relay_multiaddrs: ["/dns4/relay.local/tcp/443/wss/p2p/relay/p2p-circuit"],
+        peer_count: 1,
+        created_ns: 1,
+        last_liveness_check_ns: 2,
+      }, 201);
+    }
+    if (String(url).endsWith("/clusters")) {
+      return jsonResponse({
+        clusters: [{
+          name: "overwatch",
+          manager_peer_id: "peer-manager",
+          manager_multiaddrs: ["/webrtc/p2p/peer-manager"],
+          relay_multiaddrs: ["/dns4/relay.local/tcp/443/wss/p2p/relay/p2p-circuit"],
+          peer_count: 2,
+          created_ns: 1,
+          last_liveness_check_ns: 2,
+        }],
+      });
+    }
+    if (String(url).endsWith("/nodes?type=relay")) {
+      return jsonResponse({
+        nodes: [{
+          peer_id: "relay",
+          node_type: "relay",
+          multiaddrs: ["/dns4/relay.local/tcp/443/wss/p2p/relay"],
+          created_ns: 3,
+          last_liveness_check_ns: 4,
+        }],
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const client = new DiscoveryDirectoryClient("http://discovery.local/");
+    const created = JSON.parse(await client.registerPeerJson(JSON.stringify({
+      name: "overwatch",
+      manager_peer_id: "peer-manager",
+      manager_multiaddrs: ["/webrtc/p2p/peer-manager"],
+      relay_multiaddrs: ["/dns4/relay.local/tcp/443/wss/p2p/relay/p2p-circuit"],
+    })));
+    const clusters = JSON.parse(await client.discoverPeersJson("{}")).clusters;
+    const relays = JSON.parse(await client.listNodesJson(JSON.stringify({ type: "relay" }))).nodes;
+
+    assert.equal(created.kind, "created");
+    assert.equal(created.entry.relay_multiaddrs.length, 1);
+    assert.equal(clusters[0].relay_multiaddrs.length, 1);
+    assert.equal(relays[0].node_type, "relay");
+    assert.deepEqual(calls.map((call) => [call.method, call.url]), [
+      ["POST", "http://discovery.local/clusters/overwatch"],
+      ["GET", "http://discovery.local/clusters"],
+      ["GET", "http://discovery.local/nodes?type=relay"],
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("DiscoveryDirectoryClient sends and polls signaling messages through fetch", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({
+      url: String(url),
+      method: init.method ?? "GET",
+      body: init.body ? JSON.parse(init.body) : null,
+    });
+    if (String(url).endsWith("/signals/peer-b") && init.method === "POST") {
+      return jsonResponse({
+        id: 7,
+        recipient_peer_id: "peer-b",
+        from_peer_id: "peer-a",
+        connection_id: "conn-1",
+        kind: "offer",
+        payload: { sdp: "offer-sdp" },
+        created_ns: 11,
+      }, 201);
+    }
+    if (String(url).endsWith("/signals/peer-b?since=7&timeout_ms=25")) {
+      return jsonResponse({
+        messages: [{
+          id: 8,
+          recipient_peer_id: "peer-b",
+          from_peer_id: "peer-a",
+          connection_id: "conn-1",
+          kind: "candidate",
+          payload: { candidate: "candidate-json" },
+          created_ns: 12,
+        }],
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const client = new DiscoveryDirectoryClient("http://discovery.local/");
+    const sent = JSON.parse(await client.sendSignalJson(JSON.stringify({
+      recipient_peer_id: "peer-b",
+      from_peer_id: "peer-a",
+      connection_id: "conn-1",
+      kind: "offer",
+      payload: { sdp: "offer-sdp" },
+    })));
+    const polled = JSON.parse(await client.pollSignalsJson(JSON.stringify({
+      peer_id: "peer-b",
+      since: 7,
+      timeout_ms: 25,
+    })));
+
+    assert.equal(sent.id, 7);
+    assert.equal(polled.messages[0].kind, "candidate");
+    assert.deepEqual(calls.map((call) => [call.method, call.url]), [
+      ["POST", "http://discovery.local/signals/peer-b"],
+      ["GET", "http://discovery.local/signals/peer-b?since=7&timeout_ms=25"],
+    ]);
+    assert.deepEqual(calls[0].body, {
+      from_peer_id: "peer-a",
+      connection_id: "conn-1",
+      kind: "offer",
+      payload: { sdp: "offer-sdp" },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function jsonResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() {
+      return JSON.stringify(body);
+    },
+  };
+}

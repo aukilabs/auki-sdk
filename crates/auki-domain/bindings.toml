@@ -27,8 +27,13 @@ templates = [
   "README.md.tmpl",
   "index.js.tmpl",
   "index.d.ts.tmpl",
+  "test/browser-domain-peer-state.test.mjs.tmpl",
+  "test/browser-domain-peer-join.test.mjs.tmpl",
+  "test/browser-domain-peer-catalogs.test.mjs.tmpl",
+  "test/browser-domain-peer-stream.test.mjs.tmpl",
   "test/domain-helpers.test.mjs.tmpl",
   "test/domain-client-request-response.test.mjs.tmpl",
   "test/full-domain-generated.test.mjs.tmpl",
 ]
+type_sources = ["src/adapter.ts.tmpl"]
 smoke = "bindings/javascript/smoke.mjs"

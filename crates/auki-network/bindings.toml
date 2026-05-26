@@ -36,6 +36,10 @@ templates = [
     "test/protocol-helpers.test.mjs.tmpl",
     "test/browser-message-smoke.test.mjs.tmpl",
     "test/browser-request-response-smoke.test.mjs.tmpl",
+    "test/discovery-directory-client.test.mjs.tmpl",
+    "test/framed-handler.test.mjs.tmpl",
+    "test/stream-message-helpers.test.mjs.tmpl",
     "test/full-network-generated.test.mjs.tmpl",
 ]
+type_sources = ["src/adapter.ts.tmpl"]
 smoke = "bindings/javascript/smoke.mjs"

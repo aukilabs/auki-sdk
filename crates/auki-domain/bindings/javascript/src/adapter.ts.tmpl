@@ -1,0 +1,57 @@
+export interface AukiNetworkPeerLike {
+  readonly peerId?: string;
+  requestFramed(peerMultiaddr: string, protocol: string, payload: Uint8Array): Promise<Uint8Array | ArrayBuffer>;
+}
+
+export interface AukiDomainClientOptions {
+  networkPeer: AukiNetworkPeerLike;
+  clusterName: string;
+}
+
+export declare class AukiDomainClient {
+  constructor(options: AukiDomainClientOptions);
+  readonly networkPeer: AukiNetworkPeerLike;
+  readonly clusterName: string;
+  readonly localPeerId: string | undefined;
+  validateMembership(membershipJson: string | object): string;
+  successor(membershipJson: string | object, peerId: string): string | null;
+  requestJoin(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchParticipantInfo(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchSensorCatalog(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchResourceCatalog(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  fetchRegistryEntry(peerMultiaddr: string, requestJson?: string | object): Promise<string>;
+  requestProtocolJson(peerMultiaddr: string, protocol: string, requestJson?: string | object): Promise<string>;
+}
+
+export interface AukiBrowserDomainPeerOptions {
+  networkPeer: {
+    readonly peerId: string;
+    readonly multiaddrs?: string[];
+    openStream?: (peerMultiaddr: string, requestJson: { sensor_id: string }) => Promise<unknown>;
+    handleStream?: (
+      protocol: string,
+      handler: (request: { sensor_id: string }, context: unknown) => unknown | Promise<unknown>,
+    ) => Promise<void>;
+  };
+  discovery?: unknown;
+  discoveryFactory?: (url: string) => unknown;
+  core?: unknown;
+  appId?: string;
+  displayName?: string;
+  livenessIntervalMs?: number;
+}
+
+export declare class AukiBrowserDomainPeer {
+  constructor(options: AukiBrowserDomainPeerOptions);
+  readonly networkPeer: AukiBrowserDomainPeerOptions["networkPeer"];
+  readonly peerId: string;
+  snapshot(): unknown;
+  debugState(): unknown;
+  observeParticipants(callback: (snapshot: unknown) => void): () => void;
+  declareSensors(sensors: unknown[]): Promise<void>;
+  sensorCatalogJson(): string;
+  resourceCatalogJson(): string;
+  publishSensor(sensorId: string, source: unknown): Promise<void>;
+  subscribeToSensor(peerId: string, sensorId: string): Promise<unknown>;
+  createOrJoin(input: { discoveryUrl?: string; clusterName: string }): Promise<void>;
+}

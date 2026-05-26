@@ -1,0 +1,132 @@
+import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import initAukiNetwork, {
+  AukiNetworkPeer,
+  decodeStreamMessageJson,
+  encodeStreamAcceptBytes,
+  encodeStreamEntryBytes,
+  encodeStreamRequestBytes,
+  streamProtocol,
+} from "../index.js";
+
+const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
+await initAukiNetwork({ module_or_path: wasmBytes });
+
+test("stream message helpers encode and decode request accept and entry envelopes", () => {
+  assert.equal(streamProtocol(), "/auki/stream/0.1.0");
+
+  const request = JSON.parse(decodeStreamMessageJson(encodeStreamRequestBytes(JSON.stringify({
+    sensor_id: "browser-a/audio",
+  }))));
+  const accept = JSON.parse(decodeStreamMessageJson(encodeStreamAcceptBytes(JSON.stringify({
+    sensor_id: "browser-a/audio",
+    sensor_hash: "audio-hash",
+    clock_id: "browser-a/audio/clock",
+    clock_hash: "clock-hash",
+    frame_id: "browser-a/audio/frame",
+    frame_hash: "frame-hash",
+  }))));
+  const entry = JSON.parse(decodeStreamMessageJson(encodeStreamEntryBytes(JSON.stringify({
+    timestamp_ns: 42,
+    seq: 7,
+    payload: [1, 2, 3],
+  }))));
+
+  assert.deepEqual(request, { request: { sensor_id: "browser-a/audio" } });
+  assert.equal(accept.accept.sensor_hash, "audio-hash");
+  assert.deepEqual(entry, { entry: { timestamp_ns: 42, seq: 7, payload: [1, 2, 3] } });
+});
+
+test("AukiNetworkPeer.openStream sends a stream request and decodes the next stream message", async () => {
+  const stream = new FakeStream([
+    encodeStreamAcceptBytes(JSON.stringify({
+      sensor_id: "browser-a/audio",
+      sensor_hash: "audio-hash",
+      clock_id: "browser-a/audio/clock",
+      clock_hash: "clock-hash",
+      frame_id: "browser-a/audio/frame",
+      frame_hash: "frame-hash",
+    })),
+    encodeStreamEntryBytes(JSON.stringify({
+      timestamp_ns: 100,
+      seq: 0,
+      payload: [9, 8, 7],
+    })),
+  ]);
+  const peer = new AukiNetworkPeer(new FakeNode(stream));
+
+  const browserStream = await peer.openStream({ id: "peer-a" }, { sensor_id: "browser-a/audio" });
+
+  assert.deepEqual(JSON.parse(decodeStreamMessageJson(stream.sentPayload())), {
+    request: { sensor_id: "browser-a/audio" },
+  });
+  assert.deepEqual(await browserStream.nextMessage(), {
+    accept: {
+      sensor_id: "browser-a/audio",
+      sensor_hash: "audio-hash",
+      clock_id: "browser-a/audio/clock",
+      clock_hash: "clock-hash",
+      frame_id: "browser-a/audio/frame",
+      frame_hash: "frame-hash",
+    },
+  });
+  assert.deepEqual(await browserStream.nextMessage(), {
+    entry: {
+      timestamp_ns: 100,
+      seq: 0,
+      payload: [9, 8, 7],
+    },
+  });
+});
+
+class FakeNode {
+  constructor(stream) {
+    this.peerId = { toString: () => "fake-peer" };
+    this.stream = stream;
+  }
+
+  getMultiaddrs() {
+    return [];
+  }
+
+  async dialProtocol(_address, protocol) {
+    assert.equal(protocol, "/auki/stream/0.1.0");
+    return this.stream;
+  }
+}
+
+class FakeStream {
+  constructor(messages) {
+    this.frames = messages.map(frame);
+    this.sent = [];
+  }
+
+  send(bytes) {
+    this.sent.push(bytes);
+    return true;
+  }
+
+  sentPayload() {
+    const bytes = this.sent[0];
+    const length = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, false);
+    assert.equal(length, bytes.length - 4);
+    return bytes.slice(4);
+  }
+
+  async *[Symbol.asyncIterator]() {
+    for (const frameBytes of this.frames) {
+      yield frameBytes;
+    }
+  }
+}
+
+function frame(payload) {
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, payload.length, false);
+  const out = new Uint8Array(length.length + payload.length);
+  out.set(length, 0);
+  out.set(payload, length.length);
+  return out;
+}

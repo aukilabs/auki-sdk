@@ -4,6 +4,7 @@
 //! validation helpers live here only when they need runtime configuration or
 //! libp2p context; protocol truth remains in `auki-protocol`.
 
+pub mod api;
 pub mod config;
 pub mod handshake_policy;
 pub mod identity;
@@ -15,6 +16,7 @@ pub mod paths;
 pub mod protocols;
 pub mod relationship;
 
+pub use api::{AukiNode, AukiNodeError, AukiNodeEvent};
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,

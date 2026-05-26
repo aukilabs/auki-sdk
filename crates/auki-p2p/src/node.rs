@@ -1,6 +1,6 @@
 //! Minimal libp2p node wrapper for the RFC-first runtime.
 
-use crate::{AukiP2pConfig, ConfigError, DialPolicyError, LocalPeerIdentity};
+use crate::{AukiP2pConfig, ConfigError, ConfiguredPeer, DialPolicyError, LocalPeerIdentity};
 use auki_protocol::v1::{
     base64url,
     status::{LocalPeerStatus, StatusError},
@@ -280,6 +280,38 @@ impl AukiP2pNode {
     /// Relay-mediated connectivity addresses.
     pub fn relay_addresses(&self) -> &[Multiaddr] {
         &self.config.relay_addresses
+    }
+
+    pub(crate) fn configured_peers(&self) -> &[ConfiguredPeer] {
+        &self.config.p2p.configured_peers
+    }
+
+    pub(crate) fn configured_peer(&self, peer_id: PeerId) -> Option<&ConfiguredPeer> {
+        self.config
+            .p2p
+            .configured_peers
+            .iter()
+            .find(|peer| peer.peer_id == peer_id)
+    }
+
+    pub(crate) fn upsert_configured_peer(
+        &mut self,
+        peer: ConfiguredPeer,
+    ) -> Result<(), AukiP2pNodeError> {
+        peer.validate_dial_addresses(self.config.p2p.dial_policy)
+            .map_err(AukiP2pNodeError::DialPolicy)?;
+        if let Some(existing) = self
+            .config
+            .p2p
+            .configured_peers
+            .iter_mut()
+            .find(|existing| existing.peer_id == peer.peer_id)
+        {
+            *existing = peer;
+        } else {
+            self.config.p2p.configured_peers.push(peer);
+        }
+        Ok(())
     }
 
     /// Number of retained active connections for one peer.

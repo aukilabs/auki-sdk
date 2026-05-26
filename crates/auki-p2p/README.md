@@ -24,6 +24,9 @@ Current public surface:
 - `LocalPeerIdentity` derives deterministic libp2p peer keys from the wallet
   and maintains the wallet-signed `PeerBinding`.
 - `AukiP2pConfig` captures RFC-shaped runtime limits and policy knobs.
+- `AukiNode` is the SDK-facing runtime handle for configured peer management,
+  dialing, high-level peer events, relationship tracking, and in-process status
+  snapshots without exposing protocol frames or stream internals.
 - `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
   advertised, and relay addresses separate; can dial explicit peer addresses;
   applies local per-peer connection caps for duplicate/simultaneous dials;

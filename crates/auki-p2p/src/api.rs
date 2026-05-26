@@ -1,26 +1,32 @@
 //! SDK-facing high-level node API.
 
 use crate::{
-    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, LocalPeerIdentity,
-    PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
-    RelationshipStatusBuildError, RelationshipStatusOptions, build_relationship_status_snapshot,
+    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome,
+    Libp2pPathClient, Libp2pSubscription, LoadedRemoteOffer, LocalPeerIdentity,
+    OfferCatalogLoadState, OfferLoadReport, PathClientError, PathContext, PathOrchestrationError,
+    PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope, RelationshipLoadedOffer,
+    RelationshipRegistryReferenceStatus, RelationshipStatusBuildError, RelationshipStatusOptions,
+    SubscribeInput, accept_subscribe_data_frame, build_relationship_status_snapshot,
+    get_over_libp2p, subscribe_over_libp2p,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
     domain::{DelegationScope, DomainDeclaration, DomainDelegation, DomainError},
     error,
+    message::SpatialMessage,
     offer::{Offer, OfferCatalogResponse, OfferCatalogResponseError},
     status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
 };
 use libp2p::{Multiaddr, PeerId};
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, future::Future};
 
 /// High-level RFC-first runtime handle for SDK and app code.
 pub struct AukiNode {
     node: AukiP2pNode,
     local_domains: BTreeMap<String, LocalDomainRegistration>,
     local_offers: BTreeMap<(String, String), Offer>,
+    remote_offer_reports: BTreeMap<PeerId, OfferLoadReport>,
     relationships: BTreeMap<PeerId, PeerRelationship>,
 }
 
@@ -34,6 +40,11 @@ pub struct LocalDomainRegistration {
     advertised: bool,
     delegation_scopes: Vec<DelegationScope>,
     delegation_expires_at: Option<String>,
+}
+
+/// High-level accepted subscription handle.
+pub struct AukiSubscription {
+    inner: Libp2pSubscription,
 }
 
 /// High-level node events that do not expose libp2p stream or frame internals.
@@ -112,6 +123,13 @@ pub enum AukiNodeError {
     },
     /// Local offer catalog projection failed.
     OfferCatalog(OfferCatalogResponseError),
+    /// No loaded remote offers are available for the requested peer.
+    RemoteOffersNotLoaded {
+        /// Remote peer id.
+        peer_id: PeerId,
+    },
+    /// Get or Subscribe path orchestration failed.
+    Path(PathOrchestrationError),
 }
 
 impl LocalDomainRegistration {
@@ -189,6 +207,33 @@ impl LocalDomainRegistration {
     }
 }
 
+impl AukiSubscription {
+    /// Path id used for status tracking.
+    pub fn path_id(&self) -> &str {
+        self.inner.handle().path_id()
+    }
+
+    /// Remote peer id.
+    pub fn peer_id(&self) -> PeerId {
+        self.inner.handle().peer_id()
+    }
+
+    /// Accepted payload type for this subscription.
+    pub fn payload_type(&self) -> &str {
+        self.inner.handle().payload_type()
+    }
+
+    /// Last accepted sequence value.
+    pub fn last_sequence(&self) -> Option<u64> {
+        self.inner.handle().last_sequence()
+    }
+
+    /// Observed sequence-gap count.
+    pub fn sequence_gap_count(&self) -> u64 {
+        self.inner.handle().sequence_gap_count()
+    }
+}
+
 impl AukiNode {
     /// Build a high-level node from a local identity and runtime config.
     pub fn new(
@@ -200,6 +245,7 @@ impl AukiNode {
             node,
             local_domains: BTreeMap::new(),
             local_offers: BTreeMap::new(),
+            remote_offer_reports: BTreeMap::new(),
             relationships: BTreeMap::new(),
         };
         for peer in this.node.configured_peers().to_vec() {
@@ -231,6 +277,11 @@ impl AukiNode {
     /// Return relationship snapshots in deterministic peer-id order.
     pub fn relationships(&self) -> Vec<PeerRelationship> {
         self.relationships.values().cloned().collect()
+    }
+
+    /// Borrow one loaded remote offer report.
+    pub fn remote_offer_report(&self, peer_id: PeerId) -> Option<&OfferLoadReport> {
+        self.remote_offer_reports.get(&peer_id)
     }
 
     /// Return local domain registrations in deterministic domain-id order.
@@ -313,6 +364,20 @@ impl AukiNode {
         .map_err(AukiNodeError::OfferCatalog)
     }
 
+    /// Add or replace a loaded remote offer report for one peer.
+    pub fn upsert_remote_offer_report(&mut self, report: OfferLoadReport) {
+        let peer_id = report.peer_id;
+        let loaded_offers = report
+            .offers
+            .iter()
+            .map(relationship_loaded_offer)
+            .collect();
+        let relationship = self.relationship_mut(peer_id);
+        relationship.offer_catalog_state = OfferCatalogLoadState::Loaded;
+        relationship.loaded_offers = loaded_offers;
+        self.remote_offer_reports.insert(peer_id, report);
+    }
+
     /// Dial a configured peer through its configured addresses.
     pub fn dial_configured_peer(&mut self, peer_id: PeerId) -> Result<(), AukiNodeError> {
         let peer = self
@@ -329,6 +394,94 @@ impl AukiNode {
             .map_err(AukiNodeError::Node)?;
         self.relationship_mut(peer_id).dialing();
         Ok(())
+    }
+
+    /// Run one high-level Get over the configured libp2p path.
+    pub async fn get(
+        &mut self,
+        peer_id: PeerId,
+        input: GetInput,
+        now: &str,
+    ) -> Result<GetOutcome, AukiNodeError> {
+        let offers = self
+            .remote_offer_reports
+            .get(&peer_id)
+            .cloned()
+            .ok_or(AukiNodeError::RemoteOffersNotLoaded { peer_id })?;
+        let node = &mut self.node;
+        let relationships = &mut self.relationships;
+        let p2p_config = node.config().p2p.clone();
+        let mut client = Libp2pPathClient::new(node.stream_control(), p2p_config.limits);
+        let relationship = relationships
+            .entry(peer_id)
+            .or_insert_with(|| PeerRelationship::new(peer_id));
+        let get = get_over_libp2p(
+            relationship,
+            &offers,
+            &mut client,
+            input,
+            PathContext::new(&p2p_config, now),
+        );
+
+        drive_node_until(node, get)
+            .await
+            .map_err(AukiNodeError::Path)
+    }
+
+    /// Start one high-level Subscribe over the configured libp2p path.
+    pub async fn subscribe(
+        &mut self,
+        peer_id: PeerId,
+        input: SubscribeInput,
+        now: &str,
+    ) -> Result<AukiSubscription, AukiNodeError> {
+        let offers = self
+            .remote_offer_reports
+            .get(&peer_id)
+            .cloned()
+            .ok_or(AukiNodeError::RemoteOffersNotLoaded { peer_id })?;
+        let node = &mut self.node;
+        let relationships = &mut self.relationships;
+        let p2p_config = node.config().p2p.clone();
+        let mut client = Libp2pPathClient::new(node.stream_control(), p2p_config.limits);
+        let relationship = relationships
+            .entry(peer_id)
+            .or_insert_with(|| PeerRelationship::new(peer_id));
+        let subscribe = subscribe_over_libp2p(
+            relationship,
+            &offers,
+            &mut client,
+            input,
+            PathContext::new(&p2p_config, now),
+        );
+
+        drive_node_until(node, subscribe)
+            .await
+            .map(|inner| AukiSubscription { inner })
+            .map_err(AukiNodeError::Path)
+    }
+
+    /// Read and validate the next Subscribe data message.
+    pub async fn next_subscription_message(
+        &mut self,
+        subscription: &mut AukiSubscription,
+        now: &str,
+    ) -> Result<SpatialMessage, AukiNodeError> {
+        let p2p_config = self.node.config().p2p.clone();
+        let max_body_len = p2p_config.limits.subscribe_message_frame_body_bytes;
+        let read = subscription.inner.read_next_frame(max_body_len);
+        let frame = drive_node_until(&mut self.node, read)
+            .await
+            .map_err(|error| AukiNodeError::Path(path_client_read_error(error)))?;
+        let peer_id = subscription.peer_id();
+        let relationship = self.relationship_mut(peer_id);
+        accept_subscribe_data_frame(
+            relationship,
+            subscription.inner.handle_mut(),
+            &frame,
+            PathContext::new(&p2p_config, now),
+        )
+        .map_err(AukiNodeError::Path)
     }
 
     /// Wait for the next high-level node event and update relationship state.
@@ -557,21 +710,79 @@ impl fmt::Display for AukiNodeError {
                 "local offer {offer_id} references unregistered domain {domain_id}"
             ),
             Self::OfferCatalog(error) => write!(f, "{error}"),
+            Self::RemoteOffersNotLoaded { peer_id } => {
+                write!(f, "remote offers are not loaded for peer {peer_id}")
+            }
+            Self::Path(error) => write!(f, "{error}"),
         }
     }
 }
 
 impl std::error::Error for AukiNodeError {}
 
+fn relationship_loaded_offer(loaded: &LoadedRemoteOffer) -> RelationshipLoadedOffer {
+    RelationshipLoadedOffer {
+        domain_id: Some(loaded.offer.domain_id.clone()),
+        offer_id: Some(loaded.offer.offer_id.clone()),
+        kind: Some(loaded.offer.kind.clone()),
+        status: Some(loaded.offer.status.as_str().to_owned()),
+        access_modes: loaded
+            .offer
+            .access_modes
+            .iter()
+            .map(|mode| mode.as_str().to_owned())
+            .collect(),
+        payload_type: Some(loaded.offer.payload.payload_type.clone()),
+        registry_refs: loaded
+            .offer
+            .registry_refs
+            .iter()
+            .map(|reference| RelationshipRegistryReferenceStatus {
+                registry: reference.registry.clone(),
+                role: reference.role.clone(),
+                id: reference.id.clone(),
+                hash: reference.hash.clone(),
+            })
+            .collect(),
+        usable: Some(loaded.usable),
+        unusable_reason: loaded.unusable_reason.map(ToOwned::to_owned),
+        updated_at: loaded.offer.updated_at.clone(),
+        expires_at: loaded.offer.expires_at.clone(),
+    }
+}
+
+fn path_client_read_error(error: PathClientError) -> PathOrchestrationError {
+    PathOrchestrationError::SubscribeClient(error)
+}
+
+async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output = T>) -> T {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = node.next_event() => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PeerRelationshipState;
+    use crate::{
+        PeerRelationshipState,
+        protocols::{get_protocol, subscribe_protocol},
+    };
     use auki_identity::Wallet;
     use auki_protocol::v1::{
         domain::DOMAIN_NONCE_LEN,
+        frame::{decode_json_frame, decode_length, encode_json_frame},
+        get::{GetRequest, GetResponse},
+        message::{SPATIAL_MESSAGE_TYPE, SpatialMessage},
         offer::{OfferAccessMode, OfferStatus, PayloadDescriptor},
+        subscribe::{SubscribeAccept, SubscribeRequest},
     };
+    use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt, StreamExt as _};
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use tokio::time::{Duration, timeout};
 
@@ -603,11 +814,43 @@ mod tests {
             domain_id,
             "frame",
             OfferStatus::Available,
-            vec![OfferAccessMode::Get],
+            vec![OfferAccessMode::Get, OfferAccessMode::Subscribe],
             PayloadDescriptor::create("auki.frame"),
             Vec::new(),
         )
         .expect("offer")
+    }
+
+    fn offer_report(peer_id: PeerId, domain_id: &str) -> OfferLoadReport {
+        OfferLoadReport {
+            peer_id,
+            offers: vec![LoadedRemoteOffer {
+                offer: offer(domain_id, "camera-main"),
+                usable: true,
+                unusable_reason: None,
+            }],
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        }
+    }
+
+    fn message_value(domain_id: &str, offer_id: &str, sequence: u64) -> Value {
+        json!({
+            "type": SPATIAL_MESSAGE_TYPE,
+            "domain_id": domain_id,
+            "offer_id": offer_id,
+            "payload": {
+                "type": "auki.frame",
+                "bytes": "AQID",
+                "json": {"ok": true},
+            },
+            "sequence": sequence.to_string(),
+            "generated_at": ISSUED_AT,
+        })
+    }
+
+    fn message(domain_id: &str, offer_id: &str, sequence: u64) -> SpatialMessage {
+        SpatialMessage::from_value(message_value(domain_id, offer_id, sequence)).expect("message")
     }
 
     async fn wait_for_listen_addr(node: &mut AukiNode) -> Multiaddr {
@@ -621,6 +864,49 @@ mod tests {
         })
         .await
         .expect("listen address should be emitted")
+    }
+
+    async fn wait_for_peer_connected(node: &mut AukiNode, peer_id: PeerId) {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(AukiNodeEvent::PeerConnected { peer_id: connected }) =
+                    node.next_event(ISSUED_AT).await
+                    && connected == peer_id
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("peer should connect");
+    }
+
+    async fn drain_node(mut node: AukiNode) {
+        while node.next_event(ISSUED_AT).await.is_some() {}
+    }
+
+    async fn read_frame_bytes<S>(stream: &mut S, max_body_len: u64) -> Vec<u8>
+    where
+        S: AsyncRead + Unpin,
+    {
+        let mut prefix = Vec::new();
+        loop {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).await.expect("read prefix");
+            prefix.push(byte[0]);
+            if let Ok((body_len, _)) = decode_length(&prefix, max_body_len) {
+                let mut body = vec![0u8; body_len as usize];
+                stream.read_exact(&mut body).await.expect("read body");
+                prefix.extend_from_slice(&body);
+                return prefix;
+            }
+        }
+    }
+
+    fn decode_request_frame(frame: &[u8], max_body_len: u64) -> Value {
+        let (value, consumed) = decode_json_frame(frame, max_body_len).expect("request frame");
+        assert_eq!(consumed, frame.len());
+        value
     }
 
     #[test]
@@ -834,6 +1120,206 @@ mod tests {
             snapshot.local_domains[0].delegation_expires_at.as_deref(),
             Some(DELEGATION_EXPIRES_AT)
         );
+    }
+
+    #[tokio::test]
+    async fn get_requires_loaded_remote_offers() {
+        let remote_peer_id = identity(75).peer_id();
+        let mut node =
+            AukiNode::new(identity(76), AukiP2pNodeConfig::dial_only_development()).expect("node");
+
+        let error = node
+            .get(
+                remote_peer_id,
+                GetInput::new("noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs", "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect_err("remote offers must be loaded before get");
+
+        assert!(matches!(
+            error,
+            AukiNodeError::RemoteOffersNotLoaded { peer_id } if peer_id == remote_peer_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_uses_loaded_remote_offers_and_hides_streams() {
+        let domain_id = domain_declaration(77, 5).domain_id().unwrap().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(78), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener =
+            AukiNode::new(identity(79), AukiP2pNodeConfig::loopback_tcp_development()).unwrap();
+        let dialer_peer_id = dialer.peer_id();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let limits = dialer.node.config().p2p.limits;
+        let mut incoming = listener
+            .node
+            .stream_control()
+            .accept(get_protocol())
+            .expect("accept get streams");
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        let listener_task = tokio::spawn(drain_node(listener));
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let (peer_id, mut stream) = incoming.next().await.expect("get stream");
+            assert_eq!(peer_id, dialer_peer_id);
+            let request_frame =
+                read_frame_bytes(&mut stream, limits.get_response_frame_body_bytes).await;
+            let request = GetRequest::from_value(decode_request_frame(
+                &request_frame,
+                limits.get_response_frame_body_bytes,
+            ))
+            .expect("get request");
+            assert_eq!(request.domain_id, server_domain_id);
+            assert_eq!(request.offer_id, "camera-main");
+
+            let response = GetResponse::success(message(&server_domain_id, "camera-main", 11));
+            let response_frame =
+                encode_json_frame(response.value(), limits.get_response_frame_body_bytes)
+                    .expect("response frame");
+            stream
+                .write_all(&response_frame)
+                .await
+                .expect("write get response");
+            stream.close().await.expect("close get stream");
+        });
+
+        let outcome = dialer
+            .get(
+                listener_peer_id,
+                GetInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("get should succeed");
+
+        assert_eq!(outcome.message.sequence, Some(11));
+        assert_eq!(
+            dialer
+                .relationship(listener_peer_id)
+                .unwrap()
+                .paths
+                .last()
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("succeeded")
+        );
+        server.await.expect("server task");
+        listener_task.abort();
+    }
+
+    #[tokio::test]
+    async fn subscribe_returns_high_level_subscription_and_reads_messages() {
+        let domain_id = domain_declaration(80, 6).domain_id().unwrap().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(81), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener =
+            AukiNode::new(identity(82), AukiP2pNodeConfig::loopback_tcp_development()).unwrap();
+        let dialer_peer_id = dialer.peer_id();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let limits = dialer.node.config().p2p.limits;
+        let mut incoming = listener
+            .node
+            .stream_control()
+            .accept(subscribe_protocol())
+            .expect("accept subscribe streams");
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        let listener_task = tokio::spawn(drain_node(listener));
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let (peer_id, mut stream) = incoming.next().await.expect("subscribe stream");
+            assert_eq!(peer_id, dialer_peer_id);
+            let request_frame =
+                read_frame_bytes(&mut stream, limits.subscribe_message_frame_body_bytes).await;
+            let request = SubscribeRequest::from_value(decode_request_frame(
+                &request_frame,
+                limits.subscribe_message_frame_body_bytes,
+            ))
+            .expect("subscribe request");
+            assert_eq!(request.domain_id, server_domain_id);
+            assert_eq!(request.offer_id, "camera-main");
+
+            let accept = SubscribeAccept::create(
+                &server_domain_id,
+                "camera-main",
+                PayloadDescriptor::create("auki.frame"),
+                Vec::new(),
+                Some(1),
+                Some(ISSUED_AT.to_owned()),
+                None,
+            )
+            .expect("subscribe accept");
+            let accept_frame =
+                encode_json_frame(accept.value(), limits.subscribe_message_frame_body_bytes)
+                    .expect("accept frame");
+            stream.write_all(&accept_frame).await.expect("write accept");
+
+            let data_frame = encode_json_frame(
+                &message_value(&server_domain_id, "camera-main", 1),
+                limits.subscribe_message_frame_body_bytes,
+            )
+            .expect("data frame");
+            stream.write_all(&data_frame).await.expect("write data");
+            stream.close().await.expect("close subscribe stream");
+        });
+
+        let mut subscription = dialer
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscribe should start");
+        assert_eq!(subscription.peer_id(), listener_peer_id);
+        assert_eq!(subscription.payload_type(), "auki.frame");
+
+        let message = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("subscription message");
+
+        assert_eq!(message.sequence, Some(1));
+        assert_eq!(subscription.last_sequence(), Some(1));
+        assert_eq!(subscription.sequence_gap_count(), 0);
+        assert_eq!(
+            dialer
+                .relationship(listener_peer_id)
+                .unwrap()
+                .paths
+                .last()
+                .unwrap()
+                .last_sequence,
+            Some(1)
+        );
+        server.await.expect("server task");
+        listener_task.abort();
     }
 
     #[tokio::test]

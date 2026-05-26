@@ -16,7 +16,7 @@ pub mod paths;
 pub mod protocols;
 pub mod relationship;
 
-pub use api::{AukiNode, AukiNodeError, AukiNodeEvent, LocalDomainRegistration};
+pub use api::{AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LocalDomainRegistration};
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,

@@ -10,13 +10,17 @@ pub mod handshake_policy;
 pub mod identity;
 pub mod lifecycle;
 pub mod node;
+pub mod offer_catalog_streams;
 pub mod offer_loading;
 pub mod path_streams;
 pub mod paths;
 pub mod protocols;
 pub mod relationship;
 
-pub use api::{AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LocalDomainRegistration};
+pub use api::{
+    AukiNode, AukiNodeError, AukiNodeEvent, AukiSubscription, LocalDomainRegistration,
+    RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
+};
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,
@@ -37,6 +41,10 @@ pub use lifecycle::{
     read_peer_handshake, read_peer_handshake_strict, write_peer_handshake,
 };
 pub use node::{AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError};
+pub use offer_catalog_streams::{
+    Libp2pOfferCatalogClient, OfferCatalogServeError, accept_offer_catalog_streams,
+    load_remote_offers_over_libp2p, serve_offer_catalog_response,
+};
 pub use offer_loading::{
     AppAllowedOffer, AppOfferPolicy, LoadedRemoteOffer, OfferCatalogClient,
     OfferCatalogClientError, OfferLoadContext, OfferLoadError, OfferLoadReport, OfferLookupError,

@@ -1,20 +1,25 @@
 //! SDK-facing high-level node API.
 
 use crate::{
-    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome,
-    Libp2pPathClient, Libp2pSubscription, LoadedRemoteOffer, LocalPeerIdentity,
-    OfferCatalogLoadState, OfferLoadReport, PathClientError, PathContext, PathOrchestrationError,
-    PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope, RelationshipLoadedOffer,
-    RelationshipRegistryReferenceStatus, RelationshipStatusBuildError, RelationshipStatusOptions,
-    SubscribeInput, accept_subscribe_data_frame, build_relationship_status_snapshot,
-    get_over_libp2p, subscribe_over_libp2p,
+    AppAllowedOffer, AppOfferPolicy, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError,
+    ConfiguredPeer, GetInput, GetOutcome, Libp2pOfferCatalogClient, Libp2pPathClient,
+    Libp2pSubscription, LoadedRemoteOffer, LocalPeerIdentity, OfferCatalogLoadState,
+    OfferLoadContext, OfferLoadError, OfferLoadReport, PathClientError, PathContext,
+    PathOrchestrationError, PeerRelationship, RelationshipFailureRecord, RelationshipFailureScope,
+    RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
+    RelationshipStatusOptions, SubscribeInput, accept_subscribe_data_frame,
+    build_relationship_status_snapshot, get_over_libp2p, load_remote_offers_over_libp2p,
+    subscribe_over_libp2p,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
     domain::{DelegationScope, DomainDeclaration, DomainDelegation, DomainError},
     error,
     message::SpatialMessage,
-    offer::{Offer, OfferCatalogResponse, OfferCatalogResponseError},
+    offer::{
+        Offer, OfferAccessMode, OfferCatalogRequest, OfferCatalogRequestError,
+        OfferCatalogResponse, OfferCatalogResponseError,
+    },
     status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
 };
 use libp2p::{Multiaddr, PeerId};
@@ -45,6 +50,55 @@ pub struct LocalDomainRegistration {
 /// High-level accepted subscription handle.
 pub struct AukiSubscription {
     inner: Libp2pSubscription,
+}
+
+/// High-level remote offer-catalog load input. Callers do not pass protocol frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteOfferLoadInput {
+    /// Domain filters requested by the consumer. Empty means all visible domains.
+    pub domain_ids: Vec<String>,
+    /// Offer-kind filters requested by the consumer. Empty means all kinds.
+    pub kinds: Vec<String>,
+    /// Whether inline canonical registry entries should be requested.
+    pub include_inline_registry_entries: bool,
+    /// Access mode the caller intends to use, if known.
+    pub requested_access_mode: Option<OfferAccessMode>,
+    /// Locally supported offer kinds. Empty defers this check.
+    pub supported_kinds: Vec<String>,
+    /// Locally supported payload types. Empty defers this check.
+    pub supported_payload_types: Vec<String>,
+    /// Application offer-policy decision when config uses app-policy.
+    pub app_offer_policy: RemoteOfferAppPolicy,
+}
+
+/// Application offer-policy input for one remote catalog load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteOfferAppPolicy {
+    /// No application policy decision was supplied.
+    NotProvided,
+    /// Application policy allows every otherwise-usable offer.
+    AllowAll,
+    /// Application policy allows only these domain/offer tuples.
+    AllowOnly {
+        /// Allowed offer tuples.
+        offers: Vec<RemoteAllowedOffer>,
+        /// Stable failure code to report for offers outside the allow-list.
+        failure_code: &'static str,
+    },
+    /// Application policy rejects every offer.
+    RejectAll {
+        /// Stable failure code to report for rejected offers.
+        failure_code: &'static str,
+    },
+}
+
+/// Application-selected remote offer allowed by local app policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteAllowedOffer {
+    /// Offer domain id.
+    pub domain_id: String,
+    /// Producer-scoped offer id.
+    pub offer_id: String,
 }
 
 /// High-level node events that do not expose libp2p stream or frame internals.
@@ -123,6 +177,10 @@ pub enum AukiNodeError {
     },
     /// Local offer catalog projection failed.
     OfferCatalog(OfferCatalogResponseError),
+    /// Local offer-catalog request construction failed.
+    OfferCatalogRequest(OfferCatalogRequestError),
+    /// Remote offer loading failed.
+    OfferLoad(OfferLoadError),
     /// No loaded remote offers are available for the requested peer.
     RemoteOffersNotLoaded {
         /// Remote peer id.
@@ -231,6 +289,67 @@ impl AukiSubscription {
     /// Observed sequence-gap count.
     pub fn sequence_gap_count(&self) -> u64 {
         self.inner.handle().sequence_gap_count()
+    }
+}
+
+impl RemoteOfferLoadInput {
+    /// Create remote offer-load input without filters.
+    pub fn new() -> Self {
+        Self {
+            domain_ids: Vec::new(),
+            kinds: Vec::new(),
+            include_inline_registry_entries: false,
+            requested_access_mode: None,
+            supported_kinds: Vec::new(),
+            supported_payload_types: Vec::new(),
+            app_offer_policy: RemoteOfferAppPolicy::NotProvided,
+        }
+    }
+}
+
+impl Default for RemoteOfferLoadInput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RemoteOfferAppPolicy {
+    fn allowed_offers(&self) -> Vec<AppAllowedOffer<'_>> {
+        match self {
+            Self::AllowOnly { offers, .. } => offers
+                .iter()
+                .map(|offer| AppAllowedOffer {
+                    domain_id: &offer.domain_id,
+                    offer_id: &offer.offer_id,
+                })
+                .collect(),
+            Self::NotProvided | Self::AllowAll | Self::RejectAll { .. } => Vec::new(),
+        }
+    }
+
+    fn as_app_offer_policy<'a>(
+        &'a self,
+        allowed_offers: &'a [AppAllowedOffer<'a>],
+    ) -> AppOfferPolicy<'a> {
+        match self {
+            Self::NotProvided => AppOfferPolicy::NotProvided,
+            Self::AllowAll => AppOfferPolicy::AllowAll,
+            Self::AllowOnly { failure_code, .. } => AppOfferPolicy::AllowOnly {
+                offers: allowed_offers,
+                failure_code,
+            },
+            Self::RejectAll { failure_code } => AppOfferPolicy::RejectAll { failure_code },
+        }
+    }
+}
+
+impl RemoteAllowedOffer {
+    /// Create one app-policy allowed remote offer tuple.
+    pub fn new(domain_id: impl Into<String>, offer_id: impl Into<String>) -> Self {
+        Self {
+            domain_id: domain_id.into(),
+            offer_id: offer_id.into(),
+        }
     }
 }
 
@@ -362,6 +481,55 @@ impl AukiNode {
             Vec::new(),
         )
         .map_err(AukiNodeError::OfferCatalog)
+    }
+
+    /// Load and validate one remote peer's offer catalog over libp2p.
+    pub async fn load_remote_offers(
+        &mut self,
+        peer_id: PeerId,
+        input: RemoteOfferLoadInput,
+        now: &str,
+    ) -> Result<OfferLoadReport, AukiNodeError> {
+        let request = OfferCatalogRequest::create(
+            input.domain_ids.clone(),
+            input.kinds.clone(),
+            input.include_inline_registry_entries,
+        )
+        .map_err(AukiNodeError::OfferCatalogRequest)?;
+
+        let p2p_config = self.node.config().p2p.clone();
+        let supported_kinds =
+            (!input.supported_kinds.is_empty()).then_some(input.supported_kinds.as_slice());
+        let supported_payload_types = (!input.supported_payload_types.is_empty())
+            .then_some(input.supported_payload_types.as_slice());
+        let allowed_offers = input.app_offer_policy.allowed_offers();
+        let app_offer_policy = input.app_offer_policy.as_app_offer_policy(&allowed_offers);
+        let context = OfferLoadContext {
+            config: &p2p_config,
+            now,
+            requested_access_mode: input.requested_access_mode,
+            supported_kinds,
+            supported_payload_types,
+            app_offer_policy,
+        };
+
+        let report = {
+            let node = &mut self.node;
+            let relationships = &mut self.relationships;
+            let relationship = relationships
+                .entry(peer_id)
+                .or_insert_with(|| PeerRelationship::new(peer_id));
+            let mut client =
+                Libp2pOfferCatalogClient::new(node.stream_control(), p2p_config.limits);
+            let load = load_remote_offers_over_libp2p(relationship, &mut client, request, context);
+
+            drive_node_until(node, load)
+                .await
+                .map_err(AukiNodeError::OfferLoad)?
+        };
+
+        self.remote_offer_reports.insert(peer_id, report.clone());
+        Ok(report)
     }
 
     /// Add or replace a loaded remote offer report for one peer.
@@ -710,6 +878,8 @@ impl fmt::Display for AukiNodeError {
                 "local offer {offer_id} references unregistered domain {domain_id}"
             ),
             Self::OfferCatalog(error) => write!(f, "{error}"),
+            Self::OfferCatalogRequest(error) => write!(f, "{error}"),
+            Self::OfferLoad(error) => write!(f, "{error}"),
             Self::RemoteOffersNotLoaded { peer_id } => {
                 write!(f, "remote offers are not loaded for peer {peer_id}")
             }
@@ -769,8 +939,9 @@ async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output 
 mod tests {
     use super::*;
     use crate::{
-        PeerRelationshipState,
+        OfferPolicy, PeerRelationshipState, accept_offer_catalog_streams,
         protocols::{get_protocol, subscribe_protocol},
+        serve_offer_catalog_response,
     };
     use auki_identity::Wallet;
     use auki_protocol::v1::{
@@ -832,6 +1003,15 @@ mod tests {
             diagnostics: Vec::new(),
             generated_at: Some(ISSUED_AT.to_owned()),
         }
+    }
+
+    fn mark_authorized_for_domain(node: &mut AukiNode, peer_id: PeerId, domain_id: &str) {
+        let relationship = node.relationship_mut(peer_id);
+        relationship.state = PeerRelationshipState::Authorized;
+        relationship.connected = true;
+        relationship.authorized = true;
+        relationship.accepted_served_domains = vec![domain_id.to_owned()];
+        relationship.offer_catalog_state = OfferCatalogLoadState::Available;
     }
 
     fn message_value(domain_id: &str, offer_id: &str, sequence: u64) -> Value {
@@ -1028,6 +1208,106 @@ mod tests {
             AukiNodeError::LocalOfferDomainNotRegistered { domain_id: rejected, offer_id }
                 if rejected == domain_id && offer_id == "unregistered"
         ));
+    }
+
+    #[tokio::test]
+    async fn load_remote_offers_requires_authorized_relationship() {
+        let remote_peer_id = identity(83).peer_id();
+        let mut node =
+            AukiNode::new(identity(84), AukiP2pNodeConfig::dial_only_development()).expect("node");
+
+        let error = node
+            .load_remote_offers(remote_peer_id, RemoteOfferLoadInput::new(), ISSUED_AT)
+            .await
+            .expect_err("relationship must be authorized before offer loading");
+
+        assert!(matches!(
+            error,
+            AukiNodeError::OfferLoad(OfferLoadError::RelationshipNotAuthorized { peer_id })
+                if peer_id == remote_peer_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_remote_offers_fetches_catalog_over_libp2p_and_stores_report() {
+        let listener_wallet = wallet(85);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration =
+            DomainDeclaration::create(&listener_wallet, &[7; DOMAIN_NONCE_LEN], Some("served"))
+                .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer_config = AukiP2pNodeConfig::dial_only_development();
+        dialer_config.p2p.offer_policy = OfferPolicy::AppPolicy;
+        let mut dialer = AukiNode::new(identity(86), dialer_config).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let dialer_peer_id = dialer.peer_id();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let limits = dialer.node.config().p2p.limits;
+        let mut incoming = accept_offer_catalog_streams(&mut listener.node.stream_control())
+            .expect("accept offer catalog streams");
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        let response = listener
+            .local_offer_catalog_response(Some(ISSUED_AT))
+            .expect("local offer catalog");
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        let listener_task = tokio::spawn(drain_node(listener));
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        mark_authorized_for_domain(&mut dialer, listener_peer_id, &domain_id);
+
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let (peer_id, mut stream) = incoming.next().await.expect("offer catalog stream");
+            assert_eq!(peer_id, dialer_peer_id);
+            let request = serve_offer_catalog_response(&mut stream, &response, limits)
+                .await
+                .expect("serve offer catalog");
+            assert_eq!(request.domain_ids, vec![server_domain_id]);
+            assert_eq!(request.kinds, vec!["frame".to_owned()]);
+        });
+
+        let mut input = RemoteOfferLoadInput::new();
+        input.domain_ids.push(domain_id.clone());
+        input.kinds.push("frame".to_owned());
+        input.supported_payload_types.push("auki.frame".to_owned());
+        input.app_offer_policy = RemoteOfferAppPolicy::AllowAll;
+        let report = dialer
+            .load_remote_offers(listener_peer_id, input, ISSUED_AT)
+            .await
+            .expect("load remote offers");
+
+        assert_eq!(report.peer_id, listener_peer_id);
+        assert_eq!(report.offers.len(), 1);
+        assert!(report.offers[0].usable);
+        assert_eq!(report.offers[0].offer.domain_id, domain_id);
+        assert!(dialer.remote_offer_report(listener_peer_id).is_some());
+        assert_eq!(
+            dialer.relationship(listener_peer_id).unwrap().state,
+            PeerRelationshipState::Ready
+        );
+
+        server.await.expect("server task");
+        listener_task.abort();
     }
 
     #[test]

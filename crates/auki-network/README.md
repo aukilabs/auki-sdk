@@ -13,6 +13,7 @@ Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `
 - Resource catalog rows: `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`
 - Typed stream payloads: camera, point cloud, joint encoders, audio, and pose `SpatialTransform`
 - Relay reachability: `swarm::reserve_relay_circuit_addr` reserves `/p2p-circuit` on a relay and returns the Manager circuit address to publish; `discovery_client` derives `relay_multiaddrs` from circuit Manager addresses when creating or rotating Discovery entries.
+- Runtime relay reachability: `NetworkRuntimeHandle::reserve_relay_circuit_addr` lets a runtime-owned swarm reserve a Manager circuit address after spawn, for promotion/rotation flows.
 - Discovery: `ClusterEntry.relay_multiaddrs`, `create_cluster_with_relay_multiaddrs`, `rotate_manager_with_relay_multiaddrs`
 - Constants: `PEER_DERIVATION_LABEL = "peer/v1"`
 - Locked vectors pin `seed → PeerId` and the stream wire bytes across language reimplementations.

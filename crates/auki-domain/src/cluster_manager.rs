@@ -107,6 +107,23 @@ use tokio::task::JoinHandle;
 /// consecutive misses' tolerance before the cluster is swept.
 pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Relay reservation request for a Manager-capable peer.
+///
+/// `relay_dial_multiaddr` is the address this native peer can dial to
+/// reserve the circuit. `relay_advertise_multiaddr` is the relay base
+/// address Discovery should expose for browser peers. Both addresses
+/// must identify the same relay peer id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagerRelayReservation {
+    /// Native-dialable relay address, including `/p2p/<relay-peer-id>`.
+    pub relay_dial_multiaddr: Multiaddr,
+    /// Browser-dialable relay base address, including
+    /// `/p2p/<relay-peer-id>`.
+    pub relay_advertise_multiaddr: Multiaddr,
+    /// Maximum time to wait for the relay reservation to complete.
+    pub timeout: Duration,
+}
+
 /// Daemon-side identity fields the SDK doesn't own. The daemon
 /// hands one of these to [`ClusterManager::create_cluster`] /
 /// [`ClusterManager::join_cluster`] **at construction time**; the
@@ -430,6 +447,10 @@ pub enum BootstrapError {
     /// `NetworkRuntime::spawn` failed.
     #[error("runtime spawn failed: {0}")]
     Runtime(#[from] SpawnError),
+    /// The Manager could not reserve its relay-mediated address before
+    /// publishing Discovery metadata.
+    #[error("relay reservation failed: {0}")]
+    RelayReservation(#[from] auki_network::swarm::RelayReservationError),
 }
 
 impl From<CreateClusterError> for BootstrapError {
@@ -438,6 +459,7 @@ impl From<CreateClusterError> for BootstrapError {
             CreateClusterError::Discovery(d) => BootstrapError::Discovery(d),
             CreateClusterError::AlreadyExists(n) => BootstrapError::AlreadyExists(n),
             CreateClusterError::Runtime(s) => BootstrapError::Runtime(s),
+            CreateClusterError::RelayReservation(r) => BootstrapError::RelayReservation(r),
         }
     }
 }
@@ -472,6 +494,10 @@ pub enum CreateClusterError {
     /// isn't inside a tokio runtime.
     #[error("runtime spawn failed: {0}")]
     Runtime(#[from] SpawnError),
+    /// Relay reservation failed before Discovery registration. The
+    /// cluster is not created in Discovery when this is returned.
+    #[error("relay reservation failed: {0}")]
+    RelayReservation(#[from] auki_network::swarm::RelayReservationError),
 }
 
 /// Errors from [`ClusterManager::admit_peer`].
@@ -856,6 +882,41 @@ impl ClusterManager {
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
     ) -> Result<Self, CreateClusterError> {
+        Self::create_cluster_with_relay_hints(
+            cluster_name,
+            local_identity,
+            local_multiaddrs,
+            relay_multiaddrs,
+            discovery_url,
+            swarm,
+            stream_provider,
+            daemon_info,
+        )
+        .await
+    }
+
+    /// Reserve a relay-mediated Manager address before creating the
+    /// cluster, then publish both the native Manager addresses and the
+    /// relay circuit Manager address through Discovery.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_cluster_with_relay_reservation(
+        cluster_name: impl Into<String>,
+        local_identity: PeerIdentity,
+        mut local_multiaddrs: Vec<Multiaddr>,
+        relay_reservation: ManagerRelayReservation,
+        discovery_url: impl Into<String>,
+        mut swarm: Swarm<Behaviour>,
+        stream_provider: StreamProvider,
+        daemon_info: DaemonInfo,
+    ) -> Result<Self, CreateClusterError> {
+        let mut relay_multiaddrs = Vec::new();
+        reserve_manager_relay_multiaddr(
+            &mut swarm,
+            &mut local_multiaddrs,
+            &mut relay_multiaddrs,
+            &relay_reservation,
+        )
+        .await?;
         Self::create_cluster_with_relay_hints(
             cluster_name,
             local_identity,
@@ -2200,6 +2261,33 @@ fn manager_rotation_discovery_request(
             manager_multiaddrs: manager_multiaddrs.to_vec(),
             relay_multiaddrs: relay_multiaddrs.to_vec(),
         }
+    }
+}
+
+async fn reserve_manager_relay_multiaddr(
+    swarm: &mut Swarm<Behaviour>,
+    manager_multiaddrs: &mut Vec<Multiaddr>,
+    relay_multiaddrs: &mut Vec<Multiaddr>,
+    reservation: &ManagerRelayReservation,
+) -> Result<(), auki_network::swarm::RelayReservationError> {
+    let circuit_addr = auki_network::swarm::reserve_relay_circuit_addr_with_advertised_addr(
+        swarm,
+        reservation.relay_dial_multiaddr.clone(),
+        reservation.relay_advertise_multiaddr.clone(),
+        reservation.timeout,
+    )
+    .await?;
+    push_unique_multiaddr(manager_multiaddrs, circuit_addr);
+    push_unique_multiaddr(
+        relay_multiaddrs,
+        reservation.relay_advertise_multiaddr.clone(),
+    );
+    Ok(())
+}
+
+fn push_unique_multiaddr(addrs: &mut Vec<Multiaddr>, addr: Multiaddr) {
+    if !addrs.contains(&addr) {
+        addrs.push(addr);
     }
 }
 
@@ -3706,6 +3794,90 @@ mod tests {
                 relay_multiaddrs: vec![relay_addr],
             }
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn relay_reservation_appends_manager_circuit_and_relay_hint() {
+        use auki_network::swarm::{SwarmConfig, build_swarm};
+        use futures::StreamExt as _;
+
+        let relay_identity = auki_network::PeerIdentity::from_seed(&[71u8; 32]);
+        let manager_identity = auki_network::PeerIdentity::from_seed(&[72u8; 32]);
+        let mut relay_swarm = build_swarm(
+            &relay_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                agent_version: "relay/0".into(),
+                enable_relay_server: true,
+            },
+        )
+        .expect("relay swarm builds");
+        let relay_addr = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(libp2p::swarm::SwarmEvent::NewListenAddr { address, .. }) =
+                    relay_swarm.next().await
+                {
+                    return address;
+                }
+            }
+        })
+        .await
+        .expect("relay listen address appears");
+        relay_swarm.add_external_address(relay_addr.clone());
+        let relay_dial_multiaddr =
+            relay_addr.with(libp2p::multiaddr::Protocol::P2p(relay_identity.peer_id()));
+        let relay_advertise_multiaddr: Multiaddr = format!(
+            "/ip4/203.0.113.72/tcp/4002/ws/p2p/{}",
+            relay_identity.peer_id()
+        )
+        .parse()
+        .unwrap();
+        let expected_circuit = relay_advertise_multiaddr
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(manager_identity.peer_id()));
+        let mut manager_swarm = build_swarm(
+            &manager_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                agent_version: "manager/0".into(),
+                enable_relay_server: false,
+            },
+        )
+        .expect("manager swarm builds");
+        let direct_manager_addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let mut manager_multiaddrs = vec![direct_manager_addr.clone()];
+        let mut relay_multiaddrs = Vec::new();
+        let reservation = ManagerRelayReservation {
+            relay_dial_multiaddr,
+            relay_advertise_multiaddr: relay_advertise_multiaddr.clone(),
+            timeout: Duration::from_secs(10),
+        };
+
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::select! {
+                result = reserve_manager_relay_multiaddr(
+                    &mut manager_swarm,
+                    &mut manager_multiaddrs,
+                    &mut relay_multiaddrs,
+                    &reservation,
+                ) => result,
+                _ = async {
+                    loop {
+                        let _ = relay_swarm.next().await;
+                    }
+                } => unreachable!("relay swarm stream ended"),
+            }
+        })
+        .await
+        .expect("relay reservation timed out")
+        .expect("relay reservation succeeds");
+
+        assert_eq!(
+            manager_multiaddrs,
+            vec![direct_manager_addr, expected_circuit]
+        );
+        assert_eq!(relay_multiaddrs, vec![relay_advertise_multiaddr]);
     }
 
     #[test]

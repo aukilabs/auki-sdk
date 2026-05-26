@@ -9,7 +9,7 @@ A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Hi
 ## Public surface
 
 - `ClusterManager` + `ClusterTarget`
-- Relay-aware cluster creation and Manager-rotation hint preservation
+- Relay-aware cluster creation, Manager relay reservation, and Manager-rotation hint preservation
 - `ClusterMembership`, `ClusterMember`, `DaemonInfo`
 - `ResourceCatalogProvider`, `ResourceEntry`, `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
 - `ResourcesRequest::sensor_streams()` and `ResourcesRequest::pose_streams()` helpers for catalog discovery

@@ -236,7 +236,7 @@ Python consumers open streams through `auki-domain-py`'s `ClusterManager.open_*_
 
 ## Networking — clusters, streams, discovery
 
-The SDK ships a libp2p substrate behind the `auki-network` `swarm` feature. A daemon (Booster, Sentinel, Park) becomes a peer in a **cluster** through `auki-domain::ClusterManager`: create or join via Discovery, preserve Manager and Relay reachability hints, exchange membership over libp2p, and open typed streams over `/auki/stream/0.1.0`.
+The SDK ships a libp2p substrate behind the `auki-network` `swarm` feature. A daemon (Booster, Sentinel, Park) becomes a peer in a **cluster** through `auki-domain::ClusterManager`: create or join via Discovery, reserve relay-mediated Manager reachability when configured, preserve Manager and Relay reachability hints, exchange membership over libp2p, and open typed streams over `/auki/stream/0.1.0`.
 
 The main live paths are:
 

@@ -16,6 +16,7 @@ pub mod offer_loading;
 pub mod path_streams;
 pub mod paths;
 pub mod protocols;
+pub mod publication;
 pub mod relationship;
 pub mod subscribe_serving;
 pub mod transport_path;
@@ -68,6 +69,10 @@ pub use paths::{
     GetClient, GetInput, GetOutcome, PathClientError, PathContext, PathOrchestrationError,
     SubscribeClient, SubscribeInput, SubscriptionHandle, accept_subscribe_data_frame,
     end_subscription_from_frame, get, subscribe,
+};
+pub use publication::{
+    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteSource,
+    PublishedByteSourceFactory, PublishedOfferHandle, ServedPublishedSubscription,
 };
 pub use relationship::{
     OfferCatalogLoadState, PeerRelationship, PeerRelationshipState, RelationshipFailureRecord,

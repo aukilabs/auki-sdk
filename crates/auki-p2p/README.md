@@ -27,7 +27,8 @@ Current public surface:
 - `AukiNode` is the SDK-facing runtime handle for configured peer management,
   dialing, local domain/offer registration, high-level lifecycle
   authorization and serving, remote offer loading and catalog serving,
-  SDK-facing Get/Subscribe consumers and providers, high-level peer events,
+  generic local offer publication, SDK-facing Get/Subscribe consumers and providers,
+  high-level peer events,
   relationship tracking, and in-process status snapshots without exposing
   protocol frames or stream internals.
 - `AukiP2pNode` is a small libp2p node wrapper that keeps listen,
@@ -78,6 +79,10 @@ Current public surface:
   one Subscribe request, writes accept/reject/data/end frames, and lets
   `AukiNode` serve local subscriptions through registered application
   providers without exposing raw frames.
+- `publication` adds the browser-aligned generic producer shape:
+  `PublishOfferInput` registers a Subscribe offer backed by a byte-source
+  factory, while `AukiNode::serve_next_published_subscription(...)` streams the
+  source as RFC spatial messages.
 - `paths` defines high-level Get and Subscribe orchestration over loaded offers:
   request shaping, response validation, data-message validation, path status,
   and sequence-gap diagnostics before transport wiring.
@@ -98,6 +103,8 @@ Get serving tests now cover a registered local provider responding to a remote
 `AukiNode::get(...)` over the RFC Get stream.
 Subscribe serving tests now cover a registered local provider accepting a remote
 `AukiNode::subscribe(...)`, sending a data message, and ending the stream.
+Publication tests now cover publishing a generic byte source, duplicate
+protection, withdrawal, and serving finite bytes over inbound Subscribe.
 The full `AukiNode` smoke test now covers configured dial, lifecycle
 authorization, offer loading, Get, Subscribe data, and relationship/status
 assertions in one two-peer flow.

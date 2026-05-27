@@ -1,5 +1,6 @@
 //! SDK-facing high-level node API.
 
+use crate::publication::LocalOfferPublication;
 use crate::{
     AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiBrowserBootstrapRecord, AukiP2pConfig,
     AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome,
@@ -9,16 +10,17 @@ use crate::{
     LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer, LocalPeerIdentity,
     OfferCatalogLoadState, OfferCatalogServeError, OfferLoadContext, OfferLoadError,
     OfferLoadReport, PathClientError, PathContext, PathOrchestrationError, PeerRelationship,
+    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedOfferHandle,
     RelationshipFailureRecord, RelationshipFailureScope, RelationshipLoadedOffer,
     RelationshipRegistryReferenceStatus, RelationshipStatusBuildError, RelationshipStatusOptions,
-    SubscribeInput, SubscribeServeError, accept_get_streams, accept_lifecycle_streams,
-    accept_offer_catalog_streams, accept_subscribe_data_frame, accept_subscribe_streams,
-    build_relationship_status_snapshot, close_subscribe_stream, encode_subscribe_data_frame,
-    exchange_peer_handshake_strict, get_over_libp2p, load_remote_offers_over_libp2p,
-    open_lifecycle_stream_once, read_get_request, read_subscribe_request,
-    serve_offer_catalog_response, subscribe_over_libp2p, validate_remote_handshake,
-    write_encoded_subscribe_frame, write_get_response, write_subscribe_end,
-    write_subscribe_start_result,
+    ServedPublishedSubscription, SubscribeInput, SubscribeServeError, accept_get_streams,
+    accept_lifecycle_streams, accept_offer_catalog_streams, accept_subscribe_data_frame,
+    accept_subscribe_streams, build_relationship_status_snapshot, close_subscribe_stream,
+    encode_subscribe_data_frame, exchange_peer_handshake_strict, get_over_libp2p,
+    load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
+    read_subscribe_request, serve_offer_catalog_response, subscribe_over_libp2p,
+    validate_remote_handshake, write_encoded_subscribe_frame, write_get_response,
+    write_subscribe_end, write_subscribe_start_result,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
@@ -58,6 +60,7 @@ pub struct AukiNode {
     get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
     subscribe_incoming: Option<libp2p_stream::IncomingStreams>,
     subscribe_providers: BTreeMap<(String, String), Box<dyn AukiSubscribeProvider>>,
+    local_publications: BTreeMap<(String, String), LocalOfferPublication>,
 }
 
 /// Local domain authority material registered with the high-level node.
@@ -320,6 +323,13 @@ pub enum AukiNodeError {
         /// Producer-scoped offer id.
         offer_id: String,
     },
+    /// A high-level publication attempted to replace an existing local offer.
+    LocalOfferAlreadyRegistered {
+        /// Offer domain id.
+        domain_id: String,
+        /// Producer-scoped offer id.
+        offer_id: String,
+    },
     /// Local provider references an offer that is not registered locally.
     LocalOfferNotRegistered {
         /// Offer domain id.
@@ -327,6 +337,17 @@ pub enum AukiNodeError {
         /// Producer-scoped offer id.
         offer_id: String,
     },
+    /// A published-offer helper referenced an unknown local publication.
+    LocalPublicationNotRegistered {
+        /// Offer domain id.
+        domain_id: String,
+        /// Producer-scoped offer id.
+        offer_id: String,
+    },
+    /// High-level publication offer construction failed.
+    PublishOffer(PublishOfferError),
+    /// High-level publication message construction failed.
+    PublicationMessage(PublicationMessageError),
     /// Local offer catalog projection failed.
     OfferCatalog(OfferCatalogResponseError),
     /// Local offer-catalog path construction failed.
@@ -691,6 +712,7 @@ impl AukiNode {
             get_providers: BTreeMap::new(),
             subscribe_incoming: None,
             subscribe_providers: BTreeMap::new(),
+            local_publications: BTreeMap::new(),
         };
         for peer in this.node.configured_peers().to_vec() {
             this.relationship_mut(peer.peer_id).configured();
@@ -866,6 +888,55 @@ impl AukiNode {
 
         self.subscribe_providers
             .insert((domain_id, offer_id), Box::new(provider));
+        Ok(())
+    }
+
+    /// Publish a generic local byte source as a Subscribe offer.
+    pub fn publish_offer(
+        &mut self,
+        input: PublishOfferInput,
+    ) -> Result<PublishedOfferHandle, AukiNodeError> {
+        let key = input.key();
+        if self.local_offers.contains_key(&key) || self.local_publications.contains_key(&key) {
+            return Err(AukiNodeError::LocalOfferAlreadyRegistered {
+                domain_id: key.0,
+                offer_id: key.1,
+            });
+        }
+
+        let publication = input
+            .into_publication()
+            .map_err(AukiNodeError::PublishOffer)?;
+        let offer = publication.offer().clone();
+        let handle = PublishedOfferHandle::new(offer.domain_id.clone(), offer.offer_id.clone());
+
+        self.upsert_local_offer(offer)?;
+        self.upsert_subscribe_provider(
+            handle.domain_id().to_owned(),
+            handle.offer_id().to_owned(),
+            |_request: &SubscribeRequest, now: &str| {
+                Ok(AukiSubscribeProviderAccept {
+                    initial_sequence: None,
+                    generated_at: Some(now.to_owned()),
+                    metadata: None,
+                })
+            },
+        )?;
+        self.local_publications.insert(handle.key(), publication);
+        Ok(handle)
+    }
+
+    /// Withdraw a generic local publication created by [`Self::publish_offer`].
+    pub fn unpublish_offer(&mut self, handle: &PublishedOfferHandle) -> Result<(), AukiNodeError> {
+        let key = handle.key();
+        if self.local_publications.remove(&key).is_none() {
+            return Err(AukiNodeError::LocalPublicationNotRegistered {
+                domain_id: key.0,
+                offer_id: key.1,
+            });
+        }
+        self.local_offers.remove(&key);
+        self.subscribe_providers.remove(&key);
         Ok(())
     }
 
@@ -1232,6 +1303,54 @@ impl AukiNode {
         Ok(Some(served))
     }
 
+    /// Serve one inbound Subscribe stream for a generic published byte source.
+    pub async fn serve_next_published_subscription(
+        &mut self,
+        now: &str,
+    ) -> Result<Option<ServedPublishedSubscription>, AukiNodeError> {
+        let Some(served) = self.serve_next_subscribe(now).await? else {
+            return Ok(None);
+        };
+        if !served.accepted {
+            return Ok(Some(ServedPublishedSubscription::rejected(
+                served.peer_id,
+                served.domain_id,
+                served.offer_id,
+                served.failure_code,
+            )));
+        }
+
+        let peer_id = served.peer_id;
+        let mut subscription = served
+            .into_subscription()
+            .ok_or(AukiNodeError::SubscribeServe(
+                SubscribeServeError::AlreadyEnded,
+            ))?;
+        let domain_id = subscription.domain_id().to_owned();
+        let offer_id = subscription.offer_id().to_owned();
+        let mut source = self.open_publication_source(&domain_id, &offer_id)?;
+        let mut messages_sent = 0_u64;
+
+        while let Some(chunk) = source.next().await {
+            let message = self.next_publication_message(&domain_id, &offer_id, chunk, now)?;
+            self.send_served_subscription_message(&mut subscription, &message)
+                .await?;
+            messages_sent = messages_sent.saturating_add(1);
+        }
+
+        let end_reason = SubscribeEndReason::Complete;
+        self.end_served_subscription(subscription, end_reason, None, None)
+            .await?;
+
+        Ok(Some(ServedPublishedSubscription::accepted(
+            peer_id,
+            domain_id,
+            offer_id,
+            messages_sent,
+            end_reason,
+        )))
+    }
+
     /// Send one spatial message on an accepted served Subscribe stream.
     pub async fn send_served_subscription_message(
         &mut self,
@@ -1494,6 +1613,37 @@ impl AukiNode {
         self.subscribe_incoming =
             Some(accept_subscribe_streams(&mut control).map_err(AukiNodeError::SubscribeAccept)?);
         Ok(())
+    }
+
+    fn open_publication_source(
+        &mut self,
+        domain_id: &str,
+        offer_id: &str,
+    ) -> Result<crate::PublishedByteSource, AukiNodeError> {
+        self.local_publications
+            .get_mut(&(domain_id.to_owned(), offer_id.to_owned()))
+            .map(LocalOfferPublication::open_source)
+            .ok_or_else(|| AukiNodeError::LocalPublicationNotRegistered {
+                domain_id: domain_id.to_owned(),
+                offer_id: offer_id.to_owned(),
+            })
+    }
+
+    fn next_publication_message(
+        &mut self,
+        domain_id: &str,
+        offer_id: &str,
+        chunk: Vec<u8>,
+        generated_at: &str,
+    ) -> Result<SpatialMessage, AukiNodeError> {
+        self.local_publications
+            .get_mut(&(domain_id.to_owned(), offer_id.to_owned()))
+            .ok_or_else(|| AukiNodeError::LocalPublicationNotRegistered {
+                domain_id: domain_id.to_owned(),
+                offer_id: offer_id.to_owned(),
+            })?
+            .next_message(chunk, Some(generated_at))
+            .map_err(AukiNodeError::PublicationMessage)
     }
 
     fn validate_lifecycle_exchange(
@@ -1936,10 +2086,26 @@ impl fmt::Display for AukiNodeError {
                 f,
                 "local offer {offer_id} references unregistered domain {domain_id}"
             ),
+            Self::LocalOfferAlreadyRegistered {
+                domain_id,
+                offer_id,
+            } => write!(
+                f,
+                "local offer {domain_id}/{offer_id} is already registered"
+            ),
             Self::LocalOfferNotRegistered {
                 domain_id,
                 offer_id,
             } => write!(f, "local offer {domain_id}/{offer_id} is not registered"),
+            Self::LocalPublicationNotRegistered {
+                domain_id,
+                offer_id,
+            } => write!(
+                f,
+                "local publication {domain_id}/{offer_id} is not registered"
+            ),
+            Self::PublishOffer(error) => write!(f, "{error}"),
+            Self::PublicationMessage(error) => write!(f, "{error}"),
             Self::OfferCatalog(error) => write!(f, "{error}"),
             Self::OfferCatalogPath(error) => write!(f, "{error}"),
             Self::OfferCatalogRequest(error) => write!(f, "{error}"),
@@ -2115,7 +2281,7 @@ mod tests {
         offer::{OfferAccessMode, OfferStatus, PayloadDescriptor},
         subscribe::{SubscribeAccept, SubscribeEndReason, SubscribeRequest, SubscribeStartResult},
     };
-    use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+    use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt, stream};
     use serde_json::{Value, json};
     use std::sync::Arc;
     use tokio::time::{Duration, timeout};
@@ -2395,6 +2561,107 @@ mod tests {
             error,
             AukiNodeError::LocalOfferDomainNotRegistered { domain_id: rejected, offer_id }
                 if rejected == domain_id && offer_id == "unregistered"
+        ));
+    }
+
+    #[test]
+    fn publish_offer_registers_subscribe_offer_and_publication_handle() {
+        let local_wallet = wallet(71);
+        let declaration =
+            DomainDeclaration::create(&local_wallet, &[3; DOMAIN_NONCE_LEN], Some("publish-offer"))
+                .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut node = AukiNode::new(
+            identity_from_wallet(local_wallet),
+            AukiP2pNodeConfig::dial_only_development(),
+        )
+        .expect("node");
+        node.upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+
+        let handle = node
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "bytes-main",
+                    "example.bytes",
+                    PayloadDescriptor::create("example.bytes.v1"),
+                    || stream::iter([vec![1, 2, 3]]),
+                )
+                .with_display_name("Bytes Main")
+                .with_metadata(json!({"source": "unit"})),
+            )
+            .expect("publish offer");
+
+        assert_eq!(handle.domain_id(), domain_id);
+        assert_eq!(handle.offer_id(), "bytes-main");
+
+        let local_offers = node.local_offers(&domain_id);
+        assert_eq!(local_offers.len(), 1);
+        assert_eq!(
+            local_offers[0].access_modes,
+            vec![OfferAccessMode::Subscribe]
+        );
+        assert_eq!(local_offers[0].payload.payload_type, "example.bytes.v1");
+        assert_eq!(local_offers[0].display_name.as_deref(), Some("Bytes Main"));
+
+        let duplicate = node
+            .publish_offer(PublishOfferInput::new(
+                domain_id.clone(),
+                "bytes-main",
+                "example.bytes",
+                PayloadDescriptor::create("example.bytes.v1"),
+                || stream::iter([vec![4, 5, 6]]),
+            ))
+            .expect_err("published offer should not replace an existing offer");
+        assert!(matches!(
+            duplicate,
+            AukiNodeError::LocalOfferAlreadyRegistered { domain_id: rejected, offer_id }
+                if rejected == domain_id && offer_id == "bytes-main"
+        ));
+    }
+
+    #[test]
+    fn unpublish_offer_withdraws_published_offer_and_provider() {
+        let local_wallet = wallet(73);
+        let declaration = DomainDeclaration::create(
+            &local_wallet,
+            &[4; DOMAIN_NONCE_LEN],
+            Some("unpublish-offer"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut node = AukiNode::new(
+            identity_from_wallet(local_wallet),
+            AukiP2pNodeConfig::dial_only_development(),
+        )
+        .expect("node");
+        node.upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        let handle = node
+            .publish_offer(PublishOfferInput::new(
+                domain_id.clone(),
+                "bytes-main",
+                "example.bytes",
+                PayloadDescriptor::create("example.bytes.v1"),
+                || stream::iter([vec![1, 2, 3]]),
+            ))
+            .expect("publish offer");
+
+        node.unpublish_offer(&handle).expect("unpublish offer");
+        assert!(node.local_offers(&domain_id).is_empty());
+
+        let error = node
+            .unpublish_offer(&handle)
+            .expect_err("publication should already be gone");
+        assert!(matches!(
+            error,
+            AukiNodeError::LocalPublicationNotRegistered { domain_id: rejected, offer_id }
+                if rejected == domain_id && offer_id == "bytes-main"
         ));
     }
 
@@ -3224,6 +3491,124 @@ mod tests {
         server.await.expect("server task");
 
         assert_eq!(data.sequence, Some(1));
+        assert_eq!(subscription.last_sequence(), Some(1));
+        assert_eq!(subscription.sequence_gap_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn published_offer_serves_finite_byte_source_over_subscribe() {
+        let listener_wallet = wallet(101);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[12; DOMAIN_NONCE_LEN],
+            Some("published-source"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(102), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(PublishOfferInput::new(
+                domain_id.clone(),
+                "bytes-main",
+                "example.bytes",
+                PayloadDescriptor::create("example.bytes.v1"),
+                || stream::iter([vec![1, 2, 3], vec![4, 5]]),
+            ))
+            .expect("publish offer");
+        let remote_report = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: listener
+                .local_offers(&domain_id)
+                .into_iter()
+                .map(|offer| LoadedRemoteOffer {
+                    offer,
+                    usable: true,
+                    unusable_reason: None,
+                })
+                .collect(),
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let served = listener
+                .serve_next_published_subscription(ISSUED_AT)
+                .await
+                .expect("serve next published subscription")
+                .expect("served published subscription");
+            assert!(served.accepted);
+            assert_eq!(served.domain_id.as_deref(), Some(server_domain_id.as_str()));
+            assert_eq!(served.offer_id.as_deref(), Some("bytes-main"));
+            assert_eq!(served.messages_sent, 2);
+            assert_eq!(served.end_reason, Some(SubscribeEndReason::Complete));
+            served_tx.send(served).expect("send served publication");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = listener.next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(remote_report);
+
+        let mut subscription = dialer
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "bytes-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscribe should start");
+        let first = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first subscription message");
+        let second = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:01Z")
+            .await
+            .expect("second subscription message");
+
+        served_rx.await.expect("served publication");
+        let _ = stop_tx.send(());
+        server.await.expect("server task");
+
+        assert_eq!(first.sequence, Some(0));
+        assert_eq!(first.payload.bytes, Some(vec![1, 2, 3]));
+        assert_eq!(second.sequence, Some(1));
+        assert_eq!(second.payload.bytes, Some(vec![4, 5]));
         assert_eq!(subscription.last_sequence(), Some(1));
         assert_eq!(subscription.sequence_gap_count(), 0);
     }

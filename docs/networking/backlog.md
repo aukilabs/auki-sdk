@@ -144,6 +144,9 @@ protocols from those crates.
         peer method surface.
   - [x] Serve local offer catalogs to inbound browser/native peers.
   - [x] Serve finite local byte streams over inbound Subscribe.
+- [x] Align native `auki-p2p` with the browser producer shape through generic
+      `PublishOfferInput`, `PublishedOfferHandle`, and finite byte-source
+      Subscribe serving helpers.
 
 Candidate browser API shape:
 
@@ -200,6 +203,8 @@ Rust:
 - [x] `cargo test -p auki-p2p`.
 - [x] Test WebRTC Direct config and browser-dialable observed addresses.
 - [x] Test relay server address emission.
+- [x] Test native generic published-offer registration, withdrawal, and
+      Subscribe byte streaming.
 - [ ] Test that node-to-node TCP/QUIC still works.
 
 Browser:

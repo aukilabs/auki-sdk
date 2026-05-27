@@ -8,6 +8,7 @@ The example:
 - starts a native `AukiNode` with loopback WebRTC Direct and WebSocket relay listeners
 - registers a deterministic demo domain
 - publishes the shared `auki.sensor.rgb_camera.preview` offer profile
+- serves inbound lifecycle and offer-catalog streams for browser peers
 - streams generated JPEG preview frames over Subscribe
 - prints the browser bootstrap record and compact P2P state
 

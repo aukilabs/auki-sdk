@@ -1,7 +1,8 @@
 use auki_identity::Wallet;
 use auki_p2p::{
-    AukiNode, AukiNodeEvent, AukiP2pNodeConfig, LocalDomainRegistration, LocalPeerIdentity,
-    PreviewOfferOptions, ServedPublishedSubscription, publish_preview_offer,
+    AukiNode, AukiNodeError, AukiNodeEvent, AukiP2pNodeConfig, LifecycleInput,
+    LifecycleStreamDirection, LifecycleStreamGuardError, LocalDomainRegistration,
+    LocalPeerIdentity, PreviewOfferOptions, ServedPublishedSubscription, publish_preview_offer,
 };
 use auki_protocol::v1::domain::{DOMAIN_NONCE_LEN, DomainDeclaration};
 use futures::stream;
@@ -90,6 +91,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
+    let mut next_state_print = Instant::now() + config.status_interval;
     loop {
         let now = now_rfc3339()?;
         tokio::select! {
@@ -97,22 +99,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 println!("shutdown: ctrl-c received");
                 break;
             }
-            result = timeout(config.status_interval, node.serve_next_published_subscription(&now)) => {
-                match result {
-                    Ok(Ok(Some(served))) => {
-                        stats.record_served(served);
-                        print_state(&node, &stats, &domain_id, &config)?;
-                    }
-                    Ok(Ok(None)) => {
-                        print_state(&node, &stats, &domain_id, &config)?;
-                    }
-                    Ok(Err(error)) => {
-                        stats.record_error(error.to_string());
-                        print_state(&node, &stats, &domain_id, &config)?;
-                    }
-                    Err(_) => {
-                        print_state(&node, &stats, &domain_id, &config)?;
-                    }
+            result = serve_inbound_once(&mut node, &now, &mut stats) => {
+                if let Err(error) = result {
+                    stats.record_error(error.to_string());
+                }
+                if Instant::now() >= next_state_print {
+                    print_state(&node, &stats, &domain_id, &config)?;
+                    next_state_print = Instant::now() + config.status_interval;
                 }
             }
         }
@@ -272,6 +265,9 @@ impl Error for CliError {}
 
 #[derive(Debug, Default)]
 struct DemoStats {
+    lifecycles_served: u64,
+    duplicate_lifecycle_attempts: u64,
+    offer_catalogs_served: u64,
     subscriptions_served: u64,
     subscriptions_rejected: u64,
     frames_sent: u64,
@@ -292,6 +288,73 @@ impl DemoStats {
     fn record_error(&mut self, error: String) {
         self.last_failure = Some(error);
     }
+
+    fn record_nonfatal_lifecycle_error(&mut self, error: &AukiNodeError) -> bool {
+        if !is_duplicate_inbound_lifecycle(error) {
+            return false;
+        }
+        self.duplicate_lifecycle_attempts = self.duplicate_lifecycle_attempts.saturating_add(1);
+        true
+    }
+}
+
+async fn serve_inbound_once(
+    node: &mut AukiNode,
+    now: &str,
+    stats: &mut DemoStats,
+) -> Result<(), Box<dyn Error>> {
+    match timeout(
+        Duration::from_millis(100),
+        node.serve_next_lifecycle(LifecycleInput::new(), now),
+    )
+    .await
+    {
+        Ok(Ok(Some(_))) => {
+            stats.lifecycles_served = stats.lifecycles_served.saturating_add(1);
+            return Ok(());
+        }
+        Ok(Ok(None)) | Err(_) => {}
+        Ok(Err(error)) if stats.record_nonfatal_lifecycle_error(&error) => return Ok(()),
+        Ok(Err(error)) => return Err(Box::new(error)),
+    }
+
+    match timeout(
+        Duration::from_millis(100),
+        node.serve_next_offer_catalog(Some(now)),
+    )
+    .await
+    {
+        Ok(Ok(Some(_))) => {
+            stats.offer_catalogs_served = stats.offer_catalogs_served.saturating_add(1);
+            return Ok(());
+        }
+        Ok(Ok(None)) | Err(_) => {}
+        Ok(Err(error)) => return Err(Box::new(error)),
+    }
+
+    match timeout(
+        Duration::from_millis(500),
+        node.serve_next_published_subscription(now),
+    )
+    .await
+    {
+        Ok(Ok(Some(served))) => {
+            stats.record_served(served);
+            Ok(())
+        }
+        Ok(Ok(None)) | Err(_) => Ok(()),
+        Ok(Err(error)) => Err(Box::new(error)),
+    }
+}
+
+fn is_duplicate_inbound_lifecycle(error: &AukiNodeError) -> bool {
+    matches!(
+        error,
+        AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
+            direction: LifecycleStreamDirection::Inbound,
+            ..
+        })
+    )
 }
 
 async fn wait_for_bootstrap_addresses(
@@ -382,8 +445,13 @@ fn print_state(
         config.frames_per_subscription,
     );
     println!(
-        "streaming: served={} rejected={} frames_sent={}",
-        stats.subscriptions_served, stats.subscriptions_rejected, stats.frames_sent,
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} subscriptions={} rejected={} frames_sent={}",
+        stats.lifecycles_served,
+        stats.duplicate_lifecycle_attempts,
+        stats.offer_catalogs_served,
+        stats.subscriptions_served,
+        stats.subscriptions_rejected,
+        stats.frames_sent,
     );
     if let Some(error) = &stats.last_failure {
         println!("last_failure: {error}");
@@ -505,5 +573,21 @@ mod tests {
         assert!(frame.len() > 100);
         assert_eq!(&frame[..2], &[0xff, 0xd8]);
         assert_eq!(&frame[frame.len() - 2..], &[0xff, 0xd9]);
+    }
+
+    #[test]
+    fn duplicate_inbound_lifecycle_is_counted_without_failure() {
+        let wallet = Wallet::from_seed(vec![9; 32]).expect("wallet");
+        let identity = LocalPeerIdentity::from_wallet(wallet, "2026-05-27T00:00:00Z", Some("test"))
+            .expect("identity");
+        let error = AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
+            peer_id: identity.peer_id(),
+            direction: LifecycleStreamDirection::Inbound,
+        });
+        let mut stats = DemoStats::default();
+
+        assert!(stats.record_nonfatal_lifecycle_error(&error));
+        assert_eq!(stats.duplicate_lifecycle_attempts, 1);
+        assert_eq!(stats.last_failure, None);
     }
 }

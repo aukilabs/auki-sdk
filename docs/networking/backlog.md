@@ -275,12 +275,16 @@ Browser:
 
 End-to-end:
 
+- [x] Headless Chrome smoke: one generated native preview node plus one browser
+      page. Verified connect -> lifecycle -> offer catalog -> Subscribe -> 10
+      JPEG frames on May 27, 2026.
 - [ ] Playwright smoke: one generated native preview node plus one browser page.
 - [ ] Playwright smoke: one native node plus three browser pages.
 - [ ] Verify all browsers appear in the roster.
-- [ ] Verify generated native preview renders in the browser.
-- [ ] Verify the CLI and browser state panels expose peer, transport, relay,
-      offer, subscription, and frame-count state.
+- [x] Verify generated native preview renders in the browser.
+- [x] Verify the CLI and browser state panels expose peer, offer,
+      subscription, and frame-count state for the one-browser Sentinel path.
+- [ ] Add transport path and relay detail to the browser panel.
 - [ ] Verify browser A/B/C generated previews are visible cross-window.
 - [ ] Verify Sentinel preview is visible in all browsers.
 - [ ] Add a second Sentinel and verify it appears.

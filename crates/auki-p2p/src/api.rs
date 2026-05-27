@@ -1507,6 +1507,7 @@ impl AukiNode {
             crate::AukiP2pEvent::ConnectionClosed { peer_id } => {
                 let active_connections = self.node.active_connection_count(peer_id);
                 if active_connections == 0 {
+                    self.lifecycle_stream_guard.reset(peer_id);
                     self.relationship_mut(peer_id)
                         .lost(observed_at.to_owned(), failure_cap);
                 } else {

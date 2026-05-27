@@ -27,7 +27,7 @@ pub enum LifecycleStreamDirection {
     Inbound,
 }
 
-/// Tracks the one-lifecycle-stream-per-peer rule.
+/// Tracks lifecycle stream concurrency and completion state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LifecycleStreamGuard {
     in_progress: HashSet<PeerId>,
@@ -194,7 +194,7 @@ impl LifecycleStreamGuard {
         peer_id: PeerId,
         direction: LifecycleStreamDirection,
     ) -> Result<(), LifecycleStreamGuardError> {
-        if self.in_progress.contains(&peer_id) || self.completed.contains(&peer_id) {
+        if self.in_progress.contains(&peer_id) {
             return Err(LifecycleStreamGuardError { peer_id, direction });
         }
         self.in_progress.insert(peer_id);
@@ -210,6 +210,12 @@ impl LifecycleStreamGuard {
     /// Mark a lifecycle stream as failed before completion, allowing retry.
     pub fn fail(&mut self, peer_id: PeerId) {
         self.in_progress.remove(&peer_id);
+    }
+
+    /// Forget lifecycle state for a disconnected peer, allowing a new session.
+    pub fn reset(&mut self, peer_id: PeerId) {
+        self.in_progress.remove(&peer_id);
+        self.completed.remove(&peer_id);
     }
 
     /// Return whether lifecycle completed for `peer_id`.
@@ -555,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_stream_guard_rejects_duplicate_streams() {
+    fn lifecycle_stream_guard_rejects_concurrent_streams_and_allows_refresh() {
         let peer_id = identity(35).peer_id();
         let mut guard = LifecycleStreamGuard::default();
 
@@ -575,9 +581,26 @@ mod tests {
         guard.complete(peer_id);
         assert!(guard.is_completed(peer_id));
 
-        let error = guard
+        guard
             .begin(peer_id, LifecycleStreamDirection::Outbound)
-            .expect_err("duplicate completed stream fails");
-        assert_eq!(error.direction, LifecycleStreamDirection::Outbound);
+            .expect("refresh after completed stream is allowed");
+    }
+
+    #[test]
+    fn lifecycle_stream_guard_reset_allows_reconnect_after_disconnect() {
+        let peer_id = identity(36).peer_id();
+        let mut guard = LifecycleStreamGuard::default();
+
+        guard
+            .begin(peer_id, LifecycleStreamDirection::Inbound)
+            .expect("first stream starts");
+        guard.complete(peer_id);
+        assert!(guard.is_completed(peer_id));
+
+        guard.reset(peer_id);
+        assert!(!guard.is_completed(peer_id));
+        guard
+            .begin(peer_id, LifecycleStreamDirection::Inbound)
+            .expect("reconnect after reset is allowed");
     }
 }

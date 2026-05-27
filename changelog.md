@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Overwatch decodes native camera stream frames.** The Overwatch example now stages generated `@aukilabs/auki-proto`, carries sensor kind metadata on runtime stream frames, and decodes native `CameraFrame` payloads into JPEG previews while preserving raw browser/demo stream payloads. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Domain Swift auto-advertise bootstrap added.** `auki-domain` generated Swift hosts can now bootstrap `DomainClusterManager` from listen addresses while the SDK resolves advertised multiaddrs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

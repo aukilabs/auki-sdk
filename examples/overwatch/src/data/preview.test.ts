@@ -68,4 +68,46 @@ describe("subscribePreview", () => {
     dispose();
     expect(revokeSpy).toHaveBeenCalledWith("blob:frame");
   });
+
+  it("renders encoded native camera frames as JPEG blobs", () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const cameraFrame = new Uint8Array([0x12, 0x04, ...jpeg]);
+    const revokeSpy = vi.fn();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn((blob: Blob) => `blob:${blob.size}:${blob.type}`),
+      revokeObjectURL: revokeSpy,
+    });
+    subscribeRuntimeStream.mockImplementationOnce((_spec, cb) => {
+      cb({
+        descriptor: { sensor_hash: "hash", clock_id: "clock" },
+        payload: cameraFrame,
+        sensorKind: "camera",
+        seq: 8,
+        timestamp_ns: 13,
+        receivedAt: 11,
+        receivedAtWallMs: 21,
+      });
+      return vi.fn();
+    });
+
+    const frames: unknown[] = [];
+    const dispose = subscribePreview(
+      {
+        peer_id: "12D3KooWCameraPeer",
+        sensor_id: "K1-WALK01/head_left_cam",
+      },
+      (frame) => frames.push(frame),
+    );
+
+    expect(frames.at(-1)).toMatchObject({
+      url: "blob:4:image/jpeg",
+      bytes: 4,
+      seq: 8,
+      timestamp_ns: 13,
+    });
+
+    dispose();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:4:image/jpeg");
+  });
 });

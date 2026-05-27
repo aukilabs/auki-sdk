@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+**Native camera stream frames decode through generated protobuf bindings.** Overwatch now stages generated `@aukilabs/auki-proto`, declares the proto/runtime dependencies, tags runtime stream frames with matching sensor metadata, and decodes camera `CameraFrame.frame` bytes before creating JPEG preview blobs while preserving raw JPEG previews for non-camera streams.
+
+Tests: `scripts/generate-javascript-proto.sh`; `npm --prefix examples/overwatch install`; `npm --prefix examples/overwatch test -- preview.test.ts streamHub.test.ts`; `npm --prefix examples/overwatch run build`.
+
 ### Nils's codex · May 26, HKT, 2026
 
 **Park brand assets copied into Overwatch.** Overwatch now ships the `/brand/auki-monogram-white.svg` and `/brand/auki-wordmark-white.svg` files that Park's copied topbar references, with a focused test guarding the Vite public asset paths.

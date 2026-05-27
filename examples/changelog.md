@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+**[`overwatch`](overwatch/changelog.md) — Native camera stream frames decode through generated protobuf bindings.** Overwatch now stages `@aukilabs/auki-proto`, carries camera sensor metadata on runtime frames, and decodes `CameraFrame.frame` bytes for JPEG previews while preserving raw non-camera payloads.
+
 ### Nils's codex · May 26, HKT, 2026
 
 **[`overwatch`](overwatch/changelog.md) — Park brand assets copied into Overwatch.** Overwatch now ships the `/brand/*` SVG files referenced by Park's copied topbar and tests those Vite public asset paths.

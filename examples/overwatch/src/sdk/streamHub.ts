@@ -1,4 +1,5 @@
 import { sdkRuntime } from "./runtime";
+import type { SensorSummary } from "./contract";
 
 export type RuntimeStreamDescriptor = {
   sensor_id: string;
@@ -12,6 +13,7 @@ export type RuntimeStreamDescriptor = {
 export type RuntimeStreamFrame = {
   descriptor: RuntimeStreamDescriptor | null;
   payload: Uint8Array;
+  sensorKind?: SensorSummary["kind"];
   seq: number;
   timestamp_ns: number;
   receivedAt: number;
@@ -75,6 +77,9 @@ export function getRuntimeStreamState(spec: StreamSpec): Source["state"] | "unkn
 
 async function pump(source: Source) {
   try {
+    const sensor = sdkRuntime
+      .getParticipantSensors(source.spec.peer_id)
+      .find((candidate) => candidate.sensor_id === source.spec.sensor_id);
     const stream = await sdkRuntime.getStream(source.spec.peer_id, source.spec.sensor_id);
     source.stream = stream;
     while (!source.cancelled) {
@@ -90,6 +95,7 @@ async function pump(source: Source) {
         const frame: RuntimeStreamFrame = {
           descriptor: source.descriptor,
           payload: toBytes(entry.payload),
+          sensorKind: sensor?.kind,
           seq: Number(entry.seq ?? 0),
           timestamp_ns: Number(entry.timestamp_ns ?? 0),
           receivedAt: performance.now(),

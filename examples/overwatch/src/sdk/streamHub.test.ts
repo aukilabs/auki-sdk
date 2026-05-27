@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { getStream } = vi.hoisted(() => ({
+const { getParticipantSensors, getStream } = vi.hoisted(() => ({
+  getParticipantSensors: vi.fn(() => []),
   getStream: vi.fn(),
 }));
 
 vi.mock("./runtime", () => ({
   sdkRuntime: {
+    getParticipantSensors,
     getStream,
   },
 }));
@@ -63,6 +65,56 @@ describe("streamHub", () => {
       sensor_hash: "camera-hash",
       clock_id: "clock",
     });
+
+    dispose();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("marks frames with the matching runtime sensor kind", async () => {
+    const close = vi.fn();
+    getParticipantSensors.mockReturnValueOnce([
+      {
+        sensor_id: "native-camera",
+        sensor_hash: "camera-hash",
+        kind: "camera",
+      },
+    ]);
+    getStream.mockResolvedValueOnce(
+      fakeStream([
+        {
+          accept: {
+            sensor_id: "native-camera",
+            sensor_hash: "camera-hash",
+            clock_id: "clock",
+            clock_hash: "clock-hash",
+            frame_id: "frame",
+            frame_hash: "frame-hash",
+          },
+        },
+        {
+          entry: {
+            seq: 9,
+            timestamp_ns: 43,
+            payload: [1, 2, 3],
+          },
+        },
+        null,
+      ], close),
+    );
+
+    const frames: unknown[] = [];
+    const dispose = subscribeRuntimeStream(
+      { peer_id: "peer-a", sensor_id: "native-camera" },
+      (frame) => frames.push(frame),
+    );
+
+    await vi.waitFor(() => {
+      expect(frames.at(-1)).toMatchObject({
+        sensorKind: "camera",
+        seq: 9,
+      });
+    });
+    expect(getParticipantSensors).toHaveBeenCalledWith("peer-a");
 
     dispose();
     expect(close).toHaveBeenCalled();

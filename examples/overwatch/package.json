@@ -13,6 +13,8 @@
     "@aukilabs/auki-domain": "file:./sdk-generated/auki-domain",
     "@aukilabs/auki-geometry": "file:./sdk-generated/auki-geometry",
     "@aukilabs/auki-network": "file:./sdk-generated/auki-network",
+    "@aukilabs/auki-proto": "file:./sdk-generated/auki-proto",
+    "@bufbuild/protobuf": "^2.0.0",
     "motion": "^12.38.0",
     "three": "^0.169.0"
   },

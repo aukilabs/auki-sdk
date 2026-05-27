@@ -47,8 +47,9 @@ pub use lifecycle::{
     read_peer_handshake, read_peer_handshake_strict, write_peer_handshake,
 };
 pub use node::{
-    AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, BrowserWebRtcDirectConfig,
-    RelayServerConfig, loopback_webrtc_direct_listen_addr, loopback_websocket_relay_listen_addr,
+    AukiBrowserBootstrapRecord, AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError,
+    BrowserWebRtcDirectConfig, RelayServerConfig, loopback_webrtc_direct_listen_addr,
+    loopback_websocket_relay_listen_addr,
 };
 pub use offer_catalog_streams::{
     Libp2pOfferCatalogClient, OfferCatalogServeError, accept_offer_catalog_streams,

@@ -79,6 +79,28 @@ pub struct RelayServerConfig {
     pub enabled: bool,
 }
 
+/// Connectivity-only bootstrap record for browser peers.
+///
+/// This record is an address snapshot only. It does not convey domain
+/// authority, lifecycle state, offers, or policy grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AukiBrowserBootstrapRecord {
+    /// Native peer id browsers are expected to dial or use as a bootstrap peer.
+    pub peer_id: PeerId,
+    /// Identify agent version of the native peer.
+    pub agent_version: String,
+    /// Browser-compatible direct addresses for this peer.
+    pub direct_addresses: Vec<Multiaddr>,
+    /// Direct WebRTC addresses for browser-to-node dialing.
+    pub webrtc_direct_addresses: Vec<Multiaddr>,
+    /// Relay-mediated addresses for this peer, when configured by the operator.
+    pub relay_addresses: Vec<Multiaddr>,
+    /// Browser-compatible relay server addresses for this peer.
+    pub relay_server_addresses: Vec<Multiaddr>,
+    /// Unique union of direct, relay-mediated, and relay-server bootstrap addresses.
+    pub bootstrap_addresses: Vec<Multiaddr>,
+}
+
 /// Public events surfaced by the node skeleton.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AukiP2pEvent {
@@ -256,6 +278,23 @@ impl AukiP2pNodeConfig {
             agent_version: default_agent_version(),
         }
     }
+
+    /// Development config that exposes a native peer to browsers over WebRTC
+    /// Direct and also runs a loopback WebSocket relay server.
+    pub fn loopback_browser_reachable_development() -> Self {
+        Self {
+            p2p: AukiP2pConfig::development(),
+            listen_addresses: vec![
+                loopback_webrtc_direct_listen_addr(),
+                loopback_websocket_relay_listen_addr(),
+            ],
+            advertised_addresses: Vec::new(),
+            relay_addresses: Vec::new(),
+            browser_webrtc_direct: BrowserWebRtcDirectConfig::enabled(),
+            relay_server: RelayServerConfig::enabled(),
+            agent_version: default_agent_version(),
+        }
+    }
 }
 
 impl BrowserWebRtcDirectConfig {
@@ -279,6 +318,43 @@ impl RelayServerConfig {
     /// Enable local Circuit Relay v2 server support.
     pub fn enabled() -> Self {
         Self { enabled: true }
+    }
+}
+
+impl AukiBrowserBootstrapRecord {
+    /// Convert the bootstrap record to a JSON value suitable for a local demo
+    /// endpoint or browser package boundary.
+    pub fn to_value(&self) -> Value {
+        let mut object = Map::new();
+        object.insert(
+            "peer_id".to_owned(),
+            Value::String(self.peer_id.to_string()),
+        );
+        object.insert(
+            "agent_version".to_owned(),
+            Value::String(self.agent_version.clone()),
+        );
+        object.insert(
+            "direct_addresses".to_owned(),
+            multiaddr_array(&self.direct_addresses),
+        );
+        object.insert(
+            "webrtc_direct_addresses".to_owned(),
+            multiaddr_array(&self.webrtc_direct_addresses),
+        );
+        object.insert(
+            "relay_addresses".to_owned(),
+            multiaddr_array(&self.relay_addresses),
+        );
+        object.insert(
+            "relay_server_addresses".to_owned(),
+            multiaddr_array(&self.relay_server_addresses),
+        );
+        object.insert(
+            "bootstrap_addresses".to_owned(),
+            multiaddr_array(&self.bootstrap_addresses),
+        );
+        Value::Object(object)
     }
 }
 
@@ -395,6 +471,43 @@ impl AukiP2pNode {
         &self.config.relay_addresses
     }
 
+    /// Build a connectivity-only browser bootstrap record.
+    pub fn browser_bootstrap_record(&self) -> AukiBrowserBootstrapRecord {
+        let peer_id = self.peer_id();
+        let direct_addresses = self.browser_direct_addresses();
+        let webrtc_direct_addresses = direct_addresses
+            .iter()
+            .filter(|address| is_webrtc_direct_address(address))
+            .cloned()
+            .collect();
+        let relay_addresses = self
+            .config
+            .relay_addresses
+            .iter()
+            .cloned()
+            .map(|address| address_with_peer_id(address, peer_id))
+            .collect::<Vec<_>>();
+        let relay_server_addresses = self.observed_browser_relay_server_addresses();
+        let mut bootstrap_addresses = Vec::new();
+        for address in direct_addresses
+            .iter()
+            .chain(relay_addresses.iter())
+            .chain(relay_server_addresses.iter())
+        {
+            push_unique(&mut bootstrap_addresses, address.clone());
+        }
+
+        AukiBrowserBootstrapRecord {
+            peer_id,
+            agent_version: self.config.agent_version.clone(),
+            direct_addresses,
+            webrtc_direct_addresses,
+            relay_addresses,
+            relay_server_addresses,
+            bootstrap_addresses,
+        }
+    }
+
     pub(crate) fn configured_peers(&self) -> &[ConfiguredPeer] {
         &self.config.p2p.configured_peers
     }
@@ -464,11 +577,16 @@ impl AukiP2pNode {
             Value::String(self.config.p2p.peer_admission.mode().as_str().to_owned()),
         );
         object.insert(
+            "agent_version".to_owned(),
+            Value::String(self.config.agent_version.clone()),
+        );
+        object.insert(
             "relay_server_enabled".to_owned(),
             Value::Bool(self.config.relay_server.enabled),
         );
 
         if !self.config.p2p.status_privacy.redact_addresses {
+            let browser_bootstrap = self.browser_bootstrap_record();
             object.insert(
                 "listen_addresses".to_owned(),
                 multiaddr_array(self.status_listen_addresses()),
@@ -481,6 +599,27 @@ impl AukiP2pNode {
                 "relay_server_addresses".to_owned(),
                 multiaddr_array(&self.observed_relay_server_addresses()),
             );
+            object.insert(
+                "relay_addresses".to_owned(),
+                multiaddr_array(&browser_bootstrap.relay_addresses),
+            );
+            object.insert(
+                "browser_bootstrap_addresses".to_owned(),
+                multiaddr_array(&browser_bootstrap.bootstrap_addresses),
+            );
+            object.insert(
+                "browser_direct_addresses".to_owned(),
+                multiaddr_array(&browser_bootstrap.direct_addresses),
+            );
+            object.insert(
+                "browser_webrtc_direct_addresses".to_owned(),
+                multiaddr_array(&browser_bootstrap.webrtc_direct_addresses),
+            );
+            object.insert(
+                "browser_relay_server_addresses".to_owned(),
+                multiaddr_array(&browser_bootstrap.relay_server_addresses),
+            );
+            object.insert("browser_bootstrap".to_owned(), browser_bootstrap.to_value());
         }
 
         LocalPeerStatus::from_value(Value::Object(object)).map_err(AukiP2pNodeError::Status)
@@ -741,6 +880,23 @@ impl AukiP2pNode {
             &self.observed_listen_addresses
         }
     }
+
+    fn browser_direct_addresses(&self) -> Vec<Multiaddr> {
+        let peer_id = self.peer_id();
+        let mut addresses = Vec::new();
+        for address in self.observed_dialable_listen_addresses().into_iter().chain(
+            self.config
+                .advertised_addresses
+                .iter()
+                .cloned()
+                .map(|address| address_with_peer_id(address, peer_id)),
+        ) {
+            if is_browser_direct_address(&address) {
+                push_unique(&mut addresses, address);
+            }
+        }
+        addresses
+    }
 }
 
 /// Return a loopback WebRTC Direct listen address with an OS-selected UDP port.
@@ -787,11 +943,12 @@ fn is_websocket_address(address: &Multiaddr) -> bool {
         .any(|protocol| matches!(protocol, Protocol::Ws(_) | Protocol::Wss(_)))
 }
 
+fn is_browser_direct_address(address: &Multiaddr) -> bool {
+    is_webrtc_direct_address(address) || is_websocket_address(address)
+}
+
 fn address_with_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
-    if address
-        .iter()
-        .any(|protocol| matches!(protocol, Protocol::P2p(_)))
-    {
+    if matches!(address.iter().last(), Some(Protocol::P2p(_))) {
         address
     } else {
         address.with(Protocol::P2p(peer_id))
@@ -918,6 +1075,21 @@ mod tests {
         .expect("listen address should be emitted")
     }
 
+    #[cfg(feature = "browser-webrtc-direct")]
+    async fn wait_for_listen_addr_count(node: &mut AukiP2pNode, count: usize) -> Vec<Multiaddr> {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(AukiP2pEvent::Listening { .. }) = node.next_event().await {
+                    if node.observed_listen_addresses().len() >= count {
+                        return node.observed_listen_addresses().to_vec();
+                    }
+                }
+            }
+        })
+        .await
+        .expect("listen addresses should be emitted")
+    }
+
     #[test]
     fn loopback_webrtc_direct_config_enables_browser_transport() {
         let config = AukiP2pNodeConfig::loopback_webrtc_direct_development();
@@ -939,6 +1111,21 @@ mod tests {
         assert_eq!(
             config.listen_addresses,
             vec![loopback_websocket_relay_listen_addr()]
+        );
+    }
+
+    #[test]
+    fn loopback_browser_reachable_config_enables_webrtc_and_relay() {
+        let config = AukiP2pNodeConfig::loopback_browser_reachable_development();
+
+        assert!(config.browser_webrtc_direct.enabled);
+        assert!(config.relay_server.enabled);
+        assert_eq!(
+            config.listen_addresses,
+            vec![
+                loopback_webrtc_direct_listen_addr(),
+                loopback_websocket_relay_listen_addr()
+            ]
         );
     }
 
@@ -1000,6 +1187,49 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "browser-webrtc-direct")]
+    async fn loopback_browser_reachable_listener_builds_browser_bootstrap_record() {
+        let mut node = AukiP2pNode::new(
+            identity(35),
+            AukiP2pNodeConfig::loopback_browser_reachable_development(),
+        )
+        .unwrap();
+
+        let addresses = wait_for_listen_addr_count(&mut node, 2).await;
+        let record = node.browser_bootstrap_record();
+
+        assert!(addresses.iter().any(is_webrtc_direct_address));
+        assert!(addresses.iter().any(is_websocket_address));
+        assert_eq!(record.peer_id, node.peer_id());
+        assert_eq!(record.agent_version, default_agent_version());
+        assert_eq!(record.direct_addresses.len(), 2);
+        assert_eq!(record.webrtc_direct_addresses.len(), 1);
+        assert_eq!(record.relay_server_addresses.len(), 1);
+        assert_eq!(record.bootstrap_addresses.len(), 2);
+        assert!(
+            record.webrtc_direct_addresses[0]
+                .to_string()
+                .contains("/certhash/")
+        );
+        assert!(is_websocket_address(&record.relay_server_addresses[0]));
+        assert!(record.bootstrap_addresses.iter().all(|address| {
+            address.iter().last().is_some_and(
+                |protocol| matches!(protocol, Protocol::P2p(peer) if peer == node.peer_id()),
+            )
+        }));
+
+        let status = node.local_peer_status().expect("local status");
+        assert_eq!(
+            status
+                .value()
+                .get("browser_bootstrap_addresses")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
     async fn loopback_relay_server_listener_emits_browser_relay_address() {
         let mut relay = AukiP2pNode::new(
             identity(34),
@@ -1026,6 +1256,22 @@ mod tests {
             "local relay server addresses must stay separate from remote relay hints"
         );
 
+        let record = relay.browser_bootstrap_record();
+        assert_eq!(record.direct_addresses, vec![dialable.clone()]);
+        assert!(record.webrtc_direct_addresses.is_empty());
+        assert!(record.relay_addresses.is_empty());
+        assert_eq!(record.relay_server_addresses, vec![dialable.clone()]);
+        assert_eq!(record.bootstrap_addresses, vec![dialable.clone()]);
+
+        let bootstrap_value = record.to_value();
+        let peer_id = relay.peer_id().to_string();
+        assert_eq!(
+            bootstrap_value.get("peer_id").and_then(Value::as_str),
+            Some(peer_id.as_str())
+        );
+        assert!(bootstrap_value.get("local_domains").is_none());
+        assert!(bootstrap_value.get("offers").is_none());
+
         let status = relay.local_peer_status().expect("local status");
         assert_eq!(
             status
@@ -1038,6 +1284,15 @@ mod tests {
             status
                 .value()
                 .get("relay_server_addresses")
+                .and_then(Value::as_array)
+                .and_then(|addresses| addresses.first())
+                .and_then(Value::as_str),
+            Some(dialable_string.as_str())
+        );
+        assert_eq!(
+            status
+                .value()
+                .get("browser_bootstrap_addresses")
                 .and_then(Value::as_array)
                 .and_then(|addresses| addresses.first())
                 .and_then(Value::as_str),
@@ -1220,23 +1475,87 @@ mod tests {
 
     #[test]
     fn node_config_keeps_address_roles_separate() {
-        let advertised: Multiaddr = "/ip4/203.0.113.10/tcp/4001".parse().unwrap();
+        let advertised: Multiaddr = "/ip4/203.0.113.10/tcp/4001/ws".parse().unwrap();
         let relay: Multiaddr = "/ip4/198.51.100.10/tcp/4001/p2p-circuit".parse().unwrap();
         let mut config = AukiP2pNodeConfig::dial_only_development();
         config.advertised_addresses.push(advertised.clone());
         config.relay_addresses.push(relay.clone());
         let node = AukiP2pNode::new(identity(25), config).unwrap();
+        let advertised_dialable = advertised.clone().with(Protocol::P2p(node.peer_id()));
+        let relay_dialable = relay.clone().with(Protocol::P2p(node.peer_id()));
 
         assert!(node.configured_listen_addresses().is_empty());
         assert!(node.observed_listen_addresses().is_empty());
         assert_eq!(node.advertised_addresses(), &[advertised]);
         assert_eq!(node.relay_addresses(), &[relay]);
 
+        let record = node.browser_bootstrap_record();
+        assert_eq!(record.direct_addresses, vec![advertised_dialable.clone()]);
+        assert!(record.webrtc_direct_addresses.is_empty());
+        assert_eq!(record.relay_addresses, vec![relay_dialable.clone()]);
+        assert!(record.relay_server_addresses.is_empty());
+        assert_eq!(
+            record.bootstrap_addresses,
+            vec![advertised_dialable.clone(), relay_dialable.clone()]
+        );
+
         let status = node.local_peer_status().expect("local status");
         assert!(status.listen_addresses.is_empty());
         assert_eq!(
             status.advertised_addresses,
-            vec!["/ip4/203.0.113.10/tcp/4001"]
+            vec!["/ip4/203.0.113.10/tcp/4001/ws"]
+        );
+        assert_eq!(
+            status
+                .value()
+                .get("relay_addresses")
+                .and_then(Value::as_array)
+                .and_then(|addresses| addresses.first())
+                .and_then(Value::as_str),
+            Some(relay_dialable.to_string().as_str())
+        );
+        assert_eq!(
+            status
+                .value()
+                .get("browser_bootstrap_addresses")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        assert!(
+            status
+                .value()
+                .get("browser_bootstrap")
+                .and_then(|value| value.get("local_domains"))
+                .is_none()
+        );
+        assert!(
+            status
+                .value()
+                .get("browser_bootstrap")
+                .and_then(|value| value.get("offers"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn address_with_peer_id_appends_terminal_peer_after_relay_path() {
+        let relay_peer = identity(36).peer_id();
+        let local_peer = identity(37).peer_id();
+        let relay_path: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/4001/ws/p2p/{relay_peer}/p2p-circuit")
+                .parse()
+                .unwrap();
+
+        let address = address_with_peer_id(relay_path, local_peer);
+
+        assert!(matches!(
+            address.iter().last(),
+            Some(Protocol::P2p(peer)) if peer == local_peer
+        ));
+        assert_eq!(
+            address.to_string(),
+            format!("/ip4/127.0.0.1/tcp/4001/ws/p2p/{relay_peer}/p2p-circuit/p2p/{local_peer}")
         );
     }
 
@@ -1273,6 +1592,9 @@ mod tests {
 
         assert!(status.listen_addresses.is_empty());
         assert!(status.advertised_addresses.is_empty());
+        assert!(status.value().get("relay_addresses").is_none());
+        assert!(status.value().get("browser_bootstrap_addresses").is_none());
+        assert!(status.value().get("browser_bootstrap").is_none());
     }
 
     #[tokio::test]

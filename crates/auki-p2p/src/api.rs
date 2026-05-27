@@ -1,9 +1,9 @@
 //! SDK-facing high-level node API.
 
 use crate::{
-    AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiP2pConfig, AukiP2pNode,
-    AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome, GetServeError,
-    HandshakePolicyError, HandshakeValidationInput, HandshakeValidationResult,
+    AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiBrowserBootstrapRecord, AukiP2pConfig,
+    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome,
+    GetServeError, HandshakePolicyError, HandshakeValidationInput, HandshakeValidationResult,
     Libp2pOfferCatalogClient, Libp2pPathClient, Libp2pSubscription, LifecycleHandshakeExchange,
     LifecycleOpenStreamError, LifecycleProtocolError, LifecycleStreamDirection,
     LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer, LocalPeerIdentity,
@@ -759,6 +759,11 @@ impl AukiNode {
     /// Observed WebSocket relay-server addresses usable by browser peers.
     pub fn observed_browser_relay_server_addresses(&self) -> Vec<Multiaddr> {
         self.node.observed_browser_relay_server_addresses()
+    }
+
+    /// Connectivity-only bootstrap record for browser peers.
+    pub fn browser_bootstrap_record(&self) -> AukiBrowserBootstrapRecord {
+        self.node.browser_bootstrap_record()
     }
 
     /// Operator-supplied advertised addresses.
@@ -2263,6 +2268,28 @@ mod tests {
             snapshot.remote_peers[0].lifecycle_state.as_deref(),
             Some("configured")
         );
+    }
+
+    #[test]
+    fn browser_bootstrap_record_is_available_from_high_level_node() {
+        let advertised: Multiaddr = "/ip4/203.0.113.10/tcp/4001/ws".parse().unwrap();
+        let mut config = AukiP2pNodeConfig::dial_only_development();
+        config.advertised_addresses.push(advertised);
+        let node = AukiNode::new(identity(59), config).expect("node");
+
+        let record = node.browser_bootstrap_record();
+        let peer_id = node.peer_id().to_string();
+
+        assert_eq!(record.peer_id, node.peer_id());
+        assert_eq!(record.direct_addresses.len(), 1);
+        assert!(
+            record.direct_addresses[0]
+                .to_string()
+                .ends_with(&format!("/p2p/{peer_id}"))
+        );
+        assert_eq!(record.bootstrap_addresses, record.direct_addresses);
+        assert!(record.to_value().get("local_domains").is_none());
+        assert!(record.to_value().get("offers").is_none());
     }
 
     #[test]

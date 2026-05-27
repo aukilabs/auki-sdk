@@ -45,6 +45,11 @@ Current public surface:
   `AukiP2pNodeConfig::loopback_webrtc_direct_development()` for the local
   browser MVP and publish `observed_dialable_listen_addresses()` to browser
   peers after the listener emits an address.
+- `browser_bootstrap_record()` produces a connectivity-only browser bootstrap
+  snapshot with direct, WebRTC Direct, relay-mediated, relay-server, and union
+  bootstrap addresses kept distinct. Build it after listener events have
+  populated observed addresses. It is not domain authority and does not carry
+  lifecycle state or offers.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
   exchange the first peer-handshake frame using the configured frame limit,
   with optional strict helpers for duplicate lifecycle streams and extra

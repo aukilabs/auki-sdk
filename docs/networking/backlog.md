@@ -90,7 +90,7 @@ Keep legacy behavior intact:
       browser-to-node dialing.
 - [x] Add optional Circuit Relay v2 server support to `auki-p2p` over
       WebSocket.
-- [ ] Keep listen addresses, advertised addresses, relay addresses, and
+- [x] Keep listen addresses, advertised addresses, relay addresses, and
       bootstrap addresses distinct in config and status.
 - [ ] Add status output that reports observed transport path and relay
       involvement.

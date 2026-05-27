@@ -119,6 +119,23 @@ pub mod resources_protocol;
 #[cfg(feature = "swarm")]
 pub mod registries_protocol;
 
+// ─── SessionHandle ────────────────────────────────────────────────────────────
+
+/// Source of resource catalog rows that `auki-domain`'s resources protocol
+/// handler reads from. Implemented by `auki_session::Session`.
+///
+/// The trait is defined here (in `auki-network`) so both `auki-domain` and
+/// `auki-session` can depend on it without a cycle:
+/// `auki-session` depends on `auki-network` and implements the trait;
+/// `auki-domain` depends on `auki-network` and consumes the trait.
+#[cfg(feature = "swarm")]
+pub trait SessionHandle: Send + Sync {
+    /// Returns all locally-known resource catalog rows: own logs plus
+    /// materialized logs from other peers. Called whenever a remote peer
+    /// asks this peer for its catalog over `/auki/resources/0.2.0`.
+    fn catalog(&self) -> Vec<resources_protocol::ResourceEntry>;
+}
+
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,

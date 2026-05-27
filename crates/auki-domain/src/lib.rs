@@ -27,10 +27,10 @@ pub mod stream_manifest;
 pub use auki_network::registries_protocol::RegistryKind;
 #[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{
-    PoseStreamResource, ResourceEntry, ResourceKind, ResourcePinholeIntrinsics, ResourceQuat,
-    ResourceSpatialTransform, ResourceVec3, ResourcesRequest, ResourcesResponse,
-    SensorStreamResource, TransformEdgeResource,
+    ResourceEntry, ResourcesRequest, ResourcesResponse,
 };
+#[cfg(feature = "native_runtime")]
+pub use auki_network::SessionHandle;
 #[cfg(feature = "native_runtime")]
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 #[cfg(feature = "native_runtime")]

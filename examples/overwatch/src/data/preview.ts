@@ -64,7 +64,9 @@ export function subscribePreview(spec: StreamSpec, cb: Listener): () => void {
     };
     source.unsubscribeRuntime = subscribeRuntimeStream(spec, (frame) => {
       if (!frame) return;
-      const body = toArrayBuffer(previewPayloadBytes(frame.payload, frame.sensorKind));
+      const payload = previewPayloadBytes(frame.payload, frame.sensorKind);
+      if (!payload) return;
+      const body = toArrayBuffer(payload);
       const blob = new Blob([body], { type: "image/jpeg" });
       const next: PreviewFrame = {
         url: URL.createObjectURL(blob),

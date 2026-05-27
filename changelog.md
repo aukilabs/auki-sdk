@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Overwatch preserves raw camera previews.** Camera-kind preview payloads now keep raw JPEG streams alive and skip malformed generated-protobuf camera frames without stopping the preview subscription, while native `CameraFrame.frame` decoding remains supported. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Overwatch decodes native camera stream frames.** The Overwatch example now stages generated `@aukilabs/auki-proto`, carries sensor kind metadata on runtime stream frames, and decodes native `CameraFrame` payloads into JPEG previews while preserving raw browser/demo stream payloads. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

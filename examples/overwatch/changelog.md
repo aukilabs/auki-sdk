@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Raw camera preview compatibility restored.** Camera-kind previews now keep already-JPEG payloads on the raw path and skip malformed generated-protobuf camera frames without throwing through the preview subscription loop, while native `CameraFrame.frame` decoding remains covered.
+
+Tests: `npm --prefix examples/overwatch run typecheck -- --pretty false`; `npm --prefix examples/overwatch test -- preview.test.ts streamHub.test.ts`; `npm --prefix examples/overwatch run build`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Native camera stream frames decode through generated protobuf bindings.** Overwatch now stages generated `@aukilabs/auki-proto`, declares the proto/runtime dependencies, tags runtime stream frames with matching sensor metadata, and decodes camera `CameraFrame.frame` bytes before creating JPEG preview blobs while preserving raw JPEG previews for non-camera streams.
 
 Tests: `scripts/generate-javascript-proto.sh`; `npm --prefix examples/overwatch install`; `npm --prefix examples/overwatch test -- preview.test.ts streamHub.test.ts`; `npm --prefix examples/overwatch run build`.

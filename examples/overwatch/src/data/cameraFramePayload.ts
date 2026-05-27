@@ -1,14 +1,19 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { CameraFrameSchema } from "@aukilabs/auki-proto/src/auki/camera_pb.js";
 
-export function previewPayloadBytes(payload: Uint8Array, sensorKind?: string): Uint8Array {
-  if (sensorKind !== "camera") {
+export function previewPayloadBytes(payload: Uint8Array, sensorKind?: string): Uint8Array | null {
+  if (sensorKind !== "camera" || isJpeg(payload)) {
     return payload;
   }
 
-  const frame = fromBinary(CameraFrameSchema, payload);
-  if (frame.frame.length === 0) {
-    throw new Error("CameraFrame contained an empty frame field");
+  try {
+    const frame = fromBinary(CameraFrameSchema, payload);
+    return frame.frame.length > 0 ? frame.frame : null;
+  } catch {
+    return null;
   }
-  return frame.frame;
+}
+
+function isJpeg(payload: Uint8Array): boolean {
+  return payload[0] === 0xff && payload[1] === 0xd8;
 }

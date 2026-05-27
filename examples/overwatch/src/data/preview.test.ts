@@ -110,4 +110,110 @@ describe("subscribePreview", () => {
     dispose();
     expect(revokeSpy).toHaveBeenCalledWith("blob:4:image/jpeg");
   });
+
+  it("preserves raw JPEG payloads from camera sensors", () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const revokeSpy = vi.fn();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn((blob: Blob) => `blob:${blob.size}:${blob.type}`),
+      revokeObjectURL: revokeSpy,
+    });
+    subscribeRuntimeStream.mockImplementationOnce((_spec, cb) => {
+      cb({
+        descriptor: { sensor_hash: "hash", clock_id: "clock" },
+        payload: jpeg,
+        sensorKind: "camera",
+        seq: 9,
+        timestamp_ns: 14,
+        receivedAt: 12,
+        receivedAtWallMs: 22,
+      });
+      return vi.fn();
+    });
+
+    const frames: unknown[] = [];
+    const dispose = subscribePreview(
+      {
+        peer_id: "12D3KooWCameraPeer",
+        sensor_id: "overwatch/browser/demo-camera",
+      },
+      (frame) => frames.push(frame),
+    );
+
+    expect(frames.at(-1)).toMatchObject({
+      url: "blob:4:image/jpeg",
+      bytes: 4,
+      seq: 9,
+      timestamp_ns: 14,
+    });
+
+    dispose();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:4:image/jpeg");
+  });
+
+  it("skips invalid camera payloads without stopping later previews", () => {
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const revokeSpy = vi.fn();
+    const createObjectURL = vi.fn((blob: Blob) => `blob:${blob.size}:${blob.type}`);
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL: revokeSpy,
+    });
+    subscribeRuntimeStream.mockImplementationOnce((_spec, cb) => {
+      cb({
+        descriptor: { sensor_hash: "hash", clock_id: "clock" },
+        payload: new Uint8Array([0x12]),
+        sensorKind: "camera",
+        seq: 10,
+        timestamp_ns: 15,
+        receivedAt: 13,
+        receivedAtWallMs: 23,
+      });
+      cb({
+        descriptor: { sensor_hash: "hash", clock_id: "clock" },
+        payload: new Uint8Array([0x12, 0x00]),
+        sensorKind: "camera",
+        seq: 11,
+        timestamp_ns: 16,
+        receivedAt: 14,
+        receivedAtWallMs: 24,
+      });
+      cb({
+        descriptor: { sensor_hash: "hash", clock_id: "clock" },
+        payload: jpeg,
+        sensorKind: "camera",
+        seq: 12,
+        timestamp_ns: 17,
+        receivedAt: 15,
+        receivedAtWallMs: 25,
+      });
+      return vi.fn();
+    });
+
+    const frames: unknown[] = [];
+    let dispose: (() => void) | undefined;
+    expect(() => {
+      dispose = subscribePreview(
+        {
+          peer_id: "12D3KooWCameraPeer",
+          sensor_id: "K1-WALK01/head_left_cam",
+        },
+        (frame) => frames.push(frame),
+      );
+    }).not.toThrow();
+
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(frames).toHaveLength(1);
+    expect(frames.at(-1)).toMatchObject({
+      url: "blob:4:image/jpeg",
+      bytes: 4,
+      seq: 12,
+      timestamp_ns: 17,
+    });
+
+    dispose?.();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:4:image/jpeg");
+  });
 });

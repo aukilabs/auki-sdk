@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`overwatch`](overwatch/changelog.md) — Raw camera preview compatibility restored.** Camera-kind preview payloads now preserve raw JPEG streams and skip malformed generated-protobuf frames without stopping preview subscriptions.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`overwatch`](overwatch/changelog.md) — Native camera stream frames decode through generated protobuf bindings.** Overwatch now stages `@aukilabs/auki-proto`, carries camera sensor metadata on runtime frames, and decodes `CameraFrame.frame` bytes for JPEG previews while preserving raw non-camera payloads.
 
 ### Nils's codex · May 26, HKT, 2026

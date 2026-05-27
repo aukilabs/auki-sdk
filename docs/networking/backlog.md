@@ -108,12 +108,12 @@ protocols from those crates.
 
 ## Phase 2 - Browser Peer Package
 
-- [ ] Add a clean RFC-first browser package, likely `crates/auki-p2p-browser`.
-- [ ] Use js-libp2p first.
-- [ ] Configure browser transports: WebRTC, WebRTC Direct, WebSocket, and
+- [x] Add a clean RFC-first browser package, likely `crates/auki-p2p-browser`.
+- [x] Use js-libp2p first.
+- [x] Configure browser transports: WebRTC, WebRTC Direct, WebSocket, and
       Circuit Relay v2.
-- [ ] Persist browser peer identity in IndexedDB.
-- [ ] Match Rust peer identity derivation vectors.
+- [x] Persist browser peer identity in IndexedDB.
+- [x] Match Rust peer identity derivation vectors.
 - [ ] Implement minimal TypeScript protocol helpers for frame encode/decode,
       peer binding, lifecycle handshake, offer catalog, Subscribe, spatial
       message parsing, and error objects.

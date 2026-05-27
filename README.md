@@ -63,6 +63,7 @@ Cross-cutting gaps not in any of the five buckets above: a `Session` abstraction
 | [`auki-network`](crates/auki-network) | libp2p substrate, typed streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
 | [`auki-protocol`](crates/auki-protocol) | RFC-first v1 protocol types, frames, signed authority objects, lifecycle, offers, Get, Subscribe, status | WIP (v0.0.0) |
 | [`auki-p2p`](crates/auki-p2p) | Clean RFC-first libp2p runtime with configured peers, lifecycle, offer loading/serving, Get/Subscribe consumers and providers, status snapshots | WIP (v0.0.0) |
+| [`auki-p2p-browser`](crates/auki-p2p-browser) | RFC-first TypeScript browser peer package with js-libp2p transports, bootstrap parsing, identity persistence, and frame helpers | WIP (v0.0.0) |
 | [`auki-domain`](crates/auki-domain) | `ClusterManager` — app-facing cluster lifecycle facade with relay hint preservation | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |

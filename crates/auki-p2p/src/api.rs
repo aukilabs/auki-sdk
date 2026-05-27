@@ -1546,23 +1546,29 @@ impl AukiNode {
         let failure_cap = self.node.config().p2p.limits.retained_status_failures;
         match event {
             crate::AukiP2pEvent::Listening { address } => AukiNodeEvent::Listening { address },
-            crate::AukiP2pEvent::ConnectionEstablished { peer_id } => {
-                let paths = self.node.active_connection_paths(peer_id);
-                self.relationship_mut(peer_id).connected_with_paths(paths);
+            crate::AukiP2pEvent::ConnectionEstablished {
+                peer_id,
+                active_paths,
+            } => {
+                self.relationship_mut(peer_id)
+                    .connected_with_paths(active_paths);
                 AukiNodeEvent::PeerConnected { peer_id }
             }
             crate::AukiP2pEvent::DuplicateConnectionClosed { peer_id } => {
                 AukiNodeEvent::PeerDuplicateConnectionClosed { peer_id }
             }
-            crate::AukiP2pEvent::ConnectionClosed { peer_id } => {
-                let active_connections = self.node.active_connection_count(peer_id);
+            crate::AukiP2pEvent::ConnectionClosed {
+                peer_id,
+                active_connections,
+                active_paths,
+            } => {
                 if active_connections == 0 {
                     self.lifecycle_stream_guard.reset(peer_id);
                     self.relationship_mut(peer_id)
                         .lost(observed_at.to_owned(), failure_cap);
                 } else {
-                    let paths = self.node.active_connection_paths(peer_id);
-                    self.relationship_mut(peer_id).set_transport_paths(paths);
+                    self.relationship_mut(peer_id)
+                        .set_transport_paths(active_paths);
                 }
                 AukiNodeEvent::PeerConnectionClosed {
                     peer_id,
@@ -2444,6 +2450,14 @@ mod tests {
         assert_eq!(reject.error.code, expected_code);
     }
 
+    fn test_connection_path(port: u16) -> crate::AukiConnectionPath {
+        crate::AukiConnectionPath::from_endpoint(&libp2p::core::ConnectedPoint::Dialer {
+            address: format!("/ip4/127.0.0.1/tcp/{port}/ws").parse().unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::New,
+        })
+    }
+
     #[test]
     fn initializes_configured_peer_relationships() {
         let remote_peer_id = identity(61).peer_id();
@@ -2467,6 +2481,30 @@ mod tests {
             snapshot.remote_peers[0].lifecycle_state.as_deref(),
             Some("configured")
         );
+    }
+
+    #[test]
+    fn status_snapshot_applies_buffered_connection_path_snapshot() {
+        let peer_id = identity(63).peer_id();
+        let path = test_connection_path(4301);
+        let mut node =
+            AukiNode::new(identity(62), AukiP2pNodeConfig::dial_only_development()).expect("node");
+
+        assert!(node.node.active_connection_paths(peer_id).is_empty());
+        node.node
+            .push_pending_event(crate::AukiP2pEvent::ConnectionEstablished {
+                peer_id,
+                active_paths: vec![path.clone()],
+            });
+
+        node.status_snapshot(ISSUED_AT).expect("status snapshot");
+
+        let relationship = node
+            .relationship(peer_id)
+            .expect("relationship should be created from pending event");
+        assert_eq!(relationship.state, PeerRelationshipState::Connected);
+        assert!(relationship.connected);
+        assert_eq!(relationship.transport_paths, vec![path]);
     }
 
     #[test]

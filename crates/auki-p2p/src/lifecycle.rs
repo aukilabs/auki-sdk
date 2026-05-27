@@ -389,12 +389,12 @@ mod tests {
             loop {
                 tokio::select! {
                     event = dialer.next_event() => {
-                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id }) = event {
+                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id, .. }) = event {
                             dialer_observed_listener |= peer_id == listener_peer_id;
                         }
                     }
                     event = listener.next_event() => {
-                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id }) = event {
+                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id, .. }) = event {
                             listener_observed_dialer |= peer_id == dialer_peer_id;
                         }
                     }

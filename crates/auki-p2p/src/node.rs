@@ -120,6 +120,8 @@ pub enum AukiP2pEvent {
     ConnectionEstablished {
         /// Transport-authenticated remote peer id.
         peer_id: PeerId,
+        /// Retained active paths for this peer immediately after the connection event.
+        active_paths: Vec<AukiConnectionPath>,
     },
     /// A connection exceeded the local per-peer cap and was scheduled for close.
     DuplicateConnectionClosed {
@@ -130,6 +132,10 @@ pub enum AukiP2pEvent {
     ConnectionClosed {
         /// Transport-authenticated remote peer id.
         peer_id: PeerId,
+        /// Retained connections still active immediately after the close.
+        active_connections: usize,
+        /// Retained active paths for this peer immediately after the close.
+        active_paths: Vec<AukiConnectionPath>,
     },
     /// An outbound dial failed.
     OutgoingConnectionError {
@@ -727,7 +733,10 @@ impl AukiP2pNode {
                     );
                     match retention {
                         ConnectionRetention::Retained => {
-                            return Some(AukiP2pEvent::ConnectionEstablished { peer_id });
+                            return Some(AukiP2pEvent::ConnectionEstablished {
+                                peer_id,
+                                active_paths: self.connections.active_paths(peer_id),
+                            });
                         }
                         ConnectionRetention::CloseDuplicate {
                             connection_id: close_connection_id,
@@ -736,7 +745,10 @@ impl AukiP2pNode {
                             if close_connection_id == connection_id {
                                 return Some(AukiP2pEvent::DuplicateConnectionClosed { peer_id });
                             }
-                            return Some(AukiP2pEvent::ConnectionEstablished { peer_id });
+                            return Some(AukiP2pEvent::ConnectionEstablished {
+                                peer_id,
+                                active_paths: self.connections.active_paths(peer_id),
+                            });
                         }
                     }
                 }
@@ -746,7 +758,11 @@ impl AukiP2pNode {
                     ..
                 } => {
                     self.connections.closed(peer_id, connection_id);
-                    return Some(AukiP2pEvent::ConnectionClosed { peer_id });
+                    return Some(AukiP2pEvent::ConnectionClosed {
+                        peer_id,
+                        active_connections: self.connections.active_count(peer_id),
+                        active_paths: self.connections.active_paths(peer_id),
+                    });
                 }
                 SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                     return Some(AukiP2pEvent::OutgoingConnectionError {
@@ -1571,12 +1587,12 @@ mod tests {
             loop {
                 tokio::select! {
                     event = dialer.next_event() => {
-                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id }) = event {
+                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id, .. }) = event {
                             dialer_observed_listener |= peer_id == listener_peer_id;
                         }
                     }
                     event = listener.next_event() => {
-                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id }) = event {
+                        if let Some(AukiP2pEvent::ConnectionEstablished { peer_id, .. }) = event {
                             listener_observed_dialer |= peer_id == dialer_peer_id;
                         }
                     }

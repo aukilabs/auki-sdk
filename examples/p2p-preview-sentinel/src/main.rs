@@ -463,14 +463,23 @@ fn print_state(
         println!("peers:");
         for relationship in relationships {
             println!(
-                "  {} state={} connected={} authorized={} paths={} loaded_offers={}",
+                "  {} state={} connected={} authorized={} transport_paths={} data_paths={} loaded_offers={}",
                 relationship.peer_id,
                 relationship.state,
                 relationship.connected,
                 relationship.authorized,
+                relationship.transport_paths.len(),
                 relationship.paths.len(),
                 relationship.loaded_offers.len(),
             );
+            for (index, path) in relationship.transport_paths.iter().enumerate() {
+                println!(
+                    "    transport[{index}] direction={} kind={} relay={}",
+                    path.direction.as_str(),
+                    path.transport.as_str(),
+                    path.relay_involved
+                );
+            }
         }
     }
 

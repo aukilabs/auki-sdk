@@ -1,6 +1,9 @@
 //! Minimal libp2p node wrapper for the RFC-first runtime.
 
-use crate::{AukiP2pConfig, ConfigError, ConfiguredPeer, DialPolicyError, LocalPeerIdentity};
+use crate::{
+    AukiConnectionPath, AukiP2pConfig, ConfigError, ConfiguredPeer, DialPolicyError,
+    LocalPeerIdentity,
+};
 use auki_protocol::v1::{
     base64url,
     status::{LocalPeerStatus, StatusError},
@@ -192,10 +195,11 @@ struct ConnectionTracker {
     established: HashMap<PeerId, Vec<TrackedConnection>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TrackedConnection {
     connection_id: ConnectionId,
     preference: ConnectionPreference,
+    path: AukiConnectionPath,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,6 +549,11 @@ impl AukiP2pNode {
         self.connections.active_count(peer_id)
     }
 
+    /// Runtime-observed paths for retained active connections to one peer.
+    pub fn active_connection_paths(&self, peer_id: PeerId) -> Vec<AukiConnectionPath> {
+        self.connections.active_paths(peer_id)
+    }
+
     /// Add one operator-supplied advertised address.
     pub fn add_advertised_address(&mut self, address: Multiaddr) {
         push_unique(&mut self.config.advertised_addresses, address);
@@ -583,6 +592,16 @@ impl AukiP2pNode {
         object.insert(
             "relay_server_enabled".to_owned(),
             Value::Bool(self.config.relay_server.enabled),
+        );
+        object.insert(
+            "relay_involved".to_owned(),
+            Value::Bool(self.connections.relay_involved()),
+        );
+        object.insert(
+            "active_transport_paths".to_owned(),
+            Value::Array(self.active_connection_path_status_values(
+                !self.config.p2p.status_privacy.redact_addresses,
+            )),
         );
 
         if !self.config.p2p.status_privacy.redact_addresses {
@@ -679,12 +698,14 @@ impl AukiP2pNode {
                     ..
                 } => {
                     let local_peer_id = self.peer_id();
+                    let path = AukiConnectionPath::from_endpoint(&endpoint);
                     let preference =
                         ConnectionPreference::for_endpoint(local_peer_id, peer_id, &endpoint);
                     let retention = self.connections.established(
                         peer_id,
                         connection_id,
                         preference,
+                        path,
                         self.config.p2p.limits.active_connections_per_peer_id,
                     );
                     match retention {
@@ -765,6 +786,7 @@ impl ConnectionTracker {
         peer_id: PeerId,
         connection_id: ConnectionId,
         preference: ConnectionPreference,
+        path: AukiConnectionPath,
         cap: usize,
     ) -> ConnectionRetention {
         if cap == 0 {
@@ -782,6 +804,7 @@ impl ConnectionTracker {
         let connection = TrackedConnection {
             connection_id,
             preference,
+            path,
         };
 
         if connections.len() < cap {
@@ -838,6 +861,37 @@ impl ConnectionTracker {
         self.established
             .get(&peer_id)
             .map_or(0, |connections| connections.len())
+    }
+
+    fn active_paths(&self, peer_id: PeerId) -> Vec<AukiConnectionPath> {
+        self.established
+            .get(&peer_id)
+            .map(|connections| {
+                connections
+                    .iter()
+                    .map(|connection| connection.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn all_active_paths(&self) -> Vec<(PeerId, AukiConnectionPath)> {
+        self.established
+            .iter()
+            .flat_map(|(peer_id, connections)| {
+                connections
+                    .iter()
+                    .map(|connection| (*peer_id, connection.path.clone()))
+            })
+            .collect()
+    }
+
+    fn relay_involved(&self) -> bool {
+        self.established.values().any(|connections| {
+            connections
+                .iter()
+                .any(|connection| connection.path.relay_involved)
+        })
     }
 }
 
@@ -896,6 +950,20 @@ impl AukiP2pNode {
             }
         }
         addresses
+    }
+
+    fn active_connection_path_status_values(&self, include_addresses: bool) -> Vec<Value> {
+        self.connections
+            .all_active_paths()
+            .into_iter()
+            .map(|(peer_id, path)| {
+                let mut value = path.to_status_value(include_addresses);
+                if let Value::Object(object) = &mut value {
+                    object.insert("peer_id".to_owned(), Value::String(peer_id.to_string()));
+                }
+                value
+            })
+            .collect()
     }
 }
 
@@ -1088,6 +1156,14 @@ mod tests {
         })
         .await
         .expect("listen addresses should be emitted")
+    }
+
+    fn test_connection_path(port: u16) -> AukiConnectionPath {
+        AukiConnectionPath::from_endpoint(&ConnectedPoint::Dialer {
+            address: format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap(),
+            role_override: libp2p::core::Endpoint::Dialer,
+            port_use: libp2p::core::transport::PortUse::New,
+        })
     }
 
     #[test]
@@ -1308,12 +1384,25 @@ mod tests {
         let mut tracker = ConnectionTracker::default();
 
         assert_eq!(
-            tracker.established(peer_id, first, ConnectionPreference::Preferred, 1),
+            tracker.established(
+                peer_id,
+                first,
+                ConnectionPreference::Preferred,
+                test_connection_path(1),
+                1
+            ),
             ConnectionRetention::Retained
         );
         assert_eq!(tracker.active_count(peer_id), 1);
+        assert_eq!(tracker.active_paths(peer_id).len(), 1);
         assert_eq!(
-            tracker.established(peer_id, second, ConnectionPreference::Fallback, 1),
+            tracker.established(
+                peer_id,
+                second,
+                ConnectionPreference::Fallback,
+                test_connection_path(2),
+                1
+            ),
             ConnectionRetention::CloseDuplicate {
                 connection_id: second
             }
@@ -1325,7 +1414,13 @@ mod tests {
         tracker.closed(peer_id, first);
         assert_eq!(tracker.active_count(peer_id), 0);
         assert_eq!(
-            tracker.established(peer_id, second, ConnectionPreference::Preferred, 1),
+            tracker.established(
+                peer_id,
+                second,
+                ConnectionPreference::Preferred,
+                test_connection_path(2),
+                1
+            ),
             ConnectionRetention::Retained
         );
     }
@@ -1349,6 +1444,7 @@ mod tests {
                 higher_peer_id,
                 fallback,
                 ConnectionPreference::Fallback,
+                test_connection_path(1),
                 1
             ),
             ConnectionRetention::Retained
@@ -1358,6 +1454,7 @@ mod tests {
                 higher_peer_id,
                 preferred,
                 ConnectionPreference::Preferred,
+                test_connection_path(2),
                 1
             ),
             ConnectionRetention::CloseDuplicate {
@@ -1374,6 +1471,7 @@ mod tests {
                 lower_peer_id,
                 fallback,
                 ConnectionPreference::Fallback,
+                test_connection_path(3),
                 1
             ),
             ConnectionRetention::Retained
@@ -1383,6 +1481,7 @@ mod tests {
                 lower_peer_id,
                 preferred,
                 ConnectionPreference::Preferred,
+                test_connection_path(4),
                 1
             ),
             ConnectionRetention::CloseDuplicate {
@@ -1471,6 +1570,31 @@ mod tests {
         })
         .await
         .expect("both peers should observe an authenticated connection");
+
+        let dialer_paths = dialer.active_connection_paths(listener_peer_id);
+        assert_eq!(dialer_paths.len(), 1);
+        assert_eq!(dialer_paths[0].direction.as_str(), "dialer");
+        assert_eq!(dialer_paths[0].transport.as_str(), "tcp");
+        assert!(!dialer_paths[0].relay_involved);
+
+        let status = dialer.local_peer_status().expect("local status");
+        assert_eq!(
+            status
+                .value()
+                .get("relay_involved")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            status
+                .value()
+                .get("active_transport_paths")
+                .and_then(Value::as_array)
+                .and_then(|paths| paths.first())
+                .and_then(|path| path.get("transport"))
+                .and_then(Value::as_str),
+            Some("tcp")
+        );
     }
 
     #[test]

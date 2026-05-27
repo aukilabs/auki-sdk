@@ -1,6 +1,8 @@
 //! Runtime-owned peer relationship state and status projection.
 
-use crate::{HandshakePolicyError, HandshakeValidationResult, StatusPrivacyConfig};
+use crate::{
+    AukiConnectionPath, HandshakePolicyError, HandshakeValidationResult, StatusPrivacyConfig,
+};
 use auki_protocol::v1::{
     base64url,
     status::{
@@ -219,6 +221,8 @@ pub struct PeerRelationship {
     pub dialable: Option<bool>,
     /// Whether transport is currently connected.
     pub connected: bool,
+    /// Runtime-observed active transport paths.
+    pub transport_paths: Vec<AukiConnectionPath>,
     /// Whether lifecycle authority validation accepted this peer.
     pub authorized: bool,
     /// Verified wallet public key from the peer binding.
@@ -392,6 +396,7 @@ impl PeerRelationship {
             learned_from: None,
             dialable: None,
             connected: false,
+            transport_paths: Vec::new(),
             authorized: false,
             verified_wallet_public_key: None,
             selected_lifecycle_version: None,
@@ -428,6 +433,17 @@ impl PeerRelationship {
     pub fn connected(&mut self) {
         self.state = PeerRelationshipState::Connected;
         self.connected = true;
+    }
+
+    /// Mark transport as connected and store observed active paths.
+    pub fn connected_with_paths(&mut self, paths: Vec<AukiConnectionPath>) {
+        self.connected();
+        self.transport_paths = paths;
+    }
+
+    /// Replace observed active transport paths without changing lifecycle state.
+    pub fn set_transport_paths(&mut self, paths: Vec<AukiConnectionPath>) {
+        self.transport_paths = paths;
     }
 
     /// Apply an accepted handshake-policy result.
@@ -509,6 +525,7 @@ impl PeerRelationship {
     pub fn lost(&mut self, at: impl Into<String>, cap: usize) {
         self.state = PeerRelationshipState::Lost;
         self.connected = false;
+        self.transport_paths.clear();
         let mut failure = RelationshipFailureRecord::new(
             auki_protocol::v1::error::TRANSPORT_FAILED,
             at,
@@ -598,6 +615,21 @@ impl PeerRelationship {
             object.insert("dialable".to_owned(), Value::Bool(dialable));
         }
         object.insert("connected".to_owned(), Value::Bool(self.connected));
+        if !self.transport_paths.is_empty() {
+            object.insert(
+                "relay_involved".to_owned(),
+                Value::Bool(self.transport_paths.iter().any(|path| path.relay_involved)),
+            );
+            object.insert(
+                "transport_paths".to_owned(),
+                Value::Array(
+                    self.transport_paths
+                        .iter()
+                        .map(|path| path.to_status_value(!options.privacy.redact_addresses))
+                        .collect(),
+                ),
+            );
+        }
         object.insert(
             "lifecycle_state".to_owned(),
             Value::String(self.state.as_str().to_owned()),
@@ -907,7 +939,8 @@ fn merged_details(details: Option<Value>, occurrences: u64) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::{
-        AukiP2pConfig, LocalPeerIdentity, build_local_handshake, validate_remote_handshake,
+        AukiConnectionDirection, AukiP2pConfig, AukiTransportProtocol, LocalPeerIdentity,
+        build_local_handshake, validate_remote_handshake,
     };
     use auki_identity::Wallet;
     use auki_protocol::v1::{
@@ -939,6 +972,16 @@ mod tests {
             NOW,
         ))
         .expect("valid handshake")
+    }
+
+    fn transport_path(relay_involved: bool) -> AukiConnectionPath {
+        AukiConnectionPath {
+            direction: AukiConnectionDirection::Dialer,
+            transport: AukiTransportProtocol::WebSocket,
+            relay_involved,
+            local_address: None,
+            remote_address: "/ip4/127.0.0.1/tcp/4001/ws".parse().unwrap(),
+        }
     }
 
     #[test]
@@ -1054,6 +1097,87 @@ mod tests {
         assert_eq!(status.authorized, Some(true));
         assert_eq!(status.accepted_served_domains.len(), 1);
         assert!(status.verified_wallet_public_key.is_some());
+    }
+
+    #[test]
+    fn remote_peer_status_reports_transport_path_and_relay_involvement() {
+        let identity = identity(95);
+        let mut relationship = PeerRelationship::new(identity.peer_id());
+        relationship.connected_with_paths(vec![transport_path(true)]);
+
+        let status = relationship
+            .to_remote_peer_status(RelationshipStatusOptions::default())
+            .expect("status projection");
+        let path = status
+            .value()
+            .get("transport_paths")
+            .and_then(Value::as_array)
+            .and_then(|paths| paths.first())
+            .expect("transport path");
+
+        assert_eq!(
+            status
+                .value()
+                .get("relay_involved")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            path.get("direction").and_then(Value::as_str),
+            Some("dialer")
+        );
+        assert_eq!(
+            path.get("transport").and_then(Value::as_str),
+            Some("websocket")
+        );
+        assert_eq!(
+            path.get("relay_involved").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(path.get("remote_address").is_some());
+        assert_eq!(status.authorized, Some(false));
+    }
+
+    #[test]
+    fn transport_path_status_redacts_addresses_without_hiding_relay_state() {
+        let identity = identity(96);
+        let mut relationship = PeerRelationship::new(identity.peer_id());
+        relationship.connected_with_paths(vec![transport_path(true)]);
+        let options = RelationshipStatusOptions {
+            privacy: StatusPrivacyConfig {
+                redact_addresses: true,
+                ..StatusPrivacyConfig::development()
+            },
+            ..RelationshipStatusOptions::default()
+        };
+
+        let status = relationship
+            .to_remote_peer_status(options)
+            .expect("status projection");
+        let path = status
+            .value()
+            .get("transport_paths")
+            .and_then(Value::as_array)
+            .and_then(|paths| paths.first())
+            .expect("transport path");
+
+        assert_eq!(
+            status
+                .value()
+                .get("relay_involved")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            path.get("transport").and_then(Value::as_str),
+            Some("websocket")
+        );
+        assert_eq!(
+            path.get("relay_involved").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(path.get("remote_address").is_none());
+        assert!(path.get("local_address").is_none());
     }
 
     #[test]

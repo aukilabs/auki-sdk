@@ -18,6 +18,7 @@ pub mod paths;
 pub mod protocols;
 pub mod relationship;
 pub mod subscribe_serving;
+pub mod transport_path;
 
 pub use api::{
     AukiGetProvider, AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent,
@@ -79,3 +80,4 @@ pub use subscribe_serving::{
     encode_subscribe_data_frame, read_subscribe_request, write_encoded_subscribe_frame,
     write_subscribe_end, write_subscribe_start_result,
 };
+pub use transport_path::{AukiConnectionDirection, AukiConnectionPath, AukiTransportProtocol};

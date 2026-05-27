@@ -50,6 +50,10 @@ Current public surface:
   bootstrap addresses kept distinct. Build it after listener events have
   populated observed addresses. It is not domain authority and does not carry
   lifecycle state or offers.
+- Transport status reports the observed connection direction, coarse transport
+  family, and whether a Circuit Relay hop is involved. Address fields follow
+  the status privacy policy; relay state remains connectivity diagnostics, not
+  authority.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
   exchange the first peer-handshake frame using the configured frame limit,
   with optional strict helpers for duplicate lifecycle streams and extra

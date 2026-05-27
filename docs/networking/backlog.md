@@ -92,7 +92,7 @@ Keep legacy behavior intact:
       WebSocket.
 - [x] Keep listen addresses, advertised addresses, relay addresses, and
       bootstrap addresses distinct in config and status.
-- [ ] Add status output that reports observed transport path and relay
+- [x] Add status output that reports observed transport path and relay
       involvement.
 - [x] Preserve current node-to-node TCP/QUIC behavior and tests.
 

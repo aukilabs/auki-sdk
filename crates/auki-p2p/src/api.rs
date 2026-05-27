@@ -1372,7 +1372,8 @@ impl AukiNode {
         Some(match event {
             crate::AukiP2pEvent::Listening { address } => AukiNodeEvent::Listening { address },
             crate::AukiP2pEvent::ConnectionEstablished { peer_id } => {
-                self.relationship_mut(peer_id).connected();
+                let paths = self.node.active_connection_paths(peer_id);
+                self.relationship_mut(peer_id).connected_with_paths(paths);
                 AukiNodeEvent::PeerConnected { peer_id }
             }
             crate::AukiP2pEvent::DuplicateConnectionClosed { peer_id } => {
@@ -1383,6 +1384,9 @@ impl AukiNode {
                 if active_connections == 0 {
                     self.relationship_mut(peer_id)
                         .lost(observed_at.to_owned(), failure_cap);
+                } else {
+                    let paths = self.node.active_connection_paths(peer_id);
+                    self.relationship_mut(peer_id).set_transport_paths(paths);
                 }
                 AukiNodeEvent::PeerConnectionClosed {
                     peer_id,
@@ -3456,10 +3460,41 @@ mod tests {
             dialer.relationship(listener_peer_id).unwrap().state,
             PeerRelationshipState::Connected
         );
+        assert_eq!(
+            dialer
+                .relationship(listener_peer_id)
+                .unwrap()
+                .transport_paths
+                .len(),
+            1
+        );
         let snapshot = dialer.status_snapshot(ISSUED_AT).expect("status snapshot");
         assert_eq!(
             snapshot.remote_peers[0].lifecycle_state.as_deref(),
             Some("connected")
         );
+        let path = snapshot.remote_peers[0]
+            .value()
+            .get("transport_paths")
+            .and_then(Value::as_array)
+            .and_then(|paths| paths.first())
+            .expect("transport path");
+        assert_eq!(
+            snapshot.remote_peers[0]
+                .value()
+                .get("relay_involved")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            path.get("direction").and_then(Value::as_str),
+            Some("dialer")
+        );
+        assert_eq!(path.get("transport").and_then(Value::as_str), Some("tcp"));
+        assert_eq!(
+            path.get("relay_involved").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(path.get("remote_address").is_some());
     }
 }

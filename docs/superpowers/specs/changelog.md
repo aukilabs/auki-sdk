@@ -6,6 +6,10 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Added the SDK signaled WebRTC transport design spec, defining SDK-owned Discovery signaling, bidirectional WebRTC data-channel routing, native Swift/browser binding adapters, and the `auki-domain` signaled peer facade.
+
+### Nils's codex · May 27, HKT, 2026
+
 Added the iOS camera streamer design spec, defining the generated Swift binding app as a native `auki-domain` producer peer that logs typed camera frames and streams them for Overwatch consumption.
 
 ### Nils's codex · May 22, HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC transport design added.** The saved design defines SDK-owned Discovery signaling, bidirectional WebRTC data-channel routing, generated native/browser binding adapters, and a signaled `auki-domain` peer facade for iOS-to-Overwatch interop. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Native iOS Producer Peer automated verification recorded.** The plan now records passing Rust, Swift, Overwatch, and iOS simulator checks, with physical-device camera/local-network smoke still pending. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

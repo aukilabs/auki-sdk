@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import initAukiNetwork, { AukiNetworkPeer } from "../index.js";
+import initAukiNetwork, { AukiNetworkPeer, formatSignaledAddress } from "../index.js";
 
 const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
 await initAukiNetwork({ module_or_path: wasmBytes });
@@ -46,6 +46,10 @@ test("AukiNetworkPeer advertises a Discovery signaling address after configurati
   assert.equal(peer.multiaddrs.length, 1);
   assert.match(peer.multiaddrs[0], /^\/auki-webrtc-signaling\//);
   assert.match(peer.multiaddrs[0], /\/p2p\/fake-peer$/);
+  assert.equal(
+    peer.multiaddrs[0],
+    formatSignaledAddress("http://discovery.local", peer.peerId),
+  );
 });
 
 class FakeDiscovery {

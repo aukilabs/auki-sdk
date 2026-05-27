@@ -53,7 +53,7 @@ app_instance = ["dep:mac_address"]
 # only — the caller drives a tokio runtime; the SDK does not own one.
 # Opt-in because it's a fairly heavy dep set that not every consumer
 # needs.
-discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio", "dep:percent-encoding"]
+discovery_client = ["dep:reqwest", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio", "dep:percent-encoding"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity", default-features = false }
@@ -61,6 +61,7 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 
 # `wasm` feature
 getrandom = { version = "0.2", features = ["js"], optional = true }
@@ -110,7 +111,6 @@ prost = { version = "0.13", optional = true }
 # `Response::bytes_stream` for the SSE long-poll path used by
 # `discovery_client::subscribe`.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
-base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 auki-jcs = { path = "../auki-jcs", default-features = false, optional = true }
 # Parses Server-Sent Events from a `Stream<Item = Result<Bytes, _>>`
 # into a stream of typed SSE events. Picked over `reqwest-eventsource`

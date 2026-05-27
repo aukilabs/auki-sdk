@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — signaled WebRTC address helpers added.** The network crate now owns canonical `/auki-webrtc-signaling/.../p2p/...` formatting/parsing and exposes it to wasm for generated browser bindings.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-domain`](auki-domain/changelog.md) — DomainClusterManager auto-advertise bootstrap exposed to Swift.** Generated Swift hosts can now bootstrap a domain manager from listen addresses while the SDK resolves advertised multiaddrs.
 
 ### Nils's codex · May 25, HKT, 2026

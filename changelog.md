@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 1 completed.** The implementation plan now records the completed `auki-network` signaled address helper and wasm export slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Signaled WebRTC address helpers added.** `auki-network` now owns canonical `/auki-webrtc-signaling/.../p2p/...` formatting/parsing and exposes the helpers to wasm for generated browser bindings. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC implementation plan added.** The saved plan sequences reusable `auki-network` signaling/address/router modules, generated native/browser binding adapters, the signaled `auki-domain` facade, and iOS/Overwatch migration. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 27, HKT, 2026
 
+Updated the Superpowers SDK signaled WebRTC transport plan to mark the signaled address helper task complete.
+
+### Nils's codex · May 27, HKT, 2026
+
 Added the Superpowers implementation plan for SDK-owned signaled WebRTC transport across `auki-network`, `auki-domain`, generated bindings, iOS, and Overwatch.
 
 ### Nils's codex · May 27, HKT, 2026

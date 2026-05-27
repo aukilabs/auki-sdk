@@ -44,7 +44,7 @@
 - Modify: `crates/auki-network/src/wasm.rs`
 - Modify: `crates/auki-network/bindings/javascript/test/framed-handler.test.mjs.tmpl`
 
-- [ ] **Step 1: Write the failing Rust tests**
+- [x] **Step 1: Write the failing Rust tests**
 
 Add tests in `signaled_address.rs`:
 
@@ -78,13 +78,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p auki-network signaled_address -- --nocapture`
 
 Expected: fail to compile because `signaled_address` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `signaled_address.rs` with:
 
@@ -156,7 +156,7 @@ pub fn parse_signaled_address(address: &str) -> Result<ParsedSignaledAddress, Si
 
 Add `pub mod signaled_address;` and `pub use signaled_address::*;` in `lib.rs`.
 
-- [ ] **Step 4: Expose wasm helpers**
+- [x] **Step 4: Expose wasm helpers**
 
 Add to `wasm.rs`:
 
@@ -179,7 +179,7 @@ pub fn parse_signaled_address_json(address: String) -> Result<String, JsValue> {
 }
 ```
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -190,7 +190,7 @@ cargo check -p auki-network --target wasm32-unknown-unknown --no-default-feature
 
 Expected: tests pass and wasm check succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-network/src/signaled_address.rs crates/auki-network/src/lib.rs crates/auki-network/src/wasm.rs crates/auki-network/bindings/javascript/test/framed-handler.test.mjs.tmpl

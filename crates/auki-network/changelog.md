@@ -6,6 +6,12 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+**Signaled WebRTC address helpers added.** `auki-network` now owns the canonical `/auki-webrtc-signaling/<discovery-url>/p2p/<peer-id>` address formatter/parser and exposes the helpers to wasm for generated JavaScript packages. The helper normalizes trailing slashes, validates empty fields and malformed base64url payloads, and keeps the browser signaling address contract out of app code.
+
+Tests: red/green `cargo test -p auki-network signaled_address -- --nocapture`; `cargo check -p auki-network --target wasm32-unknown-unknown --no-default-features --features wasm`.
+
 ### Nils's codex · May 25, HKT, 2026
 
 **Binding runtime-pair smokes refresh peer updates while connecting.** The Rust full-surface helper and generated Python smoke now reapply the same allowed-peer update while waiting for both runtimes to connect, use a wider local libp2p startup timeout, and the Rust helper gives shutdown's transport grace window time to finish before the next pair starts. This keeps local startup verification resilient to transient libp2p dial state while still exercising the generated `set_allowed_peers` path.

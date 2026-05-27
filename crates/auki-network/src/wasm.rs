@@ -99,6 +99,26 @@ pub fn auki_network_protocols_json() -> Result<String, JsValue> {
     .map_err(json_error)
 }
 
+#[wasm_bindgen(js_name = formatSignaledAddress)]
+pub fn format_signaled_address_js(
+    discovery_url: String,
+    peer_id: String,
+) -> Result<String, JsValue> {
+    crate::signaled_address::format_signaled_address(discovery_url, peer_id)
+        .map_err(|err| js_error(err.to_string()))
+}
+
+#[wasm_bindgen(js_name = parseSignaledAddressJson)]
+pub fn parse_signaled_address_json(address: String) -> Result<String, JsValue> {
+    let parsed = crate::signaled_address::parse_signaled_address(&address)
+        .map_err(|err| js_error(err.to_string()))?;
+    serde_json::to_string(&serde_json::json!({
+        "discovery_url": parsed.discovery_url,
+        "peer_id": parsed.peer_id,
+    }))
+    .map_err(json_error)
+}
+
 #[wasm_bindgen]
 pub struct DiscoveryDirectoryClient {
     base_url: String,

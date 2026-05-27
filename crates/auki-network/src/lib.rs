@@ -21,6 +21,9 @@ compile_error!(
 pub mod core;
 pub use core::*;
 
+pub mod signaled_address;
+pub use signaled_address::*;
+
 pub mod participant;
 pub use participant::ParticipantInfo;
 

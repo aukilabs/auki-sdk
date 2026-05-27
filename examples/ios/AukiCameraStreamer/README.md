@@ -8,15 +8,22 @@ requests so Overwatch can subscribe to the same cluster.
 Generate local Swift bindings and protobuf bindings from the repository root:
 
 ```bash
-just generate-swift-bindings auki-network
-just generate-swift-bindings auki-domain
-just generate-swift-bindings auki-registry
-just generate-swift-bindings auki-time
-just generate-swift-bindings auki-logs
-just generate-swift-bindings auki-layout
-just generate-swift-bindings auki-manifests
+python3 scripts/bindings/generate_bindings.py generate swift auki-domain
+python3 scripts/bindings/generate_bindings.py generate swift auki-network
+python3 scripts/bindings/generate_bindings.py generate swift auki-registry
+python3 scripts/bindings/generate_bindings.py generate swift auki-time
+python3 scripts/bindings/generate_bindings.py generate swift auki-logs
+python3 scripts/bindings/generate_bindings.py generate swift auki-layout
+python3 scripts/bindings/generate_bindings.py generate swift auki-manifests
 scripts/generate-swift-proto.sh
 xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml
+```
+
+Start Overwatch from the repository root:
+
+```bash
+npm --prefix examples/overwatch install
+npm --prefix examples/overwatch run dev
 ```
 
 `bindings/` is ignored, so the Swift packages above must exist locally before
@@ -40,3 +47,13 @@ clock, logged as generated `CameraFrame` bytes, and streamed to accepted domain
 camera stream consumers. The app also renders the latest local JPEG in the
 Preview section so operators can confirm the camera feed without subscribing
 from Overwatch.
+
+Manual E2E flow:
+
+1. Launch iOS app on device.
+2. Set the same Discovery URL Overwatch uses.
+3. Start the app with cluster name ios-camera.
+4. Open Overwatch.
+5. Join cluster ios-camera.
+6. Select the iOS camera sensor.
+7. Confirm the preview updates from the iOS stream.

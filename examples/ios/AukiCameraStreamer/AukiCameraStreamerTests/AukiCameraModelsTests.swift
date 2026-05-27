@@ -2,6 +2,20 @@ import XCTest
 @testable import AukiCameraStreamer
 
 final class AukiCameraModelsTests: XCTestCase {
+    @MainActor
+    func testViewModelExposesRequiredInitialOperatorState() {
+        let viewModel = CameraStreamerViewModel()
+
+        XCTAssertEqual(viewModel.clusterName, "ios-camera")
+        XCTAssertEqual(viewModel.discoveryUrl, "http://192.168.9.130:8080")
+        XCTAssertTrue(viewModel.loggingEnabled)
+        XCTAssertTrue(viewModel.streamingEnabled)
+        XCTAssertEqual(viewModel.peerId, "")
+        XCTAssertFalse(viewModel.isRunning)
+        XCTAssertEqual(viewModel.statusText, "Stopped")
+        XCTAssertNil(viewModel.lastPreviewImage)
+    }
+
     func testDescriptorUsesPeerAndSessionStableIds() {
         let descriptor = AukiCameraDefaults.descriptor(peerId: "peer-a", sessionId: "session-b")
         XCTAssertEqual(descriptor.sensorId, "peer-a/session-b/camera")

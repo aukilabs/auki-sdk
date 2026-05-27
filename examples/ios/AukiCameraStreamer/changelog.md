@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Operator status and manual E2E runbook completed.** The view model now exposes the Task 7 control surface defaults, bridges the camera preview through `lastPreviewImage`, polls session status for session id, accepted stream count, logged frame count, last frame timestamp, and last error, and the SwiftUI status section shows those live values without instructional copy. The README now documents the exact binding/protobuf/project generation commands, Overwatch startup commands, and the manual device-to-Overwatch verification flow.
+
+Checks: `xcodebuild build -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-build-derived-data`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data`; `git diff --check`; `plutil -lint examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj/project.pbxproj`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Capture lifecycle races hardened.** The view model now cancels and drains in-flight frame forwarding tasks before session shutdown, rechecks startup cancellation after camera permission returns, and the capture service rolls back a partially-added camera input if video output configuration fails.
 
 Checks: `xcodebuild build -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-build-derived-data`.

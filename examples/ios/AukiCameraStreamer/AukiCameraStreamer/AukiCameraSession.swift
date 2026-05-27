@@ -12,6 +12,14 @@ enum AukiCameraSessionError: Error {
     case timestampOutOfRange(UInt64)
 }
 
+struct AukiCameraSessionStatus: Equatable {
+    let sessionId: String
+    let acceptedStreamCount: Int
+    let loggedFrameCount: Int
+    let lastFrameTimestampNs: UInt64?
+    let lastErrorMessage: String?
+}
+
 struct AukiCameraSessionCatalog: Equatable {
     let descriptor: CameraSensorDescriptor
     let sensorHash: String
@@ -124,6 +132,10 @@ actor AukiCameraSession {
     private var loggingEnabled: Bool
     private var streamingEnabled: Bool
     private var streamPollTask: Task<Void, Never>?
+    private var acceptedStreamCount = 0
+    private var loggedFrameCount = 0
+    private var lastFrameTimestampNs: UInt64?
+    private var lastErrorMessage: String?
 
     private init(
         peerId: String,
@@ -254,23 +266,42 @@ actor AukiCameraSession {
     }
 
     func handleCapturedFrame(_ frame: CapturedCameraFrame) async throws {
-        try Task.checkCancellation()
-        let payload = try CameraFrameCodec.encode(jpegBytes: frame.jpegBytes)
-        if loggingEnabled {
-            guard frame.timestampNs <= UInt64(Int64.max) else {
-                throw AukiCameraSessionError.timestampOutOfRange(frame.timestampNs)
+        do {
+            try Task.checkCancellation()
+            let payload = try CameraFrameCodec.encode(jpegBytes: frame.jpegBytes)
+            lastFrameTimestampNs = frame.timestampNs
+            if loggingEnabled {
+                guard frame.timestampNs <= UInt64(Int64.max) else {
+                    throw AukiCameraSessionError.timestampOutOfRange(frame.timestampNs)
+                }
+                try log.append(timestampNs: Int64(frame.timestampNs), payload: payload)
+                loggedFrameCount += 1
             }
-            try log.append(timestampNs: Int64(frame.timestampNs), payload: payload)
-        }
-        try Task.checkCancellation()
-        if streamingEnabled {
-            try await fanout.pushEncodedPayload(timestampNs: frame.timestampNs, payload: payload)
+            try Task.checkCancellation()
+            if streamingEnabled {
+                try await fanout.pushEncodedPayload(timestampNs: frame.timestampNs, payload: payload)
+            }
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            throw error
         }
     }
 
     func setRuntimeOptions(loggingEnabled: Bool, streamingEnabled: Bool) {
         self.loggingEnabled = loggingEnabled
         self.streamingEnabled = streamingEnabled
+    }
+
+    func status() -> AukiCameraSessionStatus {
+        AukiCameraSessionStatus(
+            sessionId: sessionId,
+            acceptedStreamCount: acceptedStreamCount,
+            loggedFrameCount: loggedFrameCount,
+            lastFrameTimestampNs: lastFrameTimestampNs,
+            lastErrorMessage: lastErrorMessage
+        )
     }
 
     func stop() async throws {
@@ -337,7 +368,9 @@ actor AukiCameraSession {
                     manifestJson: catalog.streamManifestJson()
                 )
                 await fanout.accept(streamId: String(streamId))
+                acceptedStreamCount += 1
             } catch {
+                lastErrorMessage = error.localizedDescription
                 try? manager.declineStreamOpen(responderId: responderId, reason: "sensor_unavailable")
             }
         }

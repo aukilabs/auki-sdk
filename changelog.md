@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**iOS camera operator status and manual E2E runbook completed.** `AukiCameraStreamer` now shows live session/frame/error values in its SwiftUI control surface and documents the binding, Overwatch, and device verification flow. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **iOS camera capture lifecycle races hardened.** `AukiCameraStreamer` now drains pending frame forwarding before session shutdown, respects stop during camera permission, and rolls back partial AVFoundation setup failures. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

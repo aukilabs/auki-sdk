@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — operator status and manual E2E runbook completed.** The example now surfaces live session/frame/error values in SwiftUI and documents the binding, Overwatch, and device verification flow.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — capture lifecycle races hardened.** The example now drains frame-forwarding tasks before shutdown, avoids starting sessions after canceled permission prompts, and rolls back partial capture setup failures.
 
 ### Nils's codex · May 27, HKT, 2026

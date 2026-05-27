@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — AukiCameraStreamer operator status and manual E2E runbook completed.** The native producer now shows live session/frame/error values and documents the binding, Overwatch, and device verification flow.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`ios`](ios/changelog.md) — AukiCameraStreamer capture lifecycle races hardened.** The native producer now drains pending frame forwarding before shutdown, respects stop during camera permission, and rolls back partial AVFoundation setup failures.
 
 ### Nils's codex · May 27, HKT, 2026

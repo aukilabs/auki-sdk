@@ -3,8 +3,8 @@ import UIKit
 
 @MainActor
 final class CameraStreamerViewModel: ObservableObject {
-    @Published var clusterName = "auki-camera"
-    @Published var discoveryUrl = "http://127.0.0.1:8091"
+    @Published var clusterName: String = "ios-camera"
+    @Published var discoveryUrl: String = "http://192.168.9.130:8080"
     @Published var loggingEnabled = true {
         didSet {
             updateSessionRuntimeOptions()
@@ -17,12 +17,22 @@ final class CameraStreamerViewModel: ObservableObject {
     }
     @Published private(set) var peerId = ""
     @Published private(set) var isRunning = false
-    @Published private(set) var statusText = "Idle"
-    @Published private(set) var previewImage: UIImage?
+    @Published private(set) var statusText = "Stopped"
+    @Published private(set) var lastPreviewImage: UIImage?
+    @Published private(set) var sessionId = ""
+    @Published private(set) var acceptedStreamCount = 0
+    @Published private(set) var loggedFrameCount = 0
+    @Published private(set) var lastFrameTimestampNs: UInt64?
+    @Published private(set) var lastErrorMessage = ""
+
+    var previewImage: UIImage? {
+        lastPreviewImage
+    }
 
     private var session: AukiCameraSession?
     private let captureService: CameraCaptureService
     private var startupTask: Task<Void, Never>?
+    private var statusPollingTask: Task<Void, Never>?
     private var frameForwardingTasks: [UUID: Task<Void, Never>] = [:]
     private var startupGeneration = UUID()
 
@@ -47,7 +57,8 @@ final class CameraStreamerViewModel: ObservableObject {
         isRunning = true
         peerId = "pending"
         statusText = "Starting"
-        previewImage = nil
+        lastPreviewImage = nil
+        resetSessionStatus()
         let generation = UUID()
         startupGeneration = generation
 
@@ -75,6 +86,7 @@ final class CameraStreamerViewModel: ObservableObject {
 
                 self.session = session
                 captureService.setTimestampProvider { session.nowNs() }
+                await refreshSessionStatus(session: session, generation: generation)
                 try await captureService.start()
                 guard generation == startupGeneration, !Task.isCancelled else {
                     await captureService.stop()
@@ -86,6 +98,7 @@ final class CameraStreamerViewModel: ObservableObject {
                 updateSessionRuntimeOptions()
                 peerId = session.peerId
                 statusText = "Running"
+                startStatusPolling(session: session, generation: generation)
             } catch {
                 await captureService.stop()
                 captureService.setTimestampProvider(nil)
@@ -97,6 +110,8 @@ final class CameraStreamerViewModel: ObservableObject {
                 startupTask = nil
                 peerId = ""
                 isRunning = false
+                resetSessionStatus()
+                lastErrorMessage = error.localizedDescription
                 statusText = "Start failed: \(error.localizedDescription)"
             }
         }
@@ -106,6 +121,7 @@ final class CameraStreamerViewModel: ObservableObject {
         startupGeneration = UUID()
         startupTask?.cancel()
         startupTask = nil
+        stopStatusPolling()
         statusText = "Stopping"
         let session = self.session
         self.session = nil
@@ -117,10 +133,13 @@ final class CameraStreamerViewModel: ObservableObject {
             try await session?.stop()
             peerId = ""
             isRunning = false
+            resetSessionStatus()
             statusText = "Stopped"
         } catch {
             peerId = ""
             isRunning = false
+            resetSessionStatus()
+            lastErrorMessage = error.localizedDescription
             statusText = "Stop failed: \(error.localizedDescription)"
         }
     }
@@ -150,12 +169,47 @@ final class CameraStreamerViewModel: ObservableObject {
             )
         }
     }
+
+    private func startStatusPolling(session: AukiCameraSession, generation: UUID) {
+        statusPollingTask?.cancel()
+        statusPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshSessionStatus(session: session, generation: generation)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
+    private func stopStatusPolling() {
+        statusPollingTask?.cancel()
+        statusPollingTask = nil
+    }
+
+    private func refreshSessionStatus(session: AukiCameraSession, generation: UUID) async {
+        let status = await session.status()
+        guard generation == startupGeneration, !Task.isCancelled else {
+            return
+        }
+        sessionId = status.sessionId
+        acceptedStreamCount = status.acceptedStreamCount
+        loggedFrameCount = status.loggedFrameCount
+        lastFrameTimestampNs = status.lastFrameTimestampNs
+        lastErrorMessage = status.lastErrorMessage ?? lastErrorMessage
+    }
+
+    private func resetSessionStatus() {
+        sessionId = ""
+        acceptedStreamCount = 0
+        loggedFrameCount = 0
+        lastFrameTimestampNs = nil
+        lastErrorMessage = ""
+    }
 }
 
 extension CameraStreamerViewModel: CameraCaptureServiceDelegate {
     func cameraCaptureService(_ service: CameraCaptureService, didCapture frame: CapturedCameraFrame) {
         let generation = startupGeneration
-        previewImage = UIImage(data: frame.jpegBytes)
+        lastPreviewImage = UIImage(data: frame.jpegBytes)
         let taskId = UUID()
         let task = Task { [weak self] in
             await self?.forwardCapturedFrame(frame, generation: generation)
@@ -170,6 +224,7 @@ extension CameraStreamerViewModel: CameraCaptureServiceDelegate {
         guard session != nil || startupTask != nil else {
             return
         }
+        lastErrorMessage = error.localizedDescription
         statusText = "Capture error: \(error.localizedDescription)"
     }
 
@@ -181,12 +236,15 @@ extension CameraStreamerViewModel: CameraCaptureServiceDelegate {
         do {
             try Task.checkCancellation()
             try await session.handleCapturedFrame(frame)
+            await refreshSessionStatus(session: session, generation: generation)
         } catch is CancellationError {
             return
         } catch {
             guard generation == startupGeneration, !Task.isCancelled else {
                 return
             }
+            await refreshSessionStatus(session: session, generation: generation)
+            lastErrorMessage = error.localizedDescription
             statusText = "Frame error: \(error.localizedDescription)"
         }
     }

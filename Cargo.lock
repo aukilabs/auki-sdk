@@ -862,6 +862,7 @@ dependencies = [
  "auki-datatypes",
  "auki-identity",
  "auki-jcs",
+ "auki-manifests",
  "auki-time",
  "base64",
  "eventsource-stream",

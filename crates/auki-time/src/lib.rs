@@ -705,6 +705,7 @@ impl SessionClock {
         let session_id = session_id.into();
         let name = name.into();
         let registry_entry = ClockRegistryEntry {
+            peer_id: peer_id.clone(),
             clock_id: format!("{peer_id}/{session_id}/{name}"),
             body: ClockBody::MonotonicClock(ClockMeta {
                 unit: "ns".into(),

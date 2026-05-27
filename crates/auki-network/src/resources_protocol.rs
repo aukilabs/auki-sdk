@@ -318,6 +318,117 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+// ── New catalog-row building blocks (§1 of the post-#216 design) ────────────
+//
+// These types are purely additive — the legacy SensorStreamResource,
+// TransformEdgeResource, and PoseStreamResource remain untouched.
+// Task 3.4 will assemble ResourceEntry from these pieces and delete the
+// legacy shapes.
+
+/// Closed enum identifying which log variant a catalog row describes.
+/// Wire values are `snake_case` strings; unknown values are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Variant {
+    /// Row describes a sensor log stream.
+    SensorLog,
+    /// Row describes a pose log stream.
+    PoseLog,
+    /// Row describes a time-transform log stream.
+    TimeTransformLog,
+    /// Row describes a detection log stream.
+    DetectionLog,
+}
+
+/// Closed enum for the high-level sensor family.
+/// Wire values are `snake_case` strings; unknown values are rejected.
+/// Note: `point_cloud` is a sensor *type* (open string in `SensorBlock.type`),
+/// not a kind — it belongs inside a `kind = "camera"` or similar row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorKind {
+    /// Optical camera (RGB, depth, IR, …).
+    Camera,
+    /// Distance-measuring sensor (lidar, ultrasonic, …).
+    Rangefinder,
+    /// Radio-frequency sensor (UWB, WiFi CSI, …).
+    Rf,
+    /// Microphone or acoustic sensor.
+    Audio,
+    /// Articulated joint encoders.
+    JointEncoders,
+}
+
+/// Head-behavior block for live catalog rows.
+///
+/// `Rolling` rows retain only a sliding window of data; `Fixed` rows
+/// started at a known wall-clock timestamp and keep everything since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Head {
+    /// Sliding-window retention: only the most-recent `retention_ns`
+    /// nanoseconds of data are available.
+    Rolling {
+        /// Retention window in nanoseconds.
+        retention_ns: i64,
+    },
+    /// Fixed-start head: all data since `started_at_ns` is available.
+    Fixed {
+        /// Wall-clock timestamp (ns) when the producer started writing.
+        started_at_ns: i64,
+    },
+}
+
+/// Sealed bounds block — the time extent of data that is currently
+/// on-disk and retrievable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Extent {
+    /// Earliest available sample timestamp (ns, inclusive).
+    pub start_at_ns: i64,
+    /// Latest available sample timestamp (ns, inclusive).
+    pub finish_at_ns: i64,
+}
+
+/// Snapshot of currently-retrievable data volume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Available {
+    /// Total compressed bytes available for retrieval.
+    pub bytes: u64,
+    /// Total number of log entries available.
+    pub entries: u64,
+    /// Duration covered by available data, in nanoseconds.
+    pub duration_ns: i64,
+}
+
+/// Content block for `sensor_log` variant rows.
+///
+/// Carries the closed `kind`, the open-string `type` (e.g. `"rgb"`,
+/// `"point_cloud"`, `"depth"`), plus the content-addressed
+/// `sensor_id` / `sensor_hash` pair from the Sensor Registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensorBlock {
+    /// Closed sensor family.
+    pub kind: SensorKind,
+    /// Open-string sensor type within the family (e.g. `"rgb"`, `"depth"`).
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// Producer-scoped sensor identifier.
+    pub sensor_id: String,
+    /// Content-addressed Sensor Registry hash.
+    pub sensor_hash: String,
+}
+
+/// Content block for `pose_log` variant rows.
+///
+/// Carries the writer-mode hint from the Pose Log manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseBlock {
+    /// Whether the transform is stationary (`rigid`) or time-varying (`movable`).
+    pub writer_mode: auki_manifests::PoseWriterMode,
+}
+
+// ── End of new catalog-row building blocks ──────────────────────────────────
+
 /// Failure modes for the framed read/write helpers below.
 #[derive(Debug, Error)]
 pub enum ResourcesProtocolError {
@@ -543,5 +654,113 @@ mod tests {
         assert_eq!(ResourceKind::SensorStream.as_str(), "sensor_stream");
         assert_eq!(ResourceKind::TransformEdge.as_str(), "transform_edge");
         assert_eq!(ResourceKind::PoseStream.as_str(), "pose_stream");
+    }
+}
+
+#[cfg(test)]
+mod new_blocks_tests {
+    use super::*;
+
+    fn canon<T: serde::Serialize>(v: &T) -> String {
+        let value = serde_json::to_value(v).unwrap();
+        let bytes = auki_jcs::canonicalize(&value);
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn variant_serializes_as_snake_case_strings() {
+        assert_eq!(canon(&Variant::SensorLog), r#""sensor_log""#);
+        assert_eq!(canon(&Variant::PoseLog), r#""pose_log""#);
+        assert_eq!(canon(&Variant::TimeTransformLog), r#""time_transform_log""#);
+        assert_eq!(canon(&Variant::DetectionLog), r#""detection_log""#);
+    }
+
+    #[test]
+    fn variant_rejects_unknown() {
+        let bad: Result<Variant, _> = serde_json::from_str(r#""foo_log""#);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn sensor_kind_closed_set() {
+        assert_eq!(canon(&SensorKind::Camera), r#""camera""#);
+        assert_eq!(canon(&SensorKind::Rangefinder), r#""rangefinder""#);
+        assert_eq!(canon(&SensorKind::Rf), r#""rf""#);
+        assert_eq!(canon(&SensorKind::Audio), r#""audio""#);
+        assert_eq!(canon(&SensorKind::JointEncoders), r#""joint_encoders""#);
+        let bad: Result<SensorKind, _> = serde_json::from_str(r#""point_cloud""#);
+        assert!(bad.is_err()); // point_cloud is now a sensor.type, not a kind
+    }
+
+    #[test]
+    fn head_rolling_canonical() {
+        let h = Head::Rolling {
+            retention_ns: 5_000_000_000,
+        };
+        assert_eq!(
+            canon(&h),
+            r#"{"kind":"rolling","retention_ns":5000000000}"#
+        );
+    }
+
+    #[test]
+    fn head_fixed_canonical() {
+        let h = Head::Fixed {
+            started_at_ns: 1733836800000000000,
+        };
+        assert_eq!(
+            canon(&h),
+            r#"{"kind":"fixed","started_at_ns":1733836800000000000}"#
+        );
+    }
+
+    #[test]
+    fn extent_canonical() {
+        let e = Extent {
+            start_at_ns: 100,
+            finish_at_ns: 200,
+        };
+        assert_eq!(canon(&e), r#"{"finish_at_ns":200,"start_at_ns":100}"#);
+    }
+
+    #[test]
+    fn available_canonical() {
+        let a = Available {
+            bytes: 3_000_000_000,
+            entries: 900,
+            duration_ns: 5_000_000_000,
+        };
+        assert_eq!(
+            canon(&a),
+            r#"{"bytes":3000000000,"duration_ns":5000000000,"entries":900}"#
+        );
+    }
+
+    #[test]
+    fn sensor_block_canonical() {
+        let b = SensorBlock {
+            kind: SensorKind::Camera,
+            r#type: "rgb".to_string(),
+            sensor_id: "head_left_rgb".to_string(),
+            sensor_hash: "abc123".to_string(),
+        };
+        assert_eq!(
+            canon(&b),
+            r#"{"kind":"camera","sensor_hash":"abc123","sensor_id":"head_left_rgb","type":"rgb"}"#
+        );
+    }
+
+    #[test]
+    fn pose_block_canonical() {
+        use auki_manifests::PoseWriterMode;
+        let b = PoseBlock {
+            writer_mode: PoseWriterMode::Rigid,
+        };
+        assert_eq!(canon(&b), r#"{"writer_mode":"rigid"}"#);
+
+        let b = PoseBlock {
+            writer_mode: PoseWriterMode::Movable,
+        };
+        assert_eq!(canon(&b), r#"{"writer_mode":"movable"}"#);
     }
 }

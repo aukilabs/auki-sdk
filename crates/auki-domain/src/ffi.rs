@@ -1,6 +1,6 @@
 use auki_identity::Wallet;
 use auki_network::{
-    PeerIdentity,
+    PeerIdentity, Swarm,
     registries_protocol::{RegistryEntryEnvelope, RegistryKind, RegistryRequest},
     resources_protocol::ResourcesResponse,
     sensors_protocol::SensorsResponse,
@@ -8,7 +8,7 @@ use auki_network::{
     stream_runtime::{
         StreamDispatch, StreamError, StreamProvider, StreamSubscription as TypedStreamSubscription,
     },
-    swarm::{SwarmConfig, build_swarm},
+    swarm::{Behaviour, SwarmConfig, build_swarm},
 };
 use auki_proto::detection::DetectionFrame;
 use futures::{StreamExt as _, channel::mpsc as futures_mpsc};
@@ -161,13 +161,89 @@ pub async fn bootstrap_domain_cluster_manager(
     .map_err(|err| BindingDomainError::Network {
         message: err.to_string(),
     })?;
+
+    bootstrap_domain_cluster_manager_with_swarm(
+        target_mode,
+        target_name,
+        identity,
+        parse_multiaddrs(advertise_multiaddrs)?,
+        discovery_url,
+        swarm,
+        daemon_info,
+    )
+    .await
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn bootstrap_domain_cluster_manager_auto_advertise(
+    target_mode: ClusterTargetMode,
+    target_name: String,
+    wallet_seed: Vec<u8>,
+    listen_addrs: Vec<String>,
+    advertise_multiaddrs_override: Vec<String>,
+    advertise_resolution_ms: u64,
+    discovery_url: String,
+    daemon_info: core::DaemonInfo,
+    agent_version: String,
+) -> Result<Arc<DomainClusterManager>, BindingDomainError> {
+    use std::time::Duration;
+
+    let wallet = Wallet::from_seed(&seed32(wallet_seed)?);
+    let identity = PeerIdentity::from_wallet(&wallet);
+    let parsed_listen = parse_multiaddrs(listen_addrs)?;
+    let mut swarm = build_swarm(
+        &identity,
+        SwarmConfig {
+            listen_addresses: parsed_listen,
+            agent_version,
+            enable_relay_server: false,
+        },
+    )
+    .map_err(|err| BindingDomainError::Network {
+        message: err.to_string(),
+    })?;
+
+    let override_addrs = parse_multiaddrs(advertise_multiaddrs_override)?;
+    let override_addrs_opt = if override_addrs.is_empty() {
+        None
+    } else {
+        Some(override_addrs.as_slice())
+    };
+    let local_multiaddrs = auki_network::swarm::resolve_advertise_multiaddrs(
+        &mut swarm,
+        override_addrs_opt,
+        Duration::from_millis(advertise_resolution_ms),
+    )
+    .await;
+
+    bootstrap_domain_cluster_manager_with_swarm(
+        target_mode,
+        target_name,
+        identity,
+        local_multiaddrs,
+        discovery_url,
+        swarm,
+        daemon_info,
+    )
+    .await
+}
+
+async fn bootstrap_domain_cluster_manager_with_swarm(
+    target_mode: ClusterTargetMode,
+    target_name: String,
+    identity: PeerIdentity,
+    local_multiaddrs: Vec<multiaddr::Multiaddr>,
+    discovery_url: String,
+    swarm: Swarm<Behaviour>,
+    daemon_info: core::DaemonInfo,
+) -> Result<Arc<DomainClusterManager>, BindingDomainError> {
     let stream_state = Arc::new(BindingDomainStreamState::new());
     let stream_provider = binding_domain_stream_provider(stream_state.clone());
 
     let manager = core::ClusterManager::bootstrap(
         cluster_target(target_mode, target_name),
         identity,
-        parse_multiaddrs(advertise_multiaddrs)?,
+        local_multiaddrs,
         discovery_url,
         swarm,
         stream_provider,

@@ -6,6 +6,10 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — DomainClusterManager auto-advertise bootstrap exposed to Swift.** Generated Swift hosts can now bootstrap a domain manager from listen addresses while the SDK resolves advertised multiaddrs.
+
 ### Nils's codex · May 25, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — core DaemonInfo now owns the generated binding record.** The domain UniFFI bootstrap no longer shadows the stable Rust `auki_domain::DaemonInfo` export while keeping generated Python and Swift `DaemonInfo` construction intact.

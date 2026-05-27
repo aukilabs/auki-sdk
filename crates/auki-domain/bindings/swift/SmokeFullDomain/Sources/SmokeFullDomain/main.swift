@@ -40,6 +40,37 @@ enum SmokeFullDomain {
         let membership = try manager.membershipJson()
         precondition(membership.contains("\"cluster_name\":\"\(clusterName)\""), "membership JSON missing cluster")
         try await manager.shutdown()
+
+        let autoSeed = Data(repeating: 52, count: 32)
+        let autoClusterName = "swift-smoke-auto"
+        let autoServer = try MockDiscoveryServer(
+            clusterName: autoClusterName,
+            managerPeerId: try peerIdFromWalletSeed(seed: autoSeed)
+        )
+        defer {
+            autoServer.stop()
+        }
+
+        let autoManager = try await bootstrapDomainClusterManagerAutoAdvertise(
+            targetMode: .create,
+            targetName: autoClusterName,
+            walletSeed: autoSeed,
+            listenAddrs: ["/ip4/127.0.0.1/tcp/0"],
+            advertiseMultiaddrsOverride: [],
+            advertiseResolutionMs: 1_000,
+            discoveryUrl: autoServer.baseUrl,
+            daemonInfo: DaemonInfo(
+                app: "swift-smoke",
+                name: "peer-52",
+                sessionId: "session-52",
+                sessionClockId: "legacy-clock-auto",
+                sessionClockHash: "legacy-clock-auto-hash",
+                appInstance: "00163eabcdf0"
+            ),
+            agentVersion: "auki-domain-swift-smoke/0.1"
+        )
+        precondition(autoManager.isManager(), "auto-advertise manager was not the creator")
+        try await autoManager.shutdown()
     }
 }
 

@@ -10,6 +10,38 @@ async fn native_cluster_lifecycle_is_exposed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_cluster_auto_advertise_lifecycle_is_exposed() {
+    // binding-surface: native cluster lifecycle with auto-advertised addresses
+    let server =
+        MockDiscoveryServer::spawn("binding-auto-advertise".to_string(), binding_peer_id(111));
+    let manager = auki_domain::bootstrap_domain_cluster_manager_auto_advertise(
+        auki_domain::ClusterTargetMode::Create,
+        "binding-auto-advertise".into(),
+        vec![111; 32],
+        vec!["/ip4/127.0.0.1/tcp/0".into()],
+        vec![],
+        1_000,
+        server.base_url(),
+        auki_domain::DaemonInfo {
+            app: "binding-test".into(),
+            name: "peer-111".into(),
+            session_id: "session-111".into(),
+            session_clock_id: "legacy-clock".into(),
+            session_clock_hash: "legacy-clock-hash".into(),
+            app_instance: "00163eabcdef".into(),
+        },
+        "auki-domain-binding-test/auto-advertise".into(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(manager.cluster_name(), "binding-auto-advertise");
+    assert!(manager.is_manager());
+    assert!(!manager.local_peer_id().is_empty());
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_manager_admission_is_exposed() {
     // binding-surface: native manager admission
     let (_server, manager) = bootstrap_binding_manager("binding-admit", 92).await;

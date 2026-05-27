@@ -36,7 +36,7 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - Cluster-handle `open_stream::<T>` delegating to `NetworkRuntime`.
 - Shared-reference, idempotent `shutdown`.
 - Shared JSON adapters for membership construction, filename/count reads, member admission, and deterministic successor election.
-- Native generated bindings for Python and Swift through UniFFI. The exported `DomainClusterManager` bootstraps with an internally-built network runtime and exposes cluster state, manager admission, diagnostics, membership events, participant info JSON, domain time and clock estimates, catalog/resource/registry providers, catalog/resource/registry fetches, camera/detection byte streams, and shutdown through binding-safe records.
+- Native generated bindings for Python and Swift through UniFFI. The exported `DomainClusterManager` bootstraps with an internally-built network runtime and exposes cluster state, manager admission, diagnostics, membership events, participant info JSON, domain time and clock estimates, catalog/resource/registry providers, catalog/resource/registry fetches, camera/detection byte streams, and shutdown through binding-safe records. Generated Swift hosts can either pass explicit advertised multiaddrs or call the auto-advertise bootstrap so the SDK resolves advertised listen addresses from a binding-safe listen-address list.
 - Browser generated bindings through wasm-bindgen for membership/election helpers and domain DTO validation helpers. The generated JavaScript package also exports `AukiDomainClient`, which composes a `requestFramed`-compatible `auki-network` browser peer for domain request/response flows.
 
 ## Public Re-exports
@@ -80,6 +80,8 @@ What is implemented today. See [`../README.md`](../README.md) for the crate-leve
 - `cluster_membership_peer_count_json`
 - `cluster_membership_admit_member_json`
 - `elect_successor_json`
+- `bootstrap_domain_cluster_manager`
+- `bootstrap_domain_cluster_manager_auto_advertise`
 
 ## Timekeeping
 

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Domain Swift auto-advertise bootstrap added.** `auki-domain` generated Swift hosts can now bootstrap `DomainClusterManager` from listen addresses while the SDK resolves advertised multiaddrs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Native iOS Producer Peer plan added.** The saved implementation plan sequences the `auki-domain` auto-advertise Swift bootstrap helper, Overwatch native `CameraFrame` decoding, and the generated-binding iOS camera streamer app that logs and streams camera frames. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

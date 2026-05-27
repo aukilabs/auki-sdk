@@ -48,6 +48,8 @@ pub struct PublishOfferInput {
     pub metadata: Option<Value>,
     /// Registry references needed to interpret the offer.
     pub registry_refs: Vec<RegistryReference>,
+    /// Access modes advertised by the offer.
+    pub access_modes: Vec<OfferAccessMode>,
     source_factory: Box<dyn PublishedByteSourceFactory>,
 }
 
@@ -120,6 +122,7 @@ impl PublishOfferInput {
             display_name: None,
             metadata: None,
             registry_refs: Vec::new(),
+            access_modes: vec![OfferAccessMode::Subscribe],
             source_factory: Box::new(source_factory),
         }
     }
@@ -139,6 +142,12 @@ impl PublishOfferInput {
     /// Set registry references needed to interpret this offer.
     pub fn with_registry_refs(mut self, registry_refs: Vec<RegistryReference>) -> Self {
         self.registry_refs = registry_refs;
+        self
+    }
+
+    /// Set advertised access modes for this offer.
+    pub fn with_access_modes(mut self, access_modes: Vec<OfferAccessMode>) -> Self {
+        self.access_modes = access_modes;
         self
     }
 
@@ -166,6 +175,7 @@ impl fmt::Debug for PublishOfferInput {
             .field("display_name", &self.display_name)
             .field("metadata", &self.metadata)
             .field("registry_refs", &self.registry_refs)
+            .field("access_modes", &self.access_modes)
             .finish_non_exhaustive()
     }
 }
@@ -308,9 +318,13 @@ fn create_published_offer(input: &PublishOfferInput) -> Result<Offer, PublishOff
     );
     object.insert(
         "access_modes".to_owned(),
-        Value::Array(vec![Value::String(
-            OfferAccessMode::Subscribe.as_str().to_owned(),
-        )]),
+        Value::Array(
+            input
+                .access_modes
+                .iter()
+                .map(|mode| Value::String(mode.as_str().to_owned()))
+                .collect(),
+        ),
     );
     object.insert("payload".to_owned(), input.payload.value().clone());
     object.insert(
@@ -402,6 +416,25 @@ mod tests {
         assert_eq!(offer.payload.payload_type, "example.bytes.v1");
         assert_eq!(offer.display_name.as_deref(), Some("Bytes"));
         assert_eq!(offer.metadata, Some(json!({"source": "test"})));
+    }
+
+    #[test]
+    fn creates_offer_with_explicit_access_modes() {
+        let input = PublishOfferInput::new(
+            DOMAIN_ID,
+            "bytes",
+            "example.bytes",
+            PayloadDescriptor::create("example.bytes.v1"),
+            || stream::iter([vec![1, 2, 3]]),
+        )
+        .with_access_modes(vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]);
+
+        let publication = input.into_publication().expect("publication");
+
+        assert_eq!(
+            publication.offer().access_modes,
+            vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
+        );
     }
 
     #[test]

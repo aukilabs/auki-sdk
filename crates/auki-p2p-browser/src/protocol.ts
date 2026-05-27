@@ -1,5 +1,6 @@
 import initProtocolWasm, {
   createOfferCatalogRequest as wasmCreateOfferCatalogRequest,
+  createGetRequest as wasmCreateGetRequest,
   createPeerBinding as wasmCreatePeerBinding,
   createPeerHandshake as wasmCreatePeerHandshake,
   createSubscribeRequest as wasmCreateSubscribeRequest,
@@ -7,6 +8,8 @@ import initProtocolWasm, {
   decodeLength as wasmDecodeLength,
   encodeJsonFrame as wasmEncodeJsonFrame,
   encodeLength as wasmEncodeLength,
+  parseGetRequest as wasmParseGetRequest,
+  parseGetResponse as wasmParseGetResponse,
   parseOfferCatalogRequest as wasmParseOfferCatalogRequest,
   parseOfferCatalogResponse as wasmParseOfferCatalogResponse,
   parsePeerBinding as wasmParsePeerBinding,
@@ -17,6 +20,7 @@ import initProtocolWasm, {
   parseSubscribeStartResult as wasmParseSubscribeStartResult,
   protocolConstants as wasmProtocolConstants,
   protocolVersion as wasmProtocolVersion,
+  validateGetResponseForRequest as wasmValidateGetResponseForRequest,
   validatePeerHandshakeAuthority as wasmValidatePeerHandshakeAuthority,
   validateSpatialMessageForOffer as wasmValidateSpatialMessageForOffer,
   validateSubscribeDataMessage as wasmValidateSubscribeDataMessage,
@@ -188,6 +192,48 @@ export async function parseOfferCatalogRequest(value: JsonObject): Promise<JsonO
 export async function parseOfferCatalogResponse(value: JsonObject): Promise<JsonObject> {
   return withProtocol(() =>
     expectJsonObject(wasmParseOfferCatalogResponse(value), "offer catalog response"),
+  );
+}
+
+export async function createGetRequest(
+  domainId: string,
+  offerId: string,
+  params?: JsonObject | null,
+  acceptedPayloadTypes: string[] = [],
+  maxPayloadBytes?: number | null,
+): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(
+      wasmCreateGetRequest(
+        domainId,
+        offerId,
+        params ?? undefined,
+        acceptedPayloadTypes,
+        maxPayloadBytes ?? undefined,
+      ),
+      "Get request",
+    ),
+  );
+}
+
+export async function parseGetRequest(value: JsonObject): Promise<JsonObject> {
+  return withProtocol(() => expectJsonObject(wasmParseGetRequest(value), "Get request"));
+}
+
+export async function parseGetResponse(value: JsonObject): Promise<JsonObject> {
+  return withProtocol(() => expectJsonObject(wasmParseGetResponse(value), "Get response"));
+}
+
+export async function validateGetResponseForRequest(
+  request: JsonObject,
+  response: JsonObject,
+  selectedPayloadType: string,
+): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(
+      wasmValidateGetResponseForRequest(request, response, selectedPayloadType),
+      "Get response validation",
+    ),
   );
 }
 

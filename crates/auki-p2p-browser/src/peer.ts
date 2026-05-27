@@ -6,25 +6,32 @@ import {
 } from "./bootstrap.js";
 import { type SeedStore, indexedDbSeedStore, loadOrCreateSeed, peerIdFromSeed } from "./identity.js";
 import {
+  createGetRequest,
   createOfferCatalogRequest,
   createPeerBinding,
   createPeerHandshake,
   createSubscribeRequest,
+  parseGetRequest,
+  parseGetResponse,
   parseOfferCatalogRequest,
   parseOfferCatalogResponse,
   parsePeerHandshake,
   parseSubscribeRequest,
   parseSubscribeStartResult,
+  validateGetResponseForRequest,
   validatePeerHandshakeAuthority,
   validateSubscribeDataMessage,
   validateSubscribeEndForOffer,
   validateSubscribeStartForRequest,
+  ProtocolWasmError,
   type JsonObject,
   type ProtocolWasmInitInput,
   initializeProtocolWasm,
 } from "./protocol.js";
 import {
   createLocalOfferCatalogResponse,
+  createGetFailure,
+  createGetSuccess,
   createPublicationSpatialMessage,
   createPublishedOffer,
   createSubscribeAccept,
@@ -36,6 +43,7 @@ import {
   requestAcceptsPayload,
   stringField,
   toAsyncIterable,
+  type ByteSourceInput,
   type LoadedOffer,
   type LocalOfferPublication,
   type OfferSummary,
@@ -74,6 +82,15 @@ export type SubscribeRequest = {
   maxMessageBytes?: number;
 };
 
+export type GetRequest = {
+  peerId: string;
+  domainId: string;
+  offerId: string;
+  params?: JsonObject;
+  acceptedPayloadTypes?: string[];
+  maxPayloadBytes?: number;
+};
+
 export type SpatialMessage = JsonObject;
 
 export type AukiBrowserPeerConfig = {
@@ -93,6 +110,7 @@ export interface AukiBrowserPeer {
   connectBootstrap(records: unknown | unknown[]): Promise<void>;
   listPeers(): PeerSummary[];
   listOffers(peerId?: string): Promise<OfferSummary[]>;
+  get(request: GetRequest): Promise<SpatialMessage>;
   subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>;
   publishOffer(options: PublishOfferOptions): Promise<PublicationHandle>;
   stop(): Promise<void>;
@@ -125,6 +143,7 @@ export async function createAukiBrowserPeer(
 
 const LIFECYCLE_PROTOCOL_ID = "/auki/cluster-lifecycle/0.0.1";
 const OFFER_CATALOG_PROTOCOL_ID = "/auki/offer-catalog/0.0.1";
+const GET_PROTOCOL_ID = "/auki/get/0.0.1";
 const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const SUBSCRIBE_END_TYPE = "auki.subscribe_end.v1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
@@ -190,6 +209,42 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       ...(peerId ? [] : this.localOfferSummaries()),
       ...offers.flat().map(({ raw: _raw, ...summary }) => summary),
     ];
+  }
+
+  async get(request: GetRequest): Promise<SpatialMessage> {
+    await this.ensureStarted();
+    const peer = this.requirePeer(request.peerId);
+    const offer = await this.requireRemoteOffer(peer, request.domainId, request.offerId);
+    if (!offer.accessModes.includes("get")) {
+      throw new Error(`Offer ${request.domainId}/${request.offerId} does not advertise Get`);
+    }
+    const selectedPayloadType = offer.payloadType ?? request.acceptedPayloadTypes?.[0];
+    if (!selectedPayloadType) {
+      throw new Error(`Offer ${request.domainId}/${request.offerId} has no payload type`);
+    }
+
+    const getRequest = await createGetRequest(
+      request.domainId,
+      request.offerId,
+      request.params,
+      request.acceptedPayloadTypes ?? [selectedPayloadType],
+      request.maxPayloadBytes,
+    );
+    const stream = await this.transport.dialProtocol(
+      peer.peerId,
+      peer.dialAddresses,
+      GET_PROTOCOL_ID,
+    );
+    const reader = new JsonFrameReader(stream);
+
+    try {
+      await writeJsonFrame(stream, getRequest, DEFAULT_FRAME_BODY_LIMIT);
+      const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      const response = await parseGetResponse(frame.value);
+      return await validateGetResponseForRequest(getRequest, response, selectedPayloadType);
+    } finally {
+      await closeStream(stream);
+    }
   }
 
   async *subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage> {
@@ -351,6 +406,21 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
   }
 
+  private async requireRemoteOffer(
+    peer: PeerSummary,
+    domainId: string,
+    offerId: string,
+  ): Promise<LoadedOffer> {
+    const offers = await this.loadOffers(peer);
+    const offer = offers.find(
+      (candidate) => candidate.domainId === domainId && candidate.offerId === offerId,
+    );
+    if (!offer) {
+      throw new Error(`Unknown offer ${domainId}/${offerId} for peer ${peer.peerId}`);
+    }
+    return offer;
+  }
+
   private requirePeer(peerId: string): PeerSummary {
     const peer = this.peers.get(peerId);
     if (!peer) {
@@ -369,6 +439,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       { maxInboundStreams: 32 },
     );
     await this.transport.registerProtocolHandler(
+      GET_PROTOCOL_ID,
+      (stream) => this.serveGet(stream),
+      { maxInboundStreams: 64 },
+    );
+    await this.transport.registerProtocolHandler(
       SUBSCRIBE_PROTOCOL_ID,
       (stream) => this.serveSubscribe(stream),
       { maxInboundStreams: 64 },
@@ -381,6 +456,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       return;
     }
     await this.transport.unregisterProtocolHandler(OFFER_CATALOG_PROTOCOL_ID);
+    await this.transport.unregisterProtocolHandler(GET_PROTOCOL_ID);
     await this.transport.unregisterProtocolHandler(SUBSCRIBE_PROTOCOL_ID);
     this.inboundHandlersRegistered = false;
   }
@@ -391,6 +467,88 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
       const request = await parseOfferCatalogRequest(frame.value);
       await writeJsonFrame(stream, await this.localOfferCatalogResponse(request), DEFAULT_FRAME_BODY_LIMIT);
+    } finally {
+      await closeStream(stream);
+    }
+  }
+
+  private async serveGet(stream: BrowserProtocolStream): Promise<void> {
+    const reader = new JsonFrameReader(stream);
+    let request: JsonObject | undefined;
+    try {
+      const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      request = await parseGetRequest(frame.value);
+      const publication = this.localPublications.get(
+        offerKey(stringField(request, "domain_id"), stringField(request, "offer_id")),
+      );
+
+      if (!publication || publication.stopped) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "offer.unknown_offer"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+      if (!publication.offer.accessModes.includes("get")) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "offer.unsupported_access_mode"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+      if (!requestAcceptsPayload(request, publication.offer.payloadType)) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "offer.unsupported_payload_type"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+
+      const chunk = await firstChunk(publication.source);
+      if (!chunk) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "offer.temporarily_unavailable"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+
+      const selectedPayloadType = publication.offer.payloadType;
+      if (!selectedPayloadType) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "offer.unsupported_payload_type"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+
+      const message = await createPublicationSpatialMessage(publication, chunk);
+      const response = await createGetSuccess(message);
+      try {
+        await validateGetResponseForRequest(request, response, selectedPayloadType);
+      } catch (error) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, protocolFailureCode(error)),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+      await writeJsonFrame(stream, response, DEFAULT_FRAME_BODY_LIMIT);
+    } catch (error) {
+      if (request) {
+        await writeJsonFrame(
+          stream,
+          await createGetFailure(request, "transport.failed"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        ).catch(() => undefined);
+      }
+      throw error;
     } finally {
       await closeStream(stream);
     }
@@ -499,6 +657,13 @@ async function closeStream(stream: BrowserProtocolStream): Promise<void> {
   await stream.close();
 }
 
+async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefined> {
+  for await (const chunk of toAsyncIterable(source)) {
+    return chunk;
+  }
+  return undefined;
+}
+
 function nestedString(value: unknown, path: string[]): string | undefined {
   let current = value;
   for (const segment of path) {
@@ -512,4 +677,10 @@ function nestedString(value: unknown, path: string[]): string | undefined {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function protocolFailureCode(error: unknown): string {
+  return error instanceof ProtocolWasmError && error.failureCode
+    ? error.failureCode
+    : "transport.failed";
 }

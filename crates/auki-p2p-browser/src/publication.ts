@@ -1,4 +1,5 @@
 import {
+  parseGetResponse,
   parseOfferCatalogResponse,
   parseSubscribeStartResult,
   validateSubscribeEndForOffer,
@@ -27,6 +28,7 @@ export type PublishOfferOptions = {
   displayName?: string;
   metadata?: JsonObject;
   registryRefs?: JsonObject[];
+  accessModes?: string[];
 };
 
 export type PublicationHandle = {
@@ -53,7 +55,7 @@ export async function createPublishedOffer(
     domain_id: options.domainId,
     kind: options.kind,
     status: "available",
-    access_modes: ["subscribe"],
+    access_modes: options.accessModes ?? ["subscribe"],
     payload: { ...options.payload },
     registry_refs: options.registryRefs ?? [],
     updated_at: new Date().toISOString(),
@@ -125,6 +127,25 @@ export async function createSubscribeReject(
       offer_id: stringField(request, "offer_id"),
       retryable: code === "transport.failed" || code === "offer.temporarily_unavailable",
     },
+  });
+}
+
+export async function createGetFailure(request: JsonObject, code: string): Promise<JsonObject> {
+  return parseGetResponse({
+    type: "auki.get_response.v1",
+    error: {
+      code,
+      domain_id: stringField(request, "domain_id"),
+      offer_id: stringField(request, "offer_id"),
+      retryable: code === "transport.failed" || code === "offer.temporarily_unavailable",
+    },
+  });
+}
+
+export async function createGetSuccess(message: JsonObject): Promise<JsonObject> {
+  return parseGetResponse({
+    type: "auki.get_response.v1",
+    message,
   });
 }
 

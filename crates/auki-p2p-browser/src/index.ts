@@ -35,12 +35,14 @@ export type {
   PublicationHandle,
   PublishOfferOptions,
   SpatialMessage,
+  GetRequest,
   SubscribeRequest,
 } from "./peer.js";
 export { createAukiBrowserPeer } from "./peer.js";
 export {
   GENERATED_PREVIEW_OFFER_KIND,
   GENERATED_PREVIEW_PAYLOAD_TYPE,
+  PREVIEW_ACCESS_MODES,
   PREVIEW_OFFER_KIND,
   PREVIEW_PAYLOAD_ENCODING,
   PREVIEW_PAYLOAD_MEDIA_TYPE,

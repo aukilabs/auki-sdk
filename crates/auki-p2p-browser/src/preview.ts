@@ -5,6 +5,7 @@ export const PREVIEW_PAYLOAD_TYPE = "auki.camera.jpeg_frame.v1";
 export const PREVIEW_PAYLOAD_ENCODING = "binary";
 export const PREVIEW_PAYLOAD_MEDIA_TYPE = "image/jpeg";
 export const PREVIEW_PAYLOAD_SCHEMA_VERSION = "1";
+export const PREVIEW_ACCESS_MODES = ["get", "subscribe"] as const;
 
 export type PreviewOfferOptions = {
   domainId: string;
@@ -13,6 +14,7 @@ export type PreviewOfferOptions = {
   payloadType?: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
+  accessModes?: string[];
 };
 
 export type OfferPublisher = {
@@ -43,6 +45,7 @@ export function publishPreviewOffer(
     payload: previewPayloadDescriptor(options.payloadType),
     displayName: options.displayName,
     metadata: options.metadata,
+    accessModes: options.accessModes ?? [...PREVIEW_ACCESS_MODES],
   });
 }
 

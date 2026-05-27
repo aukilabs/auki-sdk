@@ -1,12 +1,17 @@
 //! Preview offer profile helpers over generic local offer publication.
 
 use crate::{
-    api::{AukiNode, AukiNodeError},
+    api::{AukiGetProviderError, AukiNode, AukiNodeError},
     publication::{PublishOfferInput, PublishedOfferHandle},
 };
-use auki_protocol::v1::offer::PayloadDescriptor;
+use auki_protocol::v1::{
+    base64url, error,
+    get::GetRequest,
+    message::{SPATIAL_MESSAGE_TYPE, SpatialMessage, SpatialMessageError},
+    offer::{OfferAccessMode, PayloadDescriptor},
+};
 use futures::Stream;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// Offer kind for live RGB camera preview frames.
 pub const PREVIEW_OFFER_KIND: &str = "auki.sensor.rgb_camera.preview";
@@ -30,6 +35,8 @@ pub struct PreviewOfferOptions {
     pub display_name: Option<String>,
     /// Optional non-authoritative metadata.
     pub metadata: Option<Value>,
+    /// Access modes advertised by the preview offer.
+    pub access_modes: Vec<OfferAccessMode>,
 }
 
 impl PreviewOfferOptions {
@@ -40,6 +47,7 @@ impl PreviewOfferOptions {
             offer_id: offer_id.into(),
             display_name: None,
             metadata: None,
+            access_modes: vec![OfferAccessMode::Subscribe],
         }
     }
 
@@ -54,6 +62,17 @@ impl PreviewOfferOptions {
         self.metadata = Some(metadata);
         self
     }
+
+    /// Set advertised access modes for this preview offer.
+    pub fn with_access_modes(mut self, access_modes: Vec<OfferAccessMode>) -> Self {
+        self.access_modes = access_modes;
+        self
+    }
+
+    /// Advertise one-shot Get snapshots and Subscribe streams.
+    pub fn with_snapshot_and_stream_access(self) -> Self {
+        self.with_access_modes(preview_snapshot_and_stream_access_modes())
+    }
 }
 
 /// Build the shared preview payload descriptor.
@@ -65,6 +84,11 @@ pub fn preview_payload_descriptor() -> PayloadDescriptor {
         "schema_version": PREVIEW_PAYLOAD_SCHEMA_VERSION,
     }))
     .expect("static preview payload descriptor is valid")
+}
+
+/// Access modes for a preview publisher that serves both snapshots and streams.
+pub fn preview_snapshot_and_stream_access_modes() -> Vec<OfferAccessMode> {
+    vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
 }
 
 /// Build generic publication input for the preview profile.
@@ -82,7 +106,8 @@ where
         PREVIEW_OFFER_KIND,
         preview_payload_descriptor(),
         source_factory,
-    );
+    )
+    .with_access_modes(options.access_modes);
     if let Some(display_name) = options.display_name {
         input = input.with_display_name(display_name);
     }
@@ -90,6 +115,40 @@ where
         input = input.with_metadata(metadata);
     }
     input
+}
+
+/// Build one preview spatial message from JPEG bytes.
+pub fn preview_spatial_message(
+    domain_id: impl Into<String>,
+    offer_id: impl Into<String>,
+    sequence: u64,
+    bytes: &[u8],
+    generated_at: Option<&str>,
+) -> Result<SpatialMessage, SpatialMessageError> {
+    let mut payload = preview_payload_descriptor()
+        .value()
+        .as_object()
+        .expect("static preview payload descriptor is a JSON object")
+        .clone();
+    payload.insert("bytes".to_owned(), Value::String(base64url::encode(bytes)));
+
+    let mut object = Map::new();
+    object.insert(
+        "type".to_owned(),
+        Value::String(SPATIAL_MESSAGE_TYPE.to_owned()),
+    );
+    object.insert("domain_id".to_owned(), Value::String(domain_id.into()));
+    object.insert("offer_id".to_owned(), Value::String(offer_id.into()));
+    object.insert("payload".to_owned(), Value::Object(payload));
+    object.insert("sequence".to_owned(), Value::String(sequence.to_string()));
+    if let Some(generated_at) = generated_at {
+        object.insert(
+            "generated_at".to_owned(),
+            Value::String(generated_at.to_owned()),
+        );
+    }
+
+    SpatialMessage::from_value(Value::Object(object))
 }
 
 /// Publish a preview offer through the generic native publication API.
@@ -105,6 +164,51 @@ where
     node.publish_offer(preview_offer_input(source_factory, options))
 }
 
+/// Publish a preview offer with one-shot Get snapshots and Subscribe streams.
+pub fn publish_preview_offer_with_snapshot<F, S, G>(
+    node: &mut AukiNode,
+    source_factory: F,
+    mut snapshot_factory: G,
+    options: PreviewOfferOptions,
+) -> Result<PublishedOfferHandle, AukiNodeError>
+where
+    F: FnMut() -> S + Send + 'static,
+    S: Stream<Item = Vec<u8>> + Send + 'static,
+    G: FnMut(&GetRequest, &str) -> Result<Vec<u8>, AukiGetProviderError> + Send + 'static,
+{
+    let domain_id = options.domain_id.clone();
+    let offer_id = options.offer_id.clone();
+    let handle = node.publish_offer(preview_offer_input(
+        source_factory,
+        options.with_snapshot_and_stream_access(),
+    ))?;
+
+    let provider_domain_id = domain_id.clone();
+    let provider_offer_id = offer_id.clone();
+    let mut next_sequence = 0_u64;
+    node.upsert_get_provider(
+        domain_id,
+        offer_id,
+        move |request: &GetRequest, now: &str| {
+            let sequence = next_sequence;
+            next_sequence = next_sequence
+                .checked_add(1)
+                .ok_or_else(|| AukiGetProviderError::new(error::MESSAGE_INVALID_ENVELOPE))?;
+            let bytes = snapshot_factory(request, now)?;
+            preview_spatial_message(
+                provider_domain_id.clone(),
+                provider_offer_id.clone(),
+                sequence,
+                bytes.as_slice(),
+                Some(now),
+            )
+            .map_err(|_| AukiGetProviderError::new(error::MESSAGE_INVALID_ENVELOPE))
+        },
+    )?;
+
+    Ok(handle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +218,7 @@ mod tests {
     use futures::stream;
     use std::sync::Arc;
 
+    const DOMAIN_ID: &str = "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs";
     const ISSUED_AT: &str = "2026-05-26T12:00:00Z";
 
     fn wallet(seed: u8) -> Arc<Wallet> {
@@ -192,7 +297,41 @@ mod tests {
             offers[0].payload.schema_version.as_deref(),
             Some(PREVIEW_PAYLOAD_SCHEMA_VERSION)
         );
+        assert_eq!(offers[0].access_modes, vec![OfferAccessMode::Subscribe]);
         assert_eq!(offers[0].display_name.as_deref(), Some("Preview Main"));
         assert_eq!(offers[0].metadata, Some(json!({"source": "generated"})));
+    }
+
+    #[test]
+    fn preview_snapshot_and_stream_offer_advertises_both_access_modes() {
+        let input = preview_offer_input(
+            || stream::iter([vec![0xff, 0xd8, 0xff, 0xd9]]),
+            PreviewOfferOptions::new(DOMAIN_ID, "preview-main").with_snapshot_and_stream_access(),
+        );
+        let publication = input.into_publication().expect("publication");
+
+        assert_eq!(
+            publication.offer().access_modes,
+            vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
+        );
+    }
+
+    #[test]
+    fn preview_spatial_message_wraps_jpeg_bytes() {
+        let message = preview_spatial_message(
+            DOMAIN_ID,
+            "preview-main",
+            7,
+            &[0xff, 0xd8, 0xff, 0xd9],
+            Some(ISSUED_AT),
+        )
+        .expect("preview message");
+
+        assert_eq!(message.domain_id, DOMAIN_ID);
+        assert_eq!(message.offer_id, "preview-main");
+        assert_eq!(message.sequence, Some(7));
+        assert_eq!(message.generated_at.as_deref(), Some(ISSUED_AT));
+        assert_eq!(message.payload.payload_type, PREVIEW_PAYLOAD_TYPE);
+        assert_eq!(message.payload.bytes, Some(vec![0xff, 0xd8, 0xff, 0xd9]));
     }
 }

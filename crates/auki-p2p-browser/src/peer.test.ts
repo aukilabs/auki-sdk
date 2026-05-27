@@ -6,12 +6,15 @@ import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
 import { publishPreviewOffer } from "./preview.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
+  createGetRequest,
   createOfferCatalogRequest,
   createPeerBinding,
   createPeerHandshake,
   createSubscribeRequest,
+  parseGetResponse,
   parseOfferCatalogResponse,
   parseSubscribeStartResult,
+  validateGetResponseForRequest,
   validateSubscribeDataMessage,
   validateSubscribeEndForOffer,
   type JsonObject,
@@ -197,6 +200,49 @@ describe("AukiBrowserPeer shell", () => {
     expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
       OFFER_CATALOG_PROTOCOL_ID,
       SUBSCRIBE_PROTOCOL_ID,
+    ]);
+  });
+
+  it("gets one spatial message over an RFC protocol stream", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const getFixture = await fixtureJson("v1_get.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const response = getFixture.positive.success_response.object as JsonObject;
+    const inputs = getFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(GET_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      const request = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      expect(request.value).toEqual(getFixture.positive.request.object);
+      await writeJsonFrame(stream, response, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    await expect(
+      peer.get({
+        peerId: "native-peer",
+        domainId: inputs.domain_id as string,
+        offerId: inputs.offer_id as string,
+        params: { frame: "latest" },
+        acceptedPayloadTypes: [inputs.selected_payload_type as string],
+        maxPayloadBytes: inputs.max_payload_bytes as number,
+      }),
+    ).resolves.toEqual(response.message);
+    expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
+      OFFER_CATALOG_PROTOCOL_ID,
+      GET_PROTOCOL_ID,
     ]);
   });
 
@@ -399,6 +445,53 @@ describe("AukiBrowserPeer shell", () => {
     expect(end.reason).toBe("complete");
   });
 
+  it("serves published offer bytes through inbound Get streams", async () => {
+    const fixture = await fixtureJson("v1_get.json");
+    const inputs = fixture.inputs as JsonObject;
+    const domainId = inputs.domain_id as string;
+    const offerId = "browser-bytes";
+    const payloadType = inputs.selected_payload_type as string;
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+    await peer.publishOffer({
+      source: () => [new Uint8Array([1, 2, 3])],
+      domainId,
+      offerId,
+      kind: "example.bytes",
+      payload: {
+        type: payloadType,
+        encoding: "binary",
+        media_type: "application/octet-stream",
+        schema_version: "1",
+      },
+      accessModes: ["get", "subscribe"],
+    });
+
+    const stream = await transport.openInbound("remote-peer", GET_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    const request = await createGetRequest(domainId, offerId, undefined, [payloadType], 4096);
+    await writeJsonFrame(stream, request, DEFAULT_FRAME_BODY_LIMIT);
+
+    const response = await parseGetResponse((await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value);
+    const message = await validateGetResponseForRequest(request, response, payloadType);
+
+    expect(message).toEqual(
+      expect.objectContaining({
+        type: "auki.spatial_message.v1",
+        domain_id: domainId,
+        offer_id: offerId,
+        sequence: "0",
+        payload: {
+          type: payloadType,
+          encoding: "binary",
+          media_type: "application/octet-stream",
+          schema_version: "1",
+          bytes: "AQID",
+        },
+      }),
+    );
+  });
+
   it("keeps preview publishing as a helper over generic offer publishing", async () => {
     const fixture = await fixtureJson("v1_offer_catalogs.json");
     const transport = new MemoryTransport("browser-peer", []);
@@ -416,7 +509,7 @@ describe("AukiBrowserPeer shell", () => {
         offerId: "browser-preview",
         kind: "auki.sensor.rgb_camera.preview",
         payloadType: "auki.camera.jpeg_frame.v1",
-        accessModes: ["subscribe"],
+        accessModes: ["get", "subscribe"],
       },
     ]);
   });
@@ -424,6 +517,7 @@ describe("AukiBrowserPeer shell", () => {
 
 const LIFECYCLE_PROTOCOL_ID = "/auki/cluster-lifecycle/0.0.1";
 const OFFER_CATALOG_PROTOCOL_ID = "/auki/offer-catalog/0.0.1";
+const GET_PROTOCOL_ID = "/auki/get/0.0.1";
 const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
 

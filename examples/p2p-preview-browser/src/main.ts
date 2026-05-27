@@ -21,6 +21,7 @@ type AppState = {
   peers: PeerSummary[];
   offers: OfferSummary[];
   selectedOffer?: OfferSummary;
+  snapshotsReceived: number;
   framesReceived: number;
   lastFrameAt?: Date;
   status: string;
@@ -32,6 +33,7 @@ type AppState = {
 const state: AppState = {
   peers: [],
   offers: [],
+  snapshotsReceived: 0,
   framesReceived: 0,
   status: "Idle",
   subscriptionToken: 0,
@@ -47,6 +49,7 @@ const els = {
   connectionStatus: element("connection-status"),
   previewImage: element<HTMLImageElement>("preview-image"),
   previewEmpty: element("preview-empty"),
+  snapshotsReceived: element("snapshots-received"),
   framesReceived: element("frames-received"),
   lastFrameAt: element("last-frame-at"),
   selectedOffer: element("selected-offer"),
@@ -91,10 +94,29 @@ async function connect(): Promise<void> {
     state.peers = peer.listPeers();
     state.offers = offers;
     state.selectedOffer = findPreviewOffer(offers);
+    state.snapshotsReceived = 0;
     state.framesReceived = 0;
     state.lastFrameAt = undefined;
-    state.status = state.selectedOffer ? "Connected" : "Connected, no preview offer";
+    if (state.selectedOffer?.accessModes.includes("get")) {
+      await getPreviewSnapshot(peer, state.selectedOffer);
+      state.status = "Connected, snapshot loaded";
+    } else {
+      state.status = state.selectedOffer ? "Connected" : "Connected, no preview offer";
+    }
   });
+}
+
+async function getPreviewSnapshot(peer: AukiBrowserPeer, offer: OfferSummary): Promise<void> {
+  const message = await peer.get({
+    peerId: offer.peerId,
+    domainId: offer.domainId,
+    offerId: offer.offerId,
+    acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+    maxPayloadBytes: 1_048_576,
+  });
+  renderFrame(previewFrameBytes(message));
+  state.snapshotsReceived += 1;
+  state.lastFrameAt = new Date();
 }
 
 async function subscribeToPreview(): Promise<void> {
@@ -145,6 +167,9 @@ async function stopPeer(): Promise<void> {
   state.peers = [];
   state.offers = [];
   state.selectedOffer = undefined;
+  state.snapshotsReceived = 0;
+  state.framesReceived = 0;
+  state.lastFrameAt = undefined;
 }
 
 async function loadBootstrapFile(): Promise<void> {
@@ -191,6 +216,7 @@ function renderFrame(bytes: Uint8Array): void {
 
 function render(): void {
   els.connectionStatus.textContent = state.status;
+  els.snapshotsReceived.textContent = state.snapshotsReceived.toString();
   els.framesReceived.textContent = state.framesReceived.toString();
   els.lastFrameAt.textContent = state.lastFrameAt
     ? state.lastFrameAt.toLocaleTimeString()
@@ -217,6 +243,7 @@ function renderPeers(peers: PeerSummary[]): void {
       peer.connected ? "yes" : "no",
       peer.dialAddresses.length.toString(),
     ]),
+    3,
   );
 }
 
@@ -228,17 +255,19 @@ function renderOffers(offers: OfferSummary[], selected: OfferSummary | undefined
       shortId(offer.domainId),
       offer.offerId,
       offer.payloadType ?? "unknown",
+      offer.accessModes.join(", "),
       selected === offer ? "selected" : "",
     ]),
+    5,
   );
 }
 
-function replaceRows(table: HTMLTableSectionElement, rows: string[][]): void {
+function replaceRows(table: HTMLTableSectionElement, rows: string[][], emptyColSpan: number): void {
   table.replaceChildren();
   if (rows.length === 0) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = emptyColSpan;
     cell.textContent = "None";
     row.append(cell);
     table.append(row);

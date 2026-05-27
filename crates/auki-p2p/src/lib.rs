@@ -74,7 +74,8 @@ pub use paths::{
 pub use preview::{
     PREVIEW_OFFER_KIND, PREVIEW_PAYLOAD_ENCODING, PREVIEW_PAYLOAD_MEDIA_TYPE,
     PREVIEW_PAYLOAD_SCHEMA_VERSION, PREVIEW_PAYLOAD_TYPE, PreviewOfferOptions, preview_offer_input,
-    preview_payload_descriptor, publish_preview_offer,
+    preview_payload_descriptor, preview_snapshot_and_stream_access_modes, preview_spatial_message,
+    publish_preview_offer, publish_preview_offer_with_snapshot,
 };
 pub use publication::{
     PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteSource,

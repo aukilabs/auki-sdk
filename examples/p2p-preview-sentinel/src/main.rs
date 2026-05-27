@@ -1,8 +1,9 @@
 use auki_identity::Wallet;
 use auki_p2p::{
-    AukiNode, AukiNodeError, AukiNodeEvent, AukiP2pNodeConfig, LifecycleInput,
-    LifecycleStreamDirection, LifecycleStreamGuardError, LocalDomainRegistration,
-    LocalPeerIdentity, PreviewOfferOptions, ServedPublishedSubscription, publish_preview_offer,
+    AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent, AukiP2pNodeConfig,
+    LifecycleInput, LifecycleStreamDirection, LifecycleStreamGuardError, LocalDomainRegistration,
+    LocalPeerIdentity, PreviewOfferOptions, ServedGet, ServedPublishedSubscription,
+    publish_preview_offer_with_snapshot,
 };
 use auki_protocol::v1::domain::{DOMAIN_NONCE_LEN, DomainDeclaration};
 use futures::stream;
@@ -58,9 +59,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
         AukiP2pNodeConfig::loopback_browser_reachable_development(),
     )?;
     node.upsert_local_domain(registration, &now)?;
-    publish_preview_offer(
+    let mut snapshot_sequence = 0_u64;
+    publish_preview_offer_with_snapshot(
         &mut node,
         generated_jpeg_source(config.frames_per_subscription),
+        move |_request, _now| {
+            let frame = generated_jpeg_frame(snapshot_sequence);
+            snapshot_sequence = snapshot_sequence.saturating_add(1);
+            Ok::<Vec<u8>, AukiGetProviderError>(frame)
+        },
         PreviewOfferOptions::new(domain_id.clone(), config.offer_id.clone())
             .with_display_name("Sentinel preview")
             .with_metadata(json!({
@@ -268,6 +275,8 @@ struct DemoStats {
     lifecycles_served: u64,
     duplicate_lifecycle_attempts: u64,
     offer_catalogs_served: u64,
+    gets_served: u64,
+    gets_rejected: u64,
     subscriptions_served: u64,
     subscriptions_rejected: u64,
     frames_sent: u64,
@@ -275,6 +284,15 @@ struct DemoStats {
 }
 
 impl DemoStats {
+    fn record_get(&mut self, served: ServedGet) {
+        if served.success {
+            self.gets_served = self.gets_served.saturating_add(1);
+        } else {
+            self.gets_rejected = self.gets_rejected.saturating_add(1);
+            self.last_failure = served.failure_code;
+        }
+    }
+
     fn record_served(&mut self, served: ServedPublishedSubscription) {
         if served.accepted {
             self.subscriptions_served = self.subscriptions_served.saturating_add(1);
@@ -326,6 +344,15 @@ async fn serve_inbound_once(
     {
         Ok(Ok(Some(_))) => {
             stats.offer_catalogs_served = stats.offer_catalogs_served.saturating_add(1);
+            return Ok(());
+        }
+        Ok(Ok(None)) | Err(_) => {}
+        Ok(Err(error)) => return Err(Box::new(error)),
+    }
+
+    match timeout(Duration::from_millis(100), node.serve_next_get(now)).await {
+        Ok(Ok(Some(served))) => {
+            stats.record_get(served);
             return Ok(());
         }
         Ok(Ok(None)) | Err(_) => {}
@@ -445,10 +472,12 @@ fn print_state(
         config.frames_per_subscription,
     );
     println!(
-        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} subscriptions={} rejected={} frames_sent={}",
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} subscription_rejected={} frames_sent={}",
         stats.lifecycles_served,
         stats.duplicate_lifecycle_attempts,
         stats.offer_catalogs_served,
+        stats.gets_served,
+        stats.gets_rejected,
         stats.subscriptions_served,
         stats.subscriptions_rejected,
         stats.frames_sent,

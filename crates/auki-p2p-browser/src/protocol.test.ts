@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   type JsonObject,
   ProtocolWasmError,
+  createGetRequest,
   createOfferCatalogRequest,
   createPeerBinding,
   createSubscribeRequest,
@@ -12,12 +13,15 @@ import {
   encodeJsonFrame,
   encodeLength,
   initializeProtocolWasm,
+  parseGetRequest,
+  parseGetResponse,
   parseOfferCatalogRequest,
   parseOfferCatalogResponse,
   parseSpatialMessage,
   parseSubscribeEnd,
   parseSubscribeRequest,
   parseSubscribeStartResult,
+  validateGetResponseForRequest,
   validateSpatialMessageForOffer,
   validateSubscribeDataMessage,
   validateSubscribeEndForOffer,
@@ -106,6 +110,46 @@ describe("auki-protocol-wasm adapter", () => {
     ).rejects.toMatchObject({
       name: "ProtocolWasmError",
       failureCode: "offer.invalid_catalog_response",
+    } satisfies Partial<ProtocolWasmError>);
+  });
+
+  it("creates and validates Get messages through Rust protocol code", async () => {
+    const fixture = await fixtureJson("v1_get.json");
+    const inputs = fixture.inputs as JsonObject;
+    const positive = fixture.positive as JsonObject;
+    const negative = fixture.negative as JsonObject;
+    const request = (positive.request as JsonObject).object as JsonObject;
+    const response = (positive.success_response as JsonObject).object as JsonObject;
+    const message = response.message as JsonObject;
+
+    await expect(
+      createGetRequest(
+        inputs.domain_id as string,
+        inputs.offer_id as string,
+        { frame: "latest" },
+        [inputs.selected_payload_type as string],
+        inputs.max_payload_bytes as number,
+      ),
+    ).resolves.toEqual(request);
+    await expect(parseGetRequest(request)).resolves.toEqual(request);
+    await expect(parseGetResponse(response)).resolves.toEqual(response);
+    await expect(
+      validateGetResponseForRequest(
+        request,
+        response,
+        inputs.selected_payload_type as string,
+      ),
+    ).resolves.toEqual(message);
+
+    await expect(
+      validateGetResponseForRequest(
+        request,
+        (negative.response_payload_type_mismatch as JsonObject).object as JsonObject,
+        inputs.selected_payload_type as string,
+      ),
+    ).rejects.toMatchObject({
+      name: "ProtocolWasmError",
+      failureCode: "message.invalid_payload",
     } satisfies Partial<ProtocolWasmError>);
   });
 

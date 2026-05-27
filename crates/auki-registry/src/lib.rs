@@ -20,6 +20,34 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// ─── Registry ID Validation ──────────────────────────────────────────────────
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RegistryIdError {
+    #[error("registry id is empty")]
+    Empty,
+    #[error("registry id contains disallowed character {0:?}")]
+    DisallowedChar(char),
+}
+
+/// Validate that a registry id is suitable for use as a `(peer_id, id)` key.
+///
+/// Rejects: empty strings, `>` (collides with the `->` separator in
+/// pose/time-transform resource_ids), `@` (collides with the detection
+/// separator), and whitespace. Forward slashes are allowed and treated
+/// as path separators downstream.
+pub fn validate_registry_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+    if id.is_empty() {
+        return Err(RegistryIdError::Empty);
+    }
+    for c in id.chars() {
+        if c == '>' || c == '@' || c.is_whitespace() {
+            return Err(RegistryIdError::DisallowedChar(c));
+        }
+    }
+    Ok(())
+}
+
 // ─── Shared References ───────────────────────────────────────────────────────
 
 /// Reference to a registry entry by (peer_id, id, content hash).
@@ -235,6 +263,10 @@ impl SensorRegistryEntry {
     pub fn hash(&self) -> String {
         auki_hash::hash_jcs_bytes(&self.canonical_bytes())
     }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
+    }
 }
 
 // ─── Sensor Log payload ──────────────────────────────────────────────────────
@@ -300,6 +332,10 @@ impl ClockRegistryEntry {
 
     pub fn hash(&self) -> String {
         auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
     }
 }
 
@@ -392,6 +428,10 @@ impl FrameRegistryEntry {
 
     pub fn hash(&self) -> String {
         auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
     }
 
     /// Validate that the [`AxisConvention`] is internally orthogonal —
@@ -565,6 +605,10 @@ impl DetectorRegistryEntry {
     }
     pub fn hash(&self) -> String {
         auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
     }
 }
 
@@ -1775,6 +1819,53 @@ mod tests {
         let ble_json = std::str::from_utf8(&rf.canonical_bytes()).unwrap().to_string();
         assert!(ble_json.contains(r#""kind":"rf""#), "rf kind: {ble_json}");
         assert!(ble_json.contains(r#""type":"bluetooth""#), "rf type: {ble_json}");
+    }
+}
+
+#[cfg(test)]
+mod id_charset_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_disallowed_chars() {
+        let bad_ids = ["foo>bar", "foo@bar", "foo bar", "foo\tbar", "foo\nbar"];
+        for bad in bad_ids {
+            let result = validate_registry_id(bad);
+            assert!(
+                matches!(result, Err(RegistryIdError::DisallowedChar(_))),
+                "id {bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_id() {
+        let result = validate_registry_id("");
+        assert_eq!(result, Err(RegistryIdError::Empty));
+    }
+
+    #[test]
+    fn allows_slash_underscore_dash_dot() {
+        for good in ["foo/bar", "foo_bar", "foo-bar", "a.b.c", "a/b/c", "head_left_rgb", "session/sdk_clock"] {
+            assert!(
+                validate_registry_id(good).is_ok(),
+                "id {good:?} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn each_entry_type_has_validate_id() {
+        // Just smoke — confirm each entry type exposes a validate_id function delegating to the helper.
+        assert!(SensorRegistryEntry::validate_id("head_left_rgb").is_ok());
+        assert!(ClockRegistryEntry::validate_id("session/sdk_clock").is_ok());
+        assert!(FrameRegistryEntry::validate_id("base_link").is_ok());
+        assert!(DetectorRegistryEntry::validate_id("yolo_v8").is_ok());
+
+        assert!(SensorRegistryEntry::validate_id("bad>id").is_err());
+        assert!(ClockRegistryEntry::validate_id("bad@id").is_err());
+        assert!(FrameRegistryEntry::validate_id("bad id").is_err());
+        assert!(DetectorRegistryEntry::validate_id("").is_err());
     }
 }
 

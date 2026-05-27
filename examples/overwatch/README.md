@@ -10,7 +10,7 @@ Run from the repository root:
 just overwatch
 ```
 
-`just overwatch` stages the generated `@aukilabs/auki-network`, `@aukilabs/auki-domain`, and `@aukilabs/auki-geometry` JavaScript/WASM packages into the example, installs the Park UI dependencies, and starts the Vite dev server on port 7880.
+`just overwatch` stages the generated `@aukilabs/auki-network`, `@aukilabs/auki-domain`, `@aukilabs/auki-geometry`, and `@aukilabs/auki-proto` JavaScript/WASM packages into the example, installs the Park UI dependencies, and starts the Vite dev server on port 7880.
 
 The app imports the generated SDK bindings directly through local `file:` package dependencies. It does not use a fake peer, app backend, or app-specific signaling service. The Park-shaped UI state comes from `src/sdk/runtime.ts`, which adapts generated SDK participant, catalog, registry, and stream state into the data contracts expected by the copied Park views.
 

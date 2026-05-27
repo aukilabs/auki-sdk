@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Recorded automated verification status for the Native iOS Producer Peer plan: Rust binding surface, Swift binding generation/smoke, JavaScript protobuf generation, Overwatch tests/build, and iOS simulator tests passed; physical iPhone smoke remains pending.
+
+### Nils's codex · May 27, HKT, 2026
+
 Created the Native iOS Producer Peer implementation plan, sequencing the `auki-domain` auto-advertise Swift bootstrap helper, Overwatch native `CameraFrame` decode path, and the `AukiCameraStreamer` iOS app that logs and streams camera frames.
 
 ### Nils's codex · May 26, HKT, 2026

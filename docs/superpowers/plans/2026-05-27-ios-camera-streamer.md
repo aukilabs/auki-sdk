@@ -64,7 +64,7 @@
 - Modify: `crates/auki-domain/src/sprint.md`
 - Modify: `crates/auki-domain/changelog.md`, `crates/changelog.md`, `changelog.md`
 
-- [ ] **Step 1: Add the failing Rust binding-surface test**
+- [x] **Step 1: Add the failing Rust binding-surface test**
 
 In `crates/auki-domain/tests/full_binding_surface.rs`, add a test next to `native_cluster_lifecycle_is_exposed` that calls the new helper with a loopback TCP listen address and no advertise override:
 
@@ -106,7 +106,7 @@ async fn native_cluster_auto_advertise_lifecycle_is_exposed() {
 
 Expected: `cargo test -p auki-domain --test full_binding_surface native_cluster_auto_advertise_lifecycle_is_exposed -- --nocapture` fails because the helper is not exported.
 
-- [ ] **Step 2: Implement the helper in `ffi.rs`**
+- [x] **Step 2: Implement the helper in `ffi.rs`**
 
 Add this UniFFI export next to `bootstrap_domain_cluster_manager`:
 
@@ -168,11 +168,11 @@ pub async fn bootstrap_domain_cluster_manager_auto_advertise(
 
 Extract the shared tail of the current `bootstrap_domain_cluster_manager` into a private `bootstrap_domain_cluster_manager_with_swarm(...)` helper so both bootstrap functions use the same `ClusterTargetMode` dispatch and stream decline policy.
 
-- [ ] **Step 3: Reuse existing multiaddr parsing**
+- [x] **Step 3: Reuse existing multiaddr parsing**
 
 Keep `parse_multiaddrs(...)` as the only string-to-`Multiaddr` parser. The new helper must not parse listen or advertise addresses in Swift.
 
-- [ ] **Step 4: Extend the Swift smoke**
+- [x] **Step 4: Extend the Swift smoke**
 
 In `crates/auki-domain/bindings/swift/SmokeFullDomain/Sources/SmokeFullDomain/main.swift`, after the current explicit-advertise manager shuts down, create a second manager:
 
@@ -206,7 +206,7 @@ try await autoManager.shutdown()
 autoServer.stop()
 ```
 
-- [ ] **Step 5: Run the domain checks**
+- [x] **Step 5: Run the domain checks**
 
 Run:
 
@@ -219,11 +219,11 @@ swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain
 
 Expected: every command exits with status `0`.
 
-- [ ] **Step 6: Update docs and changelogs**
+- [x] **Step 6: Update docs and changelogs**
 
 Update `crates/auki-domain/src/readme.md` and `crates/auki-domain/src/sprint.md` to state that generated Swift hosts can bootstrap a `DomainClusterManager` with SDK-resolved advertised listen addresses. Add leaf and parent changelog entries for the crate change.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 
@@ -244,7 +244,7 @@ git commit -m "Expose domain auto-advertise bootstrap to Swift"
 - Modify: `examples/overwatch/src/sdk/streamHub.test.ts`
 - Modify: `examples/overwatch/changelog.md`, `examples/changelog.md`, `changelog.md`
 
-- [ ] **Step 1: Add a failing native-camera preview test**
+- [x] **Step 1: Add a failing native-camera preview test**
 
 In `examples/overwatch/src/data/preview.test.ts`, add:
 
@@ -275,7 +275,7 @@ it("renders native camera frame protobuf payloads", async () => {
 
 Expected: `npm --prefix examples/overwatch test -- preview.test.ts` fails because preview treats the protobuf envelope as JPEG bytes.
 
-- [ ] **Step 2: Stage `auki-proto` for Overwatch**
+- [x] **Step 2: Stage `auki-proto` for Overwatch**
 
 In `examples/overwatch/scripts/stage-sdk.mjs`, add `auki-proto` to the generated packages staged from `bindings/javascript`:
 
@@ -301,7 +301,7 @@ scripts/generate-javascript-proto.sh
 npm --prefix examples/overwatch install
 ```
 
-- [ ] **Step 3: Add the payload decoder**
+- [x] **Step 3: Add the payload decoder**
 
 Create `examples/overwatch/src/data/cameraFramePayload.ts`:
 
@@ -322,7 +322,7 @@ export function previewPayloadBytes(payload: Uint8Array, sensorKind?: string): U
 }
 ```
 
-- [ ] **Step 4: Use sensor kind in previews**
+- [x] **Step 4: Use sensor kind in previews**
 
 Update `examples/overwatch/src/data/preview.ts` so JPEG `Blob` creation uses:
 
@@ -333,7 +333,7 @@ const blob = new Blob([bytes], { type: "image/jpeg" });
 
 Keep the existing raw path by passing any non-camera or missing `sensorKind` through unchanged.
 
-- [ ] **Step 5: Attach sensor kind to stream frames**
+- [x] **Step 5: Attach sensor kind to stream frames**
 
 Update `examples/overwatch/src/sdk/streamHub.ts` so `RuntimeStreamFrame` includes:
 
@@ -351,7 +351,7 @@ const sensor = sdkRuntime
 
 Set `sensorKind: sensor?.kind` on every emitted frame. Do not use string matching on sensor ids.
 
-- [ ] **Step 6: Prove stream metadata propagation**
+- [x] **Step 6: Prove stream metadata propagation**
 
 In `examples/overwatch/src/sdk/streamHub.test.ts`, add a test where the fake runtime exposes a camera sensor and emits one `Entry` message. Assert the frame includes:
 
@@ -359,7 +359,7 @@ In `examples/overwatch/src/sdk/streamHub.test.ts`, add a test where the fake run
 expect(frame.sensorKind).toBe("camera");
 ```
 
-- [ ] **Step 7: Run Overwatch checks**
+- [x] **Step 7: Run Overwatch checks**
 
 Run:
 
@@ -370,7 +370,7 @@ npm --prefix examples/overwatch run build
 
 Expected: both commands exit with status `0`.
 
-- [ ] **Step 8: Update changelogs and commit**
+- [x] **Step 8: Update changelogs and commit**
 
 Run:
 
@@ -390,7 +390,7 @@ git commit -m "Decode native camera stream frames in Overwatch"
 - Create: `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/AukiCameraModelsTests.swift`
 - Modify: `examples/ios/changelog.md`, `examples/changelog.md`, `changelog.md`
 
-- [ ] **Step 1: Create the XcodeGen project**
+- [x] **Step 1: Create the XcodeGen project**
 
 Create `examples/ios/AukiCameraStreamer/project.yml`:
 
@@ -455,7 +455,7 @@ targets:
       - package: auki-proto
 ```
 
-- [ ] **Step 2: Add minimal app entry**
+- [x] **Step 2: Add minimal app entry**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamer/App.swift`:
 
@@ -472,7 +472,7 @@ struct AukiCameraStreamerApp: App {
 }
 ```
 
-- [ ] **Step 3: Add stable models and constants**
+- [x] **Step 3: Add stable models and constants**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamer/AukiCameraModels.swift`:
 
@@ -509,7 +509,7 @@ enum AukiCameraDefaults {
 }
 ```
 
-- [ ] **Step 4: Add a compact SwiftUI shell**
+- [x] **Step 4: Add a compact SwiftUI shell**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamer/ContentView.swift` with:
 
@@ -548,7 +548,7 @@ struct ContentView: View {
 
 The strings are operational UI labels only. Do not add instructional copy inside the app.
 
-- [ ] **Step 5: Add model tests**
+- [x] **Step 5: Add model tests**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/AukiCameraModelsTests.swift`:
 
@@ -565,7 +565,7 @@ final class AukiCameraModelsTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 6: Generate and build the project shell**
+- [x] **Step 6: Generate and build the project shell**
 
 Run:
 
@@ -584,7 +584,7 @@ xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcod
 
 Expected: the generated project builds and `AukiCameraModelsTests` passes.
 
-- [ ] **Step 7: Add README and changelogs, then commit**
+- [x] **Step 7: Add README and changelogs, then commit**
 
 Document the shell app, binding generation commands, and simulator test command in `examples/ios/AukiCameraStreamer/README.md`. Add leaf and parent changelog entries.
 
@@ -603,7 +603,7 @@ git commit -m "Add iOS camera streamer app shell"
 - Create: `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/CameraFrameEncodingTests.swift`
 - Create: `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/CameraStreamFanoutTests.swift`
 
-- [ ] **Step 1: Add a failing SwiftProtobuf encoding test**
+- [x] **Step 1: Add a failing SwiftProtobuf encoding test**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/CameraFrameEncodingTests.swift`:
 
@@ -624,7 +624,7 @@ final class CameraFrameEncodingTests: XCTestCase {
 
 Expected: the app tests fail because `CameraFrameCodec` does not exist.
 
-- [ ] **Step 2: Implement the codec**
+- [x] **Step 2: Implement the codec**
 
 Add to `CameraStreamFanout.swift`:
 
@@ -641,7 +641,7 @@ enum CameraFrameCodec {
 }
 ```
 
-- [ ] **Step 3: Add a sink protocol for fanout tests**
+- [x] **Step 3: Add a sink protocol for fanout tests**
 
 In `CameraStreamFanout.swift`, define:
 
@@ -687,7 +687,7 @@ actor CameraStreamFanout {
 }
 ```
 
-- [ ] **Step 4: Prove fanout behavior**
+- [x] **Step 4: Prove fanout behavior**
 
 Create `examples/ios/AukiCameraStreamer/AukiCameraStreamerTests/CameraStreamFanoutTests.swift`:
 
@@ -731,7 +731,7 @@ final class CameraStreamFanoutTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 5: Run app tests and commit**
+- [x] **Step 5: Run app tests and commit**
 
 Run:
 
@@ -759,7 +759,7 @@ git commit -m "Encode and fan out iOS camera frames"
 - Modify: `examples/ios/AukiCameraStreamer/README.md`
 - Modify: `examples/ios/changelog.md`, `examples/changelog.md`, `changelog.md`
 
-- [ ] **Step 1: Add stable session catalog tests**
+- [x] **Step 1: Add stable session catalog tests**
 
 In `AukiCameraModelsTests.swift`, add tests that assert the generated sensor catalog and resource catalog JSON contain:
 
@@ -772,7 +772,7 @@ XCTAssertEqual(resource["sensor_id"] as? String, "peer-a/session-b/camera")
 
 Expected: tests fail until the session builder exists.
 
-- [ ] **Step 2: Add seed persistence**
+- [x] **Step 2: Add seed persistence**
 
 Create `KeychainSeedStore.swift` with:
 
@@ -830,7 +830,7 @@ final class KeychainSeedStore {
 }
 ```
 
-- [ ] **Step 3: Build `AukiCameraSession` over generated SDK packages**
+- [x] **Step 3: Build `AukiCameraSession` over generated SDK packages**
 
 Create `AukiCameraSession.swift` that imports:
 
@@ -856,7 +856,7 @@ The session startup sequence must be:
 9. Register static sensor catalog, resource catalog, and registry entries on the manager.
 10. Poll `drainStreamOpenRequests`, accept matching camera requests, and decline others with `sensor_not_found` or `sensor_unavailable`.
 
-- [ ] **Step 4: Connect fanout to the generated domain manager**
+- [x] **Step 4: Connect fanout to the generated domain manager**
 
 In `CameraStreamFanout.swift`, add a concrete sink:
 
@@ -885,7 +885,7 @@ final class DomainCameraStreamSink: CameraStreamSink {
 
 Use the exact generated Swift method labels after regeneration if UniFFI lowercases or renames the Rust arguments.
 
-- [ ] **Step 5: Add logging path**
+- [x] **Step 5: Add logging path**
 
 When a captured frame arrives and logging is enabled:
 
@@ -897,7 +897,7 @@ try await fanout.push(frame)
 
 The log payload and stream payload must be the same encoded `CameraFrame` bytes.
 
-- [ ] **Step 6: Run checks and commit**
+- [x] **Step 6: Run checks and commit**
 
 Run:
 
@@ -923,7 +923,7 @@ git commit -m "Connect iOS camera streamer to domain sessions"
 - Modify: `examples/ios/AukiCameraStreamer/AukiCameraStreamer/ContentView.swift`
 - Modify: `examples/ios/AukiCameraStreamer/README.md`
 
-- [ ] **Step 1: Add the capture protocol**
+- [x] **Step 1: Add the capture protocol**
 
 Create a testable abstraction:
 
@@ -940,7 +940,7 @@ protocol CameraCaptureControlling {
 }
 ```
 
-- [ ] **Step 2: Implement AVFoundation capture**
+- [x] **Step 2: Implement AVFoundation capture**
 
 `CameraCaptureService` must use:
 
@@ -959,7 +959,7 @@ private let minimumFrameIntervalNs: UInt64 = 100_000_000
 
 Use `SessionClock.nowNs()` from `AukiCameraSession` for frame timestamps once the SDK session is running. Before the SDK session starts, do not emit frames to the log or stream.
 
-- [ ] **Step 3: Wire preview state**
+- [x] **Step 3: Wire preview state**
 
 Store the latest local JPEG as a `UIImage` in `CameraStreamerViewModel` for a local preview. Keep preview rendering out of the SDK path; the SDK path uses encoded bytes from `CapturedCameraFrame`.
 
@@ -978,7 +978,9 @@ On a physical iPhone, run from Xcode and verify:
 - The local preview updates.
 - The status line reports active logging.
 
-- [ ] **Step 5: Commit**
+Status: Simulator build and test coverage passed on `iPhone 15,OS=17.5`. Physical iPhone verification remains pending under Task 8's physical-device smoke.
+
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -995,7 +997,7 @@ git commit -m "Capture iOS camera frames for streaming"
 - Modify: `examples/ios/AukiCameraStreamer/README.md`
 - Modify: `examples/ios/changelog.md`, `examples/changelog.md`, `changelog.md`
 
-- [ ] **Step 1: Implement the view model state machine**
+- [x] **Step 1: Implement the view model state machine**
 
 `CameraStreamerViewModel` must expose:
 
@@ -1017,7 +1019,7 @@ git commit -m "Capture iOS camera frames for streaming"
 3. Start camera capture.
 4. Stop capture, finish streams, flush the log, and shut down the manager when stopping.
 
-- [ ] **Step 2: Add operator status without instructional copy**
+- [x] **Step 2: Add operator status without instructional copy**
 
 Show only live values:
 
@@ -1028,7 +1030,7 @@ Show only live values:
 - Last frame timestamp
 - Last error
 
-- [ ] **Step 3: Document E2E runbook**
+- [x] **Step 3: Document E2E runbook**
 
 In `examples/ios/AukiCameraStreamer/README.md`, document:
 
@@ -1056,7 +1058,7 @@ Manual flow:
 6. Select the iOS camera sensor.
 7. Confirm the preview updates from the iOS stream.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
@@ -1074,7 +1076,7 @@ git commit -m "Finish iOS camera streamer controls"
 - Modify: `docs/changelog.md`
 - Modify: `changelog.md`
 
-- [ ] **Step 1: Run full relevant automated checks**
+- [x] **Step 1: Run full relevant automated checks**
 
 Run:
 
@@ -1091,6 +1093,18 @@ git diff --check
 
 Expected: every command exits with status `0`.
 
+Status on May 27, 2026 HKT:
+
+- `cargo test -p auki-domain --test full_binding_surface` passed: 14 tests, 0 failures.
+- `python3 scripts/bindings/generate_bindings.py generate swift auki-domain` exited `0`.
+- `swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain` exited `0`.
+- `scripts/generate-javascript-proto.sh` exited `0`.
+- `npm --prefix examples/overwatch test -- preview.test.ts streamHub.test.ts` passed: 3 files, 7 tests.
+- `npm --prefix examples/overwatch run build` exited `0`.
+- `xcodebuild test ... -destination 'platform=iOS Simulator,name=iPhone 15'` did not run because Xcode resolved it to `OS:latest` and this machine has `iPhone 15` only on iOS 17.5.
+- `xcodebuild test ... -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5'` passed: 8 tests, 0 failures.
+- `git diff --check` exited `0`.
+
 - [ ] **Step 2: Run physical-device smoke**
 
 On an iPhone and a desktop running Overwatch:
@@ -1104,6 +1118,8 @@ On an iPhone and a desktop running Overwatch:
 - iOS sensor log receives encoded `CameraFrame` entries.
 
 Record the device model, iOS version, Discovery URL, Overwatch URL, and cluster name in the implementation closeout.
+
+Status: Not run in this Codex session. This requires a physical iPhone run, camera and local-network permission prompts, and a desktop Overwatch session on the same Discovery URL.
 
 - [ ] **Step 3: Mark this plan complete**
 
@@ -1120,11 +1136,11 @@ git commit -m "Complete iOS camera streamer plan"
 
 ## Self-Review Checklist
 
-- [ ] The app is a native iOS producer peer, not a Swift libp2p implementation.
-- [ ] The cluster path uses generated `auki-domain` Swift bindings and `DomainClusterManager`.
-- [ ] The iOS app logs and streams the same encoded `CameraFrame` bytes.
-- [ ] Overwatch decodes native camera stream payloads and preserves the raw JPEG demo path.
-- [ ] Registry entries include camera sensor, ROS optical frame, and session clock.
-- [ ] Stream-open requests accept only the advertised camera sensor.
-- [ ] Automated checks cover Rust binding surface, generated Swift smoke, Overwatch preview decoding, and iOS unit tests.
+- [x] The app is a native iOS producer peer, not a Swift libp2p implementation.
+- [x] The cluster path uses generated `auki-domain` Swift bindings and `DomainClusterManager`.
+- [x] The iOS app logs and streams the same encoded `CameraFrame` bytes.
+- [x] Overwatch decodes native camera stream payloads and preserves the raw JPEG demo path.
+- [x] Registry entries include camera sensor, ROS optical frame, and session clock.
+- [x] Stream-open requests accept only the advertised camera sensor.
+- [x] Automated checks cover Rust binding surface, generated Swift smoke, Overwatch preview decoding, and iOS unit tests.
 - [ ] Physical-device smoke verifies camera permission, local-network permission, cluster join, stream acceptance, and Overwatch preview rendering.

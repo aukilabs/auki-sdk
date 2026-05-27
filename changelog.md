@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Native iOS Producer Peer automated verification recorded.** The plan now records passing Rust, Swift, Overwatch, and iOS simulator checks, with physical-device camera/local-network smoke still pending. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **iOS camera E2E runbook now stages Overwatch packages.** The `AukiCameraStreamer` manual flow documents JavaScript binding/protobuf generation and `stage-sdk.mjs` before `npm install` so Overwatch's ignored `sdk-generated` file packages exist. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

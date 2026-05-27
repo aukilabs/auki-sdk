@@ -20,6 +20,18 @@ export type BrowserTransport = {
   stop(): Promise<void>;
   multiaddrs(): string[];
   dial(addresses: string[]): Promise<void>;
+  dialProtocol(
+    peerId: string,
+    addresses: string[],
+    protocol: string,
+  ): Promise<BrowserProtocolStream>;
+};
+
+export type BrowserProtocolStream = AsyncIterable<Uint8Array | { subarray(): Uint8Array }> & {
+  send(data: Uint8Array): boolean;
+  close(): Promise<void>;
+  abort?(error: Error): void;
+  onDrain?(): Promise<void>;
 };
 
 export type CreateBrowserLibp2pTransportOptions = {
@@ -102,5 +114,20 @@ class Libp2pBrowserTransport implements BrowserTransport {
       throw new Error("No bootstrap addresses available to dial");
     }
     await this.node.dial(addresses.map((address) => multiaddr(address)));
+  }
+
+  async dialProtocol(
+    _peerId: string,
+    addresses: string[],
+    protocol: string,
+  ): Promise<BrowserProtocolStream> {
+    if (addresses.length === 0) {
+      throw new Error(`No bootstrap addresses available for ${protocol}`);
+    }
+    return this.node.dialProtocol(
+      addresses.map((address) => multiaddr(address)),
+      protocol,
+      { runOnLimitedConnection: true },
+    );
   }
 }

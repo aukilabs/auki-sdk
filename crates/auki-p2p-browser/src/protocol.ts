@@ -1,6 +1,7 @@
 import initProtocolWasm, {
   createOfferCatalogRequest as wasmCreateOfferCatalogRequest,
   createPeerBinding as wasmCreatePeerBinding,
+  createPeerHandshake as wasmCreatePeerHandshake,
   createSubscribeRequest as wasmCreateSubscribeRequest,
   decodeJsonFrame as wasmDecodeJsonFrame,
   decodeLength as wasmDecodeLength,
@@ -9,12 +10,14 @@ import initProtocolWasm, {
   parseOfferCatalogRequest as wasmParseOfferCatalogRequest,
   parseOfferCatalogResponse as wasmParseOfferCatalogResponse,
   parsePeerBinding as wasmParsePeerBinding,
+  parsePeerHandshake as wasmParsePeerHandshake,
   parseSpatialMessage as wasmParseSpatialMessage,
   parseSubscribeEnd as wasmParseSubscribeEnd,
   parseSubscribeRequest as wasmParseSubscribeRequest,
   parseSubscribeStartResult as wasmParseSubscribeStartResult,
   protocolConstants as wasmProtocolConstants,
   protocolVersion as wasmProtocolVersion,
+  validatePeerHandshakeAuthority as wasmValidatePeerHandshakeAuthority,
   validateSpatialMessageForOffer as wasmValidateSpatialMessageForOffer,
   validateSubscribeDataMessage as wasmValidateSubscribeDataMessage,
   validateSubscribeEndForOffer as wasmValidateSubscribeEndForOffer,
@@ -129,6 +132,37 @@ export async function verifyPeerBinding(
 ): Promise<JsonObject> {
   return withProtocol(() =>
     expectJsonObject(wasmVerifyPeerBinding(value, authenticatedPeerId), "verified peer binding"),
+  );
+}
+
+export async function createPeerHandshake(
+  peerBinding: JsonObject,
+  declaredDomains: JsonObject[] = [],
+  offerCatalog?: JsonObject | null,
+): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(
+      wasmCreatePeerHandshake(peerBinding, declaredDomains, offerCatalog ?? undefined),
+      "peer handshake",
+    ),
+  );
+}
+
+export async function parsePeerHandshake(value: JsonObject): Promise<JsonObject> {
+  return withProtocol(() => expectJsonObject(wasmParsePeerHandshake(value), "peer handshake"));
+}
+
+export async function validatePeerHandshakeAuthority(
+  value: JsonObject,
+  authenticatedPeerId: string,
+  peerAuthorized: boolean,
+  now: string,
+): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(
+      wasmValidatePeerHandshakeAuthority(value, authenticatedPeerId, peerAuthorized, now),
+      "peer handshake authority",
+    ),
   );
 }
 

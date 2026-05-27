@@ -5,6 +5,11 @@ Status: Approved for implementation
 Issue: #216
 Baseline: tag `v0.0.52`, commit `eeec1287`
 
+## Revision history
+
+- **2026-05-27**: initial draft from the #216 brainstorm.
+- **2026-05-27 (rev 2)**: after issue #216 was edited post-brainstorm. Adopted the three-axis taxonomy (`variant` / `sensor.kind` / `sensor.type`), moved `writer_mode` into a `pose` block on the catalog row, made `time_transform_log` an explicit catalog variant, and added the `TransformEdgeResource` consumer migration. `SensorBody::PointCloud` is renamed to `SensorBody::Rangefinder` with `point_cloud` becoming a sensor.type; new `SensorBody::Rf` variant ships with a minimal body.
+
 ## Goal
 
 Lock the v1 schema and crate boundaries for [#216](https://github.com/aukilabs/auki-sdk/issues/216) — "Make the SDK the robot data plane for peer-owned logs." This spec resolves the issue's Open Design Points and the structural questions surfaced during review, so a follow-up writing-plans pass can produce a coordinated migration plan.
@@ -33,18 +38,32 @@ After this design:
 
 ## §1 — Catalog row shape
 
-Served from each peer over `/auki/resources/0.2.0`. Top-level fields:
+Served from each peer over `/auki/resources/0.2.0`. The row carries five axes that stay orthogonal — never collapsed into one field:
 
-| Field             | Description |
-|-------------------|-------------|
-| `source_peer_id`  | Canonical data origin (preserved across materializations) |
-| `writer_peer_id`  | Peer that wrote the underlying manifest file (= serving peer for v1) |
-| `resource_id`     | Per-log type structured id (see §6) |
-| `kind`            | Closed enum: `camera \| point_cloud \| audio \| joint_encoders \| pose \| time_transform \| detection` |
-| `state`           | Open-string discriminator; v1: `"live" \| "sealed"` |
-| `head` *or* `extent` | Mutually exclusive bounds block keyed by `state` |
-| `available`       | Snapshot of currently-retrievable data |
-| `manifest`        | Canonical-field summary the consumer needs to materialize / stream |
+| Axis | Field | Type | Notes |
+|------|-------|------|-------|
+| Resource variant | `variant` | closed enum | `sensor_log \| pose_log \| time_transform_log \| detection_log` |
+| Sensor family (sensor_log only) | `sensor.kind` | closed enum | `camera \| rangefinder \| rf \| audio \| joint_encoders` |
+| Sensor modality (sensor_log only) | `sensor.type` | open string | kind-scoped, documented constants |
+| Lifecycle | `state` | open string | v1: `"live" \| "sealed"` |
+| Live head behavior | `head.kind` | closed enum | `rolling \| fixed`; only on live rows |
+| Pose semantics (pose_log only) | `pose.writer_mode` | closed enum | `rigid \| movable`; mirrors `PoseWriterMode` |
+
+Top-level fields, in JCS-canonical (alphabetical) order:
+
+| Field | Present on | Description |
+|-------|------------|-------------|
+| `available` | all | Snapshot of currently-retrievable data |
+| `extent` | sealed | Closed-range block (mutually exclusive with `head`) |
+| `head` | live | Head-behavior block (mutually exclusive with `extent`) |
+| `manifest` | all | Variant-specific registry refs the consumer needs to resolve the log |
+| `pose` | pose_log | `{ writer_mode: "rigid" \| "movable" }` |
+| `resource_id` | all | Per-variant derived id (see §6) |
+| `sensor` | sensor_log | `{ kind, type, sensor_id, sensor_hash }` |
+| `source_peer_id` | all | Canonical data origin (preserved across materializations) |
+| `state` | all | Lifecycle discriminator |
+| `variant` | all | Closed resource variant |
+| `writer_peer_id` | all | Peer that wrote the underlying manifest file (= serving peer for v1) |
 
 Field-level types:
 
@@ -61,117 +80,228 @@ available:
   bytes:        u64
   entries:      u64
   duration_ns:  i64
+
+sensor (sensor_log only):
+  kind:        SensorKind                    (closed: camera | rangefinder | rf | audio | joint_encoders)
+  type:        String                        (open string; common values documented per kind)
+  sensor_id:   String                        (peer-local; same as the row's resource_id)
+  sensor_hash: String                        (content hash of the SensorRegistryEntry)
+
+pose (pose_log only):
+  writer_mode: PoseWriterMode                (Rigid | Movable; mirrors PoseLogManifest::PoseWriterMode)
+
+manifest (variant-keyed contents — see Per-variant manifest blocks below)
 ```
+
+### Sensor kind set + documented type constants
+
+Closed `sensor.kind`:
+
+- `camera`
+- `rangefinder` — replaces the previous `point_cloud` kind. `point_cloud` becomes a sensor.type under rangefinder.
+- `rf` — new kind for RF-based sensors. v1 ships the kind in the catalog enum + a minimal `SensorBody::Rf` registry body; production-quality RF sensors land via follow-up cards.
+- `audio`
+- `joint_encoders`
+
+Documented `sensor.type` constants per kind (open string — these are SDK-documented common values, not an enforced enum):
+
+```
+camera:           rgb | depth | ir | mono | multispectral
+rangefinder:      point_cloud | 2d_lidar | 3d_lidar | ultrasonic | radar
+rf:               wifi | bluetooth | uwb
+audio:            pcm | opus
+joint_encoders:   absolute | incremental
+```
+
+Producers may use unlisted type strings; consumers MUST handle unknown types gracefully (fall back to the kind-level handler or ignore the row).
+
+### Per-variant manifest blocks
+
+The `manifest` block contains only the registry refs and canonical bindings the consumer needs to resolve the log. Sensor identity (kind/type/sensor_id/sensor_hash) and pose semantics (writer_mode) are hoisted into the dedicated `sensor` / `pose` blocks above.
+
+```
+sensor_log:
+  clock: RegistryRef
+  frame: Option<RegistryRef>
+
+pose_log:
+  from_frame: RegistryRef
+  to_frame:   RegistryRef
+  clock:      RegistryRef
+  source:     PoseSource
+  expected_rate_hz: u32
+
+time_transform_log:
+  from_clock: RegistryRef
+  to_clock:   RegistryRef
+  source:     TimeTransformSource
+
+detection_log:
+  detector:     RegistryRef
+  input_log:    LogRef
+  input_sensor: RegistryRef
+  clock:        RegistryRef
+```
+
+A consumer with just the row has everything needed to identify the log, fetch the underlying registry entries by hash, materialize a local copy with its own retention, or open a stream. No separate manifest-fetch endpoint is required for v1.
 
 ### Examples
 
-Live rolling-head camera (origin):
+Live rolling-head sensor_log (camera, origin):
 ```json
 {
-  "source_peer_id": "galbot",
-  "writer_peer_id": "galbot",
-  "resource_id": "head_left_rgb",
-  "kind": "camera",
-  "state": "live",
+  "available": { "bytes": 3000000000, "duration_ns": 5000000000, "entries": 900 },
   "head": { "kind": "rolling", "retention_ns": 5000000000 },
-  "available": { "bytes": 3000000000, "entries": 900, "duration_ns": 5000000000 },
   "manifest": {
-    "sensor": { "peer_id": "galbot", "id": "head_left_rgb", "hash": "…" },
-    "clock":  { "peer_id": "galbot", "id": "session/sdk_clock", "hash": "…" },
-    "frame":  { "peer_id": "galbot", "id": "head_left_camera_optical", "hash": "…" }
-  }
-}
-```
-
-Live fixed-head pose log (intent recording):
-```json
-{
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_left_camera_optical", "peer_id": "galbot" }
+  },
+  "resource_id": "head_left_rgb",
+  "sensor": {
+    "kind": "camera",
+    "sensor_hash": "…",
+    "sensor_id": "head_left_rgb",
+    "type": "rgb"
+  },
   "source_peer_id": "galbot",
-  "writer_peer_id": "galbot",
-  "resource_id": "left_gripper->object_pose",
-  "kind": "pose",
   "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+Sensor_log on a rangefinder (3D point cloud lidar):
+```json
+{
+  "available": { "bytes": 1500000000, "duration_ns": 1000000000, "entries": 100 },
+  "head": { "kind": "rolling", "retention_ns": 1000000000 },
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_lidar", "peer_id": "galbot" }
+  },
+  "resource_id": "head_lidar",
+  "sensor": {
+    "kind": "rangefinder",
+    "sensor_hash": "…",
+    "sensor_id": "head_lidar",
+    "type": "3d_lidar"
+  },
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+Live fixed-head pose_log (movable, intent recording):
+```json
+{
+  "available": { "bytes": 18000000, "duration_ns": 30000000000, "entries": 5000 },
   "head": { "kind": "fixed", "started_at_ns": 1733836800000000000 },
-  "available": { "bytes": 18000000, "entries": 5000, "duration_ns": 30000000000 },
   "manifest": {
-    "from_frame": { "peer_id": "galbot", "id": "left_gripper", "hash": "…" },
-    "to_frame":   { "peer_id": "galbot", "id": "object_pose",  "hash": "…" },
-    "clock":      { "peer_id": "galbot", "id": "session/sdk_clock", "hash": "…" }
-  }
+    "clock":      { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "expected_rate_hz": 30,
+    "from_frame": { "hash": "…", "id": "left_gripper",      "peer_id": "galbot" },
+    "source":     { "kind": "manual" },
+    "to_frame":   { "hash": "…", "id": "object_pose",       "peer_id": "galbot" }
+  },
+  "pose": { "writer_mode": "movable" },
+  "resource_id": "left_gripper->object_pose",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "pose_log",
+  "writer_peer_id": "galbot"
 }
 ```
 
-Sealed multi-sample camera log:
+One-sample rigid pose_log (static transform):
 ```json
 {
-  "source_peer_id": "galbot",
-  "writer_peer_id": "galbot",
-  "resource_id": "yesterday_capture",
-  "kind": "camera",
-  "state": "sealed",
-  "extent": { "start_at_ns": 1733750400000000000, "finish_at_ns": 1733754000000000000 },
-  "available": { "bytes": 50000000000, "entries": 108000, "duration_ns": 3600000000000 },
-  "manifest": { … }
-}
-```
-
-One-sample rigid pose log (static transform):
-```json
-{
-  "source_peer_id": "galbot",
-  "writer_peer_id": "galbot",
+  "available": { "bytes": 80, "duration_ns": 0, "entries": 1 },
+  "extent": { "finish_at_ns": 1733836800000000000, "start_at_ns": 1733836800000000000 },
+  "manifest": {
+    "clock":      { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "expected_rate_hz": 0,
+    "from_frame": { "hash": "…", "id": "world",     "peer_id": "park"   },
+    "source":     { "kind": "calibration" },
+    "to_frame":   { "hash": "…", "id": "base_link", "peer_id": "galbot" }
+  },
+  "pose": { "writer_mode": "rigid" },
   "resource_id": "world->base_link",
-  "kind": "pose",
+  "source_peer_id": "galbot",
   "state": "sealed",
-  "extent": { "start_at_ns": 1733836800000000000, "finish_at_ns": 1733836800000000000 },
-  "available": { "bytes": 80, "entries": 1, "duration_ns": 0 },
+  "variant": "pose_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+Live rolling time_transform_log:
+```json
+{
+  "available": { "bytes": 4096, "duration_ns": 60000000000, "entries": 60 },
+  "head": { "kind": "rolling", "retention_ns": 60000000000 },
   "manifest": {
-    "from_frame": { "peer_id": "park",   "id": "world",     "hash": "…" },
-    "to_frame":   { "peer_id": "galbot", "id": "base_link", "hash": "…" },
-    "clock":      { "peer_id": "galbot", "id": "session/sdk_clock", "hash": "…" }
-  }
+    "from_clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "source":     { "kind": "heartbeat" },
+    "to_clock":   { "hash": "…", "id": "wall_clock",        "peer_id": "galbot" }
+  },
+  "resource_id": "session/sdk_clock->wall_clock",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "time_transform_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+Live rolling detection_log:
+```json
+{
+  "available": { "bytes": 250000, "duration_ns": 5000000000, "entries": 150 },
+  "head": { "kind": "rolling", "retention_ns": 5000000000 },
+  "manifest": {
+    "clock":        { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "detector":     { "hash": "…", "id": "yolo_v8",           "peer_id": "galbot" },
+    "input_log":    { "resource_id": "head_left_rgb", "source_peer_id": "galbot" },
+    "input_sensor": { "hash": "…", "id": "head_left_rgb",     "peer_id": "galbot" }
+  },
+  "resource_id": "yolo_v8@head_left_rgb",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "detection_log",
+  "writer_peer_id": "galbot"
 }
 ```
 
 Materialization (Park serving Galbot's RGB with 5-min local retention):
 ```json
 {
-  "source_peer_id": "galbot",
-  "writer_peer_id": "park",
-  "resource_id": "head_left_rgb",
-  "kind": "camera",
-  "state": "live",
+  "available": { "bytes": 12000000000, "duration_ns": 300000000000, "entries": 9000 },
   "head": { "kind": "rolling", "retention_ns": 300000000000 },
-  "available": { "bytes": 12000000000, "entries": 9000, "duration_ns": 300000000000 },
-  "manifest": { "sensor": {…}, "clock": {…}, "frame": {…} }
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_left_camera_optical", "peer_id": "galbot" }
+  },
+  "resource_id": "head_left_rgb",
+  "sensor": {
+    "kind": "camera",
+    "sensor_hash": "…",
+    "sensor_id": "head_left_rgb",
+    "type": "rgb"
+  },
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "park"
 }
 ```
 
-The materialized row's `head` reflects Park's local cache policy. The consumer fetching Park's underlying manifest sees Park's segment / retention layout; the consumer fetching Galbot's manifest sees Galbot's. Row and manifest are internally consistent on the serving peer.
+The materialized row's `head` reflects Park's local cache policy. The consumer fetching Park's underlying manifest sees Park's segment / retention layout; the consumer fetching Galbot's manifest sees Galbot's. The `sensor.sensor_hash` and registry refs point at Galbot's canonical registry entries (peer_id=galbot inside the RegistryRef), preserving identity.
 
-The `manifest` block on the row carries the manifest's *canonical* fields — every field a materializer needs to recreate the data shape on the consumer side. Writer-local manifest fields (`app_id`, `session_id`, `segment_duration_ns`, `retention_ns`) are not in the block; the consumer either doesn't need them (materialization picks its own) or sees `retention_ns` via the row's `head` block.
+### Axis-separation notes
 
-Per kind, the manifest block is:
-
-```
-camera | point_cloud | audio | joint_encoders:
-  sensor: RegistryRef, clock: RegistryRef, frame: RegistryRef
-
-pose:
-  from_frame: RegistryRef, to_frame: RegistryRef, clock: RegistryRef,
-  writer_mode: "rigid" | "movable",
-  source: PoseSource,
-  expected_rate_hz: u32
-
-time_transform:
-  from_clock: RegistryRef, to_clock: RegistryRef,
-  source: TimeTransformSource
-
-detection:
-  detector: RegistryRef, input_log: LogRef, input_sensor: RegistryRef, clock: RegistryRef
-```
-
-A consumer with just the row has everything needed to identify the log, fetch the underlying registry entries, materialize a local copy with its own retention, or open a stream. No separate manifest-fetch endpoint is required for v1.
+- `state=sealed + pose.writer_mode=rigid + available.entries=1` is the canonical "static transform" shape. There is no separate transform-edge row variant — consumers detect rigid pose logs by these three fields.
+- `head.kind` (rolling/fixed) is only meaningful while `state=live`. Sealed rows omit `head` and carry `extent` instead.
+- Pose `writer_mode` is *pose-specific semantics*, not a generic resource axis. Non-pose variants never carry the `pose` block.
 
 ## §2 — Registry entry schema
 
@@ -185,7 +315,7 @@ Four types stay: `SensorRegistryEntry`, `ClockRegistryEntry`, `FrameRegistryEntr
 pub struct SensorRegistryEntry {
     pub peer_id: PeerId,
     pub sensor_id: String,
-    pub body: SensorBody,            // closed enum (Camera | PointCloud | Audio | JointEncoders)
+    pub body: SensorBody,            // closed enum (Camera | Rangefinder | Rf | Audio | JointEncoders)
 }
 
 pub struct ClockRegistryEntry {
@@ -212,23 +342,58 @@ pub struct DetectorRegistryEntry {
 
 `PeerId` reuses `auki-identity::PeerId`.
 
-### `SensorBody` knock-on
+### `SensorBody` restructuring
 
-The body's nested frame reference becomes a `RegistryRef`:
+Each body gains a `type: String` (the open-string sensor.type from §1) and switches frame refs to `RegistryRef`. `SensorBody::PointCloud` is renamed to `SensorBody::Rangefinder`; a new `SensorBody::Rf` variant ships with a minimal body.
 
 ```rust
 pub enum SensorBody {
     Camera {
-        width: u32, height: u32, frame_rate_hz: f32,
-        pixel_format: String, color_space: String,
-        intrinsics_model: String, distortion_model: String,
-        frame: RegistryRef,                  // was (frame_id, frame_hash)
+        r#type: String,                              // "rgb" | "depth" | "ir" | "mono" | "multispectral" | …
+        width: u32,
+        height: u32,
+        frame_rate_hz: u32,
+        pixel_format: String,
+        color_space: String,
+        intrinsics_model: String,
+        distortion_model: String,
+        frame: RegistryRef,                          // was (frame_id, frame_hash)
     },
-    PointCloud { frame: RegistryRef, … },
-    Audio { … },
-    JointEncoders { … },
+    Rangefinder {
+        r#type: String,                              // "point_cloud" | "2d_lidar" | "3d_lidar" | "ultrasonic" | "radar" | …
+        // For type="point_cloud" the body carries the migrated PointCloud fields below.
+        // For other types, the additional fields are omitted (Option/None) until
+        // a future card lands the schema for that type.
+        fields: Vec<PointField>,                     // point_cloud type
+        point_step: u32,                             // point_cloud type
+        is_bigendian: bool,                          // point_cloud type
+        frame_rate_hz: u32,
+        frame: RegistryRef,
+    },
+    Rf {
+        r#type: String,                              // "wifi" | "bluetooth" | "uwb" | …
+        frame: RegistryRef,
+        // Minimal v1 body — actual rf-sensor canonical fields land via a follow-up
+        // card when an SDK producer ships. The kind exists in v1 so catalog rows
+        // can declare `sensor.kind = "rf"` without a registry-shape mismatch.
+    },
+    Audio {
+        r#type: String,                              // "pcm" | "opus" | …
+        sample_rate_hz: u32,
+        channels: u8,
+        sample_format: String,
+        frame: RegistryRef,
+    },
+    JointEncoders {
+        r#type: String,                              // "absolute" | "incremental"
+        joint_count: u8,
+        units: String,
+        frame: RegistryRef,
+    },
 }
 ```
+
+Migration: existing `SensorBody::PointCloud` bodies become `SensorBody::Rangefinder` with `type = "point_cloud"`. Existing `Camera` / `Audio` / `JointEncoders` bodies gain a `type` field with the documented default for that kind (`type = "rgb"` for camera, `type = "pcm"` for audio, `type = "absolute"` for joint_encoders) — adjusted by the producer where they know better.
 
 ### Canonical JSON
 
@@ -501,8 +666,16 @@ Analogous `PoseLogHandle`, `TimeTransformLogHandle`, `DetectionLogHandle`, `Mate
 ```rust
 let mut session = Session::new(self_peer_id, "boosterapp");
 
-let sensor = session.register_sensor("head_left_rgb", Camera { … })?;
-let clock  = session.register_clock("sdk_clock",      MonotonicClock { … })?;
+let sensor = session.register_sensor("head_left_rgb", SensorBody::Camera {
+    r#type: "rgb".to_string(),
+    width: 1920, height: 1200, frame_rate_hz: 30,
+    pixel_format: "rgb8".to_string(),
+    color_space: "srgb".to_string(),
+    intrinsics_model: "pinhole".to_string(),
+    distortion_model: "brown_conrady".to_string(),
+    frame: head_left_camera_optical_ref.clone(),
+})?;
+let clock  = session.register_clock("sdk_clock",      ClockBody::MonotonicClock { /* … */ })?;
 let frame  = session.register_frame("head_left_camera_optical", FrameDef::ros_optical())?;
 
 let log = session.register_sensor_log(SensorLogSpec {
@@ -597,6 +770,45 @@ Deep design (sample lineage on multi-source convergence, materializer-of-materia
 1. If `log_ref.source_peer_id` is reachable in the cluster, prefer it (canonical source has freshest data).
 2. Otherwise, walk peer catalogs and pick any peer advertising `(source_peer_id, resource_id)`.
 
+### `TransformEdgeResource` consumer migration
+
+Today consumers read a static rigid transform directly from `TransformEdgeResource.transform` on the catalog row — a single inline field. After #216 there is no separate transform-edge variant; rigid transforms are sealed one-sample `pose_log` rows with `pose.writer_mode = "rigid"`.
+
+Migration recipe for consumers:
+
+1. Walk a peer's catalog and filter for rows where `variant = "pose_log"` and `pose.writer_mode = "rigid"` and `state = "sealed"`.
+2. For each, open a stream against the canonical owner with `StreamRequest { source_peer_id, resource_id, from: ReadFrom::FromStart }`.
+3. Read exactly one `SpatialTransform` sample. Use it as the rigid transform.
+
+Consumer code that previously did:
+
+```rust
+for row in catalog {
+    if let ResourceEntry::TransformEdge(edge) = row {
+        scenegraph.insert_rigid_edge(edge.from_frame_id, edge.to_frame_id, edge.transform);
+    }
+}
+```
+
+becomes:
+
+```rust
+for row in catalog {
+    if row.variant == Variant::PoseLog
+        && row.pose.as_ref().map_or(false, |p| p.writer_mode == PoseWriterMode::Rigid)
+    {
+        let mut stream = session.open_remote_stream::<SpatialTransform>(
+            LogRef { source_peer_id: row.source_peer_id.clone(), resource_id: row.resource_id.clone() },
+            ReadFrom::FromStart,
+        ).await?;
+        let sample = stream.next().await.unwrap()?;
+        scenegraph.insert_rigid_edge(row.manifest.pose_from(), row.manifest.pose_to(), sample.payload);
+    }
+}
+```
+
+A `Session` helper (`Session::resolve_static_transform(log_ref)`) can wrap the open-stream-then-one-sample dance so consumers don't write that loop by hand. Add the helper as part of Phase 4.
+
 ## §6 — `resource_id` derivation rules
 
 SDK-enforced format strings per log type. Apps never type the resource_id literal — it derives from the log's bindings inside `Session::register_*_log`.
@@ -640,10 +852,13 @@ Pose / time-transform format strings encode only the local IDs (no peer prefix).
 
 ```
 crates/auki-registry/tests/locked/
-  sensor_camera.json
-  sensor_point_cloud.json
-  sensor_audio.json
-  sensor_joint_encoders.json
+  sensor_camera_rgb.json
+  sensor_camera_depth.json
+  sensor_rangefinder_point_cloud.json
+  sensor_rangefinder_3d_lidar.json
+  sensor_rf_wifi.json
+  sensor_audio_pcm.json
+  sensor_joint_encoders_absolute.json
   clock_monotonic.json
   clock_utc.json
   frame_ros_body.json
@@ -661,11 +876,14 @@ crates/auki-manifests/tests/locked/
   detection_log.json
 
 crates/auki-network/tests/locked/
-  catalog_row_live_rolling_camera.json
-  catalog_row_live_fixed_pose.json
-  catalog_row_sealed_camera.json
-  catalog_row_sealed_one_sample_pose.json
-  catalog_row_materialization.json
+  catalog_row_sensor_log_camera_live_rolling.json
+  catalog_row_sensor_log_rangefinder_live_rolling.json
+  catalog_row_sensor_log_sealed.json
+  catalog_row_sensor_log_materialization.json
+  catalog_row_pose_log_movable_live_fixed.json
+  catalog_row_pose_log_rigid_sealed.json
+  catalog_row_time_transform_log.json
+  catalog_row_detection_log.json
   resources_request_response.json
   registries_request_response.json
   stream_request.json
@@ -709,9 +927,9 @@ A `cargo xtask regen-locked-fixtures` target regenerates every locked JSON fixtu
 
 | Crate | Change |
 |-------|--------|
-| `auki-registry` | Add `peer_id` to all 4 entries; introduce `RegistryRef`, `LogRef`; update `SensorBody` to use `RegistryRef` for frame ref; update disk layout; regen locked fixtures |
+| `auki-registry` | Add `peer_id` to all 4 entries; introduce `RegistryRef`, `LogRef`; rename `SensorBody::PointCloud` → `SensorBody::Rangefinder`; add `SensorBody::Rf` variant; add `type: String` to every sensor body; update disk layout; regen locked fixtures |
 | `auki-manifests` | Add `source_peer_id` + `writer_peer_id` to all 4 manifests; switch cross-refs to `RegistryRef` / `LogRef`; regen locked fixtures |
-| `auki-network` | New `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/stream/0.2.0` protocols; delete old `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`; new `ResourceEntry` shape per §1; new `StreamRequest` per §5 |
+| `auki-network` | New `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/stream/0.2.0` protocols; delete old `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`; new `ResourceEntry` shape per §1 with `variant` + `sensor` + `pose` blocks; new `StreamRequest` per §5 |
 | `auki-domain` | Stop being app-facing; expose the four protocols above against a session handle; remove `stream_manifest`, `cluster_manager` public re-exports that apps used; integration becomes internal-to-`auki-session` |
 | `auki-session` (NEW) | Per-process Session, declarative registration API, log handles, materialization, owns Domain internally |
 | `auki-logs` | No schema change; gain a `HeadSpec`-aware constructor variant for fixed-head logs |

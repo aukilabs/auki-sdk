@@ -12,6 +12,19 @@
 
 ---
 
+## Revision notes (2026-05-27 rev 2)
+
+The spec was revised after #216 was edited post-brainstorm. **Read the spec's "Revision history" section first.** Plan changes versus rev 1:
+
+1. **SensorBody restructure (Phase 1):** `SensorBody::PointCloud` → `SensorBody::Rangefinder`. New `SensorBody::Rf` variant with a minimal body. Every sensor body (Camera / Rangefinder / Rf / Audio / JointEncoders) gains a `r#type: String` field. Migration defaults: `type = "point_cloud"` for migrated Rangefinder, `type = "rgb"` for Camera, `type = "pcm"` for Audio, `type = "absolute"` for JointEncoders. Locked fixtures regenerate accordingly — the fixture list in the next section reflects the post-revision names.
+2. **Catalog row three-axis taxonomy (Phase 3):** Row gains a closed `variant` enum (`sensor_log | pose_log | time_transform_log | detection_log`) plus a variant-specific `sensor` block (only on sensor_log: `kind`, `type`, `sensor_id`, `sensor_hash`) and `pose` block (only on pose_log: `writer_mode`). The old single `Kind` enum from rev 1 is dropped; `SensorKind` is now a separate closed enum (`camera | rangefinder | rf | audio | joint_encoders`). `sensor.type` is open-string with documented constants per kind.
+3. **time_transform_log and detection_log are explicit catalog variants (Phase 3):** not generic future rows. Locked fixtures for each. The fixture list updates accordingly.
+4. **TransformEdgeResource consumer migration (added to Phase 4 + Phase 5):** existing consumers that read `.transform` inline must migrate to `Session::resolve_static_transform(log_ref)`, which opens the pose log and reads one sample. Helper lands in Phase 4 as a Session extension. Phase 5's auki-domain refactor removes the old TransformEdge code paths.
+
+**Where this revision-notes block conflicts with a task body below, this block wins.** Tasks 1.2 (`Camera` struct), 1.5 (locked fixtures), 3.2 (`Kind` enum), 3.3 (head/extent), 3.4 (`ResourceEntry`), 3.6 (wire fixtures), 4.2-4.5 (`Session` log specs) have to be rewritten against the new shape. The subagent dispatching each task should read the corresponding spec section first and treat the rev-1 task body as the *structure* (test → fail → implement → pass → commit) but rewrite the *content* (struct fields, fixture names, assertions).
+
+---
+
 ## File Structure
 
 **Created:**
@@ -28,10 +41,13 @@
 - `bindings/python/auki-session-py/python_tests/test_session.py`
 
 **Locked test fixtures (each as one JSON file):**
-- `crates/auki-registry/tests/locked/sensor_camera.json`
-- `crates/auki-registry/tests/locked/sensor_point_cloud.json`
-- `crates/auki-registry/tests/locked/sensor_audio.json`
-- `crates/auki-registry/tests/locked/sensor_joint_encoders.json`
+- `crates/auki-registry/tests/locked/sensor_camera_rgb.json`
+- `crates/auki-registry/tests/locked/sensor_camera_depth.json`
+- `crates/auki-registry/tests/locked/sensor_rangefinder_point_cloud.json`
+- `crates/auki-registry/tests/locked/sensor_rangefinder_3d_lidar.json`
+- `crates/auki-registry/tests/locked/sensor_rf_wifi.json`
+- `crates/auki-registry/tests/locked/sensor_audio_pcm.json`
+- `crates/auki-registry/tests/locked/sensor_joint_encoders_absolute.json`
 - `crates/auki-registry/tests/locked/clock_monotonic.json`
 - `crates/auki-registry/tests/locked/clock_utc.json`
 - `crates/auki-registry/tests/locked/frame_ros_body.json`
@@ -45,19 +61,22 @@
 - `crates/auki-manifests/tests/locked/pose_log_movable.json`
 - `crates/auki-manifests/tests/locked/time_transform_log.json`
 - `crates/auki-manifests/tests/locked/detection_log.json`
-- `crates/auki-network/tests/locked/catalog_row_live_rolling_camera.json`
-- `crates/auki-network/tests/locked/catalog_row_live_fixed_pose.json`
-- `crates/auki-network/tests/locked/catalog_row_sealed_camera.json`
-- `crates/auki-network/tests/locked/catalog_row_sealed_one_sample_pose.json`
-- `crates/auki-network/tests/locked/catalog_row_materialization.json`
+- `crates/auki-network/tests/locked/catalog_row_sensor_log_camera_live_rolling.json`
+- `crates/auki-network/tests/locked/catalog_row_sensor_log_rangefinder_live_rolling.json`
+- `crates/auki-network/tests/locked/catalog_row_sensor_log_sealed.json`
+- `crates/auki-network/tests/locked/catalog_row_sensor_log_materialization.json`
+- `crates/auki-network/tests/locked/catalog_row_pose_log_movable_live_fixed.json`
+- `crates/auki-network/tests/locked/catalog_row_pose_log_rigid_sealed.json`
+- `crates/auki-network/tests/locked/catalog_row_time_transform_log.json`
+- `crates/auki-network/tests/locked/catalog_row_detection_log.json`
 - `crates/auki-network/tests/locked/stream_request.json`
 
 **Modified:**
 - `Cargo.toml` (workspace) — add `auki-session` + `auki-session-py` members
-- `crates/auki-registry/src/lib.rs` — `peer_id` on entries, `RegistryRef`, `LogRef`, `SensorBody` body update, charset validation
+- `crates/auki-registry/src/lib.rs` — `peer_id` on entries, `RegistryRef`, `LogRef`, `SensorBody` restructure (`Rangefinder` rename, new `Rf` variant, `type: String` field on every body), charset validation
 - `crates/auki-registry/src/storage.rs` (new helper module or extend lib.rs) — disk path now includes `peer_id` segment
 - `crates/auki-manifests/src/lib.rs` — source/writer split, `RegistryRef`/`LogRef` adoption in all four manifests + builders
-- `crates/auki-network/src/resources_protocol.rs` — new `ResourceEntry`, `Kind` closed enum, `Head`/`Extent`/`Available` blocks, drop the three legacy resource structs
+- `crates/auki-network/src/resources_protocol.rs` — new `ResourceEntry` with `variant` closed enum + `SensorKind` closed enum + `sensor`/`pose` blocks; `Head`/`Extent`/`Available` blocks; drop the three legacy resource structs
 - `crates/auki-network/src/stream_protocol.rs` — new `StreamRequest` (source_peer_id + resource_id + ReadFrom), drop legacy fields
 - `crates/auki-network/src/lib.rs` — `RESOURCES_PROTOCOL` / `REGISTRIES_PROTOCOL` / `STREAM_PROTOCOL` constants → `0.2.0`
 - `crates/auki-domain/src/lib.rs` — re-orient as internal: stop re-exporting wire types as app surface; remove `stream_manifest` public-builder

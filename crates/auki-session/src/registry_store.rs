@@ -12,3 +12,17 @@ impl<T> Default for RegistryStore<T> {
         Self { entries: HashMap::new() }
     }
 }
+
+impl<T> RegistryStore<T> {
+    pub fn insert(&mut self, id: impl Into<String>, entry: T) {
+        self.entries.insert(id.into(), entry);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&T> {
+        self.entries.get(id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
+        self.entries.iter()
+    }
+}

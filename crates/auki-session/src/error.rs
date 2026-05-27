@@ -6,6 +6,8 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
     #[error("invalid registry id: {0}")]
     InvalidId(#[from] auki_registry::RegistryIdError),
+    #[error("registry: {0}")]
+    Registry(#[from] auki_registry::Error),
     #[error("duplicate log {source_peer_id}/{resource_id}")]
     DuplicateLog { source_peer_id: String, resource_id: String },
     #[error("materialization: {0}")]

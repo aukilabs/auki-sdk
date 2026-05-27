@@ -60,6 +60,11 @@ browser-reachable Sentinel peer that publishes the shared preview offer profile,
 generates JPEG preview frames, and prints/writes address-only browser bootstrap
 JSON plus compact P2P state.
 
+`examples/p2p-preview-browser` now provides the first browser receiver: it loads
+Sentinel bootstrap JSON, creates a browser peer, connects, loads offers,
+subscribes to the shared preview profile, renders JPEG frames, and shows basic
+peer/offer/frame diagnostics.
+
 ## Networking Matrix
 
 The SDK demo path should cover every peer-type pairing:
@@ -212,16 +217,16 @@ Sentinel/Park integration.
         and recent failure codes.
   - [ ] CLI reports active served subscriptions and per-transport path details
         once the browser subscriber exists.
-- [ ] Add `examples/p2p-preview-browser/`.
-  - [ ] Small web app using `auki-p2p-browser`.
-  - [ ] Loads address-only bootstrap JSON.
-  - [ ] Connects lifecycle, loads offers, subscribes, and renders JPEG frames.
+- [x] Add `examples/p2p-preview-browser/`.
+  - [x] Small web app using `auki-p2p-browser`.
+  - [x] Loads address-only bootstrap JSON.
+  - [x] Connects lifecycle, loads offers, subscribes, and renders JPEG frames.
   - [ ] Publishes its own generated preview stream.
   - [ ] Adds browser camera publishing later, behind a user action.
-  - [ ] Shows local peer id, connected peers, transport path, relay status,
-        offers, and live preview tiles.
-  - [ ] Shows active subscriptions, frames received, last frame time, selected
-        source, and recent connection/path failures.
+  - [x] Shows local peer id, connected peers, offers, live preview tiles, frames
+        received, last frame time, selected offer, and recent failures.
+  - [ ] Shows transport path, relay status, and active subscription detail once
+        the browser runtime exposes those diagnostics.
 - [ ] Support multiple Sentinels/native nodes in one demo session.
 - [ ] Support browser-to-browser preview where the native node is only
       bootstrap/signaling/relay, not the media data path.

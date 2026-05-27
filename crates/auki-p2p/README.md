@@ -83,6 +83,9 @@ Current public surface:
   `PublishOfferInput` registers a Subscribe offer backed by a byte-source
   factory, while `AukiNode::serve_next_published_subscription(...)` streams the
   source as RFC spatial messages.
+- `preview` defines the shared JPEG preview offer profile on top of generic
+  publication. Generated frames and camera capture remain source adapters, not
+  runtime concepts.
 - `paths` defines high-level Get and Subscribe orchestration over loaded offers:
   request shaping, response validation, data-message validation, path status,
   and sequence-gap diagnostics before transport wiring.

@@ -15,6 +15,7 @@ pub mod offer_catalog_streams;
 pub mod offer_loading;
 pub mod path_streams;
 pub mod paths;
+pub mod preview;
 pub mod protocols;
 pub mod publication;
 pub mod relationship;
@@ -69,6 +70,11 @@ pub use paths::{
     GetClient, GetInput, GetOutcome, PathClientError, PathContext, PathOrchestrationError,
     SubscribeClient, SubscribeInput, SubscriptionHandle, accept_subscribe_data_frame,
     end_subscription_from_frame, get, subscribe,
+};
+pub use preview::{
+    PREVIEW_OFFER_KIND, PREVIEW_PAYLOAD_ENCODING, PREVIEW_PAYLOAD_MEDIA_TYPE,
+    PREVIEW_PAYLOAD_SCHEMA_VERSION, PREVIEW_PAYLOAD_TYPE, PreviewOfferOptions, preview_offer_input,
+    preview_payload_descriptor, publish_preview_offer,
 };
 pub use publication::{
     PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteSource,

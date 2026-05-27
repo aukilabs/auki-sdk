@@ -52,8 +52,8 @@ new path across browser and native peers without breaking the shipped
 identity, bootstrap parsing, js-libp2p transport setup, lifecycle handshakes,
 remote offer-catalog loading, Subscribe consumption, generic local offer
 publication, inbound offer-catalog serving, and inbound Subscribe serving
-through `auki-protocol-wasm` validators. Generated preview publishing is a
-helper/profile on top of the generic offer API.
+through `auki-protocol-wasm` validators. Preview publishing is a helper/profile
+on top of the generic offer API.
 
 ## Networking Matrix
 
@@ -171,14 +171,14 @@ interface AukiBrowserPeer {
 
 ## Phase 3 - Preview Offer Profile
 
-- [ ] Define one shared preview profile over the generic offer APIs, not inside
+- [x] Define one shared preview profile over the generic offer APIs, not inside
       core runtime logic.
-- [ ] Native helper wraps `AukiNode::publish_offer(...)` and
+- [x] Native helper wraps `AukiNode::publish_offer(...)` and
       `PublishOfferInput`.
-- [ ] Browser helper wraps `AukiBrowserPeer.publishOffer(...)`.
-- [ ] Use `subscribe` access.
-- [ ] Use JPEG payload bytes in `auki.spatial_message.v1` for the first demo.
-- [ ] Keep camera capture and generated-frame production outside SDK core.
+- [x] Browser helper wraps `AukiBrowserPeer.publishOffer(...)`.
+- [x] Use `subscribe` access.
+- [x] Use JPEG payload bytes in `auki.spatial_message.v1` for the first demo.
+- [x] Keep camera capture and generated-frame production outside SDK core.
 - [ ] Reference Sensor, Clock, and Frame registry entries by id/hash when the
       profile needs real Sentinel metadata.
 - [ ] Keep the old Park polling endpoint alive as compatibility.
@@ -242,7 +242,7 @@ Rust:
 - [x] Test relay server address emission.
 - [x] Test native generic published-offer registration, withdrawal, and
       Subscribe byte streaming.
-- [ ] Test shared preview profile construction on native and browser helpers.
+- [x] Test shared preview profile construction on native and browser helpers.
 - [ ] Test that node-to-node TCP/QUIC still works.
 
 Browser:
@@ -259,7 +259,7 @@ Browser:
       not Subscribe start/end control frames.
 - [x] Browser peer producer tests for inbound offer-catalog and Subscribe
       streams.
-- [ ] Browser preview helper test matches the shared profile descriptor.
+- [x] Browser preview helper test matches the shared profile descriptor.
 
 End-to-end:
 

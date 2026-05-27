@@ -15,10 +15,11 @@ IndexedDB-backed seed persistence, identity derivation, Rust-backed protocol
 WASM initialization, a js-libp2p transport factory, lifecycle handshake,
 remote offer-catalog loading, high-level Subscribe consumption, generic local
 offer publication, inbound offer-catalog serving, and inbound Subscribe serving.
-Generated preview publishing is a helper/profile on top of the generic offer
-API. Protocol frame and message validation is intentionally routed through
+Preview publishing is a helper/profile on top of the generic offer API.
+Generated frames and camera capture are source choices outside the peer core.
+Protocol frame and message validation is intentionally routed through
 `auki-protocol-wasm` instead of a TypeScript reimplementation.
 
 The remaining browser-peer work is real browser-to-browser/native end-to-end
 evidence, live source lifecycle hardening, camera capture, and richer
-application profiles beyond generated preview frames.
+application profiles beyond preview frames.

@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { peerIdFromSeed } from "./identity.js";
 import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
-import { publishGeneratedPreview } from "./preview.js";
+import { publishPreviewOffer } from "./preview.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   createOfferCatalogRequest,
@@ -399,12 +399,12 @@ describe("AukiBrowserPeer shell", () => {
     expect(end.reason).toBe("complete");
   });
 
-  it("keeps generated preview as a helper over generic offer publishing", async () => {
+  it("keeps preview publishing as a helper over generic offer publishing", async () => {
     const fixture = await fixtureJson("v1_offer_catalogs.json");
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
 
-    await publishGeneratedPreview(peer, [], {
+    await publishPreviewOffer(peer, [], {
       domainId: fixture.inputs.domain_id as string,
       offerId: "browser-preview",
     });

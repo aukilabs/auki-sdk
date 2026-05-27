@@ -1,4 +1,4 @@
-//! `/auki/resources/0.0.1` - libp2p protocol for fetching a peer's
+//! `/auki/resources/0.2.0` - libp2p protocol for fetching a peer's
 //! current resource catalog over the cluster's libp2p plane.
 //!
 //! Resources are the generalized discovery layer above one-off
@@ -21,7 +21,7 @@ use thiserror::Error;
 /// libp2p protocol id for "what resources can this peer provide
 /// right now?". Stable; bump version only on an incompatible
 /// wire-shape change.
-pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.0.1");
+pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.2.0");
 
 /// Cap on a single framed message. 1 MiB leaves room for catalogs with
 /// embedded registry JSON and several transform edges while bounding

@@ -1,4 +1,4 @@
-//! `/auki/stream/0.1.0` — libp2p substream protocol carrying typed
+//! `/auki/stream/0.2.0` — libp2p substream protocol carrying typed
 //! [`Stream<T>`] data, encoded as protobuf via prost. Step 2 of the
 //! [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md)
 //! moved the wire format off JSON-via-serde-json onto protobuf.
@@ -108,7 +108,7 @@ pub use auki_datatypes::{audio, joint_encoders, point_cloud, pose};
 /// `auki-datatypes`'s `auki.stream` package; consumers update their
 /// decoders in lockstep. 1.0.0 is reserved for the SDK's first
 /// official release.
-pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
+pub const STREAM_PROTOCOL: &str = "/auki/stream/0.2.0";
 
 /// Maximum framed-message size on the wire, in bytes. Bounded so a peer
 /// cannot drive an OOM by sending an arbitrarily-large length prefix;
@@ -255,7 +255,7 @@ mod tests {
     fn protocol_id_is_locked() {
         // Wire format. Coordinate with Boosterapp, Sentinel, Park, and
         // any cross-language reimplementation before touching it.
-        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.1.0");
+        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 
     #[test]

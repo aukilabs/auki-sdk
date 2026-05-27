@@ -522,3 +522,17 @@ mod swift_bindings_tests {
         assert_ne!(a.peer_id_string(), b.peer_id_string());
     }
 }
+
+#[cfg(all(test, feature = "swarm"))]
+mod protocol_id_tests {
+    use crate::registries_protocol::REGISTRIES_PROTOCOL;
+    use crate::resources_protocol::RESOURCES_PROTOCOL;
+    use crate::stream_protocol::STREAM_PROTOCOL;
+
+    #[test]
+    fn protocols_bumped_to_v0_2_0() {
+        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
+        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.2.0");
+        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
+    }
+}

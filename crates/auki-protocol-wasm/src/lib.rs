@@ -233,25 +233,10 @@ pub fn verify_domain_declaration(value: JsValue) -> Result<JsValue, JsValue> {
 
 /// Create a signed domain delegation.
 #[wasm_bindgen(js_name = createDomainDelegation)]
-pub fn create_domain_delegation(
-    owner_seed: &[u8],
-    domain_id: &str,
-    delegate_wallet_public_key: &str,
-    delegate_peer_id: &str,
-    scopes: JsValue,
-    valid_from: &str,
-    expires_at: &str,
-    label: Option<String>,
-) -> Result<JsValue, JsValue> {
+pub fn create_domain_delegation(owner_seed: &[u8], params: JsValue) -> Result<JsValue, JsValue> {
     ok_value(create_domain_delegation_value(
         owner_seed,
-        domain_id,
-        delegate_wallet_public_key,
-        delegate_peer_id,
-        js_to_string_vec(scopes, "delegation_scopes")?,
-        valid_from,
-        expires_at,
-        label.as_deref(),
+        js_to_value(params)?,
     ))
 }
 
@@ -666,17 +651,56 @@ fn verify_domain_declaration_value(value: Value) -> ProtocolResult<Value> {
         .map_err(domain_declaration_error)
 }
 
-fn create_domain_delegation_value(
-    owner_seed: &[u8],
-    domain_id: &str,
-    delegate_wallet_public_key: &str,
-    delegate_peer_id: &str,
-    scopes: Vec<String>,
-    valid_from: &str,
-    expires_at: &str,
-    label: Option<&str>,
-) -> ProtocolResult<Value> {
+fn create_domain_delegation_value(owner_seed: &[u8], params: Value) -> ProtocolResult<Value> {
     let wallet = wallet_from_seed(owner_seed)?;
+    let params = params_object(
+        &params,
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let domain_id = required_param_string(
+        params,
+        "domain_id",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let delegate_wallet_public_key = required_param_string(
+        params,
+        "delegate_wallet_public_key",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let delegate_peer_id = required_param_string(
+        params,
+        "delegate_peer_id",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let scopes = required_param_string_array(
+        params,
+        "scopes",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let valid_from = required_param_string(
+        params,
+        "valid_from",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let expires_at = required_param_string(
+        params,
+        "expires_at",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+    let label = optional_param_string(
+        params,
+        "label",
+        "domain_delegation",
+        error::DOMAIN_INVALID_DELEGATION,
+    )?;
+
     let delegate_wallet_public_key = parse_wallet_public_key(
         delegate_wallet_public_key,
         "delegate_wallet_public_key",
@@ -703,6 +727,99 @@ fn create_domain_delegation_value(
     )
     .map(DomainDelegation::into_value)
     .map_err(domain_delegation_error)
+}
+
+fn params_object<'a>(
+    value: &'a Value,
+    kind: &'static str,
+    failure_code: &'static str,
+) -> ProtocolResult<&'a Map<String, Value>> {
+    value.as_object().ok_or_else(|| {
+        ProtocolWasmError::with_failure_code(kind, "params must be an object", failure_code)
+    })
+}
+
+fn required_param_string<'a>(
+    object: &'a Map<String, Value>,
+    field: &'static str,
+    kind: &'static str,
+    failure_code: &'static str,
+) -> ProtocolResult<&'a str> {
+    object
+        .get(field)
+        .ok_or_else(|| {
+            ProtocolWasmError::with_failure_code(
+                kind,
+                format!("params missing {field}"),
+                failure_code,
+            )
+        })?
+        .as_str()
+        .ok_or_else(|| {
+            ProtocolWasmError::with_failure_code(
+                kind,
+                format!("params field {field} must be a string"),
+                failure_code,
+            )
+        })
+}
+
+fn optional_param_string<'a>(
+    object: &'a Map<String, Value>,
+    field: &'static str,
+    kind: &'static str,
+    failure_code: &'static str,
+) -> ProtocolResult<Option<&'a str>> {
+    object
+        .get(field)
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                ProtocolWasmError::with_failure_code(
+                    kind,
+                    format!("params field {field} must be a string"),
+                    failure_code,
+                )
+            })
+        })
+        .transpose()
+}
+
+fn required_param_string_array(
+    object: &Map<String, Value>,
+    field: &'static str,
+    kind: &'static str,
+    failure_code: &'static str,
+) -> ProtocolResult<Vec<String>> {
+    let values = object
+        .get(field)
+        .ok_or_else(|| {
+            ProtocolWasmError::with_failure_code(
+                kind,
+                format!("params missing {field}"),
+                failure_code,
+            )
+        })?
+        .as_array()
+        .ok_or_else(|| {
+            ProtocolWasmError::with_failure_code(
+                kind,
+                format!("params field {field} must be an array"),
+                failure_code,
+            )
+        })?;
+
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                ProtocolWasmError::with_failure_code(
+                    kind,
+                    format!("params field {field} must be an array of strings"),
+                    failure_code,
+                )
+            })
+        })
+        .collect()
 }
 
 fn parse_domain_delegation_value(value: Value) -> ProtocolResult<Value> {
@@ -1355,13 +1472,15 @@ mod tests {
         let delegate_public_key = wallet_public_key_from_seed_value(&delegate_seed).unwrap();
         let delegation = create_domain_delegation_value(
             &owner_seed,
-            domain_id,
-            &delegate_public_key,
-            PEER_ID,
-            vec!["advertise".to_owned(), "serve".to_owned()],
-            VALID_FROM,
-            EXPIRES_AT,
-            Some("sentinel"),
+            json!({
+                "domain_id": domain_id,
+                "delegate_wallet_public_key": delegate_public_key,
+                "delegate_peer_id": PEER_ID,
+                "scopes": ["advertise", "serve"],
+                "valid_from": VALID_FROM,
+                "expires_at": EXPIRES_AT,
+                "label": "sentinel",
+            }),
         )
         .unwrap();
         let verified_delegation = verify_domain_delegation_value(delegation).unwrap();

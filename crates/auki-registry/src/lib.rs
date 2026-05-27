@@ -532,6 +532,7 @@ pub enum DetectorBody {
     Aruco(Aruco),
     Qr(Qr),
     Esl(Esl),
+    ObjectDetection(ObjectDetection),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,6 +549,15 @@ pub struct Qr {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Esl {}
+
+/// Generic ML-based object detection detector body. Carries the model
+/// name as the primary identity field; the output types list on
+/// [`DetectorRegistryEntry`] declares what detection labels it emits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectDetection {
+    /// Model identifier, e.g. `"yolo_v8n"`, `"yolo_v8s"`.
+    pub model: String,
+}
 
 impl DetectorRegistryEntry {
     pub fn canonical_bytes(&self) -> Vec<u8> {

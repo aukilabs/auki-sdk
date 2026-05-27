@@ -17,6 +17,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 auki-manifests-rs = { package = "auki-manifests", path = "../../../crates/auki-manifests" }
+auki-registry-rs = { package = "auki-registry", path = "../../../crates/auki-registry" }
 serde_json = "1"
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 

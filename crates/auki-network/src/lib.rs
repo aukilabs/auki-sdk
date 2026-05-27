@@ -119,6 +119,23 @@ pub mod resources_protocol;
 #[cfg(feature = "swarm")]
 pub mod registries_protocol;
 
+// ─── SessionHandle ────────────────────────────────────────────────────────────
+
+/// Source of resource catalog rows that `auki-domain`'s resources protocol
+/// handler reads from. Implemented by `auki_session::Session`.
+///
+/// The trait is defined here (in `auki-network`) so both `auki-domain` and
+/// `auki-session` can depend on it without a cycle:
+/// `auki-session` depends on `auki-network` and implements the trait;
+/// `auki-domain` depends on `auki-network` and consumes the trait.
+#[cfg(feature = "swarm")]
+pub trait SessionHandle: Send + Sync {
+    /// Returns all locally-known resource catalog rows: own logs plus
+    /// materialized logs from other peers. Called whenever a remote peer
+    /// asks this peer for its catalog over `/auki/resources/0.2.0`.
+    fn catalog(&self) -> Vec<resources_protocol::ResourceEntry>;
+}
+
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
@@ -520,5 +537,19 @@ mod swift_bindings_tests {
         let a = PeerIdentity::from_wallet(Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed"));
         let b = PeerIdentity::from_wallet(Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed"));
         assert_ne!(a.peer_id_string(), b.peer_id_string());
+    }
+}
+
+#[cfg(all(test, feature = "swarm"))]
+mod protocol_id_tests {
+    use crate::registries_protocol::REGISTRIES_PROTOCOL;
+    use crate::resources_protocol::RESOURCES_PROTOCOL;
+    use crate::stream_protocol::STREAM_PROTOCOL;
+
+    #[test]
+    fn protocols_bumped_to_v0_2_0() {
+        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
+        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.2.0");
+        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

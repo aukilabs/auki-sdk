@@ -62,8 +62,8 @@ use crate::stream_bridge::PyAsyncIterStream;
 // ─── StreamRequest ───────────────────────────────────────────────────────────
 
 /// Inbound request the SDK delivers to the Python `stream_provider`.
-/// Carries either a sensor id (`sensor_stream`) or a generalized
-/// resource id (`pose_stream`), using additive wire fields per grimsby D2.
+/// Carries `resource_id` (the log's stable identity) and `source_peer_id`
+/// (the peer that originally wrote the log).
 #[pyclass(name = "StreamRequest", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyStreamRequest {
@@ -73,19 +73,15 @@ pub struct PyStreamRequest {
 #[pymethods]
 impl PyStreamRequest {
     #[new]
-    #[pyo3(signature = (*, sensor_id))]
-    fn new(sensor_id: String) -> Self {
+    #[pyo3(signature = (*, resource_id, source_peer_id = String::new()))]
+    fn new(resource_id: String, source_peer_id: String) -> Self {
         Self {
             inner: RustStreamRequest {
-                sensor_id,
+                resource_id,
+                source_peer_id,
                 ..Default::default()
             },
         }
-    }
-
-    #[getter]
-    fn sensor_id(&self) -> &str {
-        &self.inner.sensor_id
     }
 
     #[getter]
@@ -93,15 +89,16 @@ impl PyStreamRequest {
         &self.inner.resource_id
     }
 
+    #[getter]
+    fn source_peer_id(&self) -> &str {
+        &self.inner.source_peer_id
+    }
+
     fn __repr__(&self) -> String {
-        if self.inner.resource_id.is_empty() {
-            format!("StreamRequest(sensor_id={:?})", self.inner.sensor_id)
-        } else {
-            format!(
-                "StreamRequest(sensor_id={:?}, resource_id={:?})",
-                self.inner.sensor_id, self.inner.resource_id
-            )
-        }
+        format!(
+            "StreamRequest(resource_id={:?}, source_peer_id={:?})",
+            self.inner.resource_id, self.inner.source_peer_id
+        )
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -2182,11 +2179,12 @@ mod tests {
     #[test]
     fn stream_request_round_trips() {
         Python::with_gil(|_py| {
-            let r = PyStreamRequest::new("K1-AABB/head_left_cam".into());
-            assert_eq!(r.sensor_id(), "K1-AABB/head_left_cam");
+            let r = PyStreamRequest::new("K1-AABB/head_left_cam".into(), "galbot".into());
+            assert_eq!(r.resource_id(), "K1-AABB/head_left_cam");
+            assert_eq!(r.source_peer_id(), "galbot");
             assert_eq!(
                 r.__repr__(),
-                r#"StreamRequest(sensor_id="K1-AABB/head_left_cam")"#,
+                r#"StreamRequest(resource_id="K1-AABB/head_left_cam", source_peer_id="galbot")"#,
             );
         });
     }
@@ -2669,7 +2667,7 @@ def _make(cluster):
 
             let rust_provider = build_stream_provider(provider.unbind());
             let request = RustStreamRequest {
-                sensor_id: "any".into(),
+                resource_id: "any".into(),
                 ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
@@ -2702,7 +2700,7 @@ def _bad(peer, req):
             let bad = py.eval_bound("_bad", None, None).unwrap();
             let rust_provider = build_stream_provider(bad.unbind());
             let request = RustStreamRequest {
-                sensor_id: "any".into(),
+                resource_id: "any".into(),
                 ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
@@ -2741,7 +2739,7 @@ def _make(cluster):
     def provider(peer, req):
         return cluster.StreamDecision.accept_camera(
             manifest=cluster.StreamManifest(
-                sensor_id=req.sensor_id,
+                sensor_id=req.resource_id,
                 sensor_hash="h",
                 clock_id="c",
                 clock_hash="ch",
@@ -2763,7 +2761,7 @@ def _make(cluster):
             match rust_provider(
                 test_peer_id(),
                 RustStreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
                     ..Default::default()
                 },
             ) {
@@ -2801,7 +2799,7 @@ def _make(cluster):
     def provider(peer, req):
         return cluster.StreamDecision.accept_pointcloud(
             manifest=cluster.StreamManifest(
-                sensor_id=req.sensor_id,
+                sensor_id=req.resource_id,
                 sensor_hash="pc",
                 clock_id="c",
                 clock_hash="ch",
@@ -2823,7 +2821,7 @@ def _make(cluster):
             match rust_provider(
                 test_peer_id(),
                 RustStreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
                     ..Default::default()
                 },
             ) {

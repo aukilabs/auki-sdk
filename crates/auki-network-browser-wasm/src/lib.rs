@@ -1782,7 +1782,8 @@ mod browser_discovery_address_tests {
     #[test]
     fn browser_manager_address_prefers_relay_circuit_over_native_direct_addr() {
         let native = format!("/ip4/192.168.9.130/tcp/4001/p2p/{MANAGER}");
-        let circuit = format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}/p2p-circuit/p2p/{MANAGER}");
+        let circuit =
+            format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}/p2p-circuit/p2p/{MANAGER}");
         let entry = BrowserDiscoveryCluster {
             name: "test2".to_string(),
             manager_peer_id: MANAGER.to_string(),
@@ -1818,10 +1819,9 @@ mod browser_discovery_address_tests {
     fn browser_relay_address_prefers_browser_transport_relay_hint() {
         let native_relay = format!("/ip4/192.168.9.130/tcp/4001/p2p/{RELAY}");
         let browser_relay = format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}");
-        let manager: libp2p::Multiaddr =
-            format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
-                .parse()
-                .unwrap();
+        let manager: libp2p::Multiaddr = format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
+            .parse()
+            .unwrap();
         let entry = BrowserDiscoveryCluster {
             name: "test2".to_string(),
             manager_peer_id: MANAGER.to_string(),
@@ -1838,10 +1838,9 @@ mod browser_discovery_address_tests {
     #[test]
     fn browser_relay_address_derives_relay_base_from_manager_circuit() {
         let browser_relay = format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}");
-        let manager: libp2p::Multiaddr =
-            format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
-                .parse()
-                .unwrap();
+        let manager: libp2p::Multiaddr = format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
+            .parse()
+            .unwrap();
         let entry = BrowserDiscoveryCluster {
             name: "test2".to_string(),
             manager_peer_id: MANAGER.to_string(),

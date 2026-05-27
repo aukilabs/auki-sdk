@@ -999,7 +999,7 @@ async fn cluster_peers_fetch_frame_registry_entry_over_libp2p() {
     .expect("join_cluster B");
 
     let app_root = tempfile::tempdir().expect("temp app root");
-    let frame = FrameRegistryEntry::ros_optical("K1-FAKE/head_cam_points");
+    let frame = FrameRegistryEntry::ros_optical("K1-FAKE", "K1-FAKE/head_cam_points");
     let frame_hash = write_frame(app_root.path(), &frame)
         .expect("write frame entry")
         .hash()

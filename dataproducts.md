@@ -1,224 +1,330 @@
 # Data Products — peer discovery descriptors
 
-> **Status: WIP — working draft, not yet a committed spec.** Schemas, names,
-> and lifecycles in this document are subject to change. No code in the SDK
-> consumes or produces these structures yet.
+> **Status: v1 shipped in #216.** This document describes the post-#216 schema.
+> The pre-#216 `CameraLogProduct` / `PointCloudLogProduct` draft is superseded.
 
 ## Purpose
 
-A *data product* is one externally addressable thing a node can offer — a camera log, a point cloud log, a TimeTransform Log, a Pose Log, a Detection Log, or the live stream that could be materialized into the same shape later. Peers on the Auki network need to discover what data products a node holds: enough metadata to interpret the payload bytes, align timestamps with their own clock, locate the data in space, and decide whether to fetch.
+A *data product* is one externally addressable thing a node can offer — a sensor log, a pose log, a TimeTransform Log, or a Detection Log. Peers on the Auki network need to discover what data products a node holds: enough metadata to interpret the payload bytes, align timestamps with their own clock, locate the data in space, and decide whether to fetch.
 
-This document drafts the **descriptor schema** — the serializable shape one peer sends to another to advertise a single data product. The wire transport (gossip, central registry, direct query, signing/trust) is a separate concern that depends on broader Auki Domain/Map architecture and is deliberately out of scope here.
-
-The descriptor's role: pack everything from the local registries + `LogManifest`/`StreamManifest` + log state that a peer would otherwise discover through multiple round-trips, so that one fetch resolves "what is this and how do I use it."
+This document describes the **`ResourceEntry` descriptor schema** — the serializable shape one peer sends to another to advertise a single data product over `/auki/resources/0.2.0`.
 
 ---
 
-## `CameraLogProduct` — schema v1
+## Resource catalog row (`ResourceEntry`)
 
-The first concrete descriptor, for an RGB camera sensor log. The shape generalizes — point clouds get a parallel `PointCloudLogProduct` with the same scaffolding minus camera-specific bits.
+Every log variant is described by one `ResourceEntry`. The row is discriminated by a closed `variant` field; variant-specific metadata lives in typed blocks (`sensor`, `pose`, `manifest`). Common fields (`source_peer_id`, `writer_peer_id`, `resource_id`, `state`, `head`/`extent`, `available`) appear on every row.
+
+### Three-axis taxonomy for sensor logs
+
+Sensor logs carry three orthogonal identification axes:
+
+| Axis | Field | Type | Notes |
+|------|-------|------|-------|
+| Resource variant | `variant` | closed enum | `sensor_log` |
+| Sensor family | `sensor.kind` | closed enum | `camera \| rangefinder \| rf \| audio \| joint_encoders` |
+| Sensor modality | `sensor.type` | open string | kind-scoped string; see documented constants below |
+
+The three axes are never collapsed. A consumer that needs "all lidar streams" filters on `sensor.kind = "rangefinder"`; a consumer that needs "only 3D lidar" also filters on `sensor.type = "3d_lidar"`. The `sensor_id` / `sensor_hash` pair in the `sensor` block links to the full `SensorRegistryEntry` for byte-level field metadata.
+
+### Closed sensor kinds and documented type constants
+
+Closed `sensor.kind` values:
+
+- `camera` — optical imager (RGB, depth, IR, etc.)
+- `rangefinder` — distance sensor (lidar, radar, ultrasonic, etc.); renamed from the former `point_cloud` kind. `point_cloud` is now a `sensor.type` value under this kind.
+- `rf` — radio-frequency sensor (WiFi CSI, Bluetooth, UWB, etc.)
+- `audio` — microphone or acoustic sensor
+- `joint_encoders` — articulated joint encoder bank
+
+Common `sensor.type` strings per kind (open — producers may use unlisted values):
 
 ```
-CameraLogProduct {
-  schema_version:  u32,                  // 1
-  app_id:          string,               // copied from LogManifest
-  session_id:      string,               // copied from LogManifest
-  log_id:          string,               // local fetch handle, not semantic identity
-  payload_type:    string,               // "auki.camera.CameraFrame"
+camera:         rgb | depth | ir | mono | multispectral
+rangefinder:    point_cloud | 2d_lidar | 3d_lidar | ultrasonic | radar
+rf:             wifi | bluetooth | uwb
+audio:          pcm | opus
+joint_encoders: absolute | incremental
+```
 
-  // ── Sensor identity ─────────────────────────────────────────────
-  // Embedded by value (full registry entry, not just a hash reference)
-  // so the peer can interpret bytes without a follow-up registry fetch.
-  // The hash fields stay because they're cheap and let receivers cache.
-  sensor_id:       string,
-  sensor_hash:     string,
-  sensor_entry:    SensorRegistryEntry,
-                   // For RGB cameras carries:
-                   //   width, height, frame_rate_hz,
-                   //   pixel_format, color_space,
-                   //   intrinsics_model, distortion_model
-                   // Dynamic intrinsics, when present, live per-entry
-                   // in CameraFrame.dynamic_intrinsics.
+### `source_peer_id` vs `writer_peer_id`
 
-  // ── Clock identity ──────────────────────────────────────────────
-  // The clock the log's framing timestamps are expressed in.
-  clock_id:        string,
-  clock_hash:      string,
-  clock_entry:     ClockRegistryEntry,
+Two peer identity fields appear on every row and on every manifest:
 
-  // ── Spatial frame identity ──────────────────────────────────────
-  // The Frame Registry entry for the sample convention
-  // (the camera optical frame for an RGB camera).
-  // The hash references a specific FrameRegistryEntry under
-  // <app_root>/registries/frames/<frame_id>/<hash>.json so a peer can
-  // resolve handedness / axes / units before consuming any pose data
-  // tagged with this frame.
-  frame_id:        string,
-  frame_hash:      string,
-  frame_entry:     FrameRegistryEntry,
-                   // Carries: handedness, axes (x/y/z directions),
-                   //          units. Tree structure (parent-child)
-                   //          lives in the Pose Log, not here.
+| Field | Meaning |
+|-------|---------|
+| `source_peer_id` | Canonical data origin — the peer whose physical sensor or actuator produced the data. Preserved across materializations. |
+| `writer_peer_id` | The peer that holds the underlying manifest file and log bytes. Equals `source_peer_id` for origin rows; differs when a second peer (e.g. Park) materializes a copy of Galbot's log. |
 
-  // ── Time-alignment options ──────────────────────────────────────
-  // One entry per other clock this node tracks via a TimeTransform Log.
-  // Lets a peer pick a bridge clock and fetch the relevant log to
-  // convert this log's timestamps into their own clock space.
-  time_transforms: [TimeTransformAvailability],
+A consumer that wants Galbot's original data follows `source_peer_id = "galbot"`. A consumer that wants to fetch bytes should dial `writer_peer_id` (the node that has them).
 
-  // ── Spatial-alignment options ───────────────────────────────────
-  // One entry per pose chain available for `frame_id` (i.e. how this
-  // sensor's mounting frame relates to other frames over time).
-  frame_transforms: [FrameTransformAvailability],
+### Top-level fields
 
-  // ── Log parameters (mirror log_manifest.json) ───────────────────
-  segment_duration_ns: i64,
-  retention_ns:        i64,              // 0 = unbounded
+| Field | Present on | Description |
+|-------|------------|-------------|
+| `available` | all | Snapshot of currently-retrievable data (bytes, entries, duration_ns) |
+| `extent` | sealed | Closed time-range block (mutually exclusive with `head`) |
+| `head` | live | Head-behavior block: `rolling` (retention window) or `fixed` (start timestamp) |
+| `manifest` | all | Variant-specific registry refs (see per-variant blocks below) |
+| `pose` | pose_log | `{ writer_mode: "rigid" \| "movable" }` |
+| `resource_id` | all | Per-variant derived id (sensor_id for sensor logs; `from->to` for pose/time-transform; `detector@sensor` for detections) |
+| `sensor` | sensor_log | `{ kind, type, sensor_id, sensor_hash }` |
+| `source_peer_id` | all | Canonical data origin |
+| `state` | all | Lifecycle: `"live"` or `"sealed"` |
+| `variant` | all | Closed resource variant |
+| `writer_peer_id` | all | Peer holding the manifest and bytes |
 
-  // ── Coverage (computed at scan time from segment files) ─────────
-  earliest_timestamp_ns: i64,            // first entry in OLDEST RETAINED segment
-  latest_timestamp_ns:   i64,            // last entry on disk
-  segment_count:         u32,
-  total_bytes:           u64,
+### Per-variant manifest blocks
 
-  // ── Status ──────────────────────────────────────────────────────
-  status:           "live" | "sealed" | "aborted",
-  generated_at_ns:  i64,                 // wall-clock UTC ns when produced
+The `manifest` block carries only the registry refs and canonical bindings a consumer needs to resolve the log. Identity fields already hoisted into `sensor`/`pose` are not repeated.
+
+```
+sensor_log:
+  clock: RegistryRef
+  frame: Option<RegistryRef>
+
+pose_log:
+  from_frame:       RegistryRef
+  to_frame:         RegistryRef
+  clock:            RegistryRef
+  source:           PoseSource
+  expected_rate_hz: u32
+
+time_transform_log:
+  from_clock: RegistryRef
+  to_clock:   RegistryRef
+  source:     TimeTransformSource
+
+detection_log:
+  detector:     RegistryRef
+  input_log:    LogRef
+  input_sensor: RegistryRef
+  clock:        RegistryRef
+```
+
+### Manifest file — source/writer split
+
+On disk each log has a `manifest.json` at:
+
+```
+<storage_root>/logs/<writer_peer_id>/<resource_id>/manifest.json
+```
+
+The manifest JSON carries both `source_peer_id` and `writer_peer_id`. For origin logs (Galbot writing its own sensor data) the two are identical:
+
+```json
+{
+  "source_peer_id": "galbot",
+  "writer_peer_id": "galbot",
+  "app_id": "galbot-ctrl",
+  "session_id": "…",
+  "sensor": { "peer_id": "galbot", "id": "head_left_rgb", "hash": "…" },
+  "clock":  { "peer_id": "galbot", "id": "session/sdk_clock", "hash": "…" },
+  "frame":  { "peer_id": "galbot", "id": "head_left_camera_optical", "hash": "…" },
+  "segment_duration_ns": 1000000000,
+  "retention_ns": 5000000000
 }
 ```
 
-### `TimeTransformAvailability`
-
-```
-TimeTransformAvailability {
-  to_clock_id:           string,
-  to_clock_hash:         string,
-  to_clock_entry:        ClockRegistryEntry,    // embedded
-  log_handle:            string,                // identifier the peer uses to fetch the TimeTransform Log
-  earliest_timestamp_ns: i64,
-  latest_timestamp_ns:   i64,
-  status:                "live" | "sealed" | "aborted",
-}
-```
-
-### `FrameTransformAvailability`
-
-```
-FrameTransformAvailability {
-  to_frame_id:           string,
-  to_frame_hash:         string,
-  to_frame_entry:        FrameRegistryEntry,    // embedded
-  log_handle:            string,                // e.g. "poselogs/<from_frame_id>__<to_frame_id>" — relative to <session_id>
-  earliest_timestamp_ns: i64,
-  latest_timestamp_ns:   i64,
-  status:                "live" | "sealed" | "aborted",
-}
-```
-
-The Pose Log capture path uses `Log<auki_datatypes::pose::SpatialTransform>` with identity in `build_pose_log_manifest` (`from_frame_id/hash`, `to_frame_id/hash`, `PoseSource`, `PoseWriterMode`, `expected_rate_hz`) and pathing from `poselog_path`. There is no `PoseLogEntry` wrapper. `auki-geometry` ships convention-level helpers (`convert_pose_convention`, point/vector/direction conversion), while the graph-level `convert_pose` operation that composes pose-log edges across a frame tree is still pending. `FrameTransformAvailability` describes what is available; graph composition is the consumer's job today.
-
-Detection Logs use `Log<auki_datatypes::detection::DetectionFrame>`. The frame envelope is structured: `data` carries opaque detector-specific bytes (schema owned by the detector family, not the SDK), `sensor_hash` pins the source sensor's registry hash, and `type` is an open-string discriminator (`aruco`, `portal`, `esl`, `person`, ...). The log manifest pins `detector_id`, `detector_hash`, `input_log_id`, `input_sensor_id/hash`, and `clock_id/hash`. `detector_hash` resolves through the Detector Registry (`DetectorRegistryEntry`, stored at `<app_root>/registries/detectors/<detector_id>/<hash>.json`) the same way sensor / clock / frame hashes do.
+For a materialization (Park caching Galbot's stream with a longer local retention), `source_peer_id` stays `"galbot"` but `writer_peer_id` becomes `"park"`.
 
 ---
 
-## What the peer gets in one fetch
+## Concrete catalog row examples
 
-- **Bytes** — full sensor identity (width, height, format, color space, intrinsics/distortion model) plus the payload type. Per-entry payload fields such as dynamic camera intrinsics stay in the payload stream/log itself.
-- **Time** — full clock identity for the log's timestamps.
-- **Space** — full frame identity (handedness, axes, units) for the sensor's mounting position.
-- **Time bridges** — a menu of TimeTransform Logs to align with the peer's own clock.
-- **Space bridges** — a menu of pose chains to align with the peer's own coordinate frame.
-- **Coverage** — what time range is on disk, how big.
-- **Lifecycle** — live, sealed, or aborted.
+### Live rolling sensor_log (RGB camera, origin)
 
-Everything required to decide "do I want this, and how do I consume it" without further round-trips against the producing node's registry.
+```json
+{
+  "available": { "bytes": 3000000000, "duration_ns": 5000000000, "entries": 900 },
+  "head": { "kind": "rolling", "retention_ns": 5000000000 },
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_left_camera_optical", "peer_id": "galbot" }
+  },
+  "resource_id": "head_left_rgb",
+  "sensor": {
+    "kind": "camera",
+    "sensor_hash": "…",
+    "sensor_id": "head_left_rgb",
+    "type": "rgb"
+  },
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+### Live rolling sensor_log (rangefinder, 3D point cloud lidar)
+
+Note: `sensor.kind = "rangefinder"` and `sensor.type = "point_cloud"`. The former `SensorBody::PointCloud` kind is replaced by `SensorBody::Rangefinder`; `point_cloud` is now a modality string within the rangefinder family.
+
+```json
+{
+  "available": { "bytes": 1500000000, "duration_ns": 1000000000, "entries": 100 },
+  "head": { "kind": "rolling", "retention_ns": 1000000000 },
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_lidar", "peer_id": "galbot" }
+  },
+  "resource_id": "head_lidar",
+  "sensor": {
+    "kind": "rangefinder",
+    "sensor_hash": "…",
+    "sensor_id": "head_lidar",
+    "type": "point_cloud"
+  },
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+### Materialized sensor_log (Park serving Galbot's RGB, 5-min local retention)
+
+`source_peer_id` is preserved as `"galbot"`; `writer_peer_id` is `"park"`. The `sensor.sensor_hash` and registry refs still point at Galbot's canonical entries.
+
+```json
+{
+  "available": { "bytes": 12000000000, "duration_ns": 300000000000, "entries": 9000 },
+  "head": { "kind": "rolling", "retention_ns": 300000000000 },
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "frame": { "hash": "…", "id": "head_left_camera_optical", "peer_id": "galbot" }
+  },
+  "resource_id": "head_left_rgb",
+  "sensor": {
+    "kind": "camera",
+    "sensor_hash": "…",
+    "sensor_id": "head_left_rgb",
+    "type": "rgb"
+  },
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "park"
+}
+```
+
+### Live movable pose_log
+
+```json
+{
+  "available": { "bytes": 18000000, "duration_ns": 30000000000, "entries": 5000 },
+  "head": { "kind": "fixed", "started_at_ns": 1733836800000000000 },
+  "manifest": {
+    "clock":            { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "expected_rate_hz": 30,
+    "from_frame":       { "hash": "…", "id": "left_gripper",      "peer_id": "galbot" },
+    "source":           { "kind": "manual" },
+    "to_frame":         { "hash": "…", "id": "object_pose",       "peer_id": "galbot" }
+  },
+  "pose": { "writer_mode": "movable" },
+  "resource_id": "left_gripper->object_pose",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "pose_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+### Sealed rigid pose_log (static transform)
+
+`state=sealed + pose.writer_mode=rigid + available.entries=1` is the canonical "static transform" shape. There is no separate transform-edge variant.
+
+```json
+{
+  "available": { "bytes": 80, "duration_ns": 0, "entries": 1 },
+  "extent": { "finish_at_ns": 1733836800000000000, "start_at_ns": 1733836800000000000 },
+  "manifest": {
+    "clock":            { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "expected_rate_hz": 0,
+    "from_frame":       { "hash": "…", "id": "world",     "peer_id": "park"   },
+    "source":           { "kind": "calibration" },
+    "to_frame":         { "hash": "…", "id": "base_link", "peer_id": "galbot" }
+  },
+  "pose": { "writer_mode": "rigid" },
+  "resource_id": "world->base_link",
+  "source_peer_id": "galbot",
+  "state": "sealed",
+  "variant": "pose_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+### Live time_transform_log
+
+```json
+{
+  "available": { "bytes": 4096, "duration_ns": 60000000000, "entries": 60 },
+  "head": { "kind": "rolling", "retention_ns": 60000000000 },
+  "manifest": {
+    "from_clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "source":     { "kind": "heartbeat" },
+    "to_clock":   { "hash": "…", "id": "wall_clock",        "peer_id": "galbot" }
+  },
+  "resource_id": "session/sdk_clock->wall_clock",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "time_transform_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+### Live detection_log
+
+```json
+{
+  "available": { "bytes": 250000, "duration_ns": 5000000000, "entries": 150 },
+  "head": { "kind": "rolling", "retention_ns": 5000000000 },
+  "manifest": {
+    "clock":        { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
+    "detector":     { "hash": "…", "id": "yolo_v8",           "peer_id": "galbot" },
+    "input_log":    { "resource_id": "head_left_rgb", "source_peer_id": "galbot" },
+    "input_sensor": { "hash": "…", "id": "head_left_rgb",     "peer_id": "galbot" }
+  },
+  "resource_id": "yolo_v8@head_left_rgb",
+  "source_peer_id": "galbot",
+  "state": "live",
+  "variant": "detection_log",
+  "writer_peer_id": "galbot"
+}
+```
+
+---
+
+## What the consumer gets in one catalog fetch
+
+- **Log identity** — variant, resource_id, source/writer split.
+- **Sensor metadata** — closed kind, open type string, and a content-addressed hash linking to the full `SensorRegistryEntry` (resolution via `/auki/registries/0.2.0`).
+- **Clock identity** — registry ref in the manifest block; resolve by hash to get unit, epoch, scope.
+- **Spatial frame identity** — registry ref in the manifest block; resolve to get handedness, axes, units.
+- **Coverage** — bytes, entries, duration on the `available` block; time bounds on `head` (live) or `extent` (sealed).
+- **Lifecycle** — `state: "live"` or `"sealed"`.
+- **Pose semantics** — `writer_mode: "rigid"` or `"movable"` on pose_log rows; `rigid + entries=1` is the canonical static-transform shape.
 
 ---
 
 ## Coverage semantics
 
-- **Bounded** (`retention_ns > 0`): `earliest_timestamp_ns` reflects the *oldest retained* segment's first entry — older content has been evicted. Not the first-ever entry.
-- **Unbounded** (`retention_ns = 0`): nothing's been evicted; `earliest_timestamp_ns` is the absolute first.
-- **Live** captures: `latest_timestamp_ns` lags wall-clock by up to `segment_duration_ns` (last fsynced entry, not in-flight). `generated_at_ns` lets a peer reason about staleness.
-
-## Status
-
-| Value     | Meaning                                                                  |
-|-----------|--------------------------------------------------------------------------|
-| `live`    | Writer is still actively appending; descriptor is a snapshot.            |
-| `sealed`  | Writer closed cleanly; the recording is final.                           |
-| `aborted` | Writer crashed mid-recording (heuristic — see open questions).           |
+- **Rolling head** (`head.kind = "rolling"`): `retention_ns` is the sliding-window size. The `available.duration_ns` reflects what is actually on disk — may be less than `retention_ns` if the session just started.
+- **Fixed head** (`head.kind = "fixed"`): `started_at_ns` is the wall-clock time the log started; all data since then is available.
+- **Sealed** (`state = "sealed"`): `extent.start_at_ns` / `extent.finish_at_ns` describe the closed-range archive.
 
 ---
 
-## Concrete example
+## Migration notes from pre-#216 shapes
 
-```json
-{
-  "schema_version": 1,
-  "app_id": "boosterapp",
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "log_id": "rec-456",
-  "payload_type": "auki.camera.CameraFrame",
-  "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-  "sensor_hash": "d798fa879c80a5b00cabc1ce47ca4f7a",
-  "sensor_entry": {
-    "type": "camera",
-    "sensor_id": "K1-AABBCCDDEEFF/head_left_cam",
-    "width": 544, "height": 488, "frame_rate_hz": 20,
-    "pixel_format": "YUV_NV12", "color_space": "BT.709",
-    "intrinsics_model": "pinhole", "distortion_model": "plumb_bob",
-    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical"
-  },
-  "clock_id": "K1-AABBCCDDEEFF/utc",
-  "clock_hash": "89f84f4c2e09bef81d385b2af1d17e6c",
-  "clock_entry": {
-    "type": "utc_clock",
-    "clock_id": "K1-AABBCCDDEEFF/utc",
-    "unit": "milliseconds", "monotonic": false,
-    "epoch": "1970-01-01T00:00:00Z", "scope": "global"
-  },
-  "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
-  "frame_hash": "fd0dc3789e898b71b5e16ee122a81a44",
-  "frame_entry": {
-    "frame_id": "K1-AABBCCDDEEFF/head_left_cam_optical",
-    "handedness": "right",
-    "axes": {"x": "right", "y": "down", "z": "forward"},
-    "units": "meters"
-  },
-  "time_transforms": [
-    {
-      "to_clock_id": "K1-AABBCCDDEEFF/monotonic",
-      "to_clock_hash": "1f2176888b1a6621315033f22659b9f3",
-      "to_clock_entry": {
-        "type": "monotonic_clock",
-        "clock_id": "K1-AABBCCDDEEFF/monotonic",
-        "unit": "milliseconds", "monotonic": true,
-        "epoch": null, "scope": "device-local"
-      },
-      "log_handle": "timetransform_logs/K1-AABBCCDDEEFF__utc__K1-AABBCCDDEEFF__monotonic",
-      "earliest_timestamp_ns": 1745000000000000000,
-      "latest_timestamp_ns":   1745000030000000000,
-      "status": "live"
-    }
-  ],
-  "frame_transforms": [],
-  "segment_duration_ns": 1000000000,
-  "retention_ns": 30000000000,
-  "earliest_timestamp_ns": 1745000000000000000,
-  "latest_timestamp_ns":   1745000030000000000,
-  "segment_count": 30,
-  "total_bytes": 1572864000,
-  "status": "live",
-  "generated_at_ns": 1745000030500000000
-}
-```
-
----
-
-## Open questions
-
-The Frame Registry shape question is resolved; Pose Log capture shape is resolved; graph-level `convert_pose` path finding and descriptor transport are still pending.
+| Pre-#216 | Post-#216 |
+|----------|-----------|
+| `SensorStreamResource` | `ResourceEntry` with `variant: "sensor_log"` |
+| `TransformEdgeResource` | `ResourceEntry` with `variant: "pose_log"`, `pose.writer_mode: "rigid"`, `state: "sealed"`, `available.entries: 1` |
+| `PoseStreamResource` | `ResourceEntry` with `variant: "pose_log"`, `pose.writer_mode: "movable"` |
+| `SensorBody::PointCloud` | `SensorBody::Rangefinder` with `type: "point_cloud"` |
+| `sensor.kind = "point_cloud"` | `sensor.kind = "rangefinder"`, `sensor.type = "point_cloud"` |
+| no `source_peer_id`/`writer_peer_id` split | explicit on every row and manifest |
 
 ---
 
@@ -229,6 +335,4 @@ The Frame Registry shape question is resolved; Pose Log capture shape is resolve
 - **Domain identity / Map endpoint** — the Domain context this node participates in.
 - **Connection info for fetching** — URL, peer ID, port. Depends on transport.
 - **Multi-product wrappers** (`NodeManifest { products: [...] }`) — a level up; needed eventually but distinct schema.
-- **Other product types** — `PointCloudLogProduct`, `TimeTransformLogProduct`, etc. Expected to be parallel to `CameraLogProduct` but designed once this one is locked.
-- **Raster / 2D frame conventions for image bytes** — see [#140](https://github.com/aukilabs/auki-sdk/issues/140). `frame_entry` here only describes the 3D optical frame; declaring the raster convention of the published bytes (mirrored vs. not, origin, axes) is a parallel concern that will likely extend the descriptor with a `raster_frame_entry`.
-- **Peer-level frame transform advertisement / scenegraph availability** — see [#141](https://github.com/aukilabs/auki-sdk/issues/141). `frame_transforms[]` here is the per-camera slice; #141 generalizes it to a peer-level advertisement of known transform edges and producer-derived output frames.
+- **Graph-level frame transform composition** — `convert_pose` path-finding across a frame tree is a consumer-side concern; the catalog only advertises what logs exist, not their composition.

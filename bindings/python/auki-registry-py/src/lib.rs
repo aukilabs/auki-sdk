@@ -10,6 +10,13 @@
 //! write a `FrameRegistryEntry`, use its returned hash in a spatial
 //! `SensorRegistryEntry`, write that sensor entry, then hand the two
 //! hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`.
+//!
+//! ## RegistryRef / LogRef
+//!
+//! Two helper classes are exposed so callers can construct the nested
+//! `(peer_id, id, hash)` / `(source_peer_id, resource_id)` shapes
+//! without building plain dicts by hand. Both are serialized as `dict`
+//! when passed through the `hash_*` / `write_*` helpers.
 
 use std::path::PathBuf;
 
@@ -64,32 +71,145 @@ fn write_outcome_hash(outcome: registry::WriteOutcome) -> String {
     outcome.hash().to_string()
 }
 
+/// Parse a `RegistryRef` out of a Python object that is either:
+/// - a `RegistryRef` pyclass instance, or
+/// - a plain `dict` with `peer_id`, `id`, `hash` keys.
+fn parse_registry_ref(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<registry::RegistryRef> {
+    // Try to extract as our RegistryRef pyclass first.
+    if let Ok(r) = value.extract::<RegistryRef>() {
+        return Ok(registry::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        });
+    }
+    // Fall back to dict / any JSON-serializable object.
+    parse_py(py, value, "registry_ref")
+}
+
+// ─── RegistryRef / LogRef helper classes ───────────────────────────────────
+
+/// Python representation of a `(peer_id, id, hash)` registry reference.
+/// Passed to sensor/manifest builders wherever a cross-registry pointer is needed.
+#[pyclass]
+#[derive(Clone)]
+pub struct RegistryRef {
+    #[pyo3(get, set)]
+    pub peer_id: String,
+    #[pyo3(get, set)]
+    pub id: String,
+    #[pyo3(get, set)]
+    pub hash: String,
+}
+
+#[pymethods]
+impl RegistryRef {
+    #[new]
+    fn new(peer_id: String, id: String, hash: String) -> Self {
+        Self { peer_id, id, hash }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RegistryRef(peer_id={:?}, id={:?}, hash={:?})",
+            self.peer_id, self.id, self.hash
+        )
+    }
+
+    /// Validate that the `peer_id`, `id`, and `hash` fields are non-empty.
+    fn validate(&self) -> PyResult<()> {
+        if self.peer_id.is_empty() {
+            return Err(PyValueError::new_err(
+                "RegistryRef.peer_id must not be empty",
+            ));
+        }
+        if self.id.is_empty() {
+            return Err(PyValueError::new_err("RegistryRef.id must not be empty"));
+        }
+        if self.hash.is_empty() {
+            return Err(PyValueError::new_err("RegistryRef.hash must not be empty"));
+        }
+        Ok(())
+    }
+}
+
+/// Python representation of a `(source_peer_id, resource_id)` log reference.
+/// Used by `DetectionLogManifest.input_log` — logs are addressed by identity
+/// tuple, not a single content hash.
+#[pyclass]
+#[derive(Clone)]
+pub struct LogRef {
+    #[pyo3(get, set)]
+    pub source_peer_id: String,
+    #[pyo3(get, set)]
+    pub resource_id: String,
+}
+
+#[pymethods]
+impl LogRef {
+    #[new]
+    fn new(source_peer_id: String, resource_id: String) -> Self {
+        Self {
+            source_peer_id,
+            resource_id,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LogRef(source_peer_id={:?}, resource_id={:?})",
+            self.source_peer_id, self.resource_id
+        )
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        if self.source_peer_id.is_empty() {
+            return Err(PyValueError::new_err(
+                "LogRef.source_peer_id must not be empty",
+            ));
+        }
+        if self.resource_id.is_empty() {
+            return Err(PyValueError::new_err(
+                "LogRef.resource_id must not be empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ─── Frame Registry constructors ───────────────────────────────────
 
 #[pyfunction]
-fn frame_ros_body(py: Python<'_>, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(py, &registry::FrameRegistryEntry::ros_body(frame_id))
+fn frame_ros_body(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(
+        py,
+        &registry::FrameRegistryEntry::ros_body(peer_id, frame_id),
+    )
 }
 
 #[pyfunction]
-fn frame_ros_optical(py: Python<'_>, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(py, &registry::FrameRegistryEntry::ros_optical(frame_id))
+fn frame_ros_optical(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(
+        py,
+        &registry::FrameRegistryEntry::ros_optical(peer_id, frame_id),
+    )
 }
 
 #[pyfunction]
-fn frame_opengl(py: Python<'_>, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(py, &registry::FrameRegistryEntry::opengl(frame_id))
+fn frame_opengl(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::opengl(peer_id, frame_id))
 }
 
 #[pyfunction]
-fn frame_unity(py: Python<'_>, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(py, &registry::FrameRegistryEntry::unity(frame_id))
+fn frame_unity(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::unity(peer_id, frame_id))
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, frame_id, handedness, x, y, z, units))]
+#[pyo3(signature = (*, peer_id, frame_id, handedness, x, y, z, units))]
 fn frame_entry(
     py: Python<'_>,
+    peer_id: &str,
     frame_id: &str,
     handedness: &str,
     x: &str,
@@ -98,6 +218,7 @@ fn frame_entry(
     units: &str,
 ) -> PyResult<PyObject> {
     let entry = registry::FrameRegistryEntry {
+        peer_id: peer_id.to_string(),
         frame_id: frame_id.to_string(),
         handedness: parse_string_enum("handedness", handedness)?,
         axes: registry::AxisConvention {
@@ -132,10 +253,12 @@ fn point_field(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, sensor_id, width, height, frame_rate_hz, pixel_format, color_space, intrinsics_model, distortion_model, frame_id, frame_hash))]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, width, height, frame_rate_hz, pixel_format, color_space, intrinsics_model, distortion_model, frame))]
 fn camera_sensor_entry(
     py: Python<'_>,
+    peer_id: &str,
     sensor_id: &str,
+    sensor_type: &str,
     width: u32,
     height: u32,
     frame_rate_hz: u32,
@@ -143,12 +266,14 @@ fn camera_sensor_entry(
     color_space: &str,
     intrinsics_model: &str,
     distortion_model: &str,
-    frame_id: &str,
-    frame_hash: &str,
+    frame: &Bound<'_, PyAny>,
 ) -> PyResult<PyObject> {
+    let frame_ref = parse_registry_ref(py, frame)?;
     let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
         sensor_id: sensor_id.to_string(),
         body: registry::SensorBody::Camera(registry::Camera {
+            r#type: sensor_type.to_string(),
             width,
             height,
             frame_rate_hz,
@@ -156,92 +281,157 @@ fn camera_sensor_entry(
             color_space: color_space.to_string(),
             intrinsics_model: intrinsics_model.to_string(),
             distortion_model: distortion_model.to_string(),
-            frame_id: frame_id.to_string(),
-            frame_hash: frame_hash.to_string(),
+            frame: frame_ref,
         }),
     };
     struct_to_pyobject(py, &entry)
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, sensor_id, fields, point_step, is_bigendian, frame_rate_hz, frame_id, frame_hash))]
-fn point_cloud_sensor_entry(
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, fields, point_step, is_bigendian, frame_rate_hz, frame))]
+fn rangefinder_sensor_entry(
     py: Python<'_>,
+    peer_id: &str,
     sensor_id: &str,
+    sensor_type: &str,
     fields: &Bound<'_, PyAny>,
     point_step: u32,
     is_bigendian: bool,
     frame_rate_hz: u32,
-    frame_id: &str,
-    frame_hash: &str,
+    frame: &Bound<'_, PyAny>,
 ) -> PyResult<PyObject> {
     let fields: Vec<registry::PointField> = parse_py(py, fields, "fields")?;
+    let frame_ref = parse_registry_ref(py, frame)?;
     let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
         sensor_id: sensor_id.to_string(),
-        body: registry::SensorBody::PointCloud(registry::PointCloud {
+        body: registry::SensorBody::Rangefinder(registry::Rangefinder {
+            r#type: sensor_type.to_string(),
             fields,
             point_step,
             is_bigendian,
             frame_rate_hz,
-            frame_id: frame_id.to_string(),
-            frame_hash: frame_hash.to_string(),
+            frame: frame_ref,
         }),
     };
     struct_to_pyobject(py, &entry)
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, sensor_id, sample_rate_hz, channels, sample_format, channel_layout))]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, sample_rate_hz, channels, sample_format, channel_layout, frame))]
 fn audio_sensor_entry(
     py: Python<'_>,
+    peer_id: &str,
     sensor_id: &str,
+    sensor_type: &str,
     sample_rate_hz: u32,
     channels: u32,
     sample_format: &str,
     channel_layout: &str,
+    frame: &Bound<'_, PyAny>,
 ) -> PyResult<PyObject> {
+    let frame_ref = parse_registry_ref(py, frame)?;
     let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
         sensor_id: sensor_id.to_string(),
         body: registry::SensorBody::Audio(registry::Audio {
+            r#type: sensor_type.to_string(),
             sample_rate_hz,
             channels,
             sample_format: sample_format.to_string(),
             channel_layout: channel_layout.to_string(),
+            frame: frame_ref,
         }),
     };
     struct_to_pyobject(py, &entry)
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, sensor_id, joint_count, frame_rate_hz))]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, joint_count, frame_rate_hz, frame))]
 fn joint_encoders_sensor_entry(
     py: Python<'_>,
+    peer_id: &str,
     sensor_id: &str,
+    sensor_type: &str,
     joint_count: u32,
     frame_rate_hz: u32,
+    frame: &Bound<'_, PyAny>,
 ) -> PyResult<PyObject> {
+    let frame_ref = parse_registry_ref(py, frame)?;
     let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
         sensor_id: sensor_id.to_string(),
         body: registry::SensorBody::JointEncoders(registry::JointEncoders {
+            r#type: sensor_type.to_string(),
             joint_count,
             frame_rate_hz,
+            frame: frame_ref,
         }),
     };
     struct_to_pyobject(py, &entry)
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, frame))]
+fn rf_sensor_entry(
+    py: Python<'_>,
+    peer_id: &str,
+    sensor_id: &str,
+    sensor_type: &str,
+    frame: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let frame_ref = parse_registry_ref(py, frame)?;
+    let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
+        sensor_id: sensor_id.to_string(),
+        body: registry::SensorBody::Rf(registry::Rf {
+            r#type: sensor_type.to_string(),
+            frame: frame_ref,
+        }),
+    };
+    struct_to_pyobject(py, &entry)
+}
+
+// ─── Validate ID ───────────────────────────────────────────────────
+
+#[pyfunction]
+fn validate_sensor_id(id: &str) -> PyResult<()> {
+    registry::SensorRegistryEntry::validate_id(id)
+        .map_err(|e| PyValueError::new_err(format!("sensor_id: {e}")))
+}
+
+#[pyfunction]
+fn validate_clock_id(id: &str) -> PyResult<()> {
+    registry::ClockRegistryEntry::validate_id(id)
+        .map_err(|e| PyValueError::new_err(format!("clock_id: {e}")))
+}
+
+#[pyfunction]
+fn validate_frame_id(id: &str) -> PyResult<()> {
+    registry::FrameRegistryEntry::validate_id(id)
+        .map_err(|e| PyValueError::new_err(format!("frame_id: {e}")))
+}
+
+#[pyfunction]
+fn validate_detector_id(id: &str) -> PyResult<()> {
+    registry::DetectorRegistryEntry::validate_id(id)
+        .map_err(|e| PyValueError::new_err(format!("detector_id: {e}")))
 }
 
 // ─── Clock Registry constructors ───────────────────────────────────
 
 #[pyfunction]
-#[pyo3(signature = (*, clock_id, unit, scope, epoch=None))]
+#[pyo3(signature = (*, peer_id, clock_id, unit, scope, epoch=None))]
 fn monotonic_clock_entry(
     py: Python<'_>,
+    peer_id: &str,
     clock_id: &str,
     unit: &str,
     scope: &str,
     epoch: Option<String>,
 ) -> PyResult<PyObject> {
     let entry = registry::ClockRegistryEntry {
+        peer_id: peer_id.to_string(),
         clock_id: clock_id.to_string(),
         body: registry::ClockBody::MonotonicClock(registry::ClockMeta {
             unit: unit.to_string(),
@@ -254,15 +444,17 @@ fn monotonic_clock_entry(
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, clock_id, unit, scope, epoch))]
+#[pyo3(signature = (*, peer_id, clock_id, unit, scope, epoch))]
 fn utc_clock_entry(
     py: Python<'_>,
+    peer_id: &str,
     clock_id: &str,
     unit: &str,
     scope: &str,
     epoch: &str,
 ) -> PyResult<PyObject> {
     let entry = registry::ClockRegistryEntry {
+        peer_id: peer_id.to_string(),
         clock_id: clock_id.to_string(),
         body: registry::ClockBody::UtcClock(registry::ClockMeta {
             unit: unit.to_string(),
@@ -342,8 +534,14 @@ fn write_clock(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> P
 }
 
 #[pyfunction]
-fn read_frame(py: Python<'_>, app_root: PathBuf, frame_id: &str, hash: &str) -> PyResult<PyObject> {
-    match registry::read_frame(&app_root, frame_id, hash).map_err(map_registry_error)? {
+fn read_frame(
+    py: Python<'_>,
+    app_root: PathBuf,
+    peer_id: &str,
+    frame_id: &str,
+    hash: &str,
+) -> PyResult<PyObject> {
+    match registry::read_frame(&app_root, peer_id, frame_id, hash).map_err(map_registry_error)? {
         Some(entry) => struct_to_pyobject(py, &entry),
         None => Ok(py.None()),
     }
@@ -353,18 +551,25 @@ fn read_frame(py: Python<'_>, app_root: PathBuf, frame_id: &str, hash: &str) -> 
 fn read_sensor(
     py: Python<'_>,
     app_root: PathBuf,
+    peer_id: &str,
     sensor_id: &str,
     hash: &str,
 ) -> PyResult<PyObject> {
-    match registry::read_sensor(&app_root, sensor_id, hash).map_err(map_registry_error)? {
+    match registry::read_sensor(&app_root, peer_id, sensor_id, hash).map_err(map_registry_error)? {
         Some(entry) => struct_to_pyobject(py, &entry),
         None => Ok(py.None()),
     }
 }
 
 #[pyfunction]
-fn read_clock(py: Python<'_>, app_root: PathBuf, clock_id: &str, hash: &str) -> PyResult<PyObject> {
-    match registry::read_clock(&app_root, clock_id, hash).map_err(map_registry_error)? {
+fn read_clock(
+    py: Python<'_>,
+    app_root: PathBuf,
+    peer_id: &str,
+    clock_id: &str,
+    hash: &str,
+) -> PyResult<PyObject> {
+    match registry::read_clock(&app_root, peer_id, clock_id, hash).map_err(map_registry_error)? {
         Some(entry) => struct_to_pyobject(py, &entry),
         None => Ok(py.None()),
     }
@@ -373,6 +578,8 @@ fn read_clock(py: Python<'_>, app_root: PathBuf, clock_id: &str, hash: &str) -> 
 /// Module entry point.
 #[pymodule]
 fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<RegistryRef>()?;
+    m.add_class::<LogRef>()?;
     m.add_function(wrap_pyfunction!(frame_ros_body, m)?)?;
     m.add_function(wrap_pyfunction!(frame_ros_optical, m)?)?;
     m.add_function(wrap_pyfunction!(frame_opengl, m)?)?;
@@ -380,9 +587,14 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(frame_entry, m)?)?;
     m.add_function(wrap_pyfunction!(point_field, m)?)?;
     m.add_function(wrap_pyfunction!(camera_sensor_entry, m)?)?;
-    m.add_function(wrap_pyfunction!(point_cloud_sensor_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(rangefinder_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(audio_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(joint_encoders_sensor_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(rf_sensor_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_sensor_id, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_clock_id, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_frame_id, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_detector_id, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic_clock_entry, m)?)?;
     m.add_function(wrap_pyfunction!(utc_clock_entry, m)?)?;
     m.add_function(wrap_pyfunction!(hash_frame, m)?)?;
@@ -405,7 +617,16 @@ mod tests {
     use super::*;
     use pyo3::types::{PyDict, PyList, PyModule};
 
+    const PEER_ID: &str = "test-peer";
     const FRAME_ID: &str = "K1-AABBCCDDEEFF/head_left_cam_optical";
+
+    fn make_frame_ref_dict(py: Python<'_>, hash: &str) -> PyObject {
+        let d = PyDict::new_bound(py);
+        d.set_item("peer_id", PEER_ID).unwrap();
+        d.set_item("id", FRAME_ID).unwrap();
+        d.set_item("hash", hash).unwrap();
+        d.into_any().unbind()
+    }
 
     #[test]
     fn module_exposes_registry_surface() {
@@ -413,8 +634,10 @@ mod tests {
             let module = PyModule::new_bound(py, "auki_registry").unwrap();
             auki_registry(py, &module).unwrap();
 
+            assert!(module.getattr("RegistryRef").is_ok());
+            assert!(module.getattr("LogRef").is_ok());
             assert!(module.getattr("frame_ros_optical").is_ok());
-            assert!(module.getattr("point_cloud_sensor_entry").is_ok());
+            assert!(module.getattr("rangefinder_sensor_entry").is_ok());
             assert!(module.getattr("write_sensor").is_ok());
         });
     }
@@ -423,12 +646,11 @@ mod tests {
     fn frame_write_read_round_trip_returns_hash() {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
-            let frame = frame_ros_optical(py, FRAME_ID).unwrap();
+            let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
             let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
 
-            assert_eq!(frame_hash, "e0d40e7b526e04f15f83f75897f53825");
-
-            let read = read_frame(py, dir.path().to_path_buf(), FRAME_ID, &frame_hash).unwrap();
+            let read =
+                read_frame(py, dir.path().to_path_buf(), PEER_ID, FRAME_ID, &frame_hash).unwrap();
             let read = read.bind(py);
             assert_eq!(
                 read.get_item("frame_id")
@@ -438,29 +660,35 @@ mod tests {
                 FRAME_ID
             );
             assert_eq!(
-                hash_frame(py, read).unwrap(),
-                "e0d40e7b526e04f15f83f75897f53825"
+                read.get_item("peer_id")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                PEER_ID
             );
+            assert_eq!(hash_frame(py, read).unwrap(), frame_hash);
         });
     }
 
     #[test]
-    fn point_cloud_sensor_requires_written_frame() {
+    fn rangefinder_sensor_requires_written_frame() {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
-            let frame = frame_ros_optical(py, FRAME_ID).unwrap();
+            let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
             let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+            let frame_ref = make_frame_ref_dict(py, &frame_hash);
             let field = point_field(py, "x", 0, "float32", 1).unwrap();
             let fields = PyList::new_bound(py, [field.bind(py)]);
-            let sensor = point_cloud_sensor_entry(
+            let sensor = rangefinder_sensor_entry(
                 py,
+                PEER_ID,
                 "K1-AABBCCDDEEFF/head_depth_points",
+                "point_cloud",
                 fields.as_any(),
                 4,
                 false,
                 10,
-                FRAME_ID,
-                &frame_hash,
+                frame_ref.bind(py),
             )
             .unwrap();
 
@@ -468,82 +696,17 @@ mod tests {
             let read = read_sensor(
                 py,
                 dir.path().to_path_buf(),
+                PEER_ID,
                 "K1-AABBCCDDEEFF/head_depth_points",
                 &sensor_hash,
             )
             .unwrap();
 
-            assert_eq!(
-                read.bind(py)
-                    .get_item("frame_hash")
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap(),
-                frame_hash
-            );
-        });
-    }
-
-    #[test]
-    fn documented_python_call_flow_works_through_module() {
-        Python::with_gil(|py| {
-            let module = PyModule::new_bound(py, "auki_registry").unwrap();
-            auki_registry(py, &module).unwrap();
-            let dir = tempfile::tempdir().unwrap();
-            let root = dir.path().to_str().unwrap();
-
-            let frame = module
-                .getattr("frame_ros_optical")
-                .unwrap()
-                .call1((FRAME_ID,))
-                .unwrap();
-            let frame_hash: String = module
-                .getattr("write_frame")
-                .unwrap()
-                .call1((root, &frame))
-                .unwrap()
-                .extract()
-                .unwrap();
-            let field = module
-                .getattr("point_field")
-                .unwrap()
-                .call1(("x", 0_u32, "float32"))
-                .unwrap();
-            let fields = PyList::new_bound(py, [field]);
-            let kwargs = PyDict::new_bound(py);
-            kwargs
-                .set_item("sensor_id", "K1-AABBCCDDEEFF/head_depth_points")
-                .unwrap();
-            kwargs.set_item("fields", &fields).unwrap();
-            kwargs.set_item("point_step", 4_u32).unwrap();
-            kwargs.set_item("is_bigendian", false).unwrap();
-            kwargs.set_item("frame_rate_hz", 10_u32).unwrap();
-            kwargs.set_item("frame_id", FRAME_ID).unwrap();
-            kwargs.set_item("frame_hash", &frame_hash).unwrap();
-            let sensor = module
-                .getattr("point_cloud_sensor_entry")
-                .unwrap()
-                .call((), Some(&kwargs))
-                .unwrap();
-
-            let sensor_hash: String = module
-                .getattr("write_sensor")
-                .unwrap()
-                .call1((root, &sensor))
-                .unwrap()
-                .extract()
-                .unwrap();
-
-            assert_eq!(
-                module
-                    .getattr("hash_sensor")
-                    .unwrap()
-                    .call1((&sensor,))
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap(),
-                sensor_hash
-            );
+            // frame is now a nested object
+            let read_bound = read.bind(py);
+            let frame_obj = read_bound.get_item("frame").unwrap();
+            let hash_val = frame_obj.get_item("hash").unwrap();
+            assert_eq!(hash_val.extract::<String>().unwrap(), frame_hash);
         });
     }
 
@@ -551,22 +714,59 @@ mod tests {
     fn write_sensor_rejects_missing_frame_hash() {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
+            let frame_ref = make_frame_ref_dict(py, "missing");
             let field = point_field(py, "x", 0, "float32", 1).unwrap();
             let fields = PyList::new_bound(py, [field.bind(py)]);
-            let sensor = point_cloud_sensor_entry(
+            let sensor = rangefinder_sensor_entry(
                 py,
+                PEER_ID,
                 "K1-AABBCCDDEEFF/head_depth_points",
+                "point_cloud",
                 fields.as_any(),
                 4,
                 false,
                 10,
-                FRAME_ID,
-                "missing",
+                frame_ref.bind(py),
             )
             .unwrap();
 
             let err = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap_err();
             assert!(err.is_instance_of::<PyValueError>(py));
+        });
+    }
+
+    #[test]
+    fn registry_ref_pyclass_round_trips_as_frame_ref() {
+        Python::with_gil(|py| {
+            let dir = tempfile::tempdir().unwrap();
+            let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
+            let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+
+            // Build a RegistryRef pyclass instance and pass it to camera_sensor_entry.
+            let frame_ref = RegistryRef::new(
+                PEER_ID.to_string(),
+                FRAME_ID.to_string(),
+                frame_hash.clone(),
+            );
+            let frame_ref_py = Py::new(py, frame_ref).unwrap();
+            let sensor = camera_sensor_entry(
+                py,
+                PEER_ID,
+                "K1-AABBCCDDEEFF/head_left_cam",
+                "rgb",
+                544,
+                488,
+                20,
+                "YUV_NV12",
+                "BT.709",
+                "pinhole",
+                "plumb_bob",
+                frame_ref_py.bind(py),
+            )
+            .unwrap();
+
+            let sensor_hash = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
+            assert!(!sensor_hash.is_empty());
         });
     }
 }

@@ -37,7 +37,7 @@
 //! the producer's callback was `StreamProvider<CameraFrame>`, returning
 //! `StreamDecision<CameraFrame>`. Dagaz lifts that pinning so a single
 //! daemon can serve multiple `T`s (camera + pointcloud, today). The
-//! producer dispatches on `request.sensor_id` / `request.resource_id` and returns a
+//! producer dispatches on `request.resource_id` (and optionally `request.source_peer_id`) and returns a
 //! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
 //! New `T` = new `StreamDispatch` variant + a coordinated SDK-consumer
 //! release; on the wire each substream stays purely typed end-to-end.
@@ -46,7 +46,8 @@ use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
     CameraFrame, DeclineReason, EndReason, STREAM_PROTOCOL, StreamEntry as WireStreamEntry,
     StreamManifest, StreamMessage, StreamProtocolError, StreamRequest, audio, joint_encoders,
-    point_cloud, pose, read_message, stream_message, write_message,
+    point_cloud, pose, read_message, stream_message, stream_request_from_wire,
+    stream_request_to_wire, write_message,
 };
 use auki_datatypes::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
@@ -184,10 +185,10 @@ pub enum StreamDispatch {
 /// allocating buffers) lives *inside* the source-Stream the app
 /// constructs and returns.
 ///
-/// The producer dispatches on `request.sensor_id` or `request.resource_id`
-/// to pick which [`StreamDispatch`] variant to return — each substream is
-/// mono-`T` end-to-end (per grimsby D1: substream lifetime IS the
-/// subscription).
+/// The producer dispatches on `request.resource_id` (and optionally
+/// `request.source_peer_id`) to pick which [`StreamDispatch`] variant to
+/// return — each substream is mono-`T` end-to-end (per grimsby D1:
+/// substream lifetime IS the subscription).
 ///
 /// The first argument is the libp2p [`PeerId`] of the requester. The
 /// SDK has known the requester since the inbound substream landed on
@@ -345,7 +346,7 @@ impl NetworkRuntime {
         };
 
         // Wire handshake: write Request, read Reply.
-        let req_msg = StreamMessage::request(request);
+        let req_msg = StreamMessage::request(stream_request_to_wire(request));
         write_message(&mut substream, &req_msg)
             .await
             .map_err(OpenStreamError::Protocol)?;
@@ -417,7 +418,7 @@ pub(crate) async fn handle_inbound_substream(
     // 1. Read the first envelope; expect Request.
     let request = match read_message(&mut substream).await {
         Ok(msg) => match msg.variant {
-            Some(stream_message::Variant::Request(req)) => req,
+            Some(stream_message::Variant::Request(wire_req)) => stream_request_from_wire(wire_req),
             _ => {
                 // Peer wrote something other than Request first, or the
                 // envelope was empty. Drop; their open_stream surfaces
@@ -744,7 +745,7 @@ mod tests {
 
     fn camera_provider_declines_unknown() -> StreamProvider {
         Arc::new(|_peer, req| {
-            if req.sensor_id == "exists" {
+            if req.resource_id == "exists" {
                 StreamDispatch::AcceptCamera {
                     manifest: manifest("exists", "h", "c", "ch", "exists/frame", "fh"),
                     source: Box::pin(stream::iter(vec![Ok(StreamItem {
@@ -924,7 +925,7 @@ mod tests {
     }
 
     fn multi_t_provider() -> StreamProvider {
-        Arc::new(|_peer, req| match req.sensor_id.as_str() {
+        Arc::new(|_peer, req| match req.resource_id.as_str() {
             "camera" => StreamDispatch::AcceptCamera {
                 manifest: manifest(
                     "camera",
@@ -1037,7 +1038,7 @@ mod tests {
             consumer.open_stream::<CameraFrame>(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "anything".into(),
+                    resource_id: "anything".into(),
                     ..Default::default()
                 },
             ),
@@ -1108,7 +1109,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "test/cam".into(),
+                    resource_id: "test/cam".into(),
                     ..Default::default()
                 },
             )
@@ -1195,7 +1196,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "does-not-exist".into(),
+                    resource_id: "does-not-exist".into(),
                     ..Default::default()
                 },
             )
@@ -1254,7 +1255,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
                     ..Default::default()
                 },
             )
@@ -1352,7 +1353,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
                     ..Default::default()
                 },
             )
@@ -1410,7 +1411,7 @@ mod tests {
             consumer.open_stream::<CameraFrame>(
                 id_unreachable.peer_id(),
                 StreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
                     ..Default::default()
                 },
             ),
@@ -1471,7 +1472,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "test/pc".into(),
+                    resource_id: "test/pc".into(),
                     ..Default::default()
                 },
             )
@@ -1672,7 +1673,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "test/audio".into(),
+                    resource_id: "test/audio".into(),
                     ..Default::default()
                 },
             )
@@ -1755,7 +1756,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "camera".into(),
+                    resource_id: "camera".into(),
                     ..Default::default()
                 },
             )
@@ -1772,7 +1773,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "pointcloud".into(),
+                    resource_id: "pointcloud".into(),
                     ..Default::default()
                 },
             )
@@ -1789,7 +1790,7 @@ mod tests {
             .open_stream(
                 id_p.peer_id(),
                 StreamRequest {
-                    sensor_id: "no-such-sensor".into(),
+                    resource_id: "no-such-sensor".into(),
                     ..Default::default()
                 },
             )
@@ -1809,7 +1810,7 @@ mod tests {
     fn decline_all_streams_returns_sensor_not_found() {
         let provider: StreamProvider = decline_all_streams();
         let req = StreamRequest {
-            sensor_id: "anything".into(),
+            resource_id: "anything".into(),
             ..Default::default()
         };
         let any_peer = libp2p_identity::Keypair::generate_ed25519()

@@ -1,0 +1,1 @@
+{"channel_layout":"n_channel","channels":4,"frame":{"hash":"16645bd8584e5ca5fa1030b439da92dc","id":"base_link","peer_id":"galbot"},"kind":"audio","peer_id":"galbot","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"mic_array","type":"pcm"}

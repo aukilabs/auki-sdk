@@ -31,7 +31,7 @@ join_protocol = ["dep:futures", "dep:thiserror", "dep:auki-datatypes", "dep:pros
 # migration); pulled in alongside libp2p so the substream protocol can
 # encode/decode prost messages directly. base64 is no longer needed
 # under swarm — protobuf handles binary natively.
-swarm = ["join_protocol", "dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:tokio", "dep:auki-datatypes", "dep:auki-time", "dep:prost"]
+swarm = ["join_protocol", "dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:tokio", "dep:auki-datatypes", "dep:auki-time", "dep:prost", "dep:auki-manifests", "dep:auki-registry", "dep:auki-jcs"]
 # Native-only probe for proving browser peers can dial an SDK-owned WebRTC
 # Direct listener before the Domain adapter stops failing closed.
 browser_probe = ["swarm", "dep:libp2p-webrtc", "dep:rand"]
@@ -98,6 +98,13 @@ rand = { version = "0.8", optional = true }
 auki-datatypes = { path = "../auki-datatypes", optional = true }
 # NTP-style samples derived from heartbeat echoes.
 auki-time = { path = "../auki-time", optional = true }
+# Log manifest shapes (PoseWriterMode, etc.) — used by the new catalog
+# row building blocks (Variant, PoseBlock, …) in resources_protocol.
+# Pulled in with `swarm` because resources_protocol is swarm-only.
+auki-manifests = { path = "../auki-manifests", optional = true }
+# Registry reference types (RegistryRef, LogRef) for new ResourceEntry
+# manifest pointers. Pulled in with `swarm` alongside auki-manifests.
+auki-registry = { path = "../auki-registry", optional = true }
 # Encode/decode prost messages on the substream wire.
 prost = { version = "0.13", optional = true }
 
@@ -132,6 +139,19 @@ tempfile = "3"
 # For the swarm tests (require `--features swarm`).
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
+# RFC 8785 canonicalization for the new_blocks_tests (--features swarm).
+auki-jcs = { path = "../auki-jcs" }
+# serde_json needed by new_blocks_tests helper.
+serde_json = "1"
+# RegistryRef / LogRef used in ResourceEntry tests.
+auki-registry = { path = "../auki-registry" }
+# PoseSource / PoseWriterMode used in ResourceEntry tests.
+auki-manifests = { path = "../auki-manifests" }
+
+[[bin]]
+name = "regen_locked_fixtures"
+path = "src/bin/regen_locked_fixtures.rs"
+required-features = ["swarm"]
 
 [[example]]
 name = "browser_full_peer_manager"

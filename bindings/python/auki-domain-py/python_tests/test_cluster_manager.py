@@ -1,8 +1,9 @@
-"""ClusterManager binding surface tests."""
+"""auki-domain-py is deprecated as of #216.
+
+ClusterManager and all other symbols were removed. This file is a stub so
+pytest doesn't error on an empty test suite.
+"""
 
 
-def test_cluster_manager_exposes_generic_open_stream():
-    import auki_domain
-
-    assert hasattr(auki_domain.ClusterManager, "open_stream")
-    assert "open_stream" in dir(auki_domain.ClusterManager)
+def test_cluster_manager_deprecated() -> None:
+    pass

@@ -1759,10 +1759,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionAudio>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::audio::Data>(peer_id, request)
             .await
@@ -1780,10 +1781,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionCamera>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::CameraFrame>(peer_id, request)
             .await
@@ -1801,10 +1803,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionPointCloud>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::point_cloud::Data>(peer_id, request)
             .await
@@ -1822,10 +1825,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionJointEncoders>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::joint_encoders::Data>(peer_id, request)
             .await
@@ -1843,10 +1847,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionDetection>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<auki_datatypes::detection::DetectionFrame>(peer_id, request)
             .await

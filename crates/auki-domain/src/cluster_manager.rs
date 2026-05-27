@@ -49,6 +49,7 @@
 
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
 use auki_network::ParticipantInfo;
+use auki_network::SessionHandle;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
@@ -56,9 +57,7 @@ use auki_network::heartbeat_protocol::HeartbeatDomainClock;
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
-use auki_network::resources_protocol::{
-    ResourceEntry, ResourceKind, ResourcesRequest, ResourcesResponse, SensorStreamResource,
-};
+use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
 };
@@ -83,7 +82,6 @@ use auki_network::network_runtime::{
 pub use auki_network::sensors_protocol::{
     SensorEntry, SensorKind, SensorsRequest, SensorsResponse,
 };
-use auki_network::stream_protocol::STREAM_PROTOCOL;
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
 use auki_network::{PeerIdentity, Swarm};
@@ -293,10 +291,14 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
     /// preserves the lightweight catalog path, and enriches rows from
     /// the producer's registered app root only when the requester asks
     /// for embedded registry entries.
+    ///
+    /// `local_peer_id` is the local libp2p peer-id string, required to
+    /// resolve registry files stored under `<app_root>/registries/sensors/<peer_id>/...`.
     fn snapshot_for_request(
         &self,
         request: &SensorsRequest,
         registry_app_root: Option<&Path>,
+        local_peer_id: &str,
     ) -> Vec<SensorEntry> {
         let mut sensors = self.snapshot();
         filter_sensor_entries(&mut sensors);
@@ -306,7 +308,7 @@ pub trait SensorCatalogProvider: Send + Sync + 'static {
         let Some(app_root) = registry_app_root else {
             return sensors;
         };
-        enrich_sensor_entries(&mut sensors, request, app_root);
+        enrich_sensor_entries(&mut sensors, request, app_root, local_peer_id);
         sensors
     }
 }
@@ -324,20 +326,30 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
     fn snapshot(&self) -> Vec<ResourceEntry>;
 
     /// Snapshot resources for a concrete request. The default
-    /// implementation filters by requested open-string kind and
-    /// enriches rows from the producer's registered app root when the
-    /// requester asks for embedded registry entries.
+    /// implementation filters by requested variant and returns the
+    /// matching rows.
     fn snapshot_for_request(
         &self,
         request: &ResourcesRequest,
-        registry_app_root: Option<&Path>,
+        _registry_app_root: Option<&Path>,
     ) -> Vec<ResourceEntry> {
-        let mut resources = self.snapshot();
-        filter_resource_entries(&mut resources, request);
-        if let Some(app_root) = registry_app_root {
-            enrich_resource_entries(&mut resources, request, app_root);
+        let resources = self.snapshot();
+        if request.variants.is_empty() {
+            return resources;
         }
+        use auki_network::resources_protocol::{Variant, VariantContent};
         resources
+            .into_iter()
+            .filter(|r| {
+                let row_variant = match &r.variant_content {
+                    VariantContent::SensorLog { .. } => Variant::SensorLog,
+                    VariantContent::PoseLog { .. } => Variant::PoseLog,
+                    VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
+                    VariantContent::DetectionLog { .. } => Variant::DetectionLog,
+                };
+                request.variants.contains(&row_variant)
+            })
+            .collect()
     }
 }
 
@@ -647,10 +659,14 @@ pub struct ClusterManager {
     /// and the handler task can read concurrently.
     sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
     /// Application-supplied non-sensor resource catalog provider.
-    /// Sensor streams are lifted from `sensor_catalog_provider`; this
-    /// provider augments the generalized resource catalog with
-    /// transform edges and future resource kinds.
+    /// Kept for backward compatibility; resource catalog is now
+    /// primarily served via [`SessionHandle`].
     resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>>,
+    /// Source of resource catalog rows for the `/auki/resources/0.2.0`
+    /// handler. When set, its [`SessionHandle::catalog`] method is
+    /// called on each inbound request instead of building rows from
+    /// the old sensor/resource provider pair.
+    session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>>,
     /// Producer-local app root containing `registries/{sensors,clocks,frames}`.
     /// `None` until the daemon calls [`Self::set_registry_app_root`];
     /// inbound registry fetches return `entry: None` while unset.
@@ -1101,19 +1117,17 @@ impl ClusterManager {
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
-        // 9. Drain inbound /auki/resources/0.0.1 requests. Sensor
-        //    streams are lifted from the sensor catalog provider;
-        //    transform edges and future resource kinds come from the
-        //    resource catalog provider.
+        // 9. Drain inbound /auki/resources/0.2.0 requests. The
+        //    resources handler delegates to a SessionHandle if one
+        //    is set; otherwise returns an empty catalog.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
+        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
-            sensor_catalog_provider.clone(),
-            resource_catalog_provider.clone(),
-            registry_app_root.clone(),
+            session_handle.clone(),
         )));
 
         // 10. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
@@ -1124,6 +1138,7 @@ impl ClusterManager {
             sensors_events_rx,
             sensor_catalog_provider.clone(),
             registry_app_root.clone(),
+            local_peer_id.to_string(),
         )));
 
         // 11. Drain inbound /auki/registries/0.0.1 requests. Read
@@ -1132,6 +1147,7 @@ impl ClusterManager {
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
+            local_peer_id.to_string(),
         )));
         let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
         let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
@@ -1165,6 +1181,7 @@ impl ClusterManager {
             diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
+            session_handle,
             registry_app_root,
             stopped: AtomicBool::new(false),
         })
@@ -1515,6 +1532,17 @@ impl ClusterManager {
             .resource_catalog_provider
             .lock()
             .expect("resource_catalog_provider lock") = Some(provider);
+    }
+
+    /// Register (or replace) the [`SessionHandle`] that the
+    /// `/auki/resources/0.2.0` handler delegates to when a remote peer
+    /// asks for the local peer's resource catalog. Call this once the
+    /// `auki-session` layer has bootstrapped its session state.
+    ///
+    /// Inbound resource requests received before this call return an
+    /// empty catalog, which is the correct "no session yet" answer.
+    pub fn set_session_handle(&self, handle: Arc<dyn SessionHandle>) {
+        *self.session_handle.lock().expect("session_handle lock") = Some(handle);
     }
 
     /// Register (or replace) the producer-local app root used to
@@ -1927,19 +1955,17 @@ impl ClusterManager {
 
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
-        // 10. Drain inbound /auki/resources/0.0.1 requests. Sensor
-        //     streams are lifted from the sensor catalog provider;
-        //     transform edges and future resource kinds come from the
-        //     resource catalog provider.
+        // 10. Drain inbound /auki/resources/0.2.0 requests. The
+        //     resources handler delegates to a SessionHandle if one
+        //     is set; otherwise returns an empty catalog.
         let sensor_catalog_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
+        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
-            sensor_catalog_provider.clone(),
-            resource_catalog_provider.clone(),
-            registry_app_root.clone(),
+            session_handle.clone(),
         )));
 
         // 11. Drain inbound /auki/sensors/0.0.1 requests. Snapshot
@@ -1950,6 +1976,7 @@ impl ClusterManager {
             sensors_events_rx,
             sensor_catalog_provider.clone(),
             registry_app_root.clone(),
+            local_peer_id.to_string(),
         )));
 
         // 12. Drain inbound /auki/registries/0.0.1 requests. Read
@@ -1958,6 +1985,7 @@ impl ClusterManager {
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
             registry_events_rx,
             registry_app_root.clone(),
+            local_peer_id.to_string(),
         )));
         let diagnostic_messages = Arc::new(Mutex::new(Vec::new()));
         let diagnostic_handler_task = Mutex::new(Some(spawn_diagnostic_handler(
@@ -1991,6 +2019,7 @@ impl ClusterManager {
             diagnostic_messages,
             sensor_catalog_provider,
             resource_catalog_provider,
+            session_handle,
             registry_app_root,
             stopped: AtomicBool::new(false),
         })
@@ -3157,11 +3186,21 @@ fn verify_registry_envelope(
     Ok(())
 }
 
-fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, app_root: &Path) {
+fn enrich_sensor_entries(
+    sensors: &mut [SensorEntry],
+    request: &SensorsRequest,
+    app_root: &Path,
+    local_peer_id: &str,
+) {
     for sensor in sensors {
         let needs_sensor = request.include_registry_entries || request.include_frame_entries;
         let sensor_entry = if needs_sensor {
-            match auki_registry::read_sensor(app_root, &sensor.sensor_id, &sensor.sensor_hash) {
+            match auki_registry::read_sensor(
+                app_root,
+                local_peer_id,
+                &sensor.sensor_id,
+                &sensor.sensor_hash,
+            ) {
                 Ok(Some(entry)) if entry.hash() == sensor.sensor_hash => Some(entry),
                 Ok(Some(_)) | Ok(None) | Err(_) => None,
             }
@@ -3182,7 +3221,8 @@ fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, 
             let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
                 continue;
             };
-            match auki_registry::read_frame(app_root, frame_id, frame_hash) {
+            let frame_peer_id = sensor_frame_peer_id(&entry.body);
+            match auki_registry::read_frame(app_root, frame_peer_id, frame_id, frame_hash) {
                 Ok(Some(frame)) if frame.hash() == frame_hash => {
                     sensor.frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
                 }
@@ -3194,11 +3234,21 @@ fn enrich_sensor_entries(sensors: &mut [SensorEntry], request: &SensorsRequest, 
 
 fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
     match body {
-        SensorBody::Camera(camera) => Some((&camera.frame_id, &camera.frame_hash)),
-        SensorBody::PointCloud(point_cloud) => {
-            Some((&point_cloud.frame_id, &point_cloud.frame_hash))
-        }
-        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+        SensorBody::Camera(camera) => Some((&camera.frame.id, &camera.frame.hash)),
+        SensorBody::Rangefinder(rf) => Some((&rf.frame.id, &rf.frame.hash)),
+        SensorBody::Rf(rf) => Some((&rf.frame.id, &rf.frame.hash)),
+        SensorBody::Audio(audio) => Some((&audio.frame.id, &audio.frame.hash)),
+        SensorBody::JointEncoders(je) => Some((&je.frame.id, &je.frame.hash)),
+    }
+}
+
+fn sensor_frame_peer_id(body: &SensorBody) -> &str {
+    match body {
+        SensorBody::Camera(camera) => &camera.frame.peer_id,
+        SensorBody::Rangefinder(rf) => &rf.frame.peer_id,
+        SensorBody::Rf(rf) => &rf.frame.peer_id,
+        SensorBody::Audio(audio) => &audio.frame.peer_id,
+        SensorBody::JointEncoders(je) => &je.frame.peer_id,
     }
 }
 
@@ -3210,211 +3260,45 @@ fn filter_sensor_entries(sensors: &mut Vec<SensorEntry>) {
     sensors.retain(|sensor| SensorKind::parse(&sensor.kind).is_some());
 }
 
-fn sensor_resource_from_entry(sensor: SensorEntry) -> Option<ResourceEntry> {
-    let payload = stream_payload_for_sensor_kind(&sensor.kind)?;
-    Some(ResourceEntry::SensorStream(SensorStreamResource {
-        id: sensor.sensor_id.clone(),
-        sensor_id: sensor.sensor_id,
-        sensor_hash: sensor.sensor_hash,
-        sensor_kind: sensor.kind.clone(),
-        stream_protocol: STREAM_PROTOCOL.into(),
-        payload: payload.into(),
-        pinhole_intrinsics: None,
-        sensor_entry_json: sensor.sensor_entry_json,
-        frame_entry_json: sensor.frame_entry_json,
-    }))
-}
-
-fn stream_payload_for_sensor_kind(kind: &str) -> Option<&'static str> {
-    match SensorKind::parse(kind)? {
-        SensorKind::Camera => Some("camera_frame"),
-        SensorKind::PointCloud => Some("point_cloud_frame"),
-        SensorKind::JointEncoders => Some("joint_encoders_frame"),
-        SensorKind::Audio => Some("audio_frame"),
-    }
-}
-
-fn filter_resource_entries(resources: &mut Vec<ResourceEntry>, request: &ResourcesRequest) {
-    if request.kinds.is_empty() {
-        return;
-    }
-    resources.retain(|r| request.kinds.iter().any(|k| k == r.kind().as_str()));
-}
-
-fn enrich_resource_entries(
-    resources: &mut [ResourceEntry],
-    request: &ResourcesRequest,
-    app_root: &Path,
-) {
-    if !request.include_sensor_entries
-        && !request.include_frame_entries
-        && !request.include_clock_entries
-    {
-        return;
-    }
-
-    for resource in resources {
-        match resource {
-            ResourceEntry::SensorStream(sensor) => {
-                let sensor_entry =
-                    if request.include_sensor_entries || request.include_frame_entries {
-                        match auki_registry::read_sensor(
-                            app_root,
-                            &sensor.sensor_id,
-                            &sensor.sensor_hash,
-                        ) {
-                            Ok(Some(entry)) if entry.hash() == sensor.sensor_hash => Some(entry),
-                            Ok(Some(_)) | Ok(None) | Err(_) => None,
-                        }
-                    } else {
-                        None
-                    };
-
-                if request.include_sensor_entries {
-                    if let Some(entry) = sensor_entry.as_ref() {
-                        sensor.sensor_entry_json = Some(canonical_json(entry.canonical_bytes()));
-                    }
-                }
-
-                if request.include_frame_entries {
-                    let Some(entry) = sensor_entry.as_ref() else {
-                        continue;
-                    };
-                    let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
-                        continue;
-                    };
-                    match auki_registry::read_frame(app_root, frame_id, frame_hash) {
-                        Ok(Some(frame)) if frame.hash() == frame_hash => {
-                            sensor.frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
-                        }
-                        Ok(Some(_)) | Ok(None) | Err(_) => {}
-                    }
-                }
-            }
-            ResourceEntry::TransformEdge(edge) => {
-                if !request.include_frame_entries {
-                    continue;
-                }
-                match auki_registry::read_frame(
-                    app_root,
-                    &edge.from_frame_id,
-                    &edge.from_frame_hash,
-                ) {
-                    Ok(Some(frame)) if frame.hash() == edge.from_frame_hash => {
-                        edge.from_frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
-                    }
-                    Ok(Some(_)) | Ok(None) | Err(_) => {}
-                }
-                match auki_registry::read_frame(app_root, &edge.to_frame_id, &edge.to_frame_hash) {
-                    Ok(Some(frame)) if frame.hash() == edge.to_frame_hash => {
-                        edge.to_frame_entry_json = Some(canonical_json(frame.canonical_bytes()));
-                    }
-                    Ok(Some(_)) | Ok(None) | Err(_) => {}
-                }
-            }
-            ResourceEntry::PoseStream(pose) => {
-                if request.include_frame_entries {
-                    match auki_registry::read_frame(
-                        app_root,
-                        &pose.from_frame_id,
-                        &pose.from_frame_hash,
-                    ) {
-                        Ok(Some(frame)) if frame.hash() == pose.from_frame_hash => {
-                            pose.from_frame_entry_json =
-                                Some(canonical_json(frame.canonical_bytes()));
-                        }
-                        Ok(Some(_)) | Ok(None) | Err(_) => {}
-                    }
-                    match auki_registry::read_frame(
-                        app_root,
-                        &pose.to_frame_id,
-                        &pose.to_frame_hash,
-                    ) {
-                        Ok(Some(frame)) if frame.hash() == pose.to_frame_hash => {
-                            pose.to_frame_entry_json =
-                                Some(canonical_json(frame.canonical_bytes()));
-                        }
-                        Ok(Some(_)) | Ok(None) | Err(_) => {}
-                    }
-                }
-
-                if request.include_clock_entries {
-                    match auki_registry::read_clock(app_root, &pose.clock_id, &pose.clock_hash) {
-                        Ok(Some(clock)) if clock.hash() == pose.clock_hash => {
-                            pose.clock_entry_json = Some(canonical_json(clock.canonical_bytes()));
-                        }
-                        Ok(Some(_)) | Ok(None) | Err(_) => {}
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn merge_resource_entries(base: &mut Vec<ResourceEntry>, extra: Vec<ResourceEntry>) {
-    for resource in extra {
-        let kind = resource.kind().as_str();
-        let id = resource.id().to_string();
-        base.retain(|existing| !(existing.kind().as_str() == kind && existing.id() == id));
-        base.push(resource);
-    }
-}
-
-/// Spawn a task that drains inbound `/auki/resources/0.0.1` requests
+/// Spawn a task that drains inbound `/auki/resources/0.2.0` requests
 /// from `rx` and replies on each `ack` with a freshly-snapshotted
-/// [`ResourcesResponse`].
+/// [`ResourcesResponse`] sourced entirely from the registered
+/// [`SessionHandle`].
 ///
-/// Sensor streams are lifted from the registered sensor catalog provider
-/// so producers that already publish sensors automatically advertise
-/// them on the generalized resource surface. The resource provider
-/// adds transform edges and future non-sensor resources.
+/// If no handle is set yet (pre-session bootstrap), returns an empty
+/// catalog. Variant filtering: if `request.variants` is non-empty,
+/// only rows whose `variant_content` tag appears in `variants` are
+/// returned. An empty `variants` list means "all variants".
 fn spawn_resources_handler(
     mut rx: mpsc::Receiver<ResourcesRequestEvent>,
-    sensor_provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
-    resource_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>>,
-    registry_app_root: Arc<Mutex<Option<PathBuf>>>,
+    session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(ResourcesRequestEvent { request, ack, .. }) = rx.recv().await {
-            let root = registry_app_root
-                .lock()
-                .expect("registry_app_root lock")
-                .clone();
-            let mut resources = Vec::new();
-
-            if request.wants_kind(ResourceKind::SensorStream) {
-                let sensors_request = SensorsRequest {
-                    include_registry_entries: request.include_sensor_entries,
-                    include_frame_entries: request.include_frame_entries,
-                };
-                let mut sensors = {
-                    let guard = sensor_provider
-                        .lock()
-                        .expect("sensor_catalog_provider lock");
-                    match guard.as_ref() {
-                        Some(p) => p.snapshot_for_request(&sensors_request, root.as_deref()),
-                        None => Vec::new(),
-                    }
-                };
-                filter_sensor_entries(&mut sensors);
-                resources.extend(sensors.into_iter().filter_map(sensor_resource_from_entry));
-            }
-
-            let provider_resources = {
-                let guard = resource_provider
-                    .lock()
-                    .expect("resource_catalog_provider lock");
+            let all_resources = {
+                let guard = session_handle.lock().expect("session_handle lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(h) => h.catalog(),
                     None => Vec::new(),
                 }
             };
-            merge_resource_entries(&mut resources, provider_resources);
-            filter_resource_entries(&mut resources, &request);
-            if let Some(app_root) = root.as_deref() {
-                enrich_resource_entries(&mut resources, &request, app_root);
-            }
-
+            let resources = if request.variants.is_empty() {
+                all_resources
+            } else {
+                use auki_network::resources_protocol::{Variant, VariantContent};
+                all_resources
+                    .into_iter()
+                    .filter(|r| {
+                        let row_variant = match &r.variant_content {
+                            VariantContent::SensorLog { .. } => Variant::SensorLog,
+                            VariantContent::PoseLog { .. } => Variant::PoseLog,
+                            VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
+                            VariantContent::DetectionLog { .. } => Variant::DetectionLog,
+                        };
+                        request.variants.contains(&row_variant)
+                    })
+                    .collect()
+            };
             let _ = ack.send(ResourcesResponse { resources });
         }
     })
@@ -3432,6 +3316,7 @@ fn spawn_sensors_handler(
     mut rx: mpsc::Receiver<SensorsRequestEvent>,
     provider: Arc<Mutex<Option<Arc<dyn SensorCatalogProvider>>>>,
     registry_app_root: Arc<Mutex<Option<PathBuf>>>,
+    local_peer_id: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(SensorsRequestEvent { request, ack, .. }) = rx.recv().await {
@@ -3442,7 +3327,7 @@ fn spawn_sensors_handler(
             let mut sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => p.snapshot_for_request(&request, root.as_deref()),
+                    Some(p) => p.snapshot_for_request(&request, root.as_deref(), &local_peer_id),
                     None => Vec::new(),
                 }
             };
@@ -3461,12 +3346,13 @@ fn spawn_sensors_handler(
 fn spawn_registry_handler(
     mut rx: mpsc::Receiver<RegistryRequestEvent>,
     app_root: Arc<Mutex<Option<PathBuf>>>,
+    local_peer_id: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(RegistryRequestEvent { peer, request, ack }) = rx.recv().await {
             let root = app_root.lock().expect("registry_app_root lock").clone();
             let entry = match root {
-                Some(root) => match read_registry_envelope(&root, &request) {
+                Some(root) => match read_registry_envelope(&root, &local_peer_id, &request) {
                     Ok(entry) => entry,
                     Err(e) => {
                         eprintln!(
@@ -3503,32 +3389,37 @@ fn spawn_diagnostic_handler(
 
 fn read_registry_envelope(
     app_root: &std::path::Path,
+    peer_id: &str,
     request: &RegistryRequest,
 ) -> Result<Option<RegistryEntryEnvelope>, auki_registry::Error> {
     match request.kind {
         RegistryKind::Sensor => {
-            let Some(entry) = auki_registry::read_sensor(app_root, &request.id, &request.hash)?
+            let Some(entry) =
+                auki_registry::read_sensor(app_root, peer_id, &request.id, &request.hash)?
             else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_sensor(entry)))
         }
         RegistryKind::Clock => {
-            let Some(entry) = auki_registry::read_clock(app_root, &request.id, &request.hash)?
+            let Some(entry) =
+                auki_registry::read_clock(app_root, peer_id, &request.id, &request.hash)?
             else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_clock(entry)))
         }
         RegistryKind::Frame => {
-            let Some(entry) = auki_registry::read_frame(app_root, &request.id, &request.hash)?
+            let Some(entry) =
+                auki_registry::read_frame(app_root, peer_id, &request.id, &request.hash)?
             else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_frame(entry)))
         }
         RegistryKind::Detector => {
-            let Some(entry) = auki_registry::read_detector(app_root, &request.id, &request.hash)?
+            let Some(entry) =
+                auki_registry::read_detector(app_root, peer_id, &request.id, &request.hash)?
             else {
                 return Ok(None);
             };
@@ -4310,7 +4201,8 @@ mod tests {
     #[test]
     fn registry_envelope_reads_canonical_frame_from_app_root() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = FrameRegistryEntry::ros_optical("K1-FAKE/head_cam_points");
+        let peer_id = "K1-FAKE";
+        let entry = FrameRegistryEntry::ros_optical(peer_id, "K1-FAKE/head_cam_points");
         let hash = auki_registry::write_frame(dir.path(), &entry)
             .unwrap()
             .hash()
@@ -4318,6 +4210,7 @@ mod tests {
 
         let envelope = read_registry_envelope(
             dir.path(),
+            peer_id,
             &RegistryRequest {
                 kind: RegistryKind::Frame,
                 id: entry.frame_id.clone(),
@@ -4340,7 +4233,9 @@ mod tests {
         use auki_registry::{Aruco, DetectorBody, DetectorRegistryEntry};
 
         let dir = tempfile::tempdir().unwrap();
+        let peer_id = "K1-FAKE";
         let entry = DetectorRegistryEntry {
+            peer_id: peer_id.into(),
             detector_id: "aukilabs/aruco/v1".into(),
             body: DetectorBody::Aruco(Aruco {
                 dictionary: "5x5_50".into(),
@@ -4354,6 +4249,7 @@ mod tests {
 
         let envelope = read_registry_envelope(
             dir.path(),
+            peer_id,
             &RegistryRequest {
                 kind: RegistryKind::Detector,
                 id: entry.detector_id.clone(),
@@ -4390,14 +4286,17 @@ mod tests {
     #[test]
     fn sensor_catalog_enrichment_embeds_sensor_and_frame_entries() {
         let dir = tempfile::tempdir().unwrap();
-        let frame = FrameRegistryEntry::opengl("K1-FAKE/lidar_points");
+        let peer_id = "K1-FAKE";
+        let frame = FrameRegistryEntry::opengl(peer_id, "K1-FAKE/lidar_points");
         let frame_hash = auki_registry::write_frame(dir.path(), &frame)
             .unwrap()
             .hash()
             .to_string();
         let sensor = SensorRegistryEntry {
+            peer_id: peer_id.into(),
             sensor_id: "K1-FAKE/lidar_top".into(),
-            body: SensorBody::PointCloud(auki_registry::PointCloud {
+            body: SensorBody::Rangefinder(auki_registry::Rangefinder {
+                r#type: "point_cloud".into(),
                 fields: vec![
                     auki_registry::PointField {
                         name: "x".into(),
@@ -4421,8 +4320,11 @@ mod tests {
                 point_step: 12,
                 is_bigendian: false,
                 frame_rate_hz: 10,
-                frame_id: frame.frame_id.clone(),
-                frame_hash: frame_hash.clone(),
+                frame: auki_registry::RegistryRef {
+                    peer_id: peer_id.into(),
+                    id: frame.frame_id.clone(),
+                    hash: frame_hash.clone(),
+                },
             }),
         };
         let sensor_hash = auki_registry::write_sensor(dir.path(), &sensor)
@@ -4432,7 +4334,7 @@ mod tests {
         let mut sensors = vec![SensorEntry {
             sensor_id: sensor.sensor_id.clone(),
             sensor_hash,
-            kind: "point_cloud".into(),
+            kind: "rangefinder".into(),
             sensor_entry_json: None,
             frame_entry_json: None,
         }];
@@ -4441,6 +4343,7 @@ mod tests {
             &mut sensors,
             &SensorsRequest::with_frame_entries(),
             dir.path(),
+            peer_id,
         );
 
         let enriched = &sensors[0];
@@ -4479,171 +4382,96 @@ mod tests {
             },
         ]);
 
-        let sensors = provider.snapshot_for_request(&SensorsRequest::catalog(), None);
+        let sensors = provider.snapshot_for_request(&SensorsRequest::catalog(), None, "K1-FAKE");
 
         assert_eq!(sensors.len(), 1);
         assert_eq!(sensors[0].kind, "camera");
         assert_eq!(sensors[0].sensor_id, "K1-FAKE/head");
     }
 
-    #[test]
-    fn sensor_entry_lifts_to_sensor_stream_resource() {
-        let resource = sensor_resource_from_entry(SensorEntry {
-            sensor_id: "K1-FAKE/head_left_cam".into(),
-            sensor_hash: "abc123".into(),
-            kind: "camera".into(),
-            sensor_entry_json: None,
-            frame_entry_json: None,
-        })
-        .expect("camera is a supported sensor kind");
-
-        let ResourceEntry::SensorStream(sensor) = resource else {
-            panic!("expected sensor stream resource");
-        };
-        assert_eq!(sensor.id, "K1-FAKE/head_left_cam");
-        assert_eq!(sensor.sensor_id, "K1-FAKE/head_left_cam");
-        assert_eq!(sensor.sensor_hash, "abc123");
-        assert_eq!(sensor.sensor_kind, "camera");
-        assert_eq!(sensor.stream_protocol, "/auki/stream/0.1.0");
-        assert_eq!(sensor.payload, "camera_frame");
-    }
-
-    #[test]
-    fn resource_enrichment_embeds_transform_edge_frame_entries() {
+    /// Verify `spawn_resources_handler` delegates to `SessionHandle::catalog`
+    /// and that variant filtering works.
+    #[tokio::test]
+    async fn resources_handler_delegates_to_session_handle() {
         use auki_network::resources_protocol::{
-            ResourceQuat, ResourceSpatialTransform, ResourceVec3, TransformEdgeResource,
+            Available, Head, ResourceEntry, ResourcesRequest, ResourcesResponse, SensorBlock,
+            SensorKind, SensorManifestPointer, Variant, VariantContent,
         };
+        use auki_registry::RegistryRef;
 
-        let dir = tempfile::tempdir().unwrap();
-        let from = FrameRegistryEntry::ros_body("K1-FAKE/camera_link");
-        let from_hash = auki_registry::write_frame(dir.path(), &from)
-            .unwrap()
-            .hash()
-            .to_string();
-        let to = FrameRegistryEntry::ros_optical("K1-FAKE/head_left_cam_optical");
-        let to_hash = auki_registry::write_frame(dir.path(), &to)
-            .unwrap()
-            .hash()
-            .to_string();
-
-        let mut resources = vec![ResourceEntry::TransformEdge(TransformEdgeResource {
-            id: "K1-FAKE/camera_link->K1-FAKE/head_left_cam_optical".into(),
-            from_frame_id: from.frame_id.clone(),
-            from_frame_hash: from_hash,
-            to_frame_id: to.frame_id.clone(),
-            to_frame_hash: to_hash,
-            writer_mode: "rigid".into(),
-            source: Some(serde_json::json!({
-                "kind": "ros2_tf",
-                "publishers": ["robot_state_publisher"]
-            })),
-            transform: ResourceSpatialTransform {
-                translation: ResourceVec3 {
-                    x: 0.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                orientation: ResourceQuat {
-                    x: 0.5,
-                    y: -0.5,
-                    z: 0.5,
-                    w: -0.5,
-                },
-            },
-            from_frame_entry_json: None,
-            to_frame_entry_json: None,
-        })];
-
-        enrich_resource_entries(
-            &mut resources,
-            &ResourcesRequest {
-                include_frame_entries: true,
-                ..ResourcesRequest::transform_edges()
-            },
-            dir.path(),
-        );
-
-        let ResourceEntry::TransformEdge(edge) = &resources[0] else {
-            panic!("expected transform edge resource");
-        };
-        let decoded_from: FrameRegistryEntry =
-            serde_json::from_str(edge.from_frame_entry_json.as_deref().unwrap()).unwrap();
-        let decoded_to: FrameRegistryEntry =
-            serde_json::from_str(edge.to_frame_entry_json.as_deref().unwrap()).unwrap();
-        assert_eq!(decoded_from, from);
-        assert_eq!(decoded_to, to);
-    }
-
-    #[test]
-    fn resource_enrichment_embeds_pose_stream_frame_and_clock_entries() {
-        use crate::PoseStreamResource;
-        use auki_registry::{ClockBody, ClockMeta, Scope};
-
-        let dir = tempfile::tempdir().unwrap();
-        let base = FrameRegistryEntry::ros_body("K1/base_link");
-        let base_hash = auki_registry::write_frame(dir.path(), &base)
-            .unwrap()
-            .hash()
-            .to_string();
-        let head = FrameRegistryEntry::ros_optical("K1/head_left_rgb_optical");
-        let head_hash = auki_registry::write_frame(dir.path(), &head)
-            .unwrap()
-            .hash()
-            .to_string();
-        let clock = ClockRegistryEntry {
-            clock_id: "K1/monotonic".into(),
-            body: ClockBody::MonotonicClock(ClockMeta {
-                unit: "nanoseconds".into(),
-                monotonic: true,
-                epoch: None,
-                scope: Scope::DeviceLocal,
+        // Build a minimal catalog: one sensor_log row.
+        let row = ResourceEntry {
+            source_peer_id: "galbot".into(),
+            writer_peer_id: "galbot".into(),
+            resource_id: "head_left_rgb".into(),
+            state: "live".into(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
             }),
-        };
-        let clock_hash = auki_registry::write_clock(dir.path(), &clock)
-            .unwrap()
-            .hash()
-            .to_string();
-
-        let mut resources = vec![ResourceEntry::PoseStream(PoseStreamResource {
-            id: "K1/base_link->K1/head_left_rgb_optical".into(),
-            from_frame_id: base.frame_id.clone(),
-            from_frame_hash: base_hash,
-            to_frame_id: head.frame_id.clone(),
-            to_frame_hash: head_hash,
-            clock_id: clock.clock_id.clone(),
-            clock_hash,
-            stream_protocol: STREAM_PROTOCOL.into(),
-            payload: "spatial_transform".into(),
-            writer_mode: "movable".into(),
-            expected_rate_hz: 30,
-            source: None,
-            from_frame_entry_json: None,
-            to_frame_entry_json: None,
-            clock_entry_json: None,
-        })];
-
-        enrich_resource_entries(
-            &mut resources,
-            &ResourcesRequest {
-                include_frame_entries: true,
-                include_clock_entries: true,
-                ..ResourcesRequest::pose_streams()
+            extent: None,
+            available: Available {
+                bytes: 1024,
+                entries: 10,
+                duration_ns: 5_000_000_000,
             },
-            dir.path(),
-        );
-
-        let ResourceEntry::PoseStream(row) = &resources[0] else {
-            panic!("expected pose stream resource");
+            sensor: Some(SensorBlock {
+                kind: SensorKind::Camera,
+                r#type: "rgb".into(),
+                sensor_id: "head_left_rgb".into(),
+                sensor_hash: "sh".into(),
+            }),
+            pose: None,
+            variant_content: VariantContent::SensorLog {
+                manifest: SensorManifestPointer {
+                    clock: RegistryRef {
+                        peer_id: "galbot".into(),
+                        id: "session/sdk_clock".into(),
+                        hash: "ch".into(),
+                    },
+                    frame: None,
+                },
+            },
         };
-        let decoded_from: FrameRegistryEntry =
-            serde_json::from_str(row.from_frame_entry_json.as_deref().unwrap()).unwrap();
-        let decoded_to: FrameRegistryEntry =
-            serde_json::from_str(row.to_frame_entry_json.as_deref().unwrap()).unwrap();
-        let decoded_clock: ClockRegistryEntry =
-            serde_json::from_str(row.clock_entry_json.as_deref().unwrap()).unwrap();
-        assert_eq!(decoded_from, base);
-        assert_eq!(decoded_to, head);
-        assert_eq!(decoded_clock, clock);
+
+        struct MockSession(Vec<ResourceEntry>);
+        impl SessionHandle for MockSession {
+            fn catalog(&self) -> Vec<ResourceEntry> {
+                self.0.clone()
+            }
+        }
+
+        let handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> =
+            Arc::new(Mutex::new(Some(Arc::new(MockSession(vec![row.clone()])))));
+
+        let (tx, rx) = mpsc::channel(8);
+        let _task = spawn_resources_handler(rx, handle);
+
+        // All variants — should return the row.
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest::all(),
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+        let resp = ack_rx.await.unwrap();
+        assert_eq!(resp.resources.len(), 1);
+        assert_eq!(resp.resources[0].resource_id, "head_left_rgb");
+
+        // Filter for PoseLog only — should return nothing.
+        let (ack_tx2, ack_rx2) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest {
+                variants: vec![Variant::PoseLog],
+            },
+            ack: ack_tx2,
+        })
+        .await
+        .unwrap();
+        let resp2 = ack_rx2.await.unwrap();
+        assert!(resp2.resources.is_empty());
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

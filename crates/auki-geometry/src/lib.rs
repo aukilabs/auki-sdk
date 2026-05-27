@@ -226,9 +226,24 @@ pub fn spatial_transform_to_matrix4(transform: &SpatialTransform) -> Result<Matr
     let rotation = spatial_transform_rotation(transform)?;
     let translation = spatial_transform_translation(transform);
     Ok([
-        [rotation[0][0], rotation[0][1], rotation[0][2], translation.x],
-        [rotation[1][0], rotation[1][1], rotation[1][2], translation.y],
-        [rotation[2][0], rotation[2][1], rotation[2][2], translation.z],
+        [
+            rotation[0][0],
+            rotation[0][1],
+            rotation[0][2],
+            translation.x,
+        ],
+        [
+            rotation[1][0],
+            rotation[1][1],
+            rotation[1][2],
+            translation.y,
+        ],
+        [
+            rotation[2][0],
+            rotation[2][1],
+            rotation[2][2],
+            translation.z,
+        ],
         [0.0, 0.0, 0.0, 1.0],
     ])
 }
@@ -302,6 +317,7 @@ fn validate_frame(entry: &FrameRegistryEntry) -> Result<()> {
 
 fn validate_axes(axes: &AxisConvention) -> Result<()> {
     let entry = FrameRegistryEntry {
+        peer_id: String::new(),
         frame_id: "<anonymous>".into(),
         handedness: if determinant3(basis_matrix(axes)) >= 0 {
             Handedness::Right
@@ -604,8 +620,8 @@ mod tests {
 
     #[test]
     fn ros_optical_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::ros_optical("camera");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
@@ -614,8 +630,8 @@ mod tests {
 
     #[test]
     fn ros_body_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::ros_body("body");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_body("", "body");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]],
@@ -624,8 +640,8 @@ mod tests {
 
     #[test]
     fn unity_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::unity("unity");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::unity("", "unity");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]],
@@ -635,12 +651,13 @@ mod tests {
     #[test]
     fn point_conversion_applies_axes_and_units() {
         let from = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "source".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::ros_optical("source").axes,
+            axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
         };
-        let to = FrameRegistryEntry::opengl("target");
+        let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_point_convention(
             Vec3 {
                 x: 100.0,
@@ -664,12 +681,13 @@ mod tests {
     #[test]
     fn direction_conversion_does_not_apply_units() {
         let from = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "source".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::ros_optical("source").axes,
+            axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
         };
-        let to = FrameRegistryEntry::opengl("target");
+        let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_direction_convention(
             Vec3 {
                 x: 1.0,
@@ -693,10 +711,10 @@ mod tests {
     #[test]
     fn convention_matrix_round_trips_to_identity() {
         let frames = [
-            FrameRegistryEntry::ros_body("body"),
-            FrameRegistryEntry::ros_optical("optical"),
-            FrameRegistryEntry::opengl("opengl"),
-            FrameRegistryEntry::unity("unity"),
+            FrameRegistryEntry::ros_body("", "body"),
+            FrameRegistryEntry::ros_optical("", "optical"),
+            FrameRegistryEntry::opengl("", "opengl"),
+            FrameRegistryEntry::unity("", "unity"),
         ];
         for a in &frames {
             for b in &frames {
@@ -713,19 +731,20 @@ mod tests {
     #[test]
     fn handedness_mismatch_is_rejected() {
         let bad = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "bad".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::unity("unity").axes,
+            axes: FrameRegistryEntry::unity("", "unity").axes,
             units: LengthUnit::Meters,
         };
-        let err = convention_matrix(&bad, &FrameRegistryEntry::opengl("world")).unwrap_err();
+        let err = convention_matrix(&bad, &FrameRegistryEntry::opengl("", "world")).unwrap_err();
         assert!(matches!(err, GeometryError::HandednessMismatch { .. }));
     }
 
     #[test]
     fn convert_pose_convention_reexpresses_translation_and_orientation() {
-        let from = FrameRegistryEntry::ros_optical("camera");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "world");
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let pose = SpatialTransform {
             translation: Some(Vec3 {
@@ -762,8 +781,8 @@ mod tests {
 
     #[test]
     fn converted_orientation_preserves_rotated_vectors() {
-        let from = FrameRegistryEntry::ros_body("body");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_body("", "body");
+        let to = FrameRegistryEntry::opengl("", "world");
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let source_q = Quat {
             x: half,
@@ -893,8 +912,17 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_identity() {
         let identity = SpatialTransform {
-            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&identity).unwrap(),
@@ -910,8 +938,17 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_translation_only() {
         let t = SpatialTransform {
-            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+            translation: Some(Vec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&t).unwrap(),
@@ -929,8 +966,17 @@ mod tests {
         // 90° rotation around +Z: x→y, y→−x
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let t = SpatialTransform {
-            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: half,
+                w: half,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&t).unwrap(),
@@ -946,7 +992,10 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_treats_missing_as_zero_identity() {
         // Both None: should produce 4x4 identity.
-        let none = SpatialTransform { translation: None, orientation: None };
+        let none = SpatialTransform {
+            translation: None,
+            orientation: None,
+        };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&none).unwrap(),
             [
@@ -963,8 +1012,17 @@ mod tests {
         // Build a pose, send it to matrix4, decode it back. Should round-trip.
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let original = SpatialTransform {
-            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+            translation: Some(Vec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: half,
+                w: half,
+            }),
         };
         let matrix = spatial_transform_to_matrix4(&original).unwrap();
         let decoded = spatial_transform_from_matrix4(matrix).unwrap();
@@ -981,10 +1039,22 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0],
         ];
         let decoded = spatial_transform_from_matrix4(identity).unwrap();
-        assert_vec3_close(decoded.translation.unwrap(), Vec3 { x: 0.0, y: 0.0, z: 0.0 });
+        assert_vec3_close(
+            decoded.translation.unwrap(),
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
         assert_quat_equivalent(
             decoded.orientation.unwrap(),
-            Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+            Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
         );
     }
 }

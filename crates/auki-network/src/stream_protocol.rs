@@ -1,4 +1,4 @@
-//! `/auki/stream/0.1.0` — libp2p substream protocol carrying typed
+//! `/auki/stream/0.2.0` — libp2p substream protocol carrying typed
 //! [`Stream<T>`] data, encoded as protobuf via prost. Step 2 of the
 //! [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md)
 //! moved the wire format off JSON-via-serde-json onto protobuf.
@@ -74,6 +74,7 @@ use crate::PEER_DERIVATION_LABEL;
 use auki_identity::Wallet;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
+use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 fn _phantom() -> Option<Wallet> {
@@ -92,10 +93,109 @@ fn _phantom() -> Option<Wallet> {
 // favour of that single shape.
 pub use auki_datatypes::camera::{CameraFrame, DynamicIntrinsics};
 pub use auki_datatypes::stream::{
-    DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, StreamRequest,
-    decline_reason, end_reason, stream_message,
+    DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, decline_reason,
+    end_reason, stream_message,
 };
 pub use auki_datatypes::{audio, joint_encoders, point_cloud, pose};
+
+// ─── StreamRequest + ReadFrom ─────────────────────────────────────────────────
+
+/// Where to start reading on the producer's log when accepting a stream
+/// subscription.
+///
+/// `Latest` — tail from the current end (live streaming; no replay).
+/// `FromStart` — replay from the beginning of the log.
+/// `FromTimestamp(i64)` — start from the first entry at or after the
+/// given nanosecond timestamp on the log's own clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadFrom {
+    /// Tail from the current live end — no historical replay.
+    Latest,
+    /// Replay from the very first entry in the log.
+    FromStart,
+    /// Start at the first entry whose timestamp is ≥ this nanosecond
+    /// value on the log's clock.
+    FromTimestamp(i64),
+}
+
+impl Default for ReadFrom {
+    fn default() -> Self {
+        ReadFrom::Latest
+    }
+}
+
+/// Consumer → Producer handshake: identifies the log the consumer wants
+/// to subscribe to, and where on that log to begin.
+///
+/// `source_peer_id` is the libp2p peer-id string of the peer that wrote
+/// the log (the canonical source, which may differ from the peer being
+/// dialled — e.g. a materializer re-serving a log it cached from a
+/// robot). `resource_id` is the log's stable identity string, matching
+/// the `resource_id` in the producer's Resource Catalog.
+///
+/// `writer_peer_id` is implicit by the libp2p connection — no field
+/// needed for v1. The connection itself identifies who the consumer is
+/// talking to; if the serving peer is a materializer, `source_peer_id`
+/// identifies the original writer.
+///
+/// Wire format: encoded as a prost `auki.stream.StreamRequest` message
+/// on the `/auki/stream/0.2.0` substream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StreamRequest {
+    /// Peer-id string of the peer that originally wrote the log. Empty
+    /// string for legacy v0 subscriptions that pre-date this field; in
+    /// that case the serving peer is assumed to be the source.
+    pub source_peer_id: String,
+    /// Stable identity of the log/resource being subscribed to.
+    pub resource_id: String,
+    /// Starting position on the log. Defaults to [`ReadFrom::Latest`].
+    #[serde(default)]
+    pub from: ReadFrom,
+}
+
+// ─── Wire conversion helpers ──────────────────────────────────────────────────
+
+/// Convert the Rust `StreamRequest` to the prost wire type so it can
+/// be wrapped in a `StreamMessage::request(…)`.
+pub(crate) fn stream_request_to_wire(req: StreamRequest) -> auki_datatypes::stream::StreamRequest {
+    use auki_datatypes::stream::{
+        ReadFromLatest, ReadFromStart, ReadFromTimestamp, stream_request,
+    };
+    let read_from = match req.from {
+        ReadFrom::Latest => Some(stream_request::ReadFrom::Latest(ReadFromLatest {})),
+        ReadFrom::FromStart => Some(stream_request::ReadFrom::FromStart(ReadFromStart {})),
+        ReadFrom::FromTimestamp(ts) => {
+            Some(stream_request::ReadFrom::FromTimestamp(ReadFromTimestamp {
+                timestamp_ns: ts,
+            }))
+        }
+    };
+    auki_datatypes::stream::StreamRequest {
+        sensor_id: String::new(),
+        resource_id: req.resource_id,
+        source_peer_id: req.source_peer_id,
+        read_from,
+    }
+}
+
+/// Convert the prost wire type back to the Rust `StreamRequest`.
+pub(crate) fn stream_request_from_wire(
+    wire: auki_datatypes::stream::StreamRequest,
+) -> StreamRequest {
+    use auki_datatypes::stream::stream_request;
+    let from = match wire.read_from {
+        Some(stream_request::ReadFrom::Latest(_)) => ReadFrom::Latest,
+        Some(stream_request::ReadFrom::FromStart(_)) => ReadFrom::FromStart,
+        Some(stream_request::ReadFrom::FromTimestamp(t)) => ReadFrom::FromTimestamp(t.timestamp_ns),
+        None => ReadFrom::Latest,
+    };
+    StreamRequest {
+        source_peer_id: wire.source_peer_id,
+        resource_id: wire.resource_id,
+        from,
+    }
+}
 
 /// libp2p protocol id for the typed-byte-stream protocol. Stable; do
 /// not change without coordinating with consumers (Boosterapp, Sentinel,
@@ -108,7 +208,7 @@ pub use auki_datatypes::{audio, joint_encoders, point_cloud, pose};
 /// `auki-datatypes`'s `auki.stream` package; consumers update their
 /// decoders in lockstep. 1.0.0 is reserved for the SDK's first
 /// official release.
-pub const STREAM_PROTOCOL: &str = "/auki/stream/0.1.0";
+pub const STREAM_PROTOCOL: &str = "/auki/stream/0.2.0";
 
 /// Maximum framed-message size on the wire, in bytes. Bounded so a peer
 /// cannot drive an OOM by sending an arbitrarily-large length prefix;
@@ -217,11 +317,11 @@ mod tests {
     use super::*;
     use futures::io::Cursor;
 
-    fn request_msg(sensor_id: &str) -> StreamMessage {
-        StreamMessage::request(StreamRequest {
-            sensor_id: sensor_id.into(),
+    fn request_msg(resource_id: &str) -> StreamMessage {
+        StreamMessage::request(stream_request_to_wire(StreamRequest {
+            resource_id: resource_id.into(),
             ..Default::default()
-        })
+        }))
     }
 
     fn accept_msg(
@@ -255,7 +355,7 @@ mod tests {
     fn protocol_id_is_locked() {
         // Wire format. Coordinate with Boosterapp, Sentinel, Park, and
         // any cross-language reimplementation before touching it.
-        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.1.0");
+        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 
     #[test]
@@ -291,13 +391,14 @@ mod tests {
     #[test]
     fn pose_request_and_manifest_round_trip_resource_identity() {
         let request = StreamRequest {
-            sensor_id: String::new(),
             resource_id: "K1/base_link->K1/head_left_rgb_optical".into(),
+            ..Default::default()
         };
-        let msg = StreamMessage::request(request.clone());
+        let wire_req = stream_request_to_wire(request.clone());
+        let msg = StreamMessage::request(wire_req.clone());
         let bytes = msg.encode_to_vec();
         let back = StreamMessage::decode(&*bytes).unwrap();
-        assert_eq!(back, StreamMessage::request(request));
+        assert_eq!(back, StreamMessage::request(wire_req));
 
         let manifest = StreamManifest {
             sensor_id: String::new(),
@@ -612,16 +713,111 @@ mod tests {
         assert_eq!(frame_inner.seq, 42);
     }
 
+    // ─── StreamRequest + ReadFrom spec tests (§5 of #216) ────────────────
+
+    #[test]
+    fn stream_request_canonical() {
+        let r = StreamRequest {
+            source_peer_id: "galbot".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+            from: ReadFrom::Latest,
+        };
+        let value = serde_json::to_value(&r).unwrap();
+        assert_eq!(value["source_peer_id"], "galbot");
+        assert_eq!(value["resource_id"], "head_left_rgb");
+        assert_eq!(value["from"], "latest");
+    }
+
+    #[test]
+    fn stream_request_from_timestamp_canonical() {
+        let r = StreamRequest {
+            source_peer_id: "galbot".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+            from: ReadFrom::FromTimestamp(1733836800000000000),
+        };
+        let value = serde_json::to_value(&r).unwrap();
+        assert!(value["from"]["from_timestamp"] == 1733836800000000000i64);
+    }
+
+    #[test]
+    fn read_from_enum_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_value(&ReadFrom::Latest).unwrap(),
+            serde_json::json!("latest")
+        );
+        assert_eq!(
+            serde_json::to_value(&ReadFrom::FromStart).unwrap(),
+            serde_json::json!("from_start")
+        );
+        let v = serde_json::to_value(&ReadFrom::FromTimestamp(42)).unwrap();
+        assert!(v.is_object()); // tagged enum variant with value
+    }
+
+    #[test]
+    fn stream_request_rejects_writer_peer_id() {
+        // The new schema does NOT include writer_peer_id. Sending one should
+        // either deserialize fine (extra field ignored) or fail.
+        let json = r#"{"source_peer_id":"galbot","resource_id":"head_left_rgb","writer_peer_id":"park","from":"latest"}"#;
+        let parsed: Result<StreamRequest, _> = serde_json::from_str(json);
+        // Default serde behavior: extra fields are silently ignored.
+        if let Ok(req) = parsed {
+            assert_eq!(req.source_peer_id, "galbot");
+            // writer_peer_id is silently dropped — acceptable since v1 doesn't need it
+        }
+    }
+
+    #[test]
+    fn stream_request_wire_round_trip_with_source_peer_id() {
+        let req = StreamRequest {
+            source_peer_id: "galbot".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+            from: ReadFrom::Latest,
+        };
+        let wire = stream_request_to_wire(req.clone());
+        let back = stream_request_from_wire(wire);
+        assert_eq!(back.source_peer_id, req.source_peer_id);
+        assert_eq!(back.resource_id, req.resource_id);
+        assert_eq!(back.from, req.from);
+    }
+
+    #[test]
+    fn stream_request_wire_round_trip_from_timestamp() {
+        let req = StreamRequest {
+            source_peer_id: String::new(),
+            resource_id: "head_left_rgb".to_string(),
+            from: ReadFrom::FromTimestamp(1733836800000000000),
+        };
+        let wire = stream_request_to_wire(req.clone());
+        let back = stream_request_from_wire(wire);
+        assert_eq!(back.from, ReadFrom::FromTimestamp(1733836800000000000));
+    }
+
+    #[test]
+    fn stream_request_wire_round_trip_from_start() {
+        let req = StreamRequest {
+            source_peer_id: String::new(),
+            resource_id: "sensor_log".to_string(),
+            from: ReadFrom::FromStart,
+        };
+        let wire = stream_request_to_wire(req.clone());
+        let back = stream_request_from_wire(wire);
+        assert_eq!(back.from, ReadFrom::FromStart);
+        assert_eq!(back.resource_id, "sensor_log");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Proves the request/response bring-up matches the documented
     /// message-order spec: Request-then-Accept-then-StreamEntry-then-EndOfStream
     /// each survive the framing helpers in their typed positions.
     #[test]
     fn typed_session_matches_message_order_spec() {
+        let wire_req = stream_request_to_wire(StreamRequest {
+            resource_id: "ordered".into(),
+            ..Default::default()
+        });
         let order = vec![
-            stream_message::Variant::Request(StreamRequest {
-                sensor_id: "ordered".into(),
-                ..Default::default()
-            }),
+            stream_message::Variant::Request(wire_req),
             stream_message::Variant::Accept(StreamManifest {
                 sensor_id: "ordered".into(),
                 sensor_hash: "h".into(),

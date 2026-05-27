@@ -739,7 +739,7 @@ pub(crate) fn swift_provider_to_upstream(
               request: auki_network_rs::stream_protocol::StreamRequest| {
             use prost::Message;
             let peer_id_str = peer.to_string();
-            let request_bytes = request.encode_to_vec();
+            let request_bytes = serde_json::to_vec(&request).unwrap_or_default();
             let decision = provider.dispatch_decision(peer_id_str.clone(), request_bytes.clone());
 
             match decision {

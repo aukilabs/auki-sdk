@@ -85,6 +85,9 @@ Architecture target:
   Subscribe stream.
 - Browser tabs can publish generated preview streams so browser-to-browser
   networking is testable without camera permission.
+- Both the native CLI and browser app expose simple diagnostic state so operators
+  can see peers, transports, relay involvement, offers, active subscriptions,
+  frame counts, and recent failures without reading debug logs.
 
 Keep legacy behavior intact:
 
@@ -166,32 +169,66 @@ interface AukiBrowserPeer {
 }
 ```
 
-## Phase 3 - Sentinel Preview Profile
+## Phase 3 - Preview Offer Profile
 
-- [ ] Define the minimal offer profile for live Sentinel preview.
+- [ ] Define one shared preview profile over the generic offer APIs, not inside
+      core runtime logic.
+- [ ] Native helper wraps `AukiNode::publish_offer(...)` and
+      `PublishOfferInput`.
+- [ ] Browser helper wraps `AukiBrowserPeer.publishOffer(...)`.
 - [ ] Use `subscribe` access.
 - [ ] Use JPEG payload bytes in `auki.spatial_message.v1` for the first demo.
-- [ ] Reference Sensor, Clock, and Frame registry entries by id/hash.
-- [ ] Add a native Subscribe provider adapter over Sentinel's existing preview
-      latch.
+- [ ] Keep camera capture and generated-frame production outside SDK core.
+- [ ] Reference Sensor, Clock, and Frame registry entries by id/hash when the
+      profile needs real Sentinel metadata.
 - [ ] Keep the old Park polling endpoint alive as compatibility.
 
-Candidate names:
+Settled initial names:
 
 - offer kind: `auki.sensor.rgb_camera.preview`
 - payload type: `auki.camera.jpeg_frame.v1`
+- payload descriptor: `encoding = binary`, `media_type = image/jpeg`,
+  `schema_version = 1`
 
-## Phase 4 - Browser Mesh Demo
+## Phase 4 - Examples Preview Demo
 
-- [ ] Add a demo app under the SDK examples tree.
-- [ ] Start one native demo node that can run bootstrap, WebRTC Direct, relay,
-      and optional Sentinel preview.
-- [ ] Let browser tabs load bootstrap JSON for addresses only.
-- [ ] Keep all protocol data on libp2p streams.
-- [ ] Let each browser publish a generated preview stream.
-- [ ] Show local peer id, connected peers, transport path, relay status,
-      offers, and live preview tiles.
+Build two standalone examples under `examples/` before touching real
+Sentinel/Park integration.
+
+- [ ] Add `examples/p2p-preview-sentinel/`.
+  - [ ] Native Rust `auki-p2p` node.
+  - [ ] Publishes a preview offer through the Phase 3 helper.
+  - [ ] Serves address-only browser bootstrap JSON.
+  - [ ] Can enable WebRTC Direct and optional Circuit Relay v2.
+  - [ ] Supports `--source generated` first.
+  - [ ] Adds `--source camera` later for MacBook camera JPEG capture.
+  - [ ] CLI prints and refreshes local peer id, listen/browser bootstrap
+        addresses, relay role, connected peers, transport path, published offers,
+        active served subscriptions, frames sent, and recent failure codes.
+- [ ] Add `examples/p2p-preview-browser/`.
+  - [ ] Small web app using `auki-p2p-browser`.
+  - [ ] Loads address-only bootstrap JSON.
+  - [ ] Connects lifecycle, loads offers, subscribes, and renders JPEG frames.
+  - [ ] Publishes its own generated preview stream.
+  - [ ] Adds browser camera publishing later, behind a user action.
+  - [ ] Shows local peer id, connected peers, transport path, relay status,
+        offers, and live preview tiles.
+  - [ ] Shows active subscriptions, frames received, last frame time, selected
+        source, and recent connection/path failures.
 - [ ] Support multiple Sentinels/native nodes in one demo session.
+- [ ] Support browser-to-browser preview where the native node is only
+      bootstrap/signaling/relay, not the media data path.
+
+Diagnostic state is observability only. It must not become a new authority
+source for peer admission, domain access, offer policy, or media routing.
+
+Implementation order:
+
+1. Native generated JPEG stream -> browser render.
+2. Browser generated stream -> second browser render.
+3. Multi-browser + multi-Sentinel roster.
+4. MacBook camera source for the native Sentinel example.
+5. Browser camera source for browser publishers.
 
 Bootstrap JSON is allowed only for address/session discovery. It must not carry
 preview frames, protocol messages, offer catalogs, or authority decisions.
@@ -205,6 +242,7 @@ Rust:
 - [x] Test relay server address emission.
 - [x] Test native generic published-offer registration, withdrawal, and
       Subscribe byte streaming.
+- [ ] Test shared preview profile construction on native and browser helpers.
 - [ ] Test that node-to-node TCP/QUIC still works.
 
 Browser:
@@ -221,11 +259,16 @@ Browser:
       not Subscribe start/end control frames.
 - [x] Browser peer producer tests for inbound offer-catalog and Subscribe
       streams.
+- [ ] Browser preview helper test matches the shared profile descriptor.
 
 End-to-end:
 
+- [ ] Playwright smoke: one generated native preview node plus one browser page.
 - [ ] Playwright smoke: one native node plus three browser pages.
 - [ ] Verify all browsers appear in the roster.
+- [ ] Verify generated native preview renders in the browser.
+- [ ] Verify the CLI and browser state panels expose peer, transport, relay,
+      offer, subscription, and frame-count state.
 - [ ] Verify browser A/B/C generated previews are visible cross-window.
 - [ ] Verify Sentinel preview is visible in all browsers.
 - [ ] Add a second Sentinel and verify it appears.

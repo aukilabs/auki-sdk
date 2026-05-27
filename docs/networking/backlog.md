@@ -1,14 +1,17 @@
-# Peer-To-Peer Cluster Backlog
+# Peer-To-Peer Networking Backlog
 
 Status: implementation and follow-up work queue. This file is not part of the
 protocol requirements.
 
 Owner: TBD.
 
-Last updated: 2026-05-26.
+Last updated: 2026-05-27.
 
 Related baseline:
 [`baseline.md`](baseline.md).
+
+Related production guardrails:
+[`security-profile-v1.md`](security-profile-v1.md).
 
 Related drafts:
 [`drafts.md`](drafts.md).
@@ -18,89 +21,182 @@ Related glossary:
 
 ## Purpose
 
-Track the work that follows the draft implementable baseline.
+Track implementation work that follows the RFC-shaped networking baseline.
 
 The protocol requirements live in `baseline.md`. Future extension sketches live
 in `drafts.md`. This file is only the work queue.
 
 ## Current State
 
-The first RFC-shaped SDK foundation now exists in `auki-protocol` and
-`auki-p2p`.
+The first RFC-shaped SDK foundation exists in `auki-protocol` and `auki-p2p`.
 
 `auki-protocol` owns the pure v1 protocol surface: JSON frames, signed peer and
 domain authority objects, lifecycle handshakes, offer catalogs, Get,
 Subscribe, spatial messages, status snapshots, and locked vectors.
 
-`auki-p2p` owns the clean libp2p runtime path: configured peer dialing,
+`auki-p2p` owns the clean native libp2p runtime path: configured peer dialing,
 lifecycle authorization, local domain and offer registration, offer loading,
 Get and Subscribe consumers/providers, relationship status, and a full
-two-peer smoke flow. It does not reuse `NetworkRuntime`, Discovery, Manager
-election, or legacy cluster membership semantics.
+two-peer native smoke flow. It does not reuse `NetworkRuntime`, Discovery,
+Manager election, or legacy cluster membership semantics.
 
 Discovery remains optional and non-authoritative. The next work is proving the
-new path against real SDK app surfaces without breaking the shipped
+new path across browser and native peers without breaking the shipped
 `auki-network` / `auki-domain` runtime.
 
-## Next Work
+## Networking Matrix
 
-Build migration adapters and one app-facing proof without replacing shipped
-legacy behavior.
+The SDK demo path should cover every peer-type pairing:
 
-Suggested next vertical slice: browser-first Sentinel preview.
+| Pair | Required | First transport target | Notes |
+| --- | --- | --- | --- |
+| Browser <-> browser | Yes | js-libp2p WebRTC | Circuit Relay v2/signaling is expected for setup. Data should be direct when WebRTC is established. |
+| Browser <-> node | Yes | WebRTC Direct | Native Sentinel/operator node advertises browser-dialable multiaddr. |
+| Node <-> node | Yes | Existing `auki-p2p` TCP/QUIC | Preserve the tested native path. |
+| Multiple browsers + multiple nodes | Yes | Mixed | The demo should prove the matrix scales beyond a two-peer toy. |
 
-1. Define a small RFC offer profile for Sentinel's live RGB preview:
-   `subscribe` access, JPEG payload bytes in `auki.spatial_message.v1`, and
-   Sensor / Clock / Frame registry references.
-2. Add a producer adapter that maps Sentinel's existing preview latch to an
-   `AukiNode` Subscribe provider.
-3. Add a browser-compatible consumer experiment that uses `auki-protocol`
-   frames and browser libp2p transports instead of Park's Rust HTTP cache.
-4. For the localhost MVP, have the browser dial Sentinel and open Subscribe;
-   Sentinel then sends preview frames directly on that stream.
-5. Keep Park's current backend path as legacy compatibility while the browser
-   peer path is proven.
+Relay and signaling are connectivity infrastructure only. They must not replace
+peer binding, lifecycle authority, domain authorization, offer policy, or
+application-level access decisions.
 
-Transport questions for the browser slice:
+## Next Vertical Slice
 
-- Which browser transport is selected first: WebRTC Direct, WebTransport, or
-  WebSocket?
-- Is any relay/signaling service required only for setup, or do frame bytes
-  continue to flow through it?
-- What multiaddr shape should Sentinel advertise for a localhost/browser MVP?
-- Does `auki-p2p` need a browser-specific crate/feature, or should the browser
-  experiment pair `auki-protocol` with a JS/libp2p runtime first?
+Build a browser + Sentinel mesh demo around RFC protocol frames.
 
-## Interop/Test Work
+Architecture target:
 
-Create these from the first SDK implementation, so the examples match running
-code:
+- Sentinel is a native `auki-p2p` producer.
+- Browser tabs are Auki peers, not HTTP clients of Park.
+- A native node can optionally run bootstrap/signaling/Circuit Relay v2.
+- Browsers can connect to browsers, Sentinels, and other native nodes.
+- Browsers run lifecycle, load offer catalogs, and open Subscribe streams.
+- Sentinel sends preview JPEG frames as `auki.spatial_message.v1` data on a
+  Subscribe stream.
+- Browser tabs can publish generated preview streams so browser-to-browser
+  networking is testable without camera permission.
 
-- compatibility examples;
-- expected results;
-- validation transcripts;
-- fixture JSON;
-- signed-object test vectors;
-- frame encoding examples;
-- machine-readable schema aids where they are useful.
+Keep legacy behavior intact:
 
-Suggested coverage:
+- Do not replace Park's existing `ClusterManager` / `auki-network` stream path
+  yet.
+- Do not require Discovery for the first local proof.
+- Do not make relay or signaling authoritative.
+- Do not route RFC preview frame bytes through Park's Rust backend or HTTP
+  cache.
 
-- JSON frame encoding and JSON wire conventions;
-- signed-object canonicalization;
-- peer bindings;
-- domain id derivation;
-- domain declarations;
-- domain delegations;
-- authority-chain validation;
-- lifecycle handshake;
-- Offer Catalog;
-- Get;
-- Subscribe;
-- spatial message envelopes;
-- error objects;
-- status snapshots;
-- time fields.
+## Phase 1 - Native Browser Reachability
+
+- [ ] Add optional WebRTC Direct listener support to `auki-p2p` for
+      browser-to-node dialing.
+- [ ] Add optional Circuit Relay v2 server support to `auki-p2p` over
+      WebSocket.
+- [ ] Keep listen addresses, advertised addresses, relay addresses, and
+      bootstrap addresses distinct in config and status.
+- [ ] Add status output that reports observed transport path and relay
+      involvement.
+- [ ] Preserve current node-to-node TCP/QUIC behavior and tests.
+
+Useful prior art:
+
+- `auki-network` browser probe for native WebRTC Direct setup.
+- `auki-domain-relay` for native Circuit Relay v2 server setup.
+- `auki-network-browser-wasm` and `auki-domain-browser` for browser transport
+  experiments.
+
+Do not import legacy cluster membership, Manager election, or old stream
+protocols from those crates.
+
+## Phase 2 - Browser Peer Package
+
+- [ ] Add a clean RFC-first browser package, likely `crates/auki-p2p-browser`.
+- [ ] Use js-libp2p first.
+- [ ] Configure browser transports: WebRTC, WebRTC Direct, WebSocket, and
+      Circuit Relay v2.
+- [ ] Persist browser peer identity in IndexedDB.
+- [ ] Match Rust peer identity derivation vectors.
+- [ ] Implement minimal TypeScript protocol helpers for frame encode/decode,
+      peer binding, lifecycle handshake, offer catalog, Subscribe, spatial
+      message parsing, and error objects.
+- [ ] Validate TypeScript protocol behavior against Rust `auki-protocol`
+      vectors.
+- [ ] Expose one high-level browser peer handle that hides frames, streams, and
+      transport setup from app developers.
+
+Candidate browser API shape:
+
+```ts
+createAukiBrowserPeer(config): Promise<AukiBrowserPeer>
+
+interface AukiBrowserPeer {
+  peerId: string
+  multiaddrs(): string[]
+  dial(addr: string): Promise<void>
+  connectBootstrap(addrs: string[]): Promise<void>
+  listPeers(): PeerSummary[]
+  listOffers(peerId?: string): Promise<OfferSummary[]>
+  subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>
+  publishPreview(source: PreviewSource, options: PreviewOfferOptions): Promise<PublicationHandle>
+  stop(): Promise<void>
+}
+```
+
+## Phase 3 - Sentinel Preview Profile
+
+- [ ] Define the minimal offer profile for live Sentinel preview.
+- [ ] Use `subscribe` access.
+- [ ] Use JPEG payload bytes in `auki.spatial_message.v1` for the first demo.
+- [ ] Reference Sensor, Clock, and Frame registry entries by id/hash.
+- [ ] Add a native Subscribe provider adapter over Sentinel's existing preview
+      latch.
+- [ ] Keep the old Park polling endpoint alive as compatibility.
+
+Candidate names:
+
+- offer kind: `auki.sensor.rgb_camera.preview`
+- payload type: `auki.camera.jpeg_frame.v1`
+
+## Phase 4 - Browser Mesh Demo
+
+- [ ] Add a demo app under the SDK examples tree.
+- [ ] Start one native demo node that can run bootstrap, WebRTC Direct, relay,
+      and optional Sentinel preview.
+- [ ] Let browser tabs load bootstrap JSON for addresses only.
+- [ ] Keep all protocol data on libp2p streams.
+- [ ] Let each browser publish a generated preview stream.
+- [ ] Show local peer id, connected peers, transport path, relay status,
+      offers, and live preview tiles.
+- [ ] Support multiple Sentinels/native nodes in one demo session.
+
+Bootstrap JSON is allowed only for address/session discovery. It must not carry
+preview frames, protocol messages, offer catalogs, or authority decisions.
+
+## Test Work
+
+Rust:
+
+- [ ] `cargo test -p auki-p2p`.
+- [ ] Test WebRTC Direct config and browser-dialable advertised addresses.
+- [ ] Test relay server address emission.
+- [ ] Test that node-to-node TCP/QUIC still works.
+
+Browser:
+
+- [ ] Vitest frame encode/decode tests against Rust vectors.
+- [ ] Browser identity derivation compatibility tests.
+- [ ] Peer binding create/verify tests.
+- [ ] Offer catalog request/response tests.
+- [ ] Subscribe accept/data/end tests.
+
+End-to-end:
+
+- [ ] Playwright smoke: one native node plus three browser pages.
+- [ ] Verify all browsers appear in the roster.
+- [ ] Verify browser A/B/C generated previews are visible cross-window.
+- [ ] Verify Sentinel preview is visible in all browsers.
+- [ ] Add a second Sentinel and verify it appears.
+- [ ] Stop relay/signaling after browser-to-browser stream establishment and
+      record whether existing streams continue.
+- [ ] Confirm no Park backend or legacy HTTP cache is in the preview data path.
 
 ## Drafts To Pull Forward When Needed
 
@@ -108,22 +204,11 @@ Detailed draft text lives in [`drafts.md`](drafts.md).
 
 Pull these forward only when product or implementation work needs them:
 
-- Dynamic Served-Domain Updates
-- Discovery Record Shape
-- Discovery Data-Type Hints
-- Peer Graph Hints
-- Concrete Clock-Sync Protocol
-- Shared Offer-Kind Profiles
-
-These do not block the baseline configured/manual peer-to-peer path.
-
-## Later / Product-Scope Work
-
-Keep these parked unless product scope pulls them forward:
-
-- DHT-style discovery.
-- Relay milestone expansion beyond `RFC-0017` and `RFC-0018`.
-- Shared offer-kind profiles and payload schemas.
-- Chunking, replay, resume, reliable history, and large object transfer.
-- Implementation migration notes, if needed after the baseline implementation
-  exists.
+- Dynamic Served-Domain Updates.
+- Discovery Record Shape.
+- Discovery Data-Type Hints.
+- Peer Graph Hints.
+- Concrete Clock-Sync Protocol.
+- Shared Offer-Kind Profiles.
+- Production relay reservation and relay policy grants.
+- Subscribe reliability, replay, resume, and large-object transfer.

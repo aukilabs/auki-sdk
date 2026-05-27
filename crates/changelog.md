@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-domain`](auki-domain/changelog.md) — signaled Domain peer facade added.** The domain crate now wraps the network signaled peer core in `SignaledDomainPeer` / `AukiSignaledDomainPeer` with signaled multiaddr advertisement, static catalogs, registry JSON, and stream hooks.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — signaled peer core exposed to Swift bindings.** UniFFI now exports `AukiSignaledPeerCore`, and the Swift package template renders an `AukiNetworkSignaledWebRTC` backend protocol target for platform WebRTC integration.
 
 ### Nils's codex · May 27, HKT, 2026

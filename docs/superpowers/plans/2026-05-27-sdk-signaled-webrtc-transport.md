@@ -485,25 +485,25 @@ git commit -m "Expose signaled peer core to Swift bindings"
 - Modify: `crates/auki-domain/src/ffi.rs`
 - Modify: `crates/auki-domain/tests/full_binding_surface.rs`
 
-- [ ] **Step 1: Write failing Domain facade test**
+- [x] **Step 1: Write failing Domain facade test**
 
 Add `native_signaled_domain_peer_surface_is_exposed` that constructs a test signaled Domain peer, checks `local_peer_id`, `cluster_name`, and one signaled multiaddr.
 
-- [ ] **Step 2: Run test to verify red**
+- [x] **Step 2: Run test to verify red**
 
 Run: `cargo test -p auki-domain --test full_binding_surface native_signaled_domain_peer_surface_is_exposed -- --nocapture`
 
 Expected: compile failure because the facade does not exist.
 
-- [ ] **Step 3: Implement minimal facade**
+- [x] **Step 3: Implement minimal facade**
 
 Create `SignaledDomainPeer` holding local peer id, Discovery URL, cluster name, a signaled network peer, static sensor catalog JSON, static resource catalog JSON, static registry entries JSON, and stream-open state.
 
-- [ ] **Step 4: Add UniFFI wrapper**
+- [x] **Step 4: Add UniFFI wrapper**
 
 Expose `AukiSignaledDomainPeer` with constructor, `local_peer_id`, `cluster_name`, `multiaddrs`, static catalog setters, stream open drain/accept/decline, push entry, and finish stream. Full Discovery create/join wiring happens in Task 8.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -514,7 +514,7 @@ cargo test -p auki-domain --lib signaled_peer -- --nocapture
 
 Expected: tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-domain/src/signaled_peer.rs crates/auki-domain/src/core.rs crates/auki-domain/src/lib.rs crates/auki-domain/src/ffi.rs crates/auki-domain/tests/full_binding_surface.rs

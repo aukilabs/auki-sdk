@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Signaled Domain peer facade added.** `auki-domain` now has a minimal `SignaledDomainPeer` facade backed by `auki-network::SignaledPeerCore`, exposing local peer id, cluster name, signaled multiaddr advertisement, static sensor/resource/registry JSON setters, and stream accept/decline/push/finish hooks without making apps own Discovery signaling. Native UniFFI exports the facade as `AukiSignaledDomainPeer` for generated Swift/Python hosts.
+
+Tests: red/green `cargo test -p auki-domain --test full_binding_surface native_signaled_domain_peer_surface_is_exposed -- --nocapture`; `cargo test -p auki-domain --lib signaled_peer -- --nocapture`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **DomainClusterManager auto-advertise bootstrap exposed to generated Swift hosts.** Native UniFFI now exports `bootstrap_domain_cluster_manager_auto_advertise`, sharing the existing bootstrap dispatch and binding stream-provider setup while letting the SDK resolve advertised multiaddrs from binding-safe listen addresses and optional operator overrides. The Rust binding-surface test and Swift smoke now cover a loopback TCP `/tcp/0` manager bootstrap with no advertise override.
 
 Tests: `cargo test -p auki-domain --test full_binding_surface native_cluster_auto_advertise_lifecycle_is_exposed -- --nocapture`; `cargo test -p auki-domain --test full_binding_surface native_cluster_lifecycle_is_exposed -- --nocapture`; `cargo test -p auki-domain --test full_binding_surface native_byte_streams_are_exposed -- --nocapture`; `python3 scripts/bindings/generate_bindings.py generate swift auki-domain`; `python3 scripts/bindings/generate_bindings.py generate swift-xcframework auki-domain`; `swift run --package-path crates/auki-domain/bindings/swift/SmokeFullDomain`.

@@ -88,6 +88,11 @@ pub struct DomainClusterManager {
 }
 
 #[derive(uniffi::Object)]
+pub struct AukiSignaledDomainPeer {
+    inner: Mutex<core::SignaledDomainPeer>,
+}
+
+#[derive(uniffi::Object)]
 pub struct DomainStreamSubscription {
     manifest_json: String,
     entries: Mutex<std_mpsc::Receiver<DomainStreamRead>>,
@@ -258,6 +263,134 @@ async fn bootstrap_domain_cluster_manager_with_swarm(
         inner: manager,
         stream_state,
     }))
+}
+
+#[uniffi::export]
+impl AukiSignaledDomainPeer {
+    #[uniffi::constructor]
+    pub fn new(
+        local_peer_id: String,
+        discovery_url: String,
+        cluster_name: String,
+    ) -> Result<Arc<Self>, BindingDomainError> {
+        let inner = core::SignaledDomainPeer::new(local_peer_id, discovery_url, cluster_name)
+            .map_err(signaled_domain_error)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(inner),
+        }))
+    }
+
+    pub fn local_peer_id(&self) -> String {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .local_peer_id()
+            .to_string()
+    }
+
+    pub fn cluster_name(&self) -> String {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .cluster_name()
+            .to_string()
+    }
+
+    pub fn multiaddrs(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .multiaddrs()
+            .expect("SignaledDomainPeer constructor validated multiaddr inputs")
+    }
+
+    pub fn set_static_sensor_catalog_json(
+        &self,
+        catalog_json: String,
+    ) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .set_static_sensor_catalog_json(catalog_json)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn set_static_resource_catalog_json(
+        &self,
+        catalog_json: String,
+    ) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .set_static_resource_catalog_json(catalog_json)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn set_static_registry_entries_json(
+        &self,
+        entries_json: String,
+    ) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .set_static_registry_entries_json(entries_json)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn drain_stream_open_requests(&self, _max_events: u32) -> Vec<DomainRuntimeEvent> {
+        Vec::new()
+    }
+
+    pub fn accept_stream_open(
+        &self,
+        responder_id: u64,
+        manifest_json: String,
+    ) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .accept_stream_open(responder_id, manifest_json)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn decline_stream_open(
+        &self,
+        responder_id: u64,
+        reason: String,
+    ) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .decline_stream_open(responder_id, reason)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn push_stream_entry(
+        &self,
+        stream_id: u64,
+        entry: DomainStreamEntry,
+    ) -> Result<(), BindingDomainError> {
+        let entry_json = serde_json::json!({
+            "timestamp_ns": entry.timestamp_ns,
+            "seq": entry.sequence,
+            "payload_kind": entry.payload_kind,
+            "payload": entry.payload,
+        })
+        .to_string();
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .push_stream_entry(stream_id, entry_json)
+            .map_err(signaled_domain_error)
+    }
+
+    pub fn finish_stream(&self, stream_id: u64) -> Result<(), BindingDomainError> {
+        self.inner
+            .lock()
+            .expect("signaled domain peer mutex poisoned")
+            .finish_stream(stream_id);
+        Ok(())
+    }
 }
 
 #[uniffi::export]
@@ -1262,6 +1395,18 @@ fn domain_error(err: impl std::fmt::Display) -> BindingDomainError {
 fn domain_network_error(err: impl std::fmt::Display) -> BindingDomainError {
     BindingDomainError::Network {
         message: err.to_string(),
+    }
+}
+
+fn signaled_domain_error(err: core::SignaledDomainPeerError) -> BindingDomainError {
+    match err {
+        core::SignaledDomainPeerError::MissingClusterName => BindingDomainError::Domain {
+            message: err.to_string(),
+        },
+        core::SignaledDomainPeerError::Network(message) => BindingDomainError::Network { message },
+        core::SignaledDomainPeerError::InvalidJson(message) => {
+            BindingDomainError::InvalidJson { message }
+        }
     }
 }
 

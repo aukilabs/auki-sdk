@@ -24,10 +24,10 @@ pub use ffi::UniFfiTag;
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use ffi::{
-    BindingDomainError, BindingRegistryEntryProvider, BindingResourceCatalogProvider,
-    BindingSensorCatalogProvider, ClusterTargetMode, DomainClusterManager, DomainRuntimeEvent,
-    DomainStreamEntry, DomainStreamSubscription, bootstrap_domain_cluster_manager,
-    bootstrap_domain_cluster_manager_auto_advertise,
+    AukiSignaledDomainPeer, BindingDomainError, BindingRegistryEntryProvider,
+    BindingResourceCatalogProvider, BindingSensorCatalogProvider, ClusterTargetMode,
+    DomainClusterManager, DomainRuntimeEvent, DomainStreamEntry, DomainStreamSubscription,
+    bootstrap_domain_cluster_manager, bootstrap_domain_cluster_manager_auto_advertise,
 };
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]

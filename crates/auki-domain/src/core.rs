@@ -24,6 +24,9 @@ pub mod cluster_manager;
 #[path = "cluster_membership.rs"]
 pub mod cluster_membership;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "signaled_peer.rs"]
+pub mod signaled_peer;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "stream_manifest.rs"]
 pub mod stream_manifest;
 
@@ -50,6 +53,8 @@ pub use cluster_manager::{
     SensorCatalogProvider, SensorEntry, SensorsRequest, SensorsResponse, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
+#[cfg(not(target_arch = "wasm32"))]
+pub use signaled_peer::{SignaledDomainPeer, SignaledDomainPeerError};
 #[cfg(not(target_arch = "wasm32"))]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};
 

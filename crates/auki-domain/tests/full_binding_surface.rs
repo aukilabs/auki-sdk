@@ -302,6 +302,23 @@ async fn native_byte_streams_are_exposed() {
 }
 
 #[test]
+fn native_signaled_domain_peer_surface_is_exposed() {
+    // binding-surface: native signaled Domain peer
+    let peer = auki_domain::AukiSignaledDomainPeer::new(
+        "peer-a".into(),
+        "http://discovery.local".into(),
+        "binding-signaled".into(),
+    )
+    .unwrap();
+
+    assert_eq!(peer.local_peer_id(), "peer-a");
+    assert_eq!(peer.cluster_name(), "binding-signaled");
+    let multiaddrs = peer.multiaddrs();
+    assert_eq!(multiaddrs.len(), 1);
+    assert!(multiaddrs[0].starts_with("/auki-webrtc-signaling/"));
+}
+
+#[test]
 fn browser_membership_validation_helpers_are_exposed() {
     // binding-surface: browser membership validation helpers
     let membership = cluster_membership_fixture();

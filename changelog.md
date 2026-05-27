@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 7 completed.** The implementation plan now records the completed `auki-domain` signaled peer facade slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Signaled Domain peer facade added.** `auki-domain` now wraps the network signaled peer core in `SignaledDomainPeer` / `AukiSignaledDomainPeer`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 6 completed.** The implementation plan now records the completed native signaled peer binding and Swift backend support target slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

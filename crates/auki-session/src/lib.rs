@@ -16,9 +16,13 @@ mod materialization;
 pub use error::{Result, SessionError};
 pub use log_specs::{HeadSpec, SensorLogSpec, PoseLogSpec, TimeTransformLogSpec, DetectionLogSpec};
 pub use log_handles::{SensorLogHandle, PoseLogHandle, TimeTransformLogHandle, DetectionLogHandle, MaterializedLogHandle};
-pub use session::{Session, FrameDef};
+pub use session::{Session, FrameDef, DomainConfig};
 pub use registry_store::RegistryStore;
 pub use materialization::MaterializationError;
+
+// Convenience re-exports so callers only need `auki_session::` imports.
+pub use auki_domain::{ClusterTarget, DaemonInfo, ClusterManager};
+pub use auki_network::PeerIdentity;
 
 #[cfg(test)]
 mod tests {

@@ -26,6 +26,12 @@ use auki_network::resources_protocol::{
     SensorManifestPointer, PoseManifestPointer, TimeTransformManifestPointer,
     DetectionManifestPointer, VariantContent,
 };
+use auki_network::{PeerIdentity, SessionHandle};
+use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo};
+use auki_network::stream_runtime::StreamProvider;
+use auki_network::swarm::Behaviour;
+use auki_network::Swarm;
+use multiaddr::Multiaddr;
 
 use crate::error::{Result, SessionError};
 use crate::materialization::MaterializationError;
@@ -72,6 +78,9 @@ impl FrameDef {
 
 pub struct Session {
     pub(crate) inner: Arc<RwLock<SessionInner>>,
+    /// Active cluster manager, if [`Session::join_domain`] has been called and
+    /// [`Session::leave_domain`] has not.
+    domain: Option<ClusterManager>,
 }
 
 pub(crate) struct SessionInner {
@@ -93,6 +102,60 @@ pub(crate) struct SessionInner {
     pub(crate) detection_logs: HashMap<(String, String), Arc<DetectionLogHandle>>,
 }
 
+// ─── SessionHandleImpl ────────────────────────────────────────────────────────
+
+/// Thin `Arc`-wrapped bridge that lets `auki-domain`'s resources protocol
+/// handler read the session's catalog without holding a reference to the
+/// `Session` value itself. `ClusterManager::set_session_handle` takes an
+/// `Arc<dyn SessionHandle>`; this is the type we pass it.
+pub(crate) struct SessionHandleImpl {
+    inner: Arc<RwLock<SessionInner>>,
+}
+
+impl SessionHandle for SessionHandleImpl {
+    fn catalog(&self) -> Vec<ResourceEntry> {
+        build_catalog(&self.inner.read())
+    }
+}
+
+/// Extract catalog rows from a `SessionInner` without requiring ownership.
+/// Used by both `Session::catalog` and `SessionHandleImpl::catalog` so the
+/// logic is in one place.
+fn build_catalog(inner: &SessionInner) -> Vec<ResourceEntry> {
+    let mut out = Vec::new();
+    for handle in inner.sensor_logs.values()    { out.push(sensor_log_row(handle)); }
+    for handle in inner.pose_logs.values()      { out.push(pose_log_row(handle)); }
+    for handle in inner.time_logs.values()      { out.push(time_transform_row(handle)); }
+    for handle in inner.detection_logs.values() { out.push(detection_log_row(handle)); }
+    out
+}
+
+// ─── DomainConfig ─────────────────────────────────────────────────────────────
+
+/// Everything [`Session::join_domain`] needs that the session doesn't own:
+/// the cluster bootstrap policy, the local libp2p identity, the dialable
+/// addresses, the Discovery service URL, the already-built swarm and stream
+/// provider, and the daemon identity fields.
+///
+/// Re-exports [`ClusterTarget`] and [`DaemonInfo`] from `auki-domain` so
+/// callers only need to import from `auki-session`.
+pub struct DomainConfig {
+    /// Which cluster to create or join.
+    pub target: ClusterTarget,
+    /// The local libp2p identity (ed25519 keypair + derived `PeerId`).
+    pub local_identity: PeerIdentity,
+    /// Dialable multiaddrs to advertise in Discovery.
+    pub local_multiaddrs: Vec<Multiaddr>,
+    /// HTTP base URL of the Hagall Discovery service.
+    pub discovery_url: String,
+    /// Pre-built libp2p swarm for this peer.
+    pub swarm: Swarm<Behaviour>,
+    /// Provider for stream substream handling.
+    pub stream_provider: StreamProvider,
+    /// Static daemon identity fields (app, name, session_id, etc.).
+    pub daemon_info: DaemonInfo,
+}
+
 impl Session {
     pub fn new(peer_id: impl Into<String>, app_id: impl Into<String>) -> Self {
         Self {
@@ -110,6 +173,7 @@ impl Session {
                 time_logs:      HashMap::new(),
                 detection_logs: HashMap::new(),
             })),
+            domain: None,
         }
     }
 
@@ -494,13 +558,64 @@ impl Session {
     /// is stubbed to 0/0/0 until the backing `Log<T>` hookup lands in a
     /// later phase.
     pub fn catalog(&self) -> Vec<ResourceEntry> {
-        let inner = self.inner.read();
-        let mut out = Vec::new();
-        for handle in inner.sensor_logs.values()    { out.push(sensor_log_row(handle)); }
-        for handle in inner.pose_logs.values()      { out.push(pose_log_row(handle)); }
-        for handle in inner.time_logs.values()      { out.push(time_transform_row(handle)); }
-        for handle in inner.detection_logs.values() { out.push(detection_log_row(handle)); }
-        out
+        build_catalog(&self.inner.read())
+    }
+
+    // ─── Domain ──────────────────────────────────────────────────────────
+
+    /// Join or create a cluster as described by `config.target`, bootstrap
+    /// the [`ClusterManager`], and wire it a [`SessionHandle`] so inbound
+    /// `/auki/resources/0.2.0` requests return this session's catalog.
+    ///
+    /// The session stores the active [`ClusterManager`]; call
+    /// [`leave_domain`][Session::leave_domain] to shut it down.
+    ///
+    /// Returns `Err(SessionError::DomainBootstrap(_))` if the cluster
+    /// bootstrap fails (Discovery unreachable, name collision, join
+    /// rejection, etc.).
+    pub async fn join_domain(&mut self, config: DomainConfig) -> Result<()> {
+        let manager = ClusterManager::bootstrap(
+            config.target,
+            config.local_identity,
+            config.local_multiaddrs,
+            config.discovery_url,
+            config.swarm,
+            config.stream_provider,
+            config.daemon_info,
+        )
+        .await
+        .map_err(SessionError::DomainBootstrap)?;
+
+        // Hand the cluster manager a SessionHandle so it can serve the
+        // session's resource catalog to remote peers that ask for it via
+        // `/auki/resources/0.2.0`.
+        let handle: Arc<dyn SessionHandle> = Arc::new(SessionHandleImpl {
+            inner: self.inner.clone(),
+        });
+        manager.set_session_handle(handle);
+
+        self.domain = Some(manager);
+        Ok(())
+    }
+
+    /// Shut down the active cluster manager and leave the domain.
+    ///
+    /// No-op (returns `Ok(())`) if no domain has been joined.
+    ///
+    /// Returns `Err(SessionError::DomainShutdown(_))` only if the local
+    /// peer was the last Manager in Discovery and the HTTP DELETE failed.
+    /// The cluster manager is dropped regardless of the Discovery result.
+    pub async fn leave_domain(&mut self) -> Result<()> {
+        if let Some(manager) = self.domain.take() {
+            manager.shutdown().await.map_err(SessionError::DomainShutdown)?;
+        }
+        Ok(())
+    }
+
+    /// Returns a reference to the active [`ClusterManager`], or `None` if
+    /// no domain has been joined.
+    pub fn cluster_manager(&self) -> Option<&ClusterManager> {
+        self.domain.as_ref()
     }
 
     // ─── Materialization ─────────────────────────────────────────────────
@@ -633,6 +748,50 @@ fn detection_log_row(handle: &DetectionLogHandle) -> ResourceEntry {
                 clock: handle.manifest.clock.clone(),
             },
         },
+    }
+}
+
+#[cfg(test)]
+mod domain_api_tests {
+    use super::*;
+
+    /// Compile-only smoke test: verify that `join_domain` and `leave_domain`
+    /// exist on `Session`, accept a `DomainConfig`, and are `async`. No
+    /// actual network I/O happens — constructing a real `DomainConfig`
+    /// requires a live libp2p swarm. This test proves the API surface
+    /// compiles and that `DomainConfig` fields are accessible.
+    ///
+    /// The functions below are never called at runtime; they exist only to
+    /// ensure the types and method signatures compile.
+    #[allow(dead_code)]
+    async fn _join_domain_compiles(s: &mut Session, cfg: DomainConfig) -> Result<()> {
+        s.join_domain(cfg).await
+    }
+
+    #[allow(dead_code)]
+    async fn _leave_domain_compiles(s: &mut Session) -> Result<()> {
+        s.leave_domain().await
+    }
+
+    #[allow(dead_code)]
+    fn _cluster_manager_accessor_compiles(s: &Session) -> Option<&ClusterManager> {
+        s.cluster_manager()
+    }
+
+    /// DomainConfig fields are accessible (structural check).
+    #[allow(dead_code)]
+    fn _domain_config_fields_are_named(_cfg: DomainConfig) {
+        // If any field is renamed or removed, this function body won't compile.
+    }
+
+    /// leave_domain on a fresh session (no cluster joined) returns Ok immediately.
+    #[tokio::test]
+    async fn leave_domain_on_fresh_session_is_noop() {
+        let mut s = Session::new("p", "a");
+        assert!(s.cluster_manager().is_none());
+        let result = s.leave_domain().await;
+        assert!(result.is_ok());
+        assert!(s.cluster_manager().is_none());
     }
 }
 

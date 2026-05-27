@@ -994,6 +994,7 @@ name = "auki-session"
 version = "0.0.0"
 dependencies = [
  "auki-datatypes",
+ "auki-domain",
  "auki-hash",
  "auki-identity",
  "auki-jcs",
@@ -1002,6 +1003,7 @@ dependencies = [
  "auki-network",
  "auki-registry",
  "auki-time",
+ "multiaddr",
  "parking_lot",
  "serde",
  "serde_json",

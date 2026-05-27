@@ -12,6 +12,12 @@ pub enum SessionError {
     DuplicateLog { source_peer_id: String, resource_id: String },
     #[error("materialization: {0}")]
     Materialization(#[from] crate::materialization::MaterializationError),
+    /// Returned by [`Session::join_domain`] when the cluster bootstrap fails.
+    #[error("domain bootstrap: {0}")]
+    DomainBootstrap(#[from] auki_domain::BootstrapError),
+    /// Returned by [`Session::leave_domain`] when Discovery deregistration fails.
+    #[error("domain shutdown: {0}")]
+    DomainShutdown(auki_domain::DiscoveryClientError),
 }
 
 pub type Result<T> = std::result::Result<T, SessionError>;

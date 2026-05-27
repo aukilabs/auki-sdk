@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 26, HKT, 2026
+
+Added the Overwatch Park UI implementation plan under [`plans/`](plans/2026-05-26-overwatch-park-ui.md), covering the Park frontend source port and SDK browser/WASM replacements for the backend-facing data modules.
+
 ### Nils's codex · May 25, HKT, 2026
 
 Updated the full `auki-network` and `auki-domain` bindings implementation plan under [`plans/`](plans/2026-05-25-full-network-domain-bindings.md) to mark Phase 10 complete after documenting the generated binding surfaces and propagating sprint/changelog updates.

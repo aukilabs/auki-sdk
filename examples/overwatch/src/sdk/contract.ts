@@ -1,8 +1,18 @@
+export type SensorKind =
+  | "audio"
+  | "camera"
+  | "point_cloud"
+  | "joint_encoders"
+  | "detection"
+  | (string & {});
+
 export type SensorSummary = {
   sensor_id: string;
   sensor_hash: string;
-  kind: "audio" | "camera" | "point_cloud" | "joint_encoders" | "detection";
+  kind: SensorKind;
   label?: string;
+  sensor_entry_json?: string | null;
+  frame_entry_json?: string | null;
 };
 
 export type SensorStreamEntry = {
@@ -15,8 +25,10 @@ export type SensorSource =
   | {
       kind: "generated-bytes";
       frames: number[][];
-      interval_ms: number;
+      interval_ms?: number;
+      start_timestamp_ns?: number;
     }
+  | Iterable<SensorStreamEntry>
   | AsyncIterable<SensorStreamEntry>;
 
 export type StreamHandle = {
@@ -38,6 +50,7 @@ export type PeerSnapshot = {
     is_self?: boolean;
     is_manager?: boolean;
     connected?: boolean;
+    multiaddrs?: string[];
     sensors?: SensorSummary[];
   }>;
 };

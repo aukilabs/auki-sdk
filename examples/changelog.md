@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 26, HKT, 2026
+
+**[`overwatch`](overwatch/changelog.md) — Park brand assets copied into Overwatch.** Overwatch now ships the `/brand/*` SVG files referenced by Park's copied topbar and tests those Vite public asset paths.
+
+### Nils's codex · May 26, HKT, 2026
+
+**[`overwatch`](overwatch/changelog.md) — Park UI port completed with SDK browser runtime.** Overwatch now renders Park's operator UI while replacing Park backend data, registry, and stream paths with generated SDK JavaScript/WASM bindings and preserving the no app `/api/*` smoke invariant.
+
 ### Nils's codex · May 24, HKT, 2026
 
 **[`diagnostic-app`](diagnostic-app/changelog.md) — domain binding defaults avoided.** The diagnostic app keeps using the direct Rust `auki-domain` API with `default-features = false` after the domain crate adopted generated binding defaults.

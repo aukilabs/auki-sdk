@@ -17,13 +17,18 @@ const packages = [
     source: path.join(repoRoot, "bindings/javascript/auki-domain"),
     required: "index.js",
   },
+  {
+    name: "auki-geometry",
+    source: path.join(repoRoot, "bindings/javascript/auki-geometry"),
+    required: "auki_geometry.js",
+  },
 ];
 
 for (const pkg of packages) {
   const requiredPath = path.join(pkg.source, pkg.required);
   if (!(await exists(requiredPath))) {
     console.error(`Missing generated SDK package file: ${requiredPath}`);
-    console.error("Run:\n  just generate-javascript-bindings auki-network\n  just generate-javascript-bindings auki-domain");
+    console.error("Run:\n  just generate-javascript-bindings auki-network\n  just generate-javascript-bindings auki-domain\n  just generate-javascript-bindings auki-geometry");
     process.exit(1);
   }
 }

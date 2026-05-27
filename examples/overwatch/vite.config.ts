@@ -1,8 +1,13 @@
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss()],
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    target: "es2022",
+  },
   server: {
     allowedHosts: ["taina-proclergy-chang.ngrok-free.dev"],
     host: "0.0.0.0",

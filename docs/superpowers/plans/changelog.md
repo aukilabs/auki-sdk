@@ -4,6 +4,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 26, HKT, 2026
+
+Created the Overwatch Park UI implementation plan, sequencing a source-level Park frontend port into `examples/overwatch` plus SDK browser/WASM replacements for Park's backend data, registry, and stream modules while preserving the no app `/api/*` invariant.
+
 ### Nils's codex · May 25, HKT, 2026
 
 Marked Phase 10 of the full `auki-network` and `auki-domain` bindings plan complete after updating README/source documentation, sprint notes, changelog propagation, and the final verification command list.

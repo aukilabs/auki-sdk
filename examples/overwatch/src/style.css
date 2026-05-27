@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Brand fonts (Space Grotesk, DM Sans, Monda) load via <link> in
+   index.html — putting Google Fonts here triggers Tailwind v4's
+   @import-precedence warning since other @-rules end up before it. */
+
+/*
+ * Auki Labs design tokens — hand-coded from the design system reference
+ * (see ARCHITECTURE.md §1). Tailwind v4 generates utilities from each
+ * --color-* token (bg-ink, text-paper, text-accent, border-rule, etc.).
+ * Names mirror the design system terminology rather than semantic
+ * aliases like "bg" or "fg".
+ */
+@theme {
+  /* Brand palette */
+  --color-ink: #0F0F0F;       /* off-black — primary surface */
+  --color-ink-alt: #151515;   /* slightly raised panel surface */
+  --color-paper: #F5F5F5;     /* off-white — primary text on dark */
+  --color-accent: #FD9E2F;    /* orange — CTAs, section labels (sparingly) */
+  --color-accent-hover: #CFFFB0; /* lime — CTA hover only */
+  --color-mist: #DBEDED;      /* pale blue-green — tertiary fills */
+  --color-rule: #858585;      /* hairlines, secondary text */
+
+  /* Type — Space Grotesk substitutes for TT Firs Neue per the design
+     system's own substitution flag. DM Sans + Monda load from Google
+     Fonts CDN (linked in index.html). */
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+  --font-wordmark: "Monda", "Space Grotesk", system-ui, sans-serif;
+
+  /* Type scale — Tailwind v4 picks `text-xs` / `text-sm` font-size from
+     these tokens. Bumped a notch each from defaults (12/14 → 13/15)
+     because operators flagged the dense chrome as too small to scan
+     without leaning in. Line-heights left at Tailwind defaults so the
+     bump is purely letterform-size, not spacing-rhythm. */
+  --text-xs: 0.8125rem;     /* 13px (Tailwind default 12px) */
+  --text-sm: 0.9375rem;     /* 15px (Tailwind default 14px) */
+
+  /* Motion — durations + easings hand-coded from the Auki design system.
+     Tailwind v4 generates duration-* and ease-* utilities from these.
+     Same numeric values are exported from src/anim.ts so Motion One
+     calls share the language with CSS-only transitions. */
+  --duration-micro: 180ms;  /* button presses, hovers, micro-interactions */
+  --duration-panel: 260ms;  /* modals, drawers, tooltips                   */
+  --duration-page: 420ms;   /* route transitions, large surface morphs     */
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);  /* exits + emphasis  */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);      /* default 2-way     */
+}
+
+/* View Transitions — apply our motion language to the default route
+   crossfade. Browsers without support fall through to instant render. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--duration-page);
+  animation-timing-function: var(--ease-emphasized);
+}
+
+html, body {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-body);
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

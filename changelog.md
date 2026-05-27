@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 26, HKT, 2026
+
+**Overwatch now ships Park's brand SVG assets.** The Overwatch example includes the `/brand/*` assets referenced by Park's copied topbar and tests those Vite public asset paths. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 26, HKT, 2026
+
+**Overwatch Park UI port completed with SDK browser runtime.** The Overwatch example now renders Park's operator UI while replacing Park backend data, registry, and stream paths with generated SDK JavaScript/WASM bindings and preserving the no app `/api/*` smoke invariant. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 26, HKT, 2026
+
+**Overwatch Park UI migration plan added.** The saved implementation plan defines how `examples/overwatch` can port Park's frontend source while replacing Park's backend-facing data, registry, and stream modules with generated SDK browser/WASM bindings and preserving the no app `/api/*` invariant. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
 ### Nils's codex - May 26, HKT, 2026
 
 **Auki binding validation skill added.** Repo-local skills now include a binding-validation workflow for regenerating enabled targets, checking generated public APIs, and proving behavior through smoke tests or example apps. See [`skills/changelog.md`](skills/changelog.md) for skills-level propagation.

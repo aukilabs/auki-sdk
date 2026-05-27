@@ -8,18 +8,23 @@ import type { OverwatchPeer } from "./contract";
 
 let initialized = false;
 
-export async function createOverwatchPeer(): Promise<OverwatchPeer> {
-  if (!initialized) {
-    await initAukiNetwork();
-    await initAukiDomain();
-    initialized = true;
+export async function ensureOverwatchSdkInitialized(): Promise<void> {
+  if (initialized) {
+    return;
   }
+  await initAukiNetwork();
+  await initAukiDomain();
+  initialized = true;
+}
+
+export async function createOverwatchPeer(): Promise<OverwatchPeer> {
+  await ensureOverwatchSdkInitialized();
   const walletSeed = loadOrMintWalletSeed();
   const networkPeer = await createAukiNetworkPeer({ walletSeed });
   return new AukiBrowserDomainPeer({
-    networkPeer,
+    networkPeer: networkPeer as never,
     discoveryFactory: (url: string) => new DiscoveryDirectoryClient(url),
-    appId: "overwatch",
+    appId: "park",
     displayName: browserDisplayName(networkPeer.peerId),
   }) as OverwatchPeer;
 }
@@ -39,5 +44,5 @@ export function loadOrMintWalletSeed(): Uint8Array {
 }
 
 function browserDisplayName(peerId: string): string {
-  return `Browser ${peerId.slice(-6)}`;
+  return `Park Browser ${peerId.slice(-6)}`;
 }

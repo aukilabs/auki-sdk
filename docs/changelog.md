@@ -4,6 +4,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 26, HKT, 2026
+
+Added the Superpowers implementation plan for porting Park's frontend into Overwatch and replacing Park's backend-facing data modules with generated SDK browser/WASM bindings.
+
 ### Nils's codex · May 25, HKT, 2026
 
 Updated the Superpowers full network/domain binding plan to mark Phase 10 complete after documenting generated native/browser binding surfaces and propagating sprint/changelog updates.

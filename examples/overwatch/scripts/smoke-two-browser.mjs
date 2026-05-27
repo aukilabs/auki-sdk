@@ -54,7 +54,9 @@ try {
       }));
     }
 
-    await Promise.all([join(pageA), join(pageB)]);
+    await enterDomain(pageA, "create");
+    await waitForParticipants(pageA, 1);
+    await enterDomain(pageB, "join");
     await Promise.all([waitForParticipants(pageA, 2), waitForParticipants(pageB, 2)]).catch(
       async (error) => {
         await assertNoAppApiRequests();
@@ -63,16 +65,18 @@ try {
     );
 
     const snapshotB = await snapshot(pageB);
-    const peerA = snapshotB.participants.find((participant) => participant.peer_id !== snapshotB.selfPeerId);
-    const sensor = peerA?.sensors?.[0];
+    const peerA = snapshotB.peers[0];
+    const sensors = peerA
+      ? await pageB.evaluate((peerId) => globalThis.__overwatchPark.sensors(peerId), peerA.peer_id)
+      : [];
+    const sensor = sensors.find((candidate) => candidate.kind === "camera") ?? sensors[0];
     if (!peerA || !sensor) {
       throw new Error(`${reachabilityMessage}\nPeer B did not discover Peer A's generated sensor.`);
     }
-    const message = await pageB.evaluate(
-      ({ peerId, sensorId }) => globalThis.__overwatch.subscribeToSensor(peerId, sensorId),
+    const entry = await pageB.evaluate(
+      ({ peerId, sensorId }) => globalThis.__overwatchPark.nextSensorFrame(peerId, sensorId),
       { peerId: peerA.peer_id, sensorId: sensor.sensor_id },
     );
-    const entry = message?.entry ?? message;
     if (!entry || !Array.isArray(entry.payload) || entry.payload.length === 0) {
       throw new Error(`${reachabilityMessage}\nPeer B subscription did not receive a stream frame.`);
     }
@@ -87,23 +91,33 @@ try {
   await stopAll();
 }
 
-async function join(page) {
-  await page.goto(appUrl, { waitUntil: "networkidle" });
+async function enterDomain(page, mode) {
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
   await page.getByLabel(/Discovery URL/i).fill(discoveryUrl);
   await page.getByLabel(/Domain name/i).fill(domainName);
-  await page.getByRole("button", { name: /join domain/i }).click();
+  await page
+    .getByRole("button", { name: mode === "create" ? /create new/i : /join existing/i })
+    .click();
+  await page.waitForFunction(
+    () => globalThis.__overwatchPark?.snapshot()?.status?.source?.kind === "in_cluster",
+    undefined,
+    { timeout: 15_000 },
+  );
 }
 
 async function waitForParticipants(page, count) {
   await page.waitForFunction(
-    (expected) => globalThis.__overwatch?.snapshot()?.participants?.length >= expected,
+    (expected) => {
+      const snapshot = globalThis.__overwatchPark?.snapshot();
+      return Number(Boolean(snapshot?.self)) + (snapshot?.peers?.length ?? 0) >= expected;
+    },
     count,
     { timeout: 15_000 },
   );
 }
 
 async function snapshot(page) {
-  return page.evaluate(() => globalThis.__overwatch?.snapshot());
+  return page.evaluate(() => globalThis.__overwatchPark?.snapshot());
 }
 
 async function diagnostics(pageA, pageB) {
@@ -127,7 +141,13 @@ async function diagnostics(pageA, pageB) {
 }
 
 async function assertNoAppApiRequests() {
-  const apiRequests = requestUrls.filter((url) => new URL(url).pathname.includes("/api/"));
+  const apiRequests = requestUrls.filter((url) => {
+    try {
+      return new URL(url).pathname.includes("/api/");
+    } catch {
+      return false;
+    }
+  });
   if (apiRequests.length > 0) {
     throw new Error(`Overwatch smoke made app backend requests: ${apiRequests.join(", ")}`);
   }

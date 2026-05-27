@@ -425,9 +425,9 @@ impl FrameRegistryEntry {
     /// REP-103 body frame: right-handed, X forward, Y left, Z up, meters.
     /// Used for robot bases (`base_link`), sensor bodies, and any frame
     /// with a clear "forward direction of motion."
-    pub fn ros_body(frame_id: impl Into<String>) -> Self {
+    pub fn ros_body(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
         Self {
-            peer_id: String::new(),
+            peer_id: peer_id.into(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -442,9 +442,9 @@ impl FrameRegistryEntry {
     /// REP-103 camera optical frame: right-handed, X right, Y down,
     /// Z forward, meters. Used for camera optical centers; pixel-space
     /// reasoning lines up with this directly.
-    pub fn ros_optical(frame_id: impl Into<String>) -> Self {
+    pub fn ros_optical(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
         Self {
-            peer_id: String::new(),
+            peer_id: peer_id.into(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -460,9 +460,9 @@ impl FrameRegistryEntry {
     /// Used for browser-side visualizers (Park) and OpenGL renderers.
     /// "Z backward" because the camera in OpenGL convention looks down
     /// the negative-Z axis; +Z points away from the scene.
-    pub fn opengl(frame_id: impl Into<String>) -> Self {
+    pub fn opengl(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
         Self {
-            peer_id: String::new(),
+            peer_id: peer_id.into(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -477,9 +477,9 @@ impl FrameRegistryEntry {
     /// Unity: left-handed, X right, Y up, Z forward, meters. Some
     /// pipelines still target Unity; included so producers in that
     /// ecosystem can declare without spelling fields out by hand.
-    pub fn unity(frame_id: impl Into<String>) -> Self {
+    pub fn unity(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
         Self {
-            peer_id: String::new(),
+            peer_id: peer_id.into(),
             frame_id: frame_id.into(),
             handedness: Handedness::Left,
             axes: AxisConvention {
@@ -846,7 +846,7 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const M1_OPTICAL_FRAME_HASH: &str = "56c22778b3af83b2df549af79c2b5395";
+    const M1_OPTICAL_FRAME_HASH: &str = "cf617557b1309887de0646bd52e289b8";
 
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
@@ -871,7 +871,7 @@ mod tests {
     }
 
     fn m1_optical_frame_entry() -> FrameRegistryEntry {
-        FrameRegistryEntry::ros_optical("K1-AABBCCDDEEFF/head_left_cam_optical")
+        FrameRegistryEntry::ros_optical("galbot", "K1-AABBCCDDEEFF/head_left_cam_optical")
     }
 
     fn write_m1_optical_frame(app_root: &Path) {
@@ -917,7 +917,7 @@ mod tests {
         // sensor.type lives as "type" key inside the body.
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
         );
     }
 
@@ -945,7 +945,7 @@ mod tests {
     /// sensor.type field added.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "e6f49f6a433ad53d352238d46e7f6cba");
+        assert_eq!(m1_sensor_entry().hash(), "d42ccb474fccebe283c1b5cd83e14b46");
     }
 
     #[test]
@@ -1183,7 +1183,7 @@ mod tests {
         // peer_id added at top level.
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -1195,7 +1195,7 @@ mod tests {
         // frame_id+frame_hash→RegistryRef, kind tag renamed.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "ee3bf8c360d026d0ea53dc684451a265"
+            "1c1cf7bf0949780f6f8103aeb1bbf798"
         );
     }
 
@@ -1284,7 +1284,7 @@ mod tests {
         // renamed from "type" to "kind"; open-string sensor.type is now "type":"pcm".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
+            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
         );
     }
 
@@ -1294,7 +1294,7 @@ mod tests {
         // Updates to this must be coordinated with any cross-language reader.
         // Recomputed for #216 rev 2: peer_id added, frame ref added,
         // kind tag renamed, sensor.type field added.
-        assert_eq!(m1_audio_entry().hash(), "d2bcb90d0187f49ec9b5597d44560f75");
+        assert_eq!(m1_audio_entry().hash(), "5855fd8c014fa9e027b88c923cb8f8c2");
     }
 
     #[test]
@@ -1310,7 +1310,7 @@ mod tests {
 
     // ─── JointEncoders tests ───────────────────────────────────────────────
 
-    const M1_BASE_LINK_FRAME_HASH: &str = "f5f259238ca27a5322612b761a0a2fdf";
+    const M1_BASE_LINK_FRAME_HASH: &str = "ed66a1f40686437577ef3e0b6d97a13e";
 
     /// Six-DOF arm fixture — `K1` upper-arm shape, plausible publish
     /// rate. Joint count, frame rate, type, and frame ref are the fields
@@ -1348,7 +1348,7 @@ mod tests {
         // renamed; open-string sensor.type is "type":"absolute".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"frame":{"hash":"f5f259238ca27a5322612b761a0a2fdf","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
+            r#"{"frame":{"hash":"ed66a1f40686437577ef3e0b6d97a13e","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
         );
     }
 
@@ -1359,7 +1359,7 @@ mod tests {
         // Hash recomputed for #216 rev 2: peer_id, type, and frame fields added.
         assert_eq!(
             m1_joint_encoders_entry().hash(),
-            "98677a3bc55043fe81b0a6f9d7bf0cbe"
+            "2f60ed1ef4e3e522f8463e021f58006f"
         );
     }
 
@@ -1385,7 +1385,7 @@ mod tests {
     // ─── Frame Registry tests ──────────────────────────────────────────────
 
     fn m1_frame_entry() -> FrameRegistryEntry {
-        FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")
+        FrameRegistryEntry::ros_body("galbot", "K1-AABBCCDDEEFF/base_link")
     }
 
     /// Locks the JCS canonical bytes for the locked Frame Registry vector.
@@ -1399,7 +1399,7 @@ mod tests {
         let s = std::str::from_utf8(&bytes).unwrap();
         assert_eq!(
             s,
-            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","peer_id":"","units":"meters"}"#,
+            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","peer_id":"galbot","units":"meters"}"#,
         );
     }
 
@@ -1408,14 +1408,14 @@ mod tests {
     /// shape drifts.
     #[test]
     fn frame_entry_hash_is_locked() {
-        assert_eq!(m1_frame_entry().hash(), "f5f259238ca27a5322612b761a0a2fdf");
+        assert_eq!(m1_frame_entry().hash(), "ed66a1f40686437577ef3e0b6d97a13e");
     }
 
     #[test]
     fn ros_body_preset_matches_explicit_construction() {
-        let preset = FrameRegistryEntry::ros_body("frame/x");
+        let preset = FrameRegistryEntry::ros_body("galbot", "frame/x");
         let explicit = FrameRegistryEntry {
-            peer_id: String::new(),
+            peer_id: "galbot".into(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1430,9 +1430,9 @@ mod tests {
 
     #[test]
     fn ros_optical_preset_matches_explicit_construction() {
-        let preset = FrameRegistryEntry::ros_optical("frame/x");
+        let preset = FrameRegistryEntry::ros_optical("galbot", "frame/x");
         let explicit = FrameRegistryEntry {
-            peer_id: String::new(),
+            peer_id: "galbot".into(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1447,9 +1447,9 @@ mod tests {
 
     #[test]
     fn opengl_preset_matches_explicit_construction() {
-        let preset = FrameRegistryEntry::opengl("frame/x");
+        let preset = FrameRegistryEntry::opengl("galbot", "frame/x");
         let explicit = FrameRegistryEntry {
-            peer_id: String::new(),
+            peer_id: "galbot".into(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1464,9 +1464,9 @@ mod tests {
 
     #[test]
     fn unity_preset_matches_explicit_construction() {
-        let preset = FrameRegistryEntry::unity("frame/x");
+        let preset = FrameRegistryEntry::unity("galbot", "frame/x");
         let explicit = FrameRegistryEntry {
-            peer_id: String::new(),
+            peer_id: "galbot".into(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Left,
             axes: AxisConvention {
@@ -1504,10 +1504,31 @@ mod tests {
 
     #[test]
     fn validate_accepts_all_four_presets() {
-        FrameRegistryEntry::ros_body("a").validate().unwrap();
-        FrameRegistryEntry::ros_optical("b").validate().unwrap();
-        FrameRegistryEntry::opengl("c").validate().unwrap();
-        FrameRegistryEntry::unity("d").validate().unwrap();
+        FrameRegistryEntry::ros_body("galbot", "a").validate().unwrap();
+        FrameRegistryEntry::ros_optical("galbot", "b").validate().unwrap();
+        FrameRegistryEntry::opengl("galbot", "c").validate().unwrap();
+        FrameRegistryEntry::unity("galbot", "d").validate().unwrap();
+    }
+
+    #[test]
+    fn frame_entry_presets_carry_peer_id() {
+        let entry = FrameRegistryEntry::ros_body("galbot", "base_link");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""peer_id":"galbot""#));
+        assert!(json.contains(r#""frame_id":"base_link""#));
+
+        let entry = FrameRegistryEntry::ros_optical("galbot", "head_left_camera_optical");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""peer_id":"galbot""#));
+        assert!(json.contains(r#""frame_id":"head_left_camera_optical""#));
+
+        let entry = FrameRegistryEntry::opengl("park", "world");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""peer_id":"park""#));
+
+        let entry = FrameRegistryEntry::unity("park", "world");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""peer_id":"park""#));
     }
 
     #[test]

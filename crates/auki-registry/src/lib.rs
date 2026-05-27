@@ -20,6 +20,28 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+// ─── Shared References ───────────────────────────────────────────────────────
+
+/// Reference to a registry entry by (peer_id, id, content hash).
+/// Used wherever one registry record points at another or a manifest
+/// points at a registry entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryRef {
+    pub peer_id: String,
+    pub id: String,
+    pub hash: String,
+}
+
+/// Reference to a log by (source_peer_id, resource_id). Logs are not
+/// content-addressed by a single hash — their manifests may differ
+/// across materializing peers — so this carries only the canonical
+/// identity tuple.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogRef {
+    pub source_peer_id: String,
+    pub resource_id: String,
+}
+
 // ─── Sensor Registry ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1558,5 +1580,47 @@ mod tests {
             .to_string();
         assert!(s.contains(r#""output_types":["portal","portal_corner"]"#));
         assert!(s.contains(r#""type":"qr""#));
+    }
+}
+
+#[cfg(test)]
+mod ref_tests {
+    use super::*;
+
+    #[test]
+    fn registry_ref_round_trips_canonical_json() {
+        let peer_id_str = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar";
+        let r = RegistryRef {
+            peer_id: peer_id_str.to_string(),
+            id: "head_left_rgb".to_string(),
+            hash: "abc123".to_string(),
+        };
+        let value = serde_json::to_value(&r).unwrap();
+        let json_bytes = auki_jcs::canonicalize(&value);
+        let json = String::from_utf8(json_bytes).unwrap();
+        assert_eq!(
+            json,
+            r#"{"hash":"abc123","id":"head_left_rgb","peer_id":"12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar"}"#
+        );
+        let r2: RegistryRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, r2);
+    }
+
+    #[test]
+    fn log_ref_round_trips_canonical_json() {
+        let peer_id_str = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar";
+        let r = LogRef {
+            source_peer_id: peer_id_str.to_string(),
+            resource_id: "head_left_rgb".to_string(),
+        };
+        let value = serde_json::to_value(&r).unwrap();
+        let json_bytes = auki_jcs::canonicalize(&value);
+        let json = String::from_utf8(json_bytes).unwrap();
+        assert_eq!(
+            json,
+            r#"{"resource_id":"head_left_rgb","source_peer_id":"12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar"}"#
+        );
+        let r2: LogRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, r2);
     }
 }

@@ -6,10 +6,10 @@
 //! ```text
 //! <app_root>/
 //! ├── registries/
-//! │   ├── sensors/<sensor_id>/<hash>.json       ← shared across all sessions of this app
-//! │   ├── clocks/<clock_id>/<hash>.json
-//! │   ├── frames/<frame_id>/<hash>.json
-//! │   └── detectors/<detector_id>/<hash>.json   ← Cuba T4
+//! │   ├── sensors/<peer_id>/<sensor_id>/<hash>.json       ← shared across all sessions of this app
+//! │   ├── clocks/<peer_id>/<clock_id>/<hash>.json
+//! │   ├── frames/<peer_id>/<frame_id>/<hash>.json
+//! │   └── detectors/<peer_id>/<detector_id>/<hash>.json   ← Cuba T4
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── log_manifest.json
@@ -76,34 +76,37 @@ pub fn registries_root(app_root: &Path) -> PathBuf {
     app_root.join(REGISTRIES_DIR)
 }
 
-/// `<app_root>/registries/sensors/<sensor_id>/<hash>.json`.
-pub fn sensor_entry_path(app_root: &Path, sensor_id: &str, hash: &str) -> PathBuf {
+/// `<app_root>/registries/sensors/<peer_id>/<sensor_id>/<hash>.json`.
+pub fn sensor_entry_path(app_root: &Path, peer_id: &str, sensor_id: &str, hash: &str) -> PathBuf {
     registries_root(app_root)
         .join(SENSORS_DIR)
+        .join(id_to_segment(peer_id))
         .join(id_to_segment(sensor_id))
         .join(format!("{hash}.json"))
 }
 
-/// `<app_root>/registries/clocks/<clock_id>/<hash>.json`.
-pub fn clock_entry_path(app_root: &Path, clock_id: &str, hash: &str) -> PathBuf {
+/// `<app_root>/registries/clocks/<peer_id>/<clock_id>/<hash>.json`.
+pub fn clock_entry_path(app_root: &Path, peer_id: &str, clock_id: &str, hash: &str) -> PathBuf {
     registries_root(app_root)
         .join(CLOCKS_DIR)
+        .join(id_to_segment(peer_id))
         .join(id_to_segment(clock_id))
         .join(format!("{hash}.json"))
 }
 
-/// `<app_root>/registries/frames/<frame_id>/<hash>.json`. Frame Registry
+/// `<app_root>/registries/frames/<peer_id>/<frame_id>/<hash>.json`. Frame Registry
 /// entries declare the coordinate convention (handedness, axes, units) of
 /// a named coordinate system; sensors and pose-log transforms reference
 /// the `frame_id` to make their bytes interpretable to consumers.
-pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf {
+pub fn frame_entry_path(app_root: &Path, peer_id: &str, frame_id: &str, hash: &str) -> PathBuf {
     registries_root(app_root)
         .join(FRAMES_DIR)
+        .join(id_to_segment(peer_id))
         .join(id_to_segment(frame_id))
         .join(format!("{hash}.json"))
 }
 
-/// `<app_root>/registries/detectors/<detector_id>/<hash>.json`. Detector
+/// `<app_root>/registries/detectors/<peer_id>/<detector_id>/<hash>.json`. Detector
 /// Registry entries declare what one Detector *is* — its identity
 /// (`detector_id`), the body fields the detector needs to interpret
 /// itself (`DetectorBody`, e.g. ArUco dictionary), and the detection
@@ -115,9 +118,10 @@ pub fn frame_entry_path(app_root: &Path, frame_id: &str, hash: &str) -> PathBuf 
 /// sensors. A `DetectionFrame`'s `sensor_hash` (Cuba T5) carries
 /// the input-frame provenance; the detector entry covers everything
 /// else.
-pub fn detector_entry_path(app_root: &Path, detector_id: &str, hash: &str) -> PathBuf {
+pub fn detector_entry_path(app_root: &Path, peer_id: &str, detector_id: &str, hash: &str) -> PathBuf {
     registries_root(app_root)
         .join(DETECTORS_DIR)
+        .join(id_to_segment(peer_id))
         .join(id_to_segment(detector_id))
         .join(format!("{hash}.json"))
 }
@@ -219,49 +223,50 @@ mod tests {
     }
 
     #[test]
-    fn sensor_entry_path_includes_id_substitution_and_hash_filename() {
+    fn sensor_entry_path_includes_peer_id_and_id_substitution_and_hash_filename() {
         assert_eq!(
             sensor_entry_path(
                 &app(),
+                "galbot",
                 "K1-AABBCCDDEEFF/head_left_cam",
                 "e8cb3879fcfa7f716047aa0892b0c0c0",
             ),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/sensors/\
-                 K1-AABBCCDDEEFF__head_left_cam/e8cb3879fcfa7f716047aa0892b0c0c0.json"
+                 galbot/K1-AABBCCDDEEFF__head_left_cam/e8cb3879fcfa7f716047aa0892b0c0c0.json"
             )
         );
     }
 
     #[test]
-    fn clock_entry_path_uses_clocks_dir() {
+    fn clock_entry_path_uses_clocks_dir_and_includes_peer_id() {
         assert_eq!(
-            clock_entry_path(&app(), "K1-AABBCCDDEEFF/utc", "deadbeef"),
+            clock_entry_path(&app(), "galbot", "K1-AABBCCDDEEFF/utc", "deadbeef"),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/clocks/\
-                 K1-AABBCCDDEEFF__utc/deadbeef.json"
+                 galbot/K1-AABBCCDDEEFF__utc/deadbeef.json"
             )
         );
     }
 
     #[test]
-    fn frame_entry_path_uses_frames_dir() {
+    fn frame_entry_path_uses_frames_dir_and_includes_peer_id() {
         assert_eq!(
-            frame_entry_path(&app(), "K1-AABBCCDDEEFF/head_left_cam_optical", "cafef00d"),
+            frame_entry_path(&app(), "galbot", "K1-AABBCCDDEEFF/head_left_cam_optical", "cafef00d"),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/frames/\
-                 K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"
+                 galbot/K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"
             )
         );
     }
 
     #[test]
-    fn detector_entry_path_uses_detectors_dir_and_id_substitution() {
+    fn detector_entry_path_uses_detectors_dir_and_id_substitution_and_includes_peer_id() {
         assert_eq!(
-            detector_entry_path(&app(), "aukilabs/aruco/v1", "f00dcafe"),
+            detector_entry_path(&app(), "galbot", "aukilabs/aruco/v1", "f00dcafe"),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/detectors/\
-                 aukilabs__aruco__v1/f00dcafe.json"
+                 galbot/aukilabs__aruco__v1/f00dcafe.json"
             )
         );
     }

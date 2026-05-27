@@ -639,7 +639,7 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
     validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_layout::sensor_entry_path(app_root, &entry.sensor_id, &hash);
+    let path = auki_layout::sensor_entry_path(app_root, &entry.peer_id, &entry.sensor_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
@@ -647,19 +647,20 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
 pub fn write_clock(app_root: &Path, entry: &ClockRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_layout::clock_entry_path(app_root, &entry.clock_id, &hash);
+    let path = auki_layout::clock_entry_path(app_root, &entry.peer_id, &entry.clock_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
-/// Read a sensor registry entry by `(sensor_id, hash)`. Returns `Ok(None)` when
+/// Read a sensor registry entry by `(peer_id, sensor_id, hash)`. Returns `Ok(None)` when
 /// the file doesn't exist; `Err(IdMismatch)` if the on-disk entry's
 /// `sensor_id` differs from the requested id.
 pub fn read_sensor(
     app_root: &Path,
+    peer_id: &str,
     sensor_id: &str,
     hash: &str,
 ) -> Result<Option<SensorRegistryEntry>> {
-    let path = auki_layout::sensor_entry_path(app_root, sensor_id, hash);
+    let path = auki_layout::sensor_entry_path(app_root, peer_id, sensor_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -674,13 +675,14 @@ pub fn read_sensor(
     Ok(Some(entry))
 }
 
-/// Read a clock registry entry by `(clock_id, hash)`.
+/// Read a clock registry entry by `(peer_id, clock_id, hash)`.
 pub fn read_clock(
     app_root: &Path,
+    peer_id: &str,
     clock_id: &str,
     hash: &str,
 ) -> Result<Option<ClockRegistryEntry>> {
-    let path = auki_layout::clock_entry_path(app_root, clock_id, hash);
+    let path = auki_layout::clock_entry_path(app_root, peer_id, clock_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -703,17 +705,18 @@ pub fn write_frame(app_root: &Path, entry: &FrameRegistryEntry) -> Result<WriteO
     entry.validate()?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_layout::frame_entry_path(app_root, &entry.frame_id, &hash);
+    let path = auki_layout::frame_entry_path(app_root, &entry.peer_id, &entry.frame_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
-/// Read a frame registry entry by `(frame_id, hash)`.
+/// Read a frame registry entry by `(peer_id, frame_id, hash)`.
 pub fn read_frame(
     app_root: &Path,
+    peer_id: &str,
     frame_id: &str,
     hash: &str,
 ) -> Result<Option<FrameRegistryEntry>> {
-    let path = auki_layout::frame_entry_path(app_root, frame_id, hash);
+    let path = auki_layout::frame_entry_path(app_root, peer_id, frame_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -733,19 +736,20 @@ pub fn read_frame(
 pub fn write_detector(app_root: &Path, entry: &DetectorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_layout::detector_entry_path(app_root, &entry.detector_id, &hash);
+    let path = auki_layout::detector_entry_path(app_root, &entry.peer_id, &entry.detector_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
-/// Read a detector registry entry by `(detector_id, hash)`. Returns
+/// Read a detector registry entry by `(peer_id, detector_id, hash)`. Returns
 /// `Ok(None)` when the file doesn't exist; `Err(IdMismatch)` if the
 /// on-disk entry's `detector_id` differs from the requested id. Cuba T4.
 pub fn read_detector(
     app_root: &Path,
+    peer_id: &str,
     detector_id: &str,
     hash: &str,
 ) -> Result<Option<DetectorRegistryEntry>> {
-    let path = auki_layout::detector_entry_path(app_root, detector_id, hash);
+    let path = auki_layout::detector_entry_path(app_root, peer_id, detector_id, hash);
     let Some(bytes) = read_at(&path)? else {
         return Ok(None);
     };
@@ -789,7 +793,7 @@ fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry)
 
     if frame_ref.id.is_empty()
         || frame_ref.hash.is_empty()
-        || read_frame(app_root, &frame_ref.id, &frame_ref.hash)?.is_none()
+        || read_frame(app_root, &frame_ref.peer_id, &frame_ref.id, &frame_ref.hash)?.is_none()
     {
         return Err(Error::FrameReferenceMissing {
             sensor_id: entry.sensor_id.clone(),
@@ -846,7 +850,7 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const M1_OPTICAL_FRAME_HASH: &str = "cf617557b1309887de0646bd52e289b8";
+    const M1_OPTICAL_FRAME_HASH: &str = "03b86f32827ec6a25a5e619b2f36478b";
 
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
@@ -871,7 +875,7 @@ mod tests {
     }
 
     fn m1_optical_frame_entry() -> FrameRegistryEntry {
-        FrameRegistryEntry::ros_optical("galbot", "K1-AABBCCDDEEFF/head_left_cam_optical")
+        FrameRegistryEntry::ros_optical("test-peer", "K1-AABBCCDDEEFF/head_left_cam_optical")
     }
 
     fn write_m1_optical_frame(app_root: &Path) {
@@ -917,7 +921,7 @@ mod tests {
         // sensor.type lives as "type" key inside the body.
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"03b86f32827ec6a25a5e619b2f36478b","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
         );
     }
 
@@ -945,7 +949,7 @@ mod tests {
     /// sensor.type field added.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "d42ccb474fccebe283c1b5cd83e14b46");
+        assert_eq!(m1_sensor_entry().hash(), "bfc5a987e68b274dd5e06c334602f64d");
     }
 
     #[test]
@@ -971,7 +975,7 @@ mod tests {
             WriteOutcome::Created(h) => h,
             other => panic!("expected Created, got {other:?}"),
         };
-        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        let read = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
@@ -981,7 +985,7 @@ mod tests {
         let entry = m1_utc_entry();
         let outcome = write_clock(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
-        let read = read_clock(dir.path(), &entry.clock_id, &hash).unwrap();
+        let read = read_clock(dir.path(), &entry.peer_id, &entry.clock_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
@@ -1002,6 +1006,7 @@ mod tests {
             .path()
             .join("registries")
             .join("sensors")
+            .join("test-peer")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         let json_count = fs::read_dir(&entry_dir)
             .unwrap()
@@ -1042,6 +1047,7 @@ mod tests {
             .path()
             .join("registries")
             .join("sensors")
+            .join("test-peer")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         let json_count = fs::read_dir(&entry_dir)
             .unwrap()
@@ -1052,11 +1058,11 @@ mod tests {
 
         // Both resolvable by their respective hashes.
         assert!(
-            read_sensor(dir.path(), &entry.sensor_id, &first_hash)
+            read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &first_hash)
                 .unwrap()
                 .is_some()
         );
-        let resolved_second = read_sensor(dir.path(), &entry.sensor_id, &second_hash).unwrap();
+        let resolved_second = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &second_hash).unwrap();
         assert_eq!(resolved_second, Some(entry));
     }
 
@@ -1071,6 +1077,7 @@ mod tests {
             .path()
             .join("registries")
             .join("sensors")
+            .join("test-peer")
             .join("K1-AABBCCDDEEFF__head_left_cam");
         assert!(expected_dir.is_dir(), "expected {expected_dir:?} to exist");
 
@@ -1080,6 +1087,7 @@ mod tests {
             .path()
             .join("registries")
             .join("sensors")
+            .join("test-peer")
             .join("K1-AABBCCDDEEFF")
             .join("head_left_cam");
         assert!(!bad.exists(), "did not expect nested dirs: {bad:?}");
@@ -1090,6 +1098,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = read_sensor(
             dir.path(),
+            "galbot",
             "K1-AABBCCDDEEFF/never_written",
             "00000000000000000000000000000000",
         )
@@ -1114,17 +1123,19 @@ mod tests {
             .path()
             .join("registries")
             .join("sensors")
+            .join(&entry.peer_id)
             .join("K1-AABBCCDDEEFF__head_left_cam")
             .join(format!("{hash}.json"));
         let bogus_dir = dir
             .path()
             .join("registries")
             .join("sensors")
+            .join(&entry.peer_id)
             .join("K1-AABBCCDDEEFF__other_cam");
         fs::create_dir_all(&bogus_dir).unwrap();
         fs::copy(&real, bogus_dir.join(format!("{hash}.json"))).unwrap();
 
-        let err = read_sensor(dir.path(), "K1-AABBCCDDEEFF/other_cam", &hash);
+        let err = read_sensor(dir.path(), &entry.peer_id, "K1-AABBCCDDEEFF/other_cam", &hash);
         assert!(matches!(err, Err(Error::IdMismatch { .. })), "got {err:?}");
     }
 
@@ -1183,7 +1194,7 @@ mod tests {
         // peer_id added at top level.
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"03b86f32827ec6a25a5e619b2f36478b","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -1193,9 +1204,10 @@ mod tests {
         // Updates to this must be coordinated with any cross-language reader.
         // Recomputed for #216 rev 2: peer_id added, PointCloud→Rangefinder,
         // frame_id+frame_hash→RegistryRef, kind tag renamed.
+        // Updated for Task 1.4: frame peer_id changed from "galbot" to "test-peer".
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "1c1cf7bf0949780f6f8103aeb1bbf798"
+            "9522242bd92110b03c024e512e0274cd"
         );
     }
 
@@ -1206,7 +1218,7 @@ mod tests {
         let entry = m1_point_cloud_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
-        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        let read = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
@@ -1284,7 +1296,7 @@ mod tests {
         // renamed from "type" to "kind"; open-string sensor.type is now "type":"pcm".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"cf617557b1309887de0646bd52e289b8","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
+            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"03b86f32827ec6a25a5e619b2f36478b","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
         );
     }
 
@@ -1294,7 +1306,8 @@ mod tests {
         // Updates to this must be coordinated with any cross-language reader.
         // Recomputed for #216 rev 2: peer_id added, frame ref added,
         // kind tag renamed, sensor.type field added.
-        assert_eq!(m1_audio_entry().hash(), "5855fd8c014fa9e027b88c923cb8f8c2");
+        // Updated for Task 1.4: frame peer_id changed from "galbot" to "test-peer".
+        assert_eq!(m1_audio_entry().hash(), "3cfe29be8c3382753655f3e693068d88");
     }
 
     #[test]
@@ -1304,13 +1317,13 @@ mod tests {
         let entry = m1_audio_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
-        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        let read = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
     // ─── JointEncoders tests ───────────────────────────────────────────────
 
-    const M1_BASE_LINK_FRAME_HASH: &str = "ed66a1f40686437577ef3e0b6d97a13e";
+    const M1_BASE_LINK_FRAME_HASH: &str = "476d36916dd2c96f09ea57304d0da334";
 
     /// Six-DOF arm fixture — `K1` upper-arm shape, plausible publish
     /// rate. Joint count, frame rate, type, and frame ref are the fields
@@ -1348,7 +1361,7 @@ mod tests {
         // renamed; open-string sensor.type is "type":"absolute".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"frame":{"hash":"ed66a1f40686437577ef3e0b6d97a13e","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
+            r#"{"frame":{"hash":"476d36916dd2c96f09ea57304d0da334","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
         );
     }
 
@@ -1357,9 +1370,10 @@ mod tests {
     #[test]
     fn joint_encoders_entry_hash_is_locked() {
         // Hash recomputed for #216 rev 2: peer_id, type, and frame fields added.
+        // Updated for Task 1.4 when frame peer_id changed from "galbot" to "test-peer".
         assert_eq!(
             m1_joint_encoders_entry().hash(),
-            "2f60ed1ef4e3e522f8463e021f58006f"
+            "3098545a72004674e0f5e2eb4f86ee0e"
         );
     }
 
@@ -1370,7 +1384,7 @@ mod tests {
         let entry = m1_joint_encoders_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
-        let read = read_sensor(dir.path(), &entry.sensor_id, &hash).unwrap();
+        let read = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
@@ -1385,7 +1399,7 @@ mod tests {
     // ─── Frame Registry tests ──────────────────────────────────────────────
 
     fn m1_frame_entry() -> FrameRegistryEntry {
-        FrameRegistryEntry::ros_body("galbot", "K1-AABBCCDDEEFF/base_link")
+        FrameRegistryEntry::ros_body("test-peer", "K1-AABBCCDDEEFF/base_link")
     }
 
     /// Locks the JCS canonical bytes for the locked Frame Registry vector.
@@ -1399,7 +1413,7 @@ mod tests {
         let s = std::str::from_utf8(&bytes).unwrap();
         assert_eq!(
             s,
-            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","peer_id":"galbot","units":"meters"}"#,
+            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","peer_id":"test-peer","units":"meters"}"#,
         );
     }
 
@@ -1408,7 +1422,7 @@ mod tests {
     /// shape drifts.
     #[test]
     fn frame_entry_hash_is_locked() {
-        assert_eq!(m1_frame_entry().hash(), "ed66a1f40686437577ef3e0b6d97a13e");
+        assert_eq!(m1_frame_entry().hash(), "476d36916dd2c96f09ea57304d0da334");
     }
 
     #[test]
@@ -1563,7 +1577,7 @@ mod tests {
         let entry = m1_frame_entry();
         let outcome = write_frame(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
-        let read = read_frame(dir.path(), &entry.frame_id, &hash).unwrap();
+        let read = read_frame(dir.path(), &entry.peer_id, &entry.frame_id, &hash).unwrap();
         assert_eq!(read, Some(entry));
     }
 
@@ -1581,7 +1595,7 @@ mod tests {
     #[test]
     fn read_frame_returns_none_for_missing_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = read_frame(dir.path(), "frame/missing", "deadbeef").unwrap();
+        let entry = read_frame(dir.path(), "galbot", "frame/missing", "deadbeef").unwrap();
         assert_eq!(entry, None);
     }
 
@@ -1623,7 +1637,7 @@ mod tests {
             WriteOutcome::Created(h) => h,
             other => panic!("unexpected: {other:?}"),
         };
-        let read = read_detector(dir.path(), &entry.detector_id, &hash)
+        let read = read_detector(dir.path(), &entry.peer_id, &entry.detector_id, &hash)
             .unwrap()
             .expect("entry must read back");
         assert_eq!(read, entry);
@@ -1665,6 +1679,7 @@ mod tests {
             .path()
             .join("registries")
             .join("detectors")
+            .join(&entry.peer_id)
             .join("aukilabs__aruco__v1");
         assert!(expected_dir.is_dir(), "expected {expected_dir:?} to exist");
     }

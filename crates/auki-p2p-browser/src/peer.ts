@@ -199,11 +199,10 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       SUBSCRIBE_PROTOCOL_ID,
     );
     const reader = new JsonFrameReader(stream);
-    const messageLimit = request.maxMessageBytes ?? DEFAULT_FRAME_BODY_LIMIT;
 
     try {
       await writeJsonFrame(stream, subscribeRequest, DEFAULT_FRAME_BODY_LIMIT);
-      const startFrame = await reader.read(messageLimit);
+      const startFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
       const startResult = await parseSubscribeStartResult(startFrame.value);
       const startValidation = await validateSubscribeStartForRequest(
         subscribeRequest,
@@ -215,7 +214,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       }
 
       for (;;) {
-        const frame = await reader.read(messageLimit);
+        const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
         if (frame.value.type === SUBSCRIBE_END_TYPE) {
           await validateSubscribeEndForOffer(frame.value, request.domainId, request.offerId);
           return;

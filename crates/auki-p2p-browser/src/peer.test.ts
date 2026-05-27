@@ -188,6 +188,50 @@ describe("AukiBrowserPeer shell", () => {
       SUBSCRIBE_PROTOCOL_ID,
     ]);
   });
+
+  it("keeps maxMessageBytes scoped to Subscribe data messages", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const subscribeFixture = await fixtureJson("v1_subscribe.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const accept = subscribeFixture.positive.accept_start_result.object as JsonObject;
+    const end = subscribeFixture.positive.end_message.object as JsonObject;
+    const inputs = subscribeFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(SUBSCRIBE_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      expect(JSON.stringify(accept).length).toBeGreaterThan(32);
+      expect(JSON.stringify(end).length).toBeGreaterThan(32);
+      await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, end, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    const messages: SpatialMessage[] = [];
+    for await (const message of peer.subscribe({
+      peerId: "native-peer",
+      domainId: inputs.domain_id as string,
+      offerId: inputs.offer_id as string,
+      acceptedPayloadTypes: [inputs.selected_payload_type as string],
+      maxMessageBytes: 32,
+    })) {
+      messages.push(message);
+    }
+
+    expect(messages).toEqual([]);
+  });
 });
 
 const LIFECYCLE_PROTOCOL_ID = "/auki/cluster-lifecycle/0.0.1";

@@ -48,6 +48,12 @@ Discovery remains optional and non-authoritative. The next work is proving the
 new path across browser and native peers without breaking the shipped
 `auki-network` / `auki-domain` runtime.
 
+`auki-p2p-browser` now provides the browser-side consumer path: browser peer
+identity, bootstrap parsing, js-libp2p transport setup, lifecycle handshakes,
+remote offer-catalog loading, and Subscribe consumption through
+`auki-protocol-wasm` validators. Browser-side publishing is still the missing
+half of the browser package.
+
 ## Networking Matrix
 
 The SDK demo path should cover every peer-type pairing:
@@ -128,6 +134,11 @@ protocols from those crates.
       through the WASM adapter.
 - [ ] Expose one high-level browser peer handle that hides frames, streams, and
       transport setup from app developers.
+  - [x] Load remote offer catalogs over RFC libp2p streams while returning
+        app-facing `OfferSummary` objects.
+  - [x] Subscribe over RFC libp2p streams while yielding app-facing spatial
+        messages.
+  - [ ] Publish browser-generated preview streams as local offers.
 
 Candidate browser API shape:
 
@@ -194,6 +205,10 @@ Browser:
 - [x] WASM-backed peer binding create/verify tests.
 - [x] WASM-backed offer catalog request/response tests.
 - [x] WASM-backed Subscribe accept/data/end tests.
+- [x] Browser peer lifecycle, offer-catalog, and Subscribe tests over
+      in-memory protocol streams.
+- [x] Browser Subscribe tests keep `maxMessageBytes` scoped to data messages,
+      not Subscribe start/end control frames.
 
 End-to-end:
 
@@ -220,3 +235,18 @@ Pull these forward only when product or implementation work needs them:
 - Shared Offer-Kind Profiles.
 - Production relay reservation and relay policy grants.
 - Subscribe reliability, replay, resume, and large-object transfer.
+
+## Browser Producer Design Checkpoint
+
+Before implementing browser `publishPreview`, keep these boundaries:
+
+- `protocol.ts` remains a thin WASM adapter; it must not grow independent RFC
+  rules.
+- `stream.ts` owns JSON-frame read/write glue over libp2p-style streams.
+- `transport.ts` owns js-libp2p setup and should expose only small transport
+  capabilities such as dialing and registering protocol handlers.
+- `peer.ts` owns the high-level SDK handle, local offer registry, publication
+  handles, and app-facing methods.
+- Generated preview publishing should first prove Subscribe with JPEG-like
+  bytes over `auki.spatial_message.v1`; camera capture and reliable delivery
+  remain later work.

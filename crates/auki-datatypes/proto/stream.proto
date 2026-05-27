@@ -22,6 +22,8 @@ package auki.stream;
 // Field number ledger (never reuse, never renumber):
 //   StreamRequest.sensor_id      = 1
 //   StreamRequest.resource_id    = 2
+//   StreamRequest.source_peer_id = 3
+//   StreamRequest.read_from      = 4..5 (oneof: latest=4 unit, from_start=5 unit, from_timestamp=6 int64)
 //   StreamManifest.sensor_id          = 1
 //   StreamManifest.sensor_hash        = 2
 //   StreamManifest.clock_id           = 3
@@ -41,9 +43,22 @@ package auki.stream;
 //   StreamEntry.payload              = 3
 //   StreamMessage.<oneof variant> = 1..5
 
+// ReadFrom oneof sub-messages for StreamRequest.
+message ReadFromLatest {}
+message ReadFromStart {}
+message ReadFromTimestamp {
+  int64 timestamp_ns = 1;
+}
+
 message StreamRequest {
   string sensor_id = 1;
   string resource_id = 2;
+  string source_peer_id = 3;
+  oneof read_from {
+    ReadFromLatest latest = 4;
+    ReadFromStart from_start = 5;
+    ReadFromTimestamp from_timestamp = 6;
+  }
 }
 
 message StreamManifest {

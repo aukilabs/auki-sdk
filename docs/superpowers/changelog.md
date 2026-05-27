@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Added the SDK signaled WebRTC transport implementation plan under [`plans/`](plans/2026-05-27-sdk-signaled-webrtc-transport.md), sequencing reusable network/domain modules and generated binding adapters before app migration.
+
+### Nils's codex · May 27, HKT, 2026
+
 Added the SDK signaled WebRTC transport design under [`specs/`](specs/2026-05-27-sdk-signaled-webrtc-transport-design.md), covering SDK-owned Discovery signaling, bidirectional data-channel routing, and generated native/browser binding adapters.
 
 ### Nils's codex · May 27, HKT, 2026

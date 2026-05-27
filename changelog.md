@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 4 completed.** The implementation plan now records the completed fake-channel framed and stream router slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Signaled peer framed and stream routers added.** `auki-network` now routes framed requests and stream-open/entry envelopes through SDK-owned signaled peer command/event APIs. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 3 completed.** The implementation plan now records the completed transport-neutral signaled peer core. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

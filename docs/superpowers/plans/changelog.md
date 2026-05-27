@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Marked Task 4 of the SDK signaled WebRTC transport plan complete after adding fake-channel framed and stream routers to `SignaledPeerCore`.
+
+### Nils's codex · May 27, HKT, 2026
+
 Marked Task 3 of the SDK signaled WebRTC transport plan complete after adding the transport-neutral signaled peer core and no-default verification fix in `auki-network`.
 
 ### Nils's codex · May 27, HKT, 2026

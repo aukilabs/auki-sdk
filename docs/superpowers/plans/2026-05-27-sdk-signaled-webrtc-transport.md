@@ -336,31 +336,31 @@ git commit -m "Add signaled peer state machine"
 **Files:**
 - Modify: `crates/auki-network/src/signaled_peer.rs`
 
-- [ ] **Step 1: Write failing framed router test**
+- [x] **Step 1: Write failing framed router test**
 
 Add a test where `handle_framed("/auki/info/0.0.1", ...)` receives request bytes from a fake remote peer and returns response bytes.
 
-- [ ] **Step 2: Write failing stream router test**
+- [x] **Step 2: Write failing stream router test**
 
 Add a test where a fake stream request for `{"sensor_id":"camera"}` creates an open request, accepts with a manifest JSON, pushes one entry, and emits a JSON stream entry message.
 
-- [ ] **Step 3: Run tests to verify red**
+- [x] **Step 3: Run tests to verify red**
 
 Run: `cargo test -p auki-network signaled_peer -- --nocapture`
 
 Expected: compile failure for missing router methods.
 
-- [ ] **Step 4: Implement routers**
+- [x] **Step 4: Implement routers**
 
 Add framed handler map, pending stream responder map, active stream map, and test helper APIs. Keep production-facing method names aligned with JavaScript: `request_framed`, `handle_framed`, `open_stream`, `handle_stream`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run: `cargo test -p auki-network signaled_peer -- --nocapture`
 
 Expected: framed and stream router tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-network/src/signaled_peer.rs

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — signaled peer framed and stream routers added.** The signaled peer core now routes fake-channel framed requests and stream-open/entry envelopes through SDK-owned command/event APIs.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — transport-neutral signaled peer core added.** The network crate now owns a pure Rust signaled peer state machine that emits platform WebRTC commands, queues ICE candidates, and resolves duplicate simultaneous dials.
 
 ### Nils's codex · May 27, HKT, 2026

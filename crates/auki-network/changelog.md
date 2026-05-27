@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Signaled peer framed and stream routers added.** `SignaledPeerCore` now has fake-channel router APIs aligned with the JavaScript facade names: `request_framed`, `handle_framed`, `open_stream`, and `handle_stream`. The core can register framed handlers, emit data-channel send commands for framed requests, turn inbound stream request envelopes into pending stream-open events, accept stream opens, track active streams, and emit JSON stream entry messages without binding to a concrete WebRTC implementation.
+
+Tests: red/green `cargo test -p auki-network signaled_peer -- --nocapture`; `cargo test -p auki-network --no-default-features`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Transport-neutral signaled peer core added.** `auki-network` now exposes `SignaledPeerCore`, `SignalEnvelope`, role/command enums, and typed errors for SDK-owned Discovery-signaled WebRTC orchestration. The core tracks peer connections without touching platform WebRTC APIs, emits create/set-remote-description/add-candidate/close commands, queues ICE candidates until the remote description is set, and resolves simultaneous dial duplicates with a deterministic peer-id tie-break. The native full-binding-surface test now correctly gates its UniFFI-only identity smoke on the `uniffi` feature, restoring the no-default test path required by the signaled core.
 
 Tests: red/green `cargo test -p auki-network signaled_peer -- --nocapture`; `cargo test -p auki-network --no-default-features`; `git diff --check`.

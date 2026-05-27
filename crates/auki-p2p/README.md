@@ -35,6 +35,11 @@ Current public surface:
   applies local per-peer connection caps for duplicate/simultaneous dials;
   surfaces connection events; projects local peer status; and exposes a raw
   stream control for protocol runtimes.
+- `AukiP2pNode` supports TCP, QUIC, and WebSocket transports in one runtime.
+  The optional relay-server role runs Circuit Relay v2 on the same node. Use
+  `AukiP2pNodeConfig::loopback_relay_server_development()` for a local
+  WebSocket relay and publish `observed_browser_relay_server_addresses()` to
+  browser peers.
 - The optional `browser-webrtc-direct` Cargo feature adds native WebRTC Direct
   transport support for browser-to-node dialing. Use
   `AukiP2pNodeConfig::loopback_webrtc_direct_development()` for the local
@@ -89,3 +94,5 @@ authorization, offer loading, Get, Subscribe data, and relationship/status
 assertions in one two-peer flow.
 With `--features browser-webrtc-direct`, the node tests also verify a loopback
 WebRTC Direct listener emits a browser-dialable multiaddr.
+Relay-server tests verify the local WebSocket relay emits a browser-usable
+`/p2p/<relay-peer-id>` multiaddr without mixing it into remote relay hints.

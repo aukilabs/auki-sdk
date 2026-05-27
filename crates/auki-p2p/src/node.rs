@@ -5,14 +5,16 @@ use auki_protocol::v1::{
     base64url,
     status::{LocalPeerStatus, StatusError},
 };
-use futures::StreamExt as _;
-#[cfg(feature = "browser-webrtc-direct")]
+use futures::{StreamExt as _, future};
 use libp2p::core::{Transport as _, muxing::StreamMuxerBox, transport::Boxed};
 use libp2p::{
-    Multiaddr, PeerId, Swarm, SwarmBuilder,
-    core::ConnectedPoint,
-    identify, noise, ping,
-    swarm::{ConnectionId, DialError, NetworkBehaviour, SwarmEvent, dial_opts::DialOpts},
+    Multiaddr, PeerId, Swarm,
+    core::{ConnectedPoint, upgrade},
+    identify, noise, ping, quic, relay,
+    swarm::{
+        Config as SwarmConfig, ConnectionId, DialError, NetworkBehaviour, SwarmEvent,
+        behaviour::toggle::Toggle, dial_opts::DialOpts,
+    },
     tcp, yamux,
 };
 #[cfg(feature = "browser-webrtc-direct")]
@@ -36,6 +38,9 @@ pub struct Behaviour {
     pub identify: identify::Behaviour,
     /// Connection liveness at the libp2p layer.
     pub ping: ping::Behaviour,
+    /// Optional Circuit Relay v2 server role. Relay is connectivity only;
+    /// protocol authority remains in lifecycle and policy validation.
+    pub relay: Toggle<relay::Behaviour>,
     /// Raw substream multiplexer used by lifecycle, offer catalog, Get, and Subscribe.
     pub stream: libp2p_stream::Behaviour,
 }
@@ -54,6 +59,8 @@ pub struct AukiP2pNodeConfig {
     pub relay_addresses: Vec<Multiaddr>,
     /// Browser-to-node WebRTC Direct transport support.
     pub browser_webrtc_direct: BrowserWebRtcDirectConfig,
+    /// Local Circuit Relay v2 server role.
+    pub relay_server: RelayServerConfig,
     /// Identify agent version advertised to remote libp2p peers.
     pub agent_version: String,
 }
@@ -62,6 +69,13 @@ pub struct AukiP2pNodeConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrowserWebRtcDirectConfig {
     /// Enable WebRTC Direct transport support for browser-to-node dialing.
+    pub enabled: bool,
+}
+
+/// Local Circuit Relay v2 server configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelayServerConfig {
+    /// Enable the local node as a relay server.
     pub enabled: bool,
 }
 
@@ -195,6 +209,7 @@ impl AukiP2pNodeConfig {
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
             browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
+            relay_server: RelayServerConfig::disabled(),
             agent_version: default_agent_version(),
         }
     }
@@ -211,6 +226,7 @@ impl AukiP2pNodeConfig {
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
             browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
+            relay_server: RelayServerConfig::disabled(),
             agent_version: default_agent_version(),
         }
     }
@@ -223,6 +239,20 @@ impl AukiP2pNodeConfig {
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
             browser_webrtc_direct: BrowserWebRtcDirectConfig::enabled(),
+            relay_server: RelayServerConfig::disabled(),
+            agent_version: default_agent_version(),
+        }
+    }
+
+    /// Development config that binds an OS-selected loopback WebSocket relay port.
+    pub fn loopback_relay_server_development() -> Self {
+        Self {
+            p2p: AukiP2pConfig::development(),
+            listen_addresses: vec![loopback_websocket_relay_listen_addr()],
+            advertised_addresses: Vec::new(),
+            relay_addresses: Vec::new(),
+            browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
+            relay_server: RelayServerConfig::enabled(),
             agent_version: default_agent_version(),
         }
     }
@@ -240,6 +270,18 @@ impl BrowserWebRtcDirectConfig {
     }
 }
 
+impl RelayServerConfig {
+    /// Disable local Circuit Relay v2 server support.
+    pub fn disabled() -> Self {
+        Self { enabled: false }
+    }
+
+    /// Enable local Circuit Relay v2 server support.
+    pub fn enabled() -> Self {
+        Self { enabled: true }
+    }
+}
+
 impl AukiP2pNode {
     /// Build a node and bind every configured listen address.
     pub fn new(
@@ -250,42 +292,28 @@ impl AukiP2pNode {
         validate_browser_webrtc_direct_config(&config)?;
 
         let local_peer_id = identity.peer_id();
-        let builder = SwarmBuilder::with_existing_identity(identity.keypair().clone())
-            .with_tokio()
-            .with_tcp(
-                tcp::Config::default(),
-                noise::Config::new,
-                yamux::Config::default,
-            )
-            .map_err(|err| AukiP2pNodeError::Transport {
-                stage: "tcp",
-                source: err.to_string(),
-            })?
-            .with_quic();
-
-        #[cfg(feature = "browser-webrtc-direct")]
-        let builder = builder
-            .with_other_transport(webrtc_direct_transport)
-            .map_err(|err| AukiP2pNodeError::Transport {
-                stage: "webrtc-direct",
-                source: err.to_string(),
-            })?;
-
-        let mut swarm = builder
-            .with_behaviour(|key| Behaviour {
-                identify: identify::Behaviour::new(
-                    identify::Config::new(IDENTIFY_PROTOCOL_ID.into(), key.public())
-                        .with_agent_version(config.agent_version.clone()),
-                ),
-                ping: ping::Behaviour::default(),
-                stream: libp2p_stream::Behaviour::new(),
-            })
-            .map_err(|err| AukiP2pNodeError::Transport {
-                stage: "behaviour",
-                source: err.to_string(),
-            })?
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
-            .build();
+        let transport = build_transport(identity.keypair(), &config)?;
+        let behaviour = Behaviour {
+            identify: identify::Behaviour::new(
+                identify::Config::new(IDENTIFY_PROTOCOL_ID.into(), identity.public_key())
+                    .with_agent_version(config.agent_version.clone()),
+            ),
+            ping: ping::Behaviour::default(),
+            relay: Toggle::from(
+                config
+                    .relay_server
+                    .enabled
+                    .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default())),
+            ),
+            stream: libp2p_stream::Behaviour::new(),
+        };
+        let mut swarm = Swarm::new(
+            transport,
+            behaviour,
+            local_peer_id,
+            SwarmConfig::with_tokio_executor()
+                .with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT),
+        );
 
         debug_assert_eq!(*swarm.local_peer_id(), local_peer_id);
 
@@ -338,6 +366,22 @@ impl AukiP2pNode {
             .iter()
             .cloned()
             .map(|address| address_with_peer_id(address, self.peer_id()))
+            .collect()
+    }
+
+    /// Observed relay-server addresses with the local `/p2p/<peer-id>` suffix.
+    pub fn observed_relay_server_addresses(&self) -> Vec<Multiaddr> {
+        if !self.config.relay_server.enabled {
+            return Vec::new();
+        }
+        self.observed_dialable_listen_addresses()
+    }
+
+    /// Observed WebSocket relay-server addresses usable by browser peers.
+    pub fn observed_browser_relay_server_addresses(&self) -> Vec<Multiaddr> {
+        self.observed_relay_server_addresses()
+            .into_iter()
+            .filter(is_websocket_address)
             .collect()
     }
 
@@ -419,6 +463,10 @@ impl AukiP2pNode {
             "authorization_mode".to_owned(),
             Value::String(self.config.p2p.peer_admission.mode().as_str().to_owned()),
         );
+        object.insert(
+            "relay_server_enabled".to_owned(),
+            Value::Bool(self.config.relay_server.enabled),
+        );
 
         if !self.config.p2p.status_privacy.redact_addresses {
             object.insert(
@@ -428,6 +476,10 @@ impl AukiP2pNode {
             object.insert(
                 "advertised_addresses".to_owned(),
                 multiaddr_array(&self.config.advertised_addresses),
+            );
+            object.insert(
+                "relay_server_addresses".to_owned(),
+                multiaddr_array(&self.observed_relay_server_addresses()),
             );
         }
 
@@ -698,6 +750,13 @@ pub fn loopback_webrtc_direct_listen_addr() -> Multiaddr {
         .expect("static loopback WebRTC Direct listen multiaddr is valid")
 }
 
+/// Return a loopback WebSocket relay listen address with an OS-selected TCP port.
+pub fn loopback_websocket_relay_listen_addr() -> Multiaddr {
+    "/ip4/127.0.0.1/tcp/0/ws"
+        .parse()
+        .expect("static loopback WebSocket relay listen multiaddr is valid")
+}
+
 fn validate_browser_webrtc_direct_config(
     config: &AukiP2pNodeConfig,
 ) -> Result<(), AukiP2pNodeError> {
@@ -722,6 +781,12 @@ fn is_webrtc_direct_address(address: &Multiaddr) -> bool {
         .any(|protocol| matches!(protocol, Protocol::WebRTCDirect))
 }
 
+fn is_websocket_address(address: &Multiaddr) -> bool {
+    address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::Ws(_) | Protocol::Wss(_)))
+}
+
 fn address_with_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
     if address
         .iter()
@@ -730,6 +795,81 @@ fn address_with_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
         address
     } else {
         address.with(Protocol::P2p(peer_id))
+    }
+}
+
+fn build_transport(
+    keypair: &libp2p_identity::Keypair,
+    config: &AukiP2pNodeConfig,
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, AukiP2pNodeError> {
+    let transport = tcp_transport(keypair)?
+        .or_transport(quic_transport(keypair))
+        .map(|either, _| either_into_inner(either))
+        .boxed();
+    let transport = transport
+        .or_transport(websocket_transport(keypair)?)
+        .map(|either, _| either_into_inner(either))
+        .boxed();
+
+    #[cfg(feature = "browser-webrtc-direct")]
+    let transport = if config.browser_webrtc_direct.enabled {
+        transport
+            .or_transport(webrtc_direct_transport(keypair))
+            .map(|either, _| either_into_inner(either))
+            .boxed()
+    } else {
+        transport
+    };
+
+    #[cfg(not(feature = "browser-webrtc-direct"))]
+    let _ = config;
+
+    Ok(transport)
+}
+
+fn tcp_transport(
+    keypair: &libp2p_identity::Keypair,
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, AukiP2pNodeError> {
+    Ok(tcp::tokio::Transport::new(tcp::Config::default())
+        .upgrade(upgrade::Version::V1Lazy)
+        .authenticate(noise_config(keypair, "tcp")?)
+        .multiplex(yamux::Config::default())
+        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .boxed())
+}
+
+fn quic_transport(keypair: &libp2p_identity::Keypair) -> Boxed<(PeerId, StreamMuxerBox)> {
+    quic::tokio::Transport::new(quic::Config::new(keypair))
+        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .boxed()
+}
+
+fn websocket_transport(
+    keypair: &libp2p_identity::Keypair,
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, AukiP2pNodeError> {
+    Ok(
+        libp2p::websocket::Config::new(tcp::tokio::Transport::new(tcp::Config::default()))
+            .upgrade(upgrade::Version::V1Lazy)
+            .authenticate(noise_config(keypair, "websocket")?)
+            .multiplex(yamux::Config::default())
+            .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+            .boxed(),
+    )
+}
+
+fn noise_config(
+    keypair: &libp2p_identity::Keypair,
+    stage: &'static str,
+) -> Result<noise::Config, AukiP2pNodeError> {
+    noise::Config::new(keypair).map_err(|err| AukiP2pNodeError::Transport {
+        stage,
+        source: err.to_string(),
+    })
+}
+
+fn either_into_inner<T>(either: future::Either<T, T>) -> T {
+    match either {
+        future::Either::Left(inner) | future::Either::Right(inner) => inner,
     }
 }
 
@@ -783,9 +923,22 @@ mod tests {
         let config = AukiP2pNodeConfig::loopback_webrtc_direct_development();
 
         assert!(config.browser_webrtc_direct.enabled);
+        assert!(!config.relay_server.enabled);
         assert_eq!(
             config.listen_addresses,
             vec![loopback_webrtc_direct_listen_addr()]
+        );
+    }
+
+    #[test]
+    fn loopback_relay_server_config_enables_relay_role() {
+        let config = AukiP2pNodeConfig::loopback_relay_server_development();
+
+        assert!(config.relay_server.enabled);
+        assert!(!config.browser_webrtc_direct.enabled);
+        assert_eq!(
+            config.listen_addresses,
+            vec![loopback_websocket_relay_listen_addr()]
         );
     }
 
@@ -844,6 +997,52 @@ mod tests {
 
         let status = listener.local_peer_status().expect("local status");
         assert_eq!(status.listen_addresses, vec![address.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn loopback_relay_server_listener_emits_browser_relay_address() {
+        let mut relay = AukiP2pNode::new(
+            identity(34),
+            AukiP2pNodeConfig::loopback_relay_server_development(),
+        )
+        .unwrap();
+
+        let address = wait_for_listen_addr(&mut relay).await;
+        let dialable = address.clone().with(Protocol::P2p(relay.peer_id()));
+        let dialable_string = dialable.to_string();
+
+        assert!(is_websocket_address(&address));
+        assert_eq!(relay.observed_listen_addresses(), &[address.clone()]);
+        assert_eq!(
+            relay.observed_relay_server_addresses(),
+            vec![dialable.clone()]
+        );
+        assert_eq!(
+            relay.observed_browser_relay_server_addresses(),
+            vec![dialable.clone()]
+        );
+        assert!(
+            relay.relay_addresses().is_empty(),
+            "local relay server addresses must stay separate from remote relay hints"
+        );
+
+        let status = relay.local_peer_status().expect("local status");
+        assert_eq!(
+            status
+                .value()
+                .get("relay_server_enabled")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            status
+                .value()
+                .get("relay_server_addresses")
+                .and_then(Value::as_array)
+                .and_then(|addresses| addresses.first())
+                .and_then(Value::as_str),
+            Some(dialable_string.as_str())
+        );
     }
 
     #[test]

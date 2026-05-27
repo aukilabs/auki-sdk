@@ -751,6 +751,16 @@ impl AukiNode {
         self.node.observed_dialable_listen_addresses()
     }
 
+    /// Observed relay-server addresses with the local `/p2p/<peer-id>` suffix.
+    pub fn observed_relay_server_addresses(&self) -> Vec<Multiaddr> {
+        self.node.observed_relay_server_addresses()
+    }
+
+    /// Observed WebSocket relay-server addresses usable by browser peers.
+    pub fn observed_browser_relay_server_addresses(&self) -> Vec<Multiaddr> {
+        self.node.observed_browser_relay_server_addresses()
+    }
+
     /// Operator-supplied advertised addresses.
     pub fn advertised_addresses(&self) -> &[Multiaddr] {
         self.node.advertised_addresses()

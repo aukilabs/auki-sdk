@@ -88,7 +88,7 @@ Keep legacy behavior intact:
 
 - [x] Add optional WebRTC Direct listener support to `auki-p2p` for
       browser-to-node dialing.
-- [ ] Add optional Circuit Relay v2 server support to `auki-p2p` over
+- [x] Add optional Circuit Relay v2 server support to `auki-p2p` over
       WebSocket.
 - [ ] Keep listen addresses, advertised addresses, relay addresses, and
       bootstrap addresses distinct in config and status.
@@ -176,7 +176,7 @@ Rust:
 
 - [x] `cargo test -p auki-p2p`.
 - [x] Test WebRTC Direct config and browser-dialable observed addresses.
-- [ ] Test relay server address emission.
+- [x] Test relay server address emission.
 - [ ] Test that node-to-node TCP/QUIC still works.
 
 Browser:

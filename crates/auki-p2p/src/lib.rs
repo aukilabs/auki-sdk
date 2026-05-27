@@ -48,7 +48,7 @@ pub use lifecycle::{
 };
 pub use node::{
     AukiP2pEvent, AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, BrowserWebRtcDirectConfig,
-    loopback_webrtc_direct_listen_addr,
+    RelayServerConfig, loopback_webrtc_direct_listen_addr, loopback_websocket_relay_listen_addr,
 };
 pub use offer_catalog_streams::{
     Libp2pOfferCatalogClient, OfferCatalogServeError, accept_offer_catalog_streams,

@@ -719,7 +719,7 @@ function trimDiscoveryUrl(url) {
 }
 
 function signalingAddress(discoveryUrl, peerId) {
-  return `/auki-webrtc-signaling/${base64UrlEncode(trimDiscoveryUrl(discoveryUrl))}/p2p/${peerId}`;
+  return wasm.formatSignaledAddress(discoveryUrl, peerId);
 }
 
 function isSignalingAddress(address) {
@@ -727,35 +727,11 @@ function isSignalingAddress(address) {
 }
 
 function parseSignalingAddress(address) {
-  const match = String(address).match(/^\/auki-webrtc-signaling\/([^/]+)\/p2p\/(.+)$/);
-  if (match == null) {
-    throw new TypeError(`invalid Discovery signaling address: ${address}`);
-  }
+  const parsed = JSON.parse(wasm.parseSignaledAddressJson(address));
   return {
-    discoveryUrl: base64UrlDecode(match[1]),
-    peerId: match[2],
+    discoveryUrl: parsed.discovery_url,
+    peerId: parsed.peer_id,
   };
-}
-
-function base64UrlEncode(text) {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  const base64 = typeof btoa === "function"
-    ? btoa(binary)
-    : Buffer.from(bytes).toString("base64");
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function base64UrlDecode(text) {
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
-  if (typeof atob === "function") {
-    const binary = atob(base64);
-    return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
-  }
-  return Buffer.from(base64, "base64").toString("utf8");
 }
 
 function randomConnectionId() {

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — generated JavaScript uses shared signaled address helpers.** The browser wrapper now delegates signaled WebRTC address formatting/parsing to wasm exports instead of local JavaScript base64url code.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — signaled peer framed and stream routers added.** The signaled peer core now routes fake-channel framed requests and stream-open/entry envelopes through SDK-owned command/event APIs.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Generated JavaScript uses shared signaled address helpers.** The `auki-network` JavaScript wrapper template now formats and parses Discovery-signaled WebRTC addresses through the wasm exports (`formatSignaledAddress`, `parseSignaledAddressJson`) instead of duplicating base64url logic in JavaScript. The generated framed-handler test now asserts the advertised address matches the Rust helper, round-trips through the Rust parser, and rejects malformed signaled addresses before WebRTC setup begins.
+
+Tests: red/green `node --test test/framed-handler.test.mjs` under `bindings/javascript/auki-network` after `just generate-javascript-bindings auki-network`; `npm --prefix bindings/javascript/auki-network test`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Signaled peer framed and stream routers added.** `SignaledPeerCore` now has fake-channel router APIs aligned with the JavaScript facade names: `request_framed`, `handle_framed`, `open_stream`, and `handle_stream`. The core can register framed handlers, emit data-channel send commands for framed requests, turn inbound stream request envelopes into pending stream-open events, accept stream opens, track active streams, and emit JSON stream entry messages without binding to a concrete WebRTC implementation.
 
 Tests: red/green `cargo test -p auki-network signaled_peer -- --nocapture`; `cargo test -p auki-network --no-default-features`; `git diff --check`.

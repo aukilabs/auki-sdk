@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import initAukiNetwork, { AukiNetworkPeer, formatSignaledAddress } from "../index.js";
+import initAukiNetwork, {
+  AukiNetworkPeer,
+  formatSignaledAddress,
+  parseSignaledAddressJson,
+} from "../index.js";
 
 const wasmBytes = await readFile(new URL("../$generated_wasm_file", import.meta.url));
 await initAukiNetwork({ module_or_path: wasmBytes });
@@ -49,6 +53,28 @@ test("AukiNetworkPeer advertises a Discovery signaling address after configurati
   assert.equal(
     peer.multiaddrs[0],
     formatSignaledAddress("http://discovery.local", peer.peerId),
+  );
+  assert.deepEqual(JSON.parse(parseSignaledAddressJson(peer.multiaddrs[0])), {
+    discovery_url: "http://discovery.local",
+    peer_id: peer.peerId,
+  });
+});
+
+test("AukiNetworkPeer rejects malformed Discovery signaling addresses through wasm parsing", async () => {
+  const peer = new AukiNetworkPeer(new FakeNode(new FakeStream(new Uint8Array())));
+  await peer.configureDiscoverySignaling({
+    discoveryUrl: "http://discovery.local",
+    discovery: new FakeDiscovery(),
+    startPolling: false,
+  });
+
+  await assert.rejects(
+    () => peer.requestFramed(
+      "/auki-webrtc-signaling/not-base64/p2p/fake-peer",
+      "/auki/test/0.0.1",
+      new Uint8Array([1]),
+    ),
+    /invalid discovery url encoding/,
   );
 });
 

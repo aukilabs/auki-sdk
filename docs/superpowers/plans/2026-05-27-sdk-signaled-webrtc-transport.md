@@ -375,11 +375,11 @@ git commit -m "Route signaled framed requests and streams"
 - Modify: `crates/auki-network/bindings/javascript/src/adapter.ts.tmpl`
 - Modify: generated files under `bindings/javascript/auki-network`
 
-- [ ] **Step 1: Write failing generated JavaScript tests**
+- [x] **Step 1: Write failing generated JavaScript tests**
 
 Add assertions that `AukiNetworkPeer.configureDiscoverySignaling(...)` uses the same address as `wasm.formatSignaledAddress(...)`, and parsing goes through `wasm.parseSignaledAddressJson(...)`.
 
-- [ ] **Step 2: Run test to verify red**
+- [x] **Step 2: Run test to verify red**
 
 Run:
 
@@ -390,7 +390,7 @@ npm --prefix bindings/javascript/auki-network test -- framed-handler
 
 Expected: test fails until the template uses shared helpers.
 
-- [ ] **Step 3: Update templates**
+- [x] **Step 3: Update templates**
 
 Replace local JS address formatting/parsing with:
 
@@ -405,7 +405,7 @@ function parseSignalingAddress(address) {
 }
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -416,7 +416,7 @@ npm --prefix bindings/javascript/auki-network test
 
 Expected: generated JavaScript tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/auki-network/bindings/javascript bindings/javascript/auki-network

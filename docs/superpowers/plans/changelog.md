@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Marked Task 5 of the SDK signaled WebRTC transport plan complete after routing generated JavaScript signaled address formatting and parsing through shared wasm helpers.
+
+### Nils's codex · May 27, HKT, 2026
+
 Marked Task 4 of the SDK signaled WebRTC transport plan complete after adding fake-channel framed and stream routers to `SignaledPeerCore`.
 
 ### Nils's codex · May 27, HKT, 2026

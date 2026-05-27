@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 5 completed.** The implementation plan now records the completed generated JavaScript shared-address-helper compatibility slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Generated JavaScript uses shared signaled address helpers.** `auki-network` browser templates now delegate signaled WebRTC address formatting/parsing to wasm exports. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 4 completed.** The implementation plan now records the completed fake-channel framed and stream router slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -1492,9 +1492,59 @@ impl AukiNode {
     /// `observed_at` is supplied by the caller so this runtime does not create
     /// or interpret a canonical clock.
     pub async fn next_event(&mut self, observed_at: &str) -> Option<AukiNodeEvent> {
+        if let Some(event) = self.node.pop_pending_event() {
+            return Some(self.apply_p2p_event(event, observed_at));
+        }
+
         let event = self.node.next_event().await?;
+        Some(self.apply_p2p_event(event, observed_at))
+    }
+
+    /// Build an in-process diagnostic status snapshot.
+    ///
+    /// This first applies transport events buffered while protocol operations
+    /// were being served, so diagnostics reflect recent connects/disconnects.
+    pub fn status_snapshot(&mut self, generated_at: &str) -> Result<StatusSnapshot, AukiNodeError> {
+        self.drain_pending_p2p_events(generated_at);
+        let local_peer = self.node.local_peer_status().map_err(AukiNodeError::from)?;
+        let local_domains = self.local_domain_statuses()?;
+        let relationships = self.relationships();
+        let options = RelationshipStatusOptions::from_config(&self.node.config().p2p);
+        let relationship_status = build_relationship_status_snapshot(
+            generated_at,
+            local_peer.clone(),
+            &relationships,
+            options,
+        )
+        .map_err(AukiNodeError::Status)?;
+        StatusSnapshot::create(StatusSnapshotParams {
+            generated_at: generated_at.to_owned(),
+            local_peer,
+            local_domains,
+            remote_peers: relationship_status.remote_peers,
+            active_paths: relationship_status.active_paths,
+            last_failures: relationship_status.last_failures,
+            discovery: relationship_status.discovery,
+            metadata: relationship_status.metadata,
+        })
+        .map_err(|error| AukiNodeError::Status(RelationshipStatusBuildError::Status(error)))
+    }
+
+    fn relationship_mut(&mut self, peer_id: PeerId) -> &mut PeerRelationship {
+        self.relationships
+            .entry(peer_id)
+            .or_insert_with(|| PeerRelationship::new(peer_id))
+    }
+
+    fn drain_pending_p2p_events(&mut self, observed_at: &str) {
+        while let Some(event) = self.node.pop_pending_event() {
+            self.apply_p2p_event(event, observed_at);
+        }
+    }
+
+    fn apply_p2p_event(&mut self, event: crate::AukiP2pEvent, observed_at: &str) -> AukiNodeEvent {
         let failure_cap = self.node.config().p2p.limits.retained_status_failures;
-        Some(match event {
+        match event {
             crate::AukiP2pEvent::Listening { address } => AukiNodeEvent::Listening { address },
             crate::AukiP2pEvent::ConnectionEstablished { peer_id } => {
                 let paths = self.node.active_connection_paths(peer_id);
@@ -1535,39 +1585,7 @@ impl AukiNode {
             crate::AukiP2pEvent::IncomingConnectionError { error } => {
                 AukiNodeEvent::IncomingConnectionFailed { error }
             }
-        })
-    }
-
-    /// Build an in-process diagnostic status snapshot.
-    pub fn status_snapshot(&self, generated_at: &str) -> Result<StatusSnapshot, AukiNodeError> {
-        let local_peer = self.node.local_peer_status().map_err(AukiNodeError::from)?;
-        let local_domains = self.local_domain_statuses()?;
-        let relationships = self.relationships();
-        let options = RelationshipStatusOptions::from_config(&self.node.config().p2p);
-        let relationship_status = build_relationship_status_snapshot(
-            generated_at,
-            local_peer.clone(),
-            &relationships,
-            options,
-        )
-        .map_err(AukiNodeError::Status)?;
-        StatusSnapshot::create(StatusSnapshotParams {
-            generated_at: generated_at.to_owned(),
-            local_peer,
-            local_domains,
-            remote_peers: relationship_status.remote_peers,
-            active_paths: relationship_status.active_paths,
-            last_failures: relationship_status.last_failures,
-            discovery: relationship_status.discovery,
-            metadata: relationship_status.metadata,
-        })
-        .map_err(|error| AukiNodeError::Status(RelationshipStatusBuildError::Status(error)))
-    }
-
-    fn relationship_mut(&mut self, peer_id: PeerId) -> &mut PeerRelationship {
-        self.relationships
-            .entry(peer_id)
-            .or_insert_with(|| PeerRelationship::new(peer_id))
+        }
     }
 
     fn ensure_get_incoming(&mut self) -> Result<(), AukiNodeError> {
@@ -2259,7 +2277,11 @@ async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output 
     loop {
         tokio::select! {
             result = &mut future => return result,
-            _ = node.next_event() => {}
+            event = node.next_event() => {
+                if let Some(event) = event {
+                    node.push_pending_event(event);
+                }
+            }
         }
     }
 }
@@ -2431,7 +2453,7 @@ mod tests {
             .configured_peers
             .push(ConfiguredPeer::new(remote_peer_id));
 
-        let node = AukiNode::new(identity(60), config).expect("node");
+        let mut node = AukiNode::new(identity(60), config).expect("node");
         let relationship = node
             .relationship(remote_peer_id)
             .expect("configured relationship");
@@ -2868,7 +2890,7 @@ mod tests {
             .expect("subscribe incoming");
 
         let (server_done_tx, server_done_rx) = tokio::sync::oneshot::channel();
-        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let (consumer_dropped_tx, consumer_dropped_rx) = tokio::sync::oneshot::channel();
         let server_domain_id = domain_id.clone();
         let server = tokio::spawn(async move {
             let lifecycle = provider
@@ -2877,6 +2899,21 @@ mod tests {
                 .expect("serve lifecycle")
                 .expect("served lifecycle");
             assert_eq!(lifecycle.authenticated_peer_id, consumer_peer_id);
+            let relationship = provider
+                .relationship(consumer_peer_id)
+                .expect("provider should track consumer after lifecycle");
+            assert_eq!(relationship.state, PeerRelationshipState::Authorized);
+            assert!(relationship.connected);
+            assert!(relationship.transport_paths.is_empty());
+            let _snapshot = provider
+                .status_snapshot(ISSUED_AT)
+                .expect("status snapshot");
+            let relationship = provider
+                .relationship(consumer_peer_id)
+                .expect("provider should retain consumer relationship");
+            assert_eq!(relationship.state, PeerRelationshipState::Authorized);
+            assert!(relationship.connected);
+            assert_eq!(relationship.transport_paths.len(), 1);
 
             let served_catalog = provider
                 .serve_next_offer_catalog(Some(ISSUED_AT))
@@ -2925,16 +2962,21 @@ mod tests {
                 .expect("end served subscription");
             server_done_tx.send(()).expect("send server done");
 
-            loop {
-                tokio::select! {
-                    _ = &mut stop_rx => break,
-                    event = provider.next_event(ISSUED_AT) => {
-                        if event.is_none() {
-                            break;
-                        }
-                    }
-                }
-            }
+            consumer_dropped_rx.await.expect("consumer dropped signal");
+            drive_node_until(
+                &mut provider.node,
+                tokio::time::sleep(Duration::from_millis(250)),
+            )
+            .await;
+            let _snapshot = provider
+                .status_snapshot(ISSUED_AT)
+                .expect("status snapshot after disconnect");
+            let relationship = provider
+                .relationship(consumer_peer_id)
+                .expect("provider should retain lost consumer relationship");
+            assert_eq!(relationship.state, PeerRelationshipState::Lost);
+            assert!(!relationship.connected);
+            assert!(relationship.transport_paths.is_empty());
         });
 
         consumer
@@ -3008,7 +3050,11 @@ mod tests {
                 && path.last_sequence == Some(41)
         }));
 
-        let _ = stop_tx.send(());
+        drop(subscription);
+        drop(consumer);
+        consumer_dropped_tx
+            .send(())
+            .expect("signal consumer dropped");
         server.await.expect("server task");
     }
 

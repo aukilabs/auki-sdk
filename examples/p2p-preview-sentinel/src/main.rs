@@ -84,7 +84,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     print_bootstrap_record(&node)?;
 
     let mut stats = DemoStats::default();
-    print_state(&node, &stats, &domain_id, &config)?;
+    print_state(&mut node, &stats, &domain_id, &config)?;
     if config.once {
         return Ok(());
     }
@@ -104,7 +104,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     stats.record_error(error.to_string());
                 }
                 if Instant::now() >= next_state_print {
-                    print_state(&node, &stats, &domain_id, &config)?;
+                    print_state(&mut node, &stats, &domain_id, &config)?;
                     next_state_print = Instant::now() + config.status_interval;
                 }
             }
@@ -419,7 +419,7 @@ fn write_bootstrap_record(node: &AukiNode, path: Option<&PathBuf>) -> Result<(),
 }
 
 fn print_state(
-    node: &AukiNode,
+    node: &mut AukiNode,
     stats: &DemoStats,
     domain_id: &str,
     config: &DemoConfig,

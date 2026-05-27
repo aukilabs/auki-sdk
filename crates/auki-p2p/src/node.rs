@@ -26,7 +26,11 @@ use multiaddr::Protocol;
 #[cfg(feature = "browser-webrtc-direct")]
 use rand::thread_rng;
 use serde_json::{Map, Value};
-use std::{collections::HashMap, fmt, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    time::Duration,
+};
 
 /// Identify protocol id used by the new RFC-first runtime.
 pub const IDENTIFY_PROTOCOL_ID: &str = "/auki/p2p/identify/0.0.1";
@@ -185,6 +189,7 @@ pub struct AukiP2pNode {
     identity: LocalPeerIdentity,
     config: AukiP2pNodeConfig,
     observed_listen_addresses: Vec<Multiaddr>,
+    pending_events: VecDeque<AukiP2pEvent>,
     connections: ConnectionTracker,
     swarm: Swarm<Behaviour>,
 }
@@ -410,6 +415,7 @@ impl AukiP2pNode {
             identity,
             config,
             observed_listen_addresses: Vec::new(),
+            pending_events: VecDeque::new(),
             connections: ConnectionTracker::default(),
             swarm,
         })
@@ -522,6 +528,14 @@ impl AukiP2pNode {
             .configured_peers
             .iter()
             .find(|peer| peer.peer_id == peer_id)
+    }
+
+    pub(crate) fn push_pending_event(&mut self, event: AukiP2pEvent) {
+        self.pending_events.push_back(event);
+    }
+
+    pub(crate) fn pop_pending_event(&mut self) -> Option<AukiP2pEvent> {
+        self.pending_events.pop_front()
     }
 
     pub(crate) fn upsert_configured_peer(

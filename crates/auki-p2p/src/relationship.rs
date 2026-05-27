@@ -432,7 +432,16 @@ impl PeerRelationship {
 
     /// Mark transport as connected.
     pub fn connected(&mut self) {
-        self.state = PeerRelationshipState::Connected;
+        if matches!(
+            self.state,
+            PeerRelationshipState::Unknown
+                | PeerRelationshipState::Discovered
+                | PeerRelationshipState::Configured
+                | PeerRelationshipState::Dialing
+                | PeerRelationshipState::Lost
+        ) {
+            self.state = PeerRelationshipState::Connected;
+        }
         self.connected = true;
     }
 
@@ -1030,6 +1039,19 @@ mod tests {
             OfferCatalogLoadState::Unavailable
         );
         assert!(relationship.verified_wallet_public_key.is_some());
+    }
+
+    #[test]
+    fn transport_refresh_does_not_downgrade_authorized_relationship() {
+        let identity = identity(64);
+        let mut relationship = PeerRelationship::new(identity.peer_id());
+        relationship.handshake_accepted(direct_owner_result(&identity));
+
+        relationship.connected_with_paths(vec![transport_path(false)]);
+
+        assert_eq!(relationship.state, PeerRelationshipState::Authorized);
+        assert!(relationship.connected);
+        assert_eq!(relationship.transport_paths.len(), 1);
     }
 
     #[test]

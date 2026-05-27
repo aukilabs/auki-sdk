@@ -76,14 +76,13 @@ impl SensorLogManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PoseLogManifest {
+    pub source_peer_id: String,
+    pub writer_peer_id: String,
     pub app_id: String,
     pub session_id: String,
-    pub from_frame_id: String,
-    pub from_frame_hash: String,
-    pub to_frame_id: String,
-    pub to_frame_hash: String,
-    pub clock_id: String,
-    pub clock_hash: String,
+    pub from_frame: RegistryRef,
+    pub to_frame: RegistryRef,
+    pub clock: RegistryRef,
     pub source: PoseSource,
     pub writer_mode: PoseWriterMode,
     pub expected_rate_hz: u32,
@@ -93,14 +92,19 @@ pub struct PoseLogManifest {
 
 impl PoseLogManifest {
     pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("source_peer_id", &self.source_peer_id)?;
+        validate_non_empty("writer_peer_id", &self.writer_peer_id)?;
         validate_non_empty("app_id", &self.app_id)?;
         validate_non_empty("session_id", &self.session_id)?;
-        validate_non_empty("from_frame_id", &self.from_frame_id)?;
-        validate_non_empty("from_frame_hash", &self.from_frame_hash)?;
-        validate_non_empty("to_frame_id", &self.to_frame_id)?;
-        validate_non_empty("to_frame_hash", &self.to_frame_hash)?;
-        validate_non_empty("clock_id", &self.clock_id)?;
-        validate_non_empty("clock_hash", &self.clock_hash)?;
+        validate_non_empty("from_frame.peer_id", &self.from_frame.peer_id)?;
+        validate_non_empty("from_frame.id", &self.from_frame.id)?;
+        validate_non_empty("from_frame.hash", &self.from_frame.hash)?;
+        validate_non_empty("to_frame.peer_id", &self.to_frame.peer_id)?;
+        validate_non_empty("to_frame.id", &self.to_frame.id)?;
+        validate_non_empty("to_frame.hash", &self.to_frame.hash)?;
+        validate_non_empty("clock.peer_id", &self.clock.peer_id)?;
+        validate_non_empty("clock.id", &self.clock.id)?;
+        validate_non_empty("clock.hash", &self.clock.hash)?;
         validate_durations(self.segment_duration_ns, self.retention_ns)
     }
 }
@@ -223,19 +227,21 @@ pub fn build_sensor_log_manifest(
 /// Build a Pose Log manifest for the new `(from, to)`-keyed Pose Log
 /// shape (Step 5 of the [`auki-datatypes` migration],
 /// 2026-05-08). One Pose Log holds samples for exactly one
-/// `(from_frame_id, to_frame_id)` pair; segment entries are flat
+/// `(from_frame, to_frame)` pair; segment entries are flat
 /// `auki_datatypes::pose::SpatialTransform`. A producer that observes a
 /// multi-pair ROS `TFMessage` is responsible for fanning the message
 /// into N parallel pose logs.
 ///
 /// Carries:
+/// - `source_peer_id` — the peer that produced the pose data.
+/// - `writer_peer_id` — the peer that wrote this manifest file (may
+///   differ when a remote peer materializes the log).
 /// - `app_id` / `session_id` — run identity (same shape as siblings).
-/// - `from_frame_id` + `from_frame_hash` and `to_frame_id` +
-///   `to_frame_hash` — content-addressed pin to two
-///   `FrameRegistryEntry` records. Mirrors how
-///   `build_time_transform_log_manifest` pins `from_clock_hash` /
-///   `to_clock_hash`.
-/// - `clock_id` + `clock_hash` — the clock the framing's
+/// - `from_frame` / `to_frame` — [`RegistryRef`] bindings to the two
+///   `FrameRegistryEntry` records, each carrying `(peer_id, id, hash)`.
+///   Mirrors how `build_sensor_log_manifest` pins `sensor` / `clock`
+///   via `RegistryRef`.
+/// - `clock` — [`RegistryRef`] binding to the clock the framing's
 ///   `timestamp_ns` is on.
 /// - `source` — inline [`PoseSource`] tagged-enum producer identity.
 /// - `writer_mode` — `"rigid"` (transform doesn't change between
@@ -248,20 +254,23 @@ pub fn build_sensor_log_manifest(
 ///   by the SDK.
 /// - `segment_duration_ns` / `retention_ns` — auki-logs framing.
 ///
+/// `source_peer_id` is the peer that produced the pose data.
+/// `writer_peer_id` is the peer that wrote this manifest file (may
+/// differ when a remote peer materializes the log, e.g. Park
+/// re-materializing Galbot's pose log).
 /// `app_id` is the application identifier (same string as the daemon's
 /// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon
 /// run (same value as the parent session directory name).
 #[allow(clippy::too_many_arguments)]
 pub fn build_pose_log_manifest(
+    source_peer_id: &str,
+    writer_peer_id: &str,
     app_id: &str,
     session_id: &str,
-    from_frame_id: &str,
-    from_frame_hash: &str,
-    to_frame_id: &str,
-    to_frame_hash: &str,
-    clock_id: &str,
-    clock_hash: &str,
+    from_frame: RegistryRef,
+    to_frame: RegistryRef,
+    clock: RegistryRef,
     source: &PoseSource,
     writer_mode: PoseWriterMode,
     expected_rate_hz: u32,
@@ -269,14 +278,13 @@ pub fn build_pose_log_manifest(
     retention: Duration,
 ) -> serde_json::Value {
     serde_json::to_value(PoseLogManifest {
+        source_peer_id: source_peer_id.into(),
+        writer_peer_id: writer_peer_id.into(),
         app_id: app_id.into(),
         session_id: session_id.into(),
-        from_frame_id: from_frame_id.into(),
-        from_frame_hash: from_frame_hash.into(),
-        to_frame_id: to_frame_id.into(),
-        to_frame_hash: to_frame_hash.into(),
-        clock_id: clock_id.into(),
-        clock_hash: clock_hash.into(),
+        from_frame,
+        to_frame,
+        clock,
         source: source.clone(),
         writer_mode,
         expected_rate_hz,
@@ -473,6 +481,10 @@ pub enum PoseSource {
         /// Sorted; ROS node names contributing to `/tf`.
         publishers: Vec<String>,
     },
+    /// Manually specified or calibration-fixture transform. No automated
+    /// producer; the transform was hand-entered or produced by an
+    /// offline calibration tool and written directly into the log.
+    Manual,
     // future: Slam { algorithm, map_id, ... }, Odometry { ... }, ...
 }
 
@@ -731,28 +743,44 @@ mod tests {
     #[test]
     fn build_pose_log_manifest_contains_all_required_fields() {
         let m = build_pose_log_manifest(
+            "galbot",
+            "galbot",
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/base_link",
-            "fd0dc3789e898b71b5e16ee122a81a44",
-            "K1-AABBCCDDEEFF/head_left_cam_optical",
-            "11223344556677889900aabbccddeeff",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
+            RegistryRef {
+                peer_id: "galbot".into(),
+                id: "K1-AABBCCDDEEFF/base_link".into(),
+                hash: "fd0dc3789e898b71b5e16ee122a81a44".into(),
+            },
+            RegistryRef {
+                peer_id: "galbot".into(),
+                id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                hash: "11223344556677889900aabbccddeeff".into(),
+            },
+            RegistryRef {
+                peer_id: "galbot".into(),
+                id: "K1-AABBCCDDEEFF/utc".into(),
+                hash: "89f84f4c2e09bef81d385b2af1d17e6c".into(),
+            },
             &m1_ros2_tf_source(),
             PoseWriterMode::Movable,
             100,
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
+        assert_eq!(m["source_peer_id"], "galbot");
+        assert_eq!(m["writer_peer_id"], "galbot");
         assert_eq!(m["app_id"], "boosterapp");
         assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(m["from_frame_id"], "K1-AABBCCDDEEFF/base_link");
-        assert_eq!(m["from_frame_hash"], "fd0dc3789e898b71b5e16ee122a81a44");
-        assert_eq!(m["to_frame_id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
-        assert_eq!(m["to_frame_hash"], "11223344556677889900aabbccddeeff");
-        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
-        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["from_frame"]["peer_id"], "galbot");
+        assert_eq!(m["from_frame"]["id"], "K1-AABBCCDDEEFF/base_link");
+        assert_eq!(m["from_frame"]["hash"], "fd0dc3789e898b71b5e16ee122a81a44");
+        assert_eq!(m["to_frame"]["peer_id"], "galbot");
+        assert_eq!(m["to_frame"]["id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
+        assert_eq!(m["to_frame"]["hash"], "11223344556677889900aabbccddeeff");
+        assert_eq!(m["clock"]["peer_id"], "galbot");
+        assert_eq!(m["clock"]["id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock"]["hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
         assert_eq!(m["source"]["kind"], "ros2_tf");
         assert_eq!(m["source"]["publishers"][0], "amcl");
         assert_eq!(m["writer_mode"], "movable");
@@ -765,13 +793,24 @@ mod tests {
     fn build_pose_log_manifest_serializes_writer_mode_as_snake_case() {
         let m = build_pose_log_manifest(
             "test",
+            "test",
+            "test-app",
             "s",
-            "from",
-            "fh",
-            "to",
-            "th",
-            "c",
-            "ch",
+            RegistryRef {
+                peer_id: "p".into(),
+                id: "from".into(),
+                hash: "fh".into(),
+            },
+            RegistryRef {
+                peer_id: "p".into(),
+                id: "to".into(),
+                hash: "th".into(),
+            },
+            RegistryRef {
+                peer_id: "p".into(),
+                id: "c".into(),
+                hash: "ch".into(),
+            },
             &m1_ros2_tf_source(),
             PoseWriterMode::Rigid,
             0,
@@ -942,6 +981,81 @@ mod tests {
         assert!(json.contains(r#""source_peer_id":"galbot""#));
         assert!(json.contains(r#""writer_peer_id":"park""#));
         assert!(json.contains(r#""app_id":"park-vis""#));
+    }
+
+    // ─── PoseLogManifest source/writer split + RegistryRef (Task 2.2) ──────
+
+    #[test]
+    fn pose_log_manifest_movable_canonical() {
+        use auki_registry::RegistryRef;
+
+        let m = PoseLogManifest {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            app_id: "galbot-control-plane".to_string(),
+            session_id: "01HV".to_string(),
+            from_frame: RegistryRef {
+                peer_id: "park".to_string(),
+                id: "world".to_string(),
+                hash: "fromhash".to_string(),
+            },
+            to_frame: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "base_link".to_string(),
+                hash: "tohash".to_string(),
+            },
+            clock: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "session/sdk_clock".to_string(),
+                hash: "clockhash".to_string(),
+            },
+            source: PoseSource::Manual,
+            writer_mode: PoseWriterMode::Movable,
+            expected_rate_hz: 30,
+            segment_duration_ns: 1_000_000_000,
+            retention_ns: 60_000_000_000,
+        };
+        let bytes = auki_jcs::canonicalize(&serde_json::to_value(&m).unwrap());
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""source_peer_id":"galbot""#));
+        assert!(json.contains(r#""writer_mode":"movable""#));
+        assert!(json.contains(r#""from_frame":{"hash":"fromhash","id":"world","peer_id":"park"}"#));
+        assert!(json.contains(r#""to_frame":{"hash":"tohash","id":"base_link","peer_id":"galbot"}"#));
+    }
+
+    #[test]
+    fn pose_log_manifest_rigid_one_sample_canonical() {
+        use auki_registry::RegistryRef;
+
+        let m = PoseLogManifest {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            app_id: "galbot-control-plane".to_string(),
+            session_id: "01HV".to_string(),
+            from_frame: RegistryRef {
+                peer_id: "park".to_string(),
+                id: "world".to_string(),
+                hash: "fromhash".to_string(),
+            },
+            to_frame: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "base_link".to_string(),
+                hash: "tohash".to_string(),
+            },
+            clock: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "session/sdk_clock".to_string(),
+                hash: "clockhash".to_string(),
+            },
+            source: PoseSource::Manual,
+            writer_mode: PoseWriterMode::Rigid,
+            expected_rate_hz: 0,
+            segment_duration_ns: 1_000_000_000,
+            retention_ns: 0,
+        };
+        let bytes = auki_jcs::canonicalize(&serde_json::to_value(&m).unwrap());
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""writer_mode":"rigid""#));
     }
 
     #[test]

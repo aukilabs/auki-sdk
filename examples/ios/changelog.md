@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — capture lifecycle races hardened.** The example now drains frame-forwarding tasks before shutdown, avoids starting sessions after canceled permission prompts, and rolls back partial capture setup failures.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — AVFoundation camera capture added.** The example now requests camera permission, captures back-camera JPEG frames at 10 fps, timestamps them from the SDK session clock, shows a local preview, and feeds the existing log/stream path.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — session lifecycle races hardened.** Startup cancellation, shutdown cleanup, and concurrent keychain seed creation now preserve the running session and persisted peer identity contracts.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**iOS camera capture lifecycle races hardened.** `AukiCameraStreamer` now drains pending frame forwarding before session shutdown, respects stop during camera permission, and rolls back partial AVFoundation setup failures. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**iOS camera producer now captures real camera frames.** `AukiCameraStreamer` requests camera permission, captures back-camera JPEG frames at 10 fps, timestamps them from the SDK session clock, previews them locally, and forwards them through the existing typed Sensor Log and Overwatch stream path. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **iOS camera producer lifecycle races hardened.** `AukiCameraStreamer` now cancels startup cleanly, continues shutdown cleanup after stream-finish errors, and preserves the persisted keychain seed during concurrent first launch. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — AukiCameraStreamer capture lifecycle races hardened.** The native producer now drains pending frame forwarding before shutdown, respects stop during camera permission, and rolls back partial AVFoundation setup failures.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer AVFoundation capture added.** The native producer now requests camera permission, captures back-camera JPEG frames at 10 fps, timestamps them from the SDK session clock, previews them locally, and sends them through the existing Sensor Log/domain stream path.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`ios`](ios/changelog.md) — AukiCameraStreamer lifecycle races hardened.** The native producer now handles startup cancellation, best-effort shutdown cleanup, and duplicate keychain seed creation without leaving stale runtime or peer identity state.
 
 ### Nils's codex · May 27, HKT, 2026

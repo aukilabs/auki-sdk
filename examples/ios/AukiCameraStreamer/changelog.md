@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Capture lifecycle races hardened.** The view model now cancels and drains in-flight frame forwarding tasks before session shutdown, rechecks startup cancellation after camera permission returns, and the capture service rolls back a partially-added camera input if video output configuration fails.
+
+Checks: `xcodebuild build -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-build-derived-data`.
+
+### Nils's codex · May 27, HKT, 2026
+
+**AVFoundation camera capture added.** `AukiCameraStreamer` now requests camera permission, starts the generated-binding domain session before emitting frames, captures back-camera BGRA sample buffers through a serial AVFoundation queue, throttles JPEG conversion to 10 fps, timestamps frames from the session clock, updates a local SwiftUI preview image, and forwards the same `CapturedCameraFrame.jpegBytes` into the existing Sensor Log and domain stream path. The README now documents the camera permission and local preview behavior, and XcodeGen was rerun so the checked-in project includes the capture service source.
+
+Checks: `xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml`; `xcodebuild build -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-build-derived-data`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Session start, stop, and seed races hardened.** The view model now cancels in-flight startup cleanly when the user stops before bootstrap completes, session shutdown still flushes logs and shuts down the domain manager if finishing a stream fails, and concurrent first keychain seed creation re-reads the persisted seed on duplicate writes.
 
 Checks: `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data`; `git diff --check`.

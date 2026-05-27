@@ -249,7 +249,12 @@ actor AukiCameraSession {
         return session
     }
 
+    nonisolated func nowNs() -> UInt64 {
+        clock.nowNs()
+    }
+
     func handleCapturedFrame(_ frame: CapturedCameraFrame) async throws {
+        try Task.checkCancellation()
         let payload = try CameraFrameCodec.encode(jpegBytes: frame.jpegBytes)
         if loggingEnabled {
             guard frame.timestampNs <= UInt64(Int64.max) else {
@@ -257,6 +262,7 @@ actor AukiCameraSession {
             }
             try log.append(timestampNs: Int64(frame.timestampNs), payload: payload)
         }
+        try Task.checkCancellation()
         if streamingEnabled {
             try await fanout.pushEncodedPayload(timestampNs: frame.timestampNs, payload: payload)
         }

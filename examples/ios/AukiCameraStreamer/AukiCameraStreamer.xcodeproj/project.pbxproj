@@ -18,6 +18,7 @@
 		446AE3BB610EECFB995BBCD2 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 33F15E5D2061A6D6F8FADE25 /* auki_manifests */; };
 		47155437F9ECAF97619C744E /* CameraStreamFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 887BFECB67319AFC504E9868 /* CameraStreamFanout.swift */; };
 		48738FF0395C4F04C05B4004 /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = 5665E167757A9128E101A128 /* AukiProto */; };
+		4A3FE98B2CAB249AE4996D90 /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC8E63E0DC6B3BFD460321E3 /* CameraCaptureService.swift */; };
 		5052563AA66A2A1FBB3726CC /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AAA6A9E4BFE29F546500F85 /* CoreImage.framework */; };
 		51E6980AA3007F64DD98FB39 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AECD862F2AAC975AB9D51EA1 /* ImageIO.framework */; };
 		5C82D5DEEDE5257BB7A499AA /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1EC334FFB0D9E85892651700 /* AVFoundation.framework */; };
@@ -80,6 +81,7 @@
 		CD9F1F8226FBCB0340B72BDB /* auki-proto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-proto"; path = "../../../bindings/swift/auki-proto"; sourceTree = SOURCE_ROOT; };
 		E35A266D351B156B2A273AC3 /* auki-layout */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-layout"; path = "../../../bindings/swift/auki-layout"; sourceTree = SOURCE_ROOT; };
 		E7ABDDB7E85DD6A69F9C72E9 /* CameraFrameEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraFrameEncodingTests.swift; sourceTree = "<group>"; };
+		EC8E63E0DC6B3BFD460321E3 /* CameraCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureService.swift; sourceTree = "<group>"; };
 		F19552C5075549A465277A7A /* KeychainSeedStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSeedStore.swift; sourceTree = "<group>"; };
 		F6548BF03C4D90A753F3ABE3 /* CameraStreamFanoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStreamFanoutTests.swift; sourceTree = "<group>"; };
 		FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AukiCameraModels.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				891E1B31C1D9DF65E299DC79 /* App.swift */,
 				FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */,
 				76E70384FBDA45752E09E788 /* AukiCameraSession.swift */,
+				EC8E63E0DC6B3BFD460321E3 /* CameraCaptureService.swift */,
 				8514C2F94890B3989EEC6A79 /* CameraStreamerViewModel.swift */,
 				887BFECB67319AFC504E9868 /* CameraStreamFanout.swift */,
 				2BE91F46D52746058C338973 /* ContentView.swift */,
@@ -310,6 +313,7 @@
 				0BCD19BADDCDC50880EF80A0 /* App.swift in Sources */,
 				69E9D0F6535ED59C11F89A40 /* AukiCameraModels.swift in Sources */,
 				719FD68E149F5632538487C4 /* AukiCameraSession.swift in Sources */,
+				4A3FE98B2CAB249AE4996D90 /* CameraCaptureService.swift in Sources */,
 				47155437F9ECAF97619C744E /* CameraStreamFanout.swift in Sources */,
 				88DEEAC3DD42AD3D059326ED /* CameraStreamerViewModel.swift in Sources */,
 				AF60F6EDC9E0B450DB7B23E2 /* ContentView.swift in Sources */,

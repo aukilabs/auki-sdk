@@ -21,6 +21,24 @@ struct ContentView: View {
                     Toggle("Streaming", isOn: $viewModel.streamingEnabled)
                 }
 
+                Section("Preview") {
+                    ZStack {
+                        Rectangle()
+                            .fill(.black)
+                        if let previewImage = viewModel.previewImage {
+                            Image(uiImage: previewImage)
+                                .resizable()
+                                .scaledToFit()
+                        } else {
+                            Text("No camera frame")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+
                 Section("Status") {
                     LabeledContent("Peer", value: viewModel.peerId)
                     LabeledContent("State", value: viewModel.statusText)

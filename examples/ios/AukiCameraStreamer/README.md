@@ -31,6 +31,12 @@ xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcod
 
 Run the app with a Discovery URL reachable from the device or simulator. The
 wallet seed is stored in the iOS keychain, so the local peer id remains stable
-across launches until the app/keychain item is removed. Task 6 wires the
-AVFoundation capture loop into `handleCapturedFrame(_:)`; the session and
-domain/log/stream coordination are already in place.
+across launches until the app/keychain item is removed.
+
+Starting the producer requests iOS camera permission, joins or creates the Auki
+domain cluster, then starts an AVFoundation back-camera capture loop. Captured
+BGRA camera buffers are converted to JPEG, timestamped from the SDK session
+clock, logged as generated `CameraFrame` bytes, and streamed to accepted domain
+camera stream consumers. The app also renders the latest local JPEG in the
+Preview section so operators can confirm the camera feed without subscribing
+from Overwatch.

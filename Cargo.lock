@@ -838,6 +838,7 @@ dependencies = [
  "auki-hash",
  "auki-jcs",
  "auki-logs",
+ "auki-registry",
  "ciborium",
  "serde",
  "serde_json",

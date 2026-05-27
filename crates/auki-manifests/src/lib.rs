@@ -17,8 +17,8 @@
 //! ## Surface
 //!
 //! - [`build_sensor_log_manifest`] — Sensor Log family (covers Sensor,
-//!   Point Cloud, Audio Logs; `(sensor_id, sensor_hash)` resolves to a
-//!   `SensorRegistryEntry` whose `body` variant tells a reader which
+//!   Point Cloud, Audio Logs; `sensor` is a [`RegistryRef`] that resolves
+//!   to a `SensorRegistryEntry` whose `body` variant tells a reader which
 //!   payload type the segments hold).
 //! - [`build_pose_log_manifest`] — Pose Log; `source` describes the
 //!   producer inline.
@@ -36,38 +36,40 @@
 
 use std::time::Duration;
 
+use auki_registry::RegistryRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SensorLogManifest {
+    pub source_peer_id: String,
+    pub writer_peer_id: String,
     pub app_id: String,
     pub session_id: String,
-    pub sensor_id: String,
-    pub sensor_hash: String,
-    pub clock_id: String,
-    pub clock_hash: String,
+    pub sensor: RegistryRef,
+    pub clock: RegistryRef,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub frame_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frame_hash: Option<String>,
+    pub frame: Option<RegistryRef>,
     pub segment_duration_ns: i64,
     pub retention_ns: i64,
 }
 
 impl SensorLogManifest {
     pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("source_peer_id", &self.source_peer_id)?;
+        validate_non_empty("writer_peer_id", &self.writer_peer_id)?;
         validate_non_empty("app_id", &self.app_id)?;
         validate_non_empty("session_id", &self.session_id)?;
-        validate_non_empty("sensor_id", &self.sensor_id)?;
-        validate_non_empty("sensor_hash", &self.sensor_hash)?;
-        validate_non_empty("clock_id", &self.clock_id)?;
-        validate_non_empty("clock_hash", &self.clock_hash)?;
-        validate_optional_pair(
-            "frame_id",
-            self.frame_id.as_deref(),
-            "frame_hash",
-            self.frame_hash.as_deref(),
-        )?;
+        validate_non_empty("sensor.peer_id", &self.sensor.peer_id)?;
+        validate_non_empty("sensor.id", &self.sensor.id)?;
+        validate_non_empty("sensor.hash", &self.sensor.hash)?;
+        validate_non_empty("clock.peer_id", &self.clock.peer_id)?;
+        validate_non_empty("clock.id", &self.clock.id)?;
+        validate_non_empty("clock.hash", &self.clock.hash)?;
+        if let Some(ref f) = self.frame {
+            validate_non_empty("frame.peer_id", &f.peer_id)?;
+            validate_non_empty("frame.id", &f.id)?;
+            validate_non_empty("frame.hash", &f.hash)?;
+        }
         validate_durations(self.segment_duration_ns, self.retention_ns)
     }
 }
@@ -176,43 +178,46 @@ impl std::fmt::Display for ManifestValidationError {
 
 impl std::error::Error for ManifestValidationError {}
 
-/// Build a Sensor Log family manifest with the run-identifying `app_id` /
-/// `session_id`, the sensor and clock bindings, and auki-logs's required
+/// Build a Sensor Log family manifest with `source_peer_id` / `writer_peer_id`,
+/// the run-identifying `app_id` / `session_id`, the sensor/clock/frame
+/// [`RegistryRef`] bindings, and auki-logs's required
 /// `segment_duration_ns` / `retention_ns`.
 ///
-/// Same shape for Sensor Log, Point Cloud Log, and Audio Log — the
-/// `(sensor_id, sensor_hash)` pair resolves to a `SensorRegistryEntry` whose
-/// `body` variant tells a reader which payload type the segments hold.
+/// Same shape for Sensor Log, Point Cloud Log, and Audio Log — the `sensor`
+/// [`RegistryRef`] resolves to a `SensorRegistryEntry` whose `body` variant
+/// tells a reader which payload type the segments hold.
 ///
+/// `source_peer_id` is the peer that produced the sensor data.
+/// `writer_peer_id` is the peer that wrote this manifest file (may differ
+/// when a remote peer materializes the log, e.g. Park re-materializing
+/// Galbot's sensor log).
 /// `app_id` is the application identifier (same string as the daemon's
 /// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon run
 /// (same value as the parent session directory name).
 pub fn build_sensor_log_manifest(
+    source_peer_id: &str,
+    writer_peer_id: &str,
     app_id: &str,
     session_id: &str,
-    sensor_id: &str,
-    sensor_hash: &str,
-    clock_id: &str,
-    clock_hash: &str,
-    frame_id: Option<&str>,
-    frame_hash: Option<&str>,
+    sensor: RegistryRef,
+    clock: RegistryRef,
+    frame: Option<RegistryRef>,
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
     serde_json::to_value(SensorLogManifest {
-        app_id: app_id.into(),
-        session_id: session_id.into(),
-        sensor_id: sensor_id.into(),
-        sensor_hash: sensor_hash.into(),
-        clock_id: clock_id.into(),
-        clock_hash: clock_hash.into(),
-        frame_id: frame_id.map(str::to_owned),
-        frame_hash: frame_hash.map(str::to_owned),
+        source_peer_id: source_peer_id.to_string(),
+        writer_peer_id: writer_peer_id.to_string(),
+        app_id: app_id.to_string(),
+        session_id: session_id.to_string(),
+        sensor,
+        clock,
+        frame,
         segment_duration_ns: duration_as_i64_ns(segment_duration),
         retention_ns: duration_as_i64_ns(retention),
     })
-    .expect("SensorLogManifest serializes")
+    .expect("manifest serialization")
 }
 
 /// Build a Pose Log manifest for the new `(from, to)`-keyed Pose Log
@@ -566,28 +571,56 @@ mod tests {
 
     // ─── Sensor Log manifest ────────────────────────────────────────────────
 
+    fn m1_sensor_ref() -> RegistryRef {
+        RegistryRef {
+            peer_id: "galbot".into(),
+            id: "K1-AABBCCDDEEFF/head_left_cam".into(),
+            hash: "e8cb3879fcfa7f716047aa0892b0c0c0".into(),
+        }
+    }
+
+    fn m1_clock_ref() -> RegistryRef {
+        RegistryRef {
+            peer_id: "galbot".into(),
+            id: "K1-AABBCCDDEEFF/utc".into(),
+            hash: "89f84f4c2e09bef81d385b2af1d17e6c".into(),
+        }
+    }
+
+    fn m1_frame_ref() -> RegistryRef {
+        RegistryRef {
+            peer_id: "galbot".into(),
+            id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+            hash: "fd0dc3789e898b71b5e16ee122a81a44".into(),
+        }
+    }
+
     #[test]
     fn build_sensor_log_manifest_contains_all_required_fields() {
         let m = build_sensor_log_manifest(
+            "galbot",
+            "galbot",
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/head_left_cam",
-            "e8cb3879fcfa7f716047aa0892b0c0c0",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
-            Some("fd0dc3789e898b71b5e16ee122a81a44"),
+            m1_sensor_ref(),
+            m1_clock_ref(),
+            Some(m1_frame_ref()),
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
+        assert_eq!(m["source_peer_id"], "galbot");
+        assert_eq!(m["writer_peer_id"], "galbot");
         assert_eq!(m["app_id"], "boosterapp");
         assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(m["sensor_id"], "K1-AABBCCDDEEFF/head_left_cam");
-        assert_eq!(m["sensor_hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
-        assert_eq!(m["clock_id"], "K1-AABBCCDDEEFF/utc");
-        assert_eq!(m["clock_hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
-        assert_eq!(m["frame_id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
-        assert_eq!(m["frame_hash"], "fd0dc3789e898b71b5e16ee122a81a44");
+        assert_eq!(m["sensor"]["peer_id"], "galbot");
+        assert_eq!(m["sensor"]["id"], "K1-AABBCCDDEEFF/head_left_cam");
+        assert_eq!(m["sensor"]["hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
+        assert_eq!(m["clock"]["peer_id"], "galbot");
+        assert_eq!(m["clock"]["id"], "K1-AABBCCDDEEFF/utc");
+        assert_eq!(m["clock"]["hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m["frame"]["peer_id"], "galbot");
+        assert_eq!(m["frame"]["id"], "K1-AABBCCDDEEFF/head_left_cam_optical");
+        assert_eq!(m["frame"]["hash"], "fd0dc3789e898b71b5e16ee122a81a44");
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
         assert_eq!(m["retention_ns"], 30_000_000_000i64);
     }
@@ -596,13 +629,12 @@ mod tests {
     fn sensor_log_manifest_opens_a_log_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = build_sensor_log_manifest(
+            "galbot",
+            "galbot",
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/head_left_cam",
-            "e8cb3879fcfa7f716047aa0892b0c0c0",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            None,
+            m1_sensor_ref(),
+            m1_clock_ref(),
             None,
             Duration::from_secs(1),
             Duration::from_secs(30),
@@ -619,41 +651,47 @@ mod tests {
     #[test]
     fn sensor_log_manifest_deserializes_and_validates() {
         let m = build_sensor_log_manifest(
+            "galbot",
+            "galbot",
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
-            "K1-AABBCCDDEEFF/head_left_cam",
-            "e8cb3879fcfa7f716047aa0892b0c0c0",
-            "K1-AABBCCDDEEFF/utc",
-            "89f84f4c2e09bef81d385b2af1d17e6c",
-            Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
-            Some("fd0dc3789e898b71b5e16ee122a81a44"),
+            m1_sensor_ref(),
+            m1_clock_ref(),
+            Some(m1_frame_ref()),
             Duration::from_secs(1),
             Duration::from_secs(30),
         );
         let typed: SensorLogManifest = serde_json::from_value(m).unwrap();
         typed.validate().unwrap();
         assert_eq!(
-            typed.frame_id.as_deref(),
+            typed.frame.as_ref().map(|f| f.id.as_str()),
             Some("K1-AABBCCDDEEFF/head_left_cam_optical")
         );
     }
 
     #[test]
-    fn sensor_log_manifest_rejects_unpaired_frame_ref() {
+    fn sensor_log_manifest_rejects_empty_sensor_id() {
         let typed = SensorLogManifest {
+            source_peer_id: "galbot".into(),
+            writer_peer_id: "galbot".into(),
             app_id: "boosterapp".into(),
             session_id: "session".into(),
-            sensor_id: "sensor".into(),
-            sensor_hash: "sensor_hash".into(),
-            clock_id: "clock".into(),
-            clock_hash: "clock_hash".into(),
-            frame_id: Some("frame".into()),
-            frame_hash: None,
+            sensor: RegistryRef {
+                peer_id: "galbot".into(),
+                id: "".into(), // empty — should fail
+                hash: "sensor_hash".into(),
+            },
+            clock: RegistryRef {
+                peer_id: "galbot".into(),
+                id: "clock".into(),
+                hash: "clock_hash".into(),
+            },
+            frame: None,
             segment_duration_ns: 1,
             retention_ns: 0,
         };
         let err = typed.validate().unwrap_err();
-        assert_eq!(err.field, "frame_hash");
+        assert_eq!(err.field, "sensor.id");
     }
 
     // ─── Pose Log + PoseSource ──────────────────────────────────────────────
@@ -838,6 +876,72 @@ mod tests {
             m.get("intent").is_none(),
             "intent field should be absent until uniform rollout"
         );
+    }
+
+    // ─── SensorLogManifest source/writer split (Task 2.1) ───────────────────
+
+    #[test]
+    fn sensor_log_manifest_origin_canonical_has_source_writer_peer_id() {
+        let m = SensorLogManifest {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            app_id: "galbot-control-plane".to_string(),
+            session_id: "01HV-galbot-session".to_string(),
+            sensor: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "head_left_rgb".to_string(),
+                hash: "sensorhash".to_string(),
+            },
+            clock: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "session/sdk_clock".to_string(),
+                hash: "clockhash".to_string(),
+            },
+            frame: Some(RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "head_left_camera_optical".to_string(),
+                hash: "framehash".to_string(),
+            }),
+            segment_duration_ns: 1_000_000_000,
+            retention_ns: 5_000_000_000,
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        let bytes = auki_jcs::canonicalize(&v);
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""source_peer_id":"galbot""#));
+        assert!(json.contains(r#""writer_peer_id":"galbot""#));
+        assert!(json.contains(r#""sensor":{"hash":"sensorhash","id":"head_left_rgb","peer_id":"galbot"}"#));
+        assert!(json.contains(r#""segment_duration_ns":1000000000"#));
+        assert!(json.contains(r#""retention_ns":5000000000"#));
+    }
+
+    #[test]
+    fn sensor_log_manifest_materialized_keeps_source_changes_writer() {
+        let m = SensorLogManifest {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "park".to_string(), // Park materialized Galbot's log
+            app_id: "park-vis".to_string(),
+            session_id: "01HV-park-session".to_string(),
+            sensor: RegistryRef {
+                peer_id: "galbot".to_string(), // Sensor still owned by Galbot
+                id: "head_left_rgb".to_string(),
+                hash: "sensorhash".to_string(),
+            },
+            clock: RegistryRef {
+                peer_id: "galbot".to_string(),
+                id: "session/sdk_clock".to_string(),
+                hash: "clockhash".to_string(),
+            },
+            frame: None,
+            segment_duration_ns: 10_000_000_000, // Park picked larger segments
+            retention_ns: 300_000_000_000,       // Park keeps 5min
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        let bytes = auki_jcs::canonicalize(&v);
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""source_peer_id":"galbot""#));
+        assert!(json.contains(r#""writer_peer_id":"park""#));
+        assert!(json.contains(r#""app_id":"park-vis""#));
     }
 
     #[test]

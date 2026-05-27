@@ -34,6 +34,10 @@ The first RFC-shaped SDK foundation exists in `auki-protocol` and `auki-p2p`.
 domain authority objects, lifecycle handshakes, offer catalogs, Get,
 Subscribe, spatial messages, status snapshots, and locked vectors.
 
+`auki-protocol-wasm` exposes the same Rust protocol validators, constructors,
+frame helpers, and failure-code mapping to browser code so the browser path
+does not grow a second TypeScript protocol implementation.
+
 `auki-p2p` owns the clean native libp2p runtime path: configured peer dialing,
 lifecycle authorization, local domain and offer registration, offer loading,
 Get and Subscribe consumers/providers, relationship status, and a full
@@ -114,11 +118,14 @@ protocols from those crates.
       Circuit Relay v2.
 - [x] Persist browser peer identity in IndexedDB.
 - [x] Match Rust peer identity derivation vectors.
-- [ ] Implement minimal TypeScript protocol helpers for frame encode/decode,
-      peer binding, lifecycle handshake, offer catalog, Subscribe, spatial
-      message parsing, and error objects.
-- [ ] Validate TypeScript protocol behavior against Rust `auki-protocol`
-      vectors.
+- [x] Add `auki-protocol-wasm` so browser code can use Rust `auki-protocol`
+      frame helpers, peer/domain authority constructors, lifecycle handshake,
+      offer catalog, Get, Subscribe, spatial message, error object, and status
+      validators.
+- [ ] Wire `auki-p2p-browser` to consume `auki-protocol-wasm` and retire the
+      temporary TypeScript frame helper from the public protocol surface.
+- [ ] Validate browser package behavior against Rust `auki-protocol` vectors
+      through the WASM adapter.
 - [ ] Expose one high-level browser peer handle that hides frames, streams, and
       transport setup from app developers.
 
@@ -181,11 +188,12 @@ Rust:
 
 Browser:
 
-- [ ] Vitest frame encode/decode tests against Rust vectors.
+- [ ] Vitest frame encode/decode tests through `auki-protocol-wasm` against
+      Rust vectors.
 - [ ] Browser identity derivation compatibility tests.
-- [ ] Peer binding create/verify tests.
-- [ ] Offer catalog request/response tests.
-- [ ] Subscribe accept/data/end tests.
+- [ ] WASM-backed peer binding create/verify tests.
+- [ ] WASM-backed offer catalog request/response tests.
+- [ ] WASM-backed Subscribe accept/data/end tests.
 
 End-to-end:
 

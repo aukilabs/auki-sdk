@@ -762,6 +762,7 @@ dependencies = [
  "auki-hash",
  "auki-jcs",
  "ed25519-dalek",
+ "getrandom 0.2.17",
  "rand_core 0.6.4",
  "serde",
  "serde_bytes",
@@ -974,6 +975,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "auki-protocol-wasm"
+version = "0.0.0"
+dependencies = [
+ "auki-identity",
+ "auki-protocol",
+ "libp2p-identity",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

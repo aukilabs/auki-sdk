@@ -8,4 +8,6 @@ pub enum MaterializationError {
     NotFound(LogRef),
     #[error("connection: {0}")]
     Connection(String),
+    #[error("not implemented: full implementation deferred to Phase 5")]
+    NotImplemented,
 }

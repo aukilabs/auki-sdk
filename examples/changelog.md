@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — AukiCameraStreamer lifecycle races hardened.** The native producer now handles startup cancellation, best-effort shutdown cleanup, and duplicate keychain seed creation without leaving stale runtime or peer identity state.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer session logs scoped by session id.** The native producer now opens camera Sensor Logs below a session-specific root to avoid stale manifest reuse across app restarts.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer session coordination added.** The iOS example now uses generated Swift bindings to join/create a domain cluster, publish camera catalogs and registry entries, write Sensor Log payloads, and stream accepted camera frames.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`ios`](ios/changelog.md) — AukiCameraStreamer fanout failure isolation added.** Failed stream pushes are pruned without blocking healthy stream ids from receiving the encoded camera frame payload.
 
 ### Nils's codex · May 27, HKT, 2026

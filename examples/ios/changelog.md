@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — session lifecycle races hardened.** Startup cancellation, shutdown cleanup, and concurrent keychain seed creation now preserve the running session and persisted peer identity contracts.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — session Sensor Logs scoped per launch.** Camera logs now live under a session-specific root so a new producer session cannot append under a stale manifest from a prior run.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — native camera session coordination added.** The example now bootstraps a generated-binding domain producer session, publishes camera catalogs/registry entries, writes Sensor Log bytes, and serves accepted camera streams from the same encoded frame payload.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — camera stream fanout failure isolation added.** The example now keeps healthy stream ids receiving frames when one sink push fails and removes failed stream ids from the active fanout set.
 
 ### Nils's codex · May 27, HKT, 2026

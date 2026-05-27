@@ -8,6 +8,18 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**iOS camera producer lifecycle races hardened.** `AukiCameraStreamer` now cancels startup cleanly, continues shutdown cleanup after stream-finish errors, and preserves the persisted keychain seed during concurrent first launch. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**iOS camera Sensor Logs now use session-specific roots.** `AukiCameraStreamer` prevents stale log manifest reuse across producer restarts by opening camera logs below the active session id. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Native iOS camera session coordination added.** `AukiCameraStreamer` now stores a stable keychain wallet seed, boots a generated Swift domain producer session, publishes camera catalogs/registry entries, writes Sensor Log camera payloads, and serves accepted camera streams for Overwatch consumers. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **iOS camera stream fanout now isolates failed streams.** `AukiCameraStreamer` continues fanout delivery to healthy stream ids when one sink push fails and prunes failed stream ids from the active set. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

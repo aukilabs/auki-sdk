@@ -24,6 +24,7 @@
 		5FC114121DDFC38F9FF0C522 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 4559FF030058F2A754F10F74 /* auki_manifests */; };
 		630AD149D0320F96170A62A6 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AECD862F2AAC975AB9D51EA1 /* ImageIO.framework */; };
 		69E9D0F6535ED59C11F89A40 /* AukiCameraModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */; };
+		719FD68E149F5632538487C4 /* AukiCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E70384FBDA45752E09E788 /* AukiCameraSession.swift */; };
 		72553A7D1AB5E630A0B54FAB /* CameraStreamFanoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6548BF03C4D90A753F3ABE3 /* CameraStreamFanoutTests.swift */; };
 		73972F370BA6DFB47FFE81CA /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 3145EDF94CE78FA7150E1471 /* auki_time */; };
 		763FD55ABB44E59765315EE1 /* auki_logs in Frameworks */ = {isa = PBXBuildFile; productRef = EE38AC8AE47CF62C3A1D8588 /* auki_logs */; };
@@ -41,6 +42,7 @@
 		D70D7A3FF2DC1F1F46AAF923 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = 512FB7CB617BABABC1667116 /* SwiftProtobuf */; };
 		D77398AD5F055E276ADA4E26 /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 8F3492ABA11653E4268945FC /* auki_time */; };
 		E538AA4CEAFB2E1B03D508AD /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3025073D0969C7F11DA9D2C7 /* SystemConfiguration.framework */; };
+		E5EDF7C3E34334057067CB88 /* KeychainSeedStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19552C5075549A465277A7A /* KeychainSeedStore.swift */; };
 		EB541904BA6104E7EB629841 /* AukiCameraModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD57CB23DC8CC2EC4872D4F /* AukiCameraModelsTests.swift */; };
 		EC377A68237750743E683EED /* auki_network in Frameworks */ = {isa = PBXBuildFile; productRef = 6BB16078BF16502C5FD680CE /* auki_network */; };
 /* End PBXBuildFile section */
@@ -69,6 +71,7 @@
 		58B9B56ED272FD9E0ADE5311 /* auki-time */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-time"; path = "../../../bindings/swift/auki-time"; sourceTree = SOURCE_ROOT; };
 		5D843C07DB681D98ACF9D641 /* AukiCameraStreamer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AukiCameraStreamer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6000191001B2113E9106051E /* auki-manifests */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-manifests"; path = "../../../bindings/swift/auki-manifests"; sourceTree = SOURCE_ROOT; };
+		76E70384FBDA45752E09E788 /* AukiCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AukiCameraSession.swift; sourceTree = "<group>"; };
 		8514C2F94890B3989EEC6A79 /* CameraStreamerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStreamerViewModel.swift; sourceTree = "<group>"; };
 		887BFECB67319AFC504E9868 /* CameraStreamFanout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStreamFanout.swift; sourceTree = "<group>"; };
 		891E1B31C1D9DF65E299DC79 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
@@ -77,6 +80,7 @@
 		CD9F1F8226FBCB0340B72BDB /* auki-proto */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-proto"; path = "../../../bindings/swift/auki-proto"; sourceTree = SOURCE_ROOT; };
 		E35A266D351B156B2A273AC3 /* auki-layout */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-layout"; path = "../../../bindings/swift/auki-layout"; sourceTree = SOURCE_ROOT; };
 		E7ABDDB7E85DD6A69F9C72E9 /* CameraFrameEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraFrameEncodingTests.swift; sourceTree = "<group>"; };
+		F19552C5075549A465277A7A /* KeychainSeedStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSeedStore.swift; sourceTree = "<group>"; };
 		F6548BF03C4D90A753F3ABE3 /* CameraStreamFanoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStreamFanoutTests.swift; sourceTree = "<group>"; };
 		FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AukiCameraModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -158,9 +162,11 @@
 			children = (
 				891E1B31C1D9DF65E299DC79 /* App.swift */,
 				FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */,
+				76E70384FBDA45752E09E788 /* AukiCameraSession.swift */,
 				8514C2F94890B3989EEC6A79 /* CameraStreamerViewModel.swift */,
 				887BFECB67319AFC504E9868 /* CameraStreamFanout.swift */,
 				2BE91F46D52746058C338973 /* ContentView.swift */,
+				F19552C5075549A465277A7A /* KeychainSeedStore.swift */,
 			);
 			path = AukiCameraStreamer;
 			sourceTree = "<group>";
@@ -303,9 +309,11 @@
 			files = (
 				0BCD19BADDCDC50880EF80A0 /* App.swift in Sources */,
 				69E9D0F6535ED59C11F89A40 /* AukiCameraModels.swift in Sources */,
+				719FD68E149F5632538487C4 /* AukiCameraSession.swift in Sources */,
 				47155437F9ECAF97619C744E /* CameraStreamFanout.swift in Sources */,
 				88DEEAC3DD42AD3D059326ED /* CameraStreamerViewModel.swift in Sources */,
 				AF60F6EDC9E0B450DB7B23E2 /* ContentView.swift in Sources */,
+				E5EDF7C3E34334057067CB88 /* KeychainSeedStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

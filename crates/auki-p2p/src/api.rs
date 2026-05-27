@@ -746,6 +746,11 @@ impl AukiNode {
         self.node.observed_listen_addresses()
     }
 
+    /// Observed listen addresses with the local `/p2p/<peer-id>` suffix.
+    pub fn observed_dialable_listen_addresses(&self) -> Vec<Multiaddr> {
+        self.node.observed_dialable_listen_addresses()
+    }
+
     /// Operator-supplied advertised addresses.
     pub fn advertised_addresses(&self) -> &[Multiaddr] {
         self.node.advertised_addresses()

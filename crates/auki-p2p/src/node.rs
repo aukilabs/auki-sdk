@@ -6,6 +6,8 @@ use auki_protocol::v1::{
     status::{LocalPeerStatus, StatusError},
 };
 use futures::StreamExt as _;
+#[cfg(feature = "browser-webrtc-direct")]
+use libp2p::core::{Transport as _, muxing::StreamMuxerBox, transport::Boxed};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder,
     core::ConnectedPoint,
@@ -13,6 +15,11 @@ use libp2p::{
     swarm::{ConnectionId, DialError, NetworkBehaviour, SwarmEvent, dial_opts::DialOpts},
     tcp, yamux,
 };
+#[cfg(feature = "browser-webrtc-direct")]
+use libp2p_webrtc as webrtc;
+use multiaddr::Protocol;
+#[cfg(feature = "browser-webrtc-direct")]
+use rand::thread_rng;
 use serde_json::{Map, Value};
 use std::{collections::HashMap, fmt, time::Duration};
 
@@ -45,8 +52,17 @@ pub struct AukiP2pNodeConfig {
     pub advertised_addresses: Vec<Multiaddr>,
     /// Relay-mediated connectivity addresses. These are operational hints, not authority.
     pub relay_addresses: Vec<Multiaddr>,
+    /// Browser-to-node WebRTC Direct transport support.
+    pub browser_webrtc_direct: BrowserWebRtcDirectConfig,
     /// Identify agent version advertised to remote libp2p peers.
     pub agent_version: String,
+}
+
+/// Browser-to-native WebRTC Direct transport configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowserWebRtcDirectConfig {
+    /// Enable WebRTC Direct transport support for browser-to-node dialing.
+    pub enabled: bool,
 }
 
 /// Public events surfaced by the node skeleton.
@@ -116,6 +132,13 @@ pub enum AukiP2pNodeError {
         /// Libp2p dial error.
         source: DialError,
     },
+    /// A WebRTC Direct listen or dial address was used while the node config disabled it.
+    BrowserWebRtcDirectDisabled {
+        /// Address that required WebRTC Direct support.
+        address: Multiaddr,
+    },
+    /// The node config enabled WebRTC Direct, but the crate feature is not compiled in.
+    BrowserWebRtcDirectFeatureDisabled,
 }
 
 /// Small, directly pollable libp2p node.
@@ -171,6 +194,7 @@ impl AukiP2pNodeConfig {
             listen_addresses: Vec::new(),
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
+            browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
             agent_version: default_agent_version(),
         }
     }
@@ -186,8 +210,33 @@ impl AukiP2pNodeConfig {
             ],
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
+            browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
             agent_version: default_agent_version(),
         }
+    }
+
+    /// Development config that binds an OS-selected loopback WebRTC Direct UDP port.
+    pub fn loopback_webrtc_direct_development() -> Self {
+        Self {
+            p2p: AukiP2pConfig::development(),
+            listen_addresses: vec![loopback_webrtc_direct_listen_addr()],
+            advertised_addresses: Vec::new(),
+            relay_addresses: Vec::new(),
+            browser_webrtc_direct: BrowserWebRtcDirectConfig::enabled(),
+            agent_version: default_agent_version(),
+        }
+    }
+}
+
+impl BrowserWebRtcDirectConfig {
+    /// Disable browser-to-node WebRTC Direct transport support.
+    pub fn disabled() -> Self {
+        Self { enabled: false }
+    }
+
+    /// Enable browser-to-node WebRTC Direct transport support.
+    pub fn enabled() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -198,9 +247,10 @@ impl AukiP2pNode {
         config: AukiP2pNodeConfig,
     ) -> Result<Self, AukiP2pNodeError> {
         config.p2p.validate().map_err(AukiP2pNodeError::Config)?;
+        validate_browser_webrtc_direct_config(&config)?;
 
         let local_peer_id = identity.peer_id();
-        let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
+        let builder = SwarmBuilder::with_existing_identity(identity.keypair().clone())
             .with_tokio()
             .with_tcp(
                 tcp::Config::default(),
@@ -211,7 +261,17 @@ impl AukiP2pNode {
                 stage: "tcp",
                 source: err.to_string(),
             })?
-            .with_quic()
+            .with_quic();
+
+        #[cfg(feature = "browser-webrtc-direct")]
+        let builder = builder
+            .with_other_transport(webrtc_direct_transport)
+            .map_err(|err| AukiP2pNodeError::Transport {
+                stage: "webrtc-direct",
+                source: err.to_string(),
+            })?;
+
+        let mut swarm = builder
             .with_behaviour(|key| Behaviour {
                 identify: identify::Behaviour::new(
                     identify::Config::new(IDENTIFY_PROTOCOL_ID.into(), key.public())
@@ -270,6 +330,15 @@ impl AukiP2pNode {
     /// Listen addresses observed from libp2p after binding.
     pub fn observed_listen_addresses(&self) -> &[Multiaddr] {
         &self.observed_listen_addresses
+    }
+
+    /// Observed listen addresses with the local `/p2p/<peer-id>` suffix.
+    pub fn observed_dialable_listen_addresses(&self) -> Vec<Multiaddr> {
+        self.observed_listen_addresses
+            .iter()
+            .cloned()
+            .map(|address| address_with_peer_id(address, self.peer_id()))
+            .collect()
     }
 
     /// Operator-supplied advertised addresses.
@@ -372,6 +441,7 @@ impl AukiP2pNode {
 
     /// Bind one additional listen address.
     pub fn listen_on(&mut self, address: Multiaddr) -> Result<(), AukiP2pNodeError> {
+        self.validate_browser_webrtc_direct_address(&address)?;
         self.swarm
             .listen_on(address.clone())
             .map_err(|source| AukiP2pNodeError::Listen {
@@ -389,6 +459,7 @@ impl AukiP2pNode {
         addresses: Vec<Multiaddr>,
     ) -> Result<(), AukiP2pNodeError> {
         for address in &addresses {
+            self.validate_browser_webrtc_direct_address(address)?;
             self.config
                 .p2p
                 .dial_policy
@@ -480,6 +551,16 @@ impl fmt::Display for AukiP2pNodeError {
             }
             Self::DialPolicy(error) => write!(f, "{error}"),
             Self::Dial { peer_id, source } => write!(f, "dial {peer_id}: {source}"),
+            Self::BrowserWebRtcDirectDisabled { address } => {
+                write!(
+                    f,
+                    "WebRTC Direct is disabled but address {address} requires it"
+                )
+            }
+            Self::BrowserWebRtcDirectFeatureDisabled => write!(
+                f,
+                "WebRTC Direct is enabled but auki-p2p was built without the browser-webrtc-direct feature"
+            ),
         }
     }
 }
@@ -589,6 +670,18 @@ fn multiaddr_array(addresses: &[Multiaddr]) -> Value {
 }
 
 impl AukiP2pNode {
+    fn validate_browser_webrtc_direct_address(
+        &self,
+        address: &Multiaddr,
+    ) -> Result<(), AukiP2pNodeError> {
+        if is_webrtc_direct_address(address) && !self.config.browser_webrtc_direct.enabled {
+            return Err(AukiP2pNodeError::BrowserWebRtcDirectDisabled {
+                address: address.clone(),
+            });
+        }
+        Ok(())
+    }
+
     fn status_listen_addresses(&self) -> &[Multiaddr] {
         if self.observed_listen_addresses.is_empty() {
             &self.config.listen_addresses
@@ -596,6 +689,67 @@ impl AukiP2pNode {
             &self.observed_listen_addresses
         }
     }
+}
+
+/// Return a loopback WebRTC Direct listen address with an OS-selected UDP port.
+pub fn loopback_webrtc_direct_listen_addr() -> Multiaddr {
+    "/ip4/127.0.0.1/udp/0/webrtc-direct"
+        .parse()
+        .expect("static loopback WebRTC Direct listen multiaddr is valid")
+}
+
+fn validate_browser_webrtc_direct_config(
+    config: &AukiP2pNodeConfig,
+) -> Result<(), AukiP2pNodeError> {
+    for address in &config.listen_addresses {
+        if is_webrtc_direct_address(address) && !config.browser_webrtc_direct.enabled {
+            return Err(AukiP2pNodeError::BrowserWebRtcDirectDisabled {
+                address: address.clone(),
+            });
+        }
+    }
+
+    if config.browser_webrtc_direct.enabled {
+        browser_webrtc_direct_feature_enabled()?;
+    }
+
+    Ok(())
+}
+
+fn is_webrtc_direct_address(address: &Multiaddr) -> bool {
+    address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::WebRTCDirect))
+}
+
+fn address_with_peer_id(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2p(_)))
+    {
+        address
+    } else {
+        address.with(Protocol::P2p(peer_id))
+    }
+}
+
+#[cfg(feature = "browser-webrtc-direct")]
+fn browser_webrtc_direct_feature_enabled() -> Result<(), AukiP2pNodeError> {
+    Ok(())
+}
+
+#[cfg(not(feature = "browser-webrtc-direct"))]
+fn browser_webrtc_direct_feature_enabled() -> Result<(), AukiP2pNodeError> {
+    Err(AukiP2pNodeError::BrowserWebRtcDirectFeatureDisabled)
+}
+
+#[cfg(feature = "browser-webrtc-direct")]
+fn webrtc_direct_transport(keypair: &libp2p_identity::Keypair) -> Boxed<(PeerId, StreamMuxerBox)> {
+    let certificate = webrtc::tokio::Certificate::generate(&mut thread_rng())
+        .expect("WebRTC certificate generation should succeed");
+    webrtc::tokio::Transport::new(keypair.clone(), certificate)
+        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .boxed()
 }
 
 #[cfg(test)]
@@ -622,6 +776,74 @@ mod tests {
         })
         .await
         .expect("listen address should be emitted")
+    }
+
+    #[test]
+    fn loopback_webrtc_direct_config_enables_browser_transport() {
+        let config = AukiP2pNodeConfig::loopback_webrtc_direct_development();
+
+        assert!(config.browser_webrtc_direct.enabled);
+        assert_eq!(
+            config.listen_addresses,
+            vec![loopback_webrtc_direct_listen_addr()]
+        );
+    }
+
+    #[test]
+    fn webrtc_direct_listen_address_requires_node_enablement() {
+        let mut config = AukiP2pNodeConfig::dial_only_development();
+        config
+            .listen_addresses
+            .push(loopback_webrtc_direct_listen_addr());
+
+        let error = match AukiP2pNode::new(identity(28), config) {
+            Ok(_) => panic!("WebRTC Direct listen address should be rejected when disabled"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            AukiP2pNodeError::BrowserWebRtcDirectDisabled { .. }
+        ));
+    }
+
+    #[test]
+    #[cfg(not(feature = "browser-webrtc-direct"))]
+    fn enabling_webrtc_direct_without_crate_feature_fails() {
+        let config = AukiP2pNodeConfig::loopback_webrtc_direct_development();
+
+        let error = match AukiP2pNode::new(identity(29), config) {
+            Ok(_) => panic!("WebRTC Direct should require the browser-webrtc-direct feature"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            AukiP2pNodeError::BrowserWebRtcDirectFeatureDisabled
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "browser-webrtc-direct")]
+    async fn loopback_webrtc_direct_listener_emits_dialable_address() {
+        let mut listener = AukiP2pNode::new(
+            identity(29),
+            AukiP2pNodeConfig::loopback_webrtc_direct_development(),
+        )
+        .unwrap();
+
+        let address = wait_for_listen_addr(&mut listener).await;
+
+        assert!(is_webrtc_direct_address(&address));
+        assert!(address.to_string().contains("/certhash/"));
+        assert_eq!(listener.observed_listen_addresses(), &[address.clone()]);
+        assert_eq!(
+            listener.observed_dialable_listen_addresses(),
+            vec![address.clone().with(Protocol::P2p(listener.peer_id()))]
+        );
+
+        let status = listener.local_peer_status().expect("local status");
+        assert_eq!(status.listen_addresses, vec![address.to_string()]);
     }
 
     #[test]
@@ -829,6 +1051,10 @@ mod tests {
 
         assert_eq!(listener.configured_listen_addresses().len(), 1);
         assert_eq!(listener.observed_listen_addresses(), &[address.clone()]);
+        assert_eq!(
+            listener.observed_dialable_listen_addresses(),
+            vec![address.clone().with(Protocol::P2p(listener.peer_id()))]
+        );
         assert!(listener.advertised_addresses().is_empty());
 
         let status = listener.local_peer_status().expect("local status");

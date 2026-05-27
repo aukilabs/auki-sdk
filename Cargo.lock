@@ -957,7 +957,9 @@ dependencies = [
  "libp2p",
  "libp2p-identity",
  "libp2p-stream",
+ "libp2p-webrtc",
  "multiaddr",
+ "rand 0.8.6",
  "serde_json",
  "tokio",
 ]

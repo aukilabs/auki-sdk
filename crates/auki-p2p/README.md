@@ -35,6 +35,11 @@ Current public surface:
   applies local per-peer connection caps for duplicate/simultaneous dials;
   surfaces connection events; projects local peer status; and exposes a raw
   stream control for protocol runtimes.
+- The optional `browser-webrtc-direct` Cargo feature adds native WebRTC Direct
+  transport support for browser-to-node dialing. Use
+  `AukiP2pNodeConfig::loopback_webrtc_direct_development()` for the local
+  browser MVP and publish `observed_dialable_listen_addresses()` to browser
+  peers after the listener emits an address.
 - `lifecycle` helpers accept/open `/auki/cluster-lifecycle/0.0.1` streams and
   exchange the first peer-handshake frame using the configured frame limit,
   with optional strict helpers for duplicate lifecycle streams and extra
@@ -82,3 +87,5 @@ Subscribe serving tests now cover a registered local provider accepting a remote
 The full `AukiNode` smoke test now covers configured dial, lifecycle
 authorization, offer loading, Get, Subscribe data, and relationship/status
 assertions in one two-peer flow.
+With `--features browser-webrtc-direct`, the node tests also verify a loopback
+WebRTC Direct listener emits a browser-dialable multiaddr.

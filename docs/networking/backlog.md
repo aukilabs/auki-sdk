@@ -86,7 +86,7 @@ Keep legacy behavior intact:
 
 ## Phase 1 - Native Browser Reachability
 
-- [ ] Add optional WebRTC Direct listener support to `auki-p2p` for
+- [x] Add optional WebRTC Direct listener support to `auki-p2p` for
       browser-to-node dialing.
 - [ ] Add optional Circuit Relay v2 server support to `auki-p2p` over
       WebSocket.
@@ -94,7 +94,7 @@ Keep legacy behavior intact:
       bootstrap addresses distinct in config and status.
 - [ ] Add status output that reports observed transport path and relay
       involvement.
-- [ ] Preserve current node-to-node TCP/QUIC behavior and tests.
+- [x] Preserve current node-to-node TCP/QUIC behavior and tests.
 
 Useful prior art:
 
@@ -174,8 +174,8 @@ preview frames, protocol messages, offer catalogs, or authority decisions.
 
 Rust:
 
-- [ ] `cargo test -p auki-p2p`.
-- [ ] Test WebRTC Direct config and browser-dialable advertised addresses.
+- [x] `cargo test -p auki-p2p`.
+- [x] Test WebRTC Direct config and browser-dialable observed addresses.
 - [ ] Test relay server address emission.
 - [ ] Test that node-to-node TCP/QUIC still works.
 

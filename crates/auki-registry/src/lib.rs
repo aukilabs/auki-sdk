@@ -46,22 +46,26 @@ pub struct LogRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SensorRegistryEntry {
+    pub peer_id: String,
     pub sensor_id: String,
     #[serde(flatten)]
     pub body: SensorBody,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SensorBody {
     Camera(Camera),
-    PointCloud(PointCloud),
+    Rangefinder(Rangefinder),
+    Rf(Rf),
     Audio(Audio),
     JointEncoders(JointEncoders),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Camera {
+    /// Open-string sensor type, e.g. `"rgb"` | `"depth"` | `"ir"` | `"mono"` | `"multispectral"`.
+    pub r#type: String,
     pub width: u32,
     pub height: u32,
     pub frame_rate_hz: u32,
@@ -69,37 +73,40 @@ pub struct Camera {
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
-    /// Frame Registry id for the camera optical frame — what the pixel
-    /// rays' depth axis points along, etc. Consumers look up the
-    /// matching [`FrameRegistryEntry`] under
-    /// `<app_root>/registries/frames/<frame_id>/`. Conventionally the
-    /// REP-103 optical convention (`X right, Y down, Z forward`); the
-    /// SDK does not enforce a specific convention.
-    pub frame_id: String,
-    /// Content hash of the exact [`FrameRegistryEntry`] version the
-    /// camera frame commits to.
-    pub frame_hash: String,
+    /// Frame Registry reference for the camera optical frame. Replaces
+    /// the former `(frame_id, frame_hash)` pair.
+    pub frame: RegistryRef,
 }
 
-/// Static layout of a point-cloud sensor's per-point bytes. The actual point
+/// Static layout of a rangefinder sensor's per-point bytes. The actual point
 /// data lives in the per-frame log payload
 /// ([`auki_datatypes::point_cloud::PointCloudLogEntry`]); this describes how
 /// to interpret those bytes.
+///
+/// Renamed from `PointCloud`; `point_cloud` becomes a `sensor.type` value
+/// under this variant (see §1 sensor kind/type taxonomy).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PointCloud {
+pub struct Rangefinder {
+    /// Open-string sensor type, e.g. `"point_cloud"` | `"2d_lidar"` | `"3d_lidar"` |
+    /// `"ultrasonic"` | `"radar"`.
+    pub r#type: String,
     pub fields: Vec<PointField>,
     pub point_step: u32,
     pub is_bigendian: bool,
     pub frame_rate_hz: u32,
-    /// Frame Registry id for the coordinate system the point bytes are
-    /// in. ROS `PointCloud2` carries `header.frame_id`; the integrator
-    /// threads it through here so consumers (Park, future Sentinel)
-    /// know which Frame Registry entry tells them how to interpret the
-    /// XYZ axes and units.
-    pub frame_id: String,
-    /// Content hash of the exact [`FrameRegistryEntry`] version the
-    /// point coordinates commit to.
-    pub frame_hash: String,
+    /// Frame Registry reference for the coordinate system the point bytes are
+    /// in. Replaces the former `(frame_id, frame_hash)` pair.
+    pub frame: RegistryRef,
+}
+
+/// Minimal RF sensor body. v1 ships the variant so catalog rows can declare
+/// `sensor.kind = "rf"` without a registry-shape mismatch. Production-quality
+/// RF fields (channel map, tx power, etc.) land via a follow-up card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rf {
+    /// Open-string sensor type, e.g. `"wifi"` | `"bluetooth"` | `"uwb"`.
+    pub r#type: String,
+    pub frame: RegistryRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,11 +155,13 @@ impl PointFieldDataType {
 /// independent capture devices on different chips.
 ///
 /// Named `Audio` (signal-type) rather than `Microphone` (instrument) for
-/// consistency with the other sensor bodies (`PointCloud`, `JointEncoders`)
+/// consistency with the other sensor bodies (`Rangefinder`, `JointEncoders`)
 /// and the closed `SensorEntry.kind` contract in
 /// [`auki-network::sensors_protocol`](../../../auki-network/src/sensors_protocol.rs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Audio {
+    /// Open-string sensor type, e.g. `"pcm"` | `"opus"`.
+    pub r#type: String,
     /// Samples per channel per second (e.g. 48000).
     pub sample_rate_hz: u32,
     /// Number of channels per sample (1 mono, 2 stereo, N for arrays).
@@ -169,6 +178,8 @@ pub struct Audio {
     /// appropriate for generic mic arrays where the consumer does its own
     /// beam-forming.
     pub channel_layout: String,
+    /// Frame Registry reference for the acoustic reference point.
+    pub frame: RegistryRef,
 }
 
 /// Static identity of a joint-encoder bank — the bits that describe how
@@ -184,7 +195,7 @@ pub struct Audio {
 /// future analyses), not the producer. The producer ships angle floats
 /// and just enough deserialization metadata (`joint_count`) for the
 /// consumer to read the bytes correctly. Mirrors the layering of
-/// [`Camera`] / [`PointCloud`] / [`Audio`]: producer ships
+/// [`Camera`] / [`Rangefinder`] / [`Audio`]: producer ships
 /// raw measurements, consumer holds the schema-for-interpretation.
 ///
 /// Joint ordering is producer-defined and immutable per log; mapping
@@ -196,12 +207,10 @@ pub struct Audio {
 ///   See `parking_lot.md` "`joint_names` placement".
 /// - **No `urdf_id` / `urdf_hash`** — speculative. Park is K1-monoculture
 ///   today. See `parking_lot.md` "`SensorBody::JointEncoders` minimalism".
-/// - **No `frame_id`** — joint encoders aren't in any cartesian frame;
-///   they're in joint space. Including a `frame_id` would invite
-///   consumers to look up a Frame Registry entry that doesn't make
-///   sense for this sensor type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JointEncoders {
+    /// Open-string sensor type, e.g. `"absolute"` | `"incremental"`.
+    pub r#type: String,
     /// Number of joints in each per-frame angle vector. Sanity-check
     /// invariant for deserialization — the per-frame payload's
     /// `angles_rad` length MUST equal this. Equivalent in spirit to
@@ -210,8 +219,12 @@ pub struct JointEncoders {
     /// Expected publish rate in Hz, observed at sensor bootstrap.
     /// Sizing hint for segment duration / consumer buffers; not part
     /// of identity logic. Same role as [`Camera::frame_rate_hz`]
-    /// and [`PointCloud::frame_rate_hz`].
+    /// and [`Rangefinder::frame_rate_hz`].
     pub frame_rate_hz: u32,
+    /// Frame Registry reference for the joint-encoders sensor's reference
+    /// frame. Joint encoders are in joint space, not a cartesian frame;
+    /// this ref points at the kinematic root frame for the encoder bank.
+    pub frame: RegistryRef,
 }
 
 impl SensorRegistryEntry {
@@ -763,29 +776,31 @@ fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcom
 }
 
 fn validate_sensor_frame_reference(app_root: &Path, entry: &SensorRegistryEntry) -> Result<()> {
-    let Some((frame_id, frame_hash)) = sensor_frame_reference(&entry.body) else {
+    let Some(frame_ref) = sensor_frame_reference(&entry.body) else {
         return Ok(());
     };
 
-    if frame_id.is_empty()
-        || frame_hash.is_empty()
-        || read_frame(app_root, frame_id, frame_hash)?.is_none()
+    if frame_ref.id.is_empty()
+        || frame_ref.hash.is_empty()
+        || read_frame(app_root, &frame_ref.id, &frame_ref.hash)?.is_none()
     {
         return Err(Error::FrameReferenceMissing {
             sensor_id: entry.sensor_id.clone(),
-            frame_id: frame_id.to_string(),
-            frame_hash: frame_hash.to_string(),
+            frame_id: frame_ref.id.clone(),
+            frame_hash: frame_ref.hash.clone(),
         });
     }
 
     Ok(())
 }
 
-fn sensor_frame_reference(body: &SensorBody) -> Option<(&str, &str)> {
+fn sensor_frame_reference(body: &SensorBody) -> Option<&RegistryRef> {
     match body {
-        SensorBody::Camera(b) => Some((&b.frame_id, &b.frame_hash)),
-        SensorBody::PointCloud(b) => Some((&b.frame_id, &b.frame_hash)),
-        SensorBody::Audio(_) | SensorBody::JointEncoders(_) => None,
+        SensorBody::Camera(b) => Some(&b.frame),
+        SensorBody::Rangefinder(b) => Some(&b.frame),
+        SensorBody::Rf(b) => Some(&b.frame),
+        SensorBody::Audio(b) => Some(&b.frame),
+        SensorBody::JointEncoders(b) => Some(&b.frame),
     }
 }
 
@@ -828,8 +843,10 @@ mod tests {
 
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
+            peer_id: "test-peer".into(),
             sensor_id: "K1-AABBCCDDEEFF/head_left_cam".into(),
             body: SensorBody::Camera(Camera {
+                r#type: "rgb".into(),
                 width: 544,
                 height: 488,
                 frame_rate_hz: 20,
@@ -837,8 +854,11 @@ mod tests {
                 color_space: "BT.709".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "plumb_bob".into(),
-                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
-                frame_hash: M1_OPTICAL_FRAME_HASH.into(),
+                frame: RegistryRef {
+                    peer_id: "test-peer".into(),
+                    id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                    hash: M1_OPTICAL_FRAME_HASH.into(),
+                },
             }),
         }
     }
@@ -883,9 +903,12 @@ mod tests {
         let bytes = m1_sensor_entry().canonical_bytes();
         let s = std::str::from_utf8(&bytes).unwrap();
         // Keys sorted by RFC 8785 §3.2.3 (lexicographic UTF-16 code units).
+        // peer_id added; frame_id+frame_hash replaced by nested frame object;
+        // variant discriminator renamed from "type" to "kind"; open-string
+        // sensor.type lives as "type" key inside the body.
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"camera","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
         );
     }
 
@@ -908,12 +931,12 @@ mod tests {
     }
 
     /// Locks the XXH3-128 hex of the M1 sensor entry. Catches drift in
-    /// entry shape, canonicalization, or hashing. Recomputed when
-    /// `frame_hash` was added to Camera to pin the exact Frame
-    /// Registry entry version, and when the camera tag was renamed.
+    /// entry shape, canonicalization, or hashing. Recomputed for #216 rev 2:
+    /// peer_id added, frame_id+frame_hash → RegistryRef, kind tag renamed,
+    /// sensor.type field added.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "5559c9648e31eee2410b692fef393489");
+        assert_eq!(m1_sensor_entry().hash(), "30f4eca87eb0e3051d6646f47bf2b27c");
     }
 
     #[test]
@@ -995,7 +1018,10 @@ mod tests {
                 cam.width = 1920;
                 cam.height = 1080;
             }
-            SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
+            SensorBody::Rangefinder(_)
+            | SensorBody::Rf(_)
+            | SensorBody::Audio(_)
+            | SensorBody::JointEncoders(_) => {
                 panic!("test was set up for Camera")
             }
         }
@@ -1104,8 +1130,10 @@ mod tests {
 
     fn m1_point_cloud_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
+            peer_id: "test-peer".into(),
             sensor_id: "K1-AABBCCDDEEFF/head_depth_points".into(),
-            body: SensorBody::PointCloud(PointCloud {
+            body: SensorBody::Rangefinder(Rangefinder {
+                r#type: "point_cloud".into(),
                 fields: vec![
                     PointField {
                         name: "x".into(),
@@ -1129,8 +1157,11 @@ mod tests {
                 point_step: 12,
                 is_bigendian: false,
                 frame_rate_hz: 10,
-                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
-                frame_hash: M1_OPTICAL_FRAME_HASH.into(),
+                frame: RegistryRef {
+                    peer_id: "test-peer".into(),
+                    id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                    hash: M1_OPTICAL_FRAME_HASH.into(),
+                },
             }),
         }
     }
@@ -1138,23 +1169,24 @@ mod tests {
     #[test]
     fn point_cloud_entry_serializes_to_canonical_bytes() {
         let bytes = m1_point_cloud_entry().canonical_bytes();
+        // Keys in JCS order; frame_id+frame_hash replaced by nested frame object;
+        // variant discriminator is now "kind":"rangefinder"; open-string type is "type":"point_cloud";
+        // peer_id added at top level.
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame_hash":"e0d40e7b526e04f15f83f75897f53825","frame_id":"K1-AABBCCDDEEFF/head_left_cam_optical","frame_rate_hz":10,"is_bigendian":false,"point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
     #[test]
     fn point_cloud_entry_hash_is_locked() {
-        // Pin the XXH3-128 of the M1 example point cloud entry.
+        // Pin the XXH3-128 of the M1 example rangefinder (formerly point_cloud) entry.
         // Updates to this must be coordinated with any cross-language reader.
-        // Recomputed when `frame_hash` was added to pin the exact Frame
-        // Registry entry. If this trips, either (a) the canonical bytes
-        // assertion above also tripped — see that for the cause — or (b)
-        // `auki-jcs` / `auki-hash` drifted; investigate before updating.
+        // Recomputed for #216 rev 2: peer_id added, PointCloud→Rangefinder,
+        // frame_id+frame_hash→RegistryRef, kind tag renamed.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "2c480838a9be0b14608a8a0d72ee319f"
+            "ac4477ea7753a9327d6fec52b6abcc01"
         );
     }
 
@@ -1186,8 +1218,11 @@ mod tests {
         write_m1_optical_frame(dir.path());
         let mut entry = m1_sensor_entry();
         match &mut entry.body {
-            SensorBody::Camera(cam) => cam.frame_hash.clear(),
-            SensorBody::PointCloud(_) | SensorBody::Audio(_) | SensorBody::JointEncoders(_) => {
+            SensorBody::Camera(cam) => cam.frame.hash.clear(),
+            SensorBody::Rangefinder(_)
+            | SensorBody::Rf(_)
+            | SensorBody::Audio(_)
+            | SensorBody::JointEncoders(_) => {
                 panic!("test was set up for Camera")
             }
         }
@@ -1214,12 +1249,21 @@ mod tests {
 
     fn m1_audio_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
+            peer_id: "test-peer".into(),
             sensor_id: "K1-AABBCCDDEEFF/head_array_4mic".into(),
             body: SensorBody::Audio(Audio {
+                r#type: "pcm".into(),
                 sample_rate_hz: 48_000,
                 channels: 4,
                 sample_format: "pcm_s16le".into(),
                 channel_layout: "n_channel".into(),
+                // Re-use the optical frame for test convenience; any valid
+                // FrameRegistryEntry is fine — the registry only checks existence.
+                frame: RegistryRef {
+                    peer_id: "test-peer".into(),
+                    id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+                    hash: M1_OPTICAL_FRAME_HASH.into(),
+                },
             }),
         }
     }
@@ -1227,9 +1271,11 @@ mod tests {
     #[test]
     fn audio_entry_serializes_to_canonical_bytes() {
         let bytes = m1_audio_entry().canonical_bytes();
+        // Keys in JCS order; peer_id added; frame ref added; kind discriminator
+        // renamed from "type" to "kind"; open-string sensor.type is now "type":"pcm".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"channel_layout":"n_channel","channels":4,"sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"audio"}"#
+            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
         );
     }
 
@@ -1237,16 +1283,15 @@ mod tests {
     fn audio_entry_hash_is_locked() {
         // Pin the XXH3-128 of the M1 example audio entry.
         // Updates to this must be coordinated with any cross-language reader.
-        // Recomputed 2026-05-14 when `Microphone` renamed to `Audio` (serde
-        // tag flipped `"microphone"` → `"audio"`, body bytes unchanged
-        // otherwise). Pre-rename locked hash was
-        // `6e0a195364866f18834d2db8e2a0699f`.
-        assert_eq!(m1_audio_entry().hash(), "bc4a0e690f1149c4927ea98c96ead65a");
+        // Recomputed for #216 rev 2: peer_id added, frame ref added,
+        // kind tag renamed, sensor.type field added.
+        assert_eq!(m1_audio_entry().hash(), "744c2bcec14c71480b7b904c92b351e7");
     }
 
     #[test]
     fn write_then_read_audio_round_trip() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_optical_frame(dir.path()); // audio entry refs the same optical frame
         let entry = m1_audio_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
@@ -1256,18 +1301,32 @@ mod tests {
 
     // ─── JointEncoders tests ───────────────────────────────────────────────
 
+    const M1_BASE_LINK_FRAME_HASH: &str = "fd0dc3789e898b71b5e16ee122a81a44";
+
     /// Six-DOF arm fixture — `K1` upper-arm shape, plausible publish
-    /// rate. Joint count and frame rate are the only fields the
-    /// registry body carries; URDF / joint names live with the
-    /// consumer.
+    /// rate. Joint count, frame rate, type, and frame ref are the fields
+    /// the registry body carries; URDF / joint names live with the consumer.
     fn m1_joint_encoders_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
+            peer_id: "test-peer".into(),
             sensor_id: "K1-AABBCCDDEEFF/right_arm_joints".into(),
             body: SensorBody::JointEncoders(JointEncoders {
+                r#type: "absolute".into(),
                 joint_count: 6,
                 frame_rate_hz: 100,
+                // base_link is the kinematic root frame for the joint bank.
+                frame: RegistryRef {
+                    peer_id: "test-peer".into(),
+                    id: "K1-AABBCCDDEEFF/base_link".into(),
+                    hash: M1_BASE_LINK_FRAME_HASH.into(),
+                },
             }),
         }
+    }
+
+    fn write_m1_base_link_frame(app_root: &Path) {
+        let outcome = write_frame(app_root, &m1_frame_entry()).unwrap();
+        assert_eq!(outcome.hash(), M1_BASE_LINK_FRAME_HASH);
     }
 
     /// Locks the JCS canonical bytes for the M1 example joint-encoders
@@ -1276,9 +1335,11 @@ mod tests {
     #[test]
     fn joint_encoders_entry_serializes_to_canonical_bytes() {
         let bytes = m1_joint_encoders_entry().canonical_bytes();
+        // Keys in JCS order; peer_id added; frame ref added; kind discriminator
+        // renamed; open-string sensor.type is "type":"absolute".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"frame_rate_hz":100,"joint_count":6,"sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"joint_encoders"}"#
+            r#"{"frame":{"hash":"fd0dc3789e898b71b5e16ee122a81a44","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
         );
     }
 
@@ -1286,15 +1347,17 @@ mod tests {
     /// `auki-jcs`, `auki-hash`, or this crate's serde shape drifts.
     #[test]
     fn joint_encoders_entry_hash_is_locked() {
+        // Hash recomputed for #216 rev 2: peer_id, type, and frame fields added.
         assert_eq!(
             m1_joint_encoders_entry().hash(),
-            "cb45b0d89bcb5c738c38ff9c3c9d7768"
+            "5bfa90f52ed54179a31f05c12e8501cc"
         );
     }
 
     #[test]
     fn write_then_read_joint_encoders_round_trip() {
         let dir = tempfile::tempdir().unwrap();
+        write_m1_base_link_frame(dir.path());
         let entry = m1_joint_encoders_entry();
         let outcome = write_sensor(dir.path(), &entry).unwrap();
         let hash = outcome.hash().to_string();
@@ -1580,6 +1643,74 @@ mod tests {
             .to_string();
         assert!(s.contains(r#""output_types":["portal","portal_corner"]"#));
         assert!(s.contains(r#""type":"qr""#));
+    }
+
+    // ─── New-shape canonical JSON test (#216 rev 2 TDD anchor) ─────────────
+
+    /// TDD anchor: asserts the new Camera + Rangefinder + Rf canonical JSON
+    /// shape after #216 rev 2 restructure. Written first (red), then the
+    /// struct changes made it green. The assertions capture:
+    ///   - `peer_id` at top level
+    ///   - variant discriminator as `"kind"` (not `"type"`)
+    ///   - open-string `"type"` field inside each body
+    ///   - `"frame"` nested object replacing `frame_id`+`frame_hash`
+    #[test]
+    fn new_shape_camera_rangefinder_rf_canonical_json() {
+        let frame_ref = RegistryRef {
+            peer_id: "galbot".into(),
+            id: "head_optical".into(),
+            hash: "abc123".into(),
+        };
+
+        let camera = SensorRegistryEntry {
+            peer_id: "galbot".into(),
+            sensor_id: "head_rgb".into(),
+            body: SensorBody::Camera(Camera {
+                r#type: "rgb".into(),
+                width: 1920,
+                height: 1200,
+                frame_rate_hz: 30,
+                pixel_format: "rgb8".into(),
+                color_space: "srgb".into(),
+                intrinsics_model: "pinhole".into(),
+                distortion_model: "brown_conrady".into(),
+                frame: frame_ref.clone(),
+            }),
+        };
+        let camera_json = std::str::from_utf8(&camera.canonical_bytes()).unwrap().to_string();
+        // Must contain kind:camera, type:rgb, peer_id, nested frame
+        assert!(camera_json.contains(r#""kind":"camera""#), "camera: {camera_json}");
+        assert!(camera_json.contains(r#""type":"rgb""#), "camera type: {camera_json}");
+        assert!(camera_json.contains(r#""peer_id":"galbot""#), "camera peer_id: {camera_json}");
+        assert!(camera_json.contains(r#""frame":{"hash":"abc123","id":"head_optical","peer_id":"galbot"}"#), "camera frame: {camera_json}");
+
+        let rangefinder = SensorRegistryEntry {
+            peer_id: "galbot".into(),
+            sensor_id: "head_lidar".into(),
+            body: SensorBody::Rangefinder(Rangefinder {
+                r#type: "3d_lidar".into(),
+                fields: vec![],
+                point_step: 0,
+                is_bigendian: false,
+                frame_rate_hz: 10,
+                frame: frame_ref.clone(),
+            }),
+        };
+        let rf_json = std::str::from_utf8(&rangefinder.canonical_bytes()).unwrap().to_string();
+        assert!(rf_json.contains(r#""kind":"rangefinder""#), "rangefinder kind: {rf_json}");
+        assert!(rf_json.contains(r#""type":"3d_lidar""#), "rangefinder type: {rf_json}");
+
+        let rf = SensorRegistryEntry {
+            peer_id: "galbot".into(),
+            sensor_id: "ble_beacon".into(),
+            body: SensorBody::Rf(Rf {
+                r#type: "bluetooth".into(),
+                frame: frame_ref.clone(),
+            }),
+        };
+        let ble_json = std::str::from_utf8(&rf.canonical_bytes()).unwrap().to_string();
+        assert!(ble_json.contains(r#""kind":"rf""#), "rf kind: {ble_json}");
+        assert!(ble_json.contains(r#""type":"bluetooth""#), "rf type: {ble_json}");
     }
 }
 

@@ -55,6 +55,11 @@ publication, inbound offer-catalog serving, and inbound Subscribe serving
 through `auki-protocol-wasm` validators. Preview publishing is a helper/profile
 on top of the generic offer API.
 
+`examples/p2p-preview-sentinel` now provides the first native demo slice: a
+browser-reachable Sentinel peer that publishes the shared preview offer profile,
+generates JPEG preview frames, and prints/writes address-only browser bootstrap
+JSON plus compact P2P state.
+
 ## Networking Matrix
 
 The SDK demo path should cover every peer-type pairing:
@@ -195,16 +200,18 @@ Settled initial names:
 Build two standalone examples under `examples/` before touching real
 Sentinel/Park integration.
 
-- [ ] Add `examples/p2p-preview-sentinel/`.
-  - [ ] Native Rust `auki-p2p` node.
-  - [ ] Publishes a preview offer through the Phase 3 helper.
-  - [ ] Serves address-only browser bootstrap JSON.
-  - [ ] Can enable WebRTC Direct and optional Circuit Relay v2.
-  - [ ] Supports `--source generated` first.
+- [x] Add `examples/p2p-preview-sentinel/`.
+  - [x] Native Rust `auki-p2p` node.
+  - [x] Publishes a preview offer through the Phase 3 helper.
+  - [x] Prints/writes address-only browser bootstrap JSON.
+  - [x] Enables WebRTC Direct and WebSocket relay/server development config.
+  - [x] Supports `--source generated` first.
   - [ ] Adds `--source camera` later for MacBook camera JPEG capture.
-  - [ ] CLI prints and refreshes local peer id, listen/browser bootstrap
-        addresses, relay role, connected peers, transport path, published offers,
-        active served subscriptions, frames sent, and recent failure codes.
+  - [x] CLI prints and refreshes local peer id, listen/browser bootstrap
+        addresses, relay role, connected peers, published offers, frames sent,
+        and recent failure codes.
+  - [ ] CLI reports active served subscriptions and per-transport path details
+        once the browser subscriber exists.
 - [ ] Add `examples/p2p-preview-browser/`.
   - [ ] Small web app using `auki-p2p-browser`.
   - [ ] Loads address-only bootstrap JSON.

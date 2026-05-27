@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**iOS camera stream fanout now isolates failed streams.** `AukiCameraStreamer` continues fanout delivery to healthy stream ids when one sink push fails and prunes failed stream ids from the active set. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**iOS camera streamer now encodes and fans out camera frames.** `AukiCameraStreamer` serializes JPEG bytes into generated `CameraFrame` protobuf payloads and has hardware-free unit tests for stream fanout delivery and removal. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Swift XCFramework generation now emits static framework slices.** Generated Swift packages can now coexist in one Xcode app without duplicate flattened C module-map outputs.
 
 ### Nils's codex · May 27, HKT, 2026

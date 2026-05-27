@@ -20,6 +20,9 @@ packages:
     path: ../../../bindings/swift/auki-manifests
   auki-proto:
     path: ../../../bindings/swift/auki-proto
+  swift-protobuf:
+    url: https://github.com/apple/swift-protobuf.git
+    from: 1.38.0
 targets:
   AukiCameraStreamer:
     type: application
@@ -43,6 +46,8 @@ targets:
         product: auki_manifests
       - package: auki-proto
         product: AukiProto
+      - package: swift-protobuf
+        product: SwiftProtobuf
       - sdk: AVFoundation.framework
       - sdk: CoreImage.framework
       - sdk: ImageIO.framework
@@ -80,6 +85,8 @@ targets:
         product: auki_manifests
       - package: auki-proto
         product: AukiProto
+      - package: swift-protobuf
+        product: SwiftProtobuf
       - sdk: AVFoundation.framework
       - sdk: CoreImage.framework
       - sdk: ImageIO.framework

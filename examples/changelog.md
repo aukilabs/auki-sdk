@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — AukiCameraStreamer fanout failure isolation added.** Failed stream pushes are pruned without blocking healthy stream ids from receiving the encoded camera frame payload.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer frame codec and stream fanout added.** The native iOS example now serializes JPEG frames as generated `CameraFrame` protobuf payloads and tests fanout delivery/removal without camera hardware.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`ios`](ios/changelog.md) — Native iOS camera streamer shell added.** The new SwiftUI example scaffolds an XcodeGen app around generated Swift SDK package products with camera descriptor defaults and an initial operational control surface.
 
 ### Nils's codex · May 27, HKT, 2026

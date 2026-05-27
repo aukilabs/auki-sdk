@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Swift XCFramework generation now emits static framework slices.** Generated Swift packages can now coexist in one Xcode app without duplicate flattened C module-map outputs.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Native iOS camera streamer shell added.** The new `AukiCameraStreamer` example scaffolds a SwiftUI producer-peer app around generated Swift SDK package products with camera descriptor defaults and a unit-tested stable camera id surface. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

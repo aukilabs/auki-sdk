@@ -93,6 +93,80 @@ def static_lib_file(lib_name: str) -> str:
     return f"lib{lib_name}.a"
 
 
+def static_framework_bundle_id(lib_name: str) -> str:
+    return f"dev.auki.{lib_name.replace('_', '-')}.ffi"
+
+
+def write_static_framework(
+    framework_dir: Path,
+    *,
+    lib_name: str,
+    version: str,
+    archive: Path,
+    header: Path,
+    modulemap: Path,
+) -> None:
+    module_name = f"{lib_name}FFI"
+    if framework_dir.exists():
+        shutil.rmtree(framework_dir)
+
+    headers_dir = framework_dir / "Headers"
+    modules_dir = framework_dir / "Modules"
+    headers_dir.mkdir(parents=True, exist_ok=True)
+    modules_dir.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(archive, framework_dir / module_name)
+    shutil.copy2(header, headers_dir / f"{module_name}.h")
+    modulemap_uses = [
+        f"    {line.strip()}"
+        for line in modulemap.read_text().splitlines()
+        if line.strip().startswith("use ")
+    ]
+    (modules_dir / "module.modulemap").write_text(
+        "\n".join(
+            [
+                f"framework module {module_name} {{",
+                f'    umbrella header "{module_name}.h"',
+                "    export *",
+                *modulemap_uses,
+                "    module * { export * }",
+                "}",
+                "",
+            ]
+        )
+    )
+    (framework_dir / "Info.plist").write_text(
+        "\n".join(
+            [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+                '<plist version="1.0">',
+                "<dict>",
+                "    <key>CFBundleDevelopmentRegion</key>",
+                "    <string>en</string>",
+                "    <key>CFBundleExecutable</key>",
+                f"    <string>{module_name}</string>",
+                "    <key>CFBundleIdentifier</key>",
+                f"    <string>{static_framework_bundle_id(lib_name)}</string>",
+                "    <key>CFBundleInfoDictionaryVersion</key>",
+                "    <string>6.0</string>",
+                "    <key>CFBundleName</key>",
+                f"    <string>{module_name}</string>",
+                "    <key>CFBundlePackageType</key>",
+                "    <string>FMWK</string>",
+                "    <key>CFBundleShortVersionString</key>",
+                f"    <string>{version}</string>",
+                "    <key>CFBundleVersion</key>",
+                f"    <string>{version}</string>",
+                "</dict>",
+                "</plist>",
+                "",
+            ]
+        )
+    )
+
+
 def package_metadata(root: Path, package_name: str) -> dict:
     package = cargo_package(root, package_name)
     return package_metadata_from_package(root, package)
@@ -615,26 +689,41 @@ def generate_swift_xcframework(root: Path, package_name: str) -> None:
     swift_file = headers_dir / f"{lib_name}.swift"
     if swift_file.exists():
         swift_file.rename(generated_dir / swift_file.name)
+    header = headers_dir / f"{lib_name}FFI.h"
+    if not header.exists():
+        raise BindingError(f"expected generated UniFFI header not found: {header}")
     modulemap = headers_dir / f"{lib_name}FFI.modulemap"
-    if modulemap.exists():
-        modulemap.rename(headers_dir / "module.modulemap")
+    if not modulemap.exists():
+        raise BindingError(f"expected generated UniFFI module map not found: {modulemap}")
+
+    framework_root = generated_dir / "frameworks"
+    device_framework = framework_root / "ios-arm64" / f"{lib_name}FFI.framework"
+    sim_framework = framework_root / "ios-arm64_x86_64-simulator" / f"{lib_name}FFI.framework"
+    macos_framework = framework_root / "macos-arm64_x86_64" / f"{lib_name}FFI.framework"
+    for framework_dir, archive in [
+        (device_framework, device_lib),
+        (sim_framework, sim_fat),
+        (macos_framework, macos_fat),
+    ]:
+        write_static_framework(
+            framework_dir,
+            lib_name=lib_name,
+            version=metadata["version"],
+            archive=archive,
+            header=header,
+            modulemap=modulemap,
+        )
 
     run(
         [
             "xcodebuild",
             "-create-xcframework",
-            "-library",
-            str(device_lib),
-            "-headers",
-            str(headers_dir),
-            "-library",
-            str(sim_fat),
-            "-headers",
-            str(headers_dir),
-            "-library",
-            str(macos_fat),
-            "-headers",
-            str(headers_dir),
+            "-framework",
+            str(device_framework),
+            "-framework",
+            str(sim_framework),
+            "-framework",
+            str(macos_framework),
             "-output",
             str(generated_dir / f"{lib_name}.xcframework"),
         ],
@@ -642,6 +731,7 @@ def generate_swift_xcframework(root: Path, package_name: str) -> None:
     )
     sim_fat.unlink(missing_ok=True)
     macos_fat.unlink(missing_ok=True)
+    shutil.rmtree(framework_root, ignore_errors=True)
     print(f"Generated Swift package with XCFramework in {rel(root, generated_dir)}")
 
 

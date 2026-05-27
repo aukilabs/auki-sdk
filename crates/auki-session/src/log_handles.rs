@@ -1,8 +1,8 @@
 //! Log handles returned by Session::register_*_log.
 
 use auki_manifests::{
-    SensorLogManifest, PoseLogManifest, TimeTransformLogManifest, DetectionLogManifest,
-    PoseWriterMode,
+    DetectionLogManifest, PoseLogManifest, PoseWriterMode, SensorLogManifest,
+    TimeTransformLogManifest,
 };
 use auki_network::resources_protocol::SensorKind;
 use auki_registry::LogRef;
@@ -23,8 +23,12 @@ pub struct SensorLogHandle {
 }
 
 impl SensorLogHandle {
-    pub fn resource_id(&self) -> &str { &self.resource_id }
-    pub fn log_ref(&self) -> &LogRef { &self.log_ref }
+    pub fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+    pub fn log_ref(&self) -> &LogRef {
+        &self.log_ref
+    }
 }
 
 pub struct PoseLogHandle {
@@ -39,8 +43,12 @@ pub struct PoseLogHandle {
 }
 
 impl PoseLogHandle {
-    pub fn resource_id(&self) -> &str { &self.resource_id }
-    pub fn log_ref(&self) -> &LogRef { &self.log_ref }
+    pub fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+    pub fn log_ref(&self) -> &LogRef {
+        &self.log_ref
+    }
 }
 
 pub struct TimeTransformLogHandle {
@@ -53,8 +61,12 @@ pub struct TimeTransformLogHandle {
 }
 
 impl TimeTransformLogHandle {
-    pub fn resource_id(&self) -> &str { &self.resource_id }
-    pub fn log_ref(&self) -> &LogRef { &self.log_ref }
+    pub fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+    pub fn log_ref(&self) -> &LogRef {
+        &self.log_ref
+    }
 }
 
 pub struct DetectionLogHandle {
@@ -67,8 +79,12 @@ pub struct DetectionLogHandle {
 }
 
 impl DetectionLogHandle {
-    pub fn resource_id(&self) -> &str { &self.resource_id }
-    pub fn log_ref(&self) -> &LogRef { &self.log_ref }
+    pub fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+    pub fn log_ref(&self) -> &LogRef {
+        &self.log_ref
+    }
 }
 
 pub struct MaterializedLogHandle {

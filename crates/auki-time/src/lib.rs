@@ -25,7 +25,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub use auki_logs;
-use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
+use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, RegistryRef, Scope};
 
 // Re-exports for short call sites at consumer crates.
 pub use auki_datatypes::time_transform::TimeTransformEntry;
@@ -1424,12 +1424,20 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let manifest = auki_manifests::build_time_transform_log_manifest(
+            "test-peer",
+            "test-peer",
             "test-app",
             "550e8400-e29b-41d4-a716-446655440000",
-            "test/from",
-            "fhash",
-            "test/to",
-            "thash",
+            RegistryRef {
+                peer_id: "test-peer".into(),
+                id: "test/from".into(),
+                hash: "fhash".into(),
+            },
+            RegistryRef {
+                peer_id: "test-peer".into(),
+                id: "test/to".into(),
+                hash: "thash".into(),
+            },
             &auki_manifests::TimeTransformSource::LocalClockRead,
             Duration::from_millis(100),
             Duration::from_secs(60),

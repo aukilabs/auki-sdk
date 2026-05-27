@@ -1,8 +1,8 @@
 //! Declarative log registration specs.
 
-use std::time::Duration;
-use auki_registry::{RegistryRef, LogRef};
 use auki_manifests::{PoseSource, PoseWriterMode, TimeTransformSource};
+use auki_registry::{LogRef, RegistryRef};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum HeadSpec {

@@ -118,7 +118,12 @@ pub fn frame_entry_path(app_root: &Path, peer_id: &str, frame_id: &str, hash: &s
 /// sensors. A `DetectionFrame`'s `sensor_hash` (Cuba T5) carries
 /// the input-frame provenance; the detector entry covers everything
 /// else.
-pub fn detector_entry_path(app_root: &Path, peer_id: &str, detector_id: &str, hash: &str) -> PathBuf {
+pub fn detector_entry_path(
+    app_root: &Path,
+    peer_id: &str,
+    detector_id: &str,
+    hash: &str,
+) -> PathBuf {
     registries_root(app_root)
         .join(DETECTORS_DIR)
         .join(id_to_segment(peer_id))
@@ -252,7 +257,12 @@ mod tests {
     #[test]
     fn frame_entry_path_uses_frames_dir_and_includes_peer_id() {
         assert_eq!(
-            frame_entry_path(&app(), "galbot", "K1-AABBCCDDEEFF/head_left_cam_optical", "cafef00d"),
+            frame_entry_path(
+                &app(),
+                "galbot",
+                "K1-AABBCCDDEEFF/head_left_cam_optical",
+                "cafef00d"
+            ),
             PathBuf::from(
                 "/home/booster/auki/boosterapp/registries/frames/\
                  galbot/K1-AABBCCDDEEFF__head_left_cam_optical/cafef00d.json"

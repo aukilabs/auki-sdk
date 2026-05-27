@@ -14,9 +14,9 @@
 
 use auki_manifests::{PoseSource, PoseWriterMode, TimeTransformSource};
 use auki_network::resources_protocol::{
-    Available, Extent, Head, PoseBlock, PoseManifestPointer, ResourceEntry,
-    SensorBlock, SensorKind, SensorManifestPointer, TimeTransformManifestPointer,
-    DetectionManifestPointer, VariantContent,
+    Available, DetectionManifestPointer, Extent, Head, PoseBlock, PoseManifestPointer,
+    ResourceEntry, SensorBlock, SensorKind, SensorManifestPointer, TimeTransformManifestPointer,
+    VariantContent,
 };
 use auki_network::stream_protocol::{ReadFrom, StreamRequest};
 use auki_registry::{LogRef, RegistryRef};
@@ -338,10 +338,7 @@ fn make_pose_movable_live_fixed() -> ResourceEntry {
                 to_frame: frame_galbot_left_gripper(),
                 clock: clock_sdk(),
                 source: PoseSource::Ros2Tf {
-                    publishers: vec![
-                        "robot_state_publisher".into(),
-                        "tf_broadcaster".into(),
-                    ],
+                    publishers: vec!["robot_state_publisher".into(), "tf_broadcaster".into()],
                 },
                 expected_rate_hz: 30,
             },

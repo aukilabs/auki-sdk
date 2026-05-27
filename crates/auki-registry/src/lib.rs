@@ -790,7 +790,8 @@ pub fn read_frame(
 pub fn write_detector(app_root: &Path, entry: &DetectorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
-    let path = auki_layout::detector_entry_path(app_root, &entry.peer_id, &entry.detector_id, &hash);
+    let path =
+        auki_layout::detector_entry_path(app_root, &entry.peer_id, &entry.detector_id, &hash);
     write_entry_at(&path, hash, &bytes)
 }
 
@@ -1116,7 +1117,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let resolved_second = read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &second_hash).unwrap();
+        let resolved_second =
+            read_sensor(dir.path(), &entry.peer_id, &entry.sensor_id, &second_hash).unwrap();
         assert_eq!(resolved_second, Some(entry));
     }
 
@@ -1189,7 +1191,12 @@ mod tests {
         fs::create_dir_all(&bogus_dir).unwrap();
         fs::copy(&real, bogus_dir.join(format!("{hash}.json"))).unwrap();
 
-        let err = read_sensor(dir.path(), &entry.peer_id, "K1-AABBCCDDEEFF/other_cam", &hash);
+        let err = read_sensor(
+            dir.path(),
+            &entry.peer_id,
+            "K1-AABBCCDDEEFF/other_cam",
+            &hash,
+        );
         assert!(matches!(err, Err(Error::IdMismatch { .. })), "got {err:?}");
     }
 
@@ -1572,9 +1579,15 @@ mod tests {
 
     #[test]
     fn validate_accepts_all_four_presets() {
-        FrameRegistryEntry::ros_body("galbot", "a").validate().unwrap();
-        FrameRegistryEntry::ros_optical("galbot", "b").validate().unwrap();
-        FrameRegistryEntry::opengl("galbot", "c").validate().unwrap();
+        FrameRegistryEntry::ros_body("galbot", "a")
+            .validate()
+            .unwrap();
+        FrameRegistryEntry::ros_optical("galbot", "b")
+            .validate()
+            .unwrap();
+        FrameRegistryEntry::opengl("galbot", "c")
+            .validate()
+            .unwrap();
         FrameRegistryEntry::unity("galbot", "d").validate().unwrap();
     }
 
@@ -1785,12 +1798,27 @@ mod tests {
                 frame: frame_ref.clone(),
             }),
         };
-        let camera_json = std::str::from_utf8(&camera.canonical_bytes()).unwrap().to_string();
+        let camera_json = std::str::from_utf8(&camera.canonical_bytes())
+            .unwrap()
+            .to_string();
         // Must contain kind:camera, type:rgb, peer_id, nested frame
-        assert!(camera_json.contains(r#""kind":"camera""#), "camera: {camera_json}");
-        assert!(camera_json.contains(r#""type":"rgb""#), "camera type: {camera_json}");
-        assert!(camera_json.contains(r#""peer_id":"galbot""#), "camera peer_id: {camera_json}");
-        assert!(camera_json.contains(r#""frame":{"hash":"abc123","id":"head_optical","peer_id":"galbot"}"#), "camera frame: {camera_json}");
+        assert!(
+            camera_json.contains(r#""kind":"camera""#),
+            "camera: {camera_json}"
+        );
+        assert!(
+            camera_json.contains(r#""type":"rgb""#),
+            "camera type: {camera_json}"
+        );
+        assert!(
+            camera_json.contains(r#""peer_id":"galbot""#),
+            "camera peer_id: {camera_json}"
+        );
+        assert!(
+            camera_json
+                .contains(r#""frame":{"hash":"abc123","id":"head_optical","peer_id":"galbot"}"#),
+            "camera frame: {camera_json}"
+        );
 
         let rangefinder = SensorRegistryEntry {
             peer_id: "galbot".into(),
@@ -1804,9 +1832,17 @@ mod tests {
                 frame: frame_ref.clone(),
             }),
         };
-        let rf_json = std::str::from_utf8(&rangefinder.canonical_bytes()).unwrap().to_string();
-        assert!(rf_json.contains(r#""kind":"rangefinder""#), "rangefinder kind: {rf_json}");
-        assert!(rf_json.contains(r#""type":"3d_lidar""#), "rangefinder type: {rf_json}");
+        let rf_json = std::str::from_utf8(&rangefinder.canonical_bytes())
+            .unwrap()
+            .to_string();
+        assert!(
+            rf_json.contains(r#""kind":"rangefinder""#),
+            "rangefinder kind: {rf_json}"
+        );
+        assert!(
+            rf_json.contains(r#""type":"3d_lidar""#),
+            "rangefinder type: {rf_json}"
+        );
 
         let rf = SensorRegistryEntry {
             peer_id: "galbot".into(),
@@ -1816,9 +1852,14 @@ mod tests {
                 frame: frame_ref.clone(),
             }),
         };
-        let ble_json = std::str::from_utf8(&rf.canonical_bytes()).unwrap().to_string();
+        let ble_json = std::str::from_utf8(&rf.canonical_bytes())
+            .unwrap()
+            .to_string();
         assert!(ble_json.contains(r#""kind":"rf""#), "rf kind: {ble_json}");
-        assert!(ble_json.contains(r#""type":"bluetooth""#), "rf type: {ble_json}");
+        assert!(
+            ble_json.contains(r#""type":"bluetooth""#),
+            "rf type: {ble_json}"
+        );
     }
 }
 
@@ -1846,7 +1887,15 @@ mod id_charset_tests {
 
     #[test]
     fn allows_slash_underscore_dash_dot() {
-        for good in ["foo/bar", "foo_bar", "foo-bar", "a.b.c", "a/b/c", "head_left_rgb", "session/sdk_clock"] {
+        for good in [
+            "foo/bar",
+            "foo_bar",
+            "foo-bar",
+            "a.b.c",
+            "a/b/c",
+            "head_left_rgb",
+            "session/sdk_clock",
+        ] {
             assert!(
                 validate_registry_id(good).is_ok(),
                 "id {good:?} should be allowed"

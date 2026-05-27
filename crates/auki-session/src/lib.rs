@@ -7,21 +7,24 @@
 #![deny(unused_must_use)]
 
 mod error;
-mod registry_store;
-mod log_specs;
 mod log_handles;
-mod session;
+mod log_specs;
 mod materialization;
+mod registry_store;
+mod session;
 
 pub use error::{Result, SessionError};
-pub use log_specs::{HeadSpec, SensorLogSpec, PoseLogSpec, TimeTransformLogSpec, DetectionLogSpec};
-pub use log_handles::{SensorLogHandle, PoseLogHandle, TimeTransformLogHandle, DetectionLogHandle, MaterializedLogHandle};
-pub use session::{Session, FrameDef, DomainConfig};
-pub use registry_store::RegistryStore;
+pub use log_handles::{
+    DetectionLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
+    TimeTransformLogHandle,
+};
+pub use log_specs::{DetectionLogSpec, HeadSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec};
 pub use materialization::MaterializationError;
+pub use registry_store::RegistryStore;
+pub use session::{DomainConfig, FrameDef, Session};
 
 // Convenience re-exports so callers only need `auki_session::` imports.
-pub use auki_domain::{ClusterTarget, DaemonInfo, ClusterManager};
+pub use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo};
 pub use auki_network::PeerIdentity;
 
 #[cfg(test)]

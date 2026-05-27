@@ -158,12 +158,9 @@ pub struct StreamRequest {
 
 /// Convert the Rust `StreamRequest` to the prost wire type so it can
 /// be wrapped in a `StreamMessage::request(…)`.
-pub(crate) fn stream_request_to_wire(
-    req: StreamRequest,
-) -> auki_datatypes::stream::StreamRequest {
+pub(crate) fn stream_request_to_wire(req: StreamRequest) -> auki_datatypes::stream::StreamRequest {
     use auki_datatypes::stream::{
-        ReadFromLatest, ReadFromStart, ReadFromTimestamp,
-        stream_request,
+        ReadFromLatest, ReadFromStart, ReadFromTimestamp, stream_request,
     };
     let read_from = match req.from {
         ReadFrom::Latest => Some(stream_request::ReadFrom::Latest(ReadFromLatest {})),
@@ -190,9 +187,7 @@ pub(crate) fn stream_request_from_wire(
     let from = match wire.read_from {
         Some(stream_request::ReadFrom::Latest(_)) => ReadFrom::Latest,
         Some(stream_request::ReadFrom::FromStart(_)) => ReadFrom::FromStart,
-        Some(stream_request::ReadFrom::FromTimestamp(t)) => {
-            ReadFrom::FromTimestamp(t.timestamp_ns)
-        }
+        Some(stream_request::ReadFrom::FromTimestamp(t)) => ReadFrom::FromTimestamp(t.timestamp_ns),
         None => ReadFrom::Latest,
     };
     StreamRequest {

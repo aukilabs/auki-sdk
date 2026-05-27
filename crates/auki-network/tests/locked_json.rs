@@ -21,9 +21,8 @@ where
 {
     let path = Path::new("tests/locked").join(fixture);
     let bytes = fs::read(&path).unwrap_or_else(|_| panic!("missing fixture {fixture}"));
-    let value: T = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!("failed to deserialize {fixture}: {e}")
-    });
+    let value: T = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|e| panic!("failed to deserialize {fixture}: {e}"));
     let serialized = serde_json::to_value(&value).unwrap();
     let actual = auki_jcs::canonicalize(&serialized);
     let expected: &[u8] = bytes.trim_ascii_end();

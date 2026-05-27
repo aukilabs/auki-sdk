@@ -9,7 +9,10 @@ pub enum SessionError {
     #[error("registry: {0}")]
     Registry(#[from] auki_registry::Error),
     #[error("duplicate log {source_peer_id}/{resource_id}")]
-    DuplicateLog { source_peer_id: String, resource_id: String },
+    DuplicateLog {
+        source_peer_id: String,
+        resource_id: String,
+    },
     #[error("materialization: {0}")]
     Materialization(#[from] crate::materialization::MaterializationError),
     /// Returned by [`Session::join_domain`] when the cluster bootstrap fails.

@@ -122,40 +122,43 @@ pub fn dynamic_intrinsics_from(info: &CameraInfoMsg) -> DynamicIntrinsics {
 /// `sensor_msgs/CameraInfo` but required by `SensorRegistryEntry`. For the K1
 /// these come from out-of-band knowledge of the platform.
 #[derive(Debug, Clone)]
-pub struct StaticCameraMetadata<'a> {
-    pub pixel_format: &'a str,
-    pub color_space: &'a str,
+pub struct StaticCameraMetadata {
+    pub pixel_format: String,
+    pub color_space: String,
     pub frame_rate_hz: u32,
-    pub intrinsics_model: &'a str,
-    /// Frame Registry id for the camera optical frame. Threaded into
-    /// `Camera.frame_id` so consumers can resolve a
-    /// `FrameRegistryEntry` for the camera's coordinate system.
+    pub intrinsics_model: String,
+    /// Sensor type string (e.g. `"rgb"`, `"depth"`, `"ir"`). Corresponds to
+    /// `SensorBody::Camera.r#type` — the open-string modality within the
+    /// `camera` sensor kind.
+    pub sensor_type: String,
+    /// Frame Registry reference for the camera optical frame (content-addressed).
     /// Conventionally REP-103 optical (`X right, Y down, Z forward`).
-    pub frame_id: &'a str,
-    /// Content hash of the exact Frame Registry entry named by
-    /// [`StaticCameraMetadata::frame_id`].
-    pub frame_hash: &'a str,
+    pub frame: auki_registry::RegistryRef,
 }
 
 /// Build a `SensorRegistryEntry` from a bootstrap `CameraInfo` + integrator-
 /// supplied static metadata. Currently only emits `Camera` bodies.
+///
+/// `peer_id` is the peer that owns the physical sensor.
 pub fn build_camera_registry_entry(
+    peer_id: impl Into<String>,
     sensor_id: impl Into<String>,
     info: &CameraInfoMsg,
-    meta: &StaticCameraMetadata<'_>,
+    meta: &StaticCameraMetadata,
 ) -> auki_registry::SensorRegistryEntry {
     auki_registry::SensorRegistryEntry {
+        peer_id: peer_id.into(),
         sensor_id: sensor_id.into(),
         body: auki_registry::SensorBody::Camera(auki_registry::Camera {
+            r#type: meta.sensor_type.clone(),
             width: info.width,
             height: info.height,
             frame_rate_hz: meta.frame_rate_hz,
-            pixel_format: meta.pixel_format.to_string(),
-            color_space: meta.color_space.to_string(),
-            intrinsics_model: meta.intrinsics_model.to_string(),
+            pixel_format: meta.pixel_format.clone(),
+            color_space: meta.color_space.clone(),
+            intrinsics_model: meta.intrinsics_model.clone(),
             distortion_model: info.distortion_model.clone(),
-            frame_id: meta.frame_id.to_string(),
-            frame_hash: meta.frame_hash.to_string(),
+            frame: meta.frame.clone(),
         }),
     }
 }
@@ -435,33 +438,38 @@ fn apply_normalization(
     out
 }
 
-/// Build a `SensorRegistryEntry` (with `SensorBody::PointCloud`) from a
-/// bootstrap `PointCloud2` message. The integrator supplies `frame_rate_hz`
-/// plus `(frame_id, frame_hash)` out-of-band — the same way
-/// `StaticCameraMetadata` works for cameras. (`PointCloud2Msg` does not
-/// currently mirror ROS's `header.frame_id`; integrators source the frame id
-/// from their topic configuration or platform knowledge.)
+/// Build a `SensorRegistryEntry` (with `SensorBody::Rangefinder`) from a
+/// bootstrap `PointCloud2` message. The integrator supplies `peer_id`,
+/// `frame_rate_hz`, and a `RegistryRef` for the coordinate frame out-of-band —
+/// the same way `StaticCameraMetadata` works for cameras. (`PointCloud2Msg`
+/// does not currently mirror ROS's `header.frame_id`; integrators source the
+/// frame ref from their topic configuration or platform knowledge.)
 ///
 /// The output `fields`/`point_step` reflect [RGB(A) normalization](crate),
 /// not the raw ROS2 layout — so the registry describes the bytes that
 /// downstream readers will see in the log payload.
+///
+/// `sensor_type` is an open-string modality, e.g. `"point_cloud"`, `"3d_lidar"`,
+/// `"2d_lidar"`. Use `"point_cloud"` for generic `PointCloud2` data.
 pub fn build_point_cloud_registry_entry(
+    peer_id: impl Into<String>,
     sensor_id: impl Into<String>,
     msg: &PointCloud2Msg,
     frame_rate_hz: u32,
-    frame_id: impl Into<String>,
-    frame_hash: impl Into<String>,
+    sensor_type: impl Into<String>,
+    frame: auki_registry::RegistryRef,
 ) -> auki_registry::SensorRegistryEntry {
     let normalized = normalize_layout(&msg.fields);
     auki_registry::SensorRegistryEntry {
+        peer_id: peer_id.into(),
         sensor_id: sensor_id.into(),
-        body: auki_registry::SensorBody::PointCloud(auki_registry::PointCloud {
+        body: auki_registry::SensorBody::Rangefinder(auki_registry::Rangefinder {
+            r#type: sensor_type.into(),
             fields: normalized.fields,
             point_step: normalized.point_step,
             is_bigendian: msg.is_bigendian,
             frame_rate_hz,
-            frame_id: frame_id.into(),
-            frame_hash: frame_hash.into(),
+            frame,
         }),
     }
 }
@@ -799,7 +807,15 @@ pub mod r2r_subscriber {
 mod tests {
     use super::*;
 
-    const K1_HEAD_LEFT_CAM_OPTICAL_HASH: &str = "e0d40e7b526e04f15f83f75897f53825";
+    const K1_HEAD_LEFT_CAM_OPTICAL_HASH: &str = "03b86f32827ec6a25a5e619b2f36478b";
+
+    fn k1_optical_frame_ref() -> auki_registry::RegistryRef {
+        auki_registry::RegistryRef {
+            peer_id: "test-peer".into(),
+            id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
+            hash: K1_HEAD_LEFT_CAM_OPTICAL_HASH.into(),
+        }
+    }
 
     fn k1_bootstrap_camera_info() -> CameraInfoMsg {
         CameraInfoMsg {
@@ -888,21 +904,20 @@ mod tests {
             d: vec![],   // unused by the registry side
         };
         let entry = build_camera_registry_entry(
+            "test-peer",
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
-                pixel_format: "YUV_NV12",
-                color_space: "BT.709",
+                pixel_format: "YUV_NV12".into(),
+                color_space: "BT.709".into(),
                 frame_rate_hz: 20,
-                intrinsics_model: "pinhole",
-                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical",
-                frame_hash: K1_HEAD_LEFT_CAM_OPTICAL_HASH,
+                intrinsics_model: "pinhole".into(),
+                sensor_type: "rgb".into(),
+                frame: k1_optical_frame_ref(),
             },
         );
-        // Recomputed when `frame_hash` was added to Camera and when
-        // the camera registry tag was renamed.
-        // Same hash as auki-registry's `sensor_entry_hash_is_locked`.
-        assert_eq!(entry.hash(), "5559c9648e31eee2410b692fef393489");
+        // Same hash as auki-registry's `sensor_entry_hash_is_locked` (#216 rev 2 shape).
+        assert_eq!(entry.hash(), "bfc5a987e68b274dd5e06c334602f64d");
     }
 
     #[test]
@@ -974,20 +989,20 @@ mod tests {
         let mut sub = MockCameraSubscriber::new().with_bootstrap_ok(k1_bootstrap_camera_info());
         let info = sub.bootstrap(Duration::from_secs(5)).unwrap();
         let registry_entry = build_camera_registry_entry(
+            "test-peer",
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
-                pixel_format: "YUV_NV12",
-                color_space: "BT.709",
+                pixel_format: "YUV_NV12".into(),
+                color_space: "BT.709".into(),
                 frame_rate_hz: 20,
-                intrinsics_model: "pinhole",
-                frame_id: "K1-AABBCCDDEEFF/head_left_cam_optical",
-                frame_hash: K1_HEAD_LEFT_CAM_OPTICAL_HASH,
+                intrinsics_model: "pinhole".into(),
+                sensor_type: "rgb".into(),
+                frame: k1_optical_frame_ref(),
             },
         );
-        // Recomputed when `frame_hash` was added to Camera and when
-        // the camera registry tag was renamed.
-        assert_eq!(registry_entry.hash(), "5559c9648e31eee2410b692fef393489");
+        // Matches auki-registry's locked hash for the M1 camera entry (#216 rev 2 shape).
+        assert_eq!(registry_entry.hash(), "bfc5a987e68b274dd5e06c334602f64d");
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {
@@ -1100,17 +1115,16 @@ mod tests {
             is_dense: true,
         };
         let entry = build_point_cloud_registry_entry(
+            "test-peer",
             "K1-AABBCCDDEEFF/head_depth_points",
             &msg,
             10,
-            "K1-AABBCCDDEEFF/head_left_cam_optical",
-            K1_HEAD_LEFT_CAM_OPTICAL_HASH,
+            "point_cloud",
+            k1_optical_frame_ref(),
         );
-        // Locked: this is the same hash exercised by auki-registry's
-        // `point_cloud_entry_hash_is_locked`. If the two diverge, one of the
-        // crates drifted from the schema. Recomputed when `frame_hash`
-        // was added to PointCloud.
-        assert_eq!(entry.hash(), "2c480838a9be0b14608a8a0d72ee319f");
+        // Locked: matches auki-registry's `point_cloud_entry_hash_is_locked` (#216 rev 2 shape).
+        // SensorBody::Rangefinder with type="point_cloud".
+        assert_eq!(entry.hash(), "9522242bd92110b03c024e512e0274cd");
     }
 
     #[test]
@@ -1171,10 +1185,21 @@ mod tests {
         };
 
         // Registry side: rgb expanded to r/g/b uint8 fields, point_step 16 → 15.
-        let entry =
-            build_point_cloud_registry_entry("test/cam", &msg, 30, "test/cam_optical", "fh");
-        let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
-            panic!("expected PointCloud variant");
+        let frame_ref = auki_registry::RegistryRef {
+            peer_id: "test".into(),
+            id: "test/cam_optical".into(),
+            hash: "fh".into(),
+        };
+        let entry = build_point_cloud_registry_entry(
+            "test",
+            "test/cam",
+            &msg,
+            30,
+            "point_cloud",
+            frame_ref,
+        );
+        let auki_registry::SensorBody::Rangefinder(pc) = &entry.body else {
+            panic!("expected Rangefinder variant");
         };
         let names: Vec<_> = pc.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["x", "y", "z", "r", "g", "b"]);
@@ -1236,10 +1261,21 @@ mod tests {
             is_dense: true,
         };
 
-        let entry =
-            build_point_cloud_registry_entry("test/cam", &msg, 30, "test/cam_optical", "fh");
-        let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
-            panic!("expected PointCloud variant");
+        let frame_ref2 = auki_registry::RegistryRef {
+            peer_id: "test".into(),
+            id: "test/cam_optical".into(),
+            hash: "fh".into(),
+        };
+        let entry = build_point_cloud_registry_entry(
+            "test",
+            "test/cam",
+            &msg,
+            30,
+            "point_cloud",
+            frame_ref2,
+        );
+        let auki_registry::SensorBody::Rangefinder(pc) = &entry.body else {
+            panic!("expected Rangefinder variant");
         };
         let names: Vec<_> = pc.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["x", "r", "g", "b", "a"]);
@@ -1288,10 +1324,21 @@ mod tests {
             is_dense: true,
         };
 
-        let entry =
-            build_point_cloud_registry_entry("test/lidar", &msg, 10, "test/lidar_frame", "fh");
-        let auki_registry::SensorBody::PointCloud(pc) = &entry.body else {
-            panic!("expected PointCloud variant");
+        let frame_ref3 = auki_registry::RegistryRef {
+            peer_id: "test".into(),
+            id: "test/lidar_frame".into(),
+            hash: "fh".into(),
+        };
+        let entry = build_point_cloud_registry_entry(
+            "test",
+            "test/lidar",
+            &msg,
+            10,
+            "point_cloud",
+            frame_ref3,
+        );
+        let auki_registry::SensorBody::Rangefinder(pc) = &entry.body else {
+            panic!("expected Rangefinder variant");
         };
         assert_eq!(pc.fields.len(), 2);
         assert_eq!(pc.fields[0].name, "intensity");

@@ -9,7 +9,9 @@ pub struct RegistryStore<T> {
 
 impl<T> Default for RegistryStore<T> {
     fn default() -> Self {
-        Self { entries: HashMap::new() }
+        Self {
+            entries: HashMap::new(),
+        }
     }
 }
 

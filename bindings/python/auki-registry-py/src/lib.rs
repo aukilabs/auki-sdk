@@ -119,7 +119,9 @@ impl RegistryRef {
     /// Validate that the `peer_id`, `id`, and `hash` fields are non-empty.
     fn validate(&self) -> PyResult<()> {
         if self.peer_id.is_empty() {
-            return Err(PyValueError::new_err("RegistryRef.peer_id must not be empty"));
+            return Err(PyValueError::new_err(
+                "RegistryRef.peer_id must not be empty",
+            ));
         }
         if self.id.is_empty() {
             return Err(PyValueError::new_err("RegistryRef.id must not be empty"));
@@ -167,7 +169,9 @@ impl LogRef {
             ));
         }
         if self.resource_id.is_empty() {
-            return Err(PyValueError::new_err("LogRef.resource_id must not be empty"));
+            return Err(PyValueError::new_err(
+                "LogRef.resource_id must not be empty",
+            ));
         }
         Ok(())
     }
@@ -193,18 +197,12 @@ fn frame_ros_optical(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<
 
 #[pyfunction]
 fn frame_opengl(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(
-        py,
-        &registry::FrameRegistryEntry::opengl(peer_id, frame_id),
-    )
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::opengl(peer_id, frame_id))
 }
 
 #[pyfunction]
 fn frame_unity(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
-    struct_to_pyobject(
-        py,
-        &registry::FrameRegistryEntry::unity(peer_id, frame_id),
-    )
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::unity(peer_id, frame_id))
 }
 
 #[pyfunction]
@@ -649,12 +647,10 @@ mod tests {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
             let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
-            let frame_hash =
-                write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+            let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
 
             let read =
-                read_frame(py, dir.path().to_path_buf(), PEER_ID, FRAME_ID, &frame_hash)
-                    .unwrap();
+                read_frame(py, dir.path().to_path_buf(), PEER_ID, FRAME_ID, &frame_hash).unwrap();
             let read = read.bind(py);
             assert_eq!(
                 read.get_item("frame_id")
@@ -679,8 +675,7 @@ mod tests {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
             let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
-            let frame_hash =
-                write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+            let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
             let frame_ref = make_frame_ref_dict(py, &frame_hash);
             let field = point_field(py, "x", 0, "float32", 1).unwrap();
             let fields = PyList::new_bound(py, [field.bind(py)]);
@@ -697,8 +692,7 @@ mod tests {
             )
             .unwrap();
 
-            let sensor_hash =
-                write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
+            let sensor_hash = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
             let read = read_sensor(
                 py,
                 dir.path().to_path_buf(),
@@ -736,8 +730,7 @@ mod tests {
             )
             .unwrap();
 
-            let err =
-                write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap_err();
+            let err = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap_err();
             assert!(err.is_instance_of::<PyValueError>(py));
         });
     }
@@ -747,8 +740,7 @@ mod tests {
         Python::with_gil(|py| {
             let dir = tempfile::tempdir().unwrap();
             let frame = frame_ros_optical(py, PEER_ID, FRAME_ID).unwrap();
-            let frame_hash =
-                write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+            let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
 
             // Build a RegistryRef pyclass instance and pass it to camera_sensor_entry.
             let frame_ref = RegistryRef::new(
@@ -773,8 +765,7 @@ mod tests {
             )
             .unwrap();
 
-            let sensor_hash =
-                write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
+            let sensor_hash = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
             assert!(!sensor_hash.is_empty());
         });
     }

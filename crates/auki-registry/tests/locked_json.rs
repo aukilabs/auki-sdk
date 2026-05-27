@@ -15,7 +15,9 @@
 //! cargo run -p auki-registry --bin regen_locked_fixtures
 //! ```
 
-use auki_registry::{ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+use auki_registry::{
+    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorRegistryEntry,
+};
 use std::fs;
 use std::path::Path;
 

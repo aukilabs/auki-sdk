@@ -1,5 +1,5 @@
 //! Single source of truth for the Auki SDK's log manifests — schemas
-//! + builders for Sensor Log, Pose Log, and TimeTransform Log
+//! and builders for Sensor Log, Pose Log, and TimeTransform Log
 //! manifests.
 //!
 //! Symmetric with [`auki-datatypes`](../../auki-datatypes), which
@@ -208,6 +208,7 @@ impl std::error::Error for ManifestValidationError {}
 /// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon run
 /// (same value as the parent session directory name).
+#[allow(clippy::too_many_arguments)]
 pub fn build_sensor_log_manifest(
     source_peer_id: &str,
     writer_peer_id: &str,
@@ -910,7 +911,10 @@ mod tests {
         assert_eq!(m["input_log"]["resource_id"], "rec-456");
         assert_eq!(m["input_sensor"]["peer_id"], "galbot");
         assert_eq!(m["input_sensor"]["id"], "K1-AABBCCDDEEFF/head_left_cam");
-        assert_eq!(m["input_sensor"]["hash"], "e8cb3879fcfa7f716047aa0892b0c0c0");
+        assert_eq!(
+            m["input_sensor"]["hash"],
+            "e8cb3879fcfa7f716047aa0892b0c0c0"
+        );
         assert_eq!(m["clock"]["peer_id"], "galbot");
         assert_eq!(m["clock"]["id"], "K1-AABBCCDDEEFF/utc");
         assert_eq!(m["clock"]["hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
@@ -965,7 +969,11 @@ mod tests {
         let json = std::str::from_utf8(&bytes).unwrap();
         assert!(json.contains(r#""source_peer_id":"galbot""#));
         assert!(json.contains(r#""writer_peer_id":"galbot""#));
-        assert!(json.contains(r#""sensor":{"hash":"sensorhash","id":"head_left_rgb","peer_id":"galbot"}"#));
+        assert!(
+            json.contains(
+                r#""sensor":{"hash":"sensorhash","id":"head_left_rgb","peer_id":"galbot"}"#
+            )
+        );
         assert!(json.contains(r#""segment_duration_ns":1000000000"#));
         assert!(json.contains(r#""retention_ns":5000000000"#));
     }
@@ -1036,7 +1044,9 @@ mod tests {
         assert!(json.contains(r#""source_peer_id":"galbot""#));
         assert!(json.contains(r#""writer_mode":"movable""#));
         assert!(json.contains(r#""from_frame":{"hash":"fromhash","id":"world","peer_id":"park"}"#));
-        assert!(json.contains(r#""to_frame":{"hash":"tohash","id":"base_link","peer_id":"galbot"}"#));
+        assert!(
+            json.contains(r#""to_frame":{"hash":"tohash","id":"base_link","peer_id":"galbot"}"#)
+        );
     }
 
     #[test]
@@ -1121,7 +1131,9 @@ mod tests {
         let json = std::str::from_utf8(&bytes).unwrap();
         assert!(json.contains(r#""source_peer_id":"galbot""#));
         assert!(json.contains(r#""writer_peer_id":"galbot""#));
-        assert!(json.contains(r#""from_clock":{"hash":"fromhash","id":"session/sdk_clock","peer_id":"galbot"}"#));
+        assert!(json.contains(
+            r#""from_clock":{"hash":"fromhash","id":"session/sdk_clock","peer_id":"galbot"}"#
+        ));
     }
 
     // ─── DetectionLogManifest source/writer split + RegistryRef/LogRef (Task 2.3) ─
@@ -1159,7 +1171,11 @@ mod tests {
         };
         let bytes = auki_jcs::canonicalize(&serde_json::to_value(&m).unwrap());
         let json = std::str::from_utf8(&bytes).unwrap();
-        assert!(json.contains(r#""input_log":{"resource_id":"head_left_rgb","source_peer_id":"galbot"}"#));
+        assert!(
+            json.contains(
+                r#""input_log":{"resource_id":"head_left_rgb","source_peer_id":"galbot"}"#
+            )
+        );
         assert!(json.contains(r#""detector":{"hash":"dethash""#));
     }
 }

@@ -60,9 +60,9 @@ fn extract_floats(seq: &Bound<'_, PyAny>, expected_len: usize, name: &str) -> Py
     let mut out = Vec::with_capacity(expected_len);
     for i in 0..expected_len {
         let item = sequence.get_item(i)?;
-        let value: f64 = item.extract().map_err(|_| {
-            PyValueError::new_err(format!("{name}[{i}]: expected a float"))
-        })?;
+        let value: f64 = item
+            .extract()
+            .map_err(|_| PyValueError::new_err(format!("{name}[{i}]: expected a float")))?;
         out.push(value);
     }
     Ok(out)
@@ -70,14 +70,30 @@ fn extract_floats(seq: &Bound<'_, PyAny>, expected_len: usize, name: &str) -> Py
 
 fn extract_vec3_array(any: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec3> {
     let floats = extract_floats(any, 3, name)?;
-    Ok(Vec3 { x: floats[0], y: floats[1], z: floats[2] })
+    Ok(Vec3 {
+        x: floats[0],
+        y: floats[1],
+        z: floats[2],
+    })
 }
 
-fn extract_spatial_transform_array(any: &Bound<'_, PyAny>, name: &str) -> PyResult<SpatialTransform> {
+fn extract_spatial_transform_array(
+    any: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<SpatialTransform> {
     let floats = extract_floats(any, 7, name)?;
     Ok(SpatialTransform {
-        translation: Some(Vec3 { x: floats[0], y: floats[1], z: floats[2] }),
-        orientation: Some(Quat { x: floats[3], y: floats[4], z: floats[5], w: floats[6] }),
+        translation: Some(Vec3 {
+            x: floats[0],
+            y: floats[1],
+            z: floats[2],
+        }),
+        orientation: Some(Quat {
+            x: floats[3],
+            y: floats[4],
+            z: floats[5],
+            w: floats[6],
+        }),
     })
 }
 
@@ -98,8 +114,13 @@ fn spatial_transform_to_pylist(py: Python<'_>, t: &SpatialTransform) -> PyResult
     Ok(PyList::new_bound(
         py,
         [
-            translation.x, translation.y, translation.z,
-            orientation.x, orientation.y, orientation.z, orientation.w,
+            translation.x,
+            translation.y,
+            translation.z,
+            orientation.x,
+            orientation.y,
+            orientation.z,
+            orientation.w,
         ],
     )
     .into())
@@ -154,11 +175,19 @@ fn parse_py<T: DeserializeOwned>(
     serde_json::from_value(json).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
 }
 
-fn parse_frame_entry(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -> PyResult<FrameRegistryEntry> {
+fn parse_frame_entry(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<FrameRegistryEntry> {
     parse_py(py, value, name)
 }
 
-fn parse_axis_convention(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -> PyResult<AxisConvention> {
+fn parse_axis_convention(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<AxisConvention> {
     parse_py(py, value, name)
 }
 
@@ -166,10 +195,9 @@ fn parse_axis_convention(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -
 
 #[pyfunction]
 fn meters_per_unit(unit: &str) -> PyResult<f64> {
-    let parsed: auki_registry_rs::LengthUnit = serde_json::from_value(
-        serde_json::Value::String(unit.to_string()),
-    )
-    .map_err(|e| PyValueError::new_err(format!("unit: {e}")))?;
+    let parsed: auki_registry_rs::LengthUnit =
+        serde_json::from_value(serde_json::Value::String(unit.to_string()))
+            .map_err(|e| PyValueError::new_err(format!("unit: {e}")))?;
     Ok(geometry::meters_per_unit(parsed))
 }
 
@@ -237,7 +265,9 @@ fn convert_direction_convention(
     let direction = extract_vec3_array(direction, "direction")?;
     let from = parse_frame_entry(py, from_entry, "from_entry")?;
     let to = parse_frame_entry(py, to_entry, "to_entry")?;
-    let converted = map_err(geometry::convert_direction_convention(direction, &from, &to))?;
+    let converted = map_err(geometry::convert_direction_convention(
+        direction, &from, &to,
+    ))?;
     vec3_to_pylist(py, &converted)
 }
 
@@ -258,10 +288,7 @@ fn convert_pose_convention(
 // ─── Spatial transform composition (PR #193) ────────────────────────
 
 #[pyfunction]
-fn inverse_spatial_transform(
-    py: Python<'_>,
-    transform: &Bound<'_, PyAny>,
-) -> PyResult<PyObject> {
+fn inverse_spatial_transform(py: Python<'_>, transform: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     let t = extract_spatial_transform_array(transform, "transform")?;
     let inverse = map_err(geometry::inverse_spatial_transform(&t))?;
     spatial_transform_to_pylist(py, &inverse)
@@ -294,20 +321,14 @@ fn relative_spatial_transform(
 // ─── 4x4 ↔ 7-array bridge ──────────────────────────────────────────
 
 #[pyfunction]
-fn spatial_transform_to_matrix4(
-    py: Python<'_>,
-    pose: &Bound<'_, PyAny>,
-) -> PyResult<PyObject> {
+fn spatial_transform_to_matrix4(py: Python<'_>, pose: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     let t = extract_spatial_transform_array(pose, "pose")?;
     let matrix = map_err(geometry::spatial_transform_to_matrix4(&t))?;
     matrix4_to_pylist(py, matrix)
 }
 
 #[pyfunction]
-fn spatial_transform_from_matrix4(
-    py: Python<'_>,
-    matrix: &Bound<'_, PyAny>,
-) -> PyResult<PyObject> {
+fn spatial_transform_from_matrix4(py: Python<'_>, matrix: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     let m = extract_matrix4(matrix, "matrix")?;
     let transform = map_err(geometry::spatial_transform_from_matrix4(m))?;
     spatial_transform_to_pylist(py, &transform)

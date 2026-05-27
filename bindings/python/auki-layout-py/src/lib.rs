@@ -4,7 +4,7 @@
 //! Lets a Python consumer (e.g. the ESL detector loop in
 //! [`detectors`](https://github.com/aukilabs/detectors)) compute
 //! SDK-canonical paths without re-implementing the `__`-substitution
-//! + directory-name conventions in Python. Drift risk: if the Rust
+//! and directory-name conventions in Python. Drift risk: if the Rust
 //! `id_to_segment` substitution rule changes, Python users who
 //! hand-roll the path concat would silently break — these wrappers
 //! keep both sides reading from one source of truth.
@@ -13,9 +13,9 @@
 //! returning `str` (PathBuf converts via `to_string_lossy`):
 //!
 //! - `registries_root(app_root)`
-//! - `sensor_entry_path(app_root, sensor_id, hash)`
-//! - `clock_entry_path(app_root, clock_id, hash)`
-//! - `frame_entry_path(app_root, frame_id, hash)`
+//! - `sensor_entry_path(app_root, peer_id, sensor_id, hash)`
+//! - `clock_entry_path(app_root, peer_id, clock_id, hash)`
+//! - `frame_entry_path(app_root, peer_id, frame_id, hash)`
 //! - `session_root(app_root, session)`
 //! - `timetransform_log_path(session_root, from_id, to_id)`
 //! - `sensorlog_path(session_root, sensor_log_id)`
@@ -41,18 +41,20 @@ fn registries_root(app_root: PathBuf) -> String {
 }
 
 #[pyfunction]
-fn sensor_entry_path(app_root: PathBuf, sensor_id: &str, hash: &str) -> String {
-    pathbuf_to_string(layout::sensor_entry_path(&app_root, sensor_id, hash))
+fn sensor_entry_path(app_root: PathBuf, peer_id: &str, sensor_id: &str, hash: &str) -> String {
+    pathbuf_to_string(layout::sensor_entry_path(
+        &app_root, peer_id, sensor_id, hash,
+    ))
 }
 
 #[pyfunction]
-fn clock_entry_path(app_root: PathBuf, clock_id: &str, hash: &str) -> String {
-    pathbuf_to_string(layout::clock_entry_path(&app_root, clock_id, hash))
+fn clock_entry_path(app_root: PathBuf, peer_id: &str, clock_id: &str, hash: &str) -> String {
+    pathbuf_to_string(layout::clock_entry_path(&app_root, peer_id, clock_id, hash))
 }
 
 #[pyfunction]
-fn frame_entry_path(app_root: PathBuf, frame_id: &str, hash: &str) -> String {
-    pathbuf_to_string(layout::frame_entry_path(&app_root, frame_id, hash))
+fn frame_entry_path(app_root: PathBuf, peer_id: &str, frame_id: &str, hash: &str) -> String {
+    pathbuf_to_string(layout::frame_entry_path(&app_root, peer_id, frame_id, hash))
 }
 
 #[pyfunction]
@@ -134,12 +136,13 @@ mod tests {
     fn sensor_entry_path_includes_id_subst_and_hash_filename() {
         let s = sensor_entry_path(
             PathBuf::from("/app"),
+            "galbot",
             "K1-AABBCCDDEEFF/head_left_cam",
             "deadbeef",
         );
         assert_eq!(
             s,
-            "/app/registries/sensors/K1-AABBCCDDEEFF__head_left_cam/deadbeef.json"
+            "/app/registries/sensors/galbot/K1-AABBCCDDEEFF__head_left_cam/deadbeef.json"
         );
     }
 

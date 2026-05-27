@@ -43,7 +43,11 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyModule};
 
-fn pyany_to_json(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -> PyResult<serde_json::Value> {
+fn pyany_to_json(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<serde_json::Value> {
     let json = py.import_bound("json")?;
     let s: String = json.call_method1("dumps", (value,))?.extract()?;
     serde_json::from_str(&s).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
@@ -60,7 +64,11 @@ fn json_to_pyobject(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject>
     Ok(json.call_method1("loads", (s,))?.unbind())
 }
 
-fn parse_registry_ref(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -> PyResult<RegistryRef> {
+fn parse_registry_ref(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<RegistryRef> {
     let v = pyany_to_json(py, value, name)?;
     serde_json::from_value(v).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
 }

@@ -314,8 +314,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let entry = rangefinder_sensor("frame-hash");
         let sensor_hash = entry.hash();
-        let path =
-            auki_layout::sensor_entry_path(dir.path(), &entry.peer_id, &entry.sensor_id, &sensor_hash);
+        let path = auki_layout::sensor_entry_path(
+            dir.path(),
+            &entry.peer_id,
+            &entry.sensor_id,
+            &sensor_hash,
+        );
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"{").unwrap();
 

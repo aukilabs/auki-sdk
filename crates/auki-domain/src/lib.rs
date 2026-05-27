@@ -24,13 +24,11 @@ pub mod cluster_membership;
 pub mod stream_manifest;
 
 #[cfg(feature = "native_runtime")]
+pub use auki_network::SessionHandle;
+#[cfg(feature = "native_runtime")]
 pub use auki_network::registries_protocol::RegistryKind;
 #[cfg(feature = "native_runtime")]
-pub use auki_network::resources_protocol::{
-    ResourceEntry, ResourcesRequest, ResourcesResponse,
-};
-#[cfg(feature = "native_runtime")]
-pub use auki_network::SessionHandle;
+pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 #[cfg(feature = "native_runtime")]
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 #[cfg(feature = "native_runtime")]

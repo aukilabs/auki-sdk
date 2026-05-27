@@ -226,21 +226,15 @@ pub struct DetectionManifestPointer {
 #[serde(tag = "variant", rename_all = "snake_case")]
 pub enum VariantContent {
     /// Sensor log row.
-    SensorLog {
-        manifest: SensorManifestPointer,
-    },
+    SensorLog { manifest: SensorManifestPointer },
     /// Pose log row.
-    PoseLog {
-        manifest: PoseManifestPointer,
-    },
+    PoseLog { manifest: PoseManifestPointer },
     /// Time-transform log row.
     TimeTransformLog {
         manifest: TimeTransformManifestPointer,
     },
     /// Detection log row.
-    DetectionLog {
-        manifest: DetectionManifestPointer,
-    },
+    DetectionLog { manifest: DetectionManifestPointer },
 }
 
 // ── ResourceEntry ────────────────────────────────────────────────────────────
@@ -419,9 +413,15 @@ mod tests {
             writer_peer_id: "galbot".to_string(),
             resource_id: "head_left_rgb".to_string(),
             state: "live".to_string(),
-            head: Some(Head::Rolling { retention_ns: 5_000_000_000 }),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
             extent: None,
-            available: Available { bytes: 3_000_000_000, entries: 900, duration_ns: 5_000_000_000 },
+            available: Available {
+                bytes: 3_000_000_000,
+                entries: 900,
+                duration_ns: 5_000_000_000,
+            },
             sensor: Some(SensorBlock {
                 kind: SensorKind::Camera,
                 r#type: "rgb".to_string(),
@@ -431,8 +431,16 @@ mod tests {
             pose: None,
             variant_content: VariantContent::SensorLog {
                 manifest: SensorManifestPointer {
-                    clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
-                    frame: Some(RegistryRef { peer_id: "galbot".to_string(), id: "head_left_camera_optical".to_string(), hash: "fh".to_string() }),
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                    frame: Some(RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_camera_optical".to_string(),
+                        hash: "fh".to_string(),
+                    }),
                 },
             },
         };
@@ -453,15 +461,36 @@ mod tests {
             resource_id: "world->base_link".to_string(),
             state: "sealed".to_string(),
             head: None,
-            extent: Some(Extent { start_at_ns: 100, finish_at_ns: 100 }),
-            available: Available { bytes: 80, entries: 1, duration_ns: 0 },
+            extent: Some(Extent {
+                start_at_ns: 100,
+                finish_at_ns: 100,
+            }),
+            available: Available {
+                bytes: 80,
+                entries: 1,
+                duration_ns: 0,
+            },
             sensor: None,
-            pose: Some(PoseBlock { writer_mode: PoseWriterMode::Rigid }),
+            pose: Some(PoseBlock {
+                writer_mode: PoseWriterMode::Rigid,
+            }),
             variant_content: VariantContent::PoseLog {
                 manifest: PoseManifestPointer {
-                    from_frame: RegistryRef { peer_id: "park".to_string(), id: "world".to_string(), hash: "fh".to_string() },
-                    to_frame: RegistryRef { peer_id: "galbot".to_string(), id: "base_link".to_string(), hash: "th".to_string() },
-                    clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
+                    from_frame: RegistryRef {
+                        peer_id: "park".to_string(),
+                        id: "world".to_string(),
+                        hash: "fh".to_string(),
+                    },
+                    to_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "base_link".to_string(),
+                        hash: "th".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
                     source: PoseSource::Manual,
                     expected_rate_hz: 0,
                 },
@@ -483,15 +512,29 @@ mod tests {
             writer_peer_id: "galbot".to_string(),
             resource_id: "session/sdk_clock->wall_clock".to_string(),
             state: "live".to_string(),
-            head: Some(Head::Rolling { retention_ns: 60_000_000_000 }),
+            head: Some(Head::Rolling {
+                retention_ns: 60_000_000_000,
+            }),
             extent: None,
-            available: Available { bytes: 4096, entries: 60, duration_ns: 60_000_000_000 },
+            available: Available {
+                bytes: 4096,
+                entries: 60,
+                duration_ns: 60_000_000_000,
+            },
             sensor: None,
             pose: None,
             variant_content: VariantContent::TimeTransformLog {
                 manifest: TimeTransformManifestPointer {
-                    from_clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "fh".to_string() },
-                    to_clock: RegistryRef { peer_id: "galbot".to_string(), id: "wall_clock".to_string(), hash: "th".to_string() },
+                    from_clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "fh".to_string(),
+                    },
+                    to_clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "wall_clock".to_string(),
+                        hash: "th".to_string(),
+                    },
                     source: TimeTransformSource::LocalClockRead,
                 },
             },
@@ -509,23 +552,47 @@ mod tests {
             writer_peer_id: "galbot".to_string(),
             resource_id: "yolo_v8@head_left_rgb".to_string(),
             state: "live".to_string(),
-            head: Some(Head::Rolling { retention_ns: 5_000_000_000 }),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
             extent: None,
-            available: Available { bytes: 250000, entries: 150, duration_ns: 5_000_000_000 },
+            available: Available {
+                bytes: 250000,
+                entries: 150,
+                duration_ns: 5_000_000_000,
+            },
             sensor: None,
             pose: None,
             variant_content: VariantContent::DetectionLog {
                 manifest: DetectionManifestPointer {
-                    detector: RegistryRef { peer_id: "galbot".to_string(), id: "yolo_v8".to_string(), hash: "dh".to_string() },
-                    input_log: LogRef { source_peer_id: "galbot".to_string(), resource_id: "head_left_rgb".to_string() },
-                    input_sensor: RegistryRef { peer_id: "galbot".to_string(), id: "head_left_rgb".to_string(), hash: "sh".to_string() },
-                    clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
+                    detector: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "yolo_v8".to_string(),
+                        hash: "dh".to_string(),
+                    },
+                    input_log: LogRef {
+                        source_peer_id: "galbot".to_string(),
+                        resource_id: "head_left_rgb".to_string(),
+                    },
+                    input_sensor: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_rgb".to_string(),
+                        hash: "sh".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
                 },
             },
         };
         let value = serde_json::to_value(&row).unwrap();
         assert_eq!(value["variant"], "detection_log");
-        assert_eq!(value["manifest"]["input_log"]["resource_id"], "head_left_rgb");
+        assert_eq!(
+            value["manifest"]["input_log"]["resource_id"],
+            "head_left_rgb"
+        );
     }
 
     #[test]
@@ -535,9 +602,15 @@ mod tests {
             writer_peer_id: "park".to_string(),
             resource_id: "head_left_rgb".to_string(),
             state: "live".to_string(),
-            head: Some(Head::Rolling { retention_ns: 300_000_000_000 }),
+            head: Some(Head::Rolling {
+                retention_ns: 300_000_000_000,
+            }),
             extent: None,
-            available: Available { bytes: 12_000_000_000, entries: 9000, duration_ns: 300_000_000_000 },
+            available: Available {
+                bytes: 12_000_000_000,
+                entries: 9000,
+                duration_ns: 300_000_000_000,
+            },
             sensor: Some(SensorBlock {
                 kind: SensorKind::Camera,
                 r#type: "rgb".to_string(),
@@ -547,8 +620,16 @@ mod tests {
             pose: None,
             variant_content: VariantContent::SensorLog {
                 manifest: SensorManifestPointer {
-                    clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
-                    frame: Some(RegistryRef { peer_id: "galbot".to_string(), id: "head_left_camera_optical".to_string(), hash: "fh".to_string() }),
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                    frame: Some(RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_camera_optical".to_string(),
+                        hash: "fh".to_string(),
+                    }),
                 },
             },
         };
@@ -589,9 +670,15 @@ mod tests {
                     writer_peer_id: "galbot".to_string(),
                     resource_id: "head_left_rgb".to_string(),
                     state: "live".to_string(),
-                    head: Some(Head::Rolling { retention_ns: 5_000_000_000 }),
+                    head: Some(Head::Rolling {
+                        retention_ns: 5_000_000_000,
+                    }),
                     extent: None,
-                    available: Available { bytes: 1024, entries: 10, duration_ns: 5_000_000_000 },
+                    available: Available {
+                        bytes: 1024,
+                        entries: 10,
+                        duration_ns: 5_000_000_000,
+                    },
                     sensor: Some(SensorBlock {
                         kind: SensorKind::Camera,
                         r#type: "rgb".to_string(),
@@ -601,7 +688,11 @@ mod tests {
                     pose: None,
                     variant_content: VariantContent::SensorLog {
                         manifest: SensorManifestPointer {
-                            clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
+                            clock: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "session/sdk_clock".to_string(),
+                                hash: "ch".to_string(),
+                            },
                             frame: None,
                         },
                     },
@@ -611,16 +702,36 @@ mod tests {
                     writer_peer_id: "galbot".to_string(),
                     resource_id: "world->base_link".to_string(),
                     state: "live".to_string(),
-                    head: Some(Head::Rolling { retention_ns: 60_000_000_000 }),
+                    head: Some(Head::Rolling {
+                        retention_ns: 60_000_000_000,
+                    }),
                     extent: None,
-                    available: Available { bytes: 512, entries: 5, duration_ns: 60_000_000_000 },
+                    available: Available {
+                        bytes: 512,
+                        entries: 5,
+                        duration_ns: 60_000_000_000,
+                    },
                     sensor: None,
-                    pose: Some(PoseBlock { writer_mode: PoseWriterMode::Movable }),
+                    pose: Some(PoseBlock {
+                        writer_mode: PoseWriterMode::Movable,
+                    }),
                     variant_content: VariantContent::PoseLog {
                         manifest: PoseManifestPointer {
-                            from_frame: RegistryRef { peer_id: "park".to_string(), id: "world".to_string(), hash: "fh".to_string() },
-                            to_frame: RegistryRef { peer_id: "galbot".to_string(), id: "base_link".to_string(), hash: "th".to_string() },
-                            clock: RegistryRef { peer_id: "galbot".to_string(), id: "session/sdk_clock".to_string(), hash: "ch".to_string() },
+                            from_frame: RegistryRef {
+                                peer_id: "park".to_string(),
+                                id: "world".to_string(),
+                                hash: "fh".to_string(),
+                            },
+                            to_frame: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "base_link".to_string(),
+                                hash: "th".to_string(),
+                            },
+                            clock: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "session/sdk_clock".to_string(),
+                                hash: "ch".to_string(),
+                            },
                             source: PoseSource::Manual,
                             expected_rate_hz: 30,
                         },
@@ -674,10 +785,7 @@ mod tests {
         let h = Head::Rolling {
             retention_ns: 5_000_000_000,
         };
-        assert_eq!(
-            canon(&h),
-            r#"{"kind":"rolling","retention_ns":5000000000}"#
-        );
+        assert_eq!(canon(&h), r#"{"kind":"rolling","retention_ns":5000000000}"#);
     }
 
     #[test]

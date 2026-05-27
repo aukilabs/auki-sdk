@@ -166,8 +166,8 @@ fn make_sensor_log_materialized() -> SensorLogManifest {
         // (Park re-stores the data but doesn't re-project it into a
         // different optical frame).
         frame: Some(frame_head_left_camera_optical()),
-        segment_duration_ns: 10_000_000_000,  // Park uses 10-second segments
-        retention_ns: 300_000_000_000,        // Park retains 5 minutes
+        segment_duration_ns: 10_000_000_000, // Park uses 10-second segments
+        retention_ns: 300_000_000_000,       // Park retains 5 minutes
     }
 }
 
@@ -223,8 +223,8 @@ fn make_time_transform_log() -> TimeTransformLogManifest {
         from_clock: clock_sdk("galbot"),
         to_clock: clock_wall(),
         source: TimeTransformSource::LocalClockRead,
-        segment_duration_ns: 60_000_000_000,        // 1-minute segments
-        retention_ns: 3_600_000_000_000,            // 1-hour retention
+        segment_duration_ns: 60_000_000_000, // 1-minute segments
+        retention_ns: 3_600_000_000_000,     // 1-hour retention
     }
 }
 

@@ -46,8 +46,8 @@ use crate::network_runtime::NetworkRuntime;
 use crate::stream_protocol::{
     CameraFrame, DeclineReason, EndReason, STREAM_PROTOCOL, StreamEntry as WireStreamEntry,
     StreamManifest, StreamMessage, StreamProtocolError, StreamRequest, audio, joint_encoders,
-    point_cloud, pose, read_message, stream_request_from_wire, stream_request_to_wire,
-    stream_message, write_message,
+    point_cloud, pose, read_message, stream_message, stream_request_from_wire,
+    stream_request_to_wire, write_message,
 };
 use auki_datatypes::detection::DetectionFrame;
 use futures::{Stream, StreamExt, channel::mpsc};
@@ -418,9 +418,7 @@ pub(crate) async fn handle_inbound_substream(
     // 1. Read the first envelope; expect Request.
     let request = match read_message(&mut substream).await {
         Ok(msg) => match msg.variant {
-            Some(stream_message::Variant::Request(wire_req)) => {
-                stream_request_from_wire(wire_req)
-            }
+            Some(stream_message::Variant::Request(wire_req)) => stream_request_from_wire(wire_req),
             _ => {
                 // Peer wrote something other than Request first, or the
                 // envelope was empty. Drop; their open_stream surfaces

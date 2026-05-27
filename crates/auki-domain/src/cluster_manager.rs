@@ -49,6 +49,7 @@
 
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
 use auki_network::ParticipantInfo;
+use auki_network::SessionHandle;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
@@ -57,7 +58,6 @@ use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
 use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
-use auki_network::SessionHandle;
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry,
 };
@@ -1124,8 +1124,7 @@ impl ClusterManager {
             Arc::new(Mutex::new(None));
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
-        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> =
-            Arc::new(Mutex::new(None));
+        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
             session_handle.clone(),
@@ -1543,10 +1542,7 @@ impl ClusterManager {
     /// Inbound resource requests received before this call return an
     /// empty catalog, which is the correct "no session yet" answer.
     pub fn set_session_handle(&self, handle: Arc<dyn SessionHandle>) {
-        *self
-            .session_handle
-            .lock()
-            .expect("session_handle lock") = Some(handle);
+        *self.session_handle.lock().expect("session_handle lock") = Some(handle);
     }
 
     /// Register (or replace) the producer-local app root used to
@@ -1966,8 +1962,7 @@ impl ClusterManager {
             Arc::new(Mutex::new(None));
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
-        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> =
-            Arc::new(Mutex::new(None));
+        let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
             session_handle.clone(),
@@ -3332,9 +3327,7 @@ fn spawn_sensors_handler(
             let mut sensors = {
                 let guard = provider.lock().expect("sensor_catalog_provider lock");
                 match guard.as_ref() {
-                    Some(p) => {
-                        p.snapshot_for_request(&request, root.as_deref(), &local_peer_id)
-                    }
+                    Some(p) => p.snapshot_for_request(&request, root.as_deref(), &local_peer_id),
                     None => Vec::new(),
                 }
             };

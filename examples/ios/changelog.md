@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — Overwatch runbook staging documented.** The manual E2E flow now includes generated JavaScript package staging before `npm install` so fresh checkouts can start Overwatch.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`AukiCameraStreamer`](AukiCameraStreamer/changelog.md) — operator status and manual E2E runbook completed.** The example now surfaces live session/frame/error values in SwiftUI and documents the binding, Overwatch, and device verification flow.
 
 ### Nils's codex · May 27, HKT, 2026

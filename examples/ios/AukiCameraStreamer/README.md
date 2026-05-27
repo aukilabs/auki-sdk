@@ -19,9 +19,14 @@ scripts/generate-swift-proto.sh
 xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml
 ```
 
-Start Overwatch from the repository root:
+Prepare and start Overwatch from the repository root:
 
 ```bash
+just generate-javascript-bindings auki-network
+just generate-javascript-bindings auki-domain
+just generate-javascript-bindings auki-geometry
+scripts/generate-javascript-proto.sh
+node examples/overwatch/scripts/stage-sdk.mjs
 npm --prefix examples/overwatch install
 npm --prefix examples/overwatch run dev
 ```

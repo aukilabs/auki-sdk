@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — AukiCameraStreamer Overwatch staging documented.** The manual E2E flow now stages generated JavaScript packages before `npm install` so Overwatch starts from a fresh checkout.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`ios`](ios/changelog.md) — AukiCameraStreamer operator status and manual E2E runbook completed.** The native producer now shows live session/frame/error values and documents the binding, Overwatch, and device verification flow.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -25,8 +25,8 @@ import {
 } from "./protocol.js";
 import {
   createLocalOfferCatalogResponse,
-  createPreviewOffer,
-  createPreviewSpatialMessage,
+  createPublicationSpatialMessage,
+  createPublishedOffer,
   createSubscribeAccept,
   createSubscribeEnd,
   createSubscribeReject,
@@ -37,11 +37,11 @@ import {
   stringField,
   toAsyncIterable,
   type LoadedOffer,
-  type LocalPreviewPublication,
+  type LocalOfferPublication,
   type OfferSummary,
-  type PreviewOfferOptions,
-  type PreviewSource,
-} from "./preview.js";
+  type PublicationHandle,
+  type PublishOfferOptions,
+} from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   type BrowserTransport,
@@ -56,7 +56,14 @@ export type PeerSummary = {
   dialAddresses: string[];
 };
 
-export type { OfferSummary, PreviewOfferOptions, PreviewSource } from "./preview.js";
+export type {
+  ByteSource,
+  ByteSourceFactory,
+  ByteSourceInput,
+  OfferSummary,
+  PublicationHandle,
+  PublishOfferOptions,
+} from "./publication.js";
 
 export type SubscribeRequest = {
   peerId: string;
@@ -68,10 +75,6 @@ export type SubscribeRequest = {
 };
 
 export type SpatialMessage = JsonObject;
-
-export type PublicationHandle = {
-  stop(): Promise<void>;
-};
 
 export type AukiBrowserPeerConfig = {
   seed?: Uint8Array;
@@ -91,7 +94,7 @@ export interface AukiBrowserPeer {
   listPeers(): PeerSummary[];
   listOffers(peerId?: string): Promise<OfferSummary[]>;
   subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>;
-  publishPreview(source: PreviewSource, options: PreviewOfferOptions): Promise<PublicationHandle>;
+  publishOffer(options: PublishOfferOptions): Promise<PublicationHandle>;
   stop(): Promise<void>;
 }
 
@@ -131,7 +134,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   private readonly peers = new Map<string, PeerSummary>();
   private readonly lifecyclePeers = new Set<string>();
   private readonly remoteOffers = new Map<string, LoadedOffer[]>();
-  private readonly localPublications = new Map<string, LocalPreviewPublication>();
+  private readonly localPublications = new Map<string, LocalOfferPublication>();
   private started = false;
   private inboundHandlersRegistered = false;
 
@@ -241,19 +244,16 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
   }
 
-  async publishPreview(
-    source: PreviewSource,
-    options: PreviewOfferOptions,
-  ): Promise<PublicationHandle> {
+  async publishOffer(options: PublishOfferOptions): Promise<PublicationHandle> {
     await this.ensureStarted();
-    const offer = await createPreviewOffer(this.peerId, options);
+    const offer = await createPublishedOffer(this.peerId, options);
     const key = offerKey(offer.domainId, offer.offerId);
     if (this.localPublications.has(key)) {
-      throw new Error(`Preview offer already published for ${offer.domainId}/${offer.offerId}`);
+      throw new Error(`Offer already published for ${offer.domainId}/${offer.offerId}`);
     }
 
-    const publication: LocalPreviewPublication = {
-      source,
+    const publication: LocalOfferPublication = {
+      source: options.source,
       offer,
       stopped: false,
       nextSequence: 0n,
@@ -441,7 +441,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         if (publication.stopped) {
           break;
         }
-        const message = await createPreviewSpatialMessage(publication, chunk);
+        const message = await createPublicationSpatialMessage(publication, chunk);
         const maxMessageBytes = optionalNumberField(request, "max_message_bytes");
         const validMessage = await validateSubscribeDataMessage(
           accept,

@@ -27,12 +27,20 @@ export { createBrowserLibp2pTransport, supportedBrowserTransports } from "./tran
 export type {
   AukiBrowserPeer,
   AukiBrowserPeerConfig,
+  ByteSource,
+  ByteSourceFactory,
+  ByteSourceInput,
   OfferSummary,
   PeerSummary,
-  PreviewOfferOptions,
-  PreviewSource,
   PublicationHandle,
+  PublishOfferOptions,
   SpatialMessage,
   SubscribeRequest,
 } from "./peer.js";
 export { createAukiBrowserPeer } from "./peer.js";
+export {
+  GENERATED_PREVIEW_OFFER_KIND,
+  GENERATED_PREVIEW_PAYLOAD_TYPE,
+  publishGeneratedPreview,
+} from "./preview.js";
+export type { GeneratedPreviewOptions, OfferPublisher } from "./preview.js";

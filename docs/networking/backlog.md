@@ -50,9 +50,10 @@ new path across browser and native peers without breaking the shipped
 
 `auki-p2p-browser` now provides the browser-side peer path: browser peer
 identity, bootstrap parsing, js-libp2p transport setup, lifecycle handshakes,
-remote offer-catalog loading, Subscribe consumption, local preview offer
+remote offer-catalog loading, Subscribe consumption, generic local offer
 publication, inbound offer-catalog serving, and inbound Subscribe serving
-through `auki-protocol-wasm` validators.
+through `auki-protocol-wasm` validators. Generated preview publishing is a
+helper/profile on top of the generic offer API.
 
 ## Networking Matrix
 
@@ -138,9 +139,11 @@ protocols from those crates.
         app-facing `OfferSummary` objects.
   - [x] Subscribe over RFC libp2p streams while yielding app-facing spatial
         messages.
-  - [x] Publish browser-generated preview streams as local offers.
+  - [x] Publish generic byte sources as local offers.
+  - [x] Keep generated preview publishing as a helper/profile outside the core
+        peer method surface.
   - [x] Serve local offer catalogs to inbound browser/native peers.
-  - [x] Serve finite local preview byte streams over inbound Subscribe.
+  - [x] Serve finite local byte streams over inbound Subscribe.
 
 Candidate browser API shape:
 
@@ -155,7 +158,7 @@ interface AukiBrowserPeer {
   listPeers(): PeerSummary[]
   listOffers(peerId?: string): Promise<OfferSummary[]>
   subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>
-  publishPreview(source: PreviewSource, options: PreviewOfferOptions): Promise<PublicationHandle>
+  publishOffer(options: PublishOfferOptions): Promise<PublicationHandle>
   stop(): Promise<void>
 }
 ```
@@ -251,6 +254,8 @@ Keep these boundaries as browser producer behavior grows:
   capabilities such as dialing and registering protocol handlers.
 - `peer.ts` owns the high-level SDK handle, local offer registry, publication
   handles, and app-facing methods.
-- Generated preview publishing first proves Subscribe with JPEG-like bytes over
-  `auki.spatial_message.v1`; camera capture, infinite/live source lifecycle,
-  and reliable delivery remain later work.
+- `publication.ts` owns generic local offer/message construction for byte
+  sources.
+- `preview.ts` is only a generated-preview helper/profile over
+  `publishOffer(...)`; camera capture, infinite/live source lifecycle, and
+  reliable delivery remain later work.

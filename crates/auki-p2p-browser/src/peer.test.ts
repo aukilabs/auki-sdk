@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { peerIdFromSeed } from "./identity.js";
 import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
+import { publishGeneratedPreview } from "./preview.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   createOfferCatalogRequest,
@@ -243,24 +244,32 @@ describe("AukiBrowserPeer shell", () => {
     expect(messages).toEqual([]);
   });
 
-  it("publishes local preview offers through inbound offer catalog streams", async () => {
+  it("publishes local offers through inbound offer catalog streams", async () => {
     const fixture = await fixtureJson("v1_offer_catalogs.json");
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
 
-    const handle = await peer.publishPreview([], {
+    const handle = await peer.publishOffer({
+      source: [],
       domainId: fixture.inputs.domain_id as string,
-      offerId: "browser-preview",
-      displayName: "Browser Preview",
+      offerId: "browser-bytes",
+      kind: "example.bytes",
+      payload: {
+        type: "example.bytes.v1",
+        encoding: "binary",
+        media_type: "application/octet-stream",
+        schema_version: "1",
+      },
+      displayName: "Browser Bytes",
     });
 
     await expect(peer.listOffers("browser-peer")).resolves.toEqual([
       {
         peerId: "browser-peer",
         domainId: fixture.inputs.domain_id,
-        offerId: "browser-preview",
-        kind: "auki.sensor.rgb_camera.preview",
-        payloadType: "auki.camera.jpeg_frame.v1",
+        offerId: "browser-bytes",
+        kind: "example.bytes",
+        payloadType: "example.bytes.v1",
         accessModes: ["subscribe"],
       },
     ]);
@@ -279,15 +288,15 @@ describe("AukiBrowserPeer shell", () => {
     expect(response.offers).toEqual([
       expect.objectContaining({
         domain_id: fixture.inputs.domain_id,
-        offer_id: "browser-preview",
-        display_name: "Browser Preview",
-        kind: "auki.sensor.rgb_camera.preview",
+        offer_id: "browser-bytes",
+        display_name: "Browser Bytes",
+        kind: "example.bytes",
         status: "available",
         access_modes: ["subscribe"],
         payload: {
-          type: "auki.camera.jpeg_frame.v1",
+          type: "example.bytes.v1",
           encoding: "binary",
-          media_type: "image/jpeg",
+          media_type: "application/octet-stream",
           schema_version: "1",
         },
         registry_refs: [],
@@ -310,18 +319,25 @@ describe("AukiBrowserPeer shell", () => {
     });
   });
 
-  it("serves published preview bytes through inbound Subscribe streams", async () => {
+  it("serves published offer bytes through inbound Subscribe streams", async () => {
     const fixture = await fixtureJson("v1_subscribe.json");
     const inputs = fixture.inputs as JsonObject;
     const domainId = inputs.domain_id as string;
-    const offerId = "browser-preview";
-    const payloadType = "auki.camera.jpeg_frame.v1";
+    const offerId = "browser-bytes";
+    const payloadType = "example.bytes.v1";
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
-    await peer.publishPreview([new Uint8Array([1, 2, 3])], {
+    await peer.publishOffer({
+      source: () => [new Uint8Array([1, 2, 3])],
       domainId,
       offerId,
-      payloadType,
+      kind: "example.bytes",
+      payload: {
+        type: payloadType,
+        encoding: "binary",
+        media_type: "application/octet-stream",
+        schema_version: "1",
+      },
     });
 
     const stream = await transport.openInbound("remote-peer", SUBSCRIBE_PROTOCOL_ID);
@@ -346,7 +362,7 @@ describe("AukiBrowserPeer shell", () => {
         payload: {
           type: payloadType,
           encoding: "binary",
-          media_type: "image/jpeg",
+          media_type: "application/octet-stream",
           schema_version: "1",
         },
       }),
@@ -368,7 +384,7 @@ describe("AukiBrowserPeer shell", () => {
         payload: {
           type: payloadType,
           encoding: "binary",
-          media_type: "image/jpeg",
+          media_type: "application/octet-stream",
           schema_version: "1",
           bytes: "AQID",
         },
@@ -381,6 +397,28 @@ describe("AukiBrowserPeer shell", () => {
       offerId,
     );
     expect(end.reason).toBe("complete");
+  });
+
+  it("keeps generated preview as a helper over generic offer publishing", async () => {
+    const fixture = await fixtureJson("v1_offer_catalogs.json");
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+
+    await publishGeneratedPreview(peer, [], {
+      domainId: fixture.inputs.domain_id as string,
+      offerId: "browser-preview",
+    });
+
+    await expect(peer.listOffers("browser-peer")).resolves.toEqual([
+      {
+        peerId: "browser-peer",
+        domainId: fixture.inputs.domain_id,
+        offerId: "browser-preview",
+        kind: "auki.sensor.rgb_camera.preview",
+        payloadType: "auki.camera.jpeg_frame.v1",
+        accessModes: ["subscribe"],
+      },
+    ]);
   });
 });
 

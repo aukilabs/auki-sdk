@@ -4,6 +4,10 @@ Append-only timeline of design spec changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+Added the iOS camera streamer design spec, defining the generated Swift binding app as a native `auki-domain` producer peer that logs typed camera frames and streams them for Overwatch consumption.
+
 ### Nils's codex · May 22, HKT, 2026
 
 Corrected the iOS Auki network UniFFI design so the primary artifact is an iOS test app consuming generated Swift bindings from the Rust crates, with the message-networking facade exported by `auki-network` through UniFFI.

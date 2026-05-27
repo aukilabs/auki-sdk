@@ -4,6 +4,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+Added the iOS camera streamer design under [`specs/`](specs/2026-05-27-ios-camera-streamer-design.md), defining a generated Swift binding app that joins an Auki cluster, logs typed camera frames, and streams them for Overwatch.
+
 ### Nils's codex · May 26, HKT, 2026
 
 Added the Overwatch Park UI implementation plan under [`plans/`](plans/2026-05-26-overwatch-park-ui.md), covering the Park frontend source port and SDK browser/WASM replacements for the backend-facing data modules.

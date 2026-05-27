@@ -1,0 +1,92 @@
+name: AukiCameraStreamer
+options:
+  bundleIdPrefix: com.aukilabs
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  auki-network:
+    path: ../../../bindings/swift/auki-network
+  auki-domain:
+    path: ../../../bindings/swift/auki-domain
+  auki-registry:
+    path: ../../../bindings/swift/auki-registry
+  auki-time:
+    path: ../../../bindings/swift/auki-time
+  auki-logs:
+    path: ../../../bindings/swift/auki-logs
+  auki-layout:
+    path: ../../../bindings/swift/auki-layout
+  auki-manifests:
+    path: ../../../bindings/swift/auki-manifests
+  auki-proto:
+    path: ../../../bindings/swift/auki-proto
+targets:
+  AukiCameraStreamer:
+    type: application
+    platform: iOS
+    sources:
+      - AukiCameraStreamer
+    dependencies:
+      - package: auki-network
+        product: auki_network
+      - package: auki-domain
+        product: auki_domain
+      - package: auki-registry
+        product: auki_registry
+      - package: auki-time
+        product: auki_time
+      - package: auki-logs
+        product: auki_logs
+      - package: auki-layout
+        product: auki_layout
+      - package: auki-manifests
+        product: auki_manifests
+      - package: auki-proto
+        product: AukiProto
+      - sdk: AVFoundation.framework
+      - sdk: CoreImage.framework
+      - sdk: ImageIO.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    settings:
+      base:
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "AukiCameraStreamer captures camera frames for local SDK stream tests."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "AukiCameraStreamer discovers and connects to local Auki peers."
+        MARKETING_VERSION: 0.1
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.AukiCameraStreamer
+        SWIFT_VERSION: 5.9
+  AukiCameraStreamerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - AukiCameraStreamerTests
+    dependencies:
+      - target: AukiCameraStreamer
+      - package: auki-network
+        product: auki_network
+      - package: auki-domain
+        product: auki_domain
+      - package: auki-registry
+        product: auki_registry
+      - package: auki-time
+        product: auki_time
+      - package: auki-logs
+        product: auki_logs
+      - package: auki-layout
+        product: auki_layout
+      - package: auki-manifests
+        product: auki_manifests
+      - package: auki-proto
+        product: AukiProto
+      - sdk: AVFoundation.framework
+      - sdk: CoreImage.framework
+      - sdk: ImageIO.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.AukiCameraStreamerTests
+        SWIFT_VERSION: 5.9

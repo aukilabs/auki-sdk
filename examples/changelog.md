@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`ios`](ios/changelog.md) — Native iOS camera streamer shell added.** The new SwiftUI example scaffolds an XcodeGen app around generated Swift SDK package products with camera descriptor defaults and an initial operational control surface.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`overwatch`](overwatch/changelog.md) — Raw camera preview compatibility restored.** Camera-kind preview payloads now preserve raw JPEG streams and skip malformed generated-protobuf frames without stopping preview subscriptions.
 
 ### Nils's codex · May 27, HKT, 2026

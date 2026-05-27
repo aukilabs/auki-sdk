@@ -4,6 +4,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 27, HKT, 2026
+
+Created the Native iOS Producer Peer implementation plan, sequencing the `auki-domain` auto-advertise Swift bootstrap helper, Overwatch native `CameraFrame` decode path, and the `AukiCameraStreamer` iOS app that logs and streams camera frames.
+
 ### Nils's codex · May 26, HKT, 2026
 
 Created the Overwatch Park UI implementation plan, sequencing a source-level Park frontend port into `examples/overwatch` plus SDK browser/WASM replacements for Park's backend data, registry, and stream modules while preserving the no app `/api/*` invariant.

@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 27, HKT, 2026
 
+Added the Superpowers implementation plan for the Native iOS Producer Peer, sequencing the generated Swift binding app, domain auto-advertise bootstrap, camera logging/streaming, and Overwatch native camera-frame preview compatibility.
+
+### Nils's codex · May 27, HKT, 2026
+
 Added the Superpowers iOS camera streamer design for a generated Swift binding app that joins an Auki cluster, logs typed camera frames, and streams them to Overwatch.
 
 ### Nils's codex · May 26, HKT, 2026

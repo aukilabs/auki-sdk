@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Added the Native iOS Producer Peer implementation plan under [`plans/`](plans/2026-05-27-ios-camera-streamer.md), covering the domain auto-advertise Swift bootstrap helper, Overwatch native camera-frame decoding, and the generated-binding `AukiCameraStreamer` app.
+
+### Nils's codex · May 27, HKT, 2026
+
 Added the iOS camera streamer design under [`specs/`](specs/2026-05-27-ios-camera-streamer-design.md), defining a generated Swift binding app that joins an Auki cluster, logs typed camera frames, and streams them for Overwatch.
 
 ### Nils's codex · May 26, HKT, 2026

@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Native iOS Producer Peer plan added.** The saved implementation plan sequences the `auki-domain` auto-advertise Swift bootstrap helper, Overwatch native `CameraFrame` decoding, and the generated-binding iOS camera streamer app that logs and streams camera frames. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **iOS camera streamer design added.** The saved design defines a generated Swift binding app that joins an Auki cluster as a native producer peer, logs typed camera frames, and streams them so Overwatch can render the feed. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 26, HKT, 2026

@@ -10,8 +10,10 @@ import {
   createPeerBinding,
   createPeerHandshake,
   createSubscribeRequest,
+  parseOfferCatalogRequest,
   parseOfferCatalogResponse,
   parsePeerHandshake,
+  parseSubscribeRequest,
   parseSubscribeStartResult,
   validatePeerHandshakeAuthority,
   validateSubscribeDataMessage,
@@ -21,6 +23,25 @@ import {
   type ProtocolWasmInitInput,
   initializeProtocolWasm,
 } from "./protocol.js";
+import {
+  createLocalOfferCatalogResponse,
+  createPreviewOffer,
+  createPreviewSpatialMessage,
+  createSubscribeAccept,
+  createSubscribeEnd,
+  createSubscribeReject,
+  offerKey,
+  offerSummary,
+  optionalNumberField,
+  requestAcceptsPayload,
+  stringField,
+  toAsyncIterable,
+  type LoadedOffer,
+  type LocalPreviewPublication,
+  type OfferSummary,
+  type PreviewOfferOptions,
+  type PreviewSource,
+} from "./preview.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   type BrowserTransport,
@@ -35,14 +56,7 @@ export type PeerSummary = {
   dialAddresses: string[];
 };
 
-export type OfferSummary = {
-  peerId: string;
-  domainId: string;
-  offerId: string;
-  kind?: string;
-  payloadType?: string;
-  accessModes: string[];
-};
+export type { OfferSummary, PreviewOfferOptions, PreviewSource } from "./preview.js";
 
 export type SubscribeRequest = {
   peerId: string;
@@ -54,14 +68,6 @@ export type SubscribeRequest = {
 };
 
 export type SpatialMessage = JsonObject;
-
-export type PreviewSource = AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
-
-export type PreviewOfferOptions = {
-  domainId: string;
-  offerId: string;
-  payloadType?: string;
-};
 
 export type PublicationHandle = {
   stop(): Promise<void>;
@@ -120,16 +126,14 @@ const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const SUBSCRIBE_END_TYPE = "auki.subscribe_end.v1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
 
-type LoadedOffer = OfferSummary & {
-  raw: JsonObject;
-};
-
 class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   readonly supportedTransports = supportedBrowserTransports();
   private readonly peers = new Map<string, PeerSummary>();
   private readonly lifecyclePeers = new Set<string>();
   private readonly remoteOffers = new Map<string, LoadedOffer[]>();
+  private readonly localPublications = new Map<string, LocalPreviewPublication>();
   private started = false;
+  private inboundHandlersRegistered = false;
 
   constructor(
     readonly peerId: string,
@@ -174,9 +178,15 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
 
   async listOffers(peerId?: string): Promise<OfferSummary[]> {
     await this.ensureStarted();
+    if (peerId === this.peerId) {
+      return this.localOfferSummaries();
+    }
     const peers = peerId ? [this.requirePeer(peerId)] : Array.from(this.peers.values());
     const offers = await Promise.all(peers.map((peer) => this.loadOffers(peer)));
-    return offers.flat().map(({ raw: _raw, ...summary }) => summary);
+    return [
+      ...(peerId ? [] : this.localOfferSummaries()),
+      ...offers.flat().map(({ raw: _raw, ...summary }) => summary),
+    ];
   }
 
   async *subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage> {
@@ -232,21 +242,48 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   }
 
   async publishPreview(
-    _source: PreviewSource,
-    _options: PreviewOfferOptions,
+    source: PreviewSource,
+    options: PreviewOfferOptions,
   ): Promise<PublicationHandle> {
-    throw new Error("Preview publishing is not implemented in auki-p2p-browser yet");
+    await this.ensureStarted();
+    const offer = await createPreviewOffer(this.peerId, options);
+    const key = offerKey(offer.domainId, offer.offerId);
+    if (this.localPublications.has(key)) {
+      throw new Error(`Preview offer already published for ${offer.domainId}/${offer.offerId}`);
+    }
+
+    const publication: LocalPreviewPublication = {
+      source,
+      offer,
+      stopped: false,
+      nextSequence: 0n,
+    };
+    this.localPublications.set(key, publication);
+
+    return {
+      stop: async () => {
+        publication.stopped = true;
+        this.localPublications.delete(key);
+      },
+    };
   }
 
   async stop(): Promise<void> {
+    for (const publication of this.localPublications.values()) {
+      publication.stopped = true;
+    }
+    this.localPublications.clear();
+    await this.uninstallInboundHandlers();
     await this.transport.stop();
     this.started = false;
   }
 
   private async ensureStarted(): Promise<void> {
-    if (this.started) return;
-    await this.transport.start();
-    this.started = true;
+    if (!this.started) {
+      await this.transport.start();
+      this.started = true;
+    }
+    await this.installInboundHandlers();
   }
 
   private rememberBootstrap(record: AukiBrowserBootstrapRecord): void {
@@ -321,6 +358,134 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
     return peer;
   }
+
+  private async installInboundHandlers(): Promise<void> {
+    if (this.inboundHandlersRegistered) {
+      return;
+    }
+    await this.transport.registerProtocolHandler(
+      OFFER_CATALOG_PROTOCOL_ID,
+      (stream) => this.serveOfferCatalog(stream),
+      { maxInboundStreams: 32 },
+    );
+    await this.transport.registerProtocolHandler(
+      SUBSCRIBE_PROTOCOL_ID,
+      (stream) => this.serveSubscribe(stream),
+      { maxInboundStreams: 64 },
+    );
+    this.inboundHandlersRegistered = true;
+  }
+
+  private async uninstallInboundHandlers(): Promise<void> {
+    if (!this.inboundHandlersRegistered) {
+      return;
+    }
+    await this.transport.unregisterProtocolHandler(OFFER_CATALOG_PROTOCOL_ID);
+    await this.transport.unregisterProtocolHandler(SUBSCRIBE_PROTOCOL_ID);
+    this.inboundHandlersRegistered = false;
+  }
+
+  private async serveOfferCatalog(stream: BrowserProtocolStream): Promise<void> {
+    const reader = new JsonFrameReader(stream);
+    try {
+      const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      const request = await parseOfferCatalogRequest(frame.value);
+      await writeJsonFrame(stream, await this.localOfferCatalogResponse(request), DEFAULT_FRAME_BODY_LIMIT);
+    } finally {
+      await closeStream(stream);
+    }
+  }
+
+  private async serveSubscribe(stream: BrowserProtocolStream): Promise<void> {
+    const reader = new JsonFrameReader(stream);
+    let request: JsonObject | undefined;
+    let startSent = false;
+    try {
+      const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      request = await parseSubscribeRequest(frame.value);
+      const publication = this.localPublications.get(
+        offerKey(stringField(request, "domain_id"), stringField(request, "offer_id")),
+      );
+
+      if (!publication || publication.stopped) {
+        await writeJsonFrame(
+          stream,
+          await createSubscribeReject(request, "offer.unknown_offer"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+      if (!requestAcceptsPayload(request, publication.offer.payloadType)) {
+        await writeJsonFrame(
+          stream,
+          await createSubscribeReject(request, "offer.unsupported_payload_type"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+
+      const accept = await createSubscribeAccept(publication.offer);
+      const startValidation = await validateSubscribeStartForRequest(request, accept);
+      if (startValidation.accepted !== true) {
+        await writeJsonFrame(
+          stream,
+          await createSubscribeReject(request, "subscribe.invalid_request"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+        return;
+      }
+
+      await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
+      startSent = true;
+      for await (const chunk of toAsyncIterable(publication.source)) {
+        if (publication.stopped) {
+          break;
+        }
+        const message = await createPreviewSpatialMessage(publication, chunk);
+        const maxMessageBytes = optionalNumberField(request, "max_message_bytes");
+        const validMessage = await validateSubscribeDataMessage(
+          accept,
+          message,
+          undefined,
+          maxMessageBytes,
+        );
+        await writeJsonFrame(stream, validMessage, DEFAULT_FRAME_BODY_LIMIT);
+      }
+
+      await writeJsonFrame(
+        stream,
+        await createSubscribeEnd(
+          publication.offer,
+          publication.stopped ? "offer_withdrawn" : "complete",
+        ),
+        DEFAULT_FRAME_BODY_LIMIT,
+      );
+    } catch (error) {
+      if (request && !startSent) {
+        await writeJsonFrame(
+          stream,
+          await createSubscribeReject(request, "transport.failed"),
+          DEFAULT_FRAME_BODY_LIMIT,
+        ).catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      await closeStream(stream);
+    }
+  }
+
+  private async localOfferCatalogResponse(request: JsonObject): Promise<JsonObject> {
+    return createLocalOfferCatalogResponse(this.localPublications.values(), request);
+  }
+
+  private localOfferSummaries(): OfferSummary[] {
+    return Array.from(this.localPublications.values())
+      .filter((publication) => !publication.stopped)
+      .map(({ offer }) => {
+        const { raw: _raw, ...summary } = offer;
+        return summary;
+      });
+  }
 }
 
 function requiredSeed(seed: Uint8Array | undefined): Uint8Array {
@@ -334,22 +499,6 @@ async function closeStream(stream: BrowserProtocolStream): Promise<void> {
   await stream.close();
 }
 
-function offerSummary(peerId: string, value: unknown): LoadedOffer {
-  if (!isJsonObject(value)) {
-    throw new Error("Offer catalog response contains a non-object offer");
-  }
-  const payload = isJsonObject(value.payload) ? value.payload : undefined;
-  return {
-    peerId,
-    domainId: stringField(value, "domain_id"),
-    offerId: stringField(value, "offer_id"),
-    kind: optionalStringField(value, "kind"),
-    payloadType: payload ? optionalStringField(payload, "type") : undefined,
-    accessModes: stringArrayField(value, "access_modes"),
-    raw: value,
-  };
-}
-
 function nestedString(value: unknown, path: string[]): string | undefined {
   let current = value;
   for (const segment of path) {
@@ -359,33 +508,6 @@ function nestedString(value: unknown, path: string[]): string | undefined {
     current = current[segment];
   }
   return typeof current === "string" ? current : undefined;
-}
-
-function stringField(value: JsonObject, field: string): string {
-  const fieldValue = value[field];
-  if (typeof fieldValue !== "string") {
-    throw new Error(`Offer catalog response offer missing string field ${field}`);
-  }
-  return fieldValue;
-}
-
-function optionalStringField(value: JsonObject, field: string): string | undefined {
-  const fieldValue = value[field];
-  if (fieldValue === undefined) {
-    return undefined;
-  }
-  if (typeof fieldValue !== "string") {
-    throw new Error(`Offer catalog response offer field ${field} must be a string`);
-  }
-  return fieldValue;
-}
-
-function stringArrayField(value: JsonObject, field: string): string[] {
-  const fieldValue = value[field];
-  if (!Array.isArray(fieldValue) || fieldValue.some((item) => typeof item !== "string")) {
-    throw new Error(`Offer catalog response offer field ${field} must be a string array`);
-  }
-  return fieldValue.slice();
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

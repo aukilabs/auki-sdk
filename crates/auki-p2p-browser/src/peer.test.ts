@@ -4,7 +4,17 @@ import { describe, expect, it } from "vitest";
 import { peerIdFromSeed } from "./identity.js";
 import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
-import { createPeerBinding, createPeerHandshake, type JsonObject } from "./protocol.js";
+import {
+  createOfferCatalogRequest,
+  createPeerBinding,
+  createPeerHandshake,
+  createSubscribeRequest,
+  parseOfferCatalogResponse,
+  parseSubscribeStartResult,
+  validateSubscribeDataMessage,
+  validateSubscribeEndForOffer,
+  type JsonObject,
+} from "./protocol.js";
 import type { BrowserProtocolStream, BrowserTransport } from "./transport.js";
 
 describe("AukiBrowserPeer shell", () => {
@@ -232,6 +242,146 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(messages).toEqual([]);
   });
+
+  it("publishes local preview offers through inbound offer catalog streams", async () => {
+    const fixture = await fixtureJson("v1_offer_catalogs.json");
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+
+    const handle = await peer.publishPreview([], {
+      domainId: fixture.inputs.domain_id as string,
+      offerId: "browser-preview",
+      displayName: "Browser Preview",
+    });
+
+    await expect(peer.listOffers("browser-peer")).resolves.toEqual([
+      {
+        peerId: "browser-peer",
+        domainId: fixture.inputs.domain_id,
+        offerId: "browser-preview",
+        kind: "auki.sensor.rgb_camera.preview",
+        payloadType: "auki.camera.jpeg_frame.v1",
+        accessModes: ["subscribe"],
+      },
+    ]);
+
+    const stream = await transport.openInbound("remote-peer", OFFER_CATALOG_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    await writeJsonFrame(
+      stream,
+      await createOfferCatalogRequest([fixture.inputs.domain_id as string]),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    const response = await parseOfferCatalogResponse(
+      (await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+    );
+
+    expect(response.offers).toEqual([
+      expect.objectContaining({
+        domain_id: fixture.inputs.domain_id,
+        offer_id: "browser-preview",
+        display_name: "Browser Preview",
+        kind: "auki.sensor.rgb_camera.preview",
+        status: "available",
+        access_modes: ["subscribe"],
+        payload: {
+          type: "auki.camera.jpeg_frame.v1",
+          encoding: "binary",
+          media_type: "image/jpeg",
+          schema_version: "1",
+        },
+        registry_refs: [],
+      }),
+    ]);
+
+    await handle.stop();
+    const emptyStream = await transport.openInbound("remote-peer", OFFER_CATALOG_PROTOCOL_ID);
+    const emptyReader = new JsonFrameReader(emptyStream);
+    await writeJsonFrame(
+      emptyStream,
+      await createOfferCatalogRequest([fixture.inputs.domain_id as string]),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    await expect(emptyReader.read(DEFAULT_FRAME_BODY_LIMIT)).resolves.toMatchObject({
+      value: {
+        type: "auki.offer_catalog_response.v1",
+        offers: [],
+      },
+    });
+  });
+
+  it("serves published preview bytes through inbound Subscribe streams", async () => {
+    const fixture = await fixtureJson("v1_subscribe.json");
+    const inputs = fixture.inputs as JsonObject;
+    const domainId = inputs.domain_id as string;
+    const offerId = "browser-preview";
+    const payloadType = "auki.camera.jpeg_frame.v1";
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+    await peer.publishPreview([new Uint8Array([1, 2, 3])], {
+      domainId,
+      offerId,
+      payloadType,
+    });
+
+    const stream = await transport.openInbound("remote-peer", SUBSCRIBE_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    const request = await createSubscribeRequest(
+      domainId,
+      offerId,
+      undefined,
+      [payloadType],
+      4096,
+    );
+    await writeJsonFrame(stream, request, DEFAULT_FRAME_BODY_LIMIT);
+
+    const accept = await parseSubscribeStartResult(
+      (await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+    );
+    expect(accept).toEqual(
+      expect.objectContaining({
+        type: "auki.subscribe_accept.v1",
+        domain_id: domainId,
+        offer_id: offerId,
+        payload: {
+          type: payloadType,
+          encoding: "binary",
+          media_type: "image/jpeg",
+          schema_version: "1",
+        },
+      }),
+    );
+
+    const dataFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+    const data = await validateSubscribeDataMessage(
+      accept,
+      dataFrame.value,
+      dataFrame.bodyLength,
+      4096,
+    );
+    expect(data).toEqual(
+      expect.objectContaining({
+        type: "auki.spatial_message.v1",
+        domain_id: domainId,
+        offer_id: offerId,
+        sequence: "0",
+        payload: {
+          type: payloadType,
+          encoding: "binary",
+          media_type: "image/jpeg",
+          schema_version: "1",
+          bytes: "AQID",
+        },
+      }),
+    );
+
+    const end = await validateSubscribeEndForOffer(
+      (await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+      domainId,
+      offerId,
+    );
+    expect(end.reason).toBe("complete");
+  });
 });
 
 const LIFECYCLE_PROTOCOL_ID = "/auki/cluster-lifecycle/0.0.1";
@@ -273,6 +423,10 @@ class MemoryTransport implements BrowserTransport {
     string,
     (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
   >();
+  private readonly inboundHandlers = new Map<
+    string,
+    (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
+  >();
   started = 0;
   stopped = 0;
 
@@ -304,6 +458,17 @@ class MemoryTransport implements BrowserTransport {
     this.protocolHandlers.set(protocol, handler);
   }
 
+  async registerProtocolHandler(
+    protocol: string,
+    handler: (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void,
+  ): Promise<void> {
+    this.inboundHandlers.set(protocol, handler);
+  }
+
+  async unregisterProtocolHandler(protocol: string): Promise<void> {
+    this.inboundHandlers.delete(protocol);
+  }
+
   async dialProtocol(
     peerId: string,
     addresses: string[],
@@ -319,6 +484,18 @@ class MemoryTransport implements BrowserTransport {
       remote.abort(error instanceof Error ? error : new Error(String(error)));
     });
     return local;
+  }
+
+  async openInbound(peerId: string, protocol: string): Promise<BrowserProtocolStream> {
+    const handler = this.inboundHandlers.get(protocol);
+    if (!handler) {
+      throw new Error(`No inbound handler registered for ${protocol}`);
+    }
+    const [remote, local] = linkedStreams();
+    Promise.resolve(handler(local, peerId)).catch((error: unknown) => {
+      local.abort(error instanceof Error ? error : new Error(String(error)));
+    });
+    return remote;
   }
 }
 

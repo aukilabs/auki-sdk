@@ -17,6 +17,8 @@ export {
   peerIdFromSeed,
 } from "./identity.js";
 export type {
+  BrowserProtocolHandler,
+  BrowserProtocolHandlerOptions,
   BrowserTransport,
   BrowserTransportName,
   CreateBrowserLibp2pTransportOptions,

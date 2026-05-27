@@ -20,6 +20,12 @@ export type BrowserTransport = {
   stop(): Promise<void>;
   multiaddrs(): string[];
   dial(addresses: string[]): Promise<void>;
+  registerProtocolHandler(
+    protocol: string,
+    handler: BrowserProtocolHandler,
+    options?: BrowserProtocolHandlerOptions,
+  ): Promise<void>;
+  unregisterProtocolHandler(protocol: string): Promise<void>;
   dialProtocol(
     peerId: string,
     addresses: string[],
@@ -32,6 +38,16 @@ export type BrowserProtocolStream = AsyncIterable<Uint8Array | { subarray(): Uin
   close(): Promise<void>;
   abort?(error: Error): void;
   onDrain?(): Promise<void>;
+};
+
+export type BrowserProtocolHandler = (
+  stream: BrowserProtocolStream,
+  remotePeerId: string,
+) => Promise<void> | void;
+
+export type BrowserProtocolHandlerOptions = {
+  maxInboundStreams?: number;
+  maxOutboundStreams?: number;
 };
 
 export type CreateBrowserLibp2pTransportOptions = {
@@ -114,6 +130,26 @@ class Libp2pBrowserTransport implements BrowserTransport {
       throw new Error("No bootstrap addresses available to dial");
     }
     await this.node.dial(addresses.map((address) => multiaddr(address)));
+  }
+
+  async registerProtocolHandler(
+    protocol: string,
+    handler: BrowserProtocolHandler,
+    options: BrowserProtocolHandlerOptions = {},
+  ): Promise<void> {
+    await this.node.handle(
+      protocol,
+      (stream, connection) => handler(stream, connection.remotePeer.toString()),
+      {
+        ...options,
+        runOnLimitedConnection: true,
+        force: true,
+      },
+    );
+  }
+
+  async unregisterProtocolHandler(protocol: string): Promise<void> {
+    await this.node.unhandle(protocol);
   }
 
   async dialProtocol(

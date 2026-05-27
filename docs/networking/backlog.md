@@ -48,11 +48,11 @@ Discovery remains optional and non-authoritative. The next work is proving the
 new path across browser and native peers without breaking the shipped
 `auki-network` / `auki-domain` runtime.
 
-`auki-p2p-browser` now provides the browser-side consumer path: browser peer
+`auki-p2p-browser` now provides the browser-side peer path: browser peer
 identity, bootstrap parsing, js-libp2p transport setup, lifecycle handshakes,
-remote offer-catalog loading, and Subscribe consumption through
-`auki-protocol-wasm` validators. Browser-side publishing is still the missing
-half of the browser package.
+remote offer-catalog loading, Subscribe consumption, local preview offer
+publication, inbound offer-catalog serving, and inbound Subscribe serving
+through `auki-protocol-wasm` validators.
 
 ## Networking Matrix
 
@@ -132,13 +132,15 @@ protocols from those crates.
       temporary TypeScript frame helper from the public protocol surface.
 - [x] Validate browser package behavior against Rust `auki-protocol` vectors
       through the WASM adapter.
-- [ ] Expose one high-level browser peer handle that hides frames, streams, and
+- [x] Expose one high-level browser peer handle that hides frames, streams, and
       transport setup from app developers.
   - [x] Load remote offer catalogs over RFC libp2p streams while returning
         app-facing `OfferSummary` objects.
   - [x] Subscribe over RFC libp2p streams while yielding app-facing spatial
         messages.
-  - [ ] Publish browser-generated preview streams as local offers.
+  - [x] Publish browser-generated preview streams as local offers.
+  - [x] Serve local offer catalogs to inbound browser/native peers.
+  - [x] Serve finite local preview byte streams over inbound Subscribe.
 
 Candidate browser API shape:
 
@@ -209,6 +211,8 @@ Browser:
       in-memory protocol streams.
 - [x] Browser Subscribe tests keep `maxMessageBytes` scoped to data messages,
       not Subscribe start/end control frames.
+- [x] Browser peer producer tests for inbound offer-catalog and Subscribe
+      streams.
 
 End-to-end:
 
@@ -238,7 +242,7 @@ Pull these forward only when product or implementation work needs them:
 
 ## Browser Producer Design Checkpoint
 
-Before implementing browser `publishPreview`, keep these boundaries:
+Keep these boundaries as browser producer behavior grows:
 
 - `protocol.ts` remains a thin WASM adapter; it must not grow independent RFC
   rules.
@@ -247,6 +251,6 @@ Before implementing browser `publishPreview`, keep these boundaries:
   capabilities such as dialing and registering protocol handlers.
 - `peer.ts` owns the high-level SDK handle, local offer registry, publication
   handles, and app-facing methods.
-- Generated preview publishing should first prove Subscribe with JPEG-like
-  bytes over `auki.spatial_message.v1`; camera capture and reliable delivery
-  remain later work.
+- Generated preview publishing first proves Subscribe with JPEG-like bytes over
+  `auki.spatial_message.v1`; camera capture, infinite/live source lifecycle,
+  and reliable delivery remain later work.

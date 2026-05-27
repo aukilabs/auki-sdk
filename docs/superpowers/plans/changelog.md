@@ -6,6 +6,10 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Marked Task 2 of the SDK signaled WebRTC transport plan complete after exposing Discovery `/signals` send/poll through `auki-network` native bindings.
+
+### Nils's codex · May 27, HKT, 2026
+
 Marked Task 1 of the SDK signaled WebRTC transport plan complete after adding canonical signaled address helpers and wasm exports in `auki-network`.
 
 ### Nils's codex · May 27, HKT, 2026

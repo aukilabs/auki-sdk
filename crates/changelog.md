@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — Discovery signaling exposed to native bindings.** Typed `/signals/<peer-id>` send/poll client methods and UniFFI JSON bindings now let native hosts route WebRTC offers, answers, ICE candidates, and close messages through SDK-owned Discovery signaling.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — signaled WebRTC address helpers added.** The network crate now owns canonical `/auki-webrtc-signaling/.../p2p/...` formatting/parsing and exposes it to wasm for generated browser bindings.
 
 ### Nils's codex · May 27, HKT, 2026

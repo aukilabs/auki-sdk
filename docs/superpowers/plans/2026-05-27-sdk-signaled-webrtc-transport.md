@@ -205,7 +205,7 @@ git commit -m "Add signaled address helpers"
 - Modify: `crates/auki-network/tests/full_binding_surface.rs`
 - Modify: `crates/auki-network/bindings/javascript/test/discovery-directory-client.test.mjs.tmpl`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add `signal_wire_shape_is_locked` in `discovery_client.rs` and `native_discovery_signaling_is_exposed` in `tests/full_binding_surface.rs`:
 
@@ -226,21 +226,21 @@ fn native_discovery_signaling_is_exposed() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p auki-network --features discovery_client,swarm native_discovery_signaling_is_exposed -- --nocapture`
 
 Expected: compile failure because `BindingSignalRequest` does not exist.
 
-- [ ] **Step 3: Implement typed Discovery methods**
+- [x] **Step 3: Implement typed Discovery methods**
 
 Add `SignalRequest`, `SignalMessage`, `SignalPoll`, `DiscoveryClient::send_signal`, and `DiscoveryClient::poll_signals`. Use the same wire fields already exposed by `wasm.rs`: `from_peer_id`, `connection_id`, `kind`, `payload`.
 
-- [ ] **Step 4: Implement native UniFFI JSON methods**
+- [x] **Step 4: Implement native UniFFI JSON methods**
 
 Add `BindingSignalRequest` and `BindingSignalPoll` records plus `AukiDiscoveryClient.send_signal_json(...)` and `.poll_signals_json(...)`. `payload_json` parses to `serde_json::Value`; return JSON strings shaped as `SignalMessage` and `{ "messages": [...] }`.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -251,7 +251,7 @@ cargo test -p auki-network --features discovery_client signal_wire_shape_is_lock
 
 Expected: both pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-network/src/discovery_client.rs crates/auki-network/src/ffi.rs crates/auki-network/tests/full_binding_surface.rs crates/auki-network/bindings/javascript/test/discovery-directory-client.test.mjs.tmpl

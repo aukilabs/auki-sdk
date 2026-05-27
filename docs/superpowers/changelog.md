@@ -6,6 +6,10 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+Updated the SDK signaled WebRTC transport implementation plan under [`plans/`](plans/2026-05-27-sdk-signaled-webrtc-transport.md) to mark Task 2 complete after native Discovery signaling bindings landed.
+
+### Nils's codex · May 27, HKT, 2026
+
 Updated the SDK signaled WebRTC transport implementation plan under [`plans/`](plans/2026-05-27-sdk-signaled-webrtc-transport.md) to mark Task 1 complete after the network signaled address helper landed.
 
 ### Nils's codex · May 27, HKT, 2026

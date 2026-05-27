@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Discovery signaling client exposed to native bindings.** `auki-network` now has typed Discovery `/signals/<peer-id>` send/poll methods (`SignalRequest`, `SignalMessage`, `SignalPoll`) and native UniFFI records plus JSON methods on `AukiDiscoveryClient` (`send_signal_json`, `poll_signals_json`). Native hosts can now hand WebRTC offers, answers, ICE candidates, and close messages to the SDK-owned Discovery mailbox path instead of implementing that signaling in app Swift.
+
+Tests: red/green `cargo test -p auki-network --features discovery_client,swarm native_discovery_signaling_is_exposed -- --nocapture`; `cargo test -p auki-network --features discovery_client signal_wire_shape_is_locked -- --nocapture`; regression `cargo test -p auki-network --features discovery_client,swarm native_discovery_client_is_exposed -- --nocapture`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Signaled WebRTC address helpers added.** `auki-network` now owns the canonical `/auki-webrtc-signaling/<discovery-url>/p2p/<peer-id>` address formatter/parser and exposes the helpers to wasm for generated JavaScript packages. The helper normalizes trailing slashes, validates empty fields and malformed base64url payloads, and keeps the browser signaling address contract out of app code.
 
 Tests: red/green `cargo test -p auki-network signaled_address -- --nocapture`; `cargo check -p auki-network --target wasm32-unknown-unknown --no-default-features --features wasm`.

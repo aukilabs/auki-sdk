@@ -141,6 +141,24 @@ pub struct BindingStreamEntry {
     pub payload: Vec<u8>,
 }
 
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+#[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
+pub struct BindingSignalRequest {
+    pub recipient_peer_id: String,
+    pub from_peer_id: String,
+    pub connection_id: String,
+    pub kind: String,
+    pub payload_json: String,
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+#[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
+pub struct BindingSignalPoll {
+    pub peer_id: String,
+    pub since: u64,
+    pub timeout_ms: u64,
+}
+
 #[derive(uniffi::Record, Clone, Debug, PartialEq, Eq)]
 pub struct Capability {
     pub value: String,
@@ -977,6 +995,41 @@ impl AukiDiscoveryClient {
         };
         let nodes = entries.iter().map(discovery_node_json).collect::<Vec<_>>();
         json_result_string(&serde_json::json!({ "nodes": nodes }))
+    }
+
+    pub fn send_signal_json(
+        &self,
+        request: BindingSignalRequest,
+        timeout_ms: u64,
+    ) -> Result<String, BindingNetworkError> {
+        let payload = parse_json::<serde_json::Value>(&request.payload_json)?;
+        let message = self.block_on_discovery(
+            timeout_ms,
+            self.inner.send_signal(discovery_client::SignalRequest {
+                recipient_peer_id: request.recipient_peer_id,
+                from_peer_id: request.from_peer_id,
+                connection_id: request.connection_id,
+                kind: request.kind,
+                payload,
+            }),
+        )?;
+        json_result_string(&message)
+    }
+
+    pub fn poll_signals_json(
+        &self,
+        query: BindingSignalPoll,
+        timeout_ms: u64,
+    ) -> Result<String, BindingNetworkError> {
+        let messages = self.block_on_discovery(
+            timeout_ms,
+            self.inner.poll_signals(discovery_client::SignalPoll {
+                peer_id: query.peer_id,
+                since: query.since,
+                timeout_ms: query.timeout_ms,
+            }),
+        )?;
+        json_result_string(&serde_json::json!({ "messages": messages }))
     }
 
     pub fn unregister_peer_json(

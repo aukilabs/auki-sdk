@@ -250,10 +250,58 @@ fn native_discovery_client_is_exposed() {
 }
 
 #[test]
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn native_discovery_signaling_is_exposed() {
+    // binding-surface: native Discovery signaling mailbox
+    let server = MockDiscoveryServer::spawn();
+    let client = auki_network::discovery_client(server.base_url()).unwrap();
+
+    let sent = client
+        .send_signal_json(
+            auki_network::BindingSignalRequest {
+                recipient_peer_id: "peer-b".into(),
+                from_peer_id: "peer-a".into(),
+                connection_id: "conn-1".into(),
+                kind: "offer".into(),
+                payload_json: r#"{"sdp":"v=0"}"#.into(),
+            },
+            2_000,
+        )
+        .unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["recipient_peer_id"], "peer-b");
+    assert_eq!(sent["from_peer_id"], "peer-a");
+    assert_eq!(sent["connection_id"], "conn-1");
+    assert_eq!(sent["kind"], "offer");
+    assert_eq!(sent["payload"]["sdp"], "v=0");
+
+    let polled = client
+        .poll_signals_json(
+            auki_network::BindingSignalPoll {
+                peer_id: "peer-b".into(),
+                since: 7,
+                timeout_ms: 25,
+            },
+            2_000,
+        )
+        .unwrap();
+    let polled: serde_json::Value = serde_json::from_str(&polled).unwrap();
+    assert_eq!(polled["messages"][0]["id"], 8);
+    assert_eq!(polled["messages"][0]["kind"], "answer");
+}
+
+#[test]
 #[cfg(not(all(feature = "discovery_client", feature = "swarm")))]
 #[ignore = "requires discovery_client and swarm features"]
 fn native_discovery_client_is_exposed() {
     // binding-surface: native discovery client
+}
+
+#[test]
+#[cfg(not(all(feature = "discovery_client", feature = "swarm")))]
+#[ignore = "requires discovery_client and swarm features"]
+fn native_discovery_signaling_is_exposed() {
+    // binding-surface: native Discovery signaling mailbox
 }
 
 #[test]
@@ -856,7 +904,7 @@ impl MockDiscoveryServer {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
-            for _ in 0..4 {
+            for _ in 0..8 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let request = read_http_request(&mut stream);
                 let (status, body) = if request.starts_with("POST /clusters/demo ") {
@@ -870,6 +918,13 @@ impl MockDiscoveryServer {
                     ("204 No Content", String::new())
                 } else if request.starts_with("GET /nodes?type=relay ") {
                     ("200 OK", discovery_nodes_body())
+                } else if request.starts_with("POST /signals/peer-b ") {
+                    ("200 OK", discovery_signal_body("offer"))
+                } else if request.starts_with("GET /signals/peer-b?since=7&timeout_ms=25 ") {
+                    (
+                        "200 OK",
+                        format!(r#"{{"messages":[{}]}}"#, discovery_signal_body("answer")),
+                    )
                 } else {
                     (
                         "404 Not Found",
@@ -950,6 +1005,20 @@ fn discovery_nodes_body() -> String {
             "created_ns": 2,
             "last_liveness_check_ns": 3
         }]
+    })
+    .to_string()
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn discovery_signal_body(kind: &str) -> String {
+    serde_json::json!({
+        "id": 8,
+        "recipient_peer_id": "peer-b",
+        "from_peer_id": "peer-a",
+        "connection_id": "conn-1",
+        "kind": kind,
+        "payload": { "sdp": "v=0" },
+        "created_ns": 4
     })
     .to_string()
 }

@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 2 completed.** The implementation plan now records the completed native Discovery signaling binding slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Discovery signaling exposed to native bindings.** `auki-network` now exposes Discovery `/signals/<peer-id>` send/poll through typed Rust client methods and native UniFFI JSON bindings. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 1 completed.** The implementation plan now records the completed `auki-network` signaled address helper and wasm export slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

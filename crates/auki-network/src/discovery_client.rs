@@ -89,6 +89,51 @@ pub struct NodeEntry {
     pub last_liveness_check_ns: i64,
 }
 
+/// A signaling message to enqueue through Discovery's generic WebRTC mailbox.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignalRequest {
+    /// Recipient peer id in string form. Discovery uses this as mailbox key.
+    pub recipient_peer_id: String,
+    /// Sender peer id in string form.
+    pub from_peer_id: String,
+    /// Opaque connection id shared by offer, answer, candidates, and close.
+    pub connection_id: String,
+    /// Signal kind, typically `offer`, `answer`, `candidate`, or `close`.
+    pub kind: String,
+    /// Platform WebRTC payload, usually SDP or ICE JSON.
+    pub payload: serde_json::Value,
+}
+
+/// One message returned from Discovery's signaling mailbox.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignalMessage {
+    /// Discovery-assigned monotonically increasing mailbox id.
+    pub id: u64,
+    /// Recipient peer id this message was enqueued under.
+    pub recipient_peer_id: String,
+    /// Sender peer id.
+    pub from_peer_id: String,
+    /// Opaque connection id.
+    pub connection_id: String,
+    /// Signal kind.
+    pub kind: String,
+    /// Platform WebRTC payload.
+    pub payload: serde_json::Value,
+    /// Discovery server creation timestamp in unix nanoseconds.
+    pub created_ns: i64,
+}
+
+/// Long-poll query for a peer's signaling mailbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalPoll {
+    /// Peer id whose mailbox should be polled.
+    pub peer_id: String,
+    /// Return messages with id greater than this cursor.
+    pub since: u64,
+    /// Maximum long-poll duration in milliseconds.
+    pub timeout_ms: u64,
+}
+
 /// Outcome of [`DiscoveryClient::create_cluster`].
 #[derive(Debug)]
 pub enum CreateClusterOutcome {
@@ -280,6 +325,43 @@ impl DiscoveryClient {
         self.list_nodes_url(url).await
     }
 
+    /// Enqueue a WebRTC signaling message for another peer.
+    pub async fn send_signal(
+        &self,
+        signal: SignalRequest,
+    ) -> Result<SignalMessage, DiscoveryError> {
+        let url = format!("{}/signals/{}", self.base_url, signal.recipient_peer_id);
+        let body = WireSignalRequest {
+            from_peer_id: signal.from_peer_id,
+            connection_id: signal.connection_id,
+            kind: signal.kind,
+            payload: signal.payload,
+        };
+        let resp = self.http.post(&url).json(&body).send().await?;
+        ok_signal_or_status(resp).await
+    }
+
+    /// Poll a peer's WebRTC signaling mailbox.
+    pub async fn poll_signals(
+        &self,
+        query: SignalPoll,
+    ) -> Result<Vec<SignalMessage>, DiscoveryError> {
+        let url = format!(
+            "{}/signals/{}?since={}&timeout_ms={}",
+            self.base_url, query.peer_id, query.since, query.timeout_ms
+        );
+        let resp = self.http.get(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(DiscoveryError::Status {
+                status: status.as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            });
+        }
+        let list: WireSignalListResponse = resp.json().await?;
+        Ok(list.messages)
+    }
+
     async fn list_nodes_url(&self, url: String) -> Result<Vec<NodeEntry>, DiscoveryError> {
         let resp = self.http.get(&url).send().await?;
         let status = resp.status();
@@ -355,6 +437,19 @@ struct WireLivenessCheckRequest {
     peer_count: u32,
 }
 
+#[derive(Debug, Serialize)]
+struct WireSignalRequest {
+    from_peer_id: String,
+    connection_id: String,
+    kind: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireSignalListResponse {
+    messages: Vec<SignalMessage>,
+}
+
 fn parse_wire_entry(w: WireClusterEntry) -> Result<ClusterEntry, DiscoveryError> {
     let manager_peer_id = PeerId::from_str(&w.manager_peer_id)
         .map_err(|e| DiscoveryError::InvalidPeerId(format!("{}: {}", w.manager_peer_id, e)))?;
@@ -409,6 +504,17 @@ async fn ok_or_status(resp: reqwest::Response) -> Result<ClusterEntry, Discovery
     }
     let wire: WireClusterEntry = resp.json().await?;
     parse_wire_entry(wire)
+}
+
+async fn ok_signal_or_status(resp: reqwest::Response) -> Result<SignalMessage, DiscoveryError> {
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(DiscoveryError::Status {
+            status: status.as_u16(),
+            body: resp.text().await.unwrap_or_default(),
+        });
+    }
+    resp.json().await.map_err(DiscoveryError::Transport)
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
@@ -548,5 +654,22 @@ mod tests {
         let req = WireLivenessCheckRequest { peer_count: 7 };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"peer_count":7}"#);
+    }
+
+    #[test]
+    fn signal_wire_shape_is_locked() {
+        let request = WireSignalRequest {
+            from_peer_id: "peer-a".to_string(),
+            connection_id: "conn-1".to_string(),
+            kind: "offer".to_string(),
+            payload: serde_json::json!({ "sdp": "v=0" }),
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+
+        assert!(json.contains("\"from_peer_id\":\"peer-a\""));
+        assert!(json.contains("\"connection_id\":\"conn-1\""));
+        assert!(json.contains("\"kind\":\"offer\""));
+        assert!(json.contains("\"payload\":{\"sdp\":\"v=0\"}"));
     }
 }

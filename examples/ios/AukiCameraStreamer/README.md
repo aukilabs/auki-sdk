@@ -5,13 +5,13 @@ Native iOS producer peer shell for generated Auki Swift bindings.
 Generate local Swift bindings and protobuf bindings from the repository root:
 
 ```bash
-python3 scripts/bindings/generate_bindings.py generate swift auki-network
-python3 scripts/bindings/generate_bindings.py generate swift auki-domain
-python3 scripts/bindings/generate_bindings.py generate swift auki-registry
-python3 scripts/bindings/generate_bindings.py generate swift auki-time
-python3 scripts/bindings/generate_bindings.py generate swift auki-logs
-python3 scripts/bindings/generate_bindings.py generate swift auki-layout
-python3 scripts/bindings/generate_bindings.py generate swift auki-manifests
+just generate-swift-bindings auki-network
+just generate-swift-bindings auki-domain
+just generate-swift-bindings auki-registry
+just generate-swift-bindings auki-time
+just generate-swift-bindings auki-logs
+just generate-swift-bindings auki-layout
+just generate-swift-bindings auki-manifests
 scripts/generate-swift-proto.sh
 xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml
 ```

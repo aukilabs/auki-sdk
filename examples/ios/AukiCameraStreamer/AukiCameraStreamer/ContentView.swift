@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @ObservedObject var viewModel: CameraStreamerViewModel
+    @StateObject private var viewModel = CameraStreamerViewModel()
 
     var body: some View {
         NavigationStack {

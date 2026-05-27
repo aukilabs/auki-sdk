@@ -15,11 +15,17 @@ use auki_registry::{
     RegistryRef,
 };
 
-use crate::error::Result;
+use auki_manifests::{
+    SensorLogManifest, PoseLogManifest, TimeTransformLogManifest, DetectionLogManifest,
+};
+use auki_registry::LogRef;
+
+use crate::error::{Result, SessionError};
 use crate::registry_store::RegistryStore;
 use crate::log_handles::{
     SensorLogHandle, PoseLogHandle, TimeTransformLogHandle, DetectionLogHandle,
 };
+use crate::log_specs::{SensorLogSpec, PoseLogSpec, TimeTransformLogSpec, DetectionLogSpec};
 
 // ─── FrameDef ────────────────────────────────────────────────────────────────
 
@@ -208,6 +214,224 @@ impl Session {
         };
         inner.detectors.insert(detector_id, entry);
         Ok(registry_ref)
+    }
+
+    // ─── Log registration ─────────────────────────────────────────────────
+
+    /// Register a sensor log, writing the manifest to disk and stashing a handle
+    /// in the in-memory log map.
+    ///
+    /// `resource_id` is derived as `spec.sensor.id` (§6).
+    /// Rejects duplicate `(source_peer_id, resource_id)` with
+    /// [`SessionError::DuplicateLog`].
+    pub fn register_sensor_log(&self, spec: SensorLogSpec) -> Result<SensorLogHandle> {
+        let mut inner = self.inner.write();
+        let resource_id = spec.sensor.id.clone();
+        let key = (inner.peer_id.clone(), resource_id.clone());
+        if inner.sensor_logs.contains_key(&key) {
+            return Err(SessionError::DuplicateLog {
+                source_peer_id: inner.peer_id.clone(),
+                resource_id,
+            });
+        }
+
+        let manifest = SensorLogManifest {
+            source_peer_id: inner.peer_id.clone(),
+            writer_peer_id: inner.peer_id.clone(),
+            app_id: inner.app_id.clone(),
+            session_id: inner.session_id.clone(),
+            sensor: spec.sensor,
+            clock: spec.clock,
+            frame: spec.frame,
+            segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
+            retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
+        };
+
+        let manifest_dir = inner.storage_root
+            .join("logs")
+            .join(&inner.peer_id)
+            .join(&resource_id);
+        std::fs::create_dir_all(&manifest_dir)?;
+        let canonical_bytes = auki_jcs::canonicalize(&serde_json::to_value(&manifest)
+            .expect("SensorLogManifest serializes"));
+        std::fs::write(manifest_dir.join("manifest.json"), &canonical_bytes)?;
+
+        let log_ref = LogRef {
+            source_peer_id: inner.peer_id.clone(),
+            resource_id: resource_id.clone(),
+        };
+        let handle = SensorLogHandle {
+            resource_id: resource_id.clone(),
+            log_ref: log_ref.clone(),
+        };
+        inner.sensor_logs.insert(key, std::sync::Arc::new(SensorLogHandle {
+            resource_id,
+            log_ref,
+        }));
+        Ok(handle)
+    }
+
+    /// Register a pose log, writing the manifest to disk and stashing a handle
+    /// in the in-memory log map.
+    ///
+    /// `resource_id` is derived as `"<from_frame.id>-><to_frame.id>"` (§6).
+    /// Rejects duplicate `(source_peer_id, resource_id)` with
+    /// [`SessionError::DuplicateLog`].
+    pub fn register_pose_log(&self, spec: PoseLogSpec) -> Result<PoseLogHandle> {
+        let mut inner = self.inner.write();
+        let resource_id = format!("{}->{}", spec.from_frame.id, spec.to_frame.id);
+        let key = (inner.peer_id.clone(), resource_id.clone());
+        if inner.pose_logs.contains_key(&key) {
+            return Err(SessionError::DuplicateLog {
+                source_peer_id: inner.peer_id.clone(),
+                resource_id,
+            });
+        }
+
+        let manifest = PoseLogManifest {
+            source_peer_id: inner.peer_id.clone(),
+            writer_peer_id: inner.peer_id.clone(),
+            app_id: inner.app_id.clone(),
+            session_id: inner.session_id.clone(),
+            from_frame: spec.from_frame,
+            to_frame: spec.to_frame,
+            clock: spec.clock,
+            source: spec.source,
+            writer_mode: spec.writer_mode,
+            expected_rate_hz: spec.expected_rate_hz,
+            segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
+            retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
+        };
+
+        let manifest_dir = inner.storage_root
+            .join("logs")
+            .join(&inner.peer_id)
+            .join(&resource_id);
+        std::fs::create_dir_all(&manifest_dir)?;
+        let canonical_bytes = auki_jcs::canonicalize(&serde_json::to_value(&manifest)
+            .expect("PoseLogManifest serializes"));
+        std::fs::write(manifest_dir.join("manifest.json"), &canonical_bytes)?;
+
+        let log_ref = LogRef {
+            source_peer_id: inner.peer_id.clone(),
+            resource_id: resource_id.clone(),
+        };
+        let handle = PoseLogHandle {
+            resource_id: resource_id.clone(),
+            log_ref: log_ref.clone(),
+        };
+        inner.pose_logs.insert(key, std::sync::Arc::new(PoseLogHandle {
+            resource_id,
+            log_ref,
+        }));
+        Ok(handle)
+    }
+
+    /// Register a time-transform log, writing the manifest to disk and stashing a handle
+    /// in the in-memory log map.
+    ///
+    /// `resource_id` is derived as `"<from_clock.id>-><to_clock.id>"` (§6).
+    /// Rejects duplicate `(source_peer_id, resource_id)` with
+    /// [`SessionError::DuplicateLog`].
+    pub fn register_time_transform_log(&self, spec: TimeTransformLogSpec) -> Result<TimeTransformLogHandle> {
+        let mut inner = self.inner.write();
+        let resource_id = format!("{}->{}", spec.from_clock.id, spec.to_clock.id);
+        let key = (inner.peer_id.clone(), resource_id.clone());
+        if inner.time_logs.contains_key(&key) {
+            return Err(SessionError::DuplicateLog {
+                source_peer_id: inner.peer_id.clone(),
+                resource_id,
+            });
+        }
+
+        let manifest = TimeTransformLogManifest {
+            source_peer_id: inner.peer_id.clone(),
+            writer_peer_id: inner.peer_id.clone(),
+            app_id: inner.app_id.clone(),
+            session_id: inner.session_id.clone(),
+            from_clock: spec.from_clock,
+            to_clock: spec.to_clock,
+            source: spec.source,
+            segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
+            retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
+        };
+
+        let manifest_dir = inner.storage_root
+            .join("logs")
+            .join(&inner.peer_id)
+            .join(&resource_id);
+        std::fs::create_dir_all(&manifest_dir)?;
+        let canonical_bytes = auki_jcs::canonicalize(&serde_json::to_value(&manifest)
+            .expect("TimeTransformLogManifest serializes"));
+        std::fs::write(manifest_dir.join("manifest.json"), &canonical_bytes)?;
+
+        let log_ref = LogRef {
+            source_peer_id: inner.peer_id.clone(),
+            resource_id: resource_id.clone(),
+        };
+        let handle = TimeTransformLogHandle {
+            resource_id: resource_id.clone(),
+            log_ref: log_ref.clone(),
+        };
+        inner.time_logs.insert(key, std::sync::Arc::new(TimeTransformLogHandle {
+            resource_id,
+            log_ref,
+        }));
+        Ok(handle)
+    }
+
+    /// Register a detection log, writing the manifest to disk and stashing a handle
+    /// in the in-memory log map.
+    ///
+    /// `resource_id` is derived as `"<detector.id>@<input_sensor.id>"` (§6).
+    /// Rejects duplicate `(source_peer_id, resource_id)` with
+    /// [`SessionError::DuplicateLog`].
+    pub fn register_detection_log(&self, spec: DetectionLogSpec) -> Result<DetectionLogHandle> {
+        let mut inner = self.inner.write();
+        let resource_id = format!("{}@{}", spec.detector.id, spec.input_sensor.id);
+        let key = (inner.peer_id.clone(), resource_id.clone());
+        if inner.detection_logs.contains_key(&key) {
+            return Err(SessionError::DuplicateLog {
+                source_peer_id: inner.peer_id.clone(),
+                resource_id,
+            });
+        }
+
+        let manifest = DetectionLogManifest {
+            source_peer_id: inner.peer_id.clone(),
+            writer_peer_id: inner.peer_id.clone(),
+            app_id: inner.app_id.clone(),
+            session_id: inner.session_id.clone(),
+            detector: spec.detector,
+            input_log: spec.input_log,
+            input_sensor: spec.input_sensor,
+            clock: spec.clock,
+            segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
+            retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
+        };
+
+        let manifest_dir = inner.storage_root
+            .join("logs")
+            .join(&inner.peer_id)
+            .join(&resource_id);
+        std::fs::create_dir_all(&manifest_dir)?;
+        let canonical_bytes = auki_jcs::canonicalize(&serde_json::to_value(&manifest)
+            .expect("DetectionLogManifest serializes"));
+        std::fs::write(manifest_dir.join("manifest.json"), &canonical_bytes)?;
+
+        let log_ref = LogRef {
+            source_peer_id: inner.peer_id.clone(),
+            resource_id: resource_id.clone(),
+        };
+        let handle = DetectionLogHandle {
+            resource_id: resource_id.clone(),
+            log_ref: log_ref.clone(),
+        };
+        inner.detection_logs.insert(key, std::sync::Arc::new(DetectionLogHandle {
+            resource_id,
+            log_ref,
+        }));
+        Ok(handle)
     }
 }
 
@@ -416,5 +640,163 @@ mod register_tests {
         });
         let result = s.register_detector("bad>id", body, vec![]);
         assert!(matches!(result, Err(SessionError::InvalidId(_))));
+    }
+}
+
+#[cfg(test)]
+mod register_log_tests {
+    use super::*;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use auki_registry::{Camera, ClockMeta, Scope, DetectorBody, ObjectDetection, LogRef};
+    use auki_manifests::{PoseSource, PoseWriterMode, TimeTransformSource};
+    use crate::log_specs::{SensorLogSpec, PoseLogSpec, TimeTransformLogSpec, DetectionLogSpec, HeadSpec};
+
+    fn fixture_session() -> (Session, tempfile::TempDir) {
+        let tmp = tempdir().unwrap();
+        let s = Session::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        (s, tmp)
+    }
+
+    fn camera_body(frame: RegistryRef) -> SensorBody {
+        SensorBody::Camera(Camera {
+            r#type: "rgb".to_string(),
+            width: 1920, height: 1200, frame_rate_hz: 30,
+            pixel_format: "rgb8".to_string(),
+            color_space: "srgb".to_string(),
+            intrinsics_model: "pinhole".to_string(),
+            distortion_model: "brown_conrady".to_string(),
+            frame,
+        })
+    }
+
+    fn monotonic_clock_body() -> ClockBody {
+        ClockBody::MonotonicClock(ClockMeta {
+            unit: "ns".to_string(),
+            monotonic: true,
+            epoch: None,
+            scope: Scope::DeviceLocal,
+        })
+    }
+
+    fn utc_clock_body() -> ClockBody {
+        ClockBody::UtcClock(ClockMeta {
+            unit: "ns".to_string(),
+            monotonic: false,
+            epoch: Some("1970-01-01T00:00:00Z".to_string()),
+            scope: Scope::Global,
+        })
+    }
+
+    fn fixture_registries(s: &Session) -> (RegistryRef, RegistryRef, RegistryRef) {
+        let frame = s.register_frame("head_left_camera_optical", FrameDef::ros_optical()).unwrap();
+        let sensor = s.register_sensor("head_left_rgb", camera_body(frame.clone())).unwrap();
+        let clock  = s.register_clock("session/sdk_clock", monotonic_clock_body()).unwrap();
+        (sensor, clock, frame)
+    }
+
+    #[test]
+    fn register_sensor_log_resource_id_is_sensor_id() {
+        let (s, tmp) = fixture_session();
+        let (sensor, clock, frame) = fixture_registries(&s);
+
+        let handle = s.register_sensor_log(SensorLogSpec {
+            sensor: sensor.clone(),
+            clock,
+            frame: Some(frame),
+            head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
+            segment_duration: Duration::from_secs(1),
+            retention: Duration::from_secs(5),
+        }).unwrap();
+
+        assert_eq!(handle.resource_id(), "head_left_rgb");
+        assert_eq!(handle.log_ref().source_peer_id, "galbot");
+        assert_eq!(handle.log_ref().resource_id, "head_left_rgb");
+
+        let manifest_path = tmp.path().join("logs/galbot/head_left_rgb/manifest.json");
+        assert!(manifest_path.exists(), "manifest.json missing at {}", manifest_path.display());
+    }
+
+    #[test]
+    fn register_sensor_log_rejects_duplicate() {
+        let (s, _tmp) = fixture_session();
+        let (sensor, clock, frame) = fixture_registries(&s);
+        let spec = SensorLogSpec {
+            sensor: sensor.clone(),
+            clock: clock.clone(),
+            frame: Some(frame.clone()),
+            head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
+            segment_duration: Duration::from_secs(1),
+            retention: Duration::from_secs(5),
+        };
+        s.register_sensor_log(spec.clone()).unwrap();
+        let result = s.register_sensor_log(spec);
+        assert!(matches!(result, Err(SessionError::DuplicateLog { .. })));
+    }
+
+    #[test]
+    fn register_pose_log_resource_id_is_from_arrow_to() {
+        let (s, _tmp) = fixture_session();
+        let (_sensor, clock, _frame) = fixture_registries(&s);
+        let world = s.register_frame("world", FrameDef::ros_body()).unwrap();
+        let base_link = s.register_frame("base_link", FrameDef::ros_body()).unwrap();
+
+        let handle = s.register_pose_log(PoseLogSpec {
+            from_frame: world,
+            to_frame: base_link,
+            clock,
+            source: PoseSource::Manual,
+            writer_mode: PoseWriterMode::Movable,
+            expected_rate_hz: 30,
+            head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
+            segment_duration: Duration::from_secs(1),
+            retention: Duration::from_secs(5),
+        }).unwrap();
+
+        assert_eq!(handle.resource_id(), "world->base_link");
+    }
+
+    #[test]
+    fn register_time_transform_log_resource_id_format() {
+        let (s, _tmp) = fixture_session();
+        let clock = s.register_clock("session/sdk_clock", monotonic_clock_body()).unwrap();
+        let wall = s.register_clock("wall_clock", utc_clock_body()).unwrap();
+
+        let handle = s.register_time_transform_log(TimeTransformLogSpec {
+            from_clock: clock,
+            to_clock: wall,
+            source: TimeTransformSource::LocalClockRead,
+            head: HeadSpec::Rolling { retention_ns: 60_000_000_000 },
+            segment_duration: Duration::from_secs(60),
+            retention: Duration::from_secs(3600),
+        }).unwrap();
+
+        assert_eq!(handle.resource_id(), "session/sdk_clock->wall_clock");
+    }
+
+    #[test]
+    fn register_detection_log_resource_id_format() {
+        let (s, _tmp) = fixture_session();
+        let (sensor, clock, _frame) = fixture_registries(&s);
+        let detector = s.register_detector(
+            "yolo_v8",
+            DetectorBody::ObjectDetection(ObjectDetection { model: "yolo_v8n".to_string() }),
+            vec!["bounding_box".to_string()],
+        ).unwrap();
+        let input_log = LogRef {
+            source_peer_id: "galbot".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+        };
+        let handle = s.register_detection_log(DetectionLogSpec {
+            detector,
+            input_log,
+            input_sensor: sensor,
+            clock,
+            head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
+            segment_duration: Duration::from_secs(1),
+            retention: Duration::from_secs(5),
+        }).unwrap();
+
+        assert_eq!(handle.resource_id(), "yolo_v8@head_left_rgb");
     }
 }

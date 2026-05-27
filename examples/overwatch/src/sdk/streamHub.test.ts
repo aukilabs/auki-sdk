@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SensorSummary } from "./contract";
 
 const { getParticipantSensors, getStream } = vi.hoisted(() => ({
-  getParticipantSensors: vi.fn(() => []),
+  getParticipantSensors: vi.fn((): SensorSummary[] => []),
   getStream: vi.fn(),
 }));
 

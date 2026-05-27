@@ -262,6 +262,7 @@ impl SensorRegistryEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockRegistryEntry {
+    pub peer_id: String,
     pub clock_id: String,
     #[serde(flatten)]
     pub body: ClockBody,
@@ -324,6 +325,7 @@ impl ClockRegistryEntry {
 /// the on-disk JSON is fully spelled out either way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameRegistryEntry {
+    pub peer_id: String,
     /// Stable human ID, e.g. `"K1-AABBCCDDEEFF/head_left_cam_optical"`.
     /// Same naming convention as `sensor_id` / `clock_id`.
     pub frame_id: String,
@@ -425,6 +427,7 @@ impl FrameRegistryEntry {
     /// with a clear "forward direction of motion."
     pub fn ros_body(frame_id: impl Into<String>) -> Self {
         Self {
+            peer_id: String::new(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -441,6 +444,7 @@ impl FrameRegistryEntry {
     /// reasoning lines up with this directly.
     pub fn ros_optical(frame_id: impl Into<String>) -> Self {
         Self {
+            peer_id: String::new(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -458,6 +462,7 @@ impl FrameRegistryEntry {
     /// the negative-Z axis; +Z points away from the scene.
     pub fn opengl(frame_id: impl Into<String>) -> Self {
         Self {
+            peer_id: String::new(),
             frame_id: frame_id.into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -474,6 +479,7 @@ impl FrameRegistryEntry {
     /// ecosystem can declare without spelling fields out by hand.
     pub fn unity(frame_id: impl Into<String>) -> Self {
         Self {
+            peer_id: String::new(),
             frame_id: frame_id.into(),
             handedness: Handedness::Left,
             axes: AxisConvention {
@@ -511,6 +517,7 @@ impl FrameRegistryEntry {
 /// `DetectionFrame.type` (Cuba T12) for the entries it produces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectorRegistryEntry {
+    pub peer_id: String,
     pub detector_id: String,
     #[serde(flatten)]
     pub body: DetectorBody,
@@ -839,7 +846,7 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const M1_OPTICAL_FRAME_HASH: &str = "e0d40e7b526e04f15f83f75897f53825";
+    const M1_OPTICAL_FRAME_HASH: &str = "56c22778b3af83b2df549af79c2b5395";
 
     fn m1_sensor_entry() -> SensorRegistryEntry {
         SensorRegistryEntry {
@@ -874,6 +881,7 @@ mod tests {
 
     fn m1_monotonic_entry() -> ClockRegistryEntry {
         ClockRegistryEntry {
+            peer_id: "galbot".into(),
             clock_id: "K1-AABBCCDDEEFF/monotonic".into(),
             body: ClockBody::MonotonicClock(ClockMeta {
                 unit: "milliseconds".into(),
@@ -886,6 +894,7 @@ mod tests {
 
     fn m1_utc_entry() -> ClockRegistryEntry {
         ClockRegistryEntry {
+            peer_id: "galbot".into(),
             clock_id: "K1-AABBCCDDEEFF/utc".into(),
             body: ClockBody::UtcClock(ClockMeta {
                 unit: "milliseconds".into(),
@@ -908,7 +917,7 @@ mod tests {
         // sensor.type lives as "type" key inside the body.
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
         );
     }
 
@@ -917,7 +926,7 @@ mod tests {
         let bytes = m1_monotonic_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"clock_id":"K1-AABBCCDDEEFF/monotonic","epoch":null,"monotonic":true,"scope":"device-local","type":"monotonic_clock","unit":"milliseconds"}"#
+            r#"{"clock_id":"K1-AABBCCDDEEFF/monotonic","epoch":null,"monotonic":true,"peer_id":"galbot","scope":"device-local","type":"monotonic_clock","unit":"milliseconds"}"#
         );
     }
 
@@ -926,7 +935,7 @@ mod tests {
         let bytes = m1_utc_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"clock_id":"K1-AABBCCDDEEFF/utc","epoch":"1970-01-01T00:00:00Z","monotonic":false,"scope":"global","type":"utc_clock","unit":"milliseconds"}"#
+            r#"{"clock_id":"K1-AABBCCDDEEFF/utc","epoch":"1970-01-01T00:00:00Z","monotonic":false,"peer_id":"galbot","scope":"global","type":"utc_clock","unit":"milliseconds"}"#
         );
     }
 
@@ -936,20 +945,20 @@ mod tests {
     /// sensor.type field added.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "30f4eca87eb0e3051d6646f47bf2b27c");
+        assert_eq!(m1_sensor_entry().hash(), "e6f49f6a433ad53d352238d46e7f6cba");
     }
 
     #[test]
     fn monotonic_clock_hash_is_locked() {
         assert_eq!(
             m1_monotonic_entry().hash(),
-            "1f2176888b1a6621315033f22659b9f3"
+            "af8088eb29d34d076831763a30c07cbe"
         );
     }
 
     #[test]
     fn utc_clock_hash_is_locked() {
-        assert_eq!(m1_utc_entry().hash(), "89f84f4c2e09bef81d385b2af1d17e6c");
+        assert_eq!(m1_utc_entry().hash(), "010f5b2d0b8c616a9264ac6bb822a408");
     }
 
     #[test]
@@ -1174,7 +1183,7 @@ mod tests {
         // peer_id added at top level.
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
+            r#"{"fields":[{"count":1,"datatype":"float32","name":"x","offset":0},{"count":1,"datatype":"float32","name":"y","offset":4},{"count":1,"datatype":"float32","name":"z","offset":8}],"frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":10,"is_bigendian":false,"kind":"rangefinder","peer_id":"test-peer","point_step":12,"sensor_id":"K1-AABBCCDDEEFF/head_depth_points","type":"point_cloud"}"#
         );
     }
 
@@ -1186,7 +1195,7 @@ mod tests {
         // frame_id+frame_hash→RegistryRef, kind tag renamed.
         assert_eq!(
             m1_point_cloud_entry().hash(),
-            "ac4477ea7753a9327d6fec52b6abcc01"
+            "ee3bf8c360d026d0ea53dc684451a265"
         );
     }
 
@@ -1275,7 +1284,7 @@ mod tests {
         // renamed from "type" to "kind"; open-string sensor.type is now "type":"pcm".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"e0d40e7b526e04f15f83f75897f53825","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
+            r#"{"channel_layout":"n_channel","channels":4,"frame":{"hash":"56c22778b3af83b2df549af79c2b5395","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"kind":"audio","peer_id":"test-peer","sample_format":"pcm_s16le","sample_rate_hz":48000,"sensor_id":"K1-AABBCCDDEEFF/head_array_4mic","type":"pcm"}"#
         );
     }
 
@@ -1285,7 +1294,7 @@ mod tests {
         // Updates to this must be coordinated with any cross-language reader.
         // Recomputed for #216 rev 2: peer_id added, frame ref added,
         // kind tag renamed, sensor.type field added.
-        assert_eq!(m1_audio_entry().hash(), "744c2bcec14c71480b7b904c92b351e7");
+        assert_eq!(m1_audio_entry().hash(), "d2bcb90d0187f49ec9b5597d44560f75");
     }
 
     #[test]
@@ -1301,7 +1310,7 @@ mod tests {
 
     // ─── JointEncoders tests ───────────────────────────────────────────────
 
-    const M1_BASE_LINK_FRAME_HASH: &str = "fd0dc3789e898b71b5e16ee122a81a44";
+    const M1_BASE_LINK_FRAME_HASH: &str = "f5f259238ca27a5322612b761a0a2fdf";
 
     /// Six-DOF arm fixture — `K1` upper-arm shape, plausible publish
     /// rate. Joint count, frame rate, type, and frame ref are the fields
@@ -1339,7 +1348,7 @@ mod tests {
         // renamed; open-string sensor.type is "type":"absolute".
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"frame":{"hash":"fd0dc3789e898b71b5e16ee122a81a44","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
+            r#"{"frame":{"hash":"f5f259238ca27a5322612b761a0a2fdf","id":"K1-AABBCCDDEEFF/base_link","peer_id":"test-peer"},"frame_rate_hz":100,"joint_count":6,"kind":"joint_encoders","peer_id":"test-peer","sensor_id":"K1-AABBCCDDEEFF/right_arm_joints","type":"absolute"}"#
         );
     }
 
@@ -1350,7 +1359,7 @@ mod tests {
         // Hash recomputed for #216 rev 2: peer_id, type, and frame fields added.
         assert_eq!(
             m1_joint_encoders_entry().hash(),
-            "5bfa90f52ed54179a31f05c12e8501cc"
+            "98677a3bc55043fe81b0a6f9d7bf0cbe"
         );
     }
 
@@ -1390,7 +1399,7 @@ mod tests {
         let s = std::str::from_utf8(&bytes).unwrap();
         assert_eq!(
             s,
-            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","units":"meters"}"#,
+            r#"{"axes":{"x":"forward","y":"left","z":"up"},"frame_id":"K1-AABBCCDDEEFF/base_link","handedness":"right","peer_id":"","units":"meters"}"#,
         );
     }
 
@@ -1399,13 +1408,14 @@ mod tests {
     /// shape drifts.
     #[test]
     fn frame_entry_hash_is_locked() {
-        assert_eq!(m1_frame_entry().hash(), "fd0dc3789e898b71b5e16ee122a81a44");
+        assert_eq!(m1_frame_entry().hash(), "f5f259238ca27a5322612b761a0a2fdf");
     }
 
     #[test]
     fn ros_body_preset_matches_explicit_construction() {
         let preset = FrameRegistryEntry::ros_body("frame/x");
         let explicit = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1422,6 +1432,7 @@ mod tests {
     fn ros_optical_preset_matches_explicit_construction() {
         let preset = FrameRegistryEntry::ros_optical("frame/x");
         let explicit = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1438,6 +1449,7 @@ mod tests {
     fn opengl_preset_matches_explicit_construction() {
         let preset = FrameRegistryEntry::opengl("frame/x");
         let explicit = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1454,6 +1466,7 @@ mod tests {
     fn unity_preset_matches_explicit_construction() {
         let preset = FrameRegistryEntry::unity("frame/x");
         let explicit = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Left,
             axes: AxisConvention {
@@ -1469,6 +1482,7 @@ mod tests {
     #[test]
     fn validate_rejects_non_orthogonal_axes() {
         let entry = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/x".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1500,6 +1514,7 @@ mod tests {
     fn write_frame_rejects_non_orthogonal_axes_without_touching_disk() {
         let dir = tempfile::tempdir().unwrap();
         let entry = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "frame/bad".into(),
             handedness: Handedness::Right,
             axes: AxisConvention {
@@ -1558,6 +1573,7 @@ mod tests {
 
     fn cuba_aruco_detector_entry() -> DetectorRegistryEntry {
         DetectorRegistryEntry {
+            peer_id: "galbot".into(),
             detector_id: "aukilabs/aruco/v1".into(),
             body: DetectorBody::Aruco(Aruco {
                 dictionary: "5x5_50".into(),
@@ -1573,7 +1589,7 @@ mod tests {
         // Keys sorted lexicographically per RFC 8785 §3.2.3.
         assert_eq!(
             s,
-            r#"{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","output_types":["aruco"],"type":"aruco"}"#
+            r#"{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","output_types":["aruco"],"peer_id":"galbot","type":"aruco"}"#
         );
     }
 
@@ -1611,6 +1627,7 @@ mod tests {
             body: DetectorBody::Aruco(Aruco {
                 dictionary: "4x4_50".into(),
             }),
+            peer_id: "galbot".into(),
             ..cuba_aruco_detector_entry()
         };
         let h1 = write_detector(dir.path(), &five).unwrap();
@@ -1634,6 +1651,7 @@ mod tests {
     #[test]
     fn detector_entry_supports_multiple_output_types() {
         let entry = DetectorRegistryEntry {
+            peer_id: "galbot".into(),
             detector_id: "aukilabs/qr/v1".into(),
             body: DetectorBody::Qr(Qr {}),
             output_types: vec!["portal".into(), "portal_corner".into()],

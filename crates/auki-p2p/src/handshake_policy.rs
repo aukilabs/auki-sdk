@@ -252,7 +252,9 @@ pub fn validate_remote_handshake(
         .peer_binding
         .verify_for_peer_id(input.authenticated_peer_id)
         .map_err(|error| {
-            HandshakePolicyError::Authority(AuthorityChainError::InvalidPeerBinding(error))
+            HandshakePolicyError::Authority(AuthorityChainError::InvalidPeerBinding(Box::new(
+                error,
+            )))
         })?;
     verified_for_freshness
         .validate_freshness(
@@ -583,9 +585,9 @@ fn domain_policy_allows(
                 Err(HandshakePolicyError::MissingAppDomainAccessDecision)
             }
             AppDomainAccess::AllowAll => Ok(true),
-            AppDomainAccess::AllowOnly(allowed_domain_ids) => Ok(allowed_domain_ids
-                .iter()
-                .any(|allowed_domain_id| *allowed_domain_id == domain_id)),
+            AppDomainAccess::AllowOnly(allowed_domain_ids) => {
+                Ok(allowed_domain_ids.contains(&domain_id))
+            }
         },
     }
 }
@@ -857,7 +859,10 @@ mod tests {
     use auki_identity::Wallet;
     use auki_protocol::v1::{
         authority::{PeerAuthorizationMode, ServedDomainAuthority},
-        domain::{DOMAIN_NONCE_LEN, DelegationScope, DomainDeclaration, DomainDelegation},
+        domain::{
+            DOMAIN_NONCE_LEN, DelegationScope, DomainDeclaration, DomainDelegation,
+            DomainDelegationParams,
+        },
     };
     use serde_json::{Value, json};
 
@@ -900,13 +905,15 @@ mod tests {
         let domain_id = declaration.domain_id().unwrap().to_owned();
         let delegation = DomainDelegation::create(
             owner,
-            &domain_id,
-            &delegate.wallet_public_key(),
-            &delegate.peer_id(),
-            &[DelegationScope::Serve],
-            VALID_FROM,
-            expires_at,
-            Some("delegate"),
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &delegate.wallet_public_key(),
+                delegate_peer_id: &delegate.peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: VALID_FROM,
+                expires_at,
+                label: Some("delegate"),
+            },
         )
         .unwrap();
         let declared = auki_protocol::v1::authority::DeclaredDomain::new(

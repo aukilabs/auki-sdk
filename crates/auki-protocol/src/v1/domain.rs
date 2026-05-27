@@ -85,6 +85,25 @@ pub struct DomainDelegation {
     value: Value,
 }
 
+/// Inputs for creating a v1 domain delegation.
+#[derive(Debug, Clone, Copy)]
+pub struct DomainDelegationParams<'a> {
+    /// Encoded v1 domain id delegated by the domain owner.
+    pub domain_id: &'a str,
+    /// Delegate wallet public key from the peer binding.
+    pub delegate_wallet_public_key: &'a WalletPublicKey,
+    /// Delegate libp2p peer id from the peer binding.
+    pub delegate_peer_id: &'a PeerId,
+    /// Delegated scopes.
+    pub scopes: &'a [DelegationScope],
+    /// RFC3339 UTC timestamp at which the delegation starts.
+    pub valid_from: &'a str,
+    /// RFC3339 UTC timestamp at which the delegation expires.
+    pub expires_at: &'a str,
+    /// Optional operator/application label.
+    pub label: Option<&'a str>,
+}
+
 /// A successfully verified v1 domain declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedDomainDeclaration {
@@ -226,9 +245,9 @@ pub enum DomainError {
     /// Delegation peer id did not match the transport-authenticated peer id.
     DelegatePeerIdMismatch {
         /// Peer id carried by the delegation.
-        delegated: PeerId,
+        delegated: Box<PeerId>,
         /// Transport-authenticated peer id.
-        expected: PeerId,
+        expected: Box<PeerId>,
     },
     /// Delegation did not include a required scope.
     MissingScope {
@@ -595,17 +614,11 @@ impl DomainDelegation {
     /// Create and sign a v1 domain delegation.
     pub fn create(
         domain_owner_wallet: &Wallet,
-        domain_id: &str,
-        delegate_wallet_public_key: &WalletPublicKey,
-        delegate_peer_id: &PeerId,
-        scopes: &[DelegationScope],
-        valid_from: &str,
-        expires_at: &str,
-        label: Option<&str>,
+        params: DomainDelegationParams<'_>,
     ) -> Result<Self, DomainError> {
-        decode_domain_id(domain_id)?;
-        let scopes = sorted_unique_scopes_for_signing(scopes)?;
-        validate_time_window(valid_from, expires_at)?;
+        decode_domain_id(params.domain_id)?;
+        let scopes = sorted_unique_scopes_for_signing(params.scopes)?;
+        validate_time_window(params.valid_from, params.expires_at)?;
 
         let mut object = Map::new();
         object.insert(
@@ -618,7 +631,7 @@ impl DomainDelegation {
         );
         object.insert(
             FIELD_DOMAIN_ID.to_owned(),
-            Value::String(domain_id.to_owned()),
+            Value::String(params.domain_id.to_owned()),
         );
         object.insert(
             FIELD_DOMAIN_OWNER_PUBLIC_KEY.to_owned(),
@@ -626,11 +639,11 @@ impl DomainDelegation {
         );
         object.insert(
             FIELD_DELEGATE_WALLET_PUBLIC_KEY.to_owned(),
-            Value::String(base64url::encode(&delegate_wallet_public_key.0)),
+            Value::String(base64url::encode(&params.delegate_wallet_public_key.0)),
         );
         object.insert(
             FIELD_DELEGATE_PEER_ID.to_owned(),
-            Value::String(delegate_peer_id.to_string()),
+            Value::String(params.delegate_peer_id.to_string()),
         );
         object.insert(
             FIELD_SCOPES.to_owned(),
@@ -643,13 +656,13 @@ impl DomainDelegation {
         );
         object.insert(
             FIELD_VALID_FROM.to_owned(),
-            Value::String(valid_from.to_owned()),
+            Value::String(params.valid_from.to_owned()),
         );
         object.insert(
             FIELD_EXPIRES_AT.to_owned(),
-            Value::String(expires_at.to_owned()),
+            Value::String(params.expires_at.to_owned()),
         );
-        if let Some(label) = label {
+        if let Some(label) = params.label {
             object.insert(FIELD_LABEL.to_owned(), Value::String(label.to_owned()));
         }
 
@@ -791,8 +804,8 @@ impl DomainDelegation {
         }
         if verified.delegate_peer_id != *expected_delegate_peer_id {
             return Err(DomainError::DelegatePeerIdMismatch {
-                delegated: verified.delegate_peer_id,
-                expected: *expected_delegate_peer_id,
+                delegated: Box::new(verified.delegate_peer_id),
+                expected: Box::new(*expected_delegate_peer_id),
             });
         }
         if !verified.scopes.contains(&required_scope) {
@@ -1503,13 +1516,15 @@ mod tests {
         let domain_id = domain_id_for_wallet();
         let delegation = DomainDelegation::create(
             &owner,
-            &domain_id,
-            &delegate.public_key(),
-            &delegate_peer_id(),
-            &[DelegationScope::Serve, DelegationScope::Advertise],
-            VALID_FROM,
-            EXPIRES_AT,
-            Some("ops-peer"),
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &delegate.public_key(),
+                delegate_peer_id: &delegate_peer_id(),
+                scopes: &[DelegationScope::Serve, DelegationScope::Advertise],
+                valid_from: VALID_FROM,
+                expires_at: EXPIRES_AT,
+                label: Some("ops-peer"),
+            },
         )
         .unwrap();
         let verified = delegation
@@ -1555,13 +1570,15 @@ mod tests {
     fn verify_rejects_unknown_delegation_field_added_after_signing() {
         let mut delegation = DomainDelegation::create(
             &wallet(),
-            &domain_id_for_wallet(),
-            &delegate_wallet().public_key(),
-            &delegate_peer_id(),
-            &[DelegationScope::Serve],
-            VALID_FROM,
-            EXPIRES_AT,
-            None,
+            DomainDelegationParams {
+                domain_id: &domain_id_for_wallet(),
+                delegate_wallet_public_key: &delegate_wallet().public_key(),
+                delegate_peer_id: &delegate_peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: VALID_FROM,
+                expires_at: EXPIRES_AT,
+                label: None,
+            },
         )
         .unwrap()
         .into_value();
@@ -1579,13 +1596,15 @@ mod tests {
         assert_eq!(
             DomainDelegation::create(
                 &wallet(),
-                &domain_id_for_wallet(),
-                &delegate_wallet().public_key(),
-                &delegate_peer_id(),
-                &[DelegationScope::Serve, DelegationScope::Serve],
-                VALID_FROM,
-                EXPIRES_AT,
-                None,
+                DomainDelegationParams {
+                    domain_id: &domain_id_for_wallet(),
+                    delegate_wallet_public_key: &delegate_wallet().public_key(),
+                    delegate_peer_id: &delegate_peer_id(),
+                    scopes: &[DelegationScope::Serve, DelegationScope::Serve],
+                    valid_from: VALID_FROM,
+                    expires_at: EXPIRES_AT,
+                    label: None,
+                },
             ),
             Err(DomainError::DuplicateScope {
                 scope: DelegationScope::Serve
@@ -1713,8 +1732,8 @@ mod tests {
                 NOW,
             ),
             Err(DomainError::DelegatePeerIdMismatch {
-                delegated: delegate_peer_id(),
-                expected: other_peer_id()
+                delegated: Box::new(delegate_peer_id()),
+                expected: Box::new(other_peer_id())
             })
         );
     }

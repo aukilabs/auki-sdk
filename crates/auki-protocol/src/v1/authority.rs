@@ -229,7 +229,7 @@ pub enum DomainRejectionReason {
     /// Declared-domain wrapper was malformed.
     InvalidDeclaredDomain(String),
     /// Domain declaration was malformed or invalid.
-    InvalidDeclaration(DomainError),
+    InvalidDeclaration(Box<DomainError>),
     /// Declared-domain wrapper id did not match the verified declaration id.
     DomainIdMismatch {
         /// Domain id from declared-domain wrapper.
@@ -240,9 +240,9 @@ pub enum DomainRejectionReason {
     /// Remote peer is not the owner wallet and no delegation was present.
     MissingDelegation,
     /// Delegation was malformed, mismatched, or otherwise invalid.
-    InvalidDelegation(DomainError),
+    InvalidDelegation(Box<DomainError>),
     /// Delegation has expired.
-    ExpiredDelegation(DomainError),
+    ExpiredDelegation(Box<DomainError>),
 }
 
 /// Result of validating a remote peer authority chain.
@@ -290,7 +290,7 @@ pub enum AuthorityChainError {
     /// Peer binding was absent from the handshake.
     MissingPeerBinding,
     /// Peer binding failed RFC-0005 verification.
-    InvalidPeerBinding(PeerBindingError),
+    InvalidPeerBinding(Box<PeerBindingError>),
     /// Local peer authorization rejected the verified peer.
     PeerRejected,
 }
@@ -300,13 +300,11 @@ impl AuthorityChainError {
     pub fn failure_code(&self) -> &'static str {
         match self {
             Self::MissingPeerBinding => error::IDENTITY_MISSING_PEER_BINDING,
-            Self::InvalidPeerBinding(PeerBindingError::InvalidSignature) => {
-                error::IDENTITY_INVALID_SIGNATURE
-            }
-            Self::InvalidPeerBinding(PeerBindingError::PeerIdMismatch { .. }) => {
-                error::IDENTITY_PEER_ID_MISMATCH
-            }
-            Self::InvalidPeerBinding(_) => error::IDENTITY_INVALID_PEER_BINDING,
+            Self::InvalidPeerBinding(error) => match error.as_ref() {
+                PeerBindingError::InvalidSignature => error::IDENTITY_INVALID_SIGNATURE,
+                PeerBindingError::PeerIdMismatch { .. } => error::IDENTITY_PEER_ID_MISMATCH,
+                _ => error::IDENTITY_INVALID_PEER_BINDING,
+            },
             Self::PeerRejected => error::AUTHORIZATION_PEER_REJECTED,
         }
     }
@@ -418,7 +416,7 @@ fn verify_remote_peer(
     let peer_binding = peer_binding.ok_or(AuthorityChainError::MissingPeerBinding)?;
     peer_binding
         .verify_for_peer_id(authenticated_peer_id)
-        .map_err(AuthorityChainError::InvalidPeerBinding)
+        .map_err(|error| AuthorityChainError::InvalidPeerBinding(Box::new(error)))
 }
 
 fn validate_verified_authority_chain(
@@ -457,7 +455,7 @@ fn validate_declared_domain(
         return Err(reject_domain(
             Some(declared_domain.domain_id.clone()),
             error::DOMAIN_INVALID_DECLARATION,
-            DomainRejectionReason::InvalidDeclaration(error),
+            DomainRejectionReason::InvalidDeclaration(Box::new(error)),
         ));
     }
 
@@ -469,7 +467,7 @@ fn validate_declared_domain(
             reject_domain(
                 Some(declared_domain.domain_id.clone()),
                 failure_code,
-                DomainRejectionReason::InvalidDeclaration(error),
+                DomainRejectionReason::InvalidDeclaration(Box::new(error)),
             )
         })?;
 
@@ -513,9 +511,9 @@ fn validate_declared_domain(
         .map_err(|error| {
             let failure_code = delegation_failure_code(&error);
             let reason = if failure_code == error::DOMAIN_EXPIRED_DELEGATION {
-                DomainRejectionReason::ExpiredDelegation(error)
+                DomainRejectionReason::ExpiredDelegation(Box::new(error))
             } else {
-                DomainRejectionReason::InvalidDelegation(error)
+                DomainRejectionReason::InvalidDelegation(Box::new(error))
             };
             reject_domain(
                 Some(domain_declaration.domain_id.clone()),
@@ -563,7 +561,7 @@ mod tests {
     use super::*;
     use crate::v1::{
         base64url,
-        domain::{DOMAIN_NONCE_LEN, derive_domain_id},
+        domain::{DOMAIN_NONCE_LEN, DomainDelegationParams, derive_domain_id},
     };
     use auki_identity::Wallet;
     use serde_json::json;
@@ -609,13 +607,15 @@ mod tests {
         let domain_id = owner_domain_id();
         let delegation = DomainDelegation::create(
             &owner_wallet(),
-            &domain_id,
-            &delegate_wallet().public_key(),
-            &peer_id(),
-            &[DelegationScope::Serve],
-            VALID_FROM,
-            EXPIRES_AT,
-            None,
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &delegate_wallet().public_key(),
+                delegate_peer_id: &peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: VALID_FROM,
+                expires_at: EXPIRES_AT,
+                label: None,
+            },
         )
         .unwrap();
 

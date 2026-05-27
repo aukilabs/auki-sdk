@@ -7,6 +7,7 @@ use auki_protocol::v1::{
     base64url,
     status::{
         FailureRecord, LocalPeerStatus, PathStatus, RemotePeerStatus, StatusError, StatusSnapshot,
+        StatusSnapshotParams,
     },
 };
 use libp2p_identity::PeerId;
@@ -800,16 +801,16 @@ pub fn build_relationship_status_snapshot(
         .collect::<Result<Vec<_>, _>>()
         .map_err(RelationshipStatusBuildError::Status)?;
 
-    StatusSnapshot::create(
-        generated_at,
+    StatusSnapshot::create(StatusSnapshotParams {
+        generated_at: generated_at.to_owned(),
         local_peer,
-        Vec::new(),
+        local_domains: Vec::new(),
         remote_peers,
         active_paths,
         last_failures,
-        None,
-        None,
-    )
+        discovery: None,
+        metadata: None,
+    })
     .map_err(RelationshipStatusBuildError::Status)
 }
 

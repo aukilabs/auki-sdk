@@ -867,7 +867,6 @@ impl SubscriptionHandle {
             last_envelope_failure: self.last_envelope_failure.clone(),
             last_payload_failure: self.last_payload_failure.clone(),
             last_failure: self.last_failure.clone(),
-            ..RelationshipPathStatus::default()
         }
     }
 

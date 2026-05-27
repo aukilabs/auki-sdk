@@ -35,7 +35,7 @@ fn locked_v1_json_frame_vectors_match_implementation() {
         let frame_hex = vector["frame_hex"].as_str().expect("frame_hex string");
 
         assert_eq!(
-            body.as_bytes().len() as u64,
+            body.len() as u64,
             body_len,
             "{name}: body_len must count UTF-8 bytes"
         );

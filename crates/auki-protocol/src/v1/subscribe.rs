@@ -960,13 +960,13 @@ impl SubscribeAccept {
             .validate_for_offer(&self.domain_id, &self.offer_id, &self.payload.payload_type)
             .map_err(SubscribeDataError::InvalidMessage)?;
 
-        if let Some(max) = max_message_bytes {
-            if actual_body_len as u64 > max {
-                return Err(SubscribeDataError::MessageTooLarge {
-                    actual: actual_body_len,
-                    max,
-                });
-            }
+        if let Some(max) = max_message_bytes
+            && actual_body_len as u64 > max
+        {
+            return Err(SubscribeDataError::MessageTooLarge {
+                actual: actual_body_len,
+                max,
+            });
         }
 
         Ok(())

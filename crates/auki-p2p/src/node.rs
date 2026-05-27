@@ -169,7 +169,7 @@ pub enum AukiP2pNodeError {
         /// Expected remote peer id.
         peer_id: PeerId,
         /// Libp2p dial error.
-        source: DialError,
+        source: Box<DialError>,
     },
     /// A WebRTC Direct listen or dial address was used while the node config disabled it.
     BrowserWebRtcDirectDisabled {
@@ -680,7 +680,10 @@ impl AukiP2pNode {
         let opts = DialOpts::peer_id(peer_id).addresses(addresses).build();
         self.swarm
             .dial(opts)
-            .map_err(|source| AukiP2pNodeError::Dial { peer_id, source })
+            .map_err(|source| AukiP2pNodeError::Dial {
+                peer_id,
+                source: Box::new(source),
+            })
     }
 
     /// Wait until the next public node event is available.
@@ -812,18 +815,17 @@ impl ConnectionTracker {
             return ConnectionRetention::Retained;
         }
 
-        if preference == ConnectionPreference::Preferred {
-            if let Some((index, replaced)) = connections
+        if preference == ConnectionPreference::Preferred
+            && let Some((index, replaced)) = connections
                 .iter()
                 .enumerate()
                 .find(|(_, connection)| connection.preference == ConnectionPreference::Fallback)
-            {
-                let replaced_connection_id = replaced.connection_id;
-                connections[index] = connection;
-                return ConnectionRetention::CloseDuplicate {
-                    connection_id: replaced_connection_id,
-                };
-            }
+        {
+            let replaced_connection_id = replaced.connection_id;
+            connections[index] = connection;
+            return ConnectionRetention::CloseDuplicate {
+                connection_id: replaced_connection_id,
+            };
         }
 
         ConnectionRetention::CloseDuplicate { connection_id }
@@ -1318,7 +1320,10 @@ mod tests {
         let dialable_string = dialable.to_string();
 
         assert!(is_websocket_address(&address));
-        assert_eq!(relay.observed_listen_addresses(), &[address.clone()]);
+        assert_eq!(
+            relay.observed_listen_addresses(),
+            std::slice::from_ref(&address)
+        );
         assert_eq!(
             relay.observed_relay_server_addresses(),
             vec![dialable.clone()]
@@ -1692,7 +1697,10 @@ mod tests {
         let address = wait_for_listen_addr(&mut listener).await;
 
         assert_eq!(listener.configured_listen_addresses().len(), 1);
-        assert_eq!(listener.observed_listen_addresses(), &[address.clone()]);
+        assert_eq!(
+            listener.observed_listen_addresses(),
+            std::slice::from_ref(&address)
+        );
         assert_eq!(
             listener.observed_dialable_listen_addresses(),
             vec![address.clone().with(Protocol::P2p(listener.peer_id()))]

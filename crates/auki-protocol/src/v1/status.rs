@@ -120,6 +120,27 @@ pub struct StatusSnapshot {
     pub metadata: Option<Value>,
 }
 
+/// Inputs for creating a v1 status snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusSnapshotParams {
+    /// Snapshot generation timestamp.
+    pub generated_at: String,
+    /// Local peer diagnostic status.
+    pub local_peer: LocalPeerStatus,
+    /// Local domain diagnostic statuses.
+    pub local_domains: Vec<LocalDomainStatus>,
+    /// Remote peer diagnostic statuses.
+    pub remote_peers: Vec<RemotePeerStatus>,
+    /// Active or recently completed path statuses.
+    pub active_paths: Vec<PathStatus>,
+    /// Recent failure records.
+    pub last_failures: Vec<FailureRecord>,
+    /// Optional Discovery diagnostic status.
+    pub discovery: Option<DiscoveryStatus>,
+    /// Optional non-authoritative metadata.
+    pub metadata: Option<Value>,
+}
+
 /// Parsed local peer diagnostic status.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalPeerStatus {
@@ -618,17 +639,18 @@ impl std::error::Error for StatusError {}
 
 impl StatusSnapshot {
     /// Create a v1 status snapshot from parsed child status objects.
-    pub fn create(
-        generated_at: impl Into<String>,
-        local_peer: LocalPeerStatus,
-        local_domains: Vec<LocalDomainStatus>,
-        remote_peers: Vec<RemotePeerStatus>,
-        active_paths: Vec<PathStatus>,
-        last_failures: Vec<FailureRecord>,
-        discovery: Option<DiscoveryStatus>,
-        metadata: Option<Value>,
-    ) -> Result<Self, StatusError> {
-        let generated_at = generated_at.into();
+    pub fn create(params: StatusSnapshotParams) -> Result<Self, StatusError> {
+        let StatusSnapshotParams {
+            generated_at,
+            local_peer,
+            local_domains,
+            remote_peers,
+            active_paths,
+            last_failures,
+            discovery,
+            metadata,
+        } = params;
+
         validate_timestamp(FIELD_GENERATED_AT, &generated_at)?;
         if let Some(metadata) = &metadata {
             validate_object_value(OBJECT_STATUS_SNAPSHOT, FIELD_METADATA, metadata)?;
@@ -1859,16 +1881,16 @@ mod tests {
     #[test]
     fn create_and_parse_empty_status_snapshot() {
         let local_peer = LocalPeerStatus::from_value(local_peer_value()).unwrap();
-        let snapshot = StatusSnapshot::create(
-            GENERATED_AT,
+        let snapshot = StatusSnapshot::create(StatusSnapshotParams {
+            generated_at: GENERATED_AT.to_owned(),
             local_peer,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            None,
-            Some(json!({"empty": true})),
-        )
+            local_domains: vec![],
+            remote_peers: vec![],
+            active_paths: vec![],
+            last_failures: vec![],
+            discovery: None,
+            metadata: Some(json!({"empty": true})),
+        })
         .unwrap();
         let parsed = StatusSnapshot::from_value(snapshot.value().clone()).unwrap();
 

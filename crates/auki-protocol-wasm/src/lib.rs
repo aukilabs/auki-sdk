@@ -4,7 +4,10 @@ use auki_identity::{PublicKey as WalletPublicKey, Wallet};
 use auki_protocol::v1::{
     authority::{DeclaredDomain, PeerAuthorization, ServedDomainAuthority},
     base64url,
-    domain::{DOMAIN_NONCE_LEN, DelegationScope, DomainDeclaration, DomainDelegation, DomainError},
+    domain::{
+        DOMAIN_NONCE_LEN, DelegationScope, DomainDeclaration, DomainDelegation,
+        DomainDelegationParams, DomainError,
+    },
     error, frame,
     get::{GET_PROTOCOL_ID, GetRequest, GetResponse},
     handshake::{CLUSTER_LIFECYCLE_V1, PeerHandshake},
@@ -717,13 +720,15 @@ fn create_domain_delegation_value(owner_seed: &[u8], params: Value) -> ProtocolR
 
     DomainDelegation::create(
         &wallet,
-        domain_id,
-        &delegate_wallet_public_key,
-        &delegate_peer_id,
-        &scopes,
-        valid_from,
-        expires_at,
-        label,
+        DomainDelegationParams {
+            domain_id,
+            delegate_wallet_public_key: &delegate_wallet_public_key,
+            delegate_peer_id: &delegate_peer_id,
+            scopes: &scopes,
+            valid_from,
+            expires_at,
+            label,
+        },
     )
     .map(DomainDelegation::into_value)
     .map_err(domain_delegation_error)

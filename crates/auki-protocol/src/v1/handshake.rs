@@ -420,7 +420,10 @@ fn optional_object(
 mod tests {
     use super::*;
     use crate::v1::{
-        domain::{DelegationScope, DomainDeclaration, DomainDelegation, derive_domain_id},
+        domain::{
+            DelegationScope, DomainDeclaration, DomainDelegation, DomainDelegationParams,
+            derive_domain_id,
+        },
         error,
         offer::{OFFER_CATALOG_PATH_TYPE, OFFER_CATALOG_PROTOCOL_ID, OFFER_CATALOG_VERSION},
     };
@@ -463,13 +466,15 @@ mod tests {
         let declaration = DomainDeclaration::create(&owner_wallet(), &NONCE, None).unwrap();
         let delegation = DomainDelegation::create(
             &owner_wallet(),
-            &domain_id,
-            &delegate_wallet().public_key(),
-            &peer_id(),
-            &[DelegationScope::Serve],
-            "2026-05-26T11:00:00Z",
-            "2026-05-26T13:00:00Z",
-            None,
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &delegate_wallet().public_key(),
+                delegate_peer_id: &peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: "2026-05-26T11:00:00Z",
+                expires_at: "2026-05-26T13:00:00Z",
+                label: None,
+            },
         )
         .unwrap();
         DeclaredDomain::new(domain_id, declaration, Some(delegation))

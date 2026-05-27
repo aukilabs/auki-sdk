@@ -54,9 +54,9 @@ pub struct GetResponse {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GetResponseBody {
     /// Successful Get response.
-    Message(SpatialMessage),
+    Message(Box<SpatialMessage>),
     /// Failed Get response.
-    Error(ErrorObject),
+    Error(Box<ErrorObject>),
 }
 
 /// Errors produced while creating or parsing Get requests.
@@ -340,7 +340,7 @@ impl GetResponse {
         object.insert(FIELD_MESSAGE.to_owned(), message.value().clone());
         Self {
             value: Value::Object(object),
-            body: GetResponseBody::Message(message),
+            body: GetResponseBody::Message(Box::new(message)),
         }
     }
 
@@ -354,7 +354,7 @@ impl GetResponse {
         object.insert(FIELD_ERROR.to_owned(), error.value().clone());
         Self {
             value: Value::Object(object),
-            body: GetResponseBody::Error(error),
+            body: GetResponseBody::Error(Box::new(error)),
         }
     }
 
@@ -376,16 +376,16 @@ impl GetResponse {
             (None, None) => Err(GetResponseError::MissingBody),
             (Some(message), None) => Ok(Self {
                 value,
-                body: GetResponseBody::Message(
+                body: GetResponseBody::Message(Box::new(
                     SpatialMessage::from_value(message)
                         .map_err(GetResponseError::InvalidMessage)?,
-                ),
+                )),
             }),
             (None, Some(error)) => Ok(Self {
                 value,
-                body: GetResponseBody::Error(
+                body: GetResponseBody::Error(Box::new(
                     ErrorObject::from_value(error).map_err(GetResponseError::InvalidError)?,
-                ),
+                )),
             }),
         }
     }
@@ -403,7 +403,7 @@ impl GetResponse {
     /// Return the successful message, if this is a successful response.
     pub fn message(&self) -> Option<&SpatialMessage> {
         match &self.body {
-            GetResponseBody::Message(message) => Some(message),
+            GetResponseBody::Message(message) => Some(message.as_ref()),
             GetResponseBody::Error(_) => None,
         }
     }
@@ -415,7 +415,7 @@ impl GetResponse {
         selected_payload_type: &str,
     ) -> Result<&SpatialMessage, GetResponseError> {
         let message = match &self.body {
-            GetResponseBody::Message(message) => message,
+            GetResponseBody::Message(message) => message.as_ref(),
             GetResponseBody::Error(error) => {
                 return Err(GetResponseError::ErrorResponse {
                     code: error.code.clone(),

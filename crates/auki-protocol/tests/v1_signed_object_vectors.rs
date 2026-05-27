@@ -1,6 +1,9 @@
 use auki_identity::Wallet;
 use auki_protocol::v1::{
-    domain::{DelegationScope, DomainDeclaration, DomainDelegation, DomainError, derive_domain_id},
+    domain::{
+        DelegationScope, DomainDeclaration, DomainDelegation, DomainDelegationParams, DomainError,
+        derive_domain_id,
+    },
     error,
     identity::{PeerBinding, PeerBindingError},
 };
@@ -118,13 +121,15 @@ fn positive_signed_object_vectors_match_implementation() {
 
     let domain_delegation = DomainDelegation::create(
         &owner_wallet,
-        &domain_id,
-        &delegate_wallet.public_key(),
-        &peer_id,
-        &[DelegationScope::Serve, DelegationScope::Advertise],
-        valid_from,
-        expires_at,
-        Some("delegate-peer"),
+        DomainDelegationParams {
+            domain_id: &domain_id,
+            delegate_wallet_public_key: &delegate_wallet.public_key(),
+            delegate_peer_id: &peer_id,
+            scopes: &[DelegationScope::Serve, DelegationScope::Advertise],
+            valid_from,
+            expires_at,
+            label: Some("delegate-peer"),
+        },
     )
     .unwrap();
     assert_eq!(

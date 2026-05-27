@@ -33,7 +33,7 @@ use auki_protocol::v1::{
         Offer, OfferAccessMode, OfferCatalogPath, OfferCatalogPathError, OfferCatalogRequest,
         OfferCatalogRequestError, OfferCatalogResponse, OfferCatalogResponseError,
     },
-    status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot},
+    status::{LocalDomainRole, LocalDomainStatus, StatusSnapshot, StatusSnapshotParams},
     subscribe::{
         SubscribeAccept, SubscribeEnd, SubscribeEndReason, SubscribeReject, SubscribeRequest,
         SubscribeStartResult,
@@ -289,7 +289,7 @@ pub enum AukiNodeEvent {
 #[derive(Debug)]
 pub enum AukiNodeError {
     /// Low-level node construction or command failed.
-    Node(AukiP2pNodeError),
+    Node(Box<AukiP2pNodeError>),
     /// No configured peer exists for the requested peer id.
     UnknownConfiguredPeer {
         /// Requested peer id.
@@ -366,6 +366,12 @@ pub enum AukiNodeError {
     },
     /// Get or Subscribe path orchestration failed.
     Path(PathOrchestrationError),
+}
+
+impl From<AukiP2pNodeError> for AukiNodeError {
+    fn from(error: AukiP2pNodeError) -> Self {
+        Self::Node(Box::new(error))
+    }
 }
 
 impl LocalDomainRegistration {
@@ -671,7 +677,7 @@ impl AukiNode {
         identity: LocalPeerIdentity,
         config: AukiP2pNodeConfig,
     ) -> Result<Self, AukiNodeError> {
-        let node = AukiP2pNode::new(identity, config).map_err(AukiNodeError::Node)?;
+        let node = AukiP2pNode::new(identity, config).map_err(AukiNodeError::from)?;
         let mut this = Self {
             node,
             local_domains: BTreeMap::new(),
@@ -776,7 +782,7 @@ impl AukiNode {
         let peer_id = peer.peer_id;
         self.node
             .upsert_configured_peer(peer)
-            .map_err(AukiNodeError::Node)?;
+            .map_err(AukiNodeError::from)?;
         self.relationship_mut(peer_id).configured();
         Ok(())
     }
@@ -1063,7 +1069,7 @@ impl AukiNode {
 
         self.node
             .dial_peer(peer_id, peer.dial_addresses)
-            .map_err(AukiNodeError::Node)?;
+            .map_err(AukiNodeError::from)?;
         self.relationship_mut(peer_id).dialing();
         Ok(())
     }
@@ -1414,7 +1420,7 @@ impl AukiNode {
 
     /// Build an in-process diagnostic status snapshot.
     pub fn status_snapshot(&self, generated_at: &str) -> Result<StatusSnapshot, AukiNodeError> {
-        let local_peer = self.node.local_peer_status().map_err(AukiNodeError::Node)?;
+        let local_peer = self.node.local_peer_status().map_err(AukiNodeError::from)?;
         let local_domains = self.local_domain_statuses()?;
         let relationships = self.relationships();
         let options = RelationshipStatusOptions::from_config(&self.node.config().p2p);
@@ -1425,16 +1431,16 @@ impl AukiNode {
             options,
         )
         .map_err(AukiNodeError::Status)?;
-        StatusSnapshot::create(
-            generated_at,
+        StatusSnapshot::create(StatusSnapshotParams {
+            generated_at: generated_at.to_owned(),
             local_peer,
             local_domains,
-            relationship_status.remote_peers,
-            relationship_status.active_paths,
-            relationship_status.last_failures,
-            relationship_status.discovery,
-            relationship_status.metadata,
-        )
+            remote_peers: relationship_status.remote_peers,
+            active_paths: relationship_status.active_paths,
+            last_failures: relationship_status.last_failures,
+            discovery: relationship_status.discovery,
+            metadata: relationship_status.metadata,
+        })
         .map_err(|error| AukiNodeError::Status(RelationshipStatusBuildError::Status(error)))
     }
 
@@ -2102,7 +2108,7 @@ mod tests {
     };
     use auki_identity::Wallet;
     use auki_protocol::v1::{
-        domain::DOMAIN_NONCE_LEN,
+        domain::{DOMAIN_NONCE_LEN, DomainDelegationParams},
         frame::{decode_json_frame, decode_length, encode_json_frame},
         get::{GetRequest, GetResponse, GetResponseBody},
         message::{SPATIAL_MESSAGE_TYPE, SpatialMessage},
@@ -2311,7 +2317,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            AukiNodeError::Node(AukiP2pNodeError::DialPolicy(_))
+            AukiNodeError::Node(error) if matches!(error.as_ref(), AukiP2pNodeError::DialPolicy(_))
         ));
     }
 
@@ -2752,13 +2758,15 @@ mod tests {
         let domain_id = declaration.domain_id().unwrap().to_owned();
         let delegation = DomainDelegation::create(
             &owner_wallet,
-            &domain_id,
-            &local_wallet.public_key(),
-            &local_identity.peer_id(),
-            &[DelegationScope::Serve],
-            ISSUED_AT,
-            DELEGATION_EXPIRES_AT,
-            None,
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &local_wallet.public_key(),
+                delegate_peer_id: &local_identity.peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: ISSUED_AT,
+                expires_at: DELEGATION_EXPIRES_AT,
+                label: None,
+            },
         )
         .expect("domain delegation");
         let registration = LocalDomainRegistration::delegate(declaration, delegation, true)
@@ -2792,13 +2800,15 @@ mod tests {
         let domain_id = declaration.domain_id().unwrap().to_owned();
         let delegation = DomainDelegation::create(
             &owner_wallet,
-            &domain_id,
-            &local_wallet.public_key(),
-            &local_identity.peer_id(),
-            &[DelegationScope::Serve],
-            ISSUED_AT,
-            DELEGATION_EXPIRES_AT,
-            None,
+            DomainDelegationParams {
+                domain_id: &domain_id,
+                delegate_wallet_public_key: &local_wallet.public_key(),
+                delegate_peer_id: &local_identity.peer_id(),
+                scopes: &[DelegationScope::Serve],
+                valid_from: ISSUED_AT,
+                expires_at: DELEGATION_EXPIRES_AT,
+                label: None,
+            },
         )
         .expect("domain delegation");
         let registration = LocalDomainRegistration::delegate(declaration, delegation, false)

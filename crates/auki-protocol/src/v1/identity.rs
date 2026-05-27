@@ -119,9 +119,9 @@ pub enum PeerBindingError {
     /// Signed peer id did not match the transport-authenticated peer id.
     PeerIdMismatch {
         /// Peer id claimed by the binding.
-        claimed: PeerId,
+        claimed: Box<PeerId>,
         /// Transport-authenticated peer id.
-        authenticated: PeerId,
+        authenticated: Box<PeerId>,
     },
 }
 
@@ -393,8 +393,8 @@ impl PeerBinding {
         let claimed_peer_id = parse_peer_id(required_string(object, FIELD_PEER_ID)?)?;
         if claimed_peer_id != *authenticated_peer_id {
             return Err(PeerBindingError::PeerIdMismatch {
-                claimed: claimed_peer_id,
-                authenticated: *authenticated_peer_id,
+                claimed: Box::new(claimed_peer_id),
+                authenticated: Box::new(*authenticated_peer_id),
             });
         }
 
@@ -783,8 +783,8 @@ mod tests {
         assert_eq!(
             binding.verify_for_peer_id(&other_peer_id()),
             Err(PeerBindingError::PeerIdMismatch {
-                claimed: peer_id(),
-                authenticated: other_peer_id()
+                claimed: Box::new(peer_id()),
+                authenticated: Box::new(other_peer_id())
             })
         );
     }

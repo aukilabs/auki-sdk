@@ -122,9 +122,9 @@ protocols from those crates.
       frame helpers, peer/domain authority constructors, lifecycle handshake,
       offer catalog, Get, Subscribe, spatial message, error object, and status
       validators.
-- [ ] Wire `auki-p2p-browser` to consume `auki-protocol-wasm` and retire the
+- [x] Wire `auki-p2p-browser` to consume `auki-protocol-wasm` and retire the
       temporary TypeScript frame helper from the public protocol surface.
-- [ ] Validate browser package behavior against Rust `auki-protocol` vectors
+- [x] Validate browser package behavior against Rust `auki-protocol` vectors
       through the WASM adapter.
 - [ ] Expose one high-level browser peer handle that hides frames, streams, and
       transport setup from app developers.
@@ -188,12 +188,12 @@ Rust:
 
 Browser:
 
-- [ ] Vitest frame encode/decode tests through `auki-protocol-wasm` against
+- [x] Vitest frame encode/decode tests through `auki-protocol-wasm` against
       Rust vectors.
-- [ ] Browser identity derivation compatibility tests.
-- [ ] WASM-backed peer binding create/verify tests.
-- [ ] WASM-backed offer catalog request/response tests.
-- [ ] WASM-backed Subscribe accept/data/end tests.
+- [x] Browser identity derivation compatibility tests.
+- [x] WASM-backed peer binding create/verify tests.
+- [x] WASM-backed offer catalog request/response tests.
+- [x] WASM-backed Subscribe accept/data/end tests.
 
 End-to-end:
 

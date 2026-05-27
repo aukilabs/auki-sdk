@@ -6,9 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "vite build --config vite.config.ts && tsc -p tsconfig.json --emitDeclarationOnly",
+    "build": "npm run build:protocol-wasm && vite build --config vite.config.ts && tsc -p tsconfig.json --emitDeclarationOnly",
+    "build:protocol-wasm": "wasm-pack build ../auki-protocol-wasm --target web --out-dir pkg-web",
     "smoke:import": "node -e \"import('./dist/index.js')\"",
-    "test": "vitest run",
+    "test": "npm run build:protocol-wasm && vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {

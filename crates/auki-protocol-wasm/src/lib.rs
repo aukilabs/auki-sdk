@@ -20,6 +20,7 @@ use auki_protocol::v1::{
     subscribe::{SUBSCRIBE_PROTOCOL_ID, SubscribeEnd, SubscribeRequest, SubscribeStartResult},
 };
 use libp2p_identity::PeerId;
+use serde::Serialize as _;
 use serde_json::{Map, Value, json};
 use std::{fmt, str::FromStr};
 use wasm_bindgen::prelude::*;
@@ -65,7 +66,8 @@ impl ProtocolWasmError {
             );
         }
 
-        serde_wasm_bindgen::to_value(&Value::Object(object))
+        Value::Object(object)
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .unwrap_or_else(|_| JsValue::from_str(&self.message))
     }
 }
@@ -77,7 +79,8 @@ impl fmt::Display for ProtocolWasmError {
 }
 
 fn value_to_js(value: Value) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(&value)
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|error| ProtocolWasmError::new("serde", error).into_js())
 }
 

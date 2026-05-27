@@ -5,6 +5,7 @@ import {
   relayServerAddresses,
 } from "./bootstrap.js";
 import { type SeedStore, indexedDbSeedStore, loadOrCreateSeed, peerIdFromSeed } from "./identity.js";
+import { type ProtocolWasmInitInput, initializeProtocolWasm } from "./protocol.js";
 import {
   type BrowserTransport,
   createBrowserLibp2pTransport,
@@ -48,6 +49,7 @@ export type PublicationHandle = {
 export type AukiBrowserPeerConfig = {
   seed?: Uint8Array;
   seedStore?: SeedStore;
+  protocolWasm?: ProtocolWasmInitInput;
   transport?: BrowserTransport;
   bootstrap?: unknown;
 };
@@ -86,6 +88,7 @@ export async function createAukiBrowserPeer(
   if (transport.peerId !== peerId) {
     throw new Error(`Browser transport peer id ${transport.peerId} does not match expected ${peerId}`);
   }
+  await initializeProtocolWasm(config.protocolWasm);
   return new DefaultAukiBrowserPeer(peerId, transport, config.bootstrap);
 }
 

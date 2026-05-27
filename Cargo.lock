@@ -984,6 +984,7 @@ dependencies = [
  "auki-identity",
  "auki-protocol",
  "libp2p-identity",
+ "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",

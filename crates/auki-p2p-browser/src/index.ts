@@ -16,8 +16,6 @@ export {
   memorySeedStore,
   peerIdFromSeed,
 } from "./identity.js";
-export type { DecodedJsonFrame, JsonObject } from "./frame.js";
-export { FrameError, decodeJsonFrame, decodeLength, encodeJsonFrame, encodeLength } from "./frame.js";
 export type {
   BrowserTransport,
   BrowserTransportName,

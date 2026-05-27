@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAukiBrowserPeer } from "./peer.js";
 import type { BrowserTransport } from "./transport.js";
@@ -8,6 +10,7 @@ describe("AukiBrowserPeer shell", () => {
     const peer = await createAukiBrowserPeer({
       transport,
       bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
     });
 
     expect(peer.peerId).toBe("browser-peer");
@@ -43,7 +46,7 @@ describe("AukiBrowserPeer shell", () => {
 
   it("stops the underlying transport", async () => {
     const transport = new MemoryTransport("browser-peer", []);
-    const peer = await createAukiBrowserPeer({ transport });
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
 
     await peer.dial("/memory/native");
     await peer.stop();
@@ -61,6 +64,14 @@ function bootstrapRecord(peerId: string, address: string): unknown {
     relay_addresses: [],
     relay_server_addresses: [],
     bootstrap_addresses: [address],
+  };
+}
+
+async function protocolWasmInput(): Promise<{ module_or_path: Uint8Array }> {
+  return {
+    module_or_path: await readFile(
+      path.resolve(process.cwd(), "../auki-protocol-wasm/pkg-web/auki_protocol_wasm_bg.wasm"),
+    ),
   };
 }
 

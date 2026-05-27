@@ -11,5 +11,7 @@ App code should eventually use one high-level `AukiBrowserPeer` handle instead
 of configuring libp2p streams directly.
 
 Status: WIP (v0.0.0). The current surface provides bootstrap parsing,
-IndexedDB-backed seed persistence, identity derivation, temporary frame helpers,
-a js-libp2p transport factory, and a high-level peer shell.
+IndexedDB-backed seed persistence, identity derivation, Rust-backed protocol
+WASM initialization, a js-libp2p transport factory, and a high-level peer
+shell. Protocol frame and message validation is intentionally routed through
+`auki-protocol-wasm` instead of a TypeScript reimplementation.

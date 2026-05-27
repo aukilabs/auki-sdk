@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Transport-neutral signaled peer core added.** `auki-network` now exposes `SignaledPeerCore`, `SignalEnvelope`, role/command enums, and typed errors for SDK-owned Discovery-signaled WebRTC orchestration. The core tracks peer connections without touching platform WebRTC APIs, emits create/set-remote-description/add-candidate/close commands, queues ICE candidates until the remote description is set, and resolves simultaneous dial duplicates with a deterministic peer-id tie-break. The native full-binding-surface test now correctly gates its UniFFI-only identity smoke on the `uniffi` feature, restoring the no-default test path required by the signaled core.
+
+Tests: red/green `cargo test -p auki-network signaled_peer -- --nocapture`; `cargo test -p auki-network --no-default-features`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Discovery signaling client exposed to native bindings.** `auki-network` now has typed Discovery `/signals/<peer-id>` send/poll methods (`SignalRequest`, `SignalMessage`, `SignalPoll`) and native UniFFI records plus JSON methods on `AukiDiscoveryClient` (`send_signal_json`, `poll_signals_json`). Native hosts can now hand WebRTC offers, answers, ICE candidates, and close messages to the SDK-owned Discovery mailbox path instead of implementing that signaling in app Swift.
 
 Tests: red/green `cargo test -p auki-network --features discovery_client,swarm native_discovery_signaling_is_exposed -- --nocapture`; `cargo test -p auki-network --features discovery_client signal_wire_shape_is_locked -- --nocapture`; regression `cargo test -p auki-network --features discovery_client,swarm native_discovery_client_is_exposed -- --nocapture`; `git diff --check`.

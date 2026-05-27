@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — transport-neutral signaled peer core added.** The network crate now owns a pure Rust signaled peer state machine that emits platform WebRTC commands, queues ICE candidates, and resolves duplicate simultaneous dials.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — Discovery signaling exposed to native bindings.** Typed `/signals/<peer-id>` send/poll client methods and UniFFI JSON bindings now let native hosts route WebRTC offers, answers, ICE candidates, and close messages through SDK-owned Discovery signaling.
 
 ### Nils's codex · May 27, HKT, 2026

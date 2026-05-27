@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 static NEXT_RUNTIME_SEED: AtomicU8 = AtomicU8::new(17);
 
 #[test]
+#[cfg(feature = "uniffi")]
 fn native_peer_identity_and_derivation_is_exposed() {
     // binding-surface: native peer identity and derivation
     let seed = vec![3u8; 32];
@@ -24,6 +25,13 @@ fn native_peer_identity_and_derivation_is_exposed() {
         Err(other) => panic!("unexpected peer identity error: {other:?}"),
         Ok(_) => panic!("short peer seed unexpectedly succeeded"),
     }
+}
+
+#[test]
+#[cfg(not(feature = "uniffi"))]
+#[ignore = "requires uniffi feature"]
+fn native_peer_identity_and_derivation_is_exposed() {
+    // binding-surface: native peer identity and derivation
 }
 
 #[test]

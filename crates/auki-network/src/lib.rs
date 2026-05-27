@@ -24,6 +24,9 @@ pub use core::*;
 pub mod signaled_address;
 pub use signaled_address::*;
 
+pub mod signaled_peer;
+pub use signaled_peer::*;
+
 pub mod participant;
 pub use participant::ParticipantInfo;
 

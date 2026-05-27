@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 3 completed.** The implementation plan now records the completed transport-neutral signaled peer core. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Transport-neutral signaled peer core added.** `auki-network` now owns a pure Rust state machine for Discovery-signaled WebRTC connection commands, candidate queuing, and duplicate-dial handling. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 2 completed.** The implementation plan now records the completed native Discovery signaling binding slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -264,7 +264,7 @@ git commit -m "Expose Discovery signaling to native bindings"
 - Create: `crates/auki-network/src/signaled_peer.rs`
 - Modify: `crates/auki-network/src/lib.rs`
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 Add tests for outbound dial and inbound offer:
 
@@ -299,21 +299,21 @@ fn inbound_offer_creates_responder_and_sets_remote_description() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p auki-network signaled_peer -- --nocapture`
 
 Expected: compile failure because `SignaledPeerCore` does not exist.
 
-- [ ] **Step 3: Implement minimal state machine**
+- [x] **Step 3: Implement minimal state machine**
 
 Define `SignaledPeerRole`, `SignaledPeerCommand`, `SignalEnvelope`, and `SignaledPeerCore`. The core tracks connections by connection id and remote peer id, emits platform commands, and does not call WebRTC directly.
 
-- [ ] **Step 4: Add conflict and candidate tests**
+- [x] **Step 4: Add conflict and candidate tests**
 
 Add tests for queued ICE before remote description and simultaneous dial duplicate closure. Implement only the state required by those tests.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -324,7 +324,7 @@ cargo test -p auki-network --no-default-features
 
 Expected: signaled peer tests pass and no-default build remains green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-network/src/signaled_peer.rs crates/auki-network/src/lib.rs

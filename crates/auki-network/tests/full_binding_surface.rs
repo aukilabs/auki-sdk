@@ -313,6 +313,31 @@ fn native_discovery_signaling_is_exposed() {
 }
 
 #[test]
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn native_signaled_peer_core_is_exposed() {
+    // binding-surface: native signaled peer core
+    let peer =
+        auki_network::AukiSignaledPeerCore::new("peer-a".into(), "http://discovery.local".into())
+            .unwrap();
+
+    assert_eq!(peer.local_peer_id(), "peer-a");
+    assert!(
+        peer.signaled_multiaddr()
+            .starts_with("/auki-webrtc-signaling/")
+    );
+    let parsed = auki_network::parse_signaled_address(&peer.signaled_multiaddr()).unwrap();
+    assert_eq!(parsed.discovery_url, "http://discovery.local");
+    assert_eq!(parsed.peer_id, "peer-a");
+}
+
+#[test]
+#[cfg(not(all(feature = "discovery_client", feature = "swarm")))]
+#[ignore = "requires discovery_client and swarm features"]
+fn native_signaled_peer_core_is_exposed() {
+    // binding-surface: native signaled peer core
+}
+
+#[test]
 #[cfg(all(feature = "app_instance", feature = "swarm"))]
 fn native_app_instance_derivation_is_exposed() {
     // binding-surface: native app-instance derivation

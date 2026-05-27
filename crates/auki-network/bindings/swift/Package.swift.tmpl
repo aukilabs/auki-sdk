@@ -8,7 +8,8 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .library(name: "$crate_lib_name", targets: ["$crate_lib_name"])
+        .library(name: "$crate_lib_name", targets: ["$crate_lib_name"]),
+        .library(name: "AukiNetworkSignaledWebRTC", targets: ["AukiNetworkSignaledWebRTC"])
     ],
     targets: [
         .target(
@@ -20,6 +21,12 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("SystemConfiguration")
             ]
+        ),
+        .target(
+            name: "AukiNetworkSignaledWebRTC",
+            dependencies: ["$crate_lib_name"],
+            path: "Sources/AukiNetworkSignaledWebRTC",
+            sources: ["AukiSignaledWebRTC.swift"]
         ),
         .binaryTarget(
             name: "${crate_lib_name}FFI",

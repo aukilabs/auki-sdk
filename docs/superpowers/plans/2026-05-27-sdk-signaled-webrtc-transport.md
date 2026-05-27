@@ -431,21 +431,21 @@ git commit -m "Use shared signaled address helpers in JavaScript"
 - Modify: `crates/auki-network/bindings/swift/Package.swift.tmpl`
 - Create: `crates/auki-network/bindings/swift/Sources/AukiNetworkSignaledWebRTC/AukiSignaledWebRTC.swift.tmpl`
 
-- [ ] **Step 1: Write failing binding-surface test**
+- [x] **Step 1: Write failing binding-surface test**
 
 Add `native_signaled_peer_core_is_exposed` that constructs `AukiSignaledPeerCore`, reads `local_peer_id()`, and asserts `signaled_multiaddr()` starts with `/auki-webrtc-signaling/`.
 
-- [ ] **Step 2: Run test to verify red**
+- [x] **Step 2: Run test to verify red**
 
 Run: `cargo test -p auki-network --features discovery_client,swarm native_signaled_peer_core_is_exposed -- --nocapture`
 
 Expected: compile failure because `AukiSignaledPeerCore` is not exported.
 
-- [ ] **Step 3: Add UniFFI object wrapper**
+- [x] **Step 3: Add UniFFI object wrapper**
 
 Expose a minimal native object backed by `SignaledPeerCore` with constructor, `local_peer_id()`, and `signaled_multiaddr()`.
 
-- [ ] **Step 4: Add Swift support target template**
+- [x] **Step 4: Add Swift support target template**
 
 Add `AukiNetworkSignaledWebRTC` target with a backend protocol:
 
@@ -457,7 +457,7 @@ public protocol AukiWebRTCBackend {
 }
 ```
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 
@@ -469,7 +469,7 @@ swift build --package-path bindings/swift/auki-network
 
 Expected: Rust test and Swift package build pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/auki-network/src/ffi.rs crates/auki-network/tests/full_binding_surface.rs crates/auki-network/bindings/swift bindings/swift/auki-network

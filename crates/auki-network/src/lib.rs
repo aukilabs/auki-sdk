@@ -64,7 +64,10 @@ pub use ffi::{
     not(target_arch = "wasm32")
 ))]
 #[doc(hidden)]
-pub use ffi::{AukiDiscoveryClient, BindingSignalPoll, BindingSignalRequest, discovery_client};
+pub use ffi::{
+    AukiDiscoveryClient, AukiSignaledPeerCore, BindingSignalPoll, BindingSignalRequest,
+    discovery_client,
+};
 
 #[cfg(all(
     feature = "uniffi",

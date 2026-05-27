@@ -21,6 +21,8 @@ use crate::{
     },
     swarm::{self, SwarmConfig},
 };
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+use crate::{signaled_address, signaled_peer::SignaledPeerCore};
 use auki_identity::Wallet;
 #[cfg(feature = "swarm")]
 use auki_proto::detection::DetectionFrame;
@@ -265,6 +267,12 @@ pub struct AukiStreamSubscription {
 pub struct AukiDiscoveryClient {
     inner: DiscoveryClient,
     runtime: tokio::runtime::Runtime,
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+#[derive(uniffi::Object)]
+pub struct AukiSignaledPeerCore {
+    inner: Mutex<SignaledPeerCore>,
 }
 
 #[cfg(feature = "swarm")]
@@ -855,6 +863,39 @@ pub fn app_instance_peer_id(app_instance_json: String) -> Result<String, Binding
     let binding = parse_json::<AppInstanceBinding>(&app_instance_json)?;
     parse_binding_peer_id(&binding.peer_id)?;
     Ok(binding.peer_id)
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+#[uniffi::export]
+impl AukiSignaledPeerCore {
+    #[uniffi::constructor]
+    pub fn new(
+        local_peer_id: String,
+        discovery_url: String,
+    ) -> Result<Arc<Self>, BindingNetworkError> {
+        let inner = SignaledPeerCore::new(local_peer_id, discovery_url).map_err(|err| {
+            BindingNetworkError::Runtime {
+                message: err.to_string(),
+            }
+        })?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(inner),
+        }))
+    }
+
+    pub fn local_peer_id(&self) -> String {
+        self.inner
+            .lock()
+            .expect("signaled peer mutex poisoned")
+            .local_peer_id()
+            .to_string()
+    }
+
+    pub fn signaled_multiaddr(&self) -> String {
+        let inner = self.inner.lock().expect("signaled peer mutex poisoned");
+        signaled_address::format_signaled_address(inner.discovery_url(), inner.local_peer_id())
+            .expect("SignaledPeerCore constructor validated address inputs")
+    }
 }
 
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]

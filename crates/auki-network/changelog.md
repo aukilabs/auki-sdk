@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**Signaled peer core exposed to Swift bindings.** The native UniFFI surface now exports `AukiSignaledPeerCore` with a constructor, `local_peer_id()`, and `signaled_multiaddr()`, backed by the shared `SignaledPeerCore` and signaled address helper. The Swift package template now renders an `AukiNetworkSignaledWebRTC` support target with the `AukiWebRTCBackend` protocol for platform WebRTC implementations to supply peer-connection, data-channel, and close operations.
+
+Tests: red/green `cargo test -p auki-network --features discovery_client,swarm native_signaled_peer_core_is_exposed -- --nocapture`; `just generate-swift-bindings auki-network`; `swift build --package-path bindings/swift/auki-network`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
 **Generated JavaScript uses shared signaled address helpers.** The `auki-network` JavaScript wrapper template now formats and parses Discovery-signaled WebRTC addresses through the wasm exports (`formatSignaledAddress`, `parseSignaledAddressJson`) instead of duplicating base64url logic in JavaScript. The generated framed-handler test now asserts the advertised address matches the Rust helper, round-trips through the Rust parser, and rejects malformed signaled addresses before WebRTC setup begins.
 
 Tests: red/green `node --test test/framed-handler.test.mjs` under `bindings/javascript/auki-network` after `just generate-javascript-bindings auki-network`; `npm --prefix bindings/javascript/auki-network test`; `git diff --check`.

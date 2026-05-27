@@ -6,6 +6,10 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ### Nils's codex · May 27, HKT, 2026
 
+Updated the Superpowers SDK signaled WebRTC transport plan to mark the native signaled peer binding and Swift backend target task complete.
+
+### Nils's codex · May 27, HKT, 2026
+
 Updated the Superpowers SDK signaled WebRTC transport plan to mark the generated JavaScript shared-address-helper compatibility task complete.
 
 ### Nils's codex · May 27, HKT, 2026

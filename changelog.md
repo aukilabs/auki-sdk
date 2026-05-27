@@ -8,6 +8,14 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**SDK signaled WebRTC plan Task 6 completed.** The implementation plan now records the completed native signaled peer binding and Swift backend support target slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Signaled peer core exposed to Swift bindings.** `auki-network` now exports `AukiSignaledPeerCore` through UniFFI and renders an `AukiNetworkSignaledWebRTC` Swift support target. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
 **SDK signaled WebRTC plan Task 5 completed.** The implementation plan now records the completed generated JavaScript shared-address-helper compatibility slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
 
 ### Nils's codex · May 27, HKT, 2026

@@ -1,0 +1,8 @@
+import Foundation
+import $crate_lib_name
+
+public protocol AukiWebRTCBackend {
+    func createPeerConnection(connectionId: String, remotePeerId: String, role: String) async throws
+    func createDataChannel(connectionId: String, label: String) async throws
+    func closeConnection(connectionId: String) async
+}

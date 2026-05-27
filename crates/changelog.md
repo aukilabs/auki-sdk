@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 27, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — signaled peer core exposed to Swift bindings.** UniFFI now exports `AukiSignaledPeerCore`, and the Swift package template renders an `AukiNetworkSignaledWebRTC` backend protocol target for platform WebRTC integration.
+
+### Nils's codex · May 27, HKT, 2026
+
 **[`auki-network`](auki-network/changelog.md) — generated JavaScript uses shared signaled address helpers.** The browser wrapper now delegates signaled WebRTC address formatting/parsing to wasm exports instead of local JavaScript base64url code.
 
 ### Nils's codex · May 27, HKT, 2026

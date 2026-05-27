@@ -20,7 +20,10 @@ build_features = ["message_node", "discovery_client", "app_instance"]
 enabled = true
 generator = "uniffi"
 template_dir = "bindings/swift"
-templates = ["Package.swift.tmpl"]
+templates = [
+    "Package.swift.tmpl",
+    "Sources/AukiNetworkSignaledWebRTC/AukiSignaledWebRTC.swift.tmpl",
+]
 build_features = ["message_node", "discovery_client", "app_instance"]
 
 [bindings.javascript]

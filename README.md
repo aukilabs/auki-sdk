@@ -28,7 +28,7 @@ The Auki protocol is built around five questions any node should be able to answ
 ### Networking
 
 - **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
-- **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/sensors`, `/auki/registries/0.2.0`.
+- **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`.
 - **`Session`** — declarative app-facing API (in `auki-session`) for registering sensors, clocks, frames, detectors, and their logs, joining a domain, and advertising the resource catalog. `ClusterManager` is internal infrastructure that `Session::join_domain` constructs and owns.
 - The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).

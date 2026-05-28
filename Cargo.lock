@@ -1005,7 +1005,14 @@ dependencies = [
 name = "auki-session-py"
 version = "0.0.0"
 dependencies = [
+ "auki-manifests",
+ "auki-registry",
+ "auki-session",
+ "parking_lot",
  "pyo3",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -8,7 +8,7 @@
 //! a [`libp2p-allow-block-list`] gate that enforces the cluster trust
 //! boundary at the handshake layer, and a [`NetworkRuntime`] that
 //! drives the swarm against a configurable allow-list. The runtime
-//! accepts inbound substreams on `/auki/stream/0.1.0` (delegating to
+//! accepts inbound substreams on `/auki/stream/0.2.0` (delegating to
 //! the consumer's `stream_provider`) and exposes outbound
 //! [`open_stream`].
 //!

@@ -2,6 +2,7 @@ import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { generateKeyPairFromSeed } from "@libp2p/crypto/keys";
 import { identify } from "@libp2p/identify";
 import { noise } from "@libp2p/noise";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { webSockets } from "@libp2p/websockets";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { multiaddr } from "@multiformats/multiaddr";
@@ -153,17 +154,20 @@ class Libp2pBrowserTransport implements BrowserTransport {
   }
 
   async dialProtocol(
-    _peerId: string,
+    peerId: string,
     addresses: string[],
     protocol: string,
   ): Promise<BrowserProtocolStream> {
     if (addresses.length === 0) {
       throw new Error(`No bootstrap addresses available for ${protocol}`);
     }
-    return this.node.dialProtocol(
-      addresses.map((address) => multiaddr(address)),
-      protocol,
-      { runOnLimitedConnection: true },
-    );
+    const peer = peerIdFromString(peerId);
+    const existing = this.node.getConnections(peer).at(0);
+    const connection =
+      existing ??
+      (await this.node.dial(addresses.map((address) => multiaddr(address)), {
+        force: false,
+      }));
+    return connection.newStream(protocol, { runOnLimitedConnection: true });
   }
 }

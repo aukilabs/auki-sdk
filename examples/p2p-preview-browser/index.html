@@ -14,7 +14,6 @@
         </div>
         <div class="actions">
           <button id="connect-button" type="button">Connect</button>
-          <button id="subscribe-button" type="button" disabled>Subscribe</button>
           <button id="stop-button" type="button" disabled>Stop</button>
         </div>
       </header>
@@ -26,6 +25,24 @@
           <div class="row">
             <input id="bootstrap-file" type="file" accept="application/json,.json" />
             <button id="clear-button" type="button">Clear</button>
+          </div>
+          <div class="summary-grid">
+            <div>
+              <span>Remote Peer</span>
+              <strong id="bootstrap-peer">None</strong>
+            </div>
+            <div>
+              <span>Direct</span>
+              <strong id="bootstrap-direct">0</strong>
+            </div>
+            <div>
+              <span>WebRTC</span>
+              <strong id="bootstrap-webrtc">0</strong>
+            </div>
+            <div>
+              <span>Relay Servers</span>
+              <strong id="bootstrap-relay">0</strong>
+            </div>
           </div>
         </aside>
 
@@ -42,6 +59,22 @@
             <div>
               <span>Frames</span>
               <strong id="frames-received">0</strong>
+            </div>
+            <div>
+              <span>Rate</span>
+              <strong id="stream-rate">0.0 fps</strong>
+            </div>
+            <div>
+              <span>Total Bytes</span>
+              <strong id="total-bytes">0 B</strong>
+            </div>
+            <div>
+              <span>Last Payload</span>
+              <strong id="last-payload-bytes">None</strong>
+            </div>
+            <div>
+              <span>Sequence</span>
+              <strong id="last-sequence">None</strong>
             </div>
             <div>
               <span>Last Frame</span>
@@ -81,6 +114,7 @@
                   <th>Peer</th>
                   <th>Connected</th>
                   <th>Addresses</th>
+                  <th>Transports</th>
                 </tr>
               </thead>
               <tbody id="peers-table"></tbody>
@@ -96,11 +130,20 @@
                   <th>Offer</th>
                   <th>Payload</th>
                   <th>Access</th>
+                  <th>State</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="offers-table"></tbody>
             </table>
           </div>
+        </section>
+
+        <section class="panel events-panel">
+          <div class="section-heading">
+            <h2>Events</h2>
+          </div>
+          <div id="event-log" class="event-log"></div>
         </section>
       </section>
     </main>

@@ -9,6 +9,8 @@
   --accent: #1b6f8f;
   --accent-strong: #12566f;
   --success: #217a52;
+  --danger: #a13b38;
+  --warning: #9a651d;
   color: #172026;
   background: var(--bg);
   font-family:
@@ -66,10 +68,6 @@ button:not(:disabled):hover {
   background: var(--accent-strong);
 }
 
-#subscribe-button:not(:disabled) {
-  border-color: #74a892;
-}
-
 .shell {
   min-height: 100vh;
   max-width: 1440px;
@@ -124,7 +122,8 @@ button:not(:disabled):hover {
   grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
   grid-template-areas:
     "bootstrap preview"
-    "bootstrap state";
+    "bootstrap state"
+    "bootstrap events";
   gap: 14px;
   align-items: start;
 }
@@ -141,7 +140,6 @@ button:not(:disabled):hover {
 .bootstrap-panel {
   grid-area: bootstrap;
   display: grid;
-  grid-template-rows: auto auto auto;
   gap: 10px;
   position: sticky;
   top: 18px;
@@ -149,7 +147,8 @@ button:not(:disabled):hover {
 
 label,
 .metrics span,
-.state-grid span {
+.state-grid span,
+.summary-grid span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -181,6 +180,29 @@ input[type="file"] {
   width: 100%;
   min-width: 0;
   color: var(--muted);
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #d6dee2;
+  border-radius: 6px;
+  background: #d6dee2;
+}
+
+.summary-grid div {
+  min-width: 0;
+  background: var(--panel-muted);
+  padding: 10px;
+}
+
+.summary-grid strong {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 14px;
 }
 
 .preview-panel {
@@ -224,10 +246,9 @@ input[type="file"] {
 .metrics div,
 .state-grid div {
   min-width: 0;
-  border: 1px solid #d6dee2;
-  border-radius: 6px;
-  padding: 10px;
-  background: var(--panel-muted);
+  border-left: 3px solid #d6dee2;
+  padding: 4px 8px;
+  background: transparent;
 }
 
 .metrics strong,
@@ -243,8 +264,27 @@ input[type="file"] {
   grid-area: state;
 }
 
+.events-panel {
+  grid-area: events;
+}
+
 .state-grid {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: 0;
 }
 
 .table-wrap {
@@ -277,6 +317,33 @@ th {
   font-weight: 650;
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.row-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.row-actions button[data-action="get"]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.row-actions button[data-action="subscribe"]:not(:disabled) {
+  border-color: var(--success);
+  color: #18563a;
+}
+
+.row-actions button[data-action="stop-subscribe"]:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 tr:last-child td {
   border-bottom: 0;
 }
@@ -284,6 +351,46 @@ tr:last-child td {
 tr.selected td {
   background: #edf7f2;
   color: #143d2d;
+}
+
+.event-log {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #d6dee2;
+  border-radius: 6px;
+  background: #d6dee2;
+  font-size: 13px;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: 84px minmax(140px, 0.65fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 34px;
+  align-items: center;
+  background: #fbfcfd;
+  padding: 7px 10px;
+}
+
+.event-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.event-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
+
+.event-row.error {
+  border-left: 3px solid var(--danger);
+}
+
+.event-row.info {
+  border-left: 3px solid var(--accent);
 }
 
 @media (max-width: 1040px) {
@@ -301,7 +408,8 @@ tr.selected td {
     grid-template-areas:
       "bootstrap"
       "preview"
-      "state";
+      "state"
+      "events";
   }
 
   .bootstrap-panel {
@@ -327,6 +435,10 @@ tr.selected td {
     width: 100%;
   }
 
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
   .preview-frame {
     min-height: 180px;
   }
@@ -334,5 +446,10 @@ tr.selected td {
   th,
   td {
     padding: 8px;
+  }
+
+  .event-row {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 }

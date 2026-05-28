@@ -5,6 +5,7 @@ import {
   type AukiBrowserPeer,
   type OfferSummary,
   type PeerSummary,
+  type SpatialMessage,
 } from "@aukilabs/auki-p2p-browser";
 import {
   findPreviewOffer,
@@ -15,17 +16,40 @@ import {
 } from "./app";
 import "./styles.css";
 
+type OfferRuntimeState = {
+  status: string;
+  snapshots: number;
+  frames: number;
+  lastError?: string;
+};
+
+type EventLogEntry = {
+  at: Date;
+  level: "info" | "error";
+  message: string;
+  detail?: string;
+};
+
 type AppState = {
   peer?: AukiBrowserPeer;
   bootstrap?: AukiBrowserBootstrapRecord;
   peers: PeerSummary[];
   offers: OfferSummary[];
   selectedOffer?: OfferSummary;
+  offerStates: Map<string, OfferRuntimeState>;
+  events: EventLogEntry[];
   snapshotsReceived: number;
   framesReceived: number;
+  totalBytesReceived: number;
+  lastPayloadBytes?: number;
+  lastSequence?: string;
   lastFrameAt?: Date;
+  streamStartedAt?: Date;
+  streamFrameBase: number;
+  activeSubscriptionKey?: string;
   status: string;
   lastError?: string;
+  busy: boolean;
   subscriptionToken: number;
   previewUrl?: string;
 };
@@ -33,9 +57,14 @@ type AppState = {
 const state: AppState = {
   peers: [],
   offers: [],
+  offerStates: new Map(),
+  events: [],
   snapshotsReceived: 0,
   framesReceived: 0,
+  totalBytesReceived: 0,
+  streamFrameBase: 0,
   status: "Idle",
+  busy: false,
   subscriptionToken: 0,
 };
 
@@ -43,14 +72,21 @@ const els = {
   bootstrapInput: element<HTMLTextAreaElement>("bootstrap-input"),
   bootstrapFile: element<HTMLInputElement>("bootstrap-file"),
   connectButton: element<HTMLButtonElement>("connect-button"),
-  subscribeButton: element<HTMLButtonElement>("subscribe-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
   clearButton: element<HTMLButtonElement>("clear-button"),
   connectionStatus: element("connection-status"),
+  bootstrapPeer: element("bootstrap-peer"),
+  bootstrapDirect: element("bootstrap-direct"),
+  bootstrapWebrtc: element("bootstrap-webrtc"),
+  bootstrapRelay: element("bootstrap-relay"),
   previewImage: element<HTMLImageElement>("preview-image"),
   previewEmpty: element("preview-empty"),
   snapshotsReceived: element("snapshots-received"),
   framesReceived: element("frames-received"),
+  streamRate: element("stream-rate"),
+  totalBytes: element("total-bytes"),
+  lastPayloadBytes: element("last-payload-bytes"),
+  lastSequence: element("last-sequence"),
   lastFrameAt: element("last-frame-at"),
   selectedOffer: element("selected-offer"),
   localPeer: element("local-peer"),
@@ -59,76 +95,138 @@ const els = {
   lastError: element("last-error"),
   peersTable: element<HTMLTableSectionElement>("peers-table"),
   offersTable: element<HTMLTableSectionElement>("offers-table"),
+  eventLog: element("event-log"),
 };
 
 els.connectButton.addEventListener("click", () => {
   void connect();
-});
-els.subscribeButton.addEventListener("click", () => {
-  void subscribeToPreview();
 });
 els.stopButton.addEventListener("click", () => {
   void stop();
 });
 els.clearButton.addEventListener("click", () => {
   els.bootstrapInput.value = "";
+  state.bootstrap = undefined;
+  render();
 });
 els.bootstrapFile.addEventListener("change", () => {
   void loadBootstrapFile();
+});
+els.offersTable.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const button = target.closest<HTMLButtonElement>("button[data-action][data-offer-key]");
+  if (!button) {
+    return;
+  }
+  const offer = state.offers.find((candidate) => offerKey(candidate) === button.dataset.offerKey);
+  if (!offer) {
+    return;
+  }
+  if (button.dataset.action === "get") {
+    void getOfferSnapshot(offer);
+  } else if (button.dataset.action === "subscribe") {
+    void subscribeToOffer(offer);
+  } else if (button.dataset.action === "stop-subscribe") {
+    stopSubscription("Stopped by user");
+  }
 });
 
 render();
 
 async function connect(): Promise<void> {
-  await runAction("Connecting", async () => {
+  await runShortAction("Connecting", async () => {
     const bootstrap = parseBootstrapText(els.bootstrapInput.value.trim());
     await stopPeer();
     const peer = await createAukiBrowserPeer({
       bootstrap,
       label: "p2p-preview-browser",
     });
+    recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
     await peer.connectBootstrap(bootstrap);
+    recordEvent("info", "Connected bootstrap peer", shortId(bootstrap.peerId, 12));
     const offers = await peer.listOffers();
     state.peer = peer;
     state.bootstrap = bootstrap;
     state.peers = peer.listPeers();
     state.offers = offers;
     state.selectedOffer = findPreviewOffer(offers);
-    state.snapshotsReceived = 0;
-    state.framesReceived = 0;
-    state.lastFrameAt = undefined;
-    if (state.selectedOffer?.accessModes.includes("get")) {
-      await getPreviewSnapshot(peer, state.selectedOffer);
-      state.status = "Connected, snapshot loaded";
-    } else {
-      state.status = state.selectedOffer ? "Connected" : "Connected, no preview offer";
-    }
+    state.status = offers.length > 0 ? "Connected, offers loaded" : "Connected, no offers";
+    recordEvent("info", "Offer catalog loaded", `${offers.length} offer(s)`);
   });
 }
 
-async function getPreviewSnapshot(peer: AukiBrowserPeer, offer: OfferSummary): Promise<void> {
-  const message = await peer.get({
-    peerId: offer.peerId,
-    domainId: offer.domainId,
-    offerId: offer.offerId,
-    acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
-    maxPayloadBytes: 1_048_576,
-  });
-  renderFrame(previewFrameBytes(message));
-  state.snapshotsReceived += 1;
-  state.lastFrameAt = new Date();
-}
-
-async function subscribeToPreview(): Promise<void> {
+async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
   const peer = state.peer;
-  const offer = state.selectedOffer;
-  if (!peer || !offer) {
+  if (!peer || !offer.accessModes.includes("get")) {
     return;
   }
 
+  const key = offerKey(offer);
+  const startedAt = performance.now();
+  state.selectedOffer = offer;
+  state.busy = true;
+  state.status = "Getting snapshot";
+  state.lastError = undefined;
+  setOfferStatus(key, "getting");
+  render();
+  try {
+    recordEvent("info", "Get requested", offerLabel(offer));
+    const message = await peer.get({
+      peerId: offer.peerId,
+      domainId: offer.domainId,
+      offerId: offer.offerId,
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxPayloadBytes: 1_048_576,
+    });
+    const bytes = renderPreviewMessage(message);
+    const runtime = offerRuntime(key);
+    runtime.snapshots += 1;
+    runtime.status = "snapshot ok";
+    state.snapshotsReceived += 1;
+    state.status = "Snapshot received";
+    recordEvent(
+      "info",
+      "Get snapshot received",
+      `${bytes} B in ${Math.round(performance.now() - startedAt)} ms`,
+    );
+  } catch (error) {
+    const message = errorMessage(error);
+    state.lastError = message;
+    state.status = "Error";
+    setOfferStatus(key, "error", message);
+    recordEvent("error", "Get failed", message);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+async function subscribeToOffer(offer: OfferSummary): Promise<void> {
+  const peer = state.peer;
+  if (!peer || !offer.accessModes.includes("subscribe")) {
+    return;
+  }
+  if (state.activeSubscriptionKey) {
+    stopSubscription("Replaced by new subscription");
+  }
+
+  const key = offerKey(offer);
   const token = state.subscriptionToken + 1;
   state.subscriptionToken = token;
-  await runAction("Subscribing", async () => {
+  state.activeSubscriptionKey = key;
+  state.selectedOffer = offer;
+  state.streamStartedAt = new Date();
+  state.streamFrameBase = state.framesReceived;
+  setOfferStatus(key, "subscribing");
+  state.status = "Subscribing";
+  state.lastError = undefined;
+  recordEvent("info", "Subscribe requested", offerLabel(offer));
+  render();
+
+  try {
     for await (const message of peer.subscribe({
       peerId: offer.peerId,
       domainId: offer.domainId,
@@ -139,23 +237,56 @@ async function subscribeToPreview(): Promise<void> {
       if (token !== state.subscriptionToken) {
         break;
       }
-      renderFrame(previewFrameBytes(message));
+      const bytes = renderPreviewMessage(message);
+      const runtime = offerRuntime(key);
+      runtime.frames += 1;
+      runtime.status = "streaming";
       state.framesReceived += 1;
-      state.lastFrameAt = new Date();
+      state.totalBytesReceived += bytes;
       state.status = "Receiving";
       render();
     }
+
     if (token === state.subscriptionToken) {
+      state.activeSubscriptionKey = undefined;
+      setOfferStatus(key, "complete");
       state.status = "Subscription complete";
+      recordEvent("info", "Subscribe complete", offerLabel(offer));
+      render();
     }
-  });
+  } catch (error) {
+    if (token !== state.subscriptionToken) {
+      return;
+    }
+    const message = errorMessage(error);
+    state.activeSubscriptionKey = undefined;
+    state.lastError = message;
+    state.status = "Error";
+    setOfferStatus(key, "error", message);
+    recordEvent("error", "Subscribe failed", message);
+    render();
+  }
 }
 
 async function stop(): Promise<void> {
-  await runAction("Stopping", async () => {
+  await runShortAction("Stopping", async () => {
     await stopPeer();
     state.status = "Stopped";
+    recordEvent("info", "Browser peer stopped");
   });
+}
+
+function stopSubscription(reason: string): void {
+  if (!state.activeSubscriptionKey) {
+    return;
+  }
+  const key = state.activeSubscriptionKey;
+  state.subscriptionToken += 1;
+  state.activeSubscriptionKey = undefined;
+  setOfferStatus(key, "stopped");
+  state.status = "Subscription stopped";
+  recordEvent("info", "Subscribe stopped", reason);
+  render();
 }
 
 async function stopPeer(): Promise<void> {
@@ -163,13 +294,22 @@ async function stopPeer(): Promise<void> {
   if (state.peer) {
     await state.peer.stop();
   }
+  clearPreviewFrame();
   state.peer = undefined;
+  state.bootstrap = undefined;
   state.peers = [];
   state.offers = [];
   state.selectedOffer = undefined;
+  state.offerStates.clear();
   state.snapshotsReceived = 0;
   state.framesReceived = 0;
+  state.totalBytesReceived = 0;
+  state.lastPayloadBytes = undefined;
+  state.lastSequence = undefined;
   state.lastFrameAt = undefined;
+  state.streamStartedAt = undefined;
+  state.streamFrameBase = 0;
+  state.activeSubscriptionKey = undefined;
 }
 
 async function loadBootstrapFile(): Promise<void> {
@@ -178,28 +318,42 @@ async function loadBootstrapFile(): Promise<void> {
     return;
   }
   els.bootstrapInput.value = await file.text();
+  try {
+    state.bootstrap = parseBootstrapText(els.bootstrapInput.value.trim());
+    state.lastError = undefined;
+    recordEvent("info", "Bootstrap JSON loaded", file.name);
+  } catch (error) {
+    state.lastError = errorMessage(error);
+    recordEvent("error", "Bootstrap JSON invalid", state.lastError);
+  }
+  render();
 }
 
-async function runAction(label: string, action: () => Promise<void>): Promise<void> {
-  setBusy(true);
+async function runShortAction(label: string, action: () => Promise<void>): Promise<void> {
+  state.busy = true;
   state.status = label;
   state.lastError = undefined;
   render();
   try {
     await action();
   } catch (error) {
-    state.lastError = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
+    state.lastError = message;
     state.status = "Error";
+    recordEvent("error", label, message);
   } finally {
-    setBusy(false);
+    state.busy = false;
     render();
   }
 }
 
-function setBusy(busy: boolean): void {
-  els.connectButton.disabled = busy;
-  els.subscribeButton.disabled = busy || !state.peer || !state.selectedOffer;
-  els.stopButton.disabled = busy || !state.peer;
+function renderPreviewMessage(message: SpatialMessage): number {
+  const bytes = previewFrameBytes(message);
+  renderFrame(bytes);
+  state.lastPayloadBytes = bytes.byteLength;
+  state.lastSequence = messageSequence(message);
+  state.lastFrameAt = new Date();
+  return bytes.byteLength;
 }
 
 function renderFrame(bytes: Uint8Array): void {
@@ -214,80 +368,246 @@ function renderFrame(bytes: Uint8Array): void {
   els.previewImage.src = state.previewUrl;
 }
 
+function clearPreviewFrame(): void {
+  if (state.previewUrl) {
+    URL.revokeObjectURL(state.previewUrl);
+  }
+  state.previewUrl = undefined;
+  els.previewImage.removeAttribute("src");
+}
+
 function render(): void {
   els.connectionStatus.textContent = state.status;
+  els.bootstrapPeer.textContent = state.bootstrap ? shortId(state.bootstrap.peerId, 10) : "None";
+  els.bootstrapDirect.textContent = addressCount(state.bootstrap?.directAddresses);
+  els.bootstrapWebrtc.textContent = addressCount(state.bootstrap?.webrtcDirectAddresses);
+  els.bootstrapRelay.textContent = addressCount(state.bootstrap?.relayServerAddresses);
   els.snapshotsReceived.textContent = state.snapshotsReceived.toString();
   els.framesReceived.textContent = state.framesReceived.toString();
+  els.streamRate.textContent = `${streamRate().toFixed(1)} fps`;
+  els.totalBytes.textContent = formatBytes(state.totalBytesReceived);
+  els.lastPayloadBytes.textContent =
+    state.lastPayloadBytes === undefined ? "None" : formatBytes(state.lastPayloadBytes);
+  els.lastSequence.textContent = state.lastSequence ?? "None";
   els.lastFrameAt.textContent = state.lastFrameAt
     ? state.lastFrameAt.toLocaleTimeString()
     : "Never";
   els.selectedOffer.textContent = offerLabel(state.selectedOffer);
-  els.localPeer.textContent = state.peer ? shortId(state.peer.peerId) : "Not started";
+  els.localPeer.textContent = state.peer ? shortId(state.peer.peerId, 10) : "Not started";
   els.peerCount.textContent = state.peers.length.toString();
   els.offerCount.textContent = state.offers.length.toString();
   els.lastError.textContent = state.lastError ?? "None";
   els.previewEmpty.hidden = Boolean(state.previewUrl);
   els.previewImage.hidden = !state.previewUrl;
-  els.subscribeButton.disabled = !state.peer || !state.selectedOffer;
-  els.stopButton.disabled = !state.peer;
+  els.connectButton.disabled = state.busy;
+  els.stopButton.disabled = state.busy || !state.peer;
 
   renderPeers(state.peers);
-  renderOffers(state.offers, state.selectedOffer);
+  renderOffers(state.offers);
+  renderEvents();
 }
 
 function renderPeers(peers: PeerSummary[]): void {
-  replaceRows(
-    els.peersTable,
-    peers.map((peer) => [
-      shortId(peer.peerId),
-      peer.connected ? "yes" : "no",
-      peer.dialAddresses.length.toString(),
-    ]),
-    3,
-  );
-}
-
-function renderOffers(offers: OfferSummary[], selected: OfferSummary | undefined): void {
-  replaceRows(
-    els.offersTable,
-    offers.map((offer) => [
-      offer.kind ?? "unknown",
-      shortId(offer.domainId),
-      offer.offerId,
-      offer.payloadType ?? "unknown",
-      offer.accessModes.join(", "),
-      selected === offer ? "selected" : "",
-    ]),
-    5,
-  );
-}
-
-function replaceRows(table: HTMLTableSectionElement, rows: string[][], emptyColSpan: number): void {
-  table.replaceChildren();
-  if (rows.length === 0) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = emptyColSpan;
-    cell.textContent = "None";
-    row.append(cell);
-    table.append(row);
+  els.peersTable.replaceChildren();
+  if (peers.length === 0) {
+    appendEmptyRow(els.peersTable, 4);
     return;
   }
-
-  for (const values of rows) {
+  for (const peer of peers) {
     const row = document.createElement("tr");
-    let cells = values;
-    if (values.at(-1) === "selected") {
-      row.classList.add("selected");
-      cells = values.slice(0, -1);
-    }
-    for (const value of cells) {
-      const cell = document.createElement("td");
-      cell.textContent = value;
-      row.append(cell);
-    }
-    table.append(row);
+    appendTextCell(row, shortId(peer.peerId, 10));
+    appendTextCell(row, peer.connected ? "yes" : "no");
+    appendTextCell(row, peer.dialAddresses.length.toString());
+    appendTextCell(row, transportSummary(peer.dialAddresses));
+    els.peersTable.append(row);
   }
+}
+
+function renderOffers(offers: OfferSummary[]): void {
+  els.offersTable.replaceChildren();
+  if (offers.length === 0) {
+    appendEmptyRow(els.offersTable, 7);
+    return;
+  }
+  for (const offer of offers) {
+    const key = offerKey(offer);
+    const runtime = offerRuntime(key);
+    const row = document.createElement("tr");
+    if (state.selectedOffer && offerKey(state.selectedOffer) === key) {
+      row.classList.add("selected");
+    }
+    appendTextCell(row, offer.kind ?? "unknown");
+    appendTextCell(row, shortId(offer.domainId, 8));
+    appendTextCell(row, offer.offerId);
+    appendTextCell(row, offer.payloadType ?? "unknown");
+    appendTextCell(row, offer.accessModes.join(", "));
+    appendTextCell(row, runtimeStatus(runtime));
+    row.append(offerActionCell(offer));
+    els.offersTable.append(row);
+  }
+}
+
+function offerActionCell(offer: OfferSummary): HTMLTableCellElement {
+  const key = offerKey(offer);
+  const cell = document.createElement("td");
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+
+  if (offer.accessModes.includes("get")) {
+    actions.append(actionButton("Get", "get", key, state.busy || !state.peer));
+  }
+  if (offer.accessModes.includes("subscribe")) {
+    const active = state.activeSubscriptionKey === key;
+    actions.append(
+      actionButton(
+        active ? "Stop" : "Subscribe",
+        active ? "stop-subscribe" : "subscribe",
+        key,
+        state.busy || !state.peer || Boolean(state.activeSubscriptionKey && !active),
+      ),
+    );
+  }
+  if (actions.childElementCount === 0) {
+    actions.textContent = "None";
+  }
+  cell.append(actions);
+  return cell;
+}
+
+function actionButton(
+  label: string,
+  action: "get" | "subscribe" | "stop-subscribe",
+  key: string,
+  disabled: boolean,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.dataset.action = action;
+  button.dataset.offerKey = key;
+  button.disabled = disabled;
+  return button;
+}
+
+function renderEvents(): void {
+  els.eventLog.replaceChildren();
+  if (state.events.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "event-row";
+    empty.textContent = "No events";
+    els.eventLog.append(empty);
+    return;
+  }
+  for (const event of state.events) {
+    const row = document.createElement("div");
+    row.className = `event-row ${event.level}`;
+    const time = document.createElement("span");
+    time.textContent = event.at.toLocaleTimeString();
+    const message = document.createElement("strong");
+    message.textContent = event.message;
+    const detail = document.createElement("span");
+    detail.textContent = event.detail ?? "";
+    row.append(time, message, detail);
+    els.eventLog.append(row);
+  }
+}
+
+function appendEmptyRow(table: HTMLTableSectionElement, colSpan: number): void {
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = colSpan;
+  cell.textContent = "None";
+  row.append(cell);
+  table.append(row);
+}
+
+function appendTextCell(row: HTMLTableRowElement, value: string): void {
+  const cell = document.createElement("td");
+  cell.textContent = value;
+  row.append(cell);
+}
+
+function offerRuntime(key: string): OfferRuntimeState {
+  let runtime = state.offerStates.get(key);
+  if (!runtime) {
+    runtime = { status: "idle", snapshots: 0, frames: 0 };
+    state.offerStates.set(key, runtime);
+  }
+  return runtime;
+}
+
+function setOfferStatus(key: string, status: string, error?: string): void {
+  const runtime = offerRuntime(key);
+  runtime.status = status;
+  runtime.lastError = error;
+}
+
+function runtimeStatus(runtime: OfferRuntimeState): string {
+  const counts = [];
+  if (runtime.snapshots > 0) {
+    counts.push(`${runtime.snapshots} get`);
+  }
+  if (runtime.frames > 0) {
+    counts.push(`${runtime.frames} frames`);
+  }
+  const suffix = counts.length > 0 ? ` (${counts.join(", ")})` : "";
+  return runtime.lastError ? `${runtime.status}: ${runtime.lastError}` : `${runtime.status}${suffix}`;
+}
+
+function recordEvent(level: "info" | "error", message: string, detail?: string): void {
+  state.events.unshift({ at: new Date(), level, message, detail });
+  state.events = state.events.slice(0, 80);
+}
+
+function offerKey(offer: OfferSummary): string {
+  return `${offer.peerId}\u0000${offer.domainId}\u0000${offer.offerId}`;
+}
+
+function streamRate(): number {
+  if (!state.streamStartedAt || state.framesReceived === 0) {
+    return 0;
+  }
+  const seconds = (Date.now() - state.streamStartedAt.getTime()) / 1000;
+  const streamFrames = state.framesReceived - state.streamFrameBase;
+  return seconds > 0 ? streamFrames / seconds : 0;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KiB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function addressCount(addresses: readonly string[] | undefined): string {
+  return (addresses?.length ?? 0).toString();
+}
+
+function transportSummary(addresses: readonly string[]): string {
+  const transports = new Set<string>();
+  for (const address of addresses) {
+    if (address.includes("/webrtc-direct")) {
+      transports.add("webrtc-direct");
+    } else if (address.includes("/p2p-circuit")) {
+      transports.add("relay");
+    } else if (address.includes("/ws")) {
+      transports.add("websocket");
+    } else {
+      transports.add("other");
+    }
+  }
+  return transports.size === 0 ? "unknown" : Array.from(transports).join(", ");
+}
+
+function messageSequence(message: SpatialMessage): string | undefined {
+  return typeof message.sequence === "string" ? message.sequence : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {

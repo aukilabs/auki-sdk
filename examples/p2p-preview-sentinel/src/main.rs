@@ -1,11 +1,14 @@
 use auki_identity::Wallet;
 use auki_p2p::{
     AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent, AukiP2pNodeConfig,
-    LifecycleInput, LifecycleStreamDirection, LifecycleStreamGuardError, LocalDomainRegistration,
-    LocalPeerIdentity, PreviewOfferOptions, ServedGet, ServedPublishedSubscription,
-    publish_preview_offer_with_snapshot,
+    AukiServedSubscription, LifecycleInput, LifecycleStreamDirection, LifecycleStreamGuardError,
+    LocalDomainRegistration, LocalPeerIdentity, PreviewOfferOptions, PublishedByteSource,
+    ServedGet, ServedSubscribe, preview_spatial_message, publish_preview_offer_with_snapshot,
 };
-use auki_protocol::v1::domain::{DOMAIN_NONCE_LEN, DomainDeclaration};
+use auki_protocol::v1::{
+    domain::{DOMAIN_NONCE_LEN, DomainDeclaration},
+    subscribe::SubscribeEndReason,
+};
 use futures::stream;
 use jpeg_encoder::{ColorType, Encoder};
 use serde_json::json;
@@ -18,13 +21,14 @@ use std::{
     time::{Duration, Instant},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::time::timeout;
+use tokio::time::{MissedTickBehavior, timeout};
 
 const DEFAULT_DOMAIN_LABEL: &str = "auki-p2p-preview-demo";
 const DEFAULT_OFFER_ID: &str = "sentinel-preview";
 const DEFAULT_PEER_LABEL: &str = "p2p-preview-sentinel";
 const DEFAULT_STATUS_INTERVAL_MS: u64 = 2_000;
-const DEFAULT_FRAMES_PER_SUBSCRIPTION: u64 = 60;
+const DEFAULT_FRAME_INTERVAL_MS: u64 = 100;
+const DEFAULT_LIFECYCLE_POLL_MS: u64 = 10;
 const FRAME_WIDTH: u16 = 160;
 const FRAME_HEIGHT: u16 = 90;
 
@@ -62,7 +66,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let mut snapshot_sequence = 0_u64;
     publish_preview_offer_with_snapshot(
         &mut node,
-        generated_jpeg_source(config.frames_per_subscription),
+        generated_jpeg_source(config.frame_limit, config.frame_interval),
         move |_request, _now| {
             let frame = generated_jpeg_frame(snapshot_sequence);
             snapshot_sequence = snapshot_sequence.saturating_add(1);
@@ -75,7 +79,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 "source": config.source.as_str(),
                 "frame_width": FRAME_WIDTH,
                 "frame_height": FRAME_HEIGHT,
-                "frames_per_subscription": config.frames_per_subscription,
+                "frame_limit": config.frame_limit,
+                "frame_interval_ms": config.frame_interval.as_millis(),
             })),
     )?;
 
@@ -91,27 +96,65 @@ async fn run() -> Result<(), Box<dyn Error>> {
     print_bootstrap_record(&node)?;
 
     let mut stats = DemoStats::default();
-    print_state(&mut node, &stats, &domain_id, &config)?;
+    let mut active_subscriptions = Vec::new();
+    print_state(
+        &mut node,
+        &stats,
+        &active_subscriptions,
+        &domain_id,
+        &config,
+    )?;
     if config.once {
         return Ok(());
     }
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
+    let mut frame_tick = tokio::time::interval(config.frame_interval);
+    frame_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut next_state_print = Instant::now() + config.status_interval;
     loop {
         let now = now_rfc3339()?;
         tokio::select! {
             _ = &mut shutdown => {
                 println!("shutdown: ctrl-c received");
+                end_active_subscriptions(&mut node, &mut active_subscriptions).await;
                 break;
             }
-            result = serve_inbound_once(&mut node, &now, &mut stats) => {
+            _ = frame_tick.tick(), if !active_subscriptions.is_empty() => {
+                let now = now_rfc3339()?;
+                if let Err(error) = send_active_preview_frames(
+                    &mut node,
+                    &mut active_subscriptions,
+                    &mut stats,
+                    &now,
+                ).await {
+                    stats.record_error(error.to_string());
+                }
+                if let Err(error) = pump_connection_lifecycle(
+                    &mut node,
+                    &mut stats,
+                    config.lifecycle_poll,
+                ).await {
+                    stats.record_error(error.to_string());
+                }
+                if Instant::now() >= next_state_print {
+                    print_state(&mut node, &stats, &active_subscriptions, &domain_id, &config)?;
+                    next_state_print = Instant::now() + config.status_interval;
+                }
+            }
+            result = serve_inbound_once(
+                &mut node,
+                &now,
+                &mut stats,
+                &mut active_subscriptions,
+                config.frame_limit,
+            ) => {
                 if let Err(error) = result {
                     stats.record_error(error.to_string());
                 }
                 if Instant::now() >= next_state_print {
-                    print_state(&mut node, &stats, &domain_id, &config)?;
+                    print_state(&mut node, &stats, &active_subscriptions, &domain_id, &config)?;
                     next_state_print = Instant::now() + config.status_interval;
                 }
             }
@@ -151,7 +194,9 @@ struct DemoConfig {
     source: SourceMode,
     offer_id: String,
     bootstrap_json: Option<PathBuf>,
-    frames_per_subscription: u64,
+    frame_limit: Option<u64>,
+    frame_interval: Duration,
+    lifecycle_poll: Duration,
     status_interval: Duration,
     once: bool,
     help: bool,
@@ -163,7 +208,9 @@ impl Default for DemoConfig {
             source: SourceMode::Generated,
             offer_id: DEFAULT_OFFER_ID.to_owned(),
             bootstrap_json: None,
-            frames_per_subscription: DEFAULT_FRAMES_PER_SUBSCRIPTION,
+            frame_limit: None,
+            frame_interval: Duration::from_millis(DEFAULT_FRAME_INTERVAL_MS),
+            lifecycle_poll: Duration::from_millis(DEFAULT_LIFECYCLE_POLL_MS),
             status_interval: Duration::from_millis(DEFAULT_STATUS_INTERVAL_MS),
             once: false,
             help: false,
@@ -195,8 +242,24 @@ impl DemoConfig {
                         Some(PathBuf::from(next_value("--bootstrap-json", &mut args)?));
                 }
                 "--frames" => {
-                    config.frames_per_subscription =
-                        parse_positive_u64("--frames", &next_value("--frames", &mut args)?)?;
+                    config.frame_limit = Some(parse_positive_u64(
+                        "--frames",
+                        &next_value("--frames", &mut args)?,
+                    )?);
+                }
+                "--frame-interval-ms" => {
+                    let millis = parse_positive_u64(
+                        "--frame-interval-ms",
+                        &next_value("--frame-interval-ms", &mut args)?,
+                    )?;
+                    config.frame_interval = Duration::from_millis(millis);
+                }
+                "--lifecycle-poll-ms" => {
+                    let millis = parse_positive_u64(
+                        "--lifecycle-poll-ms",
+                        &next_value("--lifecycle-poll-ms", &mut args)?,
+                    )?;
+                    config.lifecycle_poll = Duration::from_millis(millis);
                 }
                 "--status-interval-ms" => {
                     let millis = parse_positive_u64(
@@ -223,7 +286,9 @@ impl DemoConfig {
            --source generated          Preview source. Camera capture is planned but not wired yet.\n\
            --offer-id ID               Offer id to publish. Default: sentinel-preview\n\
            --bootstrap-json PATH       Write browser bootstrap JSON to PATH after listeners bind.\n\
-           --frames N                  Generated JPEG frames per subscription. Default: 60\n\
+           --frames N                  Optional finite generated-frame limit per subscription. Default: continuous\n\
+           --frame-interval-ms N       Generated stream frame interval. Default: 100\n\
+           --lifecycle-poll-ms N       Swarm poll budget after each streamed frame. Default: 10\n\
            --status-interval-ms N      P2P state print interval. Default: 2000\n\
            --once                      Print bootstrap/state once and exit.\n\
            -h, --help                  Show this help text"
@@ -279,7 +344,10 @@ struct DemoStats {
     gets_rejected: u64,
     subscriptions_served: u64,
     subscriptions_rejected: u64,
+    subscriptions_closed: u64,
     frames_sent: u64,
+    lifecycle_polls: u64,
+    lifecycle_events: u64,
     last_failure: Option<String>,
 }
 
@@ -293,13 +361,12 @@ impl DemoStats {
         }
     }
 
-    fn record_served(&mut self, served: ServedPublishedSubscription) {
+    fn record_subscribe_start(&mut self, served: &ServedSubscribe) {
         if served.accepted {
             self.subscriptions_served = self.subscriptions_served.saturating_add(1);
-            self.frames_sent = self.frames_sent.saturating_add(served.messages_sent);
         } else {
             self.subscriptions_rejected = self.subscriptions_rejected.saturating_add(1);
-            self.last_failure = served.failure_code;
+            self.last_failure = served.failure_code.clone();
         }
     }
 
@@ -316,10 +383,18 @@ impl DemoStats {
     }
 }
 
+struct ActivePreviewSubscription {
+    subscription: AukiServedSubscription,
+    next_sequence: u64,
+    remaining_frames: Option<u64>,
+}
+
 async fn serve_inbound_once(
     node: &mut AukiNode,
     now: &str,
     stats: &mut DemoStats,
+    active_subscriptions: &mut Vec<ActivePreviewSubscription>,
+    frame_limit: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
     match timeout(
         Duration::from_millis(100),
@@ -359,18 +434,129 @@ async fn serve_inbound_once(
         Ok(Err(error)) => return Err(Box::new(error)),
     }
 
-    match timeout(
-        Duration::from_millis(500),
-        node.serve_next_published_subscription(now),
-    )
-    .await
-    {
+    match timeout(Duration::from_millis(100), node.serve_next_subscribe(now)).await {
         Ok(Ok(Some(served))) => {
-            stats.record_served(served);
+            stats.record_subscribe_start(&served);
+            if served.accepted {
+                let subscription = served
+                    .into_subscription()
+                    .ok_or_else(|| CliError::new("accepted Subscribe did not include a stream"))?;
+                active_subscriptions.push(ActivePreviewSubscription {
+                    subscription,
+                    next_sequence: 0,
+                    remaining_frames: frame_limit,
+                });
+            }
             Ok(())
         }
         Ok(Ok(None)) | Err(_) => Ok(()),
         Ok(Err(error)) => Err(Box::new(error)),
+    }
+}
+
+async fn send_active_preview_frames(
+    node: &mut AukiNode,
+    active_subscriptions: &mut Vec<ActivePreviewSubscription>,
+    stats: &mut DemoStats,
+    now: &str,
+) -> Result<(), Box<dyn Error>> {
+    let mut index = 0;
+    while index < active_subscriptions.len() {
+        if active_subscriptions[index].remaining_frames == Some(0) {
+            let active = active_subscriptions.remove(index);
+            node.end_served_subscription(
+                active.subscription,
+                SubscribeEndReason::Complete,
+                None,
+                None,
+            )
+            .await?;
+            stats.subscriptions_closed = stats.subscriptions_closed.saturating_add(1);
+            continue;
+        }
+
+        let sequence = active_subscriptions[index].next_sequence;
+        let frame = generated_jpeg_frame(sequence);
+        let message = {
+            let subscription = &active_subscriptions[index].subscription;
+            preview_spatial_message(
+                subscription.domain_id().to_owned(),
+                subscription.offer_id().to_owned(),
+                sequence,
+                frame.as_slice(),
+                Some(now),
+            )?
+        };
+
+        let send_result = {
+            let subscription = &mut active_subscriptions[index].subscription;
+            node.send_served_subscription_message(subscription, &message)
+                .await
+        };
+
+        match send_result {
+            Ok(()) => {
+                active_subscriptions[index].next_sequence =
+                    active_subscriptions[index].next_sequence.saturating_add(1);
+                if let Some(remaining) = &mut active_subscriptions[index].remaining_frames {
+                    *remaining = remaining.saturating_sub(1);
+                }
+                stats.frames_sent = stats.frames_sent.saturating_add(1);
+                index += 1;
+            }
+            Err(error) => {
+                stats.subscriptions_closed = stats.subscriptions_closed.saturating_add(1);
+                stats.record_error(error.to_string());
+                active_subscriptions.remove(index);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn pump_connection_lifecycle(
+    node: &mut AukiNode,
+    stats: &mut DemoStats,
+    max_wait: Duration,
+) -> Result<(), Box<dyn Error>> {
+    stats.lifecycle_polls = stats.lifecycle_polls.saturating_add(1);
+    let started_at = Instant::now();
+
+    while started_at.elapsed() < max_wait {
+        let remaining = max_wait
+            .checked_sub(started_at.elapsed())
+            .unwrap_or_default();
+        if remaining.is_zero() {
+            break;
+        }
+
+        let now = now_rfc3339()?;
+        match timeout(remaining, node.next_event(&now)).await {
+            Ok(Some(event)) => {
+                stats.lifecycle_events = stats.lifecycle_events.saturating_add(1);
+                print_event(event);
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+
+    Ok(())
+}
+
+async fn end_active_subscriptions(
+    node: &mut AukiNode,
+    active_subscriptions: &mut Vec<ActivePreviewSubscription>,
+) {
+    while let Some(active) = active_subscriptions.pop() {
+        let _ = node
+            .end_served_subscription(
+                active.subscription,
+                SubscribeEndReason::OfferWithdrawn,
+                None,
+                None,
+            )
+            .await;
     }
 }
 
@@ -448,6 +634,7 @@ fn write_bootstrap_record(node: &AukiNode, path: Option<&PathBuf>) -> Result<(),
 fn print_state(
     node: &mut AukiNode,
     stats: &DemoStats,
+    active_subscriptions: &[ActivePreviewSubscription],
     domain_id: &str,
     config: &DemoConfig,
 ) -> Result<(), Box<dyn Error>> {
@@ -466,21 +653,27 @@ fn print_state(
         node.observed_browser_relay_server_addresses().len(),
     );
     println!(
-        "preview: source={} offer_id={} frames_per_subscription={}",
+        "preview: source={} offer_id={} frame_limit={} frame_interval_ms={} lifecycle_poll_ms={}",
         config.source.as_str(),
         config.offer_id,
-        config.frames_per_subscription,
+        frame_limit_label(config.frame_limit),
+        config.frame_interval.as_millis(),
+        config.lifecycle_poll.as_millis(),
     );
     println!(
-        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} subscription_rejected={} frames_sent={}",
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_closed={} frames_sent={} lifecycle_polls={} lifecycle_events={}",
         stats.lifecycles_served,
         stats.duplicate_lifecycle_attempts,
         stats.offer_catalogs_served,
         stats.gets_served,
         stats.gets_rejected,
         stats.subscriptions_served,
+        active_subscriptions.len(),
         stats.subscriptions_rejected,
+        stats.subscriptions_closed,
         stats.frames_sent,
+        stats.lifecycle_polls,
+        stats.lifecycle_events,
     );
     if let Some(error) = &stats.last_failure {
         println!("last_failure: {error}");
@@ -515,14 +708,45 @@ fn print_state(
     Ok(())
 }
 
+fn frame_limit_label(frame_limit: Option<u64>) -> String {
+    frame_limit
+        .map(|limit| limit.to_string())
+        .unwrap_or_else(|| "continuous".to_owned())
+}
+
 fn generated_jpeg_source(
-    frames_per_subscription: u64,
-) -> impl FnMut() -> stream::Iter<std::vec::IntoIter<Vec<u8>>> + Send + 'static {
+    frame_limit: Option<u64>,
+    frame_interval: Duration,
+) -> impl FnMut() -> PublishedByteSource + Send + 'static {
     move || {
-        let frames = (0..frames_per_subscription)
-            .map(generated_jpeg_frame)
-            .collect::<Vec<_>>();
-        stream::iter(frames)
+        Box::pin(stream::unfold(
+            (0_u64, frame_limit),
+            move |(sequence, remaining)| async move {
+                match remaining {
+                    Some(0) => None,
+                    Some(limit) => {
+                        sleep_before_next_frame(sequence, frame_interval).await;
+                        Some((
+                            generated_jpeg_frame(sequence),
+                            (sequence.saturating_add(1), Some(limit.saturating_sub(1))),
+                        ))
+                    }
+                    None => {
+                        sleep_before_next_frame(sequence, frame_interval).await;
+                        Some((
+                            generated_jpeg_frame(sequence),
+                            (sequence.saturating_add(1), None),
+                        ))
+                    }
+                }
+            },
+        ))
+    }
+}
+
+async fn sleep_before_next_frame(sequence: u64, frame_interval: Duration) {
+    if sequence > 0 && !frame_interval.is_zero() {
+        tokio::time::sleep(frame_interval).await;
     }
 }
 
@@ -557,9 +781,14 @@ mod tests {
 
         assert_eq!(config.source, SourceMode::Generated);
         assert_eq!(config.offer_id, DEFAULT_OFFER_ID);
+        assert_eq!(config.frame_limit, None);
         assert_eq!(
-            config.frames_per_subscription,
-            DEFAULT_FRAMES_PER_SUBSCRIPTION
+            config.frame_interval,
+            Duration::from_millis(DEFAULT_FRAME_INTERVAL_MS)
+        );
+        assert_eq!(
+            config.lifecycle_poll,
+            Duration::from_millis(DEFAULT_LIFECYCLE_POLL_MS)
         );
         assert_eq!(
             config.status_interval,
@@ -576,6 +805,10 @@ mod tests {
             "camera-0".to_owned(),
             "--frames".to_owned(),
             "3".to_owned(),
+            "--frame-interval-ms".to_owned(),
+            "40".to_owned(),
+            "--lifecycle-poll-ms".to_owned(),
+            "15".to_owned(),
             "--status-interval-ms".to_owned(),
             "250".to_owned(),
             "--once".to_owned(),
@@ -587,7 +820,9 @@ mod tests {
             Some(PathBuf::from("/tmp/bootstrap.json"))
         );
         assert_eq!(config.offer_id, "camera-0");
-        assert_eq!(config.frames_per_subscription, 3);
+        assert_eq!(config.frame_limit, Some(3));
+        assert_eq!(config.frame_interval, Duration::from_millis(40));
+        assert_eq!(config.lifecycle_poll, Duration::from_millis(15));
         assert_eq!(config.status_interval, Duration::from_millis(250));
         assert!(config.once);
     }

@@ -4,8 +4,6 @@ import {
   InfoResponse,
   JoinRequest,
   JoinResponse,
-  SensorsRequest,
-  SensorsResponse,
   decodeFrame,
   encodeFrame,
 } from "./protocol/control.js";
@@ -43,25 +41,10 @@ describe("protobuf control protocol bindings", () => {
     expect(decoded).toEqual(response);
   });
 
-  it("round-trips info and sensors request/response protobufs", () => {
+  it("round-trips info request/response protobufs", () => {
     expect(InfoRequest.decode(InfoRequest.encode({}))).toEqual({});
     expect(InfoResponse.decode(InfoResponse.encode({ participantInfoJson: "{}" }))).toEqual({
       participantInfoJson: "{}",
     });
-    expect(SensorsRequest.decode(SensorsRequest.encode({ includeRegistryEntries: true }))).toEqual({
-      includeRegistryEntries: true,
-      includeFrameEntries: false,
-    });
-
-    const response: SensorsResponse = {
-      sensors: [
-        {
-          sensorId: "audio",
-          sensorHash: "",
-          kind: "audio",
-        },
-      ],
-    };
-    expect(SensorsResponse.decode(SensorsResponse.encode(response))).toEqual(response);
   });
 });

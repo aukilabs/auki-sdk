@@ -79,6 +79,7 @@ pub use preview::{
     publish_preview_offer, publish_preview_offer_with_snapshot,
 };
 pub use publication::{
+    AukiSubscriptionBackpressurePolicy, DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY,
     PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteSource,
     PublishedByteSourceFactory, PublishedOfferHandle, ServedPublishedSubscription,
 };

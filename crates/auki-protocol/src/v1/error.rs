@@ -68,6 +68,8 @@ pub const MESSAGE_SEQUENCE_GAP: &str = "message.sequence_gap";
 pub const GET_INVALID_REQUEST: &str = "get.invalid_request";
 /// Subscribe request is malformed.
 pub const SUBSCRIBE_INVALID_REQUEST: &str = "subscribe.invalid_request";
+/// Subscribe stream was closed because the consumer could not keep up.
+pub const SUBSCRIBE_BACKPRESSURE: &str = "subscribe.backpressure";
 /// Offer loading failed.
 pub const OFFER_LOAD_FAILED: &str = "offer.load_failed";
 /// Transport or framing failed before a structured failure could be returned.

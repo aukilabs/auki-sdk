@@ -2,7 +2,7 @@
 
 use crate::{
     api::{AukiGetProviderError, AukiNode, AukiNodeError},
-    publication::{PublishOfferInput, PublishedOfferHandle},
+    publication::{AukiSubscriptionBackpressurePolicy, PublishOfferInput, PublishedOfferHandle},
 };
 use auki_protocol::v1::{
     base64url, error,
@@ -37,6 +37,8 @@ pub struct PreviewOfferOptions {
     pub metadata: Option<Value>,
     /// Access modes advertised by the preview offer.
     pub access_modes: Vec<OfferAccessMode>,
+    /// Runtime backpressure policy used by preview Subscribe streams.
+    pub backpressure_policy: AukiSubscriptionBackpressurePolicy,
 }
 
 impl PreviewOfferOptions {
@@ -48,6 +50,7 @@ impl PreviewOfferOptions {
             display_name: None,
             metadata: None,
             access_modes: vec![OfferAccessMode::Subscribe],
+            backpressure_policy: AukiSubscriptionBackpressurePolicy::LatestOnly,
         }
     }
 
@@ -72,6 +75,12 @@ impl PreviewOfferOptions {
     /// Advertise one-shot Get snapshots and Subscribe streams.
     pub fn with_snapshot_and_stream_access(self) -> Self {
         self.with_access_modes(preview_snapshot_and_stream_access_modes())
+    }
+
+    /// Set the runtime backpressure policy for preview Subscribe streams.
+    pub fn with_backpressure_policy(mut self, policy: AukiSubscriptionBackpressurePolicy) -> Self {
+        self.backpressure_policy = policy;
+        self
     }
 }
 
@@ -108,6 +117,7 @@ where
         source_factory,
     )
     .with_access_modes(options.access_modes);
+    input = input.with_backpressure_policy(options.backpressure_policy);
     if let Some(display_name) = options.display_name {
         input = input.with_display_name(display_name);
     }
@@ -313,6 +323,26 @@ mod tests {
         assert_eq!(
             publication.offer().access_modes,
             vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
+        );
+        assert_eq!(
+            publication.backpressure_policy(),
+            AukiSubscriptionBackpressurePolicy::LatestOnly
+        );
+    }
+
+    #[test]
+    fn preview_offer_can_override_backpressure_policy() {
+        let input = preview_offer_input(
+            || stream::iter([vec![0xff, 0xd8, 0xff, 0xd9]]),
+            PreviewOfferOptions::new(DOMAIN_ID, "preview-main").with_backpressure_policy(
+                AukiSubscriptionBackpressurePolicy::Bounded { capacity: 2 },
+            ),
+        );
+        let publication = input.into_publication().expect("publication");
+
+        assert_eq!(
+            publication.backpressure_policy(),
+            AukiSubscriptionBackpressurePolicy::Bounded { capacity: 2 }
         );
     }
 

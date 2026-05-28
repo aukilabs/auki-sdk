@@ -13,6 +13,9 @@ use libp2p::PeerId;
 use serde_json::{Map, Value};
 use std::{fmt, pin::Pin};
 
+/// Default per-subscription source queue capacity.
+pub const DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY: usize = 1024;
+
 /// Boxed byte stream opened for one Subscribe request.
 pub type PublishedByteSource = Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>;
 
@@ -29,6 +32,31 @@ where
 {
     fn open(&mut self) -> PublishedByteSource {
         Box::pin(self())
+    }
+}
+
+/// Backpressure policy for runtime-managed published Subscribe streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AukiSubscriptionBackpressurePolicy {
+    /// Keep only the newest queued source frame and drop older queued frames.
+    LatestOnly,
+    /// Backpressure the source task once this subscription queue is full.
+    Bounded {
+        /// Maximum queued source frames or control events.
+        capacity: usize,
+    },
+    /// Close the subscription with a backpressure error once the queue is full.
+    CloseOnFull {
+        /// Maximum queued source frames or control events.
+        capacity: usize,
+    },
+}
+
+impl Default for AukiSubscriptionBackpressurePolicy {
+    fn default() -> Self {
+        Self::Bounded {
+            capacity: DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY,
+        }
     }
 }
 
@@ -50,6 +78,8 @@ pub struct PublishOfferInput {
     pub registry_refs: Vec<RegistryReference>,
     /// Access modes advertised by the offer.
     pub access_modes: Vec<OfferAccessMode>,
+    /// Per-subscription backpressure policy used by the SDK serve runtime.
+    pub backpressure_policy: AukiSubscriptionBackpressurePolicy,
     source_factory: Box<dyn PublishedByteSourceFactory>,
 }
 
@@ -98,6 +128,7 @@ pub enum PublicationMessageError {
 pub(crate) struct LocalOfferPublication {
     offer: Offer,
     source_factory: Box<dyn PublishedByteSourceFactory>,
+    backpressure_policy: AukiSubscriptionBackpressurePolicy,
     next_sequence: u64,
 }
 
@@ -123,6 +154,7 @@ impl PublishOfferInput {
             metadata: None,
             registry_refs: Vec::new(),
             access_modes: vec![OfferAccessMode::Subscribe],
+            backpressure_policy: AukiSubscriptionBackpressurePolicy::default(),
             source_factory: Box::new(source_factory),
         }
     }
@@ -151,6 +183,12 @@ impl PublishOfferInput {
         self
     }
 
+    /// Set the runtime backpressure policy for Subscribe streams.
+    pub fn with_backpressure_policy(mut self, policy: AukiSubscriptionBackpressurePolicy) -> Self {
+        self.backpressure_policy = policy;
+        self
+    }
+
     pub(crate) fn key(&self) -> (String, String) {
         (self.domain_id.clone(), self.offer_id.clone())
     }
@@ -160,6 +198,7 @@ impl PublishOfferInput {
         Ok(LocalOfferPublication {
             offer,
             source_factory: self.source_factory,
+            backpressure_policy: self.backpressure_policy,
             next_sequence: 0,
         })
     }
@@ -176,6 +215,7 @@ impl fmt::Debug for PublishOfferInput {
             .field("metadata", &self.metadata)
             .field("registry_refs", &self.registry_refs)
             .field("access_modes", &self.access_modes)
+            .field("backpressure_policy", &self.backpressure_policy)
             .finish_non_exhaustive()
     }
 }
@@ -210,6 +250,10 @@ impl LocalOfferPublication {
 
     pub(crate) fn open_source(&mut self) -> PublishedByteSource {
         self.source_factory.open()
+    }
+
+    pub(crate) fn backpressure_policy(&self) -> AukiSubscriptionBackpressurePolicy {
+        self.backpressure_policy
     }
 
     pub(crate) fn next_message(
@@ -416,6 +460,10 @@ mod tests {
         assert_eq!(offer.payload.payload_type, "example.bytes.v1");
         assert_eq!(offer.display_name.as_deref(), Some("Bytes"));
         assert_eq!(offer.metadata, Some(json!({"source": "test"})));
+        assert_eq!(
+            publication.backpressure_policy(),
+            AukiSubscriptionBackpressurePolicy::default()
+        );
     }
 
     #[test]
@@ -434,6 +482,25 @@ mod tests {
         assert_eq!(
             publication.offer().access_modes,
             vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
+        );
+    }
+
+    #[test]
+    fn published_offer_can_select_backpressure_policy() {
+        let input = PublishOfferInput::new(
+            DOMAIN_ID,
+            "bytes",
+            "example.bytes",
+            PayloadDescriptor::create("example.bytes.v1"),
+            || stream::iter([vec![1, 2, 3]]),
+        )
+        .with_backpressure_policy(AukiSubscriptionBackpressurePolicy::CloseOnFull { capacity: 2 });
+
+        let publication = input.into_publication().expect("publication");
+
+        assert_eq!(
+            publication.backpressure_policy(),
+            AukiSubscriptionBackpressurePolicy::CloseOnFull { capacity: 2 }
         );
     }
 

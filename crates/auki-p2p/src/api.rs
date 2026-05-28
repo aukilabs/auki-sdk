@@ -1844,6 +1844,16 @@ impl AukiNode {
             .contains_key(&(domain_id.to_owned(), offer_id.to_owned()))
     }
 
+    pub(crate) fn local_publication_backpressure_policy(
+        &self,
+        domain_id: &str,
+        offer_id: &str,
+    ) -> Option<crate::AukiSubscriptionBackpressurePolicy> {
+        self.local_publications
+            .get(&(domain_id.to_owned(), offer_id.to_owned()))
+            .map(LocalOfferPublication::backpressure_policy)
+    }
+
     pub(crate) fn open_publication_source(
         &mut self,
         domain_id: &str,
@@ -4325,6 +4335,133 @@ mod tests {
         assert_eq!(second_b.payload.bytes, Some(vec![2]));
         assert_eq!(status.frames_sent, 4);
         assert_eq!(final_status, status);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_closes_published_subscription_on_backpressure() {
+        let listener_wallet = wallet(120);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[17; DOMAIN_NONCE_LEN],
+            Some("runtime-backpressure"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(121), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "bytes-main",
+                    "frame",
+                    PayloadDescriptor::create("auki.frame"),
+                    || stream::iter((0_u8..64).map(|value| vec![value])),
+                )
+                .with_backpressure_policy(
+                    crate::AukiSubscriptionBackpressurePolicy::CloseOnFull { capacity: 1 },
+                ),
+            )
+            .expect("publish offer");
+        let remote_report = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: listener
+                .local_offers(&domain_id)
+                .into_iter()
+                .map(|offer| LoadedRemoteOffer {
+                    offer,
+                    usable: true,
+                    unusable_reason: None,
+                })
+                .collect(),
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+
+        let (proceed_tx, proceed_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let mut ended = None;
+
+            let started = runtime
+                .serve_next(ISSUED_AT)
+                .await
+                .expect("serve subscribe start")
+                .expect("subscription started");
+            assert!(matches!(
+                started,
+                AukiServeRuntimeEvent::PublishedSubscriptionStarted(_)
+            ));
+            proceed_rx.await.expect("consumer subscribe completed");
+
+            timeout(Duration::from_secs(5), async {
+                while ended.is_none() {
+                    let event = runtime
+                        .serve_next(ISSUED_AT)
+                        .await
+                        .expect("serve next runtime event")
+                        .expect("runtime event");
+                    if let AukiServeRuntimeEvent::PublishedSubscriptionEnded(status) = event {
+                        ended = Some(status);
+                    }
+                }
+            })
+            .await
+            .expect("runtime should close for backpressure");
+
+            let status = ended.expect("ended status");
+            assert_eq!(status.reason, SubscribeEndReason::Error);
+            assert_eq!(
+                status.error_code.as_deref(),
+                Some(error::SUBSCRIBE_BACKPRESSURE)
+            );
+            assert_eq!(status.retryable, Some(true));
+            let runtime_status = runtime.status().clone();
+            assert_eq!(runtime_status.active_subscriptions, 0);
+            assert_eq!(runtime_status.subscriptions_accepted, 1);
+            assert_eq!(runtime_status.subscriptions_closed_for_backpressure, 1);
+            assert!(runtime_status.frames_dropped >= 1);
+            runtime_status
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(remote_report);
+
+        let subscription = dialer
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id, "bytes-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscribe should start");
+        proceed_tx.send(()).expect("send proceed");
+
+        let status = server.await.expect("server task");
+        drop(subscription);
+        assert_eq!(status.subscriptions_closed_for_backpressure, 1);
     }
 
     #[tokio::test]

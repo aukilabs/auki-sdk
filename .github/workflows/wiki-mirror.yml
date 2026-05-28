@@ -18,7 +18,7 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Checkout main repo
         uses: actions/checkout@v4

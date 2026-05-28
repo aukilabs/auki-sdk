@@ -1048,14 +1048,14 @@ impl ClusterManager {
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
         // 9. Drain inbound /auki/resources/0.2.0 requests. The
-        //    resources handler delegates to a SessionHandle if one
-        //    is set; otherwise returns an empty catalog.
+        //    resources handler uses only an app-supplied provider;
+        //    no provider means an empty catalog.
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
-            session_handle.clone(),
+            resource_catalog_provider.clone(),
         )));
 
         // 10. Drain inbound /auki/registries/0.0.1 requests. Read
@@ -1818,14 +1818,14 @@ impl ClusterManager {
         let registry_app_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
         // 10. Drain inbound /auki/resources/0.2.0 requests. The
-        //     resources handler delegates to a SessionHandle if one
-        //     is set; otherwise returns an empty catalog.
+        //     resources handler uses only an app-supplied provider;
+        //     no provider means an empty catalog.
         let resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
             Arc::new(Mutex::new(None));
         let session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
         let resources_handler_task = Mutex::new(Some(spawn_resources_handler(
             resources_events_rx,
-            session_handle.clone(),
+            resource_catalog_provider.clone(),
         )));
 
         // 11. Drain inbound /auki/registries/0.0.1 requests. Read
@@ -3019,43 +3019,25 @@ fn verify_registry_envelope(
 
 /// Spawn a task that drains inbound `/auki/resources/0.2.0` requests
 /// from `rx` and replies on each `ack` with a freshly-snapshotted
-/// [`ResourcesResponse`] sourced entirely from the registered
-/// [`SessionHandle`].
+/// [`ResourcesResponse`] sourced from the registered
+/// [`ResourceCatalogProvider`].
 ///
-/// If no handle is set yet (pre-session bootstrap), returns an empty
-/// catalog. Variant filtering: if `request.variants` is non-empty,
-/// only rows whose `variant_content` tag appears in `variants` are
-/// returned. An empty `variants` list means "all variants".
+/// If no provider is set yet (pre-session bootstrap), returns an
+/// empty catalog. Variant filtering is owned by
+/// [`ResourceCatalogProvider::snapshot_for_request`].
 fn spawn_resources_handler(
     mut rx: mpsc::Receiver<ResourcesRequestEvent>,
-    session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>>,
+    resource_catalog_provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(ResourcesRequestEvent { request, ack, .. }) = rx.recv().await {
-            let all_resources = {
-                let guard = session_handle.lock().expect("session_handle lock");
-                match guard.as_ref() {
-                    Some(h) => h.catalog(),
-                    None => Vec::new(),
-                }
-            };
-            let resources = if request.variants.is_empty() {
-                all_resources
-            } else {
-                use auki_network::resources_protocol::{Variant, VariantContent};
-                all_resources
-                    .into_iter()
-                    .filter(|r| {
-                        let row_variant = match &r.variant_content {
-                            VariantContent::SensorLog { .. } => Variant::SensorLog,
-                            VariantContent::PoseLog { .. } => Variant::PoseLog,
-                            VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
-                            VariantContent::DetectionLog { .. } => Variant::DetectionLog,
-                        };
-                        request.variants.contains(&row_variant)
-                    })
-                    .collect()
-            };
+            let provider = resource_catalog_provider
+                .lock()
+                .expect("resource_catalog_provider lock")
+                .clone();
+            let resources = provider
+                .map(|provider| provider.snapshot_for_request(&request, None))
+                .unwrap_or_default();
             let _ = ack.send(ResourcesResponse { resources });
         }
     })
@@ -4007,21 +3989,85 @@ mod tests {
         assert!(matches!(err, FetchRegistryEntryError::HashMismatch { .. }));
     }
 
-    /// Verify `spawn_resources_handler` delegates to `SessionHandle::catalog`
-    /// and that variant filtering works.
+    /// Verify an unset provider means an empty `/auki/resources` catalog.
     #[tokio::test]
-    async fn resources_handler_delegates_to_session_handle() {
+    async fn resources_handler_without_provider_returns_empty() {
+        use auki_network::resources_protocol::{ResourcesRequest, ResourcesResponse};
+
+        let (tx, rx) = mpsc::channel(8);
+        let provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
+            Arc::new(Mutex::new(None));
+        let _task = spawn_resources_handler(rx, provider);
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest::all(),
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+        let resp = ack_rx.await.unwrap();
+        assert!(resp.resources.is_empty());
+    }
+
+    /// Verify an app-supplied ResourceCatalogProvider is the authoritative
+    /// source for inbound `/auki/resources` requests when registered.
+    #[tokio::test]
+    async fn resources_handler_uses_resource_catalog_provider() {
         use auki_network::resources_protocol::{
-            Available, Head, ResourceEntry, ResourcesRequest, ResourcesResponse, SensorBlock,
-            SensorKind, SensorManifestPointer, Variant, VariantContent,
+            ResourceEntry, ResourcesRequest, ResourcesResponse, SensorKind,
+        };
+
+        let row = sensor_log_resource(
+            "bracketbot",
+            "head_pointcloud",
+            SensorKind::Rangefinder,
+            "point_cloud",
+        );
+
+        struct MockProvider(Vec<ResourceEntry>);
+        impl ResourceCatalogProvider for MockProvider {
+            fn snapshot(&self) -> Vec<ResourceEntry> {
+                self.0.clone()
+            }
+        }
+
+        let provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
+            Arc::new(Mutex::new(Some(Arc::new(MockProvider(vec![row.clone()])))));
+
+        let (tx, rx) = mpsc::channel(8);
+        let _task = spawn_resources_handler(rx, provider);
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest::all(),
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+
+        let resp = ack_rx.await.unwrap();
+        assert_eq!(resp.resources.len(), 1);
+        assert_eq!(resp.resources[0].resource_id, "head_pointcloud");
+    }
+
+    fn sensor_log_resource(
+        peer_id: &str,
+        resource_id: &str,
+        kind: auki_network::resources_protocol::SensorKind,
+        sensor_type: &str,
+    ) -> auki_network::resources_protocol::ResourceEntry {
+        use auki_network::resources_protocol::{
+            Available, Head, ResourceEntry, SensorBlock, SensorManifestPointer, VariantContent,
         };
         use auki_registry::RegistryRef;
 
-        // Build a minimal catalog: one sensor_log row.
-        let row = ResourceEntry {
-            source_peer_id: "galbot".into(),
-            writer_peer_id: "galbot".into(),
-            resource_id: "head_left_rgb".into(),
+        ResourceEntry {
+            source_peer_id: peer_id.into(),
+            writer_peer_id: peer_id.into(),
+            resource_id: resource_id.into(),
             state: "live".into(),
             head: Some(Head::Rolling {
                 retention_ns: 5_000_000_000,
@@ -4033,63 +4079,23 @@ mod tests {
                 duration_ns: 5_000_000_000,
             },
             sensor: Some(SensorBlock {
-                kind: SensorKind::Camera,
-                r#type: "rgb".into(),
-                sensor_id: "head_left_rgb".into(),
+                kind,
+                r#type: sensor_type.into(),
+                sensor_id: resource_id.into(),
                 sensor_hash: "sh".into(),
             }),
             pose: None,
             variant_content: VariantContent::SensorLog {
                 manifest: SensorManifestPointer {
                     clock: RegistryRef {
-                        peer_id: "galbot".into(),
+                        peer_id: peer_id.into(),
                         id: "session/sdk_clock".into(),
                         hash: "ch".into(),
                     },
                     frame: None,
                 },
             },
-        };
-
-        struct MockSession(Vec<ResourceEntry>);
-        impl SessionHandle for MockSession {
-            fn catalog(&self) -> Vec<ResourceEntry> {
-                self.0.clone()
-            }
         }
-
-        let handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> =
-            Arc::new(Mutex::new(Some(Arc::new(MockSession(vec![row.clone()])))));
-
-        let (tx, rx) = mpsc::channel(8);
-        let _task = spawn_resources_handler(rx, handle);
-
-        // All variants — should return the row.
-        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<ResourcesResponse>();
-        tx.send(ResourcesRequestEvent {
-            peer: libp2p_identity::PeerId::random(),
-            request: ResourcesRequest::all(),
-            ack: ack_tx,
-        })
-        .await
-        .unwrap();
-        let resp = ack_rx.await.unwrap();
-        assert_eq!(resp.resources.len(), 1);
-        assert_eq!(resp.resources[0].resource_id, "head_left_rgb");
-
-        // Filter for PoseLog only — should return nothing.
-        let (ack_tx2, ack_rx2) = tokio::sync::oneshot::channel::<ResourcesResponse>();
-        tx.send(ResourcesRequestEvent {
-            peer: libp2p_identity::PeerId::random(),
-            request: ResourcesRequest {
-                variants: vec![Variant::PoseLog],
-            },
-            ack: ack_tx2,
-        })
-        .await
-        .unwrap();
-        let resp2 = ack_rx2.await.unwrap();
-        assert!(resp2.resources.is_empty());
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {

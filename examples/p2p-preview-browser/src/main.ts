@@ -6,11 +6,17 @@ import {
   type OfferSummary,
   type PeerSummary,
   type PreviewFrame,
-  createAukiPreviewBrowserSession,
+  createAukiBrowserPeer,
   getPreviewSnapshot,
   openPreviewSubscription,
 } from "@aukilabs/auki-p2p-browser";
-import { canRequestSnapshot, offerLabel, parseBootstrapText, shortId } from "./app";
+import {
+  canRequestSnapshot,
+  mergeBootstrapRecords,
+  offerLabel,
+  parseBootstrapText,
+  shortId,
+} from "./app";
 import "./styles.css";
 
 type OfferRuntimeState = {
@@ -47,6 +53,7 @@ type AppState = {
   peers: PeerSummary[];
   offers: OfferSummary[];
   offerStates: Map<string, OfferRuntimeState>;
+  openOfferDetailKey?: string;
   events: EventLogEntry[];
   status: string;
   lastError?: string;
@@ -68,16 +75,12 @@ const state: AppState = {
 };
 
 const els = {
-  bootstrapInput: element<HTMLTextAreaElement>("bootstrap-input"),
-  bootstrapFile: element<HTMLInputElement>("bootstrap-file"),
+  diagnosticsButton: element<HTMLButtonElement>("diagnostics-button"),
+  diagnosticsDialog: element<HTMLDialogElement>("diagnostics-dialog"),
+  diagnosticsClose: element<HTMLButtonElement>("diagnostics-close"),
   connectButton: element<HTMLButtonElement>("connect-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
-  clearButton: element<HTMLButtonElement>("clear-button"),
-  connectionStatus: element("connection-status"),
-  bootstrapPeer: element("bootstrap-peer"),
-  bootstrapDirect: element("bootstrap-direct"),
-  bootstrapWebrtc: element("bootstrap-webrtc"),
-  bootstrapRelay: element("bootstrap-relay"),
+  addPeerButton: element<HTMLButtonElement>("add-peer-button"),
   streamSummary: element("stream-summary"),
   streamsGrid: element("streams-grid"),
   snapshotsReceived: element("snapshots-received"),
@@ -92,23 +95,75 @@ const els = {
   peerCount: element("peer-count"),
   offerCount: element("offer-count"),
   lastError: element("last-error"),
-  peersTable: element<HTMLTableSectionElement>("peers-table"),
+  peerList: element("peer-list"),
   eventLog: element("event-log"),
+  addPeerDialog: element<HTMLDialogElement>("add-peer-dialog"),
+  addPeerInput: element<HTMLTextAreaElement>("add-peer-input"),
+  addPeerFile: element<HTMLInputElement>("add-peer-file"),
+  addPeerSubmit: element<HTMLButtonElement>("add-peer-submit"),
+  addPeerCancel: element<HTMLButtonElement>("add-peer-cancel"),
+  addPeerClear: element<HTMLButtonElement>("add-peer-clear"),
+  peerDetailDialog: element<HTMLDialogElement>("peer-detail-dialog"),
+  peerDetailContent: element("peer-detail-content"),
+  peerDetailClose: element<HTMLButtonElement>("peer-detail-close"),
+  offerDetailDialog: element<HTMLDialogElement>("offer-detail-dialog"),
+  offerDetailContent: element("offer-detail-content"),
+  offerDetailClose: element<HTMLButtonElement>("offer-detail-close"),
 };
 
+els.diagnosticsButton.addEventListener("click", () => {
+  els.diagnosticsDialog.showModal();
+});
+els.diagnosticsClose.addEventListener("click", () => {
+  els.diagnosticsDialog.close();
+});
 els.connectButton.addEventListener("click", () => {
-  void connect();
+  void start();
 });
 els.stopButton.addEventListener("click", () => {
   void stop();
 });
-els.clearButton.addEventListener("click", () => {
-  els.bootstrapInput.value = "";
-  state.bootstraps = [];
-  render();
+els.addPeerButton.addEventListener("click", () => {
+  openAddPeerDialog();
 });
-els.bootstrapFile.addEventListener("change", () => {
-  void loadBootstrapFile();
+els.addPeerSubmit.addEventListener("click", () => {
+  void addPeersFromInput();
+});
+els.addPeerCancel.addEventListener("click", () => {
+  els.addPeerDialog.close();
+});
+els.addPeerClear.addEventListener("click", () => {
+  els.addPeerInput.value = "";
+});
+els.addPeerFile.addEventListener("change", () => {
+  void loadAddPeerFile();
+});
+els.peerDetailClose.addEventListener("click", () => {
+  els.peerDetailDialog.close();
+});
+els.offerDetailClose.addEventListener("click", () => {
+  els.offerDetailDialog.close();
+});
+els.offerDetailDialog.addEventListener("close", () => {
+  state.openOfferDetailKey = undefined;
+});
+els.peerList.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+  const handled = handlePeerAction(event.target);
+  if (handled) {
+    event.preventDefault();
+  }
+});
+els.peerList.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const handled = handlePeerAction(event.target);
+  if (handled) {
+    event.preventDefault();
+  }
 });
 els.streamsGrid.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) {
@@ -151,31 +206,50 @@ function handleStreamAction(target: EventTarget | null): boolean {
     void subscribeToOffer(offer);
   } else if (button.dataset.action === "stop-subscribe") {
     void stopOfferSubscription(key, "Stopped by user");
+  } else if (button.dataset.action === "offer-detail") {
+    openOfferDetail(offer);
   }
+  return true;
+}
+
+function handlePeerAction(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const button = target.closest<HTMLButtonElement>("button[data-peer-id]");
+  if (!button) {
+    return false;
+  }
+  const peerId = button.dataset.peerId;
+  if (!peerId) {
+    return false;
+  }
+  openPeerDetail(peerId);
   return true;
 }
 
 render();
 
-async function connect(): Promise<void> {
-  await runShortAction("Connecting", async () => {
-    const bootstraps = parseBootstrapText(els.bootstrapInput.value.trim());
-    await stopPeer();
-    const session = await createAukiPreviewBrowserSession({
-      bootstrap: bootstraps,
-      label: "p2p-preview-browser",
-      trace: handlePeerTrace,
-    });
-    const peer = session.peer;
-    recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
-    recordEvent("info", "Connected bootstrap peers", bootstraps.length.toString());
-    state.peer = peer;
-    state.bootstraps = session.bootstraps;
-    state.peers = session.peers;
-    state.offers = session.offers;
-    state.status =
-      session.offers.length > 0 ? "Connected, offers loaded" : "Connected, no offers";
-    recordEvent("info", "Offer catalog loaded", `${session.offers.length} offer(s)`);
+async function start(): Promise<void> {
+  await runShortAction("Starting peer", async () => {
+    await ensurePeerStarted();
+    state.status = "Peer started";
+  });
+}
+
+async function addPeersFromInput(): Promise<void> {
+  await runShortAction("Adding peer", async () => {
+    const records = parseBootstrapText(els.addPeerInput.value.trim());
+    if (records.length === 0) {
+      throw new Error("Bootstrap JSON must include at least one peer");
+    }
+    const peer = await ensurePeerStarted(records);
+    await peer.connectBootstrap(records);
+    state.bootstraps = mergeBootstrapRecords(state.bootstraps, records);
+    await refreshPeerData();
+    state.status = "Peer added";
+    recordEvent("info", "Connected bootstrap peers", records.length.toString());
+    els.addPeerDialog.close();
   });
 }
 
@@ -199,6 +273,7 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
   state.lastError = undefined;
   recordEvent("info", "Get requested", offerLabel(offer));
   render();
+  updateOpenOfferDetail(key);
 
   try {
     const frame = await getPreviewSnapshot(peer, offer);
@@ -207,6 +282,7 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
     runtime.totalBytes += bytes;
     runtime.status = "snapshot ok";
     state.status = "Snapshot received";
+    updateOpenOfferDetail(key);
     recordEvent(
       "info",
       "Get snapshot received",
@@ -218,10 +294,12 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
     runtime.lastError = message;
     state.lastError = message;
     state.status = "Error";
+    updateOpenOfferDetail(key);
     recordEvent("error", "Get failed", `${offerLabel(offer)} ${message}`);
   } finally {
     runtime.getting = false;
     render();
+    updateOpenOfferDetail(key);
   }
 }
 
@@ -248,6 +326,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
   state.lastError = undefined;
   recordEvent("info", "Subscribe requested", offerLabel(offer));
   render();
+  updateOpenOfferDetail(key);
 
   try {
     const subscription = await openPreviewSubscription(peer, offer, {
@@ -265,6 +344,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     runtime.streamFrameBase = runtime.frames;
     state.status = "Receiving";
     render();
+    updateOpenOfferDetail(key);
 
     for await (const frame of subscription.frames) {
       if (runtime.token !== token) {
@@ -276,6 +356,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
       runtime.status = "streaming";
       state.status = "Receiving";
       updateStreamCardRuntime(key, runtime);
+      updateOpenOfferDetail(key);
       renderLiveStats();
     }
 
@@ -285,6 +366,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
       state.status = "Subscription complete";
       recordEvent("info", "Subscribe complete", offerLabel(offer));
       render();
+      updateOpenOfferDetail(key);
     }
   } catch (error) {
     if (runtime.token !== token) {
@@ -298,6 +380,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     state.status = "Error";
     recordEvent("error", "Subscribe failed", `${offerLabel(offer)} ${message}`);
     render();
+    updateOpenOfferDetail(key);
   }
 }
 
@@ -348,6 +431,7 @@ async function stopOfferSubscriptionOnce(
   state.status = "Stopping subscription";
   recordEvent("info", "Subscribe stopping", reason);
   render();
+  updateOpenOfferDetail(key);
 
   try {
     await stopSubscriptionTransport(subscription, abortController, reason);
@@ -363,6 +447,7 @@ async function stopOfferSubscriptionOnce(
     runtime.status = "stopped";
     state.status = "Subscription stopped";
     render();
+    updateOpenOfferDetail(key);
   }
 }
 
@@ -384,14 +469,46 @@ async function stopPeer(): Promise<void> {
   state.nextSubscriptionToken += 1;
 }
 
-async function loadBootstrapFile(): Promise<void> {
-  const file = els.bootstrapFile.files?.[0];
+async function ensurePeerStarted(bootstrap?: unknown): Promise<AukiBrowserPeer> {
+  if (state.peer) {
+    return state.peer;
+  }
+  const peer = await createAukiBrowserPeer({
+    bootstrap,
+    label: "p2p-preview-browser",
+    trace: handlePeerTrace,
+  });
+  state.peer = peer;
+  state.status = "Peer started";
+  recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
+  return peer;
+}
+
+async function refreshPeerData(): Promise<void> {
+  const peer = state.peer;
+  if (!peer) {
+    state.peers = [];
+    state.offers = [];
+    return;
+  }
+  state.peers = peer.listPeers();
+  state.offers = await peer.listOffers();
+  recordEvent("info", "Offer catalog loaded", `${state.offers.length} offer(s)`);
+}
+
+function openAddPeerDialog(): void {
+  els.addPeerDialog.showModal();
+  els.addPeerInput.focus();
+}
+
+async function loadAddPeerFile(): Promise<void> {
+  const file = els.addPeerFile.files?.[0];
   if (!file) {
     return;
   }
-  els.bootstrapInput.value = await file.text();
+  els.addPeerInput.value = await file.text();
   try {
-    state.bootstraps = parseBootstrapText(els.bootstrapInput.value.trim());
+    parseBootstrapText(els.addPeerInput.value.trim());
     state.lastError = undefined;
     recordEvent("info", "Bootstrap JSON loaded", file.name);
   } catch (error) {
@@ -461,27 +578,13 @@ function clearAllPreviewFrames(): void {
 
 function render(): void {
   renderLiveStats();
-  renderPeers(state.peers);
+  renderPeerSidebar(state.peers);
   renderStreams(state.offers);
   renderEvents();
 }
 
 function renderLiveStats(): void {
   const totals = aggregateRuntimeStats();
-  els.connectionStatus.textContent = state.status;
-  els.bootstrapPeer.textContent =
-    state.bootstraps.length === 0
-      ? "None"
-      : state.bootstraps.map((record) => shortId(record.peerId, 6)).join(", ");
-  els.bootstrapDirect.textContent = addressCount(
-    state.bootstraps.flatMap((record) => record.directAddresses),
-  );
-  els.bootstrapWebrtc.textContent = addressCount(
-    state.bootstraps.flatMap((record) => record.webrtcDirectAddresses),
-  );
-  els.bootstrapRelay.textContent = addressCount(
-    state.bootstraps.flatMap((record) => record.relayServerAddresses),
-  );
   els.snapshotsReceived.textContent = totals.snapshots.toString();
   els.framesReceived.textContent = totals.frames.toString();
   els.streamRate.textContent = `${totals.rate.toFixed(1)} fps`;
@@ -494,31 +597,168 @@ function renderLiveStats(): void {
     : "Never";
   els.selectedOffer.textContent = totals.activeStreams.toString();
   els.localPeer.textContent = state.peer ? shortId(state.peer.peerId, 10) : "Not started";
-  els.peerCount.textContent = state.peers.length.toString();
+  els.peerCount.textContent = (state.peers.length + (state.peer ? 1 : 0)).toString();
   els.offerCount.textContent = state.offers.length.toString();
   els.lastError.textContent = state.lastError ?? "None";
   els.streamSummary.textContent =
     state.offers.length === 0
       ? "No offers"
       : `${totals.activeStreams} active / ${state.offers.length} offer(s)`;
-  els.connectButton.disabled = state.busy;
+  els.connectButton.disabled = state.busy || Boolean(state.peer);
+  els.connectButton.textContent = state.peer ? "Peer Started" : "Start Peer";
   els.stopButton.disabled = state.busy || !state.peer;
+  els.addPeerButton.disabled = state.busy;
+  els.addPeerSubmit.disabled = state.busy;
 }
 
-function renderPeers(peers: PeerSummary[]): void {
-  els.peersTable.replaceChildren();
-  if (peers.length === 0) {
-    appendEmptyRow(els.peersTable, 4);
-    return;
+function renderPeerSidebar(peers: PeerSummary[]): void {
+  els.peerList.replaceChildren();
+  if (state.peer) {
+    els.peerList.append(localPeerItem(state.peer.peerId));
   }
   for (const peer of peers) {
-    const row = document.createElement("tr");
-    appendTextCell(row, shortId(peer.peerId, 10));
-    appendTextCell(row, peer.connected ? "yes" : "no");
-    appendTextCell(row, peer.dialAddresses.length.toString());
-    appendTextCell(row, transportSummary(peer.dialAddresses));
-    els.peersTable.append(row);
+    els.peerList.append(remotePeerItem(peer));
   }
+  if (!state.peer && peers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-peers";
+    empty.textContent = "No peers";
+    els.peerList.append(empty);
+  }
+}
+
+function localPeerItem(peerId: string): HTMLElement {
+  const button = peerListItem(peerId, "Local", "browser", state.peer?.multiaddrs() ?? []);
+  button.classList.add("local");
+  return button;
+}
+
+function remotePeerItem(peer: PeerSummary): HTMLElement {
+  const offerCount = state.offers.filter((offer) => offer.peerId === peer.peerId).length;
+  const status = peer.connected ? "Connected" : "Disconnected";
+  return peerListItem(
+    peer.peerId,
+    status,
+    `${offerCount} offer(s)`,
+    peer.dialAddresses,
+    peer.connected,
+  );
+}
+
+function peerListItem(
+  peerId: string,
+  status: string,
+  detail: string,
+  addresses: string[],
+  connected = true,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "peer-list-item";
+  button.dataset.peerId = peerId;
+
+  const heading = document.createElement("span");
+  heading.className = "peer-list-heading";
+  const title = document.createElement("strong");
+  title.textContent = shortId(peerId, 10);
+  const statusPill = document.createElement("span");
+  statusPill.className = connected ? "status-pill live" : "status-pill error";
+  statusPill.textContent = status;
+  heading.append(title, statusPill);
+
+  const meta = document.createElement("span");
+  meta.className = "peer-list-meta";
+  meta.textContent = `${detail} | ${addresses.length} addr | ${transportSummary(addresses)}`;
+
+  button.append(heading, meta);
+  return button;
+}
+
+function openPeerDetail(peerId: string): void {
+  const remotePeer = state.peers.find((peer) => peer.peerId === peerId);
+  const isLocal = state.peer?.peerId === peerId;
+  if (!remotePeer && !isLocal) {
+    return;
+  }
+
+  els.peerDetailContent.replaceChildren(peerDetail(peerId, remotePeer, isLocal));
+  els.peerDetailDialog.showModal();
+}
+
+function peerDetail(
+  peerId: string,
+  peer: PeerSummary | undefined,
+  isLocal: boolean,
+): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "peer-detail";
+  const offers = state.offers.filter((offer) => offer.peerId === peerId);
+  const bootstrap = state.bootstraps.find((record) => record.peerId === peerId);
+  const addresses = isLocal ? state.peer?.multiaddrs() ?? [] : peer?.dialAddresses ?? [];
+  const bootstrapAddresses = bootstrapAddressList(bootstrap);
+
+  const summary = document.createElement("div");
+  summary.className = "peer-detail-grid";
+  summary.append(
+    detailMetric("Peer ID", peerId),
+    detailMetric("Role", isLocal ? "Browser" : "Remote"),
+    detailMetric("Connected", isLocal || peer?.connected ? "Yes" : "No"),
+    detailMetric("Dial Addresses", addresses.length.toString()),
+    detailMetric("Transports", transportSummary(addresses)),
+    detailMetric("Offers", offers.length.toString()),
+  );
+
+  wrapper.append(summary);
+  wrapper.append(addressSection("Dial Addresses", addresses));
+  if (bootstrapAddresses.length > 0) {
+    wrapper.append(addressSection("Bootstrap Addresses", bootstrapAddresses));
+  }
+  wrapper.append(offerSection(offers));
+  return wrapper;
+}
+
+function detailMetric(label: string, value: string, key?: string): HTMLElement {
+  const item = document.createElement("div");
+  if (key) {
+    item.dataset.metric = key;
+  }
+  const name = document.createElement("span");
+  name.textContent = label;
+  const content = document.createElement("strong");
+  content.textContent = value;
+  item.append(name, content);
+  return item;
+}
+
+function addressSection(title: string, addresses: string[]): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "detail-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const list = document.createElement("pre");
+  list.textContent = addresses.length === 0 ? "None" : addresses.join("\n");
+  section.append(heading, list);
+  return section;
+}
+
+function offerSection(offers: OfferSummary[]): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "detail-section";
+  const heading = document.createElement("h3");
+  heading.textContent = "Offers";
+  const list = document.createElement("div");
+  list.className = "offer-detail-list";
+  if (offers.length === 0) {
+    list.textContent = "None";
+  } else {
+    for (const offer of offers) {
+      const item = document.createElement("div");
+      item.textContent = `${offer.domainId}/${offer.offerId} | ${offer.kind} | ${offer.accessModes.join(", ")}`;
+      list.append(item);
+    }
+  }
+  section.append(heading, list);
+  return section;
 }
 
 function renderStreams(offers: OfferSummary[]): void {
@@ -596,31 +836,11 @@ function streamCard(offer: OfferSummary): HTMLElement {
   meta.append(
     metric("Domain", shortId(offer.domainId, 7)),
     metric("Payload", offer.payloadType ?? "unknown"),
-    metric("Access", offer.accessModes.join(", ")),
-  );
-
-  const stats = document.createElement("div");
-  stats.className = "stream-stats";
-  stats.append(
-    metric("Snapshots", runtime.snapshots.toString(), "snapshots"),
-    metric("Frames", runtime.frames.toString(), "frames"),
-    metric("Rate", `${streamRate(runtime).toFixed(1)} fps`, "rate"),
-    metric("Bytes", formatBytes(runtime.totalBytes), "bytes"),
-    metric(
-      "Payload",
-      runtime.lastPayloadBytes === undefined ? "None" : formatBytes(runtime.lastPayloadBytes),
-      "payload",
-    ),
-    metric("Sequence", runtime.lastSequence ?? "None", "sequence"),
-    metric(
-      "Last Frame",
-      runtime.lastFrameAt ? runtime.lastFrameAt.toLocaleTimeString() : "Never",
-      "last-frame",
-    ),
   );
 
   const actions = document.createElement("div");
   actions.className = "row-actions";
+  actions.append(actionButton("Detail", "offer-detail", key, false));
   if (offer.accessModes.includes("get")) {
     actions.append(
       actionButton(
@@ -652,12 +872,67 @@ function streamCard(offer: OfferSummary): HTMLElement {
     const error = document.createElement("div");
     error.className = "stream-error";
     error.textContent = runtime.lastError;
-    body.append(header, meta, stats, actions, error);
+    body.append(header, meta, actions, error);
   } else {
-    body.append(header, meta, stats, actions);
+    body.append(header, meta, actions);
   }
   card.append(frame, body);
   return card;
+}
+
+function openOfferDetail(offer: OfferSummary): void {
+  state.openOfferDetailKey = offerKey(offer);
+  els.offerDetailContent.replaceChildren(offerDetail(offer));
+  els.offerDetailDialog.showModal();
+}
+
+function offerDetail(offer: OfferSummary): HTMLElement {
+  const key = offerKey(offer);
+  const runtime = offerRuntime(key);
+  const wrapper = document.createElement("div");
+  wrapper.className = "peer-detail";
+  wrapper.dataset.offerDetail = encodeOfferKey(key);
+
+  const summary = document.createElement("div");
+  summary.className = "peer-detail-grid";
+  summary.append(
+    detailMetric("Peer ID", offer.peerId),
+    detailMetric("Domain ID", offer.domainId),
+    detailMetric("Offer ID", offer.offerId),
+    detailMetric("Kind", offer.kind ?? "unknown"),
+    detailMetric("Payload", offer.payloadType ?? "unknown"),
+    detailMetric("Access", offer.accessModes.join(", ")),
+    detailMetric("Status", runtime.status, "status"),
+    detailMetric("Frames", runtime.frames.toString(), "frames"),
+    detailMetric("Rate", `${streamRate(runtime).toFixed(1)} fps`, "rate"),
+    detailMetric("Gets", runtime.snapshots.toString(), "gets"),
+    detailMetric("Total Bytes", formatBytes(runtime.totalBytes), "bytes"),
+    detailMetric(
+      "Last Payload",
+      runtime.lastPayloadBytes === undefined ? "None" : formatBytes(runtime.lastPayloadBytes),
+      "payload",
+    ),
+    detailMetric("Sequence", runtime.lastSequence ?? "None", "sequence"),
+    detailMetric(
+      "Last Frame",
+      runtime.lastFrameAt ? runtime.lastFrameAt.toLocaleTimeString() : "Never",
+      "last-frame",
+    ),
+  );
+  wrapper.append(summary);
+
+  if (runtime.lastError) {
+    const section = document.createElement("section");
+    section.className = "detail-section";
+    const heading = document.createElement("h3");
+    heading.textContent = "Last Error";
+    const message = document.createElement("pre");
+    message.textContent = runtime.lastError;
+    section.append(heading, message);
+    wrapper.append(section);
+  }
+
+  return wrapper;
 }
 
 function metric(label: string, value: string, key?: string): HTMLElement {
@@ -721,6 +996,38 @@ function updateStreamCardRuntime(key: string, runtime: OfferRuntimeState): void 
   );
 }
 
+function updateOpenOfferDetail(key: string): void {
+  if (state.openOfferDetailKey !== key || !els.offerDetailDialog.open) {
+    return;
+  }
+  const runtime = state.offerStates.get(key);
+  if (!runtime) {
+    return;
+  }
+  const container = els.offerDetailContent.querySelector<HTMLElement>(
+    `[data-offer-detail="${encodeOfferKey(key)}"]`,
+  );
+  if (!container) {
+    return;
+  }
+  setMetric(container, "status", runtime.status);
+  setMetric(container, "frames", runtime.frames.toString());
+  setMetric(container, "rate", `${streamRate(runtime).toFixed(1)} fps`);
+  setMetric(container, "gets", runtime.snapshots.toString());
+  setMetric(container, "bytes", formatBytes(runtime.totalBytes));
+  setMetric(
+    container,
+    "payload",
+    runtime.lastPayloadBytes === undefined ? "None" : formatBytes(runtime.lastPayloadBytes),
+  );
+  setMetric(container, "sequence", runtime.lastSequence ?? "None");
+  setMetric(
+    container,
+    "last-frame",
+    runtime.lastFrameAt ? runtime.lastFrameAt.toLocaleTimeString() : "Never",
+  );
+}
+
 function setMetric(card: HTMLElement, metricKey: string, value: string): void {
   const target = card.querySelector<HTMLElement>(`[data-metric="${metricKey}"] strong`);
   if (target) {
@@ -737,7 +1044,7 @@ function streamCardElement(key: string): HTMLElement | undefined {
 
 function actionButton(
   label: string,
-  action: "get" | "subscribe" | "stop-subscribe",
+  action: "get" | "subscribe" | "stop-subscribe" | "offer-detail",
   key: string,
   disabled: boolean,
 ): HTMLButtonElement {
@@ -771,21 +1078,6 @@ function renderEvents(): void {
     row.append(time, message, detail);
     els.eventLog.append(row);
   }
-}
-
-function appendEmptyRow(table: HTMLTableSectionElement, colSpan: number): void {
-  const row = document.createElement("tr");
-  const cell = document.createElement("td");
-  cell.colSpan = colSpan;
-  cell.textContent = "None";
-  row.append(cell);
-  table.append(row);
-}
-
-function appendTextCell(row: HTMLTableRowElement, value: string): void {
-  const cell = document.createElement("td");
-  cell.textContent = value;
-  row.append(cell);
 }
 
 function offerRuntime(key: string): OfferRuntimeState {
@@ -964,10 +1256,6 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function addressCount(addresses: readonly string[] | undefined): string {
-  return (addresses?.length ?? 0).toString();
-}
-
 function transportSummary(addresses: readonly string[]): string {
   const transports = new Set<string>();
   for (const address of addresses) {
@@ -982,6 +1270,23 @@ function transportSummary(addresses: readonly string[]): string {
     }
   }
   return transports.size === 0 ? "unknown" : Array.from(transports).join(", ");
+}
+
+function bootstrapAddressList(record: AukiBrowserBootstrapRecord | undefined): string[] {
+  if (!record) {
+    return [];
+  }
+  return uniqueStrings([
+    ...record.bootstrapAddresses,
+    ...record.directAddresses,
+    ...record.webrtcDirectAddresses,
+    ...record.relayServerAddresses,
+    ...record.relayAddresses,
+  ]);
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return Array.from(new Set(values));
 }
 
 function errorMessage(error: unknown): string {

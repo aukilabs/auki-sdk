@@ -57,11 +57,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .ok_or_else(|| CliError::new("preview sentinel requires one local domain"))?
         .to_owned();
     let mut node = builder.build(&now)?;
+    let peer_id = node.peer_id().to_string();
+    let generator_salt = generated_preview_salt(&peer_id, &domain_id, &config.offer_id);
     let preview_source = LatestPublishedByteSource::new();
     let preview_producer = start_generated_preview_source(
         preview_source.clone(),
         config.frame_limit,
         config.frame_interval,
+        generator_salt,
     );
     publish_preview_offer_with_latest_source(
         &mut node,
@@ -75,6 +78,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 "frame_height": FRAME_HEIGHT,
                 "frame_limit": config.frame_limit,
                 "frame_interval_ms": config.frame_interval.as_millis(),
+                "generator_salt": format!("{generator_salt:016x}"),
                 "peer_label": config.peer_label,
                 "domain_label": config.domain_label,
             })),
@@ -82,11 +86,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     println!("Auki P2P preview sentinel");
     println!("peer_label: {}", config.peer_label);
-    println!("peer_id: {}", node.peer_id());
+    println!("peer_id: {peer_id}");
     println!("domain_label: {}", config.domain_label);
     println!("domain_id: {domain_id}");
     println!("offer_id: {}", config.offer_id);
     println!("source: {}", config.source.as_str());
+    println!("generator_salt: {generator_salt:016x}");
     println!("waiting for browser-reachable listen addresses...");
 
     let bootstrap = node
@@ -585,8 +590,9 @@ fn start_generated_preview_source(
     source: LatestPublishedByteSource,
     frame_limit: Option<u64>,
     frame_interval: Duration,
+    generator_salt: u64,
 ) -> tokio::task::JoinHandle<()> {
-    source.publish(generated_preview_frame(0));
+    source.publish(generated_preview_frame(0, generator_salt));
     tokio::spawn(async move {
         let mut sequence = 1_u64;
         let mut remaining = frame_limit.map(|limit| limit.saturating_sub(1));
@@ -598,7 +604,7 @@ fn start_generated_preview_source(
             if !frame_interval.is_zero() {
                 tokio::time::sleep(frame_interval).await;
             }
-            if !source.publish(generated_preview_frame(sequence)) {
+            if !source.publish(generated_preview_frame(sequence, generator_salt)) {
                 return;
             }
             sequence = match sequence.checked_add(1) {
@@ -615,21 +621,37 @@ fn start_generated_preview_source(
     })
 }
 
-fn generated_preview_frame(sequence: u64) -> PublishedByteFrame {
-    let mut frame = PublishedByteFrame::new(generated_jpeg_frame(sequence)).with_sequence(sequence);
+fn generated_preview_frame(sequence: u64, generator_salt: u64) -> PublishedByteFrame {
+    let mut frame = PublishedByteFrame::new(generated_jpeg_frame(sequence, generator_salt))
+        .with_sequence(sequence);
     if let Ok(generated_at) = now_rfc3339() {
         frame = frame.with_generated_at(generated_at);
     }
     frame
 }
 
-fn generated_jpeg_frame(sequence: u64) -> Vec<u8> {
+fn generated_jpeg_frame(sequence: u64, generator_salt: u64) -> Vec<u8> {
     let mut rgb = Vec::with_capacity(FRAME_WIDTH as usize * FRAME_HEIGHT as usize * 3);
+    let red_offset = generator_salt & 0xff;
+    let green_offset = (generator_salt >> 16) & 0xff;
+    let blue_offset = (generator_salt >> 32) & 0xff;
+    let stripe_a = ((generator_salt >> 40) % u64::from(FRAME_WIDTH)).max(8);
+    let stripe_b = ((generator_salt >> 48) % u64::from(FRAME_WIDTH)).max(8);
     for y in 0..FRAME_HEIGHT {
         for x in 0..FRAME_WIDTH {
-            rgb.push(((u64::from(x) * 2 + sequence * 5) % 256) as u8);
-            rgb.push(((u64::from(y) * 3 + sequence * 7) % 256) as u8);
-            rgb.push(((u64::from(x) + u64::from(y) + sequence * 11) % 256) as u8);
+            let x = u64::from(x);
+            let y = u64::from(y);
+            let mut red = (x * 2 + sequence * 5 + red_offset) % 256;
+            let mut green = (y * 3 + sequence * 7 + green_offset) % 256;
+            let mut blue = (x + y + sequence * 11 + blue_offset) % 256;
+            if x % 37 == stripe_a % 37 || (x + y) % 53 == stripe_b % 53 {
+                red = (red + ((generator_salt >> 8) & 0xff)) % 256;
+                green = (green + ((generator_salt >> 24) & 0xff)) % 256;
+                blue = (blue + ((generator_salt >> 56) & 0xff)) % 256;
+            }
+            rgb.push(red as u8);
+            rgb.push(green as u8);
+            rgb.push(blue as u8);
         }
     }
 
@@ -638,6 +660,19 @@ fn generated_jpeg_frame(sequence: u64) -> Vec<u8> {
         .encode(&rgb, FRAME_WIDTH, FRAME_HEIGHT, ColorType::Rgb)
         .expect("generated RGB frame must encode as JPEG");
     jpeg
+}
+
+fn generated_preview_salt(peer_id: &str, domain_id: &str, offer_id: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for value in [peer_id, domain_id, offer_id] {
+        for byte in value.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn now_rfc3339() -> Result<String, time::error::Format> {
@@ -734,7 +769,7 @@ mod tests {
 
     #[test]
     fn generated_frame_is_jpeg() {
-        let frame = generated_jpeg_frame(12);
+        let frame = generated_jpeg_frame(12, 0x1234);
 
         assert!(frame.len() > 100);
         assert_eq!(&frame[..2], &[0xff, 0xd8]);
@@ -743,12 +778,24 @@ mod tests {
 
     #[test]
     fn generated_preview_frame_carries_source_sequence() {
-        let frame = generated_preview_frame(12);
+        let frame = generated_preview_frame(12, 0x1234);
 
         assert_eq!(frame.sequence, Some(12));
         assert!(frame.generated_at.is_some());
         assert!(frame.bytes.len() > 100);
         assert_eq!(&frame.bytes[..2], &[0xff, 0xd8]);
         assert_eq!(&frame.bytes[frame.bytes.len() - 2..], &[0xff, 0xd9]);
+    }
+
+    #[test]
+    fn generated_preview_salt_changes_frame_bytes() {
+        let salt_a = generated_preview_salt("peer-a", "domain-a", "sentinel-preview");
+        let salt_b = generated_preview_salt("peer-b", "domain-a", "sentinel-preview");
+
+        assert_ne!(salt_a, salt_b);
+        assert_ne!(
+            generated_jpeg_frame(12, salt_a),
+            generated_jpeg_frame(12, salt_b)
+        );
     }
 }

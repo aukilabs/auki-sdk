@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canRequestSnapshot,
+  mergeBootstrapRecords,
   offerLabel,
   parseBootstrapText,
 } from "./app";
@@ -52,6 +53,43 @@ describe("p2p preview browser helpers", () => {
     );
 
     expect(records.map((record) => record.peerId)).toEqual(["peer-a", "peer-b"]);
+  });
+
+  it("merges bootstrap records by peer id", () => {
+    const [first, second] = parseBootstrapText(
+      JSON.stringify([
+        {
+          peer_id: "peer-a",
+          direct_addresses: ["/memory/a"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+        {
+          peer_id: "peer-b",
+          direct_addresses: ["/memory/b"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+      ]),
+    );
+    const [replacement] = parseBootstrapText(
+      JSON.stringify([
+        {
+          peer_id: "peer-a",
+          direct_addresses: ["/memory/a2"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+      ]),
+    );
+
+    const merged = mergeBootstrapRecords([first, second], [replacement]);
+
+    expect(merged.map((record) => record.peerId)).toEqual(["peer-a", "peer-b"]);
+    expect(merged[0].directAddresses).toEqual(["/memory/a2"]);
   });
 
   it("selects the shared preview offer profile", () => {

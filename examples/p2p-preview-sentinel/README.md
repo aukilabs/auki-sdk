@@ -12,6 +12,11 @@ The example:
 - produces one generated JPEG preview stream and fans the latest frames out to Get and Subscribe
 - prints the browser bootstrap record and compact P2P state
 
+Generated frames are deterministic but salted by peer id, domain id, and offer
+id. For multi-Sentinel demos, run each process with a distinct identity, such as
+different `--seed-byte` and `--domain-nonce-byte` values, so their preview
+patterns are visually distinct.
+
 Run:
 
 ```sh

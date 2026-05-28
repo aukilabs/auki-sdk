@@ -10,128 +10,144 @@
       <header class="topbar">
         <div>
           <h1>Auki P2P Preview</h1>
-          <p id="connection-status">Idle</p>
         </div>
         <div class="actions">
-          <button id="connect-button" type="button">Connect</button>
+          <button id="diagnostics-button" type="button">Diagnostics</button>
+          <button id="connect-button" type="button">Start Peer</button>
           <button id="stop-button" type="button" disabled>Stop</button>
         </div>
       </header>
 
       <section class="workspace">
-        <aside class="panel bootstrap-panel">
-          <label for="bootstrap-input">Bootstrap JSON</label>
-          <textarea id="bootstrap-input" spellcheck="false"></textarea>
-          <div class="row">
-            <input id="bootstrap-file" type="file" accept="application/json,.json" />
-            <button id="clear-button" type="button">Clear</button>
-          </div>
-          <div class="summary-grid">
-            <div>
-              <span>Remote Peers</span>
-              <strong id="bootstrap-peer">None</strong>
-            </div>
-            <div>
-              <span>Direct</span>
-              <strong id="bootstrap-direct">0</strong>
-            </div>
-            <div>
-              <span>WebRTC</span>
-              <strong id="bootstrap-webrtc">0</strong>
-            </div>
-            <div>
-              <span>Relay Servers</span>
-              <strong id="bootstrap-relay">0</strong>
-            </div>
-          </div>
-        </aside>
-
         <section class="panel streams-panel">
           <div class="section-heading">
-            <h2>Streams</h2>
+            <h2>Offers</h2>
             <span id="stream-summary">No offers</span>
           </div>
           <div id="streams-grid" class="streams-grid"></div>
         </section>
 
-        <section class="panel state-panel">
-          <div class="metrics">
-            <div>
-              <span>Snapshots</span>
-              <strong id="snapshots-received">0</strong>
-            </div>
-            <div>
-              <span>Frames</span>
-              <strong id="frames-received">0</strong>
-            </div>
-            <div>
-              <span>Rate</span>
-              <strong id="stream-rate">0.0 fps</strong>
-            </div>
-            <div>
-              <span>Total Bytes</span>
-              <strong id="total-bytes">0 B</strong>
-            </div>
-            <div>
-              <span>Last Payload</span>
-              <strong id="last-payload-bytes">None</strong>
-            </div>
-            <div>
-              <span>Sequence</span>
-              <strong id="last-sequence">None</strong>
-            </div>
-            <div>
-              <span>Last Frame</span>
-              <strong id="last-frame-at">Never</strong>
-            </div>
-            <div>
-              <span>Active Streams</span>
-              <strong id="selected-offer">None</strong>
-            </div>
-          </div>
-
-          <div class="state-grid">
-            <div>
-              <span>Local Peer</span>
-              <strong id="local-peer">Not started</strong>
-            </div>
-            <div>
-              <span>Peers</span>
-              <strong id="peer-count">0</strong>
-            </div>
-            <div>
-              <span>Offers</span>
-              <strong id="offer-count">0</strong>
-            </div>
-            <div>
-              <span>Error</span>
-              <strong id="last-error">None</strong>
-            </div>
-          </div>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Peer</th>
-                  <th>Connected</th>
-                  <th>Addresses</th>
-                  <th>Transports</th>
-                </tr>
-              </thead>
-              <tbody id="peers-table"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel events-panel">
+        <aside class="panel peers-panel">
           <div class="section-heading">
-            <h2>Events</h2>
+            <h2>Peers</h2>
+            <button id="add-peer-button" type="button">Add</button>
           </div>
-          <div id="event-log" class="event-log"></div>
-        </section>
+          <div id="peer-list" class="peer-list"></div>
+        </aside>
       </section>
     </main>
+
+    <dialog id="diagnostics-dialog" class="modal">
+      <article class="modal-card diagnostics-card">
+        <header class="modal-heading">
+          <h2>Diagnostics</h2>
+          <button id="diagnostics-close" type="button" aria-label="Close">Close</button>
+        </header>
+
+        <div class="diagnostics-content">
+          <section>
+            <div class="metrics">
+              <div>
+                <span>Snapshots</span>
+                <strong id="snapshots-received">0</strong>
+              </div>
+              <div>
+                <span>Frames</span>
+                <strong id="frames-received">0</strong>
+              </div>
+              <div>
+                <span>Rate</span>
+                <strong id="stream-rate">0.0 fps</strong>
+              </div>
+              <div>
+                <span>Total Bytes</span>
+                <strong id="total-bytes">0 B</strong>
+              </div>
+              <div>
+                <span>Last Payload</span>
+                <strong id="last-payload-bytes">None</strong>
+              </div>
+              <div>
+                <span>Sequence</span>
+                <strong id="last-sequence">None</strong>
+              </div>
+              <div>
+                <span>Last Frame</span>
+                <strong id="last-frame-at">Never</strong>
+              </div>
+              <div>
+                <span>Active Streams</span>
+                <strong id="selected-offer">0</strong>
+              </div>
+            </div>
+
+            <div class="state-grid">
+              <div>
+                <span>Local Peer</span>
+                <strong id="local-peer">Not started</strong>
+              </div>
+              <div>
+                <span>Peers</span>
+                <strong id="peer-count">0</strong>
+              </div>
+              <div>
+                <span>Offers</span>
+                <strong id="offer-count">0</strong>
+              </div>
+              <div>
+                <span>Error</span>
+                <strong id="last-error">None</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="diagnostics-events">
+            <div class="section-heading">
+              <h2>Events</h2>
+            </div>
+            <div id="event-log" class="event-log"></div>
+          </section>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="add-peer-dialog" class="modal">
+      <form class="modal-card" method="dialog">
+        <header class="modal-heading">
+          <h2>Add Peer</h2>
+          <button id="add-peer-cancel" type="button" aria-label="Close">Close</button>
+        </header>
+        <label for="add-peer-input">Bootstrap JSON</label>
+        <textarea id="add-peer-input" spellcheck="false"></textarea>
+        <div class="row">
+          <input id="add-peer-file" type="file" accept="application/json,.json" />
+          <button id="add-peer-clear" type="button">Clear</button>
+        </div>
+        <div class="modal-actions">
+          <button id="add-peer-submit" type="button">Add Peer</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="peer-detail-dialog" class="modal">
+      <article class="modal-card peer-detail-card">
+        <header class="modal-heading">
+          <h2>Peer</h2>
+          <button id="peer-detail-close" type="button" aria-label="Close">Close</button>
+        </header>
+        <div id="peer-detail-content" class="peer-detail-content"></div>
+      </article>
+    </dialog>
+
+    <dialog id="offer-detail-dialog" class="modal">
+      <article class="modal-card peer-detail-card">
+        <header class="modal-heading">
+          <h2>Offer</h2>
+          <button id="offer-detail-close" type="button" aria-label="Close">Close</button>
+        </header>
+        <div id="offer-detail-content" class="peer-detail-content"></div>
+      </article>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

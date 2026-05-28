@@ -8,6 +8,20 @@ export function parseBootstrapText(text: string): AukiBrowserBootstrapRecord[] {
   return parseBootstrapRecords(JSON.parse(text));
 }
 
+export function mergeBootstrapRecords(
+  current: AukiBrowserBootstrapRecord[],
+  incoming: AukiBrowserBootstrapRecord[],
+): AukiBrowserBootstrapRecord[] {
+  const byPeer = new Map<string, AukiBrowserBootstrapRecord>();
+  for (const record of current) {
+    byPeer.set(record.peerId, record);
+  }
+  for (const record of incoming) {
+    byPeer.set(record.peerId, record);
+  }
+  return Array.from(byPeer.values());
+}
+
 export function offerLabel(offer: OfferSummary | undefined): string {
   if (!offer) {
     return "None";

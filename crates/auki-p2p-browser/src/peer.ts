@@ -55,6 +55,7 @@ import {
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   type BrowserTransport,
+  type BrowserConnectionPath,
   type BrowserProtocolStream,
   createBrowserLibp2pTransport,
   supportedBrowserTransports,
@@ -64,6 +65,7 @@ export type PeerSummary = {
   peerId: string;
   connected: boolean;
   dialAddresses: string[];
+  connectionPaths: BrowserConnectionPath[];
 };
 
 export type {
@@ -143,6 +145,7 @@ export interface AukiBrowserPeer {
   multiaddrs(): string[];
   dial(address: string): Promise<void>;
   connectBootstrap(records: unknown | unknown[]): Promise<void>;
+  switchPeerAddress(peerId: string, address: string): Promise<void>;
   listPeers(): PeerSummary[];
   listOffers(peerId?: string): Promise<OfferSummary[]>;
   get(request: GetRequest): Promise<SpatialMessage>;
@@ -239,12 +242,41 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         peerId: record.peerId,
         connected: true,
         dialAddresses,
+        connectionPaths: this.connectionPaths(record.peerId),
       });
     }
   }
 
+  async switchPeerAddress(peerId: string, address: string): Promise<void> {
+    await this.ensureStarted();
+    const peer = this.requirePeer(peerId);
+    if (!peer.dialAddresses.includes(address)) {
+      throw new Error(`Address is not known for peer ${peerId}`);
+    }
+
+    const dialAddresses = uniqueStrings([
+      address,
+      ...peer.dialAddresses.filter((candidate) => candidate !== address),
+    ]);
+
+    if (!this.connectionPaths(peerId).some((path) => path.remoteAddress === address)) {
+      await this.transport.dial([address], { force: true });
+    }
+    await this.transport.closePeerConnections?.(peerId, [address]);
+    this.remoteOffers.delete(peerId);
+    this.peers.set(peerId, {
+      peerId,
+      connected: true,
+      dialAddresses,
+      connectionPaths: this.connectionPaths(peerId),
+    });
+  }
+
   listPeers(): PeerSummary[] {
-    return Array.from(this.peers.values());
+    return Array.from(this.peers.values()).map((peer) => ({
+      ...peer,
+      connectionPaths: this.connectionPaths(peer.peerId),
+    }));
   }
 
   async listOffers(peerId?: string): Promise<OfferSummary[]> {
@@ -349,8 +381,9 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       return message;
     } finally {
       if (stream) {
-        await closeStreamQuietly(stream);
-        this.emitTrace({ ...base, phase: "stream_closed" });
+        void closeStreamQuietly(stream).finally(() => {
+          this.emitTrace({ ...base, phase: "stream_closed" });
+        });
       }
     }
   }
@@ -525,7 +558,12 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       peerId: record.peerId,
       connected: false,
       dialAddresses: preferredDialAddresses(record),
+      connectionPaths: [],
     });
+  }
+
+  private connectionPaths(peerId: string): BrowserConnectionPath[] {
+    return this.transport.connectionPaths?.(peerId) ?? [];
   }
 
   private async exchangeLifecycle(record: AukiBrowserBootstrapRecord): Promise<void> {

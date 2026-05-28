@@ -173,7 +173,14 @@ describe("preview offer profile", () => {
     const requested: unknown[] = [];
     const peer = {
       peerId: "browser-peer",
-      listPeers: () => [{ peerId: "native-peer", connected: true, dialAddresses: ["/memory"] }],
+      listPeers: () => [
+        {
+          peerId: "native-peer",
+          connected: true,
+          dialAddresses: ["/memory"],
+          connectionPaths: [],
+        },
+      ],
       listOffers: async () => [offer],
       get: async (request: unknown) => {
         requested.push(request);
@@ -217,7 +224,12 @@ describe("preview offer profile", () => {
     ]);
     await expect(session.refreshOffers()).resolves.toEqual([offer]);
     expect(session.peers).toEqual([
-      { peerId: "native-peer", connected: true, dialAddresses: ["/memory"] },
+      {
+        peerId: "native-peer",
+        connected: true,
+        dialAddresses: ["/memory"],
+        connectionPaths: [],
+      },
     ]);
     expect(session.bootstrap.peerId).toBe("native-peer");
     expect(session.bootstraps.map((record) => record.peerId)).toEqual(["native-peer"]);

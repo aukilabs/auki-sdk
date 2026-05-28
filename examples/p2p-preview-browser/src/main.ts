@@ -58,6 +58,10 @@ type AppState = {
   status: string;
   lastError?: string;
   busy: boolean;
+  switchingAddress?: {
+    peerId: string;
+    address: string;
+  };
   nextSubscriptionToken: number;
 };
 
@@ -71,6 +75,7 @@ const state: AppState = {
   events: [],
   status: "Idle",
   busy: false,
+  switchingAddress: undefined,
   nextSubscriptionToken: 0,
 };
 
@@ -143,6 +148,24 @@ els.addPeerFile.addEventListener("change", () => {
 });
 els.peerDetailClose.addEventListener("click", () => {
   els.peerDetailDialog.close();
+});
+els.peerDetailContent.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+  const handled = handlePeerDetailAction(event.target);
+  if (handled) {
+    event.preventDefault();
+  }
+});
+els.peerDetailContent.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const handled = handlePeerDetailAction(event.target);
+  if (handled) {
+    event.preventDefault();
+  }
 });
 els.offerDetailClose.addEventListener("click", () => {
   els.offerDetailDialog.close();
@@ -231,6 +254,25 @@ function handlePeerAction(target: EventTarget | null): boolean {
   return true;
 }
 
+function handlePeerDetailAction(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const button = target.closest<HTMLButtonElement>(
+    'button[data-action="switch-address"][data-peer-id][data-address]',
+  );
+  if (!button || button.disabled) {
+    return false;
+  }
+  const peerId = button.dataset.peerId;
+  const address = decodeAddress(button.dataset.address);
+  if (!peerId || !address) {
+    return false;
+  }
+  void switchPeerAddress(peerId, address);
+  return true;
+}
+
 render();
 
 async function start(): Promise<void> {
@@ -258,6 +300,45 @@ async function addPeersFromInput(): Promise<void> {
     els.addPeerDialog.close();
     clearAddPeerInput();
   });
+}
+
+async function switchPeerAddress(peerId: string, address: string): Promise<void> {
+  if (state.switchingAddress || state.busy) {
+    return;
+  }
+
+  state.busy = true;
+  state.switchingAddress = { peerId, address };
+  state.status = "Switching address";
+  state.lastError = undefined;
+  recordEvent("info", "Peer address switching", `${shortId(peerId, 12)} ${address}`);
+  render();
+  refreshOpenPeerDetail(peerId);
+
+  try {
+    const peer = state.peer;
+    if (!peer) {
+      throw new Error("Start peer before switching peer address");
+    }
+    if (hasActivePeerSubscription(peerId)) {
+      throw new Error("Stop active streams for this peer before switching address");
+    }
+    await peer.switchPeerAddress(peerId, address);
+    await refreshPeerData();
+    state.status = "Address switched";
+    recordEvent("info", "Peer address switched", `${shortId(peerId, 12)} ${address}`);
+    refreshOpenPeerDetail(peerId);
+  } catch (error) {
+    const message = errorMessage(error);
+    state.lastError = message;
+    state.status = "Error";
+    recordEvent("error", "Switch address failed", `${shortId(peerId, 12)} ${message}`);
+  } finally {
+    state.busy = false;
+    state.switchingAddress = undefined;
+    render();
+    refreshOpenPeerDetail(peerId);
+  }
 }
 
 function clearAddPeerInput(): void {
@@ -664,7 +745,7 @@ function remotePeerItem(peer: PeerSummary): HTMLElement {
   return peerListItem(
     peer.peerId,
     status,
-    `${offerCount} offer(s)`,
+    `${offerCount} offer(s) | active ${connectionPathSummary(peer.connectionPaths)}`,
     peer.dialAddresses,
     peer.connected,
   );
@@ -710,6 +791,33 @@ function openPeerDetail(peerId: string): void {
   els.peerDetailDialog.showModal();
 }
 
+function refreshOpenPeerDetail(peerId: string): void {
+  if (!els.peerDetailDialog.open) {
+    return;
+  }
+  const remotePeer = state.peers.find((peer) => peer.peerId === peerId);
+  const isLocal = state.peer?.peerId === peerId;
+  if (!remotePeer && !isLocal) {
+    els.peerDetailDialog.close();
+    return;
+  }
+  els.peerDetailContent.replaceChildren(peerDetail(peerId, remotePeer, isLocal));
+}
+
+function hasActivePeerSubscription(peerId: string): boolean {
+  return state.offers.some((offer) => {
+    if (offer.peerId !== peerId) {
+      return false;
+    }
+    const runtime = state.offerStates.get(offerKey(offer));
+    return Boolean(
+      runtime?.subscription ||
+        runtime?.subscribing ||
+        runtime?.stopping,
+    );
+  });
+}
+
 function peerDetail(
   peerId: string,
   peer: PeerSummary | undefined,
@@ -721,6 +829,7 @@ function peerDetail(
   const bootstrap = state.bootstraps.find((record) => record.peerId === peerId);
   const addresses = isLocal ? state.peer?.multiaddrs() ?? [] : peer?.dialAddresses ?? [];
   const bootstrapAddresses = bootstrapAddressList(bootstrap);
+  const connectionPaths = isLocal ? [] : peer?.connectionPaths ?? [];
 
   const summary = document.createElement("div");
   summary.className = "peer-detail-grid";
@@ -728,16 +837,17 @@ function peerDetail(
     detailMetric("Peer ID", peerId),
     detailMetric("Role", isLocal ? "Browser" : "Remote"),
     detailMetric("Connected", isLocal || peer?.connected ? "Yes" : "No"),
+    detailMetric("Active Transport", connectionPathSummary(connectionPaths)),
+    detailMetric("Connection Paths", connectionPaths.length.toString()),
     detailMetric("Dial Addresses", addresses.length.toString()),
-    detailMetric("Transports", transportSummary(addresses)),
+    detailMetric("Dialable Transports", transportSummary(addresses)),
     detailMetric("Offers", offers.length.toString()),
   );
 
   wrapper.append(summary);
-  wrapper.append(addressSection("Dial Addresses", addresses));
-  if (bootstrapAddresses.length > 0) {
-    wrapper.append(addressSection("Bootstrap Addresses", bootstrapAddresses));
-  }
+  wrapper.append(
+    addressInventorySection(peerId, isLocal, addresses, bootstrapAddresses, connectionPaths),
+  );
   wrapper.append(offerSection(offers));
   return wrapper;
 }
@@ -755,15 +865,132 @@ function detailMetric(label: string, value: string, key?: string): HTMLElement {
   return item;
 }
 
-function addressSection(title: string, addresses: string[]): HTMLElement {
+function addressInventorySection(
+  peerId: string,
+  isLocal: boolean,
+  dialAddresses: string[],
+  bootstrapAddresses: string[],
+  paths: PeerSummary["connectionPaths"],
+): HTMLElement {
   const section = document.createElement("section");
   section.className = "detail-section";
   const heading = document.createElement("h3");
-  heading.textContent = title;
-  const list = document.createElement("pre");
-  list.textContent = addresses.length === 0 ? "None" : addresses.join("\n");
+  heading.textContent = "Addresses";
+  const list = document.createElement("div");
+  list.className = "address-inventory";
+  const entries = addressInventory(dialAddresses, bootstrapAddresses, paths);
+  if (entries.length === 0) {
+    list.textContent = "None";
+  } else {
+    const activePathCount = paths.length;
+    for (const entry of entries) {
+      list.append(
+        addressInventoryRow(peerId, entry, !isLocal, activePathCount),
+      );
+    }
+  }
   section.append(heading, list);
   return section;
+}
+
+type AddressInventoryEntry = {
+  address: string;
+  roles: Set<"active" | "dial" | "bootstrap">;
+  path?: PeerSummary["connectionPaths"][number];
+};
+
+function addressInventory(
+  dialAddresses: string[],
+  bootstrapAddresses: string[],
+  paths: PeerSummary["connectionPaths"],
+): AddressInventoryEntry[] {
+  const byAddress = new Map<string, AddressInventoryEntry>();
+  const upsert = (address: string): AddressInventoryEntry => {
+    let entry = byAddress.get(address);
+    if (!entry) {
+      entry = { address, roles: new Set() };
+      byAddress.set(address, entry);
+    }
+    return entry;
+  };
+
+  for (const path of paths) {
+    const entry = upsert(path.remoteAddress);
+    entry.roles.add("active");
+    entry.path = path;
+  }
+  for (const address of dialAddresses) {
+    upsert(address).roles.add("dial");
+  }
+  for (const address of bootstrapAddresses) {
+    upsert(address).roles.add("bootstrap");
+  }
+
+  return Array.from(byAddress.values());
+}
+
+function addressInventoryRow(
+  peerId: string,
+  entry: AddressInventoryEntry,
+  canSwitch: boolean,
+  activePathCount: number,
+): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "address-row";
+
+  const flags = document.createElement("div");
+  flags.className = "address-flags";
+  for (const role of entry.roles) {
+    const flag = document.createElement("span");
+    flag.className = `address-flag ${role}`;
+    flag.textContent = role;
+    flags.append(flag);
+  }
+
+  const content = document.createElement("div");
+  content.className = "address-content";
+  const meta = document.createElement("span");
+  meta.textContent = entry.path
+    ? formatConnectionPathMeta(entry.path)
+    : `dialable | ${transportSummary([entry.address])}`;
+  const address = document.createElement("code");
+  address.textContent = entry.address;
+  content.append(meta, address);
+
+  const action = document.createElement("div");
+  action.className = "address-action";
+  if (canSwitch && entry.roles.has("dial")) {
+    const switching = state.switchingAddress;
+    const isSwitching =
+      switching?.peerId === peerId && switching.address === entry.address;
+    const isActive = entry.roles.has("active");
+    const isOnlyActive = isActive && activePathCount === 1;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.action = "switch-address";
+    button.dataset.peerId = peerId;
+    button.dataset.address = encodeAddress(entry.address);
+    button.disabled =
+      isSwitching ||
+      (state.busy && !isSwitching) ||
+      (Boolean(state.switchingAddress) && !isSwitching) ||
+      isOnlyActive;
+    if (isSwitching) {
+      button.classList.add("loading");
+      button.setAttribute("aria-busy", "true");
+    }
+    button.textContent = isSwitching
+      ? "Switching"
+      : isOnlyActive
+        ? "Using"
+        : isActive
+          ? "Use only"
+          : "Use";
+    action.append(button);
+  }
+
+  row.append(flags, content, action);
+  return row;
 }
 
 function offerSection(offers: OfferSummary[]): HTMLElement {
@@ -1248,6 +1475,21 @@ function encodeOfferKey(key: string): string {
   return encodeURIComponent(key);
 }
 
+function encodeAddress(address: string): string {
+  return encodeURIComponent(address);
+}
+
+function decodeAddress(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function decodeOfferKey(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -1305,6 +1547,28 @@ function transportSummary(addresses: readonly string[]): string {
     }
   }
   return transports.size === 0 ? "unknown" : Array.from(transports).join(", ");
+}
+
+function connectionPathSummary(paths: PeerSummary["connectionPaths"]): string {
+  if (paths.length === 0) {
+    return "unknown";
+  }
+  return paths
+    .map((path) => {
+      const relay = path.relayInvolved ? "via relay" : "direct";
+      return `${formatTransportName(path.transport)} ${relay}`;
+    })
+    .join(", ");
+}
+
+function formatConnectionPathMeta(path: PeerSummary["connectionPaths"][number]): string {
+  const relay = path.relayInvolved ? "via relay" : "direct";
+  const rtt = path.rttMs === undefined ? "" : ` | rtt=${Math.round(path.rttMs)}ms`;
+  return `${path.direction} | ${formatTransportName(path.transport)} | ${relay} | ${path.status}${rtt}`;
+}
+
+function formatTransportName(value: string): string {
+  return value.replaceAll("_", "-");
 }
 
 function bootstrapAddressList(record: AukiBrowserBootstrapRecord | undefined): string[] {

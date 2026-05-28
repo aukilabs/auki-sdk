@@ -482,6 +482,89 @@ input[type="file"] {
   overflow-wrap: anywhere;
 }
 
+.address-inventory {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.address-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.address-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.address-flag {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.address-flag.active {
+  border-color: rgba(207, 255, 176, 0.48);
+  color: var(--success);
+  background: rgba(207, 255, 176, 0.08);
+}
+
+.address-flag.dial,
+.address-flag.bootstrap {
+  border-color: rgba(253, 158, 47, 0.36);
+  color: var(--accent);
+  background: rgba(253, 158, 47, 0.06);
+}
+
+.address-content {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.address-content span {
+  color: var(--muted-strong);
+  font-size: 12px;
+}
+
+.address-content code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.address-action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.address-action button {
+  min-height: 31px;
+  padding: 0 10px;
+  border-color: rgba(253, 158, 47, 0.48);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.address-action button:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
 .streams-panel {
   grid-area: streams;
   padding: 18px;
@@ -892,6 +975,14 @@ tr.selected td {
   }
 
   .row-actions {
+    justify-content: flex-start;
+  }
+
+  .address-row {
+    grid-template-columns: 1fr;
+  }
+
+  .address-action {
     justify-content: flex-start;
   }
 

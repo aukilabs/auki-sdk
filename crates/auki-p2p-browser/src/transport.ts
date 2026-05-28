@@ -15,12 +15,35 @@ export type BrowserTransportName =
   | "webrtc_direct"
   | "circuit_relay_v2";
 
+export type BrowserConnectionDirection = "dialer" | "listener";
+
+export type BrowserConnectionTransport =
+  | "websocket"
+  | "webrtc"
+  | "webrtc_direct"
+  | "webtransport"
+  | "tcp"
+  | "quic"
+  | "unknown";
+
+export type BrowserConnectionPath = {
+  direction: BrowserConnectionDirection;
+  transport: BrowserConnectionTransport;
+  relayInvolved: boolean;
+  remoteAddress: string;
+  status: string;
+  direct: boolean;
+  rttMs?: number;
+};
+
 export type BrowserTransport = {
   peerId: string;
   start(): Promise<void>;
   stop(): Promise<void>;
   multiaddrs(): string[];
-  dial(addresses: string[]): Promise<void>;
+  dial(addresses: string[], options?: { force?: boolean }): Promise<void>;
+  closePeerConnections?(peerId: string, keepAddresses?: string[]): Promise<void>;
+  connectionPaths?(peerId: string): BrowserConnectionPath[];
   registerProtocolHandler(
     protocol: string,
     handler: BrowserProtocolHandler,
@@ -175,11 +198,52 @@ class Libp2pBrowserTransport implements BrowserTransport {
     ];
   }
 
-  async dial(addresses: string[]): Promise<void> {
+  async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {
     if (addresses.length === 0) {
       throw new Error("No bootstrap addresses available to dial");
     }
-    await this.node.dial(addresses.map((address) => multiaddr(address)));
+    await this.node.dial(addresses.map((address) => multiaddr(address)), {
+      force: options.force ?? false,
+    });
+  }
+
+  async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
+    const peer = peerIdFromString(peerId);
+    const keep = new Set(keepAddresses);
+    const retained = new Set<string>();
+    await Promise.all(
+      this.node
+        .getConnections(peer)
+        .filter((connection) => {
+          const address = connection.remoteAddr.toString();
+          if (!keep.has(address)) {
+            return true;
+          }
+          if (retained.has(address)) {
+            return true;
+          }
+          retained.add(address);
+          return false;
+        })
+        .map((connection) => connection.close().catch(() => undefined)),
+    );
+  }
+
+  connectionPaths(peerId: string): BrowserConnectionPath[] {
+    const peer = peerIdFromString(peerId);
+    return this.node.getConnections(peer).map((connection) => {
+      const remoteAddress = connection.remoteAddr.toString();
+      const rtt = connection.rtt;
+      return {
+        direction: connection.direction === "outbound" ? "dialer" : "listener",
+        transport: classifyTransport(remoteAddress),
+        relayInvolved: remoteAddress.includes("/p2p-circuit"),
+        remoteAddress,
+        status: connection.status,
+        direct: connection.direct,
+        rttMs: typeof rtt === "number" ? rtt : undefined,
+      };
+    });
   }
 
   async registerProtocolHandler(
@@ -211,7 +275,10 @@ class Libp2pBrowserTransport implements BrowserTransport {
       throw new Error(`No bootstrap addresses available for ${protocol}`);
     }
     const peer = peerIdFromString(peerId);
-    const existing = this.node.getConnections(peer).at(0);
+    const existing = connectionForAddresses(
+      this.node.getConnections(peer),
+      addresses,
+    );
     const connection =
       existing ??
       (await this.node.dial(addresses.map((address) => multiaddr(address)), {
@@ -219,4 +286,38 @@ class Libp2pBrowserTransport implements BrowserTransport {
       }));
     return connection.newStream(protocol, { runOnLimitedConnection: true });
   }
+}
+
+function connectionForAddresses<
+  T extends {
+    remoteAddr: { toString(): string };
+  },
+>(connections: T[], addresses: string[]): T | undefined {
+  const preferred = new Set(addresses);
+  return (
+    connections.find((connection) => preferred.has(connection.remoteAddr.toString())) ??
+    connections.at(0)
+  );
+}
+
+function classifyTransport(address: string): BrowserConnectionTransport {
+  if (address.includes("/webrtc-direct")) {
+    return "webrtc_direct";
+  }
+  if (address.includes("/webrtc")) {
+    return "webrtc";
+  }
+  if (address.includes("/webtransport")) {
+    return "webtransport";
+  }
+  if (address.includes("/ws") || address.includes("/wss")) {
+    return "websocket";
+  }
+  if (address.includes("/quic")) {
+    return "quic";
+  }
+  if (address.includes("/tcp/")) {
+    return "tcp";
+  }
+  return "unknown";
 }

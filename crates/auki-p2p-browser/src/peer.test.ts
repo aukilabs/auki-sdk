@@ -25,7 +25,11 @@ import {
   validateSubscribeEndForOffer,
   type JsonObject,
 } from "./protocol.js";
-import type { BrowserProtocolStream, BrowserTransport } from "./transport.js";
+import type {
+  BrowserConnectionPath,
+  BrowserProtocolStream,
+  BrowserTransport,
+} from "./transport.js";
 
 describe("AukiBrowserPeer shell", () => {
   it("connects bootstrap records through an injected transport", async () => {
@@ -46,11 +50,13 @@ describe("AukiBrowserPeer shell", () => {
         peerId: "native-peer",
         connected: false,
         dialAddresses: ["/memory/native-direct"],
+        connectionPaths: [],
       },
       {
         peerId: "relay-peer",
         connected: false,
         dialAddresses: ["/memory/relay"],
+        connectionPaths: [],
       },
     ]);
 
@@ -66,11 +72,13 @@ describe("AukiBrowserPeer shell", () => {
         peerId: "native-peer",
         connected: true,
         dialAddresses: ["/memory/native-direct"],
+        connectionPaths: [],
       },
       {
         peerId: "relay-peer",
         connected: true,
         dialAddresses: ["/memory/relay"],
+        connectionPaths: [],
       },
     ]);
   });
@@ -84,6 +92,63 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.started).toBe(1);
     expect(transport.stopped).toBe(1);
+  });
+
+  it("switches a connected peer to a selected dial address", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    const record = {
+      peer_id: "native-peer",
+      direct_addresses: ["/memory/websocket"],
+      webrtc_direct_addresses: ["/memory/webrtc-direct"],
+      relay_addresses: [],
+      relay_server_addresses: [],
+      bootstrap_addresses: ["/memory/websocket", "/memory/webrtc-direct"],
+    };
+
+    await peer.connectBootstrap(record);
+    await peer.switchPeerAddress("native-peer", "/memory/websocket");
+
+    expect(transport.forcedDials).toEqual([["/memory/websocket"]]);
+    expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: ["/memory/websocket"] },
+    ]);
+    expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/websocket");
+  });
+
+  it("does not force dial when selected peer address is already active", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.connectBootstrap(bootstrapRecord("native-peer", "/memory/websocket"));
+    transport.setConnectionPaths("native-peer", [
+      memoryConnectionPath("/memory/websocket"),
+    ]);
+
+    await peer.switchPeerAddress("native-peer", "/memory/websocket");
+
+    expect(transport.forcedDials).toEqual([]);
+    expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: ["/memory/websocket"] },
+    ]);
+  });
+
+  it("rejects switching to an unknown peer address", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.connectBootstrap(bootstrapRecord("native-peer", "/memory/websocket"));
+
+    await expect(peer.switchPeerAddress("native-peer", "/memory/other")).rejects.toThrow(
+      "Address is not known",
+    );
   });
 
   it("exchanges lifecycle handshakes when the browser has a seed", async () => {
@@ -435,6 +500,52 @@ describe("AukiBrowserPeer shell", () => {
     ]);
   });
 
+  it("returns Get response before slow stream close finishes", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const getFixture = await fixtureJson("v1_get.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const response = getFixture.positive.success_response.object as JsonObject;
+    const inputs = getFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    let releaseGetClose: (() => void) | undefined;
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(GET_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, response, DEFAULT_FRAME_BODY_LIMIT);
+      if (stream instanceof QueueStream) {
+        stream.delayCloseUntil(
+          new Promise<void>((resolve) => {
+            releaseGetClose = resolve;
+          }),
+        );
+      }
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    const result = await peer.get({
+      peerId: "native-peer",
+      domainId: inputs.domain_id as string,
+      offerId: inputs.offer_id as string,
+      params: { frame: "latest" },
+      acceptedPayloadTypes: [inputs.selected_payload_type as string],
+      maxPayloadBytes: inputs.max_payload_bytes as number,
+    });
+
+    expect(result).toEqual(response.message);
+    releaseGetClose?.();
+  });
+
   it("retries a reset Get stream before returning a spatial message", async () => {
     const offerFixture = await fixtureJson("v1_offer_catalogs.json");
     const getFixture = await fixtureJson("v1_get.json");
@@ -490,20 +601,26 @@ describe("AukiBrowserPeer shell", () => {
       GET_PROTOCOL_ID,
       GET_PROTOCOL_ID,
     ]);
-    expect(traces.map((event) => `${event.operation}:${event.phase}:${event.attempt}`)).toEqual([
+    const phases = traces.map((event) => `${event.operation}:${event.phase}:${event.attempt}`);
+    expect(phases.slice(0, 3)).toEqual([
       "get:dialing:1",
       "get:opened:1",
       "get:request_sent:1",
-      "get:stream_closed:1",
-      "get:retrying:1",
-      "get:dialing:2",
-      "get:opened:2",
-      "get:request_sent:2",
-      "get:response_received:2",
-      "get:completed:2",
-      "get:stream_closed:2",
     ]);
-    expect(traces[4]).toMatchObject({
+    expect(phases).toEqual(
+      expect.arrayContaining([
+        "get:stream_closed:1",
+        "get:retrying:1",
+        "get:dialing:2",
+        "get:opened:2",
+        "get:request_sent:2",
+        "get:response_received:2",
+        "get:completed:2",
+        "get:stream_closed:2",
+      ]),
+    );
+    expect(phases.indexOf("get:retrying:1")).toBeLessThan(phases.indexOf("get:dialing:2"));
+    expect(traces.find((event) => event.phase === "retrying")).toMatchObject({
       error: "The stream has been reset",
       retryable: true,
       nextAttempt: 2,
@@ -856,6 +973,17 @@ function bootstrapRecord(peerId: string, address: string): unknown {
   };
 }
 
+function memoryConnectionPath(address: string): BrowserConnectionPath {
+  return {
+    direction: "dialer",
+    transport: "unknown",
+    relayInvolved: false,
+    remoteAddress: address,
+    status: "open",
+    direct: true,
+  };
+}
+
 async function protocolWasmInput(): Promise<{ module_or_path: Uint8Array }> {
   return {
     module_or_path: await readFile(
@@ -874,7 +1002,10 @@ async function fixtureJson(name: string): Promise<JsonObject> {
 
 class MemoryTransport implements BrowserTransport {
   readonly dials: string[][] = [];
+  readonly forcedDials: string[][] = [];
+  readonly closedPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly protocolDials: Array<{ peerId: string; addresses: string[]; protocol: string }> = [];
+  private readonly paths = new Map<string, BrowserConnectionPath[]>();
   private readonly protocolHandlers = new Map<
     string,
     (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
@@ -903,8 +1034,23 @@ class MemoryTransport implements BrowserTransport {
     return this.addresses.slice();
   }
 
-  async dial(addresses: string[]): Promise<void> {
+  async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {
     this.dials.push(addresses.slice());
+    if (options.force) {
+      this.forcedDials.push(addresses.slice());
+    }
+  }
+
+  async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
+    this.closedPeers.push({ peerId, keepAddresses: keepAddresses.slice() });
+  }
+
+  setConnectionPaths(peerId: string, paths: BrowserConnectionPath[]): void {
+    this.paths.set(peerId, paths.slice());
+  }
+
+  connectionPaths(peerId: string): BrowserConnectionPath[] {
+    return this.paths.get(peerId)?.slice() ?? [];
   }
 
   handleProtocol(
@@ -967,6 +1113,7 @@ class QueueStream implements BrowserProtocolStream {
   private peer?: QueueStream;
   private readonly chunks: Uint8Array[] = [];
   private readonly waiters: Array<() => void> = [];
+  private closeDelay?: Promise<void>;
   private closed = false;
   private aborted?: Error;
 
@@ -983,8 +1130,13 @@ class QueueStream implements BrowserProtocolStream {
   }
 
   async close(): Promise<void> {
+    await this.closeDelay;
     this.finish();
     this.peer?.finish();
+  }
+
+  delayCloseUntil(delay: Promise<void>): void {
+    this.closeDelay = delay;
   }
 
   abort(error: Error): void {

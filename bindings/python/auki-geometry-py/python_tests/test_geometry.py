@@ -43,10 +43,10 @@ def test_convention_matrix_round_trips_to_identity() -> None:
     import auki_registry
 
     presets = [
-        auki_registry.frame_ros_body("body"),
-        auki_registry.frame_ros_optical("optical"),
-        auki_registry.frame_opengl("opengl"),
-        auki_registry.frame_unity("unity"),
+        auki_registry.frame_ros_body("test-peer", "body"),
+        auki_registry.frame_ros_optical("test-peer", "optical"),
+        auki_registry.frame_opengl("test-peer", "opengl"),
+        auki_registry.frame_unity("test-peer", "unity"),
     ]
 
     def matmul4(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
@@ -77,12 +77,13 @@ def test_convert_point_convention_applies_axes_and_units() -> None:
     import auki_registry
 
     source = {
+        "peer_id": "test-peer",
         "frame_id": "source",
         "handedness": "right",
         "axes": {"x": "right", "y": "down", "z": "forward"},
         "units": "centimeters",
     }
-    target = auki_registry.frame_opengl("target")
+    target = auki_registry.frame_opengl("test-peer", "target")
     converted = auki_geometry.convert_point_convention([100.0, 200.0, 300.0], source, target)
     assert converted == pytest.approx([1.0, -2.0, -3.0])
 
@@ -92,12 +93,13 @@ def test_convert_vector_convention_applies_axes_and_units() -> None:
     import auki_registry
 
     source = {
+        "peer_id": "test-peer",
         "frame_id": "source",
         "handedness": "right",
         "axes": {"x": "right", "y": "down", "z": "forward"},
         "units": "centimeters",
     }
-    target = auki_registry.frame_opengl("target")
+    target = auki_registry.frame_opengl("test-peer", "target")
     # Same axis flip + unit scale as the point conversion; binding seam
     # is the same shape — both go through length_scaled_axis_matrix in Rust.
     converted = auki_geometry.convert_vector_convention([100.0, 200.0, 300.0], source, target)
@@ -109,12 +111,13 @@ def test_convert_direction_convention_skips_unit_scale() -> None:
     import auki_registry
 
     source = {
+        "peer_id": "test-peer",
         "frame_id": "source",
         "handedness": "right",
         "axes": {"x": "right", "y": "down", "z": "forward"},
         "units": "centimeters",
     }
-    target = auki_registry.frame_opengl("target")
+    target = auki_registry.frame_opengl("test-peer", "target")
     converted = auki_geometry.convert_direction_convention([1.0, 2.0, 3.0], source, target)
     assert converted == pytest.approx([1.0, -2.0, -3.0])
 
@@ -127,8 +130,8 @@ def test_convert_pose_convention_translates_and_rotates() -> None:
 
     half = 1.0 / math.sqrt(2)
     pose = [1.0, 2.0, 3.0, 0.0, 0.0, half, half]
-    from_entry = auki_registry.frame_ros_optical("camera")
-    to_entry = auki_registry.frame_opengl("world")
+    from_entry = auki_registry.frame_ros_optical("test-peer", "camera")
+    to_entry = auki_registry.frame_opengl("test-peer", "world")
 
     converted = auki_geometry.convert_pose_convention(pose, from_entry, to_entry)
 
@@ -152,8 +155,8 @@ def test_convert_pose_convention_rejects_short_array() -> None:
     with pytest.raises(ValueError, match="pose: expected 7 floats"):
         auki_geometry.convert_pose_convention(
             pose,
-            auki_registry.frame_ros_optical("camera"),
-            auki_registry.frame_opengl("world"),
+            auki_registry.frame_ros_optical("test-peer", "camera"),
+            auki_registry.frame_opengl("test-peer", "world"),
         )
 
 
@@ -299,12 +302,14 @@ def test_convention_matrix_raises_geometry_error_on_handedness_mismatch() -> Non
     # in fact — unity preset shape). Rust's validate_frame rejects this
     # as GeometryError::HandednessMismatch.
     inconsistent = {
+        "peer_id": "test-peer",
         "frame_id": "inconsistent",
         "handedness": "right",
         "axes": {"x": "right", "y": "up", "z": "forward"},
         "units": "meters",
     }
     target = {
+        "peer_id": "test-peer",
         "frame_id": "target",
         "handedness": "right",
         "axes": {"x": "right", "y": "up", "z": "backward"},

@@ -7,16 +7,22 @@ export type ReadJsonFrame = {
   consumed: number;
 };
 
+export type StreamReadOptions = {
+  signal?: AbortSignal;
+};
+
 const MAX_LEB128_U64_BYTES = 10;
 
 export async function writeJsonFrame(
   stream: BrowserProtocolStream,
   value: JsonObject,
   maxBodyLen: number,
+  options: StreamReadOptions = {},
 ): Promise<void> {
+  throwIfAborted(options.signal);
   const frame = await encodeJsonFrame(value, maxBodyLen);
   if (!stream.send(frame) && stream.onDrain) {
-    await stream.onDrain();
+    await abortable(stream.onDrain(), options.signal);
   }
 }
 
@@ -28,9 +34,10 @@ export class JsonFrameReader {
     this.iterator = stream[Symbol.asyncIterator]();
   }
 
-  async read(maxBodyLen: number): Promise<ReadJsonFrame> {
-    const length = await this.readLength(maxBodyLen);
-    await this.ensure(length.consumed + length.value);
+  async read(maxBodyLen: number, options: StreamReadOptions = {}): Promise<ReadJsonFrame> {
+    throwIfAborted(options.signal);
+    const length = await this.readLength(maxBodyLen, options);
+    await this.ensure(length.consumed + length.value, options);
 
     const frame = this.buffer.slice(0, length.consumed + length.value);
     this.buffer = this.buffer.slice(frame.byteLength);
@@ -42,8 +49,9 @@ export class JsonFrameReader {
     };
   }
 
-  private async readLength(maxBodyLen: number) {
+  private async readLength(maxBodyLen: number, options: StreamReadOptions) {
     for (;;) {
+      throwIfAborted(options.signal);
       if (this.buffer.byteLength >= MAX_LEB128_U64_BYTES) {
         return decodeLength(this.buffer, maxBodyLen);
       }
@@ -54,19 +62,19 @@ export class JsonFrameReader {
         if (!isUnexpectedEof(error)) {
           throw error;
         }
-        await this.readMore();
+        await this.readMore(options);
       }
     }
   }
 
-  private async ensure(length: number): Promise<void> {
+  private async ensure(length: number, options: StreamReadOptions): Promise<void> {
     while (this.buffer.byteLength < length) {
-      await this.readMore();
+      await this.readMore(options);
     }
   }
 
-  private async readMore(): Promise<void> {
-    const next = await this.iterator.next();
+  private async readMore(options: StreamReadOptions): Promise<void> {
+    const next = await abortable(this.iterator.next(), options.signal);
     if (next.done) {
       throw new Error("protocol stream closed before a complete frame arrived");
     }
@@ -84,4 +92,51 @@ function isUnexpectedEof(error: unknown): boolean {
 
 function normalizeChunk(chunk: Uint8Array | { subarray(): Uint8Array }): Uint8Array {
   return chunk instanceof Uint8Array ? chunk : chunk.subarray();
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    promise.catch(() => undefined);
+    return Promise.reject(abortReason(signal));
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      cleanup();
+      promise.catch(() => undefined);
+      reject(abortReason(signal));
+    };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw abortReason(signal);
+  }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string") {
+    return new Error(reason);
+  }
+  return new Error("stream aborted");
 }

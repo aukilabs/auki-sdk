@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PublishOfferOptions } from "./publication.js";
 import {
+  PREVIEW_ACCESS_MODES,
   PREVIEW_OFFER_KIND,
   PREVIEW_PAYLOAD_ENCODING,
   PREVIEW_PAYLOAD_MEDIA_TYPE,
@@ -48,6 +49,7 @@ describe("preview offer profile", () => {
       offerId: "preview-main",
       kind: PREVIEW_OFFER_KIND,
       payload: previewPayloadDescriptor(),
+      accessModes: PREVIEW_ACCESS_MODES,
       displayName: "Preview Main",
       metadata: { source: "generated" },
     });

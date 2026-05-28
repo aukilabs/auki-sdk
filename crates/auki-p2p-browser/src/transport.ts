@@ -37,6 +37,7 @@ export type BrowserTransport = {
 export type BrowserProtocolStream = AsyncIterable<Uint8Array | { subarray(): Uint8Array }> & {
   send(data: Uint8Array): boolean;
   close(): Promise<void>;
+  closeRead?(): Promise<void>;
   abort?(error: Error): void;
   onDrain?(): Promise<void>;
 };
@@ -56,6 +57,9 @@ export type CreateBrowserLibp2pTransportOptions = {
   relayServerAddresses?: string[];
 };
 
+const PING_PROTOCOL_ID = "/ipfs/ping/1.0.0";
+const PING_MESSAGE_BYTES = 32;
+
 export function supportedBrowserTransports(): BrowserTransportName[] {
   return ["websocket", "webrtc", "webrtc_direct", "circuit_relay_v2"];
 }
@@ -70,6 +74,14 @@ export async function createBrowserLibp2pTransport(
   );
   const node = await createLibp2p({
     privateKey,
+    connectionMonitor: {
+      abortConnectionOnPingFailure: false,
+      pingInterval: 10_000,
+      pingTimeout: {
+        minTimeout: 10_000,
+        maxTimeout: 30_000,
+      },
+    },
     connectionGater: {
       denyDialMultiaddr: () => false,
     },
@@ -85,7 +97,44 @@ export async function createBrowserLibp2pTransport(
       }),
     },
   });
+  await node.handle(PING_PROTOCOL_ID, (stream) => echoPingStream(stream), {
+    runOnLimitedConnection: true,
+    maxInboundStreams: 32,
+    force: true,
+  });
   return new Libp2pBrowserTransport(node, options.relayServerAddresses ?? []);
+}
+
+export async function echoPingStream(stream: BrowserProtocolStream): Promise<void> {
+  let buffer = new Uint8Array();
+
+  try {
+    for await (const value of stream) {
+      const chunk = normalizeStreamChunk(value);
+      if (chunk.byteLength === 0) {
+        continue;
+      }
+
+      const merged = new Uint8Array(buffer.byteLength + chunk.byteLength);
+      merged.set(buffer);
+      merged.set(chunk, buffer.byteLength);
+      buffer = merged;
+
+      while (buffer.byteLength >= PING_MESSAGE_BYTES) {
+        const pong = buffer.slice(0, PING_MESSAGE_BYTES);
+        buffer = buffer.slice(PING_MESSAGE_BYTES);
+        if (!stream.send(pong) && stream.onDrain) {
+          await stream.onDrain();
+        }
+      }
+    }
+  } finally {
+    await stream.close().catch(() => undefined);
+  }
+}
+
+function normalizeStreamChunk(value: Uint8Array | { subarray(): Uint8Array }): Uint8Array {
+  return value instanceof Uint8Array ? value : value.subarray();
 }
 
 class Libp2pBrowserTransport implements BrowserTransport {

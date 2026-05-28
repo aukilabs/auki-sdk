@@ -47,6 +47,7 @@ type AppState = {
   streamStartedAt?: Date;
   streamFrameBase: number;
   activeSubscriptionKey?: string;
+  subscriptionAbort?: AbortController;
   status: string;
   lastError?: string;
   busy: boolean;
@@ -215,8 +216,10 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
 
   const key = offerKey(offer);
   const token = state.subscriptionToken + 1;
+  const abortController = new AbortController();
   state.subscriptionToken = token;
   state.activeSubscriptionKey = key;
+  state.subscriptionAbort = abortController;
   state.selectedOffer = offer;
   state.streamStartedAt = new Date();
   state.streamFrameBase = state.framesReceived;
@@ -233,6 +236,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
       offerId: offer.offerId,
       acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
       maxMessageBytes: 1_048_576,
+      signal: abortController.signal,
     })) {
       if (token !== state.subscriptionToken) {
         break;
@@ -249,6 +253,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
 
     if (token === state.subscriptionToken) {
       state.activeSubscriptionKey = undefined;
+      state.subscriptionAbort = undefined;
       setOfferStatus(key, "complete");
       state.status = "Subscription complete";
       recordEvent("info", "Subscribe complete", offerLabel(offer));
@@ -260,6 +265,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     }
     const message = errorMessage(error);
     state.activeSubscriptionKey = undefined;
+    state.subscriptionAbort = undefined;
     state.lastError = message;
     state.status = "Error";
     setOfferStatus(key, "error", message);
@@ -281,6 +287,8 @@ function stopSubscription(reason: string): void {
     return;
   }
   const key = state.activeSubscriptionKey;
+  state.subscriptionAbort?.abort(new Error(reason));
+  state.subscriptionAbort = undefined;
   state.subscriptionToken += 1;
   state.activeSubscriptionKey = undefined;
   setOfferStatus(key, "stopped");
@@ -290,6 +298,8 @@ function stopSubscription(reason: string): void {
 }
 
 async function stopPeer(): Promise<void> {
+  state.subscriptionAbort?.abort(new Error("Peer stopped"));
+  state.subscriptionAbort = undefined;
   state.subscriptionToken += 1;
   if (state.peer) {
     await state.peer.stop();

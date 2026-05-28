@@ -203,6 +203,58 @@ describe("AukiBrowserPeer shell", () => {
     ]);
   });
 
+  it("aborts an active Subscribe stream when the caller aborts the signal", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const subscribeFixture = await fixtureJson("v1_subscribe.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const accept = subscribeFixture.positive.accept_start_result.object as JsonObject;
+    const inputs = subscribeFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    let requestSeen!: () => void;
+    const requestReceived = new Promise<void>((resolve) => {
+      requestSeen = resolve;
+    });
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(SUBSCRIBE_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
+      requestSeen();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+    const abort = new AbortController();
+    const iterator = peer
+      .subscribe({
+        peerId: "native-peer",
+        domainId: inputs.domain_id as string,
+        offerId: inputs.offer_id as string,
+        acceptedPayloadTypes: [inputs.selected_payload_type as string],
+        maxMessageBytes: inputs.max_message_bytes as number,
+        signal: abort.signal,
+      })
+      [Symbol.asyncIterator]();
+
+    const next = iterator.next();
+    await requestReceived;
+    abort.abort(new Error("Stopped by user"));
+
+    await expect(next).resolves.toEqual({ done: true, value: undefined });
+    expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
+      OFFER_CATALOG_PROTOCOL_ID,
+      SUBSCRIBE_PROTOCOL_ID,
+    ]);
+  });
+
   it("gets one spatial message over an RFC protocol stream", async () => {
     const offerFixture = await fixtureJson("v1_offer_catalogs.json");
     const getFixture = await fixtureJson("v1_get.json");

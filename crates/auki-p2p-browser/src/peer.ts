@@ -80,6 +80,7 @@ export type SubscribeRequest = {
   params?: JsonObject;
   acceptedPayloadTypes?: string[];
   maxMessageBytes?: number;
+  signal?: AbortSignal;
 };
 
 export type GetRequest = {
@@ -248,10 +249,16 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   }
 
   async *subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage> {
+    if (request.signal?.aborted) {
+      return;
+    }
     await this.ensureStarted();
     const peer = this.requirePeer(request.peerId);
     if (!this.remoteOffers.has(peer.peerId)) {
       await this.loadOffers(peer);
+    }
+    if (request.signal?.aborted) {
+      return;
     }
 
     const subscribeRequest = await createSubscribeRequest(
@@ -266,11 +273,19 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       peer.dialAddresses,
       SUBSCRIBE_PROTOCOL_ID,
     );
+    const cleanupAbort = bindStreamAbort(request.signal, stream);
     const reader = new JsonFrameReader(stream);
 
     try {
-      await writeJsonFrame(stream, subscribeRequest, DEFAULT_FRAME_BODY_LIMIT);
-      const startFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      if (request.signal?.aborted) {
+        return;
+      }
+      await writeJsonFrame(stream, subscribeRequest, DEFAULT_FRAME_BODY_LIMIT, {
+        signal: request.signal,
+      });
+      const startFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT, {
+        signal: request.signal,
+      });
       const startResult = await parseSubscribeStartResult(startFrame.value);
       const startValidation = await validateSubscribeStartForRequest(
         subscribeRequest,
@@ -282,7 +297,12 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       }
 
       for (;;) {
-        const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+        if (request.signal?.aborted) {
+          return;
+        }
+        const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT, {
+          signal: request.signal,
+        });
         if (frame.value.type === SUBSCRIBE_END_TYPE) {
           await validateSubscribeEndForOffer(frame.value, request.domainId, request.offerId);
           return;
@@ -294,8 +314,18 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
           request.maxMessageBytes,
         );
       }
+    } catch (error) {
+      if (request.signal?.aborted) {
+        return;
+      }
+      throw error;
     } finally {
-      await closeStream(stream);
+      cleanupAbort();
+      if (request.signal?.aborted) {
+        await closeStreamQuietly(stream);
+      } else {
+        await closeStream(stream);
+      }
     }
   }
 
@@ -655,6 +685,47 @@ function requiredSeed(seed: Uint8Array | undefined): Uint8Array {
 
 async function closeStream(stream: BrowserProtocolStream): Promise<void> {
   await stream.close();
+}
+
+async function closeStreamQuietly(stream: BrowserProtocolStream): Promise<void> {
+  await stream.close().catch(() => undefined);
+}
+
+function bindStreamAbort(
+  signal: AbortSignal | undefined,
+  stream: BrowserProtocolStream,
+): () => void {
+  if (!signal) {
+    return () => undefined;
+  }
+  const abort = () => {
+    const error = abortReason(signal);
+    if (stream.closeRead) {
+      void stream.closeRead().catch(() => undefined);
+    }
+    if (stream.abort) {
+      stream.abort(error);
+    } else {
+      void closeStreamQuietly(stream);
+    }
+  };
+  if (signal.aborted) {
+    abort();
+    return () => undefined;
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string") {
+    return new Error(reason);
+  }
+  return new Error("subscription aborted");
 }
 
 async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefined> {

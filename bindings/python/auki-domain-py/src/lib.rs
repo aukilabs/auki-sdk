@@ -594,6 +594,30 @@ pub struct PyResourceEntry {
 
 #[pymethods]
 impl PyResourceEntry {
+    /// Construct from a JSON string matching the /auki/resources/0.2.0 row shape.
+    /// Useful for round-tripping via `to_json()` or constructing from
+    /// already-serialized rows on the wire.
+    #[staticmethod]
+    fn from_json(s: &str) -> PyResult<Self> {
+        let inner: RustResourceEntry = serde_json::from_str(s)
+            .map_err(|e| PyValueError::new_err(format!("invalid ResourceEntry JSON: {e}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Construct from a Python dict matching the /auki/resources/0.2.0 row shape.
+    /// Internally converts via `json.dumps(...)` → `serde_json::from_str`.
+    /// All four variants supported (sensor_log, pose_log, time_transform_log,
+    /// detection_log) — serde handles the variant discrimination via the
+    /// `variant` field.
+    #[staticmethod]
+    fn from_dict(py: Python<'_>, d: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let json_mod = py.import_bound("json")?;
+        let json_str: String = json_mod.call_method1("dumps", (d,))?.extract()?;
+        let inner: RustResourceEntry = serde_json::from_str(&json_str)
+            .map_err(|e| PyValueError::new_err(format!("invalid ResourceEntry dict: {e}")))?;
+        Ok(Self { inner })
+    }
+
     #[getter]
     fn source_peer_id(&self) -> String {
         self.inner.source_peer_id.clone()

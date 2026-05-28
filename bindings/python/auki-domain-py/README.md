@@ -19,7 +19,7 @@ subscription types to Python daemons.
 | `DaemonInfo` | Daemon-supplied identity fields for `participant_info` |
 | `ParticipantInfo` | SDK-produced `/api/info` wire shape (`.to_json()`) |
 | `SensorEntry` | One row in a peer's sensor catalog |
-| `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. |
+| `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
 | `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |
 | `StreamRequest` | Consumer → Producer handshake: `resource_id`, `source_peer_id`, `from_` |
 | `ClusterTarget` | Policy enum for `ClusterManager.bootstrap` |
@@ -47,6 +47,47 @@ internal multi-thread tokio runtime).
 - `fetch_resources_catalog(peer_id, variants=None)` → `list[ResourceEntry]`
 - `fetch_sensors_catalog(peer_id, …)` → `list[SensorEntry]`
 - `fetch_sensor_entry / fetch_clock_entry / fetch_frame_entry` → canonical JSON
+
+## Constructing `ResourceEntry` from Python
+
+Use `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` to mint
+catalog rows from Python — e.g. to feed into
+`ClusterManager.set_resource_catalog_provider`. The dict / JSON shape must
+match the `/auki/resources/0.2.0` wire format: a flat object with a `variant`
+discriminator field plus the common fields and variant-specific `manifest`
+block.
+
+```python
+from auki_domain import ResourceEntry
+
+entry = ResourceEntry.from_dict({
+    "variant": "pose_log",
+    "source_peer_id": "galbot",
+    "writer_peer_id": "galbot",
+    "resource_id": "base_link->head_left_camera_color_optical_frame",
+    "state": "live",
+    "head": {"kind": "rolling", "retention_ns": 5_000_000_000},
+    "available": {"bytes": 0, "entries": 0, "duration_ns": 0},
+    "pose": {"writer_mode": "movable"},
+    "manifest": {
+        "from_frame": {"peer_id": "galbot", "id": "base_link",   "hash": "..."},
+        "to_frame":   {"peer_id": "galbot", "id": "head_left_camera_color_optical_frame", "hash": "..."},
+        "clock":      {"peer_id": "galbot", "id": "sdk_clock",   "hash": "..."},
+        "source":     {"kind": "manual"},
+        "expected_rate_hz": 10,
+    },
+})
+
+# or from a JSON string:
+entry2 = ResourceEntry.from_json('{"variant": "pose_log", ...}')
+
+# pass to ClusterManager:
+manager.set_resource_catalog_provider(lambda: [entry])
+```
+
+All four variants (`sensor_log`, `pose_log`, `time_transform_log`,
+`detection_log`) are accepted. Serde discriminates by the `variant` field.
+Invalid input raises `ValueError`.
 
 ## Post-#216 schema changes
 

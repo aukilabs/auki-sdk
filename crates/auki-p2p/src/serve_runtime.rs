@@ -3,7 +3,10 @@
 use crate::api::{
     AukiNode, AukiNodeError, AukiServedInbound, AukiServedSubscription, LifecycleInput,
 };
-use crate::{AukiSubscriptionBackpressurePolicy, PublishedByteFrame};
+use crate::{
+    AukiSubscriptionBackpressurePolicy, LifecycleStreamDirection, LifecycleStreamGuardError,
+    PublishedByteFrame,
+};
 use auki_protocol::v1::{
     error,
     subscribe::{SubscribeEnd, SubscribeEndReason},
@@ -28,6 +31,8 @@ const CONSUMER_END_POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub struct AukiServeRuntimeStatus {
     /// Lifecycle handshakes served.
     pub lifecycles_served: u64,
+    /// Duplicate inbound lifecycle streams ignored by the runtime.
+    pub duplicate_lifecycle_attempts: u64,
     /// Offer-catalog requests served.
     pub offer_catalogs_served: u64,
     /// Successful Get requests served.
@@ -54,6 +59,8 @@ pub struct AukiServeRuntimeStatus {
     pub subscriptions_failed: u64,
     /// Runtime-managed subscriptions closed because their queue filled.
     pub subscriptions_closed_for_backpressure: u64,
+    /// Runtime-managed subscriptions closed by local producer/runtime intent.
+    pub subscriptions_closed_by_producer: u64,
     /// Last runtime failure observed while serving active subscriptions.
     pub last_failure: Option<String>,
 }
@@ -432,6 +439,56 @@ impl AukiServeRuntime {
             .collect()
     }
 
+    /// End every active runtime-managed published subscription.
+    ///
+    /// This is intended for app/runtime shutdown and offer withdrawal paths. The
+    /// runtime removes each subscription from the active set before attempting
+    /// to send the terminal SubscribeEnd, so source tasks are stopped even if a
+    /// transport is already closed.
+    pub async fn shutdown_active_subscriptions(
+        &mut self,
+        reason: SubscribeEndReason,
+    ) -> Result<Vec<AukiEndedSubscriptionStatus>, AukiNodeError> {
+        let ids = self
+            .active_subscriptions
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut ended = Vec::new();
+        let mut first_error = None;
+
+        for id in ids {
+            let Some(mut active) = self.active_subscriptions.remove(&id) else {
+                continue;
+            };
+            let ended_status = active.ended_status(reason, None, None);
+            if let Some(subscription) = active.subscription.take() {
+                if let Err(error) = self
+                    .node
+                    .end_served_subscription(subscription, reason, None, None)
+                    .await
+                {
+                    self.status.subscriptions_failed =
+                        self.status.subscriptions_failed.saturating_add(1);
+                    self.status.last_failure = Some(error.to_string());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                } else {
+                    self.record_subscription_end_reason(reason);
+                }
+            }
+            ended.push(ended_status);
+        }
+
+        self.refresh_active_subscription_count();
+        if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Ok(ended)
+        }
+    }
+
     /// Serve one runtime event without fixed per-protocol timeout sequencing.
     pub async fn serve_next(
         &mut self,
@@ -465,12 +522,13 @@ impl AukiServeRuntime {
             };
 
             match poll {
-                RuntimePoll::Inbound(result) => {
-                    let Some(served) = result? else {
-                        return Ok(None);
-                    };
-                    return self.handle_inbound(served);
+                RuntimePoll::Inbound(Ok(Some(served))) => return self.handle_inbound(served),
+                RuntimePoll::Inbound(Ok(None)) => return Ok(None),
+                RuntimePoll::Inbound(Err(error)) if is_duplicate_inbound_lifecycle(&error) => {
+                    self.status.duplicate_lifecycle_attempts =
+                        self.status.duplicate_lifecycle_attempts.saturating_add(1);
                 }
+                RuntimePoll::Inbound(Err(error)) => return Err(error),
                 RuntimePoll::SourceReady(Some(_subscription_id)) => {
                     if let Some(event) = self.pop_queued_source_event(now).await? {
                         return Ok(Some(event));
@@ -613,8 +671,7 @@ impl AukiServeRuntime {
                     event.error.as_ref().map(|error| error.code.clone()),
                     event.retryable,
                 );
-                self.status.subscriptions_cancelled =
-                    self.status.subscriptions_cancelled.saturating_add(1);
+                self.record_subscription_end_reason(event.reason);
                 self.refresh_active_subscription_count();
                 return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
                     ended,
@@ -693,7 +750,7 @@ impl AukiServeRuntime {
         self.node
             .end_served_subscription(subscription, SubscribeEndReason::Complete, None, None)
             .await?;
-        self.status.subscriptions_completed = self.status.subscriptions_completed.saturating_add(1);
+        self.record_subscription_end_reason(SubscribeEndReason::Complete);
         self.refresh_active_subscription_count();
         Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
             ended,
@@ -751,8 +808,7 @@ impl AukiServeRuntime {
                         end.error.as_ref().map(|error| error.code.clone()),
                         end.retryable,
                     );
-                    self.status.subscriptions_cancelled =
-                        self.status.subscriptions_cancelled.saturating_add(1);
+                    self.record_subscription_end_reason(end.reason);
                     self.refresh_active_subscription_count();
                     return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
                         ended,
@@ -789,6 +845,31 @@ impl AukiServeRuntime {
     fn refresh_active_subscription_count(&mut self) {
         self.status.active_subscriptions = self.active_subscriptions.len() as u64;
     }
+
+    fn record_subscription_end_reason(&mut self, reason: SubscribeEndReason) {
+        match reason {
+            SubscribeEndReason::Complete => {
+                self.status.subscriptions_completed =
+                    self.status.subscriptions_completed.saturating_add(1);
+            }
+            SubscribeEndReason::Cancelled => {
+                self.status.subscriptions_cancelled =
+                    self.status.subscriptions_cancelled.saturating_add(1);
+            }
+            SubscribeEndReason::Error => {
+                self.status.subscriptions_failed =
+                    self.status.subscriptions_failed.saturating_add(1);
+            }
+            SubscribeEndReason::OfferWithdrawn
+            | SubscribeEndReason::NotAuthorized
+            | SubscribeEndReason::ProducerShutdown => {
+                self.status.subscriptions_closed_by_producer = self
+                    .status
+                    .subscriptions_closed_by_producer
+                    .saturating_add(1);
+            }
+        }
+    }
 }
 
 fn consumer_end_event(
@@ -799,6 +880,16 @@ fn consumer_end_event(
         .as_mut()
         .expect("active subscription should hold a stream")
         .try_consumer_end()
+}
+
+fn is_duplicate_inbound_lifecycle(error: &AukiNodeError) -> bool {
+    matches!(
+        error,
+        AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
+            direction: LifecycleStreamDirection::Inbound,
+            ..
+        })
+    )
 }
 
 fn spawn_source_task(
@@ -824,6 +915,24 @@ fn spawn_source_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_inbound_lifecycle_errors_are_runtime_nonfatal() {
+        let peer_id = "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar"
+            .parse()
+            .expect("peer id");
+        let inbound = AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
+            peer_id,
+            direction: LifecycleStreamDirection::Inbound,
+        });
+        let outbound = AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
+            peer_id,
+            direction: LifecycleStreamDirection::Outbound,
+        });
+
+        assert!(is_duplicate_inbound_lifecycle(&inbound));
+        assert!(!is_duplicate_inbound_lifecycle(&outbound));
+    }
 
     #[tokio::test]
     async fn latest_only_keeps_newest_queued_chunk() {

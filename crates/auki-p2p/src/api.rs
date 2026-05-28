@@ -44,7 +44,12 @@ use auki_protocol::v1::{
 use futures::{AsyncReadExt as _, StreamExt as _, io::WriteHalf};
 use libp2p::{Multiaddr, PeerId};
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, fmt, future::Future};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    future::Future,
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
 
 /// High-level RFC-first runtime handle for SDK and app code.
@@ -840,6 +845,26 @@ impl AukiNode {
     /// Connectivity-only bootstrap record for browser peers.
     pub fn browser_bootstrap_record(&self) -> AukiBrowserBootstrapRecord {
         self.node.browser_bootstrap_record()
+    }
+
+    /// Wait for configured listeners to appear in the browser bootstrap record.
+    ///
+    /// This consumes and applies node events while waiting, so relationship and
+    /// observed-listen-address state stay current for later diagnostics.
+    pub async fn wait_for_browser_bootstrap_record(
+        &mut self,
+        max_wait: Duration,
+        observed_at: &str,
+    ) -> AukiBrowserBootstrapRecord {
+        let expected_addresses = self.configured_listen_addresses().len();
+        let started_at = Instant::now();
+        while self.observed_listen_addresses().len() < expected_addresses
+            && started_at.elapsed() < max_wait
+        {
+            let _ = tokio::time::timeout(Duration::from_millis(500), self.next_event(observed_at))
+                .await;
+        }
+        self.browser_bootstrap_record()
     }
 
     /// Operator-supplied advertised addresses.
@@ -2746,6 +2771,24 @@ mod tests {
         assert!(record.to_value().get("offers").is_none());
     }
 
+    #[tokio::test]
+    async fn wait_for_browser_bootstrap_record_observes_listener_addresses() {
+        let mut node = AukiNode::new(
+            identity(60),
+            AukiP2pNodeConfig::loopback_relay_server_development(),
+        )
+        .expect("node");
+
+        let record = node
+            .wait_for_browser_bootstrap_record(Duration::from_secs(5), ISSUED_AT)
+            .await;
+
+        assert_eq!(node.observed_listen_addresses().len(), 1);
+        assert_eq!(record.relay_server_addresses.len(), 1);
+        assert_eq!(record.bootstrap_addresses.len(), 1);
+        assert!(record.bootstrap_addresses[0].to_string().contains("/p2p/"));
+    }
+
     #[test]
     fn upsert_configured_peer_validates_dial_policy() {
         let mut config = AukiP2pNodeConfig::dial_only_development();
@@ -4335,6 +4378,117 @@ mod tests {
         assert_eq!(second_b.payload.bytes, Some(vec![2]));
         assert_eq!(status.frames_sent, 4);
         assert_eq!(final_status, status);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_shutdown_ends_active_published_subscription() {
+        let listener_wallet = wallet(122);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[18; DOMAIN_NONCE_LEN],
+            Some("runtime-shutdown"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(123), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(PublishOfferInput::new(
+                domain_id.clone(),
+                "bytes-main",
+                "frame",
+                PayloadDescriptor::create("auki.frame"),
+                || stream::pending::<Vec<u8>>(),
+            ))
+            .expect("publish offer");
+        let remote_report = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: listener
+                .local_offers(&domain_id)
+                .into_iter()
+                .map(|offer| LoadedRemoteOffer {
+                    offer,
+                    usable: true,
+                    unusable_reason: None,
+                })
+                .collect(),
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let event = timeout(Duration::from_secs(5), runtime.serve_next(ISSUED_AT))
+                .await
+                .expect("serve next should not time out")
+                .expect("serve next runtime event")
+                .expect("runtime event");
+            let AukiServeRuntimeEvent::PublishedSubscriptionStarted(status) = event else {
+                panic!("expected runtime-managed subscription start");
+            };
+            assert_eq!(status.domain_id.as_str(), server_domain_id.as_str());
+            assert_eq!(status.offer_id, "bytes-main");
+            assert_eq!(runtime.status().active_subscriptions, 1);
+            started_tx.send(()).expect("send started");
+
+            shutdown_rx.await.expect("shutdown signal");
+            let ended = runtime
+                .shutdown_active_subscriptions(SubscribeEndReason::ProducerShutdown)
+                .await
+                .expect("shutdown subscriptions");
+            assert_eq!(ended.len(), 1);
+            assert_eq!(ended[0].reason, SubscribeEndReason::ProducerShutdown);
+
+            runtime.status().clone()
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(remote_report);
+
+        let subscription = timeout(
+            Duration::from_secs(5),
+            dialer.subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id, "bytes-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("subscribe should not time out")
+        .expect("subscribe should start");
+        started_rx.await.expect("started");
+        shutdown_tx.send(()).expect("send shutdown");
+
+        let status = server.await.expect("server task");
+        drop(subscription);
+        assert_eq!(status.active_subscriptions, 0);
+        assert_eq!(status.subscriptions_accepted, 1);
+        assert_eq!(status.subscriptions_closed_by_producer, 1);
     }
 
     #[tokio::test]

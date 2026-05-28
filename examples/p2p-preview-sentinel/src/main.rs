@@ -1,23 +1,14 @@
 use auki_identity::Wallet;
 use auki_p2p::{
-    AukiNode, AukiNodeError, AukiNodeEvent, AukiP2pNodeConfig, AukiServeRuntime,
-    LatestPublishedByteSource, LifecycleStreamDirection, LifecycleStreamGuardError,
-    LocalDomainRegistration, LocalPeerIdentity, PreviewOfferOptions, PublishedByteFrame,
-    publish_preview_offer_with_latest_source,
+    AukiBrowserBootstrapRecord, AukiNodeBuilder, AukiServeRuntime, LatestPublishedByteSource,
+    PreviewOfferOptions, PublishedByteFrame, publish_preview_offer_with_latest_source,
 };
-use auki_protocol::v1::domain::{DOMAIN_NONCE_LEN, DomainDeclaration};
+use auki_protocol::v1::{domain::DOMAIN_NONCE_LEN, subscribe::SubscribeEndReason};
 use jpeg_encoder::{ColorType, Encoder};
 use serde_json::json;
-use std::{
-    env,
-    error::Error,
-    fmt, fs,
-    path::PathBuf,
-    process::ExitCode,
-    time::{Duration, Instant},
-};
+use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::time::{MissedTickBehavior, timeout};
+use tokio::time::MissedTickBehavior;
 
 const DEFAULT_DOMAIN_LABEL: &str = "auki-p2p-preview-demo";
 const DEFAULT_OFFER_ID: &str = "sentinel-preview";
@@ -47,17 +38,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let now = now_rfc3339()?;
     let wallet = Wallet::from_seed(vec![7; 32])?;
-    let identity = LocalPeerIdentity::from_wallet(wallet.clone(), &now, Some(DEFAULT_PEER_LABEL))?;
-    let declaration =
-        DomainDeclaration::create(&wallet, &[42; DOMAIN_NONCE_LEN], Some(DEFAULT_DOMAIN_LABEL))?;
-    let registration = LocalDomainRegistration::owner(declaration, true)?;
-    let domain_id = registration.domain_id().to_owned();
-
-    let mut node = AukiNode::new(
-        identity,
-        AukiP2pNodeConfig::loopback_browser_reachable_development(),
-    )?;
-    node.upsert_local_domain(registration, &now)?;
+    let builder = AukiNodeBuilder::from_wallet(wallet, &now, Some(DEFAULT_PEER_LABEL))?
+        .with_browser_reachable_development()
+        .with_owner_domain([42; DOMAIN_NONCE_LEN], Some(DEFAULT_DOMAIN_LABEL), true)?;
+    let domain_id = builder
+        .primary_domain_id()
+        .ok_or_else(|| CliError::new("preview sentinel requires one local domain"))?
+        .to_owned();
+    let mut node = builder.build(&now)?;
     let preview_source = LatestPublishedByteSource::new();
     let preview_producer = start_generated_preview_source(
         preview_source.clone(),
@@ -86,13 +74,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     println!("source: {}", config.source.as_str());
     println!("waiting for browser-reachable listen addresses...");
 
-    wait_for_bootstrap_addresses(&mut node, Duration::from_secs(5)).await?;
-    write_bootstrap_record(&node, config.bootstrap_json.as_ref())?;
-    print_bootstrap_record(&node)?;
+    let bootstrap = node
+        .wait_for_browser_bootstrap_record(Duration::from_secs(5), &now_rfc3339()?)
+        .await;
+    write_bootstrap_record(&bootstrap, config.bootstrap_json.as_ref())?;
+    print_bootstrap_record(&bootstrap)?;
 
     let mut runtime = AukiServeRuntime::new(node);
-    let mut stats = DemoStats::default();
-    print_state(&mut runtime, &stats, &domain_id, &config)?;
+    let mut last_failure = None;
+    print_state(&mut runtime, last_failure.as_deref(), &domain_id, &config)?;
     if config.once {
         preview_source.close();
         preview_producer.abort();
@@ -110,17 +100,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
             _ = &mut shutdown => {
                 println!("shutdown: ctrl-c received");
                 preview_source.close();
+                if let Err(error) = runtime
+                    .shutdown_active_subscriptions(SubscribeEndReason::ProducerShutdown)
+                    .await
+                {
+                    eprintln!("shutdown: subscription shutdown failed: {error}");
+                }
                 preview_producer.abort();
                 break;
             }
             _ = status_tick.tick() => {
-                print_state(&mut runtime, &stats, &domain_id, &config)?;
+                print_state(&mut runtime, last_failure.as_deref(), &domain_id, &config)?;
             }
             result = runtime.serve_next(&now) => {
                 match result {
                     Ok(Some(_)) | Ok(None) => {}
-                    Err(error) if stats.record_nonfatal_lifecycle_error(&error) => {}
-                    Err(error) => stats.record_error(error.to_string()),
+                    Err(error) => last_failure = Some(error.to_string()),
                 }
             }
         }
@@ -290,92 +285,21 @@ impl fmt::Display for CliError {
 
 impl Error for CliError {}
 
-#[derive(Debug, Default)]
-struct DemoStats {
-    duplicate_lifecycle_attempts: u64,
-    last_failure: Option<String>,
-}
-
-impl DemoStats {
-    fn record_error(&mut self, error: String) {
-        self.last_failure = Some(error);
-    }
-
-    fn record_nonfatal_lifecycle_error(&mut self, error: &AukiNodeError) -> bool {
-        if !is_duplicate_inbound_lifecycle(error) {
-            return false;
-        }
-        self.duplicate_lifecycle_attempts = self.duplicate_lifecycle_attempts.saturating_add(1);
-        true
-    }
-}
-
-fn is_duplicate_inbound_lifecycle(error: &AukiNodeError) -> bool {
-    matches!(
-        error,
-        AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
-            direction: LifecycleStreamDirection::Inbound,
-            ..
-        })
-    )
-}
-
-async fn wait_for_bootstrap_addresses(
-    node: &mut AukiNode,
-    max_wait: Duration,
-) -> Result<(), Box<dyn Error>> {
-    let started_at = Instant::now();
-    let expected_addresses = node.configured_listen_addresses().len().max(1);
-    while node.browser_bootstrap_record().bootstrap_addresses.len() < expected_addresses
-        && started_at.elapsed() < max_wait
-    {
-        let now = now_rfc3339()?;
-        match timeout(Duration::from_millis(500), node.next_event(&now)).await {
-            Ok(Some(event)) => print_event(event),
-            Ok(None) | Err(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn print_event(event: AukiNodeEvent) {
-    match event {
-        AukiNodeEvent::Listening { address } => {
-            println!("event: listening {address}");
-        }
-        AukiNodeEvent::PeerConnected { peer_id } => {
-            println!("event: peer connected {peer_id}");
-        }
-        AukiNodeEvent::PeerConnectionClosed {
-            peer_id,
-            active_connections,
-        } => {
-            println!("event: peer connection closed {peer_id} active={active_connections}");
-        }
-        AukiNodeEvent::PeerDuplicateConnectionClosed { peer_id } => {
-            println!("event: duplicate connection closed {peer_id}");
-        }
-        AukiNodeEvent::PeerDialFailed { peer_id, error } => {
-            println!("event: dial failed peer={peer_id:?} error={error}");
-        }
-        AukiNodeEvent::IncomingConnectionFailed { error } => {
-            println!("event: incoming connection failed error={error}");
-        }
-    }
-}
-
-fn print_bootstrap_record(node: &AukiNode) -> Result<(), Box<dyn Error>> {
-    let value = node.browser_bootstrap_record().to_value();
+fn print_bootstrap_record(record: &AukiBrowserBootstrapRecord) -> Result<(), Box<dyn Error>> {
+    let value = record.to_value();
     println!("browser_bootstrap_json:");
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
-fn write_bootstrap_record(node: &AukiNode, path: Option<&PathBuf>) -> Result<(), Box<dyn Error>> {
+fn write_bootstrap_record(
+    record: &AukiBrowserBootstrapRecord,
+    path: Option<&PathBuf>,
+) -> Result<(), Box<dyn Error>> {
     let Some(path) = path else {
         return Ok(());
     };
-    let value = node.browser_bootstrap_record().to_value();
+    let value = record.to_value();
     fs::write(path, serde_json::to_string_pretty(&value)?)?;
     println!("wrote bootstrap JSON: {}", path.display());
     Ok(())
@@ -383,7 +307,7 @@ fn write_bootstrap_record(node: &AukiNode, path: Option<&PathBuf>) -> Result<(),
 
 fn print_state(
     runtime: &mut AukiServeRuntime,
-    stats: &DemoStats,
+    last_failure: Option<&str>,
     domain_id: &str,
     config: &DemoConfig,
 ) -> Result<(), Box<dyn Error>> {
@@ -419,9 +343,9 @@ fn print_state(
         config.frame_interval.as_millis(),
     );
     println!(
-        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_completed={} subscription_cancelled={} subscription_failed={} subscription_backpressure={} frames_produced={} frames_sent={} frames_dropped={}",
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_completed={} subscription_cancelled={} subscription_failed={} subscription_backpressure={} subscription_producer_closed={} frames_produced={} frames_sent={} frames_dropped={}",
         runtime_status.lifecycles_served,
-        stats.duplicate_lifecycle_attempts,
+        runtime_status.duplicate_lifecycle_attempts,
         runtime_status.offer_catalogs_served,
         runtime_status.gets_served,
         runtime_status.gets_rejected,
@@ -432,11 +356,12 @@ fn print_state(
         runtime_status.subscriptions_cancelled,
         runtime_status.subscriptions_failed,
         runtime_status.subscriptions_closed_for_backpressure,
+        runtime_status.subscriptions_closed_by_producer,
         runtime_status.frames_produced,
         runtime_status.frames_sent,
         runtime_status.frames_dropped,
     );
-    if let Some(error) = &stats.last_failure {
+    if let Some(error) = last_failure {
         println!("last_failure: {error}");
     }
     if let Some(error) = &runtime_status.last_failure {
@@ -635,21 +560,5 @@ mod tests {
         assert!(frame.bytes.len() > 100);
         assert_eq!(&frame.bytes[..2], &[0xff, 0xd8]);
         assert_eq!(&frame.bytes[frame.bytes.len() - 2..], &[0xff, 0xd9]);
-    }
-
-    #[test]
-    fn duplicate_inbound_lifecycle_is_counted_without_failure() {
-        let wallet = Wallet::from_seed(vec![9; 32]).expect("wallet");
-        let identity = LocalPeerIdentity::from_wallet(wallet, "2026-05-27T00:00:00Z", Some("test"))
-            .expect("identity");
-        let error = AukiNodeError::LifecycleGuard(LifecycleStreamGuardError {
-            peer_id: identity.peer_id(),
-            direction: LifecycleStreamDirection::Inbound,
-        });
-        let mut stats = DemoStats::default();
-
-        assert!(stats.record_nonfatal_lifecycle_error(&error));
-        assert_eq!(stats.duplicate_lifecycle_attempts, 1);
-        assert_eq!(stats.last_failure, None);
     }
 }

@@ -5,6 +5,7 @@
 //! libp2p context; protocol truth remains in `auki-protocol`.
 
 pub mod api;
+pub mod builder;
 pub mod config;
 pub mod get_serving;
 pub mod handshake_policy;
@@ -30,6 +31,7 @@ pub use api::{
     LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
     ServedGet, ServedOfferCatalog, ServedSubscribe,
 };
+pub use builder::{AukiNodeBuilder, AukiNodeBuilderError};
 pub use config::{
     AukiP2pConfig, AuthorityDeadlineConfig, ConfigError, ConfiguredPeer, DialPolicy,
     DialPolicyError, DomainAccessPolicy, OfferPolicy, PeerAdmissionConfig,

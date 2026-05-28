@@ -4,7 +4,7 @@
 
 - [Overview](For-SDK-Consumers)
 - [Quickstart](Quickstart)
-- [Concept: peer-owned logs](Concept-Peer-Owned-Logs) *(stub)*
+- [Concept: peer-owned logs](Concept-Peer-Owned-Logs)
 
 ### Design + Architecture
 

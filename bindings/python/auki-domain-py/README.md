@@ -1,21 +1,11 @@
 # auki-domain-py
 
-PyO3 bindings for [`auki-domain`](../../../crates/auki-domain) — the Python daemon facade for `ClusterManager`. A Python daemon (Booster's K1 sidecar, Sentinel, Park tooling) becomes a cluster peer through this package.
+**Deprecated as of #216.** The `auki_domain` Python module is now an empty extension module preserved for workspace-compilation compatibility. Downstream Python code should use [`auki-session-py`](../auki-session-py) instead.
 
-**Status:** Shipped.
+The declarative Session API (sensor/clock/frame/detector registration, log registration, catalog, domain join/leave) lives in `auki-session-py`.
 
-## Public surface
-
-- `ClusterTarget` — list-existing / create-new / join-by-id.
-- `ClusterManager.list_clusters(...)`, `ClusterManager.bootstrap(...)`, `ClusterManager.create_cluster(...)`, `ClusterManager.create_cluster_with_relay_multiaddrs(...)`, `ClusterManager.create_cluster_with_relay_reservation(...)`, `ClusterManager.join_cluster(...)`.
-- `participant_info`, peer info fetches, resource / sensor catalog fetches.
-- Resource value types for `sensor_stream`, `transform_edge`, and live `pose_stream` rows.
-- Registry serving root registration.
-- `StreamManifestBuilder.from_registry(...)` — registry-backed manifest construction.
-- Stream provider wiring + typed stream openers (`open_camera_stream`, `open_point_cloud_stream`, `open_joint_encoders_stream`, `open_audio_stream`, `open_pose_stream`).
-- `external_addresses` advertisement override, separate `relay_multiaddrs` Discovery hints, and relay-reserved Manager circuit addresses for browser-dialable Domain Relays.
+**Status:** Deprecated / empty shell.
 
 ## Depends on
 
 - [`auki-domain`](../../../crates/auki-domain) — Rust crate it wraps.
-- [`auki-network-py`](../auki-network-py) — for the shared `auki_network.cluster` stream pyclasses.

@@ -205,6 +205,62 @@ describe("AukiBrowserPeer shell", () => {
     ]);
   });
 
+  it("retries a reset Subscribe start stream before returning a subscription", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const subscribeFixture = await fixtureJson("v1_subscribe.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const accept = subscribeFixture.positive.accept_start_result.object as JsonObject;
+    const inputs = subscribeFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    let subscribeAttempts = 0;
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(SUBSCRIBE_PROTOCOL_ID, async (stream) => {
+      subscribeAttempts += 1;
+      const reader = new JsonFrameReader(stream);
+      const request = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      expect(request.value).toEqual(subscribeFixture.positive.request.object);
+      if (subscribeAttempts === 1) {
+        if (!stream.abort) {
+          throw new Error("test stream missing abort");
+        }
+        stream.abort(new Error("The stream has been reset"));
+        return;
+      }
+
+      await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
+      await parseSubscribeEnd((await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    const subscription = await peer.openSubscription({
+      peerId: "native-peer",
+      domainId: inputs.domain_id as string,
+      offerId: inputs.offer_id as string,
+      params: { frame: "latest", stream: "live" },
+      acceptedPayloadTypes: [inputs.selected_payload_type as string],
+      maxMessageBytes: inputs.max_message_bytes as number,
+    });
+    await subscription.stop();
+
+    expect(subscribeAttempts).toBe(2);
+    expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
+      OFFER_CATALOG_PROTOCOL_ID,
+      SUBSCRIBE_PROTOCOL_ID,
+      SUBSCRIBE_PROTOCOL_ID,
+    ]);
+  });
+
   it("aborts an active Subscribe stream when the caller aborts the signal", async () => {
     const offerFixture = await fixtureJson("v1_offer_catalogs.json");
     const subscribeFixture = await fixtureJson("v1_subscribe.json");
@@ -344,6 +400,61 @@ describe("AukiBrowserPeer shell", () => {
     ).resolves.toEqual(response.message);
     expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
       OFFER_CATALOG_PROTOCOL_ID,
+      GET_PROTOCOL_ID,
+    ]);
+  });
+
+  it("retries a reset Get stream before returning a spatial message", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const getFixture = await fixtureJson("v1_get.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const response = getFixture.positive.success_response.object as JsonObject;
+    const inputs = getFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    let getAttempts = 0;
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(GET_PROTOCOL_ID, async (stream) => {
+      getAttempts += 1;
+      const reader = new JsonFrameReader(stream);
+      const request = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      expect(request.value).toEqual(getFixture.positive.request.object);
+      if (getAttempts === 1) {
+        if (!stream.abort) {
+          throw new Error("test stream missing abort");
+        }
+        stream.abort(new Error("The stream has been reset"));
+        return;
+      }
+
+      await writeJsonFrame(stream, response, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    await expect(
+      peer.get({
+        peerId: "native-peer",
+        domainId: inputs.domain_id as string,
+        offerId: inputs.offer_id as string,
+        params: { frame: "latest" },
+        acceptedPayloadTypes: [inputs.selected_payload_type as string],
+        maxPayloadBytes: inputs.max_payload_bytes as number,
+      }),
+    ).resolves.toEqual(response.message);
+    expect(getAttempts).toBe(2);
+    expect(transport.protocolDials.map((dial) => dial.protocol)).toEqual([
+      OFFER_CATALOG_PROTOCOL_ID,
+      GET_PROTOCOL_ID,
       GET_PROTOCOL_ID,
     ]);
   });

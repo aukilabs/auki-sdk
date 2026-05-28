@@ -155,6 +155,8 @@ const GET_PROTOCOL_ID = "/auki/get/0.0.1";
 const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const SUBSCRIBE_END_TYPE = "auki.subscribe_end.v1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
+const GET_CLIENT_RETRY_ATTEMPTS = 2;
+const SUBSCRIBE_CLIENT_RETRY_ATTEMPTS = 2;
 const SUBSCRIBE_STOP_TIMEOUT_MS = 1_000;
 
 class DefaultAukiBrowserPeer implements AukiBrowserPeer {
@@ -239,6 +241,17 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       request.acceptedPayloadTypes ?? [selectedPayloadType],
       request.maxPayloadBytes,
     );
+
+    return withRetry(GET_CLIENT_RETRY_ATTEMPTS, undefined, () =>
+      this.getOnce(peer, getRequest, selectedPayloadType),
+    );
+  }
+
+  private async getOnce(
+    peer: PeerSummary,
+    getRequest: JsonObject,
+    selectedPayloadType: string,
+  ): Promise<SpatialMessage> {
     const stream = await this.transport.dialProtocol(
       peer.peerId,
       peer.dialAddresses,
@@ -252,7 +265,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       const response = await parseGetResponse(frame.value);
       return await validateGetResponseForRequest(getRequest, response, selectedPayloadType);
     } finally {
-      await closeStream(stream);
+      await closeStreamQuietly(stream);
     }
   }
 
@@ -276,6 +289,16 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       request.acceptedPayloadTypes ?? [],
       request.maxMessageBytes,
     );
+    return withRetry(SUBSCRIBE_CLIENT_RETRY_ATTEMPTS, request.signal, () =>
+      this.openSubscriptionOnce(peer, request, subscribeRequest),
+    );
+  }
+
+  private async openSubscriptionOnce(
+    peer: PeerSummary,
+    request: SubscribeRequest,
+    subscribeRequest: JsonObject,
+  ): Promise<AukiBrowserSubscription> {
     const stream = await this.transport.dialProtocol(
       peer.peerId,
       peer.dialAddresses,
@@ -928,6 +951,47 @@ function abortReason(signal: AbortSignal): Error {
     return new Error(reason);
   }
   return new Error("subscription aborted");
+}
+
+async function withRetry<T>(
+  retryAttempts: number,
+  signal: AbortSignal | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let attempts = 0;
+  for (;;) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (signal?.aborted) {
+        throw abortReason(signal);
+      }
+      if (attempts >= retryAttempts || !isRetryableTransportError(error)) {
+        throw error;
+      }
+      attempts += 1;
+      await yieldToEventLoop();
+    }
+  }
+}
+
+function isRetryableTransportError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("stream has been reset") ||
+    message.includes("stream reset") ||
+    message.includes("connection is closed") ||
+    message.includes("stream closed") ||
+    message.includes("protocol stream closed before a complete frame arrived") ||
+    message.includes("unexpected eof")
+  );
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefined> {

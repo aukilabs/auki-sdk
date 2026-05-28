@@ -4,6 +4,13 @@ Internal cluster lifecycle layer. Apps do not construct `ClusterManager` directl
 
 `ClusterManager` handles Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalog serving (reads from a `SessionHandle: Send + Sync`), registry-entry fetch, stream open, and clean shutdown. `SessionHandle` is defined in `auki-network` to avoid a dependency cycle.
 
+Peers can join the cluster before their resource catalog is ready. The
+resources handler answers each inbound `/auki/resources/0.2.0` request with a
+fresh snapshot from the registered `ResourceCatalogProvider`, or from
+`SessionHandle::catalog()` when no provider is installed. Producers should only
+return resources that can currently accept stream opens; unavailable resources
+are omitted until they become requestable again.
+
 **Status:** Shipped. Internal to `auki-session` for app use.
 
 ## Public surface (consumed by `auki-session`)

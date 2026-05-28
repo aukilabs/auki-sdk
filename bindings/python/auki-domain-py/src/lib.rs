@@ -1649,7 +1649,8 @@ impl PyClusterManager {
     }
 
     /// Register the resource catalog provider callable. `callable` must
-    /// return a list of `ResourceEntry` objects.
+    /// return a list of `ResourceEntry` objects and is invoked for each
+    /// inbound `/auki/resources/0.2.0` fetch.
     fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
         let provider = Arc::new(PyResourceCatalogProvider { callable });
         self.with_inner(|m| {

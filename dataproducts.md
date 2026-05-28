@@ -11,6 +11,37 @@ This document describes the **`ResourceEntry` descriptor schema** — the serial
 
 ---
 
+## `/auki/resources/0.2.0` live catalog contract
+
+Cluster membership and resource readiness are decoupled. A peer may join a
+cluster before its sensors, logs, registries, or stream handlers are ready.
+Consumers must treat `/auki/resources/0.2.0` as a live, pollable snapshot of
+the resources that are currently requestable from that peer.
+
+Contract:
+
+- A resource row means the producer can currently accept the matching
+  `/auki/stream/0.2.0` open for that `source_peer_id` + `resource_id` on the
+  peer being dialed.
+- Producers should not advertise resources whose stream opens would currently
+  fail because the backing stream, log, or registry dependency is not ready.
+- Consumers, including Park, are expected to poll `/auki/resources/0.2.0` and
+  reconcile rows that appear or disappear over time.
+- `resource_id` values are stable logical IDs scoped to `source_peer_id`.
+  Temporary outages should remove a row from the catalog, not mint a new ID; if
+  the same logical resource becomes requestable again, it should reappear with
+  the same `resource_id`.
+- An empty `resources` list is a valid response: the peer has joined and
+  supports the protocol, but currently advertises no requestable resources.
+
+The current schema has no supported `unavailable` or `degraded` state. The
+only documented `state` values are `"live"` and `"sealed"`, and the `available`
+block describes coverage volume, not health. Until the schema grows an explicit
+availability state, producers signal unavailable resources by omitting those
+rows from the catalog. A row with `available.entries = 0` is only valid when the
+producer can still accept the stream open (for example, a freshly-started live
+tail with no samples yet).
+
 ## Resource catalog row (`ResourceEntry`)
 
 Every log variant is described by one `ResourceEntry`. The row is discriminated by a closed `variant` field; variant-specific metadata lives in typed blocks (`sensor`, `pose`, `manifest`). Common fields (`source_peer_id`, `writer_peer_id`, `resource_id`, `state`, `head`/`extent`, `available`) appear on every row.

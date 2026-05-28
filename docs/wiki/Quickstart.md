@@ -202,6 +202,12 @@ print("log_ref:", log.log_ref.source_peer_id, "/", log.log_ref.resource_id)
 
 `Session::catalog()` returns one `ResourceEntry` row per registered log, in the `/auki/resources/0.2.0` wire shape. This is the same payload a peer publishes over the network so others can discover what it owns.
 
+Over the network, `/auki/resources/0.2.0` is a live snapshot of resources that
+are currently requestable. A peer may join before every producer is ready.
+Consumers should poll and reconcile rows that appear or disappear; producers
+should omit resources that cannot currently accept stream opens and re-add the
+same stable `resource_id` when they recover.
+
 **Rust**
 
 ```rust

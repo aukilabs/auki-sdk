@@ -31,6 +31,7 @@ The Auki protocol is built around five questions any node should be able to answ
 - **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`.
 - **`Session`** — declarative app-facing API (in `auki-session`) for registering sensors, clocks, frames, detectors, and their logs, joining a domain, and advertising the resource catalog. `ClusterManager` is internal infrastructure that `Session::join_domain` constructs and owns.
 - The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
+- `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics
@@ -74,7 +75,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-manifests-py`](bindings/python/auki-manifests-py) | Log-manifest builders | ✓ |
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
 | [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `PoseStreamResource` and `open_pose_stream` | ✓ |
+| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `ResourceEntry`, resource-catalog fetch, and typed stream openers including pose | ✓ |
 | [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
 
 ### `bindings/swift/` — UniFFI

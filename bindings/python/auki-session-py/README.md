@@ -17,7 +17,7 @@ s = Session("galbot", "galbot-ctrl").with_storage_root("/data/auki")
 ```
 
 - `Session(peer_id, app_id)` — constructor; generates a ULID `session_id`.
-- `with_storage_root(path)` — builder method (returns self).
+- `with_storage_root(path)` — in-place builder. Mutates the session's storage root and returns `self` for chaining. **Preserves `session_id`** — calling it after the constructor does not regenerate the ULID. Under the hood, calls Rust's `Session::set_storage_root` (the binding-friendly sibling of `Session::with_storage_root(self, root) -> Self`).
 - Read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`.
 
 ### Registry registration

@@ -694,24 +694,15 @@ impl Session {
 
     /// Set the storage root for registry and log files.
     ///
-    /// This method replaces the inner session with a new one at the given path.
-    /// The session_id changes (a fresh ULID is generated) because the Rust
-    /// `Session::with_storage_root` takes ownership.
-    /// Call this before registering sensors/logs to avoid losing registrations.
+    /// Preserves `session_id` — the underlying Rust `SessionInner` is
+    /// mutated in place via `Session::set_storage_root`, so the ULID
+    /// generated at construction stays stable across the call.
     ///
     /// Returns self for chaining: ``s = Session("p","a").with_storage_root("/tmp")``
     fn with_storage_root(slf: Py<Session>, path: &str, py: Python<'_>) -> Py<Session> {
-        let (peer_id, app_id) = {
-            let guard = slf.borrow(py);
-            let inner = guard.inner.lock();
-            (inner.peer_id(), inner.app_id())
-        };
-        let new_session =
-            session::Session::new(peer_id, app_id)
-                .with_storage_root(PathBuf::from(path));
         {
             let guard = slf.borrow(py);
-            *guard.inner.lock() = new_session;
+            guard.inner.lock().set_storage_root(PathBuf::from(path));
         }
         slf
     }

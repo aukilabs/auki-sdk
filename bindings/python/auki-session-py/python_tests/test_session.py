@@ -114,6 +114,18 @@ def test_with_storage_root(tmp_path: pathlib.Path) -> None:
     assert pathlib.Path(s.storage_root) == tmp_path
 
 
+def test_with_storage_root_preserves_session_id(tmp_path: pathlib.Path) -> None:
+    import auki_session
+
+    s = auki_session.Session(PEER_ID, APP_ID)
+    original_session_id = s.session_id
+    s.with_storage_root(str(tmp_path))
+    # session_id is stable across the call — with_storage_root mutates
+    # the underlying SessionInner in place via Rust's set_storage_root.
+    assert s.session_id == original_session_id
+    assert pathlib.Path(s.storage_root) == tmp_path
+
+
 # ─── test_session_id_is_ulid ────────────────────────────────────────────────
 
 

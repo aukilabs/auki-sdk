@@ -10,8 +10,8 @@
 //! dispatch enum is *closed* over the SDK-supported `T`s (`CameraFrame`,
 //! `point_cloud::Data`, `pose::SpatialTransform`, etc.; new variants added per coordinated
 //! SDK + consumer release). Each substream is mono-`T`; the producer's
-//! callback decides which `T` based on `request.sensor_id` or
-//! `request.resource_id`.
+//! callback decides which `T` based on the full
+//! `(request.source_peer_id, request.resource_id)` log identity.
 //!
 //! Consumer side: [`NetworkRuntime::open_stream`] returns a typed
 //! [`StreamSubscription<T>`] containing the [`StreamManifest`] from the
@@ -37,8 +37,8 @@
 //! the producer's callback was `StreamProvider<CameraFrame>`, returning
 //! `StreamDecision<CameraFrame>`. Dagaz lifts that pinning so a single
 //! daemon can serve multiple `T`s (camera + pointcloud, today). The
-//! producer dispatches on `request.resource_id` (and optionally `request.source_peer_id`) and returns a
-//! [`StreamDispatch`] variant matching whichever `T` that sensor emits.
+//! producer dispatches on `(request.source_peer_id, request.resource_id)` and
+//! returns a [`StreamDispatch`] variant matching whichever `T` that log emits.
 //! New `T` = new `StreamDispatch` variant + a coordinated SDK-consumer
 //! release; on the wire each substream stays purely typed end-to-end.
 
@@ -185,9 +185,9 @@ pub enum StreamDispatch {
 /// allocating buffers) lives *inside* the source-Stream the app
 /// constructs and returns.
 ///
-/// The producer dispatches on `request.resource_id` (and optionally
-/// `request.source_peer_id`) to pick which [`StreamDispatch`] variant to
-/// return — each substream is mono-`T` end-to-end (per grimsby D1:
+/// The producer dispatches on `(request.source_peer_id, request.resource_id)`
+/// to pick which [`StreamDispatch`] variant to return — each substream is
+/// mono-`T` end-to-end (per grimsby D1:
 /// substream lifetime IS the subscription).
 ///
 /// The first argument is the libp2p [`PeerId`] of the requester. The
@@ -924,6 +924,32 @@ mod tests {
         })
     }
 
+    fn audio_provider_for_source_qualified_resource() -> StreamProvider {
+        Arc::new(|_peer, req| {
+            if req.source_peer_id != "galbot-b" || req.resource_id != "head_left_rgb" {
+                return StreamDispatch::Decline {
+                    reason: DeclineReason::sensor_not_found(),
+                };
+            }
+
+            StreamDispatch::AcceptAudio {
+                manifest: StreamManifest {
+                    resource_id: req.resource_id,
+                    payload: "pcm".into(),
+                    clock_id: "galbot-b/session-clock".into(),
+                    clock_hash: "clock-hash-b".into(),
+                    ..Default::default()
+                },
+                source: Box::pin(stream::iter(vec![Ok(StreamItem {
+                    timestamp_ns: 42,
+                    payload: audio::Data {
+                        data: vec![0x01, 0x02, 0x03],
+                    },
+                })])),
+            }
+        })
+    }
+
     fn multi_t_provider() -> StreamProvider {
         Arc::new(|_peer, req| match req.resource_id.as_str() {
             "camera" => StreamDispatch::AcceptCamera {
@@ -967,7 +993,7 @@ mod tests {
 
     // ─── Cluster-trust-boundary gate (resolved 2026-05-13) ───────────────
 
-    /// Non-cluster peer's `/auki/stream/0.1.0` substream is silently
+    /// Non-cluster peer's `/auki/stream/0.2.0` substream is silently
     /// dropped. Producer's `StreamProvider` is **never invoked**.
     /// Pins the option-A trust-boundary resolution (server-side gate,
     /// silent-drop, no typed `Decline { NotInCluster }` variant).
@@ -975,7 +1001,7 @@ mod tests {
     /// Setup: P has an empty allow-list (C is unknown). C has P in its
     /// allow-list (so C auto-dials P; libp2p connection-layer is open
     /// by default per PR #106, so the handshake completes regardless).
-    /// C opens a `/auki/stream/0.1.0` substream; P's runtime sees the
+    /// C opens a `/auki/stream/0.2.0` substream; P's runtime sees the
     /// inbound substream from a non-allow-listed peer at
     /// `network_runtime.rs:604` and drops it before
     /// `handle_inbound_substream` (and thus the provider) ever runs.
@@ -1711,8 +1737,71 @@ mod tests {
         consumer.shutdown();
     }
 
+    /// Source identity is part of the stream-open resource identity.
+    /// This pins the PR #256/#259 rule that equal `resource_id` values
+    /// from different data-origin peers are distinct request targets.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_dispatches_duplicate_resource_ids_by_source_peer_id() {
+        let id_p = PeerIdentity::from_seed(&[143u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[144u8; 32]);
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-source-resource-p/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-source-resource-c/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
+            audio_provider_for_source_qualified_resource(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("consumer spawn");
+
+        let connected = poll_until(
+            || consumer.connected_peers().contains(&id_p.peer_id()),
+            Duration::from_secs(15),
+        )
+        .await;
+        assert!(connected, "consumer did not connect to producer within 15s");
+
+        let sub: StreamSubscription<audio::Data> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    source_peer_id: "galbot-b".into(),
+                    resource_id: "head_left_rgb".into(),
+                    from: Default::default(),
+                },
+            )
+            .await
+            .expect("open_stream<audio::Data>");
+
+        assert_eq!(sub.manifest.resource_id, "head_left_rgb");
+        assert_eq!(sub.manifest.payload, "pcm");
+
+        let mut entries = sub.entries;
+        let frame = entries.next().await.unwrap().expect("audio frame ok");
+        assert_eq!(frame.timestamp_ns, 42);
+        assert_eq!(frame.payload.data, vec![0x01, 0x02, 0x03]);
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
     /// One producer serves both Camera and PointCloud over the same
-    /// runtime via `sensor_id` dispatch (Dagaz D1). Three substreams
+    /// runtime via `resource_id` dispatch (Dagaz D1). Three substreams
     /// over one libp2p connection: camera → AcceptCamera, pointcloud →
     /// AcceptPointCloud, unknown sensor → Decline.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

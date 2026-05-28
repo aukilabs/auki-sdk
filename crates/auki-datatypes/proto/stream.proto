@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package auki.stream;
 
-// libp2p substream protocol envelope for `/auki/stream/0.1.0`.
+// libp2p substream protocol envelope for `/auki/stream/0.2.0`.
 //
 // Each substream is a sequence of length-prefixed [`StreamMessage`]
 // values (4-byte big-endian u32 length + protobuf-encoded body). The
@@ -20,7 +20,7 @@ package auki.stream;
 // `CameraFrame`, `PointCloudFrame`, `SpatialTransform`).
 //
 // Field number ledger (never reuse, never renumber):
-//   StreamRequest.sensor_id      = 1
+//   StreamRequest.sensor_id      = 1 (legacy; use resource_id + source_peer_id)
 //   StreamRequest.resource_id    = 2
 //   StreamRequest.source_peer_id = 3
 //   StreamRequest.read_from      = 4..5 (oneof: latest=4 unit, from_start=5 unit, from_timestamp=6 int64)

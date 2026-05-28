@@ -1248,7 +1248,7 @@ impl ClusterManager {
     }
 
     /// Open an outbound stream subscription on `peer_id` for the
-    /// named sensor. Thin delegator over
+    /// source-qualified log named by `request`. Thin delegator over
     /// [`NetworkRuntime::open_stream`] — the cluster handle is the
     /// daemon's natural entry point and shouldn't force consumers to
     /// reach into the runtime directly.
@@ -1258,11 +1258,12 @@ impl ClusterManager {
     /// ([`OpenStreamError::Declined { reason }`]) the request. The
     /// peer must be a member of the cluster (checked by the
     /// runtime's allow-list on the producer side per the
-    /// `/auki/stream/0.1.0` trust-boundary resolution 2026-05-13 —
+    /// `/auki/stream/0.2.0` trust-boundary resolution 2026-05-13 —
     /// non-cluster substreams are silently dropped).
     ///
     /// `T` is the typed payload the substream carries (`CameraFrame`,
-    /// `PointCloudFrame`, `JointEncodersFrame`); the consumer
+    /// `PointCloudFrame`, `JointEncodersFrame`, audio, pose, or detection);
+    /// the consumer
     /// statically knows which `T` to expect per call.
     pub async fn open_stream<T>(
         &self,

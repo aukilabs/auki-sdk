@@ -391,6 +391,7 @@ mod tests {
     #[test]
     fn pose_request_and_manifest_round_trip_resource_identity() {
         let request = StreamRequest {
+            source_peer_id: "galbot".into(),
             resource_id: "K1/base_link->K1/head_left_rgb_optical".into(),
             ..Default::default()
         };
@@ -813,6 +814,7 @@ mod tests {
     #[test]
     fn typed_session_matches_message_order_spec() {
         let wire_req = stream_request_to_wire(StreamRequest {
+            source_peer_id: "galbot".into(),
             resource_id: "ordered".into(),
             ..Default::default()
         });

@@ -8,18 +8,25 @@
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <h1>Auki P2P Preview</h1>
+        <div class="brand">
+          <div class="brand-mark" aria-label="Auki">
+            <img src="./auki-monogram-white.svg" alt="" />
+            <img src="./auki-wordmark-white.svg" alt="Auki" />
+          </div>
+          <div>
+            <span class="eyebrow">Posemesh SDK demo</span>
+            <h1>P2P Preview</h1>
+          </div>
         </div>
         <div class="actions">
-          <button id="diagnostics-button" type="button">Diagnostics</button>
+          <button id="diagnostics-button" type="button" hidden>Diagnostics</button>
           <button id="connect-button" type="button">Start Peer</button>
-          <button id="stop-button" type="button" disabled>Stop</button>
+          <button id="stop-button" type="button" disabled hidden>Stop</button>
         </div>
       </header>
 
-      <section class="workspace">
-        <section class="panel streams-panel">
+      <section id="workspace" class="workspace" hidden>
+        <section id="streams-panel" class="panel streams-panel" hidden>
           <div class="section-heading">
             <h2>Offers</h2>
             <span id="stream-summary">No offers</span>
@@ -27,10 +34,10 @@
           <div id="streams-grid" class="streams-grid"></div>
         </section>
 
-        <aside class="panel peers-panel">
+        <aside id="peers-panel" class="panel peers-panel" hidden>
           <div class="section-heading">
             <h2>Peers</h2>
-            <button id="add-peer-button" type="button">Add</button>
+            <button id="add-peer-button" type="button">Add Peer</button>
           </div>
           <div id="peer-list" class="peer-list"></div>
         </aside>

@@ -78,6 +78,9 @@ const els = {
   diagnosticsButton: element<HTMLButtonElement>("diagnostics-button"),
   diagnosticsDialog: element<HTMLDialogElement>("diagnostics-dialog"),
   diagnosticsClose: element<HTMLButtonElement>("diagnostics-close"),
+  workspace: element("workspace"),
+  streamsPanel: element("streams-panel"),
+  peersPanel: element("peers-panel"),
   connectButton: element<HTMLButtonElement>("connect-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
   addPeerButton: element<HTMLButtonElement>("add-peer-button"),
@@ -133,7 +136,7 @@ els.addPeerCancel.addEventListener("click", () => {
   els.addPeerDialog.close();
 });
 els.addPeerClear.addEventListener("click", () => {
-  els.addPeerInput.value = "";
+  clearAddPeerInput();
 });
 els.addPeerFile.addEventListener("change", () => {
   void loadAddPeerFile();
@@ -243,14 +246,23 @@ async function addPeersFromInput(): Promise<void> {
     if (records.length === 0) {
       throw new Error("Bootstrap JSON must include at least one peer");
     }
-    const peer = await ensurePeerStarted(records);
+    const peer = state.peer;
+    if (!peer) {
+      throw new Error("Start peer before adding remote peers");
+    }
     await peer.connectBootstrap(records);
     state.bootstraps = mergeBootstrapRecords(state.bootstraps, records);
     await refreshPeerData();
     state.status = "Peer added";
     recordEvent("info", "Connected bootstrap peers", records.length.toString());
     els.addPeerDialog.close();
+    clearAddPeerInput();
   });
+}
+
+function clearAddPeerInput(): void {
+  els.addPeerInput.value = "";
+  els.addPeerFile.value = "";
 }
 
 async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
@@ -497,6 +509,9 @@ async function refreshPeerData(): Promise<void> {
 }
 
 function openAddPeerDialog(): void {
+  if (!state.peer) {
+    return;
+  }
   els.addPeerDialog.showModal();
   els.addPeerInput.focus();
 }
@@ -585,6 +600,15 @@ function render(): void {
 
 function renderLiveStats(): void {
   const totals = aggregateRuntimeStats();
+  const hasPeer = Boolean(state.peer);
+  const hasRemoteContext = state.peers.length > 0 || state.offers.length > 0;
+  els.workspace.hidden = !hasPeer;
+  els.workspace.classList.toggle("peer-only", !hasRemoteContext);
+  els.peersPanel.hidden = !hasPeer;
+  els.streamsPanel.hidden = !hasRemoteContext;
+  els.diagnosticsButton.hidden = !hasPeer;
+  els.stopButton.hidden = !hasPeer;
+  els.connectButton.hidden = hasPeer;
   els.snapshotsReceived.textContent = totals.snapshots.toString();
   els.framesReceived.textContent = totals.frames.toString();
   els.streamRate.textContent = `${totals.rate.toFixed(1)} fps`;
@@ -604,11 +628,12 @@ function renderLiveStats(): void {
     state.offers.length === 0
       ? "No offers"
       : `${totals.activeStreams} active / ${state.offers.length} offer(s)`;
-  els.connectButton.disabled = state.busy || Boolean(state.peer);
-  els.connectButton.textContent = state.peer ? "Peer Started" : "Start Peer";
+  els.connectButton.disabled = state.busy || hasPeer;
+  els.connectButton.textContent = "Start Peer";
   els.stopButton.disabled = state.busy || !state.peer;
-  els.addPeerButton.disabled = state.busy;
-  els.addPeerSubmit.disabled = state.busy;
+  els.addPeerButton.disabled = state.busy || !state.peer;
+  els.addPeerButton.textContent = "Add Peer";
+  els.addPeerSubmit.disabled = state.busy || !state.peer;
 }
 
 function renderPeerSidebar(peers: PeerSummary[]): void {
@@ -622,7 +647,7 @@ function renderPeerSidebar(peers: PeerSummary[]): void {
   if (!state.peer && peers.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-peers";
-    empty.textContent = "No peers";
+    empty.textContent = "Start peer";
     els.peerList.append(empty);
   }
 }
@@ -766,7 +791,7 @@ function renderStreams(offers: OfferSummary[]): void {
   if (offers.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-streams";
-    empty.textContent = "No preview offers loaded";
+    empty.textContent = emptyOffersMessage();
     els.streamsGrid.append(empty);
     return;
   }
@@ -792,6 +817,16 @@ function renderStreams(offers: OfferSummary[]): void {
     group.append(grid);
     els.streamsGrid.append(group);
   }
+}
+
+function emptyOffersMessage(): string {
+  if (!state.peer) {
+    return "Start peer to begin";
+  }
+  if (state.peers.length === 0) {
+    return "Add peer to load offers";
+  }
+  return "No offers loaded";
 }
 
 function streamCard(offer: OfferSummary): HTMLElement {

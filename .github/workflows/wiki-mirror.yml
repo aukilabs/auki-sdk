@@ -1,0 +1,69 @@
+name: Mirror docs/wiki to GitHub Wiki
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'docs/wiki/**'
+      - '.github/workflows/wiki-mirror.yml'
+  workflow_dispatch:
+
+# Only one mirror at a time; if a second push lands while one is running,
+# cancel the in-flight one so the latest content always wins.
+concurrency:
+  group: wiki-mirror
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Mirror to wiki
+        env:
+          GH_TOKEN: ${{ secrets.WIKI_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Clone the wiki repo. The wiki is auto-created by GitHub the first
+          # time someone creates a page through the web UI. If this clone
+          # fails with "repository not found", that one-time UI bootstrap
+          # hasn't happened yet — create a stub Home page at
+          # https://github.com/${REPO}/wiki and re-run this workflow.
+          if ! git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" wiki; then
+            echo "::error::Wiki repo not yet initialized. Visit https://github.com/${REPO}/wiki and create the first page, then re-run this workflow."
+            exit 1
+          fi
+
+          # Sync docs/wiki/ to wiki/. --delete removes pages that have been
+          # removed from docs/wiki/. README.md is excluded — that file
+          # documents the mirror pattern for repo readers and isn't user-
+          # facing wiki content.
+          rsync -av --delete \
+            --exclude '.git' \
+            --exclude 'README.md' \
+            docs/wiki/ wiki/
+
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "No wiki changes to publish."
+          else
+            git commit -m "Sync wiki from main repo @ ${SHA:0:7}
+
+            Source: https://github.com/${REPO}/commit/${SHA}
+            "
+            git push
+            echo "Published wiki update."
+          fi

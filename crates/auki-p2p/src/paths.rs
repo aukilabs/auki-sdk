@@ -28,6 +28,7 @@ const SUBSCRIBE_STARTING: &str = "starting";
 const SUBSCRIBE_ACTIVE: &str = "active";
 const SUBSCRIBE_ENDING: &str = "ending";
 const SUBSCRIBE_ENDED: &str = "ended";
+const GET_CLIENT_RETRY_ATTEMPTS: usize = 2;
 
 /// Internal client boundary for one Get operation.
 pub trait GetClient {
@@ -457,7 +458,7 @@ pub async fn get<C: GetClient>(
         }
     };
 
-    let frame = match client.get(relationship.peer_id, request.clone()).await {
+    let frame = match get_with_retry(client, relationship.peer_id, request.clone()).await {
         Ok(frame) => frame,
         Err(error) => {
             let error = PathOrchestrationError::GetClient(error);
@@ -542,6 +543,24 @@ pub async fn get<C: GetClient>(
     relationship.upsert_path(path, context.config.limits.completed_path_history);
 
     Ok(GetOutcome { path_id, message })
+}
+
+async fn get_with_retry<C: GetClient>(
+    client: &mut C,
+    peer_id: PeerId,
+    request: GetRequest,
+) -> Result<Vec<u8>, PathClientError> {
+    let mut attempts = 0_usize;
+    loop {
+        match client.get(peer_id, request.clone()).await {
+            Ok(frame) => return Ok(frame),
+            Err(error) if error.retryable && attempts < GET_CLIENT_RETRY_ATTEMPTS => {
+                attempts = attempts.saturating_add(1);
+                tokio::task::yield_now().await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Start one high-level Subscribe operation.
@@ -1161,6 +1180,31 @@ mod tests {
         }
     }
 
+    struct RetryOnceGetClient {
+        frame: Vec<u8>,
+        attempts: usize,
+    }
+
+    impl GetClient for RetryOnceGetClient {
+        fn get(
+            &mut self,
+            _peer_id: PeerId,
+            _request: GetRequest,
+        ) -> impl Future<Output = Result<Vec<u8>, PathClientError>> {
+            self.attempts = self.attempts.saturating_add(1);
+            let result = if self.attempts == 1 {
+                Err(PathClientError::new(
+                    error::TRANSPORT_FAILED,
+                    "temporary get stream reset",
+                    true,
+                ))
+            } else {
+                Ok(self.frame.clone())
+            };
+            async move { result }
+        }
+    }
+
     #[derive(Default)]
     struct StaticSubscribeClient {
         frame: Option<Vec<u8>>,
@@ -1317,6 +1361,35 @@ mod tests {
             relationship.paths[0].path_type.as_deref(),
             Some(GET_PATH_TYPE)
         );
+    }
+
+    #[tokio::test]
+    async fn get_retries_retryable_client_failure_before_recording_failure() {
+        let config = test_config();
+        let mut relationship = test_relationship();
+        let response = GetResponse::success(message(DOMAIN_ID, "camera-main", "auki.frame", 8));
+        let mut client = RetryOnceGetClient {
+            frame: frame(
+                response.value(),
+                config.limits.get_response_frame_body_bytes,
+            ),
+            attempts: 0,
+        };
+
+        let outcome = get(
+            &mut relationship,
+            &offer_report(),
+            &mut client,
+            GetInput::new(DOMAIN_ID, "camera-main"),
+            context(&config),
+        )
+        .await
+        .expect("retry succeeds");
+
+        assert_eq!(outcome.message.sequence, Some(8));
+        assert_eq!(client.attempts, 2);
+        assert_eq!(relationship.paths[0].state.as_deref(), Some(GET_SUCCEEDED));
+        assert!(relationship.last_failures.is_empty());
     }
 
     #[tokio::test]

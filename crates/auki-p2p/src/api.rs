@@ -45,12 +45,17 @@ use futures::{AsyncReadExt as _, StreamExt as _, io::WriteHalf};
 use libp2p::{Multiaddr, PeerId};
 use serde_json::{Map, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fmt,
     future::Future,
     time::{Duration, Instant},
 };
-use tokio::sync::oneshot;
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
+
+const INBOUND_ACCEPT_BUFFER: usize = 1024;
 
 /// High-level RFC-first runtime handle for SDK and app code.
 pub struct AukiNode {
@@ -60,13 +65,16 @@ pub struct AukiNode {
     remote_offer_reports: BTreeMap<PeerId, OfferLoadReport>,
     relationships: BTreeMap<PeerId, PeerRelationship>,
     lifecycle_stream_guard: LifecycleStreamGuard,
-    lifecycle_incoming: Option<libp2p_stream::IncomingStreams>,
-    offer_catalog_incoming: Option<libp2p_stream::IncomingStreams>,
-    get_incoming: Option<libp2p_stream::IncomingStreams>,
+    lifecycle_accept_task: Option<JoinHandle<()>>,
+    offer_catalog_accept_task: Option<JoinHandle<()>>,
+    get_accept_task: Option<JoinHandle<()>>,
+    subscribe_accept_task: Option<JoinHandle<()>>,
+    inbound_accept_tx: mpsc::Sender<AcceptedInboundStream>,
+    inbound_accept_rx: mpsc::Receiver<AcceptedInboundStream>,
     get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
-    subscribe_incoming: Option<libp2p_stream::IncomingStreams>,
     subscribe_providers: BTreeMap<(String, String), Box<dyn AukiSubscribeProvider>>,
     local_publications: BTreeMap<(String, String), LocalOfferPublication>,
+    pending_inbound: VecDeque<AcceptedInboundStream>,
 }
 
 enum AcceptedInboundStream {
@@ -74,6 +82,63 @@ enum AcceptedInboundStream {
     OfferCatalog(PeerId, libp2p::Stream),
     Get(PeerId, libp2p::Stream),
     Subscribe(PeerId, libp2p::Stream),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AcceptedInboundKind {
+    Lifecycle,
+    OfferCatalog,
+    Get,
+    Subscribe,
+}
+
+impl AcceptedInboundStream {
+    fn kind(&self) -> AcceptedInboundKind {
+        match self {
+            Self::Lifecycle(_, _) => AcceptedInboundKind::Lifecycle,
+            Self::OfferCatalog(_, _) => AcceptedInboundKind::OfferCatalog,
+            Self::Get(_, _) => AcceptedInboundKind::Get,
+            Self::Subscribe(_, _) => AcceptedInboundKind::Subscribe,
+        }
+    }
+}
+
+impl Drop for AukiNode {
+    fn drop(&mut self) {
+        for task in [
+            &self.lifecycle_accept_task,
+            &self.offer_catalog_accept_task,
+            &self.get_accept_task,
+            &self.subscribe_accept_task,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task.abort();
+        }
+    }
+}
+
+fn spawn_inbound_accept_task(
+    mut incoming: libp2p_stream::IncomingStreams,
+    kind: AcceptedInboundKind,
+    accepted_tx: mpsc::Sender<AcceptedInboundStream>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some((peer_id, stream)) = incoming.next().await {
+            let accepted = match kind {
+                AcceptedInboundKind::Lifecycle => AcceptedInboundStream::Lifecycle(peer_id, stream),
+                AcceptedInboundKind::OfferCatalog => {
+                    AcceptedInboundStream::OfferCatalog(peer_id, stream)
+                }
+                AcceptedInboundKind::Get => AcceptedInboundStream::Get(peer_id, stream),
+                AcceptedInboundKind::Subscribe => AcceptedInboundStream::Subscribe(peer_id, stream),
+            };
+            if accepted_tx.send(accepted).await.is_err() {
+                break;
+            }
+        }
+    })
 }
 
 /// Local domain authority material registered with the high-level node.
@@ -752,6 +817,7 @@ impl AukiNode {
         config: AukiP2pNodeConfig,
     ) -> Result<Self, AukiNodeError> {
         let node = AukiP2pNode::new(identity, config).map_err(AukiNodeError::from)?;
+        let (inbound_accept_tx, inbound_accept_rx) = mpsc::channel(INBOUND_ACCEPT_BUFFER);
         let mut this = Self {
             node,
             local_domains: BTreeMap::new(),
@@ -759,13 +825,16 @@ impl AukiNode {
             remote_offer_reports: BTreeMap::new(),
             relationships: BTreeMap::new(),
             lifecycle_stream_guard: LifecycleStreamGuard::default(),
-            lifecycle_incoming: None,
-            offer_catalog_incoming: None,
-            get_incoming: None,
+            lifecycle_accept_task: None,
+            offer_catalog_accept_task: None,
+            get_accept_task: None,
+            subscribe_accept_task: None,
+            inbound_accept_tx,
+            inbound_accept_rx,
             get_providers: BTreeMap::new(),
-            subscribe_incoming: None,
             subscribe_providers: BTreeMap::new(),
             local_publications: BTreeMap::new(),
+            pending_inbound: VecDeque::new(),
         };
         for peer in this.node.configured_peers().to_vec() {
             this.relationship_mut(peer.peer_id).configured();
@@ -1066,16 +1135,10 @@ impl AukiNode {
         input: LifecycleInput,
         now: &str,
     ) -> Result<Option<HandshakeValidationResult>, AukiNodeError> {
-        self.ensure_lifecycle_incoming()?;
-        let accepted = {
-            let node = &mut self.node;
-            let incoming = self
-                .lifecycle_incoming
-                .as_mut()
-                .expect("lifecycle incoming should be registered");
-            drive_node_until(node, incoming.next()).await
-        };
-        let Some((peer_id, mut stream)) = accepted else {
+        let Some(AcceptedInboundStream::Lifecycle(peer_id, mut stream)) = self
+            .accept_next_matching_inbound_stream(AcceptedInboundKind::Lifecycle)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1132,7 +1195,7 @@ impl AukiNode {
             &local_handshake,
             p2p_config.limits.handshake_frame_body_bytes,
         );
-        let exchange = match drive_node_until(&mut self.node, exchange).await {
+        let exchange = match self.drive_node_until_accepting_inbound(exchange).await? {
             Ok(exchange) => exchange,
             Err(error) => {
                 self.lifecycle_stream_guard.fail(peer_id);
@@ -1198,16 +1261,10 @@ impl AukiNode {
         &mut self,
         generated_at: Option<&str>,
     ) -> Result<Option<ServedOfferCatalog>, AukiNodeError> {
-        self.ensure_offer_catalog_incoming()?;
-        let accepted = {
-            let node = &mut self.node;
-            let incoming = self
-                .offer_catalog_incoming
-                .as_mut()
-                .expect("offer-catalog incoming should be registered");
-            drive_node_until(node, incoming.next()).await
-        };
-        let Some((peer_id, mut stream)) = accepted else {
+        let Some(AcceptedInboundStream::OfferCatalog(peer_id, mut stream)) = self
+            .accept_next_matching_inbound_stream(AcceptedInboundKind::OfferCatalog)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1224,12 +1281,12 @@ impl AukiNode {
     ) -> Result<ServedOfferCatalog, AukiNodeError> {
         let response = self.local_offer_catalog_response(generated_at)?;
         let limits = self.node.config().p2p.limits;
-        let request = drive_node_until(
-            &mut self.node,
-            serve_offer_catalog_response(stream, &response, limits),
-        )
-        .await
-        .map_err(AukiNodeError::OfferCatalogServe)?;
+        let request = self
+            .drive_node_until_accepting_inbound(serve_offer_catalog_response(
+                stream, &response, limits,
+            ))
+            .await?
+            .map_err(AukiNodeError::OfferCatalogServe)?;
         Ok(ServedOfferCatalog {
             peer_id,
             domain_ids: request.domain_ids,
@@ -1304,16 +1361,10 @@ impl AukiNode {
 
     /// Serve one inbound Get stream with a registered local provider.
     pub async fn serve_next_get(&mut self, now: &str) -> Result<Option<ServedGet>, AukiNodeError> {
-        self.ensure_get_incoming()?;
-        let accepted = {
-            let node = &mut self.node;
-            let incoming = self
-                .get_incoming
-                .as_mut()
-                .expect("get incoming should be registered");
-            drive_node_until(node, incoming.next()).await
-        };
-        let Some((peer_id, mut stream)) = accepted else {
+        let Some(AcceptedInboundStream::Get(peer_id, mut stream)) = self
+            .accept_next_matching_inbound_stream(AcceptedInboundKind::Get)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1329,35 +1380,39 @@ impl AukiNode {
         now: &str,
     ) -> Result<ServedGet, AukiNodeError> {
         let max_body_len = self.node.config().p2p.limits.get_response_frame_body_bytes;
-        let request =
-            match drive_node_until(&mut self.node, read_get_request(stream, max_body_len)).await {
-                Ok(request) => request,
-                Err(GetServeError::Request(error)) => {
-                    let response = get_failure_response(error.failure_code());
-                    let served = ServedGet {
-                        peer_id,
-                        domain_id: None,
-                        offer_id: None,
-                        success: false,
-                        failure_code: Some(error.failure_code().to_owned()),
-                    };
-                    drive_node_until(
-                        &mut self.node,
-                        write_get_response(stream, &response, max_body_len),
-                    )
-                    .await
-                    .map_err(AukiNodeError::GetServe)?;
-                    return Ok(served);
-                }
-                Err(error) => return Err(AukiNodeError::GetServe(error)),
-            };
+        let request = match self
+            .drive_node_until_accepting_inbound(read_get_request(stream, max_body_len))
+            .await?
+        {
+            Ok(request) => request,
+            Err(GetServeError::Request(error)) => {
+                let response = get_failure_response(error.failure_code());
+                let served = ServedGet {
+                    peer_id,
+                    domain_id: None,
+                    offer_id: None,
+                    success: false,
+                    failure_code: Some(error.failure_code().to_owned()),
+                };
+                self.drive_node_until_accepting_inbound(write_get_response(
+                    stream,
+                    &response,
+                    max_body_len,
+                ))
+                .await?
+                .map_err(AukiNodeError::GetServe)?;
+                return Ok(served);
+            }
+            Err(error) => return Err(AukiNodeError::GetServe(error)),
+        };
 
         let (response, served) = self.local_get_response(peer_id, &request, now);
-        drive_node_until(
-            &mut self.node,
-            write_get_response(stream, &response, max_body_len),
-        )
-        .await
+        self.drive_node_until_accepting_inbound(write_get_response(
+            stream,
+            &response,
+            max_body_len,
+        ))
+        .await?
         .map_err(AukiNodeError::GetServe)?;
         Ok(served)
     }
@@ -1367,16 +1422,10 @@ impl AukiNode {
         &mut self,
         now: &str,
     ) -> Result<Option<ServedSubscribe>, AukiNodeError> {
-        self.ensure_subscribe_incoming()?;
-        let accepted = {
-            let node = &mut self.node;
-            let incoming = self
-                .subscribe_incoming
-                .as_mut()
-                .expect("subscribe incoming should be registered");
-            drive_node_until(node, incoming.next()).await
-        };
-        let Some((peer_id, stream)) = accepted else {
+        let Some(AcceptedInboundStream::Subscribe(peer_id, stream)) = self
+            .accept_next_matching_inbound_stream(AcceptedInboundKind::Subscribe)
+            .await?
+        else {
             return Ok(None);
         };
 
@@ -1397,24 +1446,23 @@ impl AukiNode {
             .p2p
             .limits
             .subscribe_message_frame_body_bytes;
-        let request = match drive_node_until(
-            &mut self.node,
-            read_subscribe_request(&mut stream, max_body_len),
-        )
-        .await
+        let request = match self
+            .drive_node_until_accepting_inbound(read_subscribe_request(&mut stream, max_body_len))
+            .await?
         {
             Ok(request) => request,
             Err(SubscribeServeError::Request(error)) => {
                 let (start, served) =
                     subscribe_reject_result(peer_id, None, None, error.failure_code());
-                drive_node_until(
-                    &mut self.node,
-                    write_subscribe_start_result(&mut stream, &start, max_body_len),
-                )
-                .await
+                self.drive_node_until_accepting_inbound(write_subscribe_start_result(
+                    &mut stream,
+                    &start,
+                    max_body_len,
+                ))
+                .await?
                 .map_err(AukiNodeError::SubscribeServe)?;
-                drive_node_until(&mut self.node, close_subscribe_stream(&mut stream))
-                    .await
+                self.drive_node_until_accepting_inbound(close_subscribe_stream(&mut stream))
+                    .await?
                     .map_err(AukiNodeError::SubscribeServe)?;
                 return Ok(served);
             }
@@ -1422,11 +1470,12 @@ impl AukiNode {
         };
 
         let start = self.local_subscribe_start(peer_id, &request, now);
-        drive_node_until(
-            &mut self.node,
-            write_subscribe_start_result(&mut stream, &start.response, max_body_len),
-        )
-        .await
+        self.drive_node_until_accepting_inbound(write_subscribe_start_result(
+            &mut stream,
+            &start.response,
+            max_body_len,
+        ))
+        .await?
         .map_err(AukiNodeError::SubscribeServe)?;
 
         let mut served = start.served;
@@ -1448,8 +1497,8 @@ impl AukiNode {
                 ended: false,
             });
         } else {
-            drive_node_until(&mut self.node, close_subscribe_stream(&mut stream))
-                .await
+            self.drive_node_until_accepting_inbound(close_subscribe_stream(&mut stream))
+                .await?
                 .map_err(AukiNodeError::SubscribeServe)?;
         }
 
@@ -1545,11 +1594,11 @@ impl AukiNode {
             )
             .map_err(|error| AukiNodeError::SubscribeServe(SubscribeServeError::Data(error)))?;
 
-        drive_node_until(
-            &mut self.node,
-            write_encoded_subscribe_frame(&mut subscription.stream, &frame),
-        )
-        .await
+        self.drive_node_until_accepting_inbound(write_encoded_subscribe_frame(
+            &mut subscription.stream,
+            &frame,
+        ))
+        .await?
         .map_err(AukiNodeError::SubscribeServe)
     }
 
@@ -1586,11 +1635,12 @@ impl AukiNode {
             .p2p
             .limits
             .subscribe_message_frame_body_bytes;
-        drive_node_until(
-            &mut self.node,
-            write_subscribe_end(&mut subscription.stream, &end, max_body_len),
-        )
-        .await
+        self.drive_node_until_accepting_inbound(write_subscribe_end(
+            &mut subscription.stream,
+            &end,
+            max_body_len,
+        ))
+        .await?
         .map_err(AukiNodeError::SubscribeServe)?;
         subscription.ended = true;
         Ok(())
@@ -1760,106 +1810,150 @@ impl AukiNode {
     }
 
     fn ensure_get_incoming(&mut self) -> Result<(), AukiNodeError> {
-        if self.get_incoming.is_some() {
+        if self.get_accept_task.is_some() {
             return Ok(());
         }
 
         let mut control = self.node.stream_control();
-        self.get_incoming =
-            Some(accept_get_streams(&mut control).map_err(AukiNodeError::GetAccept)?);
+        let incoming = accept_get_streams(&mut control).map_err(AukiNodeError::GetAccept)?;
+        self.get_accept_task = Some(spawn_inbound_accept_task(
+            incoming,
+            AcceptedInboundKind::Get,
+            self.inbound_accept_tx.clone(),
+        ));
         Ok(())
     }
 
     fn ensure_lifecycle_incoming(&mut self) -> Result<(), AukiNodeError> {
-        if self.lifecycle_incoming.is_some() {
+        if self.lifecycle_accept_task.is_some() {
             return Ok(());
         }
 
         let mut control = self.node.stream_control();
-        self.lifecycle_incoming =
-            Some(accept_lifecycle_streams(&mut control).map_err(AukiNodeError::LifecycleAccept)?);
+        let incoming =
+            accept_lifecycle_streams(&mut control).map_err(AukiNodeError::LifecycleAccept)?;
+        self.lifecycle_accept_task = Some(spawn_inbound_accept_task(
+            incoming,
+            AcceptedInboundKind::Lifecycle,
+            self.inbound_accept_tx.clone(),
+        ));
         Ok(())
     }
 
     fn ensure_offer_catalog_incoming(&mut self) -> Result<(), AukiNodeError> {
-        if self.offer_catalog_incoming.is_some() {
+        if self.offer_catalog_accept_task.is_some() {
             return Ok(());
         }
 
         let mut control = self.node.stream_control();
-        self.offer_catalog_incoming = Some(
-            accept_offer_catalog_streams(&mut control)
-                .map_err(AukiNodeError::OfferCatalogAccept)?,
-        );
+        let incoming = accept_offer_catalog_streams(&mut control)
+            .map_err(AukiNodeError::OfferCatalogAccept)?;
+        self.offer_catalog_accept_task = Some(spawn_inbound_accept_task(
+            incoming,
+            AcceptedInboundKind::OfferCatalog,
+            self.inbound_accept_tx.clone(),
+        ));
         Ok(())
     }
 
     fn ensure_subscribe_incoming(&mut self) -> Result<(), AukiNodeError> {
-        if self.subscribe_incoming.is_some() {
+        if self.subscribe_accept_task.is_some() {
             return Ok(());
         }
 
         let mut control = self.node.stream_control();
-        self.subscribe_incoming =
-            Some(accept_subscribe_streams(&mut control).map_err(AukiNodeError::SubscribeAccept)?);
+        let incoming =
+            accept_subscribe_streams(&mut control).map_err(AukiNodeError::SubscribeAccept)?;
+        self.subscribe_accept_task = Some(spawn_inbound_accept_task(
+            incoming,
+            AcceptedInboundKind::Subscribe,
+            self.inbound_accept_tx.clone(),
+        ));
         Ok(())
+    }
+
+    fn ensure_inbound_acceptors(&mut self) -> Result<(), AukiNodeError> {
+        self.ensure_lifecycle_incoming()?;
+        self.ensure_offer_catalog_incoming()?;
+        self.ensure_get_incoming()?;
+        self.ensure_subscribe_incoming()
+    }
+
+    fn take_pending_inbound(&mut self, kind: AcceptedInboundKind) -> Option<AcceptedInboundStream> {
+        let index = self
+            .pending_inbound
+            .iter()
+            .position(|accepted| accepted.kind() == kind)?;
+        self.pending_inbound.remove(index)
+    }
+
+    async fn accept_next_matching_inbound_stream(
+        &mut self,
+        kind: AcceptedInboundKind,
+    ) -> Result<Option<AcceptedInboundStream>, AukiNodeError> {
+        if let Some(accepted) = self.take_pending_inbound(kind) {
+            return Ok(Some(accepted));
+        }
+
+        loop {
+            let Some(accepted) = self.accept_live_inbound_stream().await? else {
+                return Ok(None);
+            };
+            if accepted.kind() == kind {
+                return Ok(Some(accepted));
+            }
+            self.pending_inbound.push_back(accepted);
+        }
     }
 
     async fn accept_next_inbound_stream(
         &mut self,
     ) -> Result<Option<AcceptedInboundStream>, AukiNodeError> {
-        self.ensure_lifecycle_incoming()?;
-        self.ensure_offer_catalog_incoming()?;
-        self.ensure_get_incoming()?;
-        self.ensure_subscribe_incoming()?;
+        if let Some(accepted) = self.pending_inbound.pop_front() {
+            return Ok(Some(accepted));
+        }
 
+        self.accept_live_inbound_stream().await
+    }
+
+    pub(crate) fn has_pending_inbound_streams(&self) -> bool {
+        !self.pending_inbound.is_empty() || !self.inbound_accept_rx.is_empty()
+    }
+
+    async fn accept_live_inbound_stream(
+        &mut self,
+    ) -> Result<Option<AcceptedInboundStream>, AukiNodeError> {
+        self.ensure_inbound_acceptors()?;
         loop {
-            let node = &mut self.node;
-            let lifecycle_incoming = self
-                .lifecycle_incoming
-                .as_mut()
-                .expect("lifecycle incoming should be registered");
-            let offer_catalog_incoming = self
-                .offer_catalog_incoming
-                .as_mut()
-                .expect("offer-catalog incoming should be registered");
-            let get_incoming = self
-                .get_incoming
-                .as_mut()
-                .expect("get incoming should be registered");
-            let subscribe_incoming = self
-                .subscribe_incoming
-                .as_mut()
-                .expect("subscribe incoming should be registered");
-
             tokio::select! {
                 biased;
-                accepted = lifecycle_incoming.next() => {
-                    return Ok(accepted.map(|(peer_id, stream)| {
-                        AcceptedInboundStream::Lifecycle(peer_id, stream)
-                    }));
+                accepted = self.inbound_accept_rx.recv() => {
+                    return Ok(accepted);
                 }
-                accepted = offer_catalog_incoming.next() => {
-                    return Ok(accepted.map(|(peer_id, stream)| {
-                        AcceptedInboundStream::OfferCatalog(peer_id, stream)
-                    }));
-                }
-                accepted = get_incoming.next() => {
-                    return Ok(accepted.map(|(peer_id, stream)| {
-                        AcceptedInboundStream::Get(peer_id, stream)
-                    }));
-                }
-                accepted = subscribe_incoming.next() => {
-                    return Ok(accepted.map(|(peer_id, stream)| {
-                        AcceptedInboundStream::Subscribe(peer_id, stream)
-                    }));
-                }
-                event = node.next_event() => {
+                event = self.node.next_event() => {
                     let Some(event) = event else {
                         return Ok(None);
                     };
-                    node.push_pending_event(event);
+                    self.node.push_pending_event(event);
                 }
+            }
+        }
+    }
+
+    async fn drive_node_until_accepting_inbound<T>(
+        &mut self,
+        future: impl Future<Output = T>,
+    ) -> Result<T, AukiNodeError> {
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                biased;
+                accepted = self.accept_live_inbound_stream() => {
+                    if let Some(accepted) = accepted? {
+                        self.pending_inbound.push_back(accepted);
+                    }
+                }
+                result = &mut future => return Ok(result),
             }
         }
     }
@@ -4206,6 +4300,186 @@ mod tests {
         assert_eq!(status.frames_sent, 2);
         assert_eq!(status.gets_served, 1);
         assert_eq!(final_status, status);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_serves_burst_gets_from_second_peer_while_subscription_streams() {
+        let listener_wallet = wallet(119);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[19; DOMAIN_NONCE_LEN],
+            Some("runtime-burst-get"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut subscriber =
+            AukiNode::new(identity(120), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut getter =
+            AukiNode::new(identity(121), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr.clone());
+
+        let source = crate::LatestPublishedByteSource::new();
+        assert!(source.publish(PublishedByteFrame::new(vec![0]).with_sequence(0)));
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "camera-main",
+                    "frame",
+                    PayloadDescriptor::create("auki.frame"),
+                    source.clone(),
+                )
+                .with_access_modes(vec![OfferAccessMode::Get, OfferAccessMode::Subscribe])
+                .with_backpressure_policy(crate::AukiSubscriptionBackpressurePolicy::LatestOnly),
+            )
+            .expect("publish offer");
+        let get_domain_id = domain_id.clone();
+        listener
+            .upsert_get_provider(
+                domain_id.clone(),
+                "camera-main",
+                move |_request: &GetRequest, _now: &str| {
+                    Ok(message(&get_domain_id, "camera-main", 77))
+                },
+            )
+            .expect("get provider");
+
+        let producer_source = source.clone();
+        let producer = tokio::spawn(async move {
+            let mut sequence = 1_u64;
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                if !producer_source
+                    .publish(PublishedByteFrame::new(vec![1]).with_sequence(sequence))
+                {
+                    return;
+                }
+                sequence = sequence.saturating_add(1);
+            }
+        });
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (server_stop_tx, mut server_stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let mut served_tx = Some(served_tx);
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        _ = &mut server_stop_rx, if served_tx.is_none() => break,
+                        result = runtime.serve_next(ISSUED_AT) => {
+                            result.expect("serve next runtime event");
+                            if runtime.status().gets_served >= 20
+                                && let Some(tx) = served_tx.take()
+                            {
+                                tx.send(runtime.status().clone())
+                                    .expect("send runtime status");
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("runtime should serve burst gets while subscription is active");
+
+            runtime.status().clone()
+        });
+
+        subscriber
+            .upsert_configured_peer(listener_peer.clone())
+            .expect("subscriber configured peer");
+        subscriber
+            .dial_configured_peer(listener_peer_id)
+            .expect("subscriber dials listener");
+        wait_for_peer_connected(&mut subscriber, listener_peer_id).await;
+        subscriber.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let mut subscription = timeout(
+            Duration::from_secs(5),
+            subscriber.subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("subscribe should not time out")
+        .expect("subscribe should start");
+        let first = subscriber
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first subscription message");
+        assert!(first.sequence.is_some());
+
+        let (reader_stop_tx, mut reader_stop_rx) = tokio::sync::oneshot::channel();
+        let subscriber_reader = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut reader_stop_rx => break,
+                    result = subscriber.next_subscription_message(
+                        &mut subscription,
+                        "2026-05-26T12:01:01Z",
+                    ) => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        getter
+            .upsert_configured_peer(listener_peer)
+            .expect("getter configured peer");
+        getter
+            .dial_configured_peer(listener_peer_id)
+            .expect("getter dials listener");
+        wait_for_peer_connected(&mut getter, listener_peer_id).await;
+        getter.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        for index in 0..20 {
+            let result = timeout(
+                Duration::from_secs(5),
+                getter.get(
+                    listener_peer_id,
+                    GetInput::new(domain_id.clone(), "camera-main"),
+                    ISSUED_AT,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("get {index} should not time out"));
+            let outcome =
+                result.unwrap_or_else(|error| panic!("get {index} should succeed: {error:?}"));
+            assert_eq!(outcome.message.sequence, Some(77));
+        }
+
+        let status = served_rx.await.expect("runtime status");
+        let _ = server_stop_tx.send(());
+        let final_status = server.await.expect("server task");
+        source.close();
+        producer.abort();
+        let _ = reader_stop_tx.send(());
+        subscriber_reader.await.expect("subscriber reader task");
+
+        assert_eq!(status.subscriptions_accepted, 1);
+        assert_eq!(status.active_subscriptions, 1);
+        assert!(status.gets_served >= 20);
+        assert!(final_status.gets_served >= 20);
+        assert_eq!(final_status.subscriptions_accepted, 1);
     }
 
     #[tokio::test]

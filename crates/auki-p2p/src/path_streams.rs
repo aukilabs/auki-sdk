@@ -75,7 +75,6 @@ impl Libp2pPathClient {
             "get response",
         )
         .await?;
-        close_stream(&mut stream, "get").await?;
         Ok(response)
     }
 
@@ -252,13 +251,6 @@ where
             Err(error) => return Err(frame_error(label, error, "frame decode failed")),
         }
     }
-}
-
-async fn close_stream<S>(stream: &mut S, label: &'static str) -> Result<(), PathClientError>
-where
-    S: AsyncWrite + Unpin,
-{
-    stream.close().await.map_err(|error| io_error(label, error))
 }
 
 fn open_stream_error(

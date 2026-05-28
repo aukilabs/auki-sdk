@@ -498,6 +498,24 @@ impl AukiServeRuntime {
             if let Some(event) = self.poll_consumer_end()? {
                 return Ok(Some(event));
             }
+            if self.node.has_pending_inbound_streams() {
+                match self
+                    .node
+                    .serve_next_inbound(self.lifecycle_input.clone(), now)
+                    .await
+                {
+                    Ok(Some(served)) => return self.handle_inbound(served),
+                    Ok(None) => {}
+                    Err(error) if is_duplicate_inbound_lifecycle(&error) => {
+                        self.status.duplicate_lifecycle_attempts =
+                            self.status.duplicate_lifecycle_attempts.saturating_add(1);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if let Some(event) = self.poll_inbound_once(now).await? {
+                return Ok(Some(event));
+            }
             if let Some(event) = self.pop_queued_source_event(now).await? {
                 return Ok(Some(event));
             }
@@ -537,6 +555,32 @@ impl AukiServeRuntime {
                 RuntimePoll::SourceReady(None) => return Ok(None),
                 RuntimePoll::ConsumerEndTick => {}
             }
+        }
+    }
+
+    async fn poll_inbound_once(
+        &mut self,
+        now: &str,
+    ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        let lifecycle_input = self.lifecycle_input.clone();
+        let inbound = {
+            let node = &mut self.node;
+            tokio::select! {
+                biased;
+                inbound = node.serve_next_inbound(lifecycle_input, now) => Some(inbound),
+                _ = tokio::task::yield_now() => None,
+            }
+        };
+
+        match inbound {
+            Some(Ok(Some(served))) => self.handle_inbound(served),
+            Some(Ok(None)) | None => Ok(None),
+            Some(Err(error)) if is_duplicate_inbound_lifecycle(&error) => {
+                self.status.duplicate_lifecycle_attempts =
+                    self.status.duplicate_lifecycle_attempts.saturating_add(1);
+                Ok(None)
+            }
+            Some(Err(error)) => Err(error),
         }
     }
 

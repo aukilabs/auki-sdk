@@ -312,9 +312,9 @@ pub async fn spawn_for_swift(
     // 3. Build the upstream StreamProvider closure from the Swift provider.
     let upstream_provider = swift_provider_to_upstream(stream_provider);
 
-    // 4. Spawn the runtime. The 9-element tuple destructure: (Self,
+    // 4. Spawn the runtime. The 8-element tuple destructure: (Self,
     //    join_rx, liveness_rx, membership_rx, info_rx, resources_rx,
-    //    sensors_rx, registry_rx, diagnostic_rx). At v0 we only wire
+    //    registry_rx, diagnostic_rx). At v0 we only wire
     //    liveness_rx to the Swift listener; the others are dropped
     //    (their senders' errors are swallowed by run_task).
     let (
@@ -324,7 +324,6 @@ pub async fn spawn_for_swift(
         _membership_rx,
         _info_rx,
         _resources_rx,
-        _sensors_rx,
         _registry_rx,
         _diagnostic_rx,
     ) = auki_network_rs::NetworkRuntime::spawn(

@@ -1,14 +1,12 @@
 // Generated TypeScript bindings for the Auki browser control-plane protos:
 // - crates/auki-datatypes/proto/join.proto
 // - crates/auki-datatypes/proto/info.proto
-// - crates/auki-datatypes/proto/sensors.proto
 //
 // The libp2p substream framing is a 4-byte big-endian length prefix followed
 // by protobuf bytes, matching auki-network's Rust helpers.
 
 export const JOIN_PROTOCOL = "/auki/join/0.0.1";
 export const INFO_PROTOCOL = "/auki/info/0.0.1";
-export const SENSORS_PROTOCOL = "/auki/sensors/0.0.1";
 export const STREAM_PROTOCOL = "/auki/stream/0.1.0";
 
 export const MAX_CONTROL_FRAME_BYTES = 1024 * 1024;
@@ -161,97 +159,6 @@ export const InfoResponse: ProtocolMessage<InfoResponse> = {
       }
     }
     return message;
-  },
-};
-
-export type SensorsRequest = {
-  includeRegistryEntries?: boolean;
-  includeFrameEntries?: boolean;
-};
-
-export const SensorsRequest: ProtocolMessage<SensorsRequest> = {
-  encode(message) {
-    const writer = new ProtoWriter();
-    if (message.includeRegistryEntries) writer.bool(1, message.includeRegistryEntries);
-    if (message.includeFrameEntries) writer.bool(2, message.includeFrameEntries);
-    return writer.finish();
-  },
-  decode(bytes) {
-    const reader = new ProtoReader(bytes);
-    const message: Required<SensorsRequest> = {
-      includeRegistryEntries: false,
-      includeFrameEntries: false,
-    };
-    while (!reader.done()) {
-      const { field, wireType } = reader.tag();
-      if (field === 1 && wireType === 0) {
-        message.includeRegistryEntries = reader.varint() !== 0;
-      } else if (field === 2 && wireType === 0) {
-        message.includeFrameEntries = reader.varint() !== 0;
-      } else {
-        reader.skip(wireType);
-      }
-    }
-    return message;
-  },
-};
-
-export type SensorEntry = {
-  sensorId: string;
-  sensorHash: string;
-  kind: string;
-  sensorEntryJson?: string;
-  frameEntryJson?: string;
-};
-
-export type SensorsResponse = {
-  sensors: SensorEntry[];
-};
-
-export const SensorsResponse: ProtocolMessage<SensorsResponse> = {
-  encode(message) {
-    const writer = new ProtoWriter();
-    for (const sensor of message.sensors) {
-      const inner = new ProtoWriter();
-      inner.string(1, sensor.sensorId);
-      inner.string(2, sensor.sensorHash);
-      inner.string(3, sensor.kind);
-      if (sensor.sensorEntryJson !== undefined) inner.string(4, sensor.sensorEntryJson);
-      if (sensor.frameEntryJson !== undefined) inner.string(5, sensor.frameEntryJson);
-      writer.bytes(1, inner.finish());
-    }
-    return writer.finish();
-  },
-  decode(bytes) {
-    const reader = new ProtoReader(bytes);
-    const sensors: SensorEntry[] = [];
-    while (!reader.done()) {
-      const { field, wireType } = reader.tag();
-      if (field !== 1 || wireType !== 2) {
-        reader.skip(wireType);
-        continue;
-      }
-      const sensorReader = new ProtoReader(reader.bytes());
-      const sensor: SensorEntry = { sensorId: "", sensorHash: "", kind: "" };
-      while (!sensorReader.done()) {
-        const tag = sensorReader.tag();
-        if (tag.field === 1 && tag.wireType === 2) {
-          sensor.sensorId = sensorReader.string();
-        } else if (tag.field === 2 && tag.wireType === 2) {
-          sensor.sensorHash = sensorReader.string();
-        } else if (tag.field === 3 && tag.wireType === 2) {
-          sensor.kind = sensorReader.string();
-        } else if (tag.field === 4 && tag.wireType === 2) {
-          sensor.sensorEntryJson = sensorReader.string();
-        } else if (tag.field === 5 && tag.wireType === 2) {
-          sensor.frameEntryJson = sensorReader.string();
-        } else {
-          sensorReader.skip(tag.wireType);
-        }
-      }
-      sensors.push(sensor);
-    }
-    return { sensors };
   },
 };
 

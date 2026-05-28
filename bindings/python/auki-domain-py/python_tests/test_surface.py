@@ -23,8 +23,6 @@ def test_module_imports_post_216_surface() -> None:
     assert hasattr(auki_domain, "ClusterMembership")
     assert hasattr(auki_domain, "DaemonInfo")
     assert hasattr(auki_domain, "ParticipantInfo")
-    assert hasattr(auki_domain, "SensorEntry")
-
     # Post-#216 resource catalog type (replaces SensorStreamResource etc.)
     assert hasattr(auki_domain, "ResourceEntry")
 
@@ -44,6 +42,7 @@ def test_module_imports_post_216_surface() -> None:
     assert hasattr(auki_domain.ClusterManager, "open_stream_with_request")
 
     # Old deleted types must NOT be present
+    assert not hasattr(auki_domain, "SensorEntry")
     assert not hasattr(auki_domain, "SensorStreamResource")
     assert not hasattr(auki_domain, "TransformEdgeResource")
     assert not hasattr(auki_domain, "PoseStreamResource")
@@ -86,32 +85,6 @@ def test_stream_manifest_builder_missing_sensor_is_file_not_found(
             "clock",
             "clock-hash",
         )
-
-
-def test_sensor_entry_value_type() -> None:
-    import auki_domain
-
-    entry = auki_domain.SensorEntry(
-        "K1-AABBCCDDEEFF/head_depth_points",
-        "sensor-hash",
-        "point_cloud",
-    )
-
-    assert entry.sensor_id == "K1-AABBCCDDEEFF/head_depth_points"
-    assert entry.sensor_hash == "sensor-hash"
-    assert entry.kind == "point_cloud"
-    assert entry == auki_domain.SensorEntry(
-        "K1-AABBCCDDEEFF/head_depth_points",
-        "sensor-hash",
-        "point_cloud",
-    )
-
-
-def test_sensor_entry_rejects_unknown_kind() -> None:
-    import auki_domain
-
-    with pytest.raises(ValueError, match="sensor kind"):
-        auki_domain.SensorEntry("robot/sensor", "hash", "rgb_camera")
 
 
 # ─── ReadFrom tests ──────────────────────────────────────────────────────────

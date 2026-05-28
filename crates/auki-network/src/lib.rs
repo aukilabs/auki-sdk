@@ -111,9 +111,6 @@ pub mod diagnostic_protocol;
 pub mod info_protocol;
 
 #[cfg(feature = "swarm")]
-pub mod sensors_protocol;
-
-#[cfg(feature = "swarm")]
 pub mod resources_protocol;
 
 #[cfg(feature = "swarm")]
@@ -142,8 +139,8 @@ pub use network_runtime::{
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
     InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
     PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
-    SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
+    RequestResourcesError, ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError,
+    UpdateReport,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]

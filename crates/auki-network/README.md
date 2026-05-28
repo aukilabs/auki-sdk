@@ -1,6 +1,6 @@
 # auki-network
 
-The libp2p substrate for the SDK and the Discovery HTTP client. Behind the `swarm` feature: TCP/QUIC transport, Noise, Yamux, Circuit Relay v2, identify, ping, and a native helper for reserving a relay-mediated Manager address through a Domain Relay. On top: the typed `/auki/stream/0.2.0` stream protocol and the peer-to-peer control protocols (join, heartbeat, membership, info, resources, sensors, registries). The Discovery client carries both Manager multiaddrs and optional Relay multiaddrs for browser-compatible reachability hints.
+The libp2p substrate for the SDK and the Discovery HTTP client. Behind the `swarm` feature: TCP/QUIC transport, Noise, Yamux, Circuit Relay v2, identify, ping, and a native helper for reserving a relay-mediated Manager address through a Domain Relay. On top: the typed `/auki/stream/0.2.0` stream protocol and the peer-to-peer control protocols (join, heartbeat, membership, info, resources, registries). The Discovery client carries both Manager multiaddrs and optional Relay multiaddrs for browser-compatible reachability hints.
 
 Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `app_instance` value is MAC-derived per machine.
 
@@ -9,7 +9,7 @@ Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `
 ## Public surface
 
 - Types: `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`
-- Modules: `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `sensors_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`
+- Modules: `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`
 - `SessionHandle` trait — implemented by `auki_session::Session`; called by the resources protocol handler to serve catalog rows to remote peers. Defined here to break the potential `auki-domain` ↔ `auki-session` cycle.
 - Resource catalog protocol `/auki/resources/0.2.0`: `ResourceEntry` rows discriminated by `variant` (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`). Each row has `source_peer_id`, `writer_peer_id`, `resource_id`, `state`, `head` | `extent`, `available`, optional `sensor` block (only on `sensor_log`: `kind`/`type`/`sensor_id`/`sensor_hash`), optional `pose` block (only on `pose_log`: `writer_mode`), and a variant-specific `manifest` pointer. Replaces the old `SensorStreamResource` / `TransformEdgeResource` / `PoseStreamResource` types.
 - Stream request type `StreamRequest { source_peer_id, resource_id, read_from }` where `read_from` is a `oneof` (`latest`, `from_start`, `from_timestamp(i64)`).

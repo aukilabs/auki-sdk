@@ -10,7 +10,6 @@
 //!   produced by `ClusterManager.participant_info`. Has a
 //!   `.to_json()` method daemons serve verbatim on their HTTP
 //!   surface.
-//! - `SensorEntry` — one row in a peer's sensor catalog.
 //! - `ResourceEntry` — post-#216 flat resource catalog row with
 //!   `variant_content` discriminator (`sensor_log` | `pose_log` |
 //!   `time_transform_log` | `detection_log`).
@@ -28,9 +27,7 @@ use auki_domain_rs::{
     DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
     JoinClusterError as RustJoinClusterError, ResourceCatalogProvider as RustResourceCatalogProvider,
-    ResourceEntry as RustResourceEntry, SensorCatalogProvider as RustSensorCatalogProvider,
-    SensorEntry as RustSensorEntry, SensorsRequest as RustSensorsRequest,
-    StreamManifestBuilder as RustStreamManifestBuilder,
+    ResourceEntry as RustResourceEntry, StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
 use auki_network::ParticipantInfo as RustParticipantInfo;
@@ -39,7 +36,6 @@ use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
 use auki_network::resources_protocol::{
     ResourcesRequest as RustResourcesRequest, Variant as RustVariant,
 };
-use auki_network::sensors_protocol::SensorKind as RustSensorKind;
 use auki_network::stream_protocol::{
     CameraFrame as RustCameraFrame, ReadFrom as RustReadFrom, StreamRequest as RustStreamRequest,
     audio::Data as RustAudioFrame, joint_encoders::Data as RustJointEncodersFrame,
@@ -461,113 +457,6 @@ impl PyParticipantInfo {
             self.inner.is_manager,
             self.inner.manager_peer_id,
         )
-    }
-}
-
-// ─── SensorEntry pyclass ───────────────────────────────────────────
-
-/// One row in a peer's sensor catalog. Produced by
-/// `ClusterManager.fetch_sensors_catalog(peer_id)` (consumer side)
-/// and supplied by the daemon's catalog provider callable
-/// (producer side, via `ClusterManager.set_sensor_catalog_provider`).
-#[pyclass(name = "SensorEntry")]
-#[derive(Clone, Debug)]
-pub struct PySensorEntry {
-    inner: RustSensorEntry,
-}
-
-#[pymethods]
-impl PySensorEntry {
-    #[new]
-    #[pyo3(signature = (sensor_id, sensor_hash, kind, sensor_entry_json = None, frame_entry_json = None))]
-    fn new(
-        sensor_id: String,
-        sensor_hash: String,
-        kind: String,
-        sensor_entry_json: Option<String>,
-        frame_entry_json: Option<String>,
-    ) -> PyResult<Self> {
-        if RustSensorKind::parse(&kind).is_none() {
-            return Err(PyValueError::new_err(format!(
-                "sensor kind must be one of camera, point_cloud, joint_encoders, or audio; got {kind:?}"
-            )));
-        }
-        Ok(Self {
-            inner: RustSensorEntry {
-                sensor_id,
-                sensor_hash,
-                kind,
-                sensor_entry_json,
-                frame_entry_json,
-            },
-        })
-    }
-
-    #[getter]
-    fn sensor_id(&self) -> String {
-        self.inner.sensor_id.clone()
-    }
-
-    #[getter]
-    fn sensor_hash(&self) -> String {
-        self.inner.sensor_hash.clone()
-    }
-
-    #[getter]
-    fn kind(&self) -> String {
-        self.inner.kind.clone()
-    }
-
-    #[getter]
-    fn sensor_entry_json(&self) -> Option<String> {
-        self.inner.sensor_entry_json.clone()
-    }
-
-    #[getter]
-    fn frame_entry_json(&self) -> Option<String> {
-        self.inner.frame_entry_json.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SensorEntry(sensor_id={:?}, sensor_hash={:?}, kind={:?}, sensor_entry_json={}, frame_entry_json={})",
-            self.inner.sensor_id,
-            self.inner.sensor_hash,
-            self.inner.kind,
-            self.inner.sensor_entry_json.is_some(),
-            self.inner.frame_entry_json.is_some(),
-        )
-    }
-
-    fn __eq__(&self, other: &Self) -> bool {
-        self.inner == other.inner
-    }
-}
-
-/// Adapter: wraps a Python callable returning `list[SensorEntry]` in
-/// a Rust `SensorCatalogProvider`. Called from the inbound
-/// `/auki/sensors/0.0.1` handler task — re-acquires the GIL on each
-/// snapshot.
-struct PySensorCatalogProvider {
-    callable: Py<PyAny>,
-}
-
-impl RustSensorCatalogProvider for PySensorCatalogProvider {
-    fn snapshot(&self) -> Vec<RustSensorEntry> {
-        Python::with_gil(|py| {
-            let result = self
-                .callable
-                .bind(py)
-                .call0()
-                .and_then(|res| res.extract::<Vec<PyRef<PySensorEntry>>>());
-            match result {
-                Ok(entries) => entries.into_iter().map(|e| e.inner.clone()).collect(),
-                Err(e) => {
-                    eprintln!("auki-domain-py: sensor_catalog_provider callable failed: {e}");
-                    Vec::new()
-                }
-            }
-        })
     }
 }
 
@@ -1735,15 +1624,6 @@ impl PyClusterManager {
         })
     }
 
-    /// Register the sensor catalog provider callable.
-    fn set_sensor_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
-        let provider = Arc::new(PySensorCatalogProvider { callable });
-        self.with_inner(|m| {
-            m.set_sensor_catalog_provider(provider);
-            Ok(())
-        })
-    }
-
     /// Register the resource catalog provider callable. `callable` must
     /// return a list of `ResourceEntry` objects.
     fn set_resource_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
@@ -1760,42 +1640,6 @@ impl PyClusterManager {
         self.with_inner(|m| {
             m.set_registry_app_root(path);
             Ok(())
-        })
-    }
-
-    /// Fetch a cluster peer's current sensor catalog over `/auki/sensors/0.0.1`.
-    #[pyo3(signature = (peer_id, include_registry_entries = false, include_frame_entries = false))]
-    fn fetch_sensors_catalog(
-        &self,
-        py: Python<'_>,
-        peer_id: &str,
-        include_registry_entries: bool,
-        include_frame_entries: bool,
-    ) -> PyResult<Vec<PySensorEntry>> {
-        let peer_id_parsed = parse_peer_id(peer_id)?;
-        let inner = self.inner.clone();
-        py.allow_threads(|| {
-            shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
-                let resp = manager
-                    .fetch_sensors_catalog_with(
-                        peer_id_parsed,
-                        RustSensorsRequest {
-                            include_registry_entries,
-                            include_frame_entries,
-                        },
-                    )
-                    .await
-                    .map_err(map_fetch_sensors_catalog_error)?;
-                Ok(resp
-                    .sensors
-                    .into_iter()
-                    .map(|inner| PySensorEntry { inner })
-                    .collect())
-            })
         })
     }
 
@@ -2201,14 +2045,6 @@ fn map_fetch_participant_info_error(e: auki_domain_rs::FetchParticipantInfoError
     }
 }
 
-fn map_fetch_sensors_catalog_error(e: auki_domain_rs::FetchSensorsCatalogError) -> PyErr {
-    match e {
-        auki_domain_rs::FetchSensorsCatalogError::Request(err) => {
-            PyOSError::new_err(format!("fetch_sensors_catalog: {err}"))
-        }
-    }
-}
-
 fn map_fetch_resources_catalog_error(e: RustFetchResourcesCatalogError) -> PyErr {
     match e {
         RustFetchResourcesCatalogError::Request(err) => {
@@ -2266,7 +2102,6 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClusterMembership>()?;
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
-    m.add_class::<PySensorEntry>()?;
     m.add_class::<PyResourceEntry>()?;
     m.add_class::<PyReadFrom>()?;
     m.add_class::<PyStreamRequest>()?;
@@ -2339,7 +2174,6 @@ mod tests {
             assert!(module.getattr("ClusterMembership").is_ok());
             assert!(module.getattr("DaemonInfo").is_ok());
             assert!(module.getattr("ParticipantInfo").is_ok());
-            assert!(module.getattr("SensorEntry").is_ok());
             assert!(module.getattr("ResourceEntry").is_ok());
             assert!(module.getattr("ReadFrom").is_ok());
             assert!(module.getattr("StreamRequest").is_ok());
@@ -2657,24 +2491,6 @@ mod tests {
             resolve_generic_stream_payload_kind_from_entries(&resources, "world->base_link").unwrap(),
             GenericStreamPayloadKind::Pose
         );
-    }
-
-    #[test]
-    fn sensor_entry_constructor_rejects_unknown_sensor_kind() {
-        let err = PySensorEntry::new(
-            "K1-FAKE/head".into(),
-            "sensor-hash".into(),
-            "rgb_camera".into(),
-            None,
-            None,
-        )
-        .unwrap_err();
-
-        Python::with_gil(|py| {
-            assert!(err.is_instance_of::<PyValueError>(py));
-            assert!(err.to_string().contains("sensor kind"));
-            assert!(err.to_string().contains("rgb_camera"));
-        });
     }
 
     #[test]

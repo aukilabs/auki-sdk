@@ -16,11 +16,14 @@
 //!
 //! ## Type sharing
 //!
-//! `RegistryRef` and `LogRef` are defined here as pyclasses that mirror
-//! the same-named pyclasses in `auki-registry-py`. Both bindings construct
-//! them from the same underlying Rust `auki_registry::{RegistryRef,LogRef}`
-//! types. Python code that uses both packages can pass the objects
-//! interchangeably through JSON round-trip (dict form) if needed.
+//! `RegistryRef` and `LogRef` come from `auki-registry-py` — they are the
+//! canonical Python pyclasses for those types across the SDK. This crate
+//! re-exports them in the `auki_session` module so callers can import them
+//! from either package.
+//!
+//! Input parsing uses duck-typing via `getattr` / `__getitem__`: any object
+//! with the right field names (including `auki_registry.RegistryRef`
+//! instances, plain dicts, `SimpleNamespace`, etc.) is accepted.
 //!
 //! `PoseSource`, `PoseWriterMode`, and `TimeTransformSource` are accepted
 //! as Python dicts / strings, not as pyclasses — same convention as
@@ -34,6 +37,10 @@ use pyo3::exceptions::{PyNotImplementedError, PyOSError, PyRuntimeError, PyValue
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyModule};
 use serde_json::Value as JsonValue;
+
+// Bring auki-registry-py's lib (named `auki_registry`) into scope under a
+// distinct alias so it doesn't shadow the `auki_registry_rs as registry` alias.
+use auki_registry as registry_py;
 
 use auki_manifests_rs as manifests;
 use auki_registry_rs as registry;
@@ -71,37 +78,52 @@ fn parse_py<T: serde::de::DeserializeOwned>(
     serde_json::from_value(json).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
 }
 
-/// Parse a `registry::RegistryRef` from a Python object that is either a
-/// `RegistryRef` pyclass instance or a plain dict with `peer_id`, `id`, `hash`.
+/// Parse a `registry::RegistryRef` from a Python object via duck-typing.
+///
+/// Accepts any object with `peer_id`, `id`, `hash` attributes or dict keys —
+/// including `auki_registry.RegistryRef` instances, plain dicts,
+/// `SimpleNamespace`, and any other attribute-bearing object.
 fn parse_registry_ref(
-    py: Python<'_>,
+    _py: Python<'_>,
     value: &Bound<'_, PyAny>,
-    name: &str,
+    _name: &str,
 ) -> PyResult<registry::RegistryRef> {
-    if let Ok(r) = value.extract::<RegistryRef>() {
-        return Ok(registry::RegistryRef {
-            peer_id: r.peer_id,
-            id: r.id,
-            hash: r.hash,
-        });
-    }
-    parse_py(py, value, name)
+    let peer_id: String = value
+        .getattr("peer_id")
+        .or_else(|_| value.get_item("peer_id"))?
+        .extract()?;
+    let id: String = value
+        .getattr("id")
+        .or_else(|_| value.get_item("id"))?
+        .extract()?;
+    let hash: String = value
+        .getattr("hash")
+        .or_else(|_| value.get_item("hash"))?
+        .extract()?;
+    Ok(registry::RegistryRef { peer_id, id, hash })
 }
 
-/// Parse a `registry::LogRef` from a Python object that is either a
-/// `LogRef` pyclass instance or a plain dict with `source_peer_id`, `resource_id`.
+/// Parse a `registry::LogRef` from a Python object via duck-typing.
+///
+/// Accepts any object with `source_peer_id`, `resource_id` attributes or
+/// dict keys — including `auki_registry.LogRef` instances, plain dicts, etc.
 fn parse_log_ref(
-    py: Python<'_>,
+    _py: Python<'_>,
     value: &Bound<'_, PyAny>,
-    name: &str,
+    _name: &str,
 ) -> PyResult<registry::LogRef> {
-    if let Ok(r) = value.extract::<LogRef>() {
-        return Ok(registry::LogRef {
-            source_peer_id: r.source_peer_id,
-            resource_id: r.resource_id,
-        });
-    }
-    parse_py(py, value, name)
+    let source_peer_id: String = value
+        .getattr("source_peer_id")
+        .or_else(|_| value.get_item("source_peer_id"))?
+        .extract()?;
+    let resource_id: String = value
+        .getattr("resource_id")
+        .or_else(|_| value.get_item("resource_id"))?
+        .extract()?;
+    Ok(registry::LogRef {
+        source_peer_id,
+        resource_id,
+    })
 }
 
 /// Convert a `session::SessionError` to a Python exception.
@@ -134,65 +156,6 @@ fn map_session_error(err: session::SessionError) -> PyErr {
                 "leave_domain not yet supported from Python (requires libp2p swarm): {e}"
             ))
         }
-    }
-}
-
-// ─── RegistryRef / LogRef pyclasses ─────────────────────────────────────────
-
-/// Python representation of a `(peer_id, id, hash)` registry reference.
-/// Mirrors the same-named class in `auki-registry-py`.
-#[pyclass]
-#[derive(Clone)]
-pub struct RegistryRef {
-    #[pyo3(get, set)]
-    pub peer_id: String,
-    #[pyo3(get, set)]
-    pub id: String,
-    #[pyo3(get, set)]
-    pub hash: String,
-}
-
-#[pymethods]
-impl RegistryRef {
-    #[new]
-    fn new(peer_id: String, id: String, hash: String) -> Self {
-        Self { peer_id, id, hash }
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "RegistryRef(peer_id={:?}, id={:?}, hash={:?})",
-            self.peer_id, self.id, self.hash
-        )
-    }
-}
-
-/// Python representation of a `(source_peer_id, resource_id)` log reference.
-/// Mirrors the same-named class in `auki-registry-py`.
-#[pyclass]
-#[derive(Clone)]
-pub struct LogRef {
-    #[pyo3(get, set)]
-    pub source_peer_id: String,
-    #[pyo3(get, set)]
-    pub resource_id: String,
-}
-
-#[pymethods]
-impl LogRef {
-    #[new]
-    fn new(source_peer_id: String, resource_id: String) -> Self {
-        Self {
-            source_peer_id,
-            resource_id,
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "LogRef(source_peer_id={:?}, resource_id={:?})",
-            self.source_peer_id, self.resource_id
-        )
     }
 }
 
@@ -542,8 +505,8 @@ pub struct SensorLogHandle {
 impl SensorLogHandle {
     /// The `(source_peer_id, resource_id)` log reference.
     #[getter]
-    fn log_ref(&self) -> LogRef {
-        LogRef {
+    fn log_ref(&self) -> registry_py::LogRef {
+        registry_py::LogRef {
             source_peer_id: self.log_ref_inner.source_peer_id.clone(),
             resource_id: self.log_ref_inner.resource_id.clone(),
         }
@@ -563,8 +526,8 @@ pub struct PoseLogHandle {
 impl PoseLogHandle {
     /// The `(source_peer_id, resource_id)` log reference.
     #[getter]
-    fn log_ref(&self) -> LogRef {
-        LogRef {
+    fn log_ref(&self) -> registry_py::LogRef {
+        registry_py::LogRef {
             source_peer_id: self.log_ref_inner.source_peer_id.clone(),
             resource_id: self.log_ref_inner.resource_id.clone(),
         }
@@ -584,8 +547,8 @@ pub struct TimeTransformLogHandle {
 impl TimeTransformLogHandle {
     /// The `(source_peer_id, resource_id)` log reference.
     #[getter]
-    fn log_ref(&self) -> LogRef {
-        LogRef {
+    fn log_ref(&self) -> registry_py::LogRef {
+        registry_py::LogRef {
             source_peer_id: self.log_ref_inner.source_peer_id.clone(),
             resource_id: self.log_ref_inner.resource_id.clone(),
         }
@@ -605,8 +568,8 @@ pub struct DetectionLogHandle {
 impl DetectionLogHandle {
     /// The `(source_peer_id, resource_id)` log reference.
     #[getter]
-    fn log_ref(&self) -> LogRef {
-        LogRef {
+    fn log_ref(&self) -> registry_py::LogRef {
+        registry_py::LogRef {
             source_peer_id: self.log_ref_inner.source_peer_id.clone(),
             resource_id: self.log_ref_inner.resource_id.clone(),
         }
@@ -626,8 +589,8 @@ pub struct MaterializedLogHandle {
 impl MaterializedLogHandle {
     /// The `(source_peer_id, resource_id)` log reference.
     #[getter]
-    fn log_ref(&self) -> LogRef {
-        LogRef {
+    fn log_ref(&self) -> registry_py::LogRef {
+        registry_py::LogRef {
             source_peer_id: self.log_ref_inner.source_peer_id.clone(),
             resource_id: self.log_ref_inner.resource_id.clone(),
         }
@@ -751,18 +714,14 @@ impl Session {
         py: Python<'_>,
         sensor_id: &str,
         body: &Bound<'_, PyAny>,
-    ) -> PyResult<RegistryRef> {
+    ) -> PyResult<registry_py::RegistryRef> {
         let sensor_body: registry::SensorBody = parse_py(py, body, "body")?;
         let r = self
             .inner
             .lock()
             .register_sensor(sensor_id, sensor_body)
             .map_err(map_session_error)?;
-        Ok(RegistryRef {
-            peer_id: r.peer_id,
-            id: r.id,
-            hash: r.hash,
-        })
+        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
 
     /// Register a clock, writing the entry to disk.
@@ -783,18 +742,14 @@ impl Session {
         py: Python<'_>,
         clock_id: &str,
         body: &Bound<'_, PyAny>,
-    ) -> PyResult<RegistryRef> {
+    ) -> PyResult<registry_py::RegistryRef> {
         let clock_body: registry::ClockBody = parse_py(py, body, "body")?;
         let r = self
             .inner
             .lock()
             .register_clock(clock_id, clock_body)
             .map_err(map_session_error)?;
-        Ok(RegistryRef {
-            peer_id: r.peer_id,
-            id: r.id,
-            hash: r.hash,
-        })
+        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
 
     /// Register a coordinate frame using a preset.
@@ -807,17 +762,13 @@ impl Session {
     /// Returns
     /// -------
     /// RegistryRef
-    fn register_frame(&self, frame_id: &str, frame_def: &FrameDef) -> PyResult<RegistryRef> {
+    fn register_frame(&self, frame_id: &str, frame_def: &FrameDef) -> PyResult<registry_py::RegistryRef> {
         let r = self
             .inner
             .lock()
             .register_frame(frame_id, frame_def.clone().into_rust_frame_def())
             .map_err(map_session_error)?;
-        Ok(RegistryRef {
-            peer_id: r.peer_id,
-            id: r.id,
-            hash: r.hash,
-        })
+        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
 
     /// Register a detector, writing the entry to disk.
@@ -839,18 +790,14 @@ impl Session {
         detector_id: &str,
         body: &Bound<'_, PyAny>,
         output_types: Vec<String>,
-    ) -> PyResult<RegistryRef> {
+    ) -> PyResult<registry_py::RegistryRef> {
         let detector_body: registry::DetectorBody = parse_py(py, body, "body")?;
         let r = self
             .inner
             .lock()
             .register_detector(detector_id, detector_body, output_types)
             .map_err(map_session_error)?;
-        Ok(RegistryRef {
-            peer_id: r.peer_id,
-            id: r.id,
-            hash: r.hash,
-        })
+        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
 
     // ─── Log registration ─────────────────────────────────────────────
@@ -1038,8 +985,10 @@ impl Session {
 
 #[pymodule]
 fn auki_session(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<RegistryRef>()?;
-    m.add_class::<LogRef>()?;
+    // Re-export the canonical pyclasses from auki-registry-py so callers
+    // can import them from either `auki_session` or `auki_registry`.
+    m.add_class::<registry_py::RegistryRef>()?;
+    m.add_class::<registry_py::LogRef>()?;
     m.add_class::<HeadSpec>()?;
     m.add_class::<FrameDef>()?;
     m.add_class::<SensorLogSpec>()?;

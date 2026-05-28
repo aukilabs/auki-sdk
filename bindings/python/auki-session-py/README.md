@@ -2,7 +2,7 @@
 
 PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the Auki SDK's declarative control-plane API. Shipped in #224 alongside the Rust `auki-session` crate.
 
-Both the Rust crate and the Python binding are live and tested (23 passing Python tests in `tests/`).
+Both the Rust crate and the Python binding are live and tested (22 passing Python tests in `tests/`).
 
 **Status:** Shipped.
 
@@ -57,10 +57,11 @@ Each returns a typed handle with `resource_id` and `log_ref` attributes. Specs t
 
 ## Type sharing
 
-`RegistryRef` and `LogRef` are defined here as pyclasses that mirror the same-named pyclasses in `auki-registry-py`. Both are constructed from the same underlying Rust `auki_registry::{RegistryRef, LogRef}` types. Cross-package PyO3 type sharing was deemed too friction-heavy; objects can be passed between packages through dict form if needed.
+`RegistryRef` and `LogRef` come from [`auki-registry-py`](../auki-registry-py). This package re-exports them in the `auki_session` namespace so callers can import from either package. Input parsing is duck-typed: any object with the right field names (including `auki_registry.RegistryRef` instances, plain dicts, or `SimpleNamespace`) is accepted.
 
 ## Depends on
 
 - [`auki-session`](../../../crates/auki-session) — Rust crate it wraps.
 - [`auki-registry`](../../../crates/auki-registry) — for `RegistryRef` / `LogRef` Rust types.
+- [`auki-registry-py`](../auki-registry-py) — source-of-truth for `RegistryRef` / `LogRef` pyclasses.
 - [`auki-manifests`](../../../crates/auki-manifests) — for `PoseSource`, `PoseWriterMode`, `TimeTransformSource`.

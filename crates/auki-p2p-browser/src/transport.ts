@@ -27,6 +27,7 @@ export type BrowserConnectionTransport =
   | "unknown";
 
 export type BrowserConnectionPath = {
+  connectionId: string;
   direction: BrowserConnectionDirection;
   transport: BrowserConnectionTransport;
   relayInvolved: boolean;
@@ -80,8 +81,29 @@ export type CreateBrowserLibp2pTransportOptions = {
   relayServerAddresses?: string[];
 };
 
+type BrowserConnectionCandidate = {
+  id: string;
+  remoteAddr: { toString(): string };
+  status: string;
+  newStream(
+    protocol: string,
+    options: { runOnLimitedConnection: true },
+  ): Promise<BrowserProtocolStream>;
+  close(): Promise<void>;
+  abort?(error: Error): void;
+};
+
+export type BrowserConnectionCleanupCandidate = Pick<
+  BrowserConnectionCandidate,
+  "id" | "remoteAddr" | "status"
+>;
+
 const PING_PROTOCOL_ID = "/ipfs/ping/1.0.0";
 const PING_MESSAGE_BYTES = 32;
+const CONNECTION_CLEANUP_TIMEOUT_MS = 3_000;
+const CONNECTION_CLEANUP_POLL_MS = 50;
+const CONNECTION_CLOSE_ATTEMPT_MS = 250;
+const CONNECTION_CLOSE_REASON = "Closing non-selected Auki peer connection";
 
 export function supportedBrowserTransports(): BrowserTransportName[] {
   return ["websocket", "webrtc", "webrtc_direct", "circuit_relay_v2"];
@@ -210,40 +232,50 @@ class Libp2pBrowserTransport implements BrowserTransport {
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
     const peer = peerIdFromString(peerId);
     const keep = new Set(keepAddresses);
-    const retained = new Set<string>();
-    await Promise.all(
-      this.node
-        .getConnections(peer)
-        .filter((connection) => {
-          const address = connection.remoteAddr.toString();
-          if (!keep.has(address)) {
-            return true;
-          }
-          if (retained.has(address)) {
-            return true;
-          }
-          retained.add(address);
-          return false;
-        })
-        .map((connection) => connection.close().catch(() => undefined)),
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < CONNECTION_CLEANUP_TIMEOUT_MS) {
+      const connections = this.node.getConnections(peer);
+      if (browserPeerConnectionCleanupComplete(connections, keepAddresses)) {
+        return;
+      }
+
+      const targets = connectionsToClose(connections, keep);
+      if (targets.length > 0) {
+        await Promise.all(targets.map((connection) => closeConnectionAttempt(connection)));
+      }
+
+      await sleep(CONNECTION_CLEANUP_POLL_MS);
+    }
+
+    const remaining = this.node
+      .getConnections(peer)
+      .filter((connection) => connection.status === "open")
+      .map(connectionSummary);
+    throw new Error(
+      `Timed out closing non-selected peer connections for ${peerId}: ${remaining.join(", ")}`,
     );
   }
 
   connectionPaths(peerId: string): BrowserConnectionPath[] {
     const peer = peerIdFromString(peerId);
-    return this.node.getConnections(peer).map((connection) => {
-      const remoteAddress = connection.remoteAddr.toString();
-      const rtt = connection.rtt;
-      return {
-        direction: connection.direction === "outbound" ? "dialer" : "listener",
-        transport: classifyTransport(remoteAddress),
-        relayInvolved: remoteAddress.includes("/p2p-circuit"),
-        remoteAddress,
-        status: connection.status,
-        direct: connection.direct,
-        rttMs: typeof rtt === "number" ? rtt : undefined,
-      };
-    });
+    return this.node
+      .getConnections(peer)
+      .filter((connection) => connection.status === "open")
+      .map((connection) => {
+        const remoteAddress = connection.remoteAddr.toString();
+        const rtt = connection.rtt;
+        return {
+          connectionId: connection.id,
+          direction: connection.direction === "outbound" ? "dialer" : "listener",
+          transport: classifyTransport(remoteAddress),
+          relayInvolved: remoteAddress.includes("/p2p-circuit"),
+          remoteAddress,
+          status: connection.status,
+          direct: connection.direct,
+          rttMs: typeof rtt === "number" ? rtt : undefined,
+        };
+      });
   }
 
   async registerProtocolHandler(
@@ -275,28 +307,171 @@ class Libp2pBrowserTransport implements BrowserTransport {
       throw new Error(`No bootstrap addresses available for ${protocol}`);
     }
     const peer = peerIdFromString(peerId);
-    const existing = connectionForAddresses(
+    return openBrowserProtocolStream(
       this.node.getConnections(peer),
       addresses,
+      protocol,
+      (dialAddresses, options) =>
+        this.node.dial(dialAddresses.map((address) => multiaddr(address)), options),
     );
-    const connection =
-      existing ??
-      (await this.node.dial(addresses.map((address) => multiaddr(address)), {
-        force: false,
-      }));
-    return connection.newStream(protocol, { runOnLimitedConnection: true });
   }
 }
 
-function connectionForAddresses<
-  T extends {
-    remoteAddr: { toString(): string };
-  },
->(connections: T[], addresses: string[]): T | undefined {
-  const preferred = new Set(addresses);
+export async function openBrowserProtocolStream(
+  connections: BrowserConnectionCandidate[],
+  addresses: string[],
+  protocol: string,
+  dial: (
+    addresses: string[],
+    options: { force?: boolean },
+  ) => Promise<BrowserConnectionCandidate>,
+): Promise<BrowserProtocolStream> {
+  for (const connection of connectionCandidates(connections, addresses)) {
+    try {
+      return await connection.newStream(protocol, { runOnLimitedConnection: true });
+    } catch (error) {
+      if (!isRetriableConnectionStateError(error)) {
+        throw error;
+      }
+      await connection.close().catch(() => undefined);
+    }
+  }
+
+  const connection = await dial(addresses, { force: false });
+  try {
+    return await connection.newStream(protocol, { runOnLimitedConnection: true });
+  } catch (error) {
+    if (!isRetriableConnectionStateError(error)) {
+      throw error;
+    }
+    await connection.close().catch(() => undefined);
+  }
+
+  const freshConnection = await dial(addresses, { force: true });
+  return freshConnection.newStream(protocol, { runOnLimitedConnection: true });
+}
+
+function connectionCandidates<T extends BrowserConnectionCandidate>(
+  connections: T[],
+  addresses: string[],
+): T[] {
+  const ordered: T[] = [];
+  const used = new Set<T>();
+  const openConnections = connections.filter((connection) => connection.status === "open");
+
+  for (const address of addresses) {
+    for (const connection of openConnections) {
+      if (used.has(connection)) {
+        continue;
+      }
+      if (connection.remoteAddr.toString() === address) {
+        ordered.push(connection);
+        used.add(connection);
+      }
+    }
+  }
+
+  for (const connection of openConnections) {
+    if (!used.has(connection)) {
+      ordered.push(connection);
+    }
+  }
+
+  return ordered;
+}
+
+function connectionsToClose<T extends BrowserConnectionCandidate>(
+  connections: T[],
+  keep: Set<string>,
+): T[] {
+  const retained = retainedConnectionIds(connections, keep);
+  return connections.filter(
+    (connection) => connection.status !== "closed" && !retained.has(connection.id),
+  );
+}
+
+export function browserPeerConnectionCleanupComplete(
+  connections: BrowserConnectionCleanupCandidate[],
+  keepAddresses: string[],
+): boolean {
+  const keep = new Set(keepAddresses);
+  const retained = retainedConnectionIds(connections, keep);
+  if (
+    connections.some(
+      (connection) => connection.status !== "closed" && !retained.has(connection.id),
+    )
+  ) {
+    return false;
+  }
+
+  const open = connections.filter((connection) => connection.status === "open");
+  if (keep.size === 0) {
+    return open.length === 0;
+  }
+
+  const seen = new Set<string>();
+  for (const connection of open) {
+    const address = connection.remoteAddr.toString();
+    if (!keep.has(address) || seen.has(address)) {
+      return false;
+    }
+    seen.add(address);
+  }
+  return seen.size > 0;
+}
+
+function retainedConnectionIds<T extends BrowserConnectionCleanupCandidate>(
+  connections: T[],
+  keep: Set<string>,
+): Set<string> {
+  const retained = new Set<string>();
+  const retainedAddresses = new Set<string>();
+  for (const connection of connections) {
+    if (connection.status !== "open") {
+      continue;
+    }
+    const address = connection.remoteAddr.toString();
+    if (!keep.has(address) || retainedAddresses.has(address)) {
+      continue;
+    }
+    retained.add(connection.id);
+    retainedAddresses.add(address);
+  }
+  return retained;
+}
+
+async function closeConnectionAttempt(connection: BrowserConnectionCandidate): Promise<void> {
+  if (connection.abort) {
+    connection.abort(new Error(CONNECTION_CLOSE_REASON));
+    return;
+  }
+
+  await Promise.race([
+    connection.close().catch(() => undefined),
+    sleep(CONNECTION_CLOSE_ATTEMPT_MS),
+  ]);
+}
+
+function connectionSummary(connection: BrowserConnectionCandidate): string {
+  return `${connection.id}:${connection.status}:${connection.remoteAddr.toString()}`;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableConnectionStateError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
   return (
-    connections.find((connection) => preferred.has(connection.remoteAddr.toString())) ??
-    connections.at(0)
+    message.includes("muxer is \"closing\"") ||
+    message.includes("muxer is \"closed\"") ||
+    message.includes("connection is \"closing\"") ||
+    message.includes("connection is \"closed\"") ||
+    message.includes("connection is closing") ||
+    message.includes("connection is closed")
   );
 }
 

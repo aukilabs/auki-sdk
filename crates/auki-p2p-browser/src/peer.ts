@@ -258,12 +258,45 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       address,
       ...peer.dialAddresses.filter((candidate) => candidate !== address),
     ]);
+    const fallbackAddresses = uniqueStrings([
+      ...this.connectionPaths(peerId)
+        .map((path) => path.remoteAddress)
+        .filter((candidate) => candidate !== address),
+      ...peer.dialAddresses.filter((candidate) => candidate !== address),
+    ]);
 
-    if (!this.connectionPaths(peerId).some((path) => path.remoteAddress === address)) {
+    try {
       await this.transport.dial([address], { force: true });
+    } catch (firstError) {
+      if (this.selectedAddressIsActive(peerId, address)) {
+        await this.transport.closePeerConnections?.(peerId, [address]);
+        this.rememberSwitchedPeer(peerId, dialAddresses);
+        return;
+      }
+      await this.transport.closePeerConnections?.(peerId, []);
+      try {
+        await this.transport.dial([address], { force: true });
+      } catch (secondError) {
+        if (this.selectedAddressIsActive(peerId, address)) {
+          await this.transport.closePeerConnections?.(peerId, [address]);
+          this.rememberSwitchedPeer(peerId, dialAddresses);
+          return;
+        }
+        await reconnectPeerBestEffort(this.transport, fallbackAddresses);
+        throw new Error(
+          `Switch to selected address failed: ${describeError(secondError)}; first attempt: ${describeError(firstError)}`,
+        );
+      }
     }
     await this.transport.closePeerConnections?.(peerId, [address]);
-    this.remoteOffers.delete(peerId);
+    this.rememberSwitchedPeer(peerId, dialAddresses);
+  }
+
+  private selectedAddressIsActive(peerId: string, address: string): boolean {
+    return this.connectionPaths(peerId).some((path) => path.remoteAddress === address);
+  }
+
+  private rememberSwitchedPeer(peerId: string, dialAddresses: string[]): void {
     this.peers.set(peerId, {
       peerId,
       connected: true,
@@ -1099,6 +1132,28 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+async function reconnectPeerBestEffort(
+  transport: BrowserTransport,
+  addresses: string[],
+): Promise<void> {
+  if (addresses.length === 0) {
+    return;
+  }
+  await transport.dial(addresses, { force: true }).catch(() => undefined);
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const messages = error.errors.map(describeError).filter((message) => message.length > 0);
+    return messages.length > 0 ? messages.join("; ") : error.message;
+  }
+  if (error instanceof Error) {
+    const cause = "cause" in error ? (error as { cause?: unknown }).cause : undefined;
+    return cause ? `${error.message}: ${describeError(cause)}` : error.message;
+  }
+  return String(error);
 }
 
 async function closeStream(stream: BrowserProtocolStream): Promise<void> {

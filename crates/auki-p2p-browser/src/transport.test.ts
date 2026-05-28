@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { echoPingStream, type BrowserProtocolStream } from "./transport.js";
+import {
+  browserPeerConnectionCleanupComplete,
+  echoPingStream,
+  openBrowserProtocolStream,
+  type BrowserProtocolStream,
+} from "./transport.js";
 
 describe("browser transport lifecycle", () => {
   it("echoes standard libp2p ping payloads across chunk boundaries", async () => {
@@ -24,6 +29,78 @@ describe("browser transport lifecycle", () => {
 
     expect(stream.sent).toEqual([]);
     expect(stream.closed).toBe(true);
+  });
+
+  it("skips closing retained connections when opening protocol streams", async () => {
+    const stale = new FakeConnection(
+      "/memory/webrtc-direct",
+      new Error('The connection muxer is "closing" and not "open"'),
+    );
+    const fresh = new FakeConnection("/memory/webrtc-direct");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [stale],
+      ["/memory/webrtc-direct"],
+      "/auki/get/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        return fresh;
+      },
+    );
+
+    expect(stream).toBe(fresh.stream);
+    expect(stale.closed).toBe(true);
+    expect(dials).toEqual([
+      { addresses: ["/memory/webrtc-direct"], force: false },
+    ]);
+  });
+
+  it("force dials when a freshly dialed connection has a closing muxer", async () => {
+    const closingDial = new FakeConnection(
+      "/memory/websocket",
+      new Error('The connection muxer is "closed" and not "open"'),
+    );
+    const forcedDial = new FakeConnection("/memory/websocket");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [],
+      ["/memory/websocket"],
+      "/auki/subscribe/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        return options.force ? forcedDial : closingDial;
+      },
+    );
+
+    expect(stream).toBe(forcedDial.stream);
+    expect(closingDial.closed).toBe(true);
+    expect(dials).toEqual([
+      { addresses: ["/memory/websocket"], force: false },
+      { addresses: ["/memory/websocket"], force: true },
+    ]);
+  });
+
+  it("does not complete selected-address cleanup while stale paths are still closing", () => {
+    const selected = cleanupConnection("ws-1", "/memory/websocket", "open");
+    const stale = cleanupConnection("rtc-1", "/memory/webrtc-direct", "closing");
+
+    expect(
+      browserPeerConnectionCleanupComplete(
+        [selected, stale],
+        ["/memory/websocket"],
+      ),
+    ).toBe(false);
+
+    stale.status = "closed";
+
+    expect(
+      browserPeerConnectionCleanupComplete(
+        [selected, stale],
+        ["/memory/websocket"],
+      ),
+    ).toBe(true);
   });
 });
 
@@ -59,4 +136,39 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
     offset += part.byteLength;
   }
   return output;
+}
+
+function cleanupConnection(id: string, address: string, status: string) {
+  return {
+    id,
+    remoteAddr: { toString: () => address },
+    status,
+  };
+}
+
+class FakeConnection {
+  readonly id: string;
+  readonly remoteAddr: { toString(): string };
+  readonly status = "open";
+  readonly stream = new InputStream([]);
+  closed = false;
+
+  constructor(
+    address: string,
+    private readonly newStreamError?: Error,
+  ) {
+    this.id = address;
+    this.remoteAddr = { toString: () => address };
+  }
+
+  async newStream(): Promise<BrowserProtocolStream> {
+    if (this.newStreamError) {
+      throw this.newStreamError;
+    }
+    return this.stream;
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
 }

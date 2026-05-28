@@ -324,7 +324,7 @@ async function switchPeerAddress(peerId: string, address: string): Promise<void>
       throw new Error("Stop active streams for this peer before switching address");
     }
     await peer.switchPeerAddress(peerId, address);
-    await refreshPeerData();
+    state.peers = peer.listPeers();
     state.status = "Address switched";
     recordEvent("info", "Peer address switched", `${shortId(peerId, 12)} ${address}`);
     refreshOpenPeerDetail(peerId);
@@ -1109,7 +1109,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
         runtime.getting ? "Getting" : "Get",
         "get",
         key,
-        !canRequestSnapshot(Boolean(state.peer), runtime),
+        state.busy || !canRequestSnapshot(Boolean(state.peer), runtime),
       ),
     );
   }
@@ -1121,7 +1121,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
       label,
       action,
       key,
-      !state.peer || runtime.stopping || runtime.getting,
+      state.busy || !state.peer || runtime.stopping || runtime.getting,
     );
     if (runtime.stopping || runtime.subscribing) {
       button.classList.add("loading");
@@ -1564,7 +1564,7 @@ function connectionPathSummary(paths: PeerSummary["connectionPaths"]): string {
 function formatConnectionPathMeta(path: PeerSummary["connectionPaths"][number]): string {
   const relay = path.relayInvolved ? "via relay" : "direct";
   const rtt = path.rttMs === undefined ? "" : ` | rtt=${Math.round(path.rttMs)}ms`;
-  return `${path.direction} | ${formatTransportName(path.transport)} | ${relay} | ${path.status}${rtt}`;
+  return `${path.connectionId} | ${path.direction} | ${formatTransportName(path.transport)} | ${relay} | ${path.status}${rtt}`;
 }
 
 function formatTransportName(value: string): string {
@@ -1589,6 +1589,10 @@ function uniqueStrings(values: readonly string[]): string[] {
 }
 
 function errorMessage(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const messages = error.errors.map(errorMessage).filter((message) => message.length > 0);
+    return messages.length > 0 ? messages.join("; ") : error.message;
+  }
   return error instanceof Error ? error.message : String(error);
 }
 

@@ -119,7 +119,7 @@ describe("AukiBrowserPeer shell", () => {
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/websocket");
   });
 
-  it("does not force dial when selected peer address is already active", async () => {
+  it("force dials selected peer address even when it is already reported active", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({
       transport,
@@ -132,9 +132,75 @@ describe("AukiBrowserPeer shell", () => {
 
     await peer.switchPeerAddress("native-peer", "/memory/websocket");
 
-    expect(transport.forcedDials).toEqual([]);
+    expect(transport.forcedDials).toEqual([["/memory/websocket"]]);
     expect(transport.closedPeers).toEqual([
       { peerId: "native-peer", keepAddresses: ["/memory/websocket"] },
+    ]);
+  });
+
+  it("retries selected peer address after dropping existing paths", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.connectBootstrap(switchableBootstrapRecord());
+    transport.failNextDial(new Error("first dial failed"));
+
+    await peer.switchPeerAddress("native-peer", "/memory/webrtc-direct");
+
+    expect(transport.forcedDials).toEqual([
+      ["/memory/webrtc-direct"],
+      ["/memory/webrtc-direct"],
+    ]);
+    expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [] },
+      { peerId: "native-peer", keepAddresses: ["/memory/webrtc-direct"] },
+    ]);
+  });
+
+  it("accepts a selected peer address when dial rejects after the path became active", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.connectBootstrap(switchableBootstrapRecord());
+    transport.failNextDial(new Error("All promises were rejected"));
+    transport.setConnectionPaths("native-peer", [
+      memoryConnectionPath("/memory/webrtc-direct"),
+    ]);
+
+    await peer.switchPeerAddress("native-peer", "/memory/webrtc-direct");
+
+    expect(transport.forcedDials).toEqual([["/memory/webrtc-direct"]]);
+    expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: ["/memory/webrtc-direct"] },
+    ]);
+    expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/webrtc-direct");
+  });
+
+  it("reconnects previous addresses when selected peer address cannot be dialed", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.connectBootstrap(switchableBootstrapRecord());
+    transport.failNextDial(new Error("first dial failed"));
+    transport.failNextDial(new Error("second dial failed"));
+
+    await expect(peer.switchPeerAddress("native-peer", "/memory/webrtc-direct")).rejects.toThrow(
+      "Switch to selected address failed",
+    );
+
+    expect(transport.forcedDials).toEqual([
+      ["/memory/webrtc-direct"],
+      ["/memory/webrtc-direct"],
+      ["/memory/websocket"],
+    ]);
+    expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [] },
     ]);
   });
 
@@ -230,6 +296,31 @@ describe("AukiBrowserPeer shell", () => {
         protocol: OFFER_CATALOG_PROTOCOL_ID,
       },
     ]);
+  });
+
+  it("keeps cached offers when switching transport addresses", async () => {
+    const fixture = await fixtureJson("v1_offer_catalogs.json");
+    const catalog = fixture.positive.response_with_offer.object as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: switchableBootstrapRecord(),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    await peer.listOffers("native-peer");
+    await peer.switchPeerAddress("native-peer", "/memory/webrtc-direct");
+    await peer.listOffers("native-peer");
+
+    expect(transport.protocolDials.filter((dial) => dial.protocol === OFFER_CATALOG_PROTOCOL_ID))
+      .toHaveLength(1);
   });
 
   it("subscribes to spatial messages over an RFC protocol stream", async () => {
@@ -973,8 +1064,20 @@ function bootstrapRecord(peerId: string, address: string): unknown {
   };
 }
 
+function switchableBootstrapRecord(): unknown {
+  return {
+    peer_id: "native-peer",
+    direct_addresses: ["/memory/websocket"],
+    webrtc_direct_addresses: ["/memory/webrtc-direct"],
+    relay_addresses: [],
+    relay_server_addresses: [],
+    bootstrap_addresses: ["/memory/websocket", "/memory/webrtc-direct"],
+  };
+}
+
 function memoryConnectionPath(address: string): BrowserConnectionPath {
   return {
+    connectionId: `memory:${address}`,
     direction: "dialer",
     transport: "unknown",
     relayInvolved: false,
@@ -1006,6 +1109,7 @@ class MemoryTransport implements BrowserTransport {
   readonly closedPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly protocolDials: Array<{ peerId: string; addresses: string[]; protocol: string }> = [];
   private readonly paths = new Map<string, BrowserConnectionPath[]>();
+  private readonly dialFailures: Error[] = [];
   private readonly protocolHandlers = new Map<
     string,
     (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
@@ -1039,6 +1143,10 @@ class MemoryTransport implements BrowserTransport {
     if (options.force) {
       this.forcedDials.push(addresses.slice());
     }
+    const failure = this.dialFailures.shift();
+    if (failure) {
+      throw failure;
+    }
   }
 
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
@@ -1047,6 +1155,10 @@ class MemoryTransport implements BrowserTransport {
 
   setConnectionPaths(peerId: string, paths: BrowserConnectionPath[]): void {
     this.paths.set(peerId, paths.slice());
+  }
+
+  failNextDial(error: Error): void {
+    this.dialFailures.push(error);
   }
 
   connectionPaths(peerId: string): BrowserConnectionPath[] {

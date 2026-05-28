@@ -297,8 +297,10 @@ impl AukiP2pNodeConfig {
     /// Development config that exposes a native peer to browsers over WebRTC
     /// Direct and also runs a loopback WebSocket relay server.
     pub fn loopback_browser_reachable_development() -> Self {
+        let mut p2p = AukiP2pConfig::development();
+        p2p.limits.active_connections_per_peer_id = 1;
         Self {
-            p2p: AukiP2pConfig::development(),
+            p2p,
             listen_addresses: vec![
                 loopback_webrtc_direct_listen_addr(),
                 loopback_websocket_relay_listen_addr(),
@@ -858,6 +860,18 @@ impl ConnectionTracker {
             };
         }
 
+        if let Some((index, replaced)) = connections
+            .iter()
+            .enumerate()
+            .find(|(_, tracked)| tracked.preference == preference)
+        {
+            let replaced_connection_id = replaced.connection_id;
+            connections[index] = connection;
+            return ConnectionRetention::CloseDuplicate {
+                connection_id: replaced_connection_id,
+            };
+        }
+
         ConnectionRetention::CloseDuplicate { connection_id }
     }
 }
@@ -1228,6 +1242,7 @@ mod tests {
 
         assert!(config.browser_webrtc_direct.enabled);
         assert!(config.relay_server.enabled);
+        assert_eq!(config.p2p.limits.active_connections_per_peer_id, 1);
         assert_eq!(
             config.listen_addresses,
             vec![
@@ -1527,6 +1542,40 @@ mod tests {
             higher_peer_tracker.established[&lower_peer_id][0].connection_id,
             preferred
         );
+    }
+
+    #[test]
+    fn connection_tracker_replaces_oldest_same_preference_connection_at_peer_cap() {
+        let peer_id = identity(34).peer_id();
+        let first = ConnectionId::new_unchecked(1);
+        let second = ConnectionId::new_unchecked(2);
+        let mut tracker = ConnectionTracker::default();
+
+        assert_eq!(
+            tracker.established(
+                peer_id,
+                first,
+                ConnectionPreference::Preferred,
+                test_connection_path(1),
+                1,
+            ),
+            ConnectionRetention::Retained
+        );
+        assert_eq!(
+            tracker.established(
+                peer_id,
+                second,
+                ConnectionPreference::Preferred,
+                test_connection_path(2),
+                1,
+            ),
+            ConnectionRetention::CloseDuplicate {
+                connection_id: first
+            }
+        );
+        assert_eq!(tracker.active_count(peer_id), 1);
+        assert_eq!(tracker.established[&peer_id][0].connection_id, second);
+        assert_eq!(tracker.active_paths(peer_id)[0], test_connection_path(2));
     }
 
     #[test]

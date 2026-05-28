@@ -45,7 +45,6 @@ internal multi-thread tokio runtime).
 
 **Catalog / registry:**
 - `fetch_resources_catalog(peer_id, variants=None)` → `list[ResourceEntry]`
-- `fetch_sensors_catalog(peer_id, …)` → `list[SensorEntry]`
 - `fetch_sensor_entry / fetch_clock_entry / fetch_frame_entry` → canonical JSON
 
 ## Post-#216 schema changes

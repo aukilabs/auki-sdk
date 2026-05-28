@@ -264,7 +264,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
       state.framesReceived += 1;
       state.totalBytesReceived += bytes;
       state.status = "Receiving";
-      render();
+      renderLiveStats();
     }
 
     if (token === state.subscriptionToken) {
@@ -468,6 +468,13 @@ function clearPreviewFrame(): void {
 }
 
 function render(): void {
+  renderLiveStats();
+  renderPeers(state.peers);
+  renderOffers(state.offers);
+  renderEvents();
+}
+
+function renderLiveStats(): void {
   els.connectionStatus.textContent = state.status;
   els.bootstrapPeer.textContent = state.bootstrap ? shortId(state.bootstrap.peerId, 10) : "None";
   els.bootstrapDirect.textContent = addressCount(state.bootstrap?.directAddresses);
@@ -492,10 +499,6 @@ function render(): void {
   els.previewImage.hidden = !state.previewUrl;
   els.connectButton.disabled = state.busy;
   els.stopButton.disabled = state.busy || !state.peer;
-
-  renderPeers(state.peers);
-  renderOffers(state.offers);
-  renderEvents();
 }
 
 function renderPeers(peers: PeerSummary[]): void {

@@ -48,14 +48,18 @@ type AppState = {
   streamStartedAt?: Date;
   streamFrameBase: number;
   activeSubscriptionKey?: string;
+  stoppingSubscriptionKey?: string;
   activeSubscription?: AukiBrowserSubscription;
   subscriptionAbort?: AbortController;
+  subscriptionStop?: Promise<void>;
   status: string;
   lastError?: string;
   busy: boolean;
   subscriptionToken: number;
   previewUrl?: string;
 };
+
+const SUBSCRIPTION_STOP_TIMEOUT_MS = 2_500;
 
 const state: AppState = {
   peers: [],
@@ -133,7 +137,7 @@ els.offersTable.addEventListener("click", (event) => {
   } else if (button.dataset.action === "subscribe") {
     void subscribeToOffer(offer);
   } else if (button.dataset.action === "stop-subscribe") {
-    stopSubscription("Stopped by user");
+    void stopSubscription("Stopped by user");
   }
 });
 
@@ -213,7 +217,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     return;
   }
   if (state.activeSubscriptionKey) {
-    stopSubscription("Replaced by new subscription");
+    await stopSubscription("Replaced by new subscription");
   }
 
   const key = offerKey(offer);
@@ -265,8 +269,10 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
 
     if (token === state.subscriptionToken) {
       state.activeSubscriptionKey = undefined;
+      state.stoppingSubscriptionKey = undefined;
       state.activeSubscription = undefined;
       state.subscriptionAbort = undefined;
+      state.subscriptionStop = undefined;
       setOfferStatus(key, "complete");
       state.status = "Subscription complete";
       recordEvent("info", "Subscribe complete", offerLabel(offer));
@@ -278,8 +284,10 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     }
     const message = errorMessage(error);
     state.activeSubscriptionKey = undefined;
+    state.stoppingSubscriptionKey = undefined;
     state.activeSubscription = undefined;
     state.subscriptionAbort = undefined;
+    state.subscriptionStop = undefined;
     state.lastError = message;
     state.status = "Error";
     setOfferStatus(key, "error", message);
@@ -296,34 +304,81 @@ async function stop(): Promise<void> {
   });
 }
 
-function stopSubscription(reason: string): void {
+async function stopSubscription(reason: string): Promise<void> {
+  if (state.subscriptionStop) {
+    await state.subscriptionStop;
+    return;
+  }
   if (!state.activeSubscriptionKey) {
     return;
   }
+
+  const stop = stopSubscriptionOnce(reason);
+  state.subscriptionStop = stop;
+  try {
+    await stop;
+  } finally {
+    if (state.subscriptionStop === stop) {
+      state.subscriptionStop = undefined;
+    }
+  }
+}
+
+async function stopSubscriptionOnce(reason: string): Promise<void> {
   const key = state.activeSubscriptionKey;
+  if (!key) {
+    return;
+  }
   const subscription = state.activeSubscription;
-  state.subscriptionAbort?.abort(new Error(reason));
-  state.subscriptionAbort = undefined;
-  state.activeSubscription = undefined;
-  state.subscriptionToken += 1;
-  state.activeSubscriptionKey = undefined;
-  setOfferStatus(key, "stopped");
-  state.status = "Subscription stopped";
-  recordEvent("info", "Subscribe stopped", reason);
+  const abortController = state.subscriptionAbort;
+  const token = state.subscriptionToken + 1;
+  state.subscriptionToken = token;
+  state.stoppingSubscriptionKey = key;
+  setOfferStatus(key, "stopping");
+  state.status = "Stopping subscription";
+  state.lastError = undefined;
+  recordEvent("info", "Subscribe stopping", reason);
   render();
-  void subscription?.stop().catch((error: unknown) => {
-    recordEvent("error", "Subscribe stop failed", errorMessage(error));
+
+  try {
+    await stopSubscriptionTransport(subscription, abortController, reason);
+  } catch (error) {
+    const message = errorMessage(error);
+    state.lastError = message;
+    recordEvent("error", "Subscribe stop failed", message);
+  } finally {
+    abortController?.abort(new Error(reason));
+    if (state.subscriptionToken === token) {
+      state.activeSubscriptionKey = undefined;
+      state.stoppingSubscriptionKey = undefined;
+      state.activeSubscription = undefined;
+      state.subscriptionAbort = undefined;
+      state.subscriptionStop = undefined;
+      setOfferStatus(key, "stopped");
+      state.status = "Subscription stopped";
+    } else if (state.stoppingSubscriptionKey === key) {
+      state.stoppingSubscriptionKey = undefined;
+    }
     render();
-  });
+  }
 }
 
 async function stopPeer(): Promise<void> {
   const subscription = state.activeSubscription;
-  state.subscriptionAbort?.abort(new Error("Peer stopped"));
+  const abortController = state.subscriptionAbort;
+  const stoppingKey = state.activeSubscriptionKey;
+  if (stoppingKey) {
+    state.stoppingSubscriptionKey = stoppingKey;
+    setOfferStatus(stoppingKey, "stopping");
+  }
   state.subscriptionAbort = undefined;
   state.activeSubscription = undefined;
+  state.subscriptionStop = undefined;
   state.subscriptionToken += 1;
-  await subscription?.stop().catch(() => undefined);
+  await stopSubscriptionTransport(subscription, abortController, "Peer stopped").catch(
+    () => undefined,
+  );
+  abortController?.abort(new Error("Peer stopped"));
   if (state.peer) {
     await state.peer.stop();
   }
@@ -343,7 +398,9 @@ async function stopPeer(): Promise<void> {
   state.streamStartedAt = undefined;
   state.streamFrameBase = 0;
   state.activeSubscriptionKey = undefined;
+  state.stoppingSubscriptionKey = undefined;
   state.activeSubscription = undefined;
+  state.subscriptionStop = undefined;
 }
 
 async function loadBootstrapFile(): Promise<void> {
@@ -492,14 +549,21 @@ function offerActionCell(offer: OfferSummary): HTMLTableCellElement {
   }
   if (offer.accessModes.includes("subscribe")) {
     const active = state.activeSubscriptionKey === key;
-    actions.append(
-      actionButton(
-        active ? "Stop" : "Subscribe",
-        active ? "stop-subscribe" : "subscribe",
-        key,
-        state.busy || !state.peer || Boolean(state.activeSubscriptionKey && !active),
-      ),
+    const stopping = state.stoppingSubscriptionKey === key;
+    const anySubscriptionBusy = Boolean(
+      state.activeSubscriptionKey || state.stoppingSubscriptionKey,
     );
+    const button = actionButton(
+      stopping ? "Stopping" : active ? "Stop" : "Subscribe",
+      active ? "stop-subscribe" : "subscribe",
+      key,
+      state.busy || !state.peer || stopping || (anySubscriptionBusy && !active),
+    );
+    if (stopping) {
+      button.classList.add("loading");
+      button.setAttribute("aria-busy", "true");
+    }
+    actions.append(button);
   }
   if (actions.childElementCount === 0) {
     actions.textContent = "None";
@@ -593,12 +657,53 @@ function recordEvent(level: "info" | "error", message: string, detail?: string):
   state.events = state.events.slice(0, 80);
 }
 
+async function stopSubscriptionTransport(
+  subscription: AukiBrowserSubscription | undefined,
+  abortController: AbortController | undefined,
+  reason: string,
+): Promise<void> {
+  if (!subscription) {
+    abortController?.abort(new Error(reason));
+    return;
+  }
+  await withTimeout(
+    subscription.stop(),
+    SUBSCRIPTION_STOP_TIMEOUT_MS,
+    `Subscribe stop timed out after ${SUBSCRIPTION_STOP_TIMEOUT_MS}ms`,
+  );
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function offerKey(offer: OfferSummary): string {
   return `${offer.peerId}\u0000${offer.domainId}\u0000${offer.offerId}`;
 }
 
 function streamRate(): number {
-  if (!state.streamStartedAt || state.framesReceived === 0) {
+  if (
+    !state.activeSubscriptionKey ||
+    state.stoppingSubscriptionKey ||
+    !state.streamStartedAt ||
+    state.framesReceived === 0
+  ) {
     return 0;
   }
   const seconds = (Date.now() - state.streamStartedAt.getTime()) / 1000;

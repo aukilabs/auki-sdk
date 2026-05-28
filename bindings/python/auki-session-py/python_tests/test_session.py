@@ -26,8 +26,10 @@ Test inventory
 - test_leave_domain_raises                     — NotImplementedError (requires libp2p swarm)
 - test_frame_def_classmethods                  — FrameDef.ros_body/optical/opengl/unity repr
 - test_head_spec_classmethods                  — HeadSpec.rolling/fixed repr
-- test_log_ref_class                           — LogRef pyclass accessors
-- test_registry_ref_class                      — RegistryRef pyclass accessors
+
+Note: test_log_ref_class / test_registry_ref_class were removed in #236.
+RegistryRef and LogRef now come from auki-registry-py; their own tests live
+in that package's test suite.
 """
 
 from __future__ import annotations
@@ -407,31 +409,6 @@ def test_head_spec_classmethods() -> None:
     assert "rolling" in repr(rolling)
     assert "5000000000" in repr(rolling)
     assert "fixed" in repr(fixed)
-
-
-# ─── test_log_ref_class ──────────────────────────────────────────────────────
-
-
-def test_log_ref_class() -> None:
-    import auki_session
-
-    lr = auki_session.LogRef(source_peer_id=PEER_ID, resource_id="head_left_rgb")
-    assert lr.source_peer_id == PEER_ID
-    assert lr.resource_id == "head_left_rgb"
-    assert "LogRef" in repr(lr)
-
-
-# ─── test_registry_ref_class ─────────────────────────────────────────────────
-
-
-def test_registry_ref_class() -> None:
-    import auki_session
-
-    ref = auki_session.RegistryRef(peer_id=PEER_ID, id="head_left_rgb", hash="abc123")
-    assert ref.peer_id == PEER_ID
-    assert ref.id == "head_left_rgb"
-    assert ref.hash == "abc123"
-    assert "RegistryRef" in repr(ref)
 
 
 # ─── Additional log type tests ───────────────────────────────────────────────

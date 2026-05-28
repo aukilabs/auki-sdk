@@ -1546,12 +1546,13 @@ where
         let Some(tail) = state.tail.take() else {
             return None;
         };
-        let joined = tokio::task::spawn_blocking(move || {
-            let mut tail = tail;
-            let next = tail.next();
-            (tail, next)
-        })
-        .await;
+        let joined = crate::cluster_tokio_runtime()
+            .spawn_blocking(move || {
+                let mut tail = tail;
+                let next = tail.next();
+                (tail, next)
+            })
+            .await;
 
         let (tail, next) = match joined {
             Ok(pair) => pair,
@@ -2329,6 +2330,36 @@ mod tests {
 
         assert_eq!(got.timestamp_ns, 400);
         assert_eq!(got.payload.data, b"pcm");
+    }
+
+    #[test]
+    fn retained_source_tail_does_not_require_ambient_tokio_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = RawLog::<RustRawLogBytes>::open(dir.path(), raw_log_manifest()).unwrap();
+        log.flush().unwrap();
+        drop(log);
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "camera"),
+            decode_retained_camera,
+        )
+        .unwrap();
+        let writer_dir = dir.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let entry = CameraFrame {
+                dynamic_intrinsics: None,
+                frame: b"tail-jpeg".to_vec(),
+            };
+            append_raw_payload(&writer_dir, 500, entry.encode_to_vec());
+        });
+
+        let got = futures::executor::block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+
+        assert_eq!(got.timestamp_ns, 500);
+        assert_eq!(got.payload.frame, b"tail-jpeg");
     }
 
     #[test]

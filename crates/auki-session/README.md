@@ -11,7 +11,8 @@ Shipped in SDK #216 (2026-05-27). Previously the SDK had no `Session` abstractio
 ### Session construction and identity
 
 - `Session::new(peer_id, app_id)` — creates a session with a fresh ULID `session_id`.
-- `Session::with_storage_root(path)` — builder; sets the disk root for registry and log files.
+- `Session::with_storage_root(path)` — take-by-value builder; sets the disk root for registry and log files. Preserves `session_id`.
+- `Session::set_storage_root(&self, path)` — in-place mutator equivalent. Same effect as `with_storage_root`, but doesn't consume `self`. Useful for FFI/binding wrappers that can't express take-by-value builder patterns (PyO3, UniFFI). Preserves `session_id`.
 - `Session::peer_id()`, `app_id()`, `session_id()`, `storage_root()` — read accessors.
 
 ### Registry registration

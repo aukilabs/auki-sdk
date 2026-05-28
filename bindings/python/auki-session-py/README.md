@@ -2,7 +2,7 @@
 
 PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the Auki SDK's declarative control-plane API. Shipped in #224 alongside the Rust `auki-session` crate.
 
-Both the Rust crate and the Python binding are live and tested (23 passing Python tests in `tests/`).
+Both the Rust crate and the Python binding are live and tested (24 passing Python tests in `python_tests/`).
 
 **Status:** Shipped.
 
@@ -17,7 +17,7 @@ s = Session("galbot", "galbot-ctrl").with_storage_root("/data/auki")
 ```
 
 - `Session(peer_id, app_id)` — constructor; generates a ULID `session_id`.
-- `with_storage_root(path)` — builder method (returns self).
+- `with_storage_root(path)` — in-place builder. Mutates the session's storage root and returns `self` for chaining. **Preserves `session_id`** — calling it after the constructor does not regenerate the ULID. Under the hood, calls Rust's `Session::set_storage_root` (the binding-friendly sibling of `Session::with_storage_root(self, root) -> Self`).
 - Read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`.
 
 ### Registry registration

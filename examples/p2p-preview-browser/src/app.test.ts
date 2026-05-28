@@ -11,7 +11,7 @@ import {
 
 describe("p2p preview browser helpers", () => {
   it("parses sentinel bootstrap JSON", () => {
-    const record = parseBootstrapText(
+    const records = parseBootstrapText(
       JSON.stringify({
         peer_id: "12D3KooWPeer",
         direct_addresses: ["/ip4/127.0.0.1/tcp/40123/ws/p2p/12D3KooWPeer"],
@@ -23,9 +23,34 @@ describe("p2p preview browser helpers", () => {
         bootstrap_addresses: ["/ip4/127.0.0.1/tcp/40123/ws/p2p/12D3KooWPeer"],
       }),
     );
+    const [record] = records;
 
+    expect(records).toHaveLength(1);
     expect(record.peerId).toBe("12D3KooWPeer");
     expect(record.webrtcDirectAddresses).toHaveLength(1);
+  });
+
+  it("parses multiple sentinel bootstrap records", () => {
+    const records = parseBootstrapText(
+      JSON.stringify([
+        {
+          peer_id: "peer-a",
+          direct_addresses: ["/memory/a"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+        {
+          peer_id: "peer-b",
+          direct_addresses: ["/memory/b"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+      ]),
+    );
+
+    expect(records.map((record) => record.peerId)).toEqual(["peer-a", "peer-b"]);
   });
 
   it("selects the shared preview offer profile", () => {
@@ -49,7 +74,7 @@ describe("p2p preview browser helpers", () => {
     ]);
 
     expect(offer?.peerId).toBe("peer-b");
-    expect(offerLabel(offer)).toBe("domain-b/sentinel-preview");
+    expect(offerLabel(offer)).toBe("peer-b/domain-b/sentinel-preview");
   });
 
   it("decodes preview payload bytes", () => {

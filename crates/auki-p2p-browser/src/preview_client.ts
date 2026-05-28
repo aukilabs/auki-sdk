@@ -8,7 +8,7 @@ import {
   type SpatialMessage,
 } from "./peer.js";
 import {
-  parseBootstrapRecord,
+  parseBootstrapRecords,
   type AukiBrowserBootstrapRecord,
 } from "./bootstrap.js";
 import type { JsonObject } from "./protocol.js";
@@ -47,9 +47,12 @@ export type AukiPreviewBrowserSessionOptions = Omit<AukiBrowserPeerConfig, "boot
 };
 
 export class AukiPreviewBrowserSession {
+  readonly bootstrap: AukiBrowserBootstrapRecord;
+  readonly bootstraps: AukiBrowserBootstrapRecord[];
+
   constructor(
     readonly peer: AukiBrowserPeer,
-    readonly bootstrap: AukiBrowserBootstrapRecord,
+    bootstrap: AukiBrowserBootstrapRecord | AukiBrowserBootstrapRecord[],
     public peers: PeerSummary[],
     public offers: OfferSummary[],
     public previewOffer: OfferSummary | undefined,
@@ -59,7 +62,14 @@ export class AukiPreviewBrowserSession {
       maxMessageBytes?: number;
       selectOffer?: (offer: OfferSummary) => boolean;
     } = {},
-  ) {}
+  ) {
+    this.bootstraps = Array.isArray(bootstrap) ? bootstrap : [bootstrap];
+    const [firstBootstrap] = this.bootstraps;
+    if (!firstBootstrap) {
+      throw new Error("A preview browser session needs at least one bootstrap record");
+    }
+    this.bootstrap = firstBootstrap;
+  }
 
   async refreshOffers(): Promise<OfferSummary[]> {
     this.peers = this.peer.listPeers();
@@ -108,14 +118,17 @@ export async function createAukiPreviewBrowserSession(
     maxMessageBytes,
     ...peerConfig
   } = options;
-  const bootstrap = parseBootstrapRecord(bootstrapInput);
-  const peer = await createAukiBrowserPeer({ ...peerConfig, bootstrap });
+  const bootstraps = parseBootstrapRecords(bootstrapInput);
+  if (bootstraps.length === 0) {
+    throw new Error("A preview browser session needs at least one bootstrap record");
+  }
+  const peer = await createAukiBrowserPeer(peerConfig);
   try {
-    await peer.connectBootstrap(bootstrap);
+    await peer.connectBootstrap(bootstraps);
     const offers = await peer.listOffers();
     return new AukiPreviewBrowserSession(
       peer,
-      bootstrap,
+      bootstraps,
       peer.listPeers(),
       offers,
       findPreviewOffer(offers, selectOffer),

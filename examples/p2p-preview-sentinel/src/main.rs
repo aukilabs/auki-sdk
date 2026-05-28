@@ -15,6 +15,8 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_DOMAIN_LABEL: &str = "auki-p2p-preview-demo";
 const DEFAULT_OFFER_ID: &str = "sentinel-preview";
 const DEFAULT_PEER_LABEL: &str = "p2p-preview-sentinel";
+const DEFAULT_SEED_BYTE: u8 = 7;
+const DEFAULT_DOMAIN_NONCE_BYTE: u8 = 42;
 const DEFAULT_STATUS_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_FRAME_INTERVAL_MS: u64 = 100;
 const FRAME_WIDTH: u16 = 160;
@@ -42,10 +44,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
     }
 
     let now = now_rfc3339()?;
-    let wallet = Wallet::from_seed(vec![7; 32])?;
-    let builder = AukiNodeBuilder::from_wallet(wallet, &now, Some(DEFAULT_PEER_LABEL))?
+    let wallet = Wallet::from_seed(vec![config.seed_byte; 32])?;
+    let builder = AukiNodeBuilder::from_wallet(wallet, &now, Some(&config.peer_label))?
         .with_browser_reachable_development()
-        .with_owner_domain([42; DOMAIN_NONCE_LEN], Some(DEFAULT_DOMAIN_LABEL), true)?;
+        .with_owner_domain(
+            [config.domain_nonce_byte; DOMAIN_NONCE_LEN],
+            Some(&config.domain_label),
+            true,
+        )?;
     let domain_id = builder
         .primary_domain_id()
         .ok_or_else(|| CliError::new("preview sentinel requires one local domain"))?
@@ -69,11 +75,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 "frame_height": FRAME_HEIGHT,
                 "frame_limit": config.frame_limit,
                 "frame_interval_ms": config.frame_interval.as_millis(),
+                "peer_label": config.peer_label,
+                "domain_label": config.domain_label,
             })),
     )?;
 
     println!("Auki P2P preview sentinel");
+    println!("peer_label: {}", config.peer_label);
     println!("peer_id: {}", node.peer_id());
+    println!("domain_label: {}", config.domain_label);
     println!("domain_id: {domain_id}");
     println!("offer_id: {}", config.offer_id);
     println!("source: {}", config.source.as_str());
@@ -172,6 +182,10 @@ impl SourceMode {
 #[derive(Debug, Clone)]
 struct DemoConfig {
     source: SourceMode,
+    seed_byte: u8,
+    peer_label: String,
+    domain_nonce_byte: u8,
+    domain_label: String,
     offer_id: String,
     bootstrap_json: Option<PathBuf>,
     frame_limit: Option<u64>,
@@ -186,6 +200,10 @@ impl Default for DemoConfig {
     fn default() -> Self {
         Self {
             source: SourceMode::Generated,
+            seed_byte: DEFAULT_SEED_BYTE,
+            peer_label: DEFAULT_PEER_LABEL.to_owned(),
+            domain_nonce_byte: DEFAULT_DOMAIN_NONCE_BYTE,
+            domain_label: DEFAULT_DOMAIN_LABEL.to_owned(),
             offer_id: DEFAULT_OFFER_ID.to_owned(),
             bootstrap_json: None,
             frame_limit: None,
@@ -216,6 +234,22 @@ impl DemoConfig {
                 "--source" => {
                     let value = next_value("--source", &mut args)?;
                     config.source = SourceMode::parse(&value)?;
+                }
+                "--seed-byte" => {
+                    config.seed_byte =
+                        parse_byte("--seed-byte", &next_value("--seed-byte", &mut args)?)?;
+                }
+                "--peer-label" => {
+                    config.peer_label = next_value("--peer-label", &mut args)?;
+                }
+                "--domain-nonce-byte" => {
+                    config.domain_nonce_byte = parse_byte(
+                        "--domain-nonce-byte",
+                        &next_value("--domain-nonce-byte", &mut args)?,
+                    )?;
+                }
+                "--domain-label" => {
+                    config.domain_label = next_value("--domain-label", &mut args)?;
                 }
                 "--offer-id" => {
                     config.offer_id = next_value("--offer-id", &mut args)?;
@@ -260,6 +294,10 @@ impl DemoConfig {
          \n\
          Options:\n\
            --source generated          Preview source. Camera capture is planned but not wired yet.\n\
+           --seed-byte N               Wallet seed byte for this Sentinel. Default: 7\n\
+           --peer-label LABEL          Peer label advertised in lifecycle metadata. Default: p2p-preview-sentinel\n\
+           --domain-nonce-byte N       Domain nonce byte for this Sentinel. Default: 42\n\
+           --domain-label LABEL        Domain label. Default: auki-p2p-preview-demo\n\
            --offer-id ID               Offer id to publish. Default: sentinel-preview\n\
            --bootstrap-json PATH       Write browser bootstrap JSON to PATH after listeners bind.\n\
            --frames N                  Optional finite generated producer-frame limit. Default: continuous\n\
@@ -288,6 +326,12 @@ fn parse_positive_u64(flag: &'static str, value: &str) -> Result<u64, CliError> 
         return Err(CliError::new(format!("{flag} expects a positive integer")));
     }
     Ok(parsed)
+}
+
+fn parse_byte(flag: &'static str, value: &str) -> Result<u8, CliError> {
+    value
+        .parse::<u8>()
+        .map_err(|_| CliError::new(format!("{flag} expects an integer from 0 to 255")))
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +653,10 @@ mod tests {
         let config = DemoConfig::parse(Vec::<String>::new()).expect("defaults parse");
 
         assert_eq!(config.source, SourceMode::Generated);
+        assert_eq!(config.seed_byte, DEFAULT_SEED_BYTE);
+        assert_eq!(config.peer_label, DEFAULT_PEER_LABEL);
+        assert_eq!(config.domain_nonce_byte, DEFAULT_DOMAIN_NONCE_BYTE);
+        assert_eq!(config.domain_label, DEFAULT_DOMAIN_LABEL);
         assert_eq!(config.offer_id, DEFAULT_OFFER_ID);
         assert_eq!(config.frame_limit, None);
         assert_eq!(
@@ -627,6 +675,14 @@ mod tests {
         let config = DemoConfig::parse([
             "--bootstrap-json".to_owned(),
             "/tmp/bootstrap.json".to_owned(),
+            "--seed-byte".to_owned(),
+            "8".to_owned(),
+            "--peer-label".to_owned(),
+            "sentinel-b".to_owned(),
+            "--domain-nonce-byte".to_owned(),
+            "43".to_owned(),
+            "--domain-label".to_owned(),
+            "sentinel-b-domain".to_owned(),
             "--offer-id".to_owned(),
             "camera-0".to_owned(),
             "--frames".to_owned(),
@@ -644,12 +700,24 @@ mod tests {
             config.bootstrap_json,
             Some(PathBuf::from("/tmp/bootstrap.json"))
         );
+        assert_eq!(config.seed_byte, 8);
+        assert_eq!(config.peer_label, "sentinel-b");
+        assert_eq!(config.domain_nonce_byte, 43);
+        assert_eq!(config.domain_label, "sentinel-b-domain");
         assert_eq!(config.offer_id, "camera-0");
         assert_eq!(config.frame_limit, Some(3));
         assert_eq!(config.frame_interval, Duration::from_millis(40));
         assert_eq!(config.status_interval, Duration::from_millis(250));
         assert!(config.trace_p2p);
         assert!(config.once);
+    }
+
+    #[test]
+    fn parse_rejects_seed_byte_out_of_range() {
+        let error =
+            DemoConfig::parse(["--seed-byte".to_owned(), "300".to_owned()]).expect_err("rejects");
+
+        assert!(error.to_string().contains("integer from 0 to 255"));
     }
 
     #[test]

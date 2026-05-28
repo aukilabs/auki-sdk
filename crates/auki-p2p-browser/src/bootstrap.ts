@@ -67,6 +67,10 @@ export function parseBootstrapRecord(value: unknown): AukiBrowserBootstrapRecord
   };
 }
 
+export function parseBootstrapRecords(value: unknown): AukiBrowserBootstrapRecord[] {
+  return (Array.isArray(value) ? value : [value]).map(parseBootstrapRecord);
+}
+
 export function bootstrapAddressBook(record: AukiBrowserBootstrapRecord): BootstrapAddress[] {
   const byAddress = new Map<string, Set<BootstrapAddressRole>>();
   addAddresses(byAddress, record.bootstrapAddresses, "bootstrap");

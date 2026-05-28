@@ -1,6 +1,7 @@
 import {
   type AukiBrowserBootstrapRecord,
   parseBootstrapRecord,
+  parseBootstrapRecords,
   preferredDialAddresses,
   relayServerAddresses,
 } from "./bootstrap.js";
@@ -165,7 +166,7 @@ export async function createAukiBrowserPeer(
     (await createBrowserLibp2pTransport({
       seed: requiredSeed(seed),
       relayServerAddresses: config.bootstrap
-        ? relayServerAddresses(parseBootstrapRecord(config.bootstrap))
+        ? uniqueStrings(parseBootstrapRecords(config.bootstrap).flatMap(relayServerAddresses))
         : [],
     }));
   const peerId = config.transport ? config.transport.peerId : await peerIdFromSeed(requiredSeed(seed));
@@ -211,7 +212,9 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     private readonly trace?: AukiBrowserPeerTraceSink,
   ) {
     if (bootstrap) {
-      this.rememberBootstrap(parseBootstrapRecord(bootstrap));
+      for (const record of parseBootstrapRecords(bootstrap)) {
+        this.rememberBootstrap(record);
+      }
     }
   }
 
@@ -1047,6 +1050,17 @@ function requiredSeed(seed: Uint8Array | undefined): Uint8Array {
     throw new Error("A browser peer seed is required");
   }
   return seed;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 async function closeStream(stream: BrowserProtocolStream): Promise<void> {

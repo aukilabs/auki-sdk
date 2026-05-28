@@ -32,7 +32,10 @@ describe("AukiBrowserPeer shell", () => {
     const transport = new MemoryTransport("browser-peer", ["/p2p-circuit/p2p/browser-peer"]);
     const peer = await createAukiBrowserPeer({
       transport,
-      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      bootstrap: [
+        bootstrapRecord("native-peer", "/memory/native-direct"),
+        bootstrapRecord("relay-peer", "/memory/relay"),
+      ],
       protocolWasm: await protocolWasmInput(),
     });
 
@@ -43,6 +46,11 @@ describe("AukiBrowserPeer shell", () => {
         peerId: "native-peer",
         connected: false,
         dialAddresses: ["/memory/native-direct"],
+      },
+      {
+        peerId: "relay-peer",
+        connected: false,
+        dialAddresses: ["/memory/relay"],
       },
     ]);
 

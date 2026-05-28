@@ -6,6 +6,7 @@ export type {
 export {
   bootstrapAddressBook,
   parseBootstrapRecord,
+  parseBootstrapRecords,
   preferredDialAddresses,
   relayServerAddresses,
 } from "./bootstrap.js";

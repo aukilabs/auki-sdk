@@ -219,6 +219,8 @@ describe("preview offer profile", () => {
     expect(session.peers).toEqual([
       { peerId: "native-peer", connected: true, dialAddresses: ["/memory"] },
     ]);
+    expect(session.bootstrap.peerId).toBe("native-peer");
+    expect(session.bootstraps.map((record) => record.peerId)).toEqual(["native-peer"]);
   });
 });
 

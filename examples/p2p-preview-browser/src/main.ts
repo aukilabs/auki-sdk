@@ -29,7 +29,7 @@ type EventLogEntry = {
 
 type AppState = {
   peer?: AukiBrowserPeer;
-  bootstrap?: AukiBrowserBootstrapRecord;
+  bootstraps: AukiBrowserBootstrapRecord[];
   peers: PeerSummary[];
   offers: OfferSummary[];
   selectedOffer?: OfferSummary;
@@ -58,6 +58,7 @@ type AppState = {
 const SUBSCRIPTION_STOP_TIMEOUT_MS = 2_500;
 
 const state: AppState = {
+  bootstraps: [],
   peers: [],
   offers: [],
   offerStates: new Map(),
@@ -109,7 +110,7 @@ els.stopButton.addEventListener("click", () => {
 });
 els.clearButton.addEventListener("click", () => {
   els.bootstrapInput.value = "";
-  state.bootstrap = undefined;
+  state.bootstraps = [];
   render();
 });
 els.bootstrapFile.addEventListener("change", () => {
@@ -141,18 +142,18 @@ render();
 
 async function connect(): Promise<void> {
   await runShortAction("Connecting", async () => {
-    const bootstrap = parseBootstrapText(els.bootstrapInput.value.trim());
+    const bootstraps = parseBootstrapText(els.bootstrapInput.value.trim());
     await stopPeer();
     const session = await createAukiPreviewBrowserSession({
-      bootstrap,
+      bootstrap: bootstraps,
       label: "p2p-preview-browser",
       trace: handlePeerTrace,
     });
     const peer = session.peer;
     recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
-    recordEvent("info", "Connected bootstrap peer", shortId(bootstrap.peerId, 12));
+    recordEvent("info", "Connected bootstrap peers", bootstraps.length.toString());
     state.peer = peer;
-    state.bootstrap = session.bootstrap;
+    state.bootstraps = session.bootstraps;
     state.peers = session.peers;
     state.offers = session.offers;
     state.selectedOffer = session.previewOffer;
@@ -370,7 +371,7 @@ async function stopPeer(): Promise<void> {
   }
   clearPreviewFrame();
   state.peer = undefined;
-  state.bootstrap = undefined;
+  state.bootstraps = [];
   state.peers = [];
   state.offers = [];
   state.selectedOffer = undefined;
@@ -396,7 +397,7 @@ async function loadBootstrapFile(): Promise<void> {
   }
   els.bootstrapInput.value = await file.text();
   try {
-    state.bootstrap = parseBootstrapText(els.bootstrapInput.value.trim());
+    state.bootstraps = parseBootstrapText(els.bootstrapInput.value.trim());
     state.lastError = undefined;
     recordEvent("info", "Bootstrap JSON loaded", file.name);
   } catch (error) {
@@ -461,10 +462,19 @@ function render(): void {
 
 function renderLiveStats(): void {
   els.connectionStatus.textContent = state.status;
-  els.bootstrapPeer.textContent = state.bootstrap ? shortId(state.bootstrap.peerId, 10) : "None";
-  els.bootstrapDirect.textContent = addressCount(state.bootstrap?.directAddresses);
-  els.bootstrapWebrtc.textContent = addressCount(state.bootstrap?.webrtcDirectAddresses);
-  els.bootstrapRelay.textContent = addressCount(state.bootstrap?.relayServerAddresses);
+  els.bootstrapPeer.textContent =
+    state.bootstraps.length === 0
+      ? "None"
+      : state.bootstraps.map((record) => shortId(record.peerId, 6)).join(", ");
+  els.bootstrapDirect.textContent = addressCount(
+    state.bootstraps.flatMap((record) => record.directAddresses),
+  );
+  els.bootstrapWebrtc.textContent = addressCount(
+    state.bootstraps.flatMap((record) => record.webrtcDirectAddresses),
+  );
+  els.bootstrapRelay.textContent = addressCount(
+    state.bootstraps.flatMap((record) => record.relayServerAddresses),
+  );
   els.snapshotsReceived.textContent = state.snapshotsReceived.toString();
   els.framesReceived.textContent = state.framesReceived.toString();
   els.streamRate.textContent = `${streamRate().toFixed(1)} fps`;
@@ -505,7 +515,7 @@ function renderPeers(peers: PeerSummary[]): void {
 function renderOffers(offers: OfferSummary[]): void {
   els.offersTable.replaceChildren();
   if (offers.length === 0) {
-    appendEmptyRow(els.offersTable, 7);
+    appendEmptyRow(els.offersTable, 8);
     return;
   }
   for (const offer of offers) {
@@ -515,6 +525,7 @@ function renderOffers(offers: OfferSummary[]): void {
     if (state.selectedOffer && offerKey(state.selectedOffer) === key) {
       row.classList.add("selected");
     }
+    appendTextCell(row, shortId(offer.peerId, 8));
     appendTextCell(row, offer.kind ?? "unknown");
     appendTextCell(row, shortId(offer.domainId, 8));
     appendTextCell(row, offer.offerId);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bootstrapAddressBook,
   parseBootstrapRecord,
+  parseBootstrapRecords,
   preferredDialAddresses,
   relayServerAddresses,
 } from "./bootstrap.js";
@@ -47,6 +48,37 @@ describe("browser bootstrap records", () => {
       { address: "/memory/direct", roles: ["bootstrap", "direct"] },
       { address: "/memory/relay", roles: ["bootstrap", "relay"] },
     ]);
+  });
+
+  it("parses one or many bootstrap records", () => {
+    expect(
+      parseBootstrapRecords({
+        peer_id: "peer-a",
+        direct_addresses: ["/memory/a"],
+        webrtc_direct_addresses: [],
+        relay_addresses: [],
+        relay_server_addresses: [],
+      }).map((record) => record.peerId),
+    ).toEqual(["peer-a"]);
+
+    expect(
+      parseBootstrapRecords([
+        {
+          peer_id: "peer-a",
+          direct_addresses: ["/memory/a"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+        {
+          peer_id: "peer-b",
+          direct_addresses: ["/memory/b"],
+          webrtc_direct_addresses: [],
+          relay_addresses: [],
+          relay_server_addresses: [],
+        },
+      ]).map((record) => record.peerId),
+    ).toEqual(["peer-a", "peer-b"]);
   });
 
   it("rejects malformed records before they reach libp2p", () => {

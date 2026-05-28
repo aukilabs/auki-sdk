@@ -1,18 +1,18 @@
 import {
-  parseBootstrapRecord,
+  parseBootstrapRecords,
   type AukiBrowserBootstrapRecord,
   type OfferSummary,
 } from "@aukilabs/auki-p2p-browser";
 
-export function parseBootstrapText(text: string): AukiBrowserBootstrapRecord {
-  return parseBootstrapRecord(JSON.parse(text));
+export function parseBootstrapText(text: string): AukiBrowserBootstrapRecord[] {
+  return parseBootstrapRecords(JSON.parse(text));
 }
 
 export function offerLabel(offer: OfferSummary | undefined): string {
   if (!offer) {
     return "None";
   }
-  return `${shortId(offer.domainId)}/${offer.offerId}`;
+  return `${shortId(offer.peerId)}/${shortId(offer.domainId)}/${offer.offerId}`;
 }
 
 export function shortId(value: string, visible = 8): string {

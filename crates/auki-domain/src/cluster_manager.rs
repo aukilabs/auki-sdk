@@ -577,7 +577,7 @@ pub struct ClusterManager {
     /// the runtime, builds a [`ParticipantInfo`] from current
     /// state, and replies. Cancelled on `shutdown`.
     info_handler_task: Mutex<Option<JoinHandle<()>>>,
-    /// Task that drains inbound `/auki/resources/0.0.1` requests
+    /// Task that drains inbound `/auki/resources/0.2.0` requests
     /// from the runtime, snapshots resource providers, and replies.
     /// Cancelled on `shutdown`.
     resources_handler_task: Mutex<Option<JoinHandle<()>>>,
@@ -1421,11 +1421,12 @@ impl ClusterManager {
 
     /// Register (or replace) the application-supplied
     /// [`ResourceCatalogProvider`]. Use this for all resource
-    /// types: sensor streams, transform edges, etc.
+    /// types: sensor logs, pose logs, time-transform logs, etc.
     ///
     /// Inbound `/auki/resources/0.2.0` requests received before this
     /// call return an empty catalog. After this call, each request
-    /// invokes [`ResourceCatalogProvider::snapshot`].
+    /// invokes the provider on the request path. The SDK stores the
+    /// provider object, not a one-time catalog snapshot.
     pub fn set_resource_catalog_provider(&self, provider: Arc<dyn ResourceCatalogProvider>) {
         *self
             .resource_catalog_provider
@@ -1460,9 +1461,9 @@ impl ClusterManager {
     }
 
     /// Fetch a cluster peer's current generalized resource catalog
-    /// over `/auki/resources/0.0.1`. This is the canonical discovery
-    /// path for sensor streams, transform edges, and future resource
-    /// kinds.
+    /// over `/auki/resources/0.2.0`. This is the canonical discovery
+    /// path for currently-requestable sensor, pose, time-transform, and
+    /// detection logs.
     pub async fn fetch_resources_catalog(
         &self,
         peer_id: PeerId,
@@ -1472,9 +1473,8 @@ impl ClusterManager {
     }
 
     /// Fetch a cluster peer's generalized resource catalog with an
-    /// explicit request. Use [`ResourcesRequest::transform_edges`] for
-    /// only frame edges, or [`ResourcesRequest::with_registry_entries`]
-    /// when a consumer wants embedded registry JSON by value.
+    /// explicit request. Set [`ResourcesRequest::variants`] to fetch only
+    /// selected resource variants; leave it empty to fetch all variants.
     pub async fn fetch_resources_catalog_with(
         &self,
         peer_id: PeerId,
@@ -4117,6 +4117,74 @@ mod tests {
         let resp = ack_rx.await.unwrap();
         assert_eq!(resp.resources.len(), 1);
         assert_eq!(resp.resources[0].resource_id, "head_pointcloud");
+    }
+
+    /// Verify the app-supplied provider is sampled for each inbound
+    /// `/auki/resources` request instead of caching the catalog once at
+    /// provider registration time.
+    #[tokio::test]
+    async fn resources_handler_snapshots_provider_for_each_request() {
+        use auki_network::resources_protocol::{
+            ResourceEntry, ResourcesRequest, ResourcesResponse, SensorKind,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        struct DynamicProvider {
+            calls: AtomicUsize,
+        }
+
+        impl ResourceCatalogProvider for DynamicProvider {
+            fn snapshot(&self) -> Vec<ResourceEntry> {
+                let calls = self.calls.fetch_add(1, Ordering::SeqCst);
+                let resource_id = if calls == 0 {
+                    "head_left_rgb"
+                } else {
+                    "head_right_rgb"
+                };
+                vec![sensor_log_resource(
+                    "galbot",
+                    resource_id,
+                    SensorKind::Camera,
+                    "rgb",
+                )]
+            }
+        }
+
+        let provider = Arc::new(DynamicProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let provider_for_assert = provider.clone();
+        let provider: Arc<Mutex<Option<Arc<dyn ResourceCatalogProvider>>>> =
+            Arc::new(Mutex::new(Some(provider)));
+        let handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>> = Arc::new(Mutex::new(None));
+
+        let (tx, rx) = mpsc::channel(8);
+        let _task = spawn_resources_handler(rx, provider, handle);
+
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest::all(),
+            ack: ack_tx,
+        })
+        .await
+        .unwrap();
+        let resp = ack_rx.await.unwrap();
+        assert_eq!(resp.resources.len(), 1);
+        assert_eq!(resp.resources[0].resource_id, "head_left_rgb");
+
+        let (ack_tx2, ack_rx2) = tokio::sync::oneshot::channel::<ResourcesResponse>();
+        tx.send(ResourcesRequestEvent {
+            peer: libp2p_identity::PeerId::random(),
+            request: ResourcesRequest::all(),
+            ack: ack_tx2,
+        })
+        .await
+        .unwrap();
+        let resp2 = ack_rx2.await.unwrap();
+        assert_eq!(resp2.resources.len(), 1);
+        assert_eq!(resp2.resources[0].resource_id, "head_right_rgb");
+        assert_eq!(provider_for_assert.calls.load(Ordering::SeqCst), 2);
     }
 
     fn sensor_log_resource(

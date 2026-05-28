@@ -9,6 +9,13 @@
 //! `resource_id`, `state`, `head` | `extent`, `available`) plus
 //! variant-specific optional blocks (`sensor`, `pose`) and a typed
 //! `manifest` pointer block whose shape varies by variant.
+//!
+//! The response is a live, pollable snapshot. Cluster membership does not
+//! imply resource readiness: producers omit rows that cannot currently
+//! accept matching stream opens, and consumers reconcile resources as rows
+//! appear or disappear. `resource_id` is a stable logical id scoped to
+//! `source_peer_id`; temporary outages should remove and later restore the
+//! same row instead of minting a replacement id.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::StreamProtocol;
@@ -255,6 +262,8 @@ pub struct ResourceEntry {
     /// Stable resource identifier scoped to `source_peer_id`.
     pub resource_id: String,
     /// Open-string lifecycle state; v1 values: `"live"` | `"sealed"`.
+    /// This is not a health field; the current schema has no supported
+    /// unavailable/degraded state. Omit rows that cannot currently be opened.
     pub state: String,
     /// Present on live rows (`state = "live"`). Describes the rolling or
     /// fixed-start retention window.
@@ -592,6 +601,77 @@ mod tests {
         assert_eq!(
             value["manifest"]["input_log"]["resource_id"],
             "head_left_rgb"
+        );
+    }
+
+    #[test]
+    fn pose_log_catalog_row_drives_stream_request_by_resource_id() {
+        use crate::stream_protocol::{ReadFrom, StreamRequest};
+
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "base_link->head_left_rgb_optical".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 0,
+                entries: 0,
+                duration_ns: 0,
+            },
+            sensor: None,
+            pose: Some(PoseBlock {
+                writer_mode: PoseWriterMode::Movable,
+            }),
+            variant_content: VariantContent::PoseLog {
+                manifest: PoseManifestPointer {
+                    from_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "base_link".to_string(),
+                        hash: "from-frame-hash".to_string(),
+                    },
+                    to_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_rgb_optical".to_string(),
+                        hash: "to-frame-hash".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "clock-hash".to_string(),
+                    },
+                    source: PoseSource::Manual,
+                    expected_rate_hz: 30,
+                },
+            },
+        };
+
+        assert!(matches!(
+            row.variant_content,
+            VariantContent::PoseLog { .. }
+        ));
+        assert_eq!(row.state, "live");
+        assert_eq!(
+            row.pose.as_ref().unwrap().writer_mode,
+            PoseWriterMode::Movable
+        );
+
+        let request = StreamRequest {
+            source_peer_id: row.source_peer_id.clone(),
+            resource_id: row.resource_id.clone(),
+            from: ReadFrom::Latest,
+        };
+        let value = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(request.source_peer_id, "galbot");
+        assert_eq!(request.resource_id, "base_link->head_left_rgb_optical");
+        assert_eq!(value["from"], "latest");
+        assert!(
+            value.get("writer_peer_id").is_none(),
+            "the serving writer is selected by the peer being dialed, not by StreamRequest"
         );
     }
 

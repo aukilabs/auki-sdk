@@ -84,6 +84,13 @@ entry2 = ResourceEntry.from_json('{"variant": "pose_log", ...}')
 manager.set_resource_catalog_provider(lambda: [entry])
 ```
 
+`set_resource_catalog_provider` stores the callable, not the callable's return
+value. The callable is invoked for each inbound `/auki/resources/0.2.0` fetch,
+so Python producers can return a live catalog that changes as backing streams
+become ready or unavailable. Return only resources that can currently accept
+stream opens; omit unavailable resources and re-add them later with the same
+stable `resource_id`.
+
 All four variants (`sensor_log`, `pose_log`, `time_transform_log`,
 `detection_log`) are accepted. Serde discriminates by the `variant` field.
 Invalid input raises `ValueError`.

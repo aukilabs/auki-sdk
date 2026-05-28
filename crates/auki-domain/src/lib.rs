@@ -38,9 +38,8 @@ pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
     DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
-    FetchResourcesCatalogError, FetchSensorsCatalogError, InboundDiagnosticMessage,
-    JoinClusterError, LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, SensorCatalogProvider,
-    SensorEntry, SensorKind, SensorsRequest, SensorsResponse, elect_successor,
+    FetchResourcesCatalogError, InboundDiagnosticMessage, JoinClusterError,
+    LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]

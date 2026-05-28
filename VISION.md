@@ -253,47 +253,60 @@ Python sidecars (BoosterApp's K1 sensor capture, Sentinel, Park tooling) use [`a
 
 ## Quickstart
 
-Add the SDK crates as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
+App code interacts with the SDK through `auki-session`. Add it (and `auki-registry`, for the registry-body types you'll pass into log specs) as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
 
 ```toml
 [dependencies]
-auki-logs      = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
-auki-layout    = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
-auki-manifests = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
-auki-datatypes = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.41" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.54" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.54" }
 ```
 
-Open a sensor log for one recording:
+Boot a session, declare a sensor and a log, inspect what the SDK advertises:
 
 ```rust
-use std::{path::Path, time::Duration};
-use auki_logs::Log;
-use auki_layout::{session_root, sensorlog_path};
-use auki_manifests::build_sensor_log_manifest;
-use auki_datatypes::camera::CameraFrame;
+use std::time::Duration;
+use auki_registry::{Camera, ClockBody, ClockMeta, Scope, SensorBody};
+use auki_session::{FrameDef, HeadSpec, SensorLogSpec, Session};
 
-let app_root  = Path::new("/home/booster/auki/boosterapp");
-let session   = session_root(app_root, "session-uuid");
-let log_root  = sensorlog_path(&session, "recording-uuid");
+let s = Session::new("galbot-01", "galbot-ctrl")
+    .with_storage_root("/data/auki/galbot-01");
 
-let manifest = build_sensor_log_manifest(
-    "boosterapp",
-    "session-uuid",
-    "K1-AABBCCDDEEFF/head_left_cam",
-    "abc...",
-    "K1-AABBCCDDEEFF/session-monotonic",
-    "def...",
-    Some("K1-AABBCCDDEEFF/head_left_cam_optical"),
-    Some("ghi..."),
-    Duration::from_secs(1),
-    Duration::from_secs(30),
-);
+let frame = s.register_frame("head_left_camera_optical", FrameDef::ros_optical())?;
 
-let mut log: Log<CameraFrame> = Log::open(&log_root, manifest)?;
-log.append(timestamp_ns, &payload)?;
+let sensor = s.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
+    r#type: "rgb".into(),
+    width: 1920, height: 1200, frame_rate_hz: 30,
+    pixel_format: "rgb8".into(),
+    color_space: "srgb".into(),
+    intrinsics_model: "pinhole".into(),
+    distortion_model: "brown_conrady".into(),
+    frame: frame.clone(),
+}))?;
+
+let clock = s.register_clock("session/sdk_clock", ClockBody::MonotonicClock(ClockMeta {
+    unit: "ns".into(),
+    monotonic: true,
+    epoch: None,
+    scope: Scope::DeviceLocal,
+}))?;
+
+let _log = s.register_sensor_log(SensorLogSpec {
+    sensor: sensor.clone(),
+    clock,
+    frame: Some(frame),
+    head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
+    segment_duration: Duration::from_secs(1),
+    retention: Duration::from_secs(5),
+})?;
+
+// The catalog is what other peers see over /auki/resources/0.2.0
+// once you `Session::join_domain`.
+for row in s.catalog() {
+    println!("{} owns {} ({})", row.source_peer_id, row.resource_id, row.state);
+}
 ```
 
-See each crate's `README.md` for the contract spec, and `crates/<name>/src/readme.md` for the Rust-side implementation status where present.
+For a deeper walkthrough — including the Python equivalent and the "what's pending" list (`Session::join_domain` from Python, `Session::materialize_remote_log`) — see the [wiki Quickstart](https://github.com/aukilabs/auki-sdk/wiki/Quickstart). Each crate's `README.md` has the contract spec for that layer.
 
 ---
 

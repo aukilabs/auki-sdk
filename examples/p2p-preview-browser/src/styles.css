@@ -143,7 +143,7 @@ button:not(:disabled):hover {
   display: grid;
   grid-template-columns: minmax(300px, 400px) minmax(0, 1fr);
   grid-template-areas:
-    "bootstrap preview"
+    "bootstrap streams"
     "bootstrap state"
     "bootstrap events";
   gap: 14px;
@@ -170,7 +170,9 @@ button:not(:disabled):hover {
 label,
 .metrics span,
 .state-grid span,
-.summary-grid span {
+.summary-grid span,
+.stream-meta span,
+.stream-stats span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -227,34 +229,175 @@ input[type="file"] {
   font-size: 14px;
 }
 
-.preview-panel {
-  grid-area: preview;
+.streams-panel {
+  grid-area: streams;
   padding: 12px;
 }
 
-.preview-frame {
+.streams-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.empty-streams {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.peer-stream-group {
+  display: grid;
+  gap: 10px;
+}
+
+.peer-stream-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.peer-stream-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.peer-stream-heading span,
+#stream-summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.stream-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.stream-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d6dee2;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.stream-card.streaming {
+  border-color: #8ab99f;
+}
+
+.stream-frame {
   position: relative;
   display: grid;
   place-items: center;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 260px;
-  max-height: 62vh;
+  min-height: 168px;
   overflow: hidden;
   border: 1px solid #202a31;
-  border-radius: 6px;
+  border-width: 0 0 1px;
   background: #11181d;
 }
 
-.preview-frame img {
+.stream-frame img {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 
-#preview-empty {
+.stream-empty {
   color: #aebbc2;
   font-size: 14px;
+}
+
+.stream-body {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.stream-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.stream-card-heading h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  max-width: 130px;
+  overflow: hidden;
+  border: 1px solid #d0d9de;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--muted);
+  background: #f2f5f6;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill.live {
+  border-color: #8ab99f;
+  color: #18563a;
+  background: #edf7f2;
+}
+
+.status-pill.busy {
+  border-color: #d5b26d;
+  color: var(--warning);
+  background: #fff8eb;
+}
+
+.status-pill.error {
+  border-color: #d9a3a1;
+  color: var(--danger);
+  background: #fff3f2;
+}
+
+.stream-meta,
+.stream-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.stream-meta div,
+.stream-stats div {
+  min-width: 0;
+  border-left: 3px solid #d6dee2;
+  padding: 2px 0 2px 8px;
+}
+
+.stream-meta strong,
+.stream-stats strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.stream-error {
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+  color: var(--danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .metrics,
@@ -429,7 +572,7 @@ tr.selected td {
     grid-template-columns: 1fr;
     grid-template-areas:
       "bootstrap"
-      "preview"
+      "streams"
       "state"
       "events";
   }
@@ -461,7 +604,11 @@ tr.selected td {
     grid-template-columns: 1fr;
   }
 
-  .preview-frame {
+  .stream-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-frame {
     min-height: 180px;
   }
 

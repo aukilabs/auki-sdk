@@ -46,11 +46,15 @@
           </div>
         </aside>
 
-        <section class="panel preview-panel">
-          <div class="preview-frame">
-            <img id="preview-image" alt="" />
-            <div id="preview-empty">No frame</div>
+        <section class="panel streams-panel">
+          <div class="section-heading">
+            <h2>Streams</h2>
+            <span id="stream-summary">No offers</span>
           </div>
+          <div id="streams-grid" class="streams-grid"></div>
+        </section>
+
+        <section class="panel state-panel">
           <div class="metrics">
             <div>
               <span>Snapshots</span>
@@ -81,13 +85,11 @@
               <strong id="last-frame-at">Never</strong>
             </div>
             <div>
-              <span>Offer</span>
+              <span>Active Streams</span>
               <strong id="selected-offer">None</strong>
             </div>
           </div>
-        </section>
 
-        <section class="panel state-panel">
           <div class="state-grid">
             <div>
               <span>Local Peer</span>
@@ -118,24 +120,6 @@
                 </tr>
               </thead>
               <tbody id="peers-table"></tbody>
-            </table>
-          </div>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Peer</th>
-                  <th>Kind</th>
-                  <th>Domain</th>
-                  <th>Offer</th>
-                  <th>Payload</th>
-                  <th>Access</th>
-                  <th>State</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="offers-table"></tbody>
             </table>
           </div>
         </section>

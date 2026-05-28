@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canRequestSnapshot,
   offerLabel,
   parseBootstrapText,
 } from "./app";
@@ -92,5 +93,14 @@ describe("p2p preview browser helpers", () => {
 
     expect(Array.from(bytes)).toEqual([255, 216, 255, 217]);
     expect(Array.from(decodeBase64UrlBytes("AQID"))).toEqual([1, 2, 3]);
+  });
+
+  it("disables snapshot requests while a stream is active", () => {
+    expect(canRequestSnapshot(false, {})).toBe(false);
+    expect(canRequestSnapshot(true, {})).toBe(true);
+    expect(canRequestSnapshot(true, { getting: true })).toBe(false);
+    expect(canRequestSnapshot(true, { subscribing: true })).toBe(false);
+    expect(canRequestSnapshot(true, { stopping: true })).toBe(false);
+    expect(canRequestSnapshot(true, { subscription: {} })).toBe(false);
   });
 });

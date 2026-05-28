@@ -15,6 +15,23 @@ export function offerLabel(offer: OfferSummary | undefined): string {
   return `${shortId(offer.peerId)}/${shortId(offer.domainId)}/${offer.offerId}`;
 }
 
+export type OfferActionState = {
+  getting?: boolean;
+  subscribing?: boolean;
+  stopping?: boolean;
+  subscription?: unknown;
+};
+
+export function canRequestSnapshot(hasPeer: boolean, runtime: OfferActionState): boolean {
+  return Boolean(
+    hasPeer &&
+      !runtime.getting &&
+      !runtime.subscribing &&
+      !runtime.stopping &&
+      !runtime.subscription,
+  );
+}
+
 export function shortId(value: string, visible = 8): string {
   if (value.length <= visible * 2 + 1) {
     return value;

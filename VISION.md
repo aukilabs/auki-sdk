@@ -81,10 +81,8 @@ This repo is in early development. The crates here implement a foundational subs
 **Not yet implemented:**
 
 - full `convert_pose` (the Pose Log primitives — `SpatialTransform` + `Vec3` + `Quat` in [`auki-datatypes`](crates/auki-datatypes), `PoseSource` + `PoseWriterMode` + `build_pose_log_manifest` in [`auki-manifests`](crates/auki-manifests), `poselog_path` in [`auki-layout`](crates/auki-layout), and the convention-only `convert_pose_convention` layer in [`auki-geometry`](crates/auki-geometry) — are in place; the operation that composes pose-log paths is pending)
-- Detector binding API (`Detector::new(sensor_log) -> Log<DetectionFrame>` or equivalent). Detection log payload, manifest, and layout primitives are already in place.
 - `convert_time` (the TimeTransform Log primitives exist; the `convert_time` operation that consumes them does not yet)
-- A `Session` abstraction tying clock + sensor-id minting + recording lifecycle together (today daemons construct sessions by convention)
-- Recording-resource and detection-resource rows in `/auki/resources/0.0.1`. The v0 resource catalog covers `sensor_stream`, rigid `transform_edge`, and live movable `pose_stream` rows so peers can discover stream sources and direct frame edges. The first live pose-stream hardware target is Galbot G1 using RoboStreamer to publish `base_link -> head_left_rgb_optical` pose logs into Park.
+- `Session::materialize_remote_log` (Phase 5 of #216). The catalog row, stream protocol, and `LogRef` plumbing are in place; the materialization layer that writes a local replica with its own retention policy is not.
 
 ---
 

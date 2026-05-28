@@ -546,21 +546,21 @@ function offerActionCell(offer: OfferSummary): HTMLTableCellElement {
   const cell = document.createElement("td");
   const actions = document.createElement("div");
   actions.className = "row-actions";
+  const subscriptionBusy = Boolean(
+    state.activeSubscriptionKey || state.stoppingSubscriptionKey,
+  );
 
   if (offer.accessModes.includes("get")) {
-    actions.append(actionButton("Get", "get", key, state.busy || !state.peer));
+    actions.append(actionButton("Get", "get", key, state.busy || !state.peer || subscriptionBusy));
   }
   if (offer.accessModes.includes("subscribe")) {
     const active = state.activeSubscriptionKey === key;
     const stopping = state.stoppingSubscriptionKey === key;
-    const anySubscriptionBusy = Boolean(
-      state.activeSubscriptionKey || state.stoppingSubscriptionKey,
-    );
     const button = actionButton(
       stopping ? "Stopping" : active ? "Stop" : "Subscribe",
       active ? "stop-subscribe" : "subscribe",
       key,
-      state.busy || !state.peer || stopping || (anySubscriptionBusy && !active),
+      state.busy || !state.peer || stopping || (subscriptionBusy && !active),
     );
     if (stopping) {
       button.classList.add("loading");

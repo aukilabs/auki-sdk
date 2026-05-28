@@ -19,12 +19,13 @@ pub mod preview;
 pub mod protocols;
 pub mod publication;
 pub mod relationship;
+pub mod serve_runtime;
 pub mod subscribe_serving;
 pub mod transport_path;
 
 pub use api::{
     AukiGetProvider, AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent,
-    AukiServedSubscription, AukiSubscribeProvider, AukiSubscribeProviderAccept,
+    AukiServedInbound, AukiServedSubscription, AukiSubscribeProvider, AukiSubscribeProviderAccept,
     AukiSubscribeProviderError, AukiSubscription, LifecycleDomainAccess, LifecycleInput,
     LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
     ServedGet, ServedOfferCatalog, ServedSubscribe,
@@ -87,6 +88,7 @@ pub use relationship::{
     RelationshipRegistryReferenceStatus, RelationshipRejectedDomain, RelationshipStatusBuildError,
     RelationshipStatusOptions, build_relationship_status_snapshot,
 };
+pub use serve_runtime::{AukiServeRuntime, AukiServeRuntimeStatus};
 pub use subscribe_serving::{
     EncodedSubscribeFrame, SubscribeServeError, accept_subscribe_streams, close_subscribe_stream,
     encode_subscribe_data_frame, read_subscribe_end, read_subscribe_request,

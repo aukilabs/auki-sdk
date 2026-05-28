@@ -4,7 +4,7 @@ package auki.audio;
 
 // Audio payload — used on both disk (Sensor Log segment payload for a
 // log whose registry entry has body kind `audio`) and on the wire (the
-// libp2p `/auki/stream/0.1.0` substream payload). One type, one byte
+// libp2p `/auki/stream/0.2.0` substream payload). One type, one byte
 // shape; the framing's `timestamp_ns` carries chunk start time on both
 // paths.
 //

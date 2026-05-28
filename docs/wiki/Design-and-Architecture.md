@@ -6,7 +6,7 @@ This section is for engineers reading or contributing to the Auki SDK source. It
 
 - [The Five Questions](The-Five-Questions) — the architectural backbone (Identity / Spatial / Temporal / Networking / Tokenomics)
 - [Glossary](Glossary) — long-form companion to `GLOSSARY.md`, with code refs and common confusions per term
-- [Crate map](Crate-Map) — what each Rust crate does, in narrative form *(stub)*
+- [Crate map](Crate-Map) — what each Rust crate does, in narrative form
 
 ## In-repo documentation
 
@@ -19,7 +19,7 @@ The repo holds frozen-in-time design records for major changes:
 
 ## Release / tag history
 
-- [Release history](Release-History) — annotated tag list with what changed *(stub)*
+- [Release history](Release-History) — one entry per shipped tag from v0.0.50 onward
 
 `git tag --list --sort=-v:refname` shows the current set; `git show vX.Y.Z` is the authoritative annotated-tag message.
 

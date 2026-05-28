@@ -14,7 +14,7 @@ Every abstraction in the SDK exists to answer one of these. Skim the table for t
 |----------|-------------------|----------------|
 | **Identity** | `auki-identity` (Wallet + ed25519 + libp2p PeerId), `auki-jcs` + `auki-hash` (content-addressing), Sensor / Clock / Frame / Detector Registries with explicit `peer_id` | — |
 | **Spatial** | Pose Logs (`from → to` transforms over time), Frame Registry, `auki-geometry` (convention conversion) | Full `convert_pose` (composition along a transform path) |
-| **Temporal** | TimeTransform Logs, `auki-time` (`SessionClock`, NTP-style samplers, 1 Hz `local_clock_read`) | `convert_time` operation that consumes the log |
+| **Temporal** | Live in-memory `DomainClockEstimate` (heartbeat-driven), per-peer `local_clock_read` TimeTransform Log (monotonic↔UTC, on disk), `auki-time` math, Clock Registry with explicit scope | `convert_time` (a unified API over the live estimate and the recorded log) |
 | **Networking** | libp2p substrate, 8 typed peer protocols, `auki-session::Session` (declarative app API + `join_domain`) | `Session::materialize_remote_log` (Phase 5 of #216), Python `join_domain` binding |
 | **Tokenomics** | `Wallet` exists as the on-device primitive | All payment / billing rails |
 
@@ -104,37 +104,53 @@ For now, traversing multi-edge transform paths is a consumer-side concern. The `
 
 ## Temporal — When did this happen?
 
-Multiple peers run on different clocks: a robot's monotonic system clock, a host's UTC clock, a sensor's hardware-stamped clock. The SDK refuses to canonicalize on any one of them; instead, every timestamp ships with a named clock identity, and conversions between clocks are themselves first-class data products called **TimeTransform Logs**.
+Multiple peers run on different clocks: a robot's monotonic system clock, a host's UTC clock, a sensor's hardware-stamped clock. The SDK refuses to canonicalize on any one of them. Every timestamp ships with a named clock identity, and the SDK runs two parallel paths for relating clocks to each other — one **live and in-memory** for cluster-wide alignment, one **persisted on disk** for offline replay.
 
-A TimeTransform Log records sampled offsets between two clocks over time. Combined with NTP-style exchanges between peers, a cluster converges on a shared **domain time** so events recorded against different local clocks can be aligned without losing the original timestamps.
+### Live: heartbeat-driven domain-clock convergence
+
+The `/auki/heartbeat/0.0.1` protocol carries the four NTP timestamps (t0/t1/t2/t3) on every beat. Each peer's `ClockSyncHandle` (in `auki-time`) accumulates samples per `(local_clock, remote_clock)` pair and emits a `ClockTransformEstimate(offset_ns, uncertainty_ns)`. The Manager announces a `HeartbeatDomainClock` in *its* heartbeats — "the domain clock is at offset N ns from my backing clock." Each peer composes `(local → backing)` with `(backing → domain)` via `auki_time::estimate_domain_clock` and ends up with a live `DomainClockEstimate(local → domain)`.
+
+`ClusterManager::domain_clock_estimate(local_clock_id)` returns that estimate for use anywhere in app code. **This is what "domain time" actually is, today.** It's live state — never persisted as a TimeTransform Log.
+
+### Persisted: TimeTransform Logs on disk
+
+A TimeTransform Log records sampled offsets between two clocks over time. The only current writer is the per-peer `local_clock_read` sampler in `auki-time` (1 Hz) — it pairs **local `CLOCK_MONOTONIC` ↔ `CLOCK_REALTIME`** on a single device, anchoring monotonic timestamps in UTC for offline replay. It does **not** record the cluster-wide domain clock; that lives in memory only.
 
 ### What addresses it
 
 - [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — Clock Registry; `ClockBody::MonotonicClock`, `UtcClock`, etc., with explicit `scope` (`device-local`, `global`)
 - [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests) — `TimeTransformLogManifest`, `TimeTransformSource`
-- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — `SessionClock`, `TimeTransform` math, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`, 1 Hz `local_clock_read` sampler that writes the TimeTransform Log
+- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — `SessionClock`, `TimeTransform` math, `NtpExchange` / `NtpSample` / `compute_ntp_sample` / `select_best_ntp_sample`, `ClockSyncHandle` (in-memory NTP accumulator), `estimate_domain_clock` (composes the live estimate), 1 Hz `local_clock_read` sampler that writes the per-peer monotonic↔UTC TimeTransform Log
+- [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `ClusterManager::domain_clock_estimate(local_clock)` returns the live `DomainClockEstimate`
+- [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — heartbeat protocol carries the four NTP timestamps and the Manager's `HeartbeatDomainClock` descriptor
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `register_time_transform_log`, `TimeTransformLogSpec`
 
 ### What's pending
 
-- **`convert_time`** — the operation that consumes a TimeTransform Log and converts a timestamp on clock A to its equivalent on clock B. The primitives exist; the consume-side operation does not.
+- **`convert_time`** — a published SDK operation that takes `(local_ts_ns, local_clock_ref, target_clock_ref) → target_ts_ns`. The primitives exist (live `DomainClockEstimate`, on-disk TimeTransform Log entries); the consume-side operation that picks between them and produces a reproducible conversion does not.
 
-### How a consumer composes the answer
+### How a consumer composes the answer (today)
 
 ```rust
-let sdk_clock = session.register_clock("session/sdk_clock", ClockBody::MonotonicClock(...))?;
-let wall_clock = session.register_clock("wall_clock", ClockBody::UtcClock(...))?;
+let sdk_clock  = session.register_clock("session/sdk_clock", ClockBody::MonotonicClock(...))?;
+let wall_clock = session.register_clock("wall_clock",        ClockBody::UtcClock(...))?;
 
-let tt_log = session.register_time_transform_log(TimeTransformLogSpec {
+// Per-peer monotonic ↔ UTC log on disk, written by the local_clock_read sampler.
+let _tt_log = session.register_time_transform_log(TimeTransformLogSpec {
     from_clock: sdk_clock,
-    to_clock: wall_clock,
-    source: TimeTransformSource::LocalClockRead,
+    to_clock:   wall_clock,
+    source:     TimeTransformSource::LocalClockRead,
     ..
 })?;
-// tt_log.resource_id() == "session/sdk_clock->wall_clock"
+
+// Live cluster-wide alignment — composed from heartbeats, never persisted.
+let cluster  = session.cluster_manager().unwrap();
+let estimate = cluster.domain_clock_estimate()?;
+// estimate.total_offset_ns + estimate.uncertainty_ns
+// Or get domain time directly: cluster.domain_time_now()? -> i64
 ```
 
-> **Why no canonical clock?** Picking UTC (or any clock) as the default would silently impose a conversion at every boundary. Making the conversion explicit — and recorded as a log of its own — keeps the lineage auditable and the SDK honest about what it's done to a timestamp.
+> **Why no canonical clock?** Picking UTC (or any clock) as the default would silently impose a conversion at every boundary. Keeping the conversion explicit — and (when persisted) recorded as a log of its own — keeps the lineage auditable and the SDK honest about what it's done to a timestamp.
 
 ---
 

@@ -1,20 +1,15 @@
 import {
-  PREVIEW_PAYLOAD_TYPE,
-  createAukiBrowserPeer,
   type AukiBrowserBootstrapRecord,
   type AukiBrowserPeer,
-  type AukiBrowserSubscription,
+  type AukiPreviewSubscription,
   type OfferSummary,
   type PeerSummary,
-  type SpatialMessage,
+  type PreviewFrame,
+  createAukiPreviewBrowserSession,
+  getPreviewSnapshot,
+  openPreviewSubscription,
 } from "@aukilabs/auki-p2p-browser";
-import {
-  findPreviewOffer,
-  offerLabel,
-  parseBootstrapText,
-  previewFrameBytes,
-  shortId,
-} from "./app";
+import { offerLabel, parseBootstrapText, shortId } from "./app";
 import "./styles.css";
 
 type OfferRuntimeState = {
@@ -49,7 +44,7 @@ type AppState = {
   streamFrameBase: number;
   activeSubscriptionKey?: string;
   stoppingSubscriptionKey?: string;
-  activeSubscription?: AukiBrowserSubscription;
+  activeSubscription?: AukiPreviewSubscription;
   subscriptionAbort?: AbortController;
   subscriptionStop?: Promise<void>;
   status: string;
@@ -147,21 +142,21 @@ async function connect(): Promise<void> {
   await runShortAction("Connecting", async () => {
     const bootstrap = parseBootstrapText(els.bootstrapInput.value.trim());
     await stopPeer();
-    const peer = await createAukiBrowserPeer({
+    const session = await createAukiPreviewBrowserSession({
       bootstrap,
       label: "p2p-preview-browser",
     });
+    const peer = session.peer;
     recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
-    await peer.connectBootstrap(bootstrap);
     recordEvent("info", "Connected bootstrap peer", shortId(bootstrap.peerId, 12));
-    const offers = await peer.listOffers();
     state.peer = peer;
-    state.bootstrap = bootstrap;
-    state.peers = peer.listPeers();
-    state.offers = offers;
-    state.selectedOffer = findPreviewOffer(offers);
-    state.status = offers.length > 0 ? "Connected, offers loaded" : "Connected, no offers";
-    recordEvent("info", "Offer catalog loaded", `${offers.length} offer(s)`);
+    state.bootstrap = session.bootstrap;
+    state.peers = session.peers;
+    state.offers = session.offers;
+    state.selectedOffer = session.previewOffer;
+    state.status =
+      session.offers.length > 0 ? "Connected, offers loaded" : "Connected, no offers";
+    recordEvent("info", "Offer catalog loaded", `${session.offers.length} offer(s)`);
   });
 }
 
@@ -181,14 +176,8 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
   render();
   try {
     recordEvent("info", "Get requested", offerLabel(offer));
-    const message = await peer.get({
-      peerId: offer.peerId,
-      domainId: offer.domainId,
-      offerId: offer.offerId,
-      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
-      maxPayloadBytes: 1_048_576,
-    });
-    const bytes = renderPreviewMessage(message);
+    const frame = await getPreviewSnapshot(peer, offer);
+    const bytes = renderPreviewFrame(frame);
     const runtime = offerRuntime(key);
     runtime.snapshots += 1;
     runtime.status = "snapshot ok";
@@ -236,12 +225,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
   render();
 
   try {
-    const subscription = await peer.openSubscription({
-      peerId: offer.peerId,
-      domainId: offer.domainId,
-      offerId: offer.offerId,
-      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
-      maxMessageBytes: 1_048_576,
+    const subscription = await openPreviewSubscription(peer, offer, {
       signal: abortController.signal,
     });
     if (token !== state.subscriptionToken) {
@@ -253,11 +237,11 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     state.status = "Receiving";
     render();
 
-    for await (const message of subscription.messages) {
+    for await (const frame of subscription.frames) {
       if (token !== state.subscriptionToken) {
         break;
       }
-      const bytes = renderPreviewMessage(message);
+      const bytes = renderPreviewFrame(frame);
       const runtime = offerRuntime(key);
       runtime.frames += 1;
       runtime.status = "streaming";
@@ -438,13 +422,12 @@ async function runShortAction(label: string, action: () => Promise<void>): Promi
   }
 }
 
-function renderPreviewMessage(message: SpatialMessage): number {
-  const bytes = previewFrameBytes(message);
-  renderFrame(bytes);
-  state.lastPayloadBytes = bytes.byteLength;
-  state.lastSequence = messageSequence(message);
+function renderPreviewFrame(frame: PreviewFrame): number {
+  renderFrame(frame.bytes);
+  state.lastPayloadBytes = frame.bytes.byteLength;
+  state.lastSequence = frame.sequence;
   state.lastFrameAt = new Date();
-  return bytes.byteLength;
+  return frame.bytes.byteLength;
 }
 
 function renderFrame(bytes: Uint8Array): void {
@@ -661,7 +644,7 @@ function recordEvent(level: "info" | "error", message: string, detail?: string):
 }
 
 async function stopSubscriptionTransport(
-  subscription: AukiBrowserSubscription | undefined,
+  subscription: AukiPreviewSubscription | undefined,
   abortController: AbortController | undefined,
   reason: string,
 ): Promise<void> {
@@ -742,10 +725,6 @@ function transportSummary(addresses: readonly string[]): string {
     }
   }
   return transports.size === 0 ? "unknown" : Array.from(transports).join(", ");
-}
-
-function messageSequence(message: SpatialMessage): string | undefined {
-  return typeof message.sequence === "string" ? message.sequence : undefined;
 }
 
 function errorMessage(error: unknown): string {

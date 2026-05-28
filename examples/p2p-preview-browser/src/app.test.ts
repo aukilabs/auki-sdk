@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  decodeBase64Url,
-  findPreviewOffer,
   offerLabel,
   parseBootstrapText,
-  previewFrameBytes,
 } from "./app";
+import {
+  decodeBase64UrlBytes,
+  findPreviewOffer,
+  previewFrameBytes,
+} from "@aukilabs/auki-p2p-browser";
 
 describe("p2p preview browser helpers", () => {
   it("parses sentinel bootstrap JSON", () => {
@@ -64,6 +66,6 @@ describe("p2p preview browser helpers", () => {
     });
 
     expect(Array.from(bytes)).toEqual([255, 216, 255, 217]);
-    expect(Array.from(decodeBase64Url("AQID"))).toEqual([1, 2, 3]);
+    expect(Array.from(decodeBase64UrlBytes("AQID"))).toEqual([1, 2, 3]);
   });
 });

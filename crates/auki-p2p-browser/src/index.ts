@@ -49,8 +49,31 @@ export {
   PREVIEW_PAYLOAD_MEDIA_TYPE,
   PREVIEW_PAYLOAD_SCHEMA_VERSION,
   PREVIEW_PAYLOAD_TYPE,
+  decodeBase64UrlBytes,
+  findPreviewOffer,
+  isPreviewOffer,
+  previewFrameBytes,
+  previewFrameFromMessage,
   previewPayloadDescriptor,
   publishGeneratedPreview,
   publishPreviewOffer,
 } from "./preview.js";
-export type { GeneratedPreviewOptions, OfferPublisher, PreviewOfferOptions } from "./preview.js";
+export {
+  AukiPreviewBrowserSession,
+  createAukiPreviewBrowserSession,
+  getPreviewSnapshot,
+  openPreviewSubscription,
+  subscribePreview,
+} from "./preview_client.js";
+export type {
+  GeneratedPreviewOptions,
+  OfferPublisher,
+  PreviewFrame,
+  PreviewOfferOptions,
+} from "./preview.js";
+export type {
+  AukiPreviewBrowserSessionOptions,
+  AukiPreviewSubscription,
+  PreviewReadOptions,
+  PreviewSubscribeOptions,
+} from "./preview_client.js";

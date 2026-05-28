@@ -4483,6 +4483,185 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serve_runtime_accepts_burst_subscribes_from_second_peer_while_subscription_streams() {
+        let listener_wallet = wallet(124);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[20; DOMAIN_NONCE_LEN],
+            Some("runtime-burst-subscribe"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut steady_subscriber =
+            AukiNode::new(identity(125), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut burst_subscriber =
+            AukiNode::new(identity(126), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr.clone());
+
+        let source = crate::LatestPublishedByteSource::new();
+        assert!(source.publish(PublishedByteFrame::new(vec![0]).with_sequence(0)));
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "camera-main",
+                    "frame",
+                    PayloadDescriptor::create("auki.frame"),
+                    source.clone(),
+                )
+                .with_access_modes(vec![OfferAccessMode::Subscribe])
+                .with_backpressure_policy(crate::AukiSubscriptionBackpressurePolicy::LatestOnly),
+            )
+            .expect("publish offer");
+
+        let producer_source = source.clone();
+        let producer = tokio::spawn(async move {
+            let mut sequence = 1_u64;
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                if !producer_source
+                    .publish(PublishedByteFrame::new(vec![1]).with_sequence(sequence))
+                {
+                    return;
+                }
+                sequence = sequence.saturating_add(1);
+            }
+        });
+
+        let expected_subscriptions = 11_u64;
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (server_stop_tx, mut server_stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let mut served_tx = Some(served_tx);
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        _ = &mut server_stop_rx, if served_tx.is_none() => break,
+                        result = runtime.serve_next(ISSUED_AT) => {
+                            result.expect("serve next runtime event");
+                            if runtime.status().subscriptions_accepted >= expected_subscriptions
+                                && let Some(tx) = served_tx.take()
+                            {
+                                tx.send(runtime.status().clone())
+                                    .expect("send runtime status");
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("runtime should accept burst subscribes while another subscription is active");
+
+            runtime.status().clone()
+        });
+
+        steady_subscriber
+            .upsert_configured_peer(listener_peer.clone())
+            .expect("steady subscriber configured peer");
+        steady_subscriber
+            .dial_configured_peer(listener_peer_id)
+            .expect("steady subscriber dials listener");
+        wait_for_peer_connected(&mut steady_subscriber, listener_peer_id).await;
+        steady_subscriber.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let mut steady_subscription = timeout(
+            Duration::from_secs(5),
+            steady_subscriber.subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("steady subscribe should not time out")
+        .expect("steady subscribe should start");
+        let first = steady_subscriber
+            .next_subscription_message(&mut steady_subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first steady subscription message");
+        assert!(first.sequence.is_some());
+
+        let (reader_stop_tx, mut reader_stop_rx) = tokio::sync::oneshot::channel();
+        let steady_reader = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut reader_stop_rx => break,
+                    result = steady_subscriber.next_subscription_message(
+                        &mut steady_subscription,
+                        "2026-05-26T12:01:01Z",
+                    ) => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        burst_subscriber
+            .upsert_configured_peer(listener_peer)
+            .expect("burst subscriber configured peer");
+        burst_subscriber
+            .dial_configured_peer(listener_peer_id)
+            .expect("burst subscriber dials listener");
+        wait_for_peer_connected(&mut burst_subscriber, listener_peer_id).await;
+        burst_subscriber.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        for index in 0..10 {
+            let mut subscription = timeout(
+                Duration::from_secs(5),
+                burst_subscriber.subscribe(
+                    listener_peer_id,
+                    SubscribeInput::new(domain_id.clone(), "camera-main"),
+                    ISSUED_AT,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("burst subscribe {index} should not time out"))
+            .unwrap_or_else(|error| panic!("burst subscribe {index} should start: {error:?}"));
+            let message = timeout(
+                Duration::from_secs(5),
+                burst_subscriber
+                    .next_subscription_message(&mut subscription, "2026-05-26T12:01:02Z"),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("burst subscription {index} message should not time out"))
+            .unwrap_or_else(|error| {
+                panic!("burst subscription {index} should receive a message: {error:?}")
+            });
+            assert!(message.sequence.is_some());
+            drop(subscription);
+        }
+
+        let status = served_rx.await.expect("runtime status");
+        let _ = server_stop_tx.send(());
+        let final_status = server.await.expect("server task");
+        source.close();
+        producer.abort();
+        let _ = reader_stop_tx.send(());
+        steady_reader.await.expect("steady reader task");
+
+        assert!(status.subscriptions_accepted >= expected_subscriptions);
+        assert!(status.frames_sent >= expected_subscriptions);
+        assert!(final_status.subscriptions_accepted >= expected_subscriptions);
+    }
+
+    #[tokio::test]
     async fn serve_runtime_streams_published_offer_to_multiple_subscribers() {
         let listener_wallet = wallet(117);
         let listener_identity = identity_from_wallet(listener_wallet.clone());

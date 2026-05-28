@@ -29,6 +29,7 @@ const SUBSCRIBE_ACTIVE: &str = "active";
 const SUBSCRIBE_ENDING: &str = "ending";
 const SUBSCRIBE_ENDED: &str = "ended";
 const GET_CLIENT_RETRY_ATTEMPTS: usize = 2;
+const SUBSCRIBE_CLIENT_RETRY_ATTEMPTS: usize = 2;
 
 /// Internal client boundary for one Get operation.
 pub trait GetClient {
@@ -627,10 +628,7 @@ pub async fn subscribe<C: SubscribeClient>(
         }
     };
 
-    let frame = match client
-        .subscribe(relationship.peer_id, request.clone())
-        .await
-    {
+    let frame = match subscribe_with_retry(client, relationship.peer_id, request.clone()).await {
         Ok(frame) => frame,
         Err(error) => {
             let error = PathOrchestrationError::SubscribeClient(error);
@@ -725,6 +723,24 @@ pub async fn subscribe<C: SubscribeClient>(
         last_payload_failure: None,
         last_failure: None,
     })
+}
+
+async fn subscribe_with_retry<C: SubscribeClient>(
+    client: &mut C,
+    peer_id: PeerId,
+    request: SubscribeRequest,
+) -> Result<Vec<u8>, PathClientError> {
+    let mut attempts = 0_usize;
+    loop {
+        match client.subscribe(peer_id, request.clone()).await {
+            Ok(frame) => return Ok(frame),
+            Err(error) if error.retryable && attempts < SUBSCRIBE_CLIENT_RETRY_ATTEMPTS => {
+                attempts = attempts.saturating_add(1);
+                tokio::task::yield_now().await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Validate and accept one Subscribe data-message frame.
@@ -1228,6 +1244,31 @@ mod tests {
         }
     }
 
+    struct RetryOnceSubscribeClient {
+        frame: Vec<u8>,
+        attempts: usize,
+    }
+
+    impl SubscribeClient for RetryOnceSubscribeClient {
+        fn subscribe(
+            &mut self,
+            _peer_id: PeerId,
+            _request: SubscribeRequest,
+        ) -> impl Future<Output = Result<Vec<u8>, PathClientError>> {
+            self.attempts = self.attempts.saturating_add(1);
+            let result = if self.attempts == 1 {
+                Err(PathClientError::new(
+                    error::TRANSPORT_FAILED,
+                    "temporary subscribe stream reset",
+                    true,
+                ))
+            } else {
+                Ok(self.frame.clone())
+            };
+            async move { result }
+        }
+    }
+
     fn test_config() -> AukiP2pConfig {
         AukiP2pConfig::development()
     }
@@ -1562,6 +1603,47 @@ mod tests {
             client.request.expect("subscribe request").max_message_bytes,
             Some(2048)
         );
+    }
+
+    #[tokio::test]
+    async fn subscribe_retries_retryable_client_failure_before_recording_failure() {
+        let config = test_config();
+        let mut relationship = test_relationship();
+        let accept = SubscribeAccept::create(
+            DOMAIN_ID,
+            "camera-main",
+            PayloadDescriptor::create("auki.frame"),
+            Vec::new(),
+            Some(2),
+            Some("2026-05-26T12:00:00Z".to_owned()),
+            None,
+        )
+        .expect("accept");
+        let mut client = RetryOnceSubscribeClient {
+            frame: frame(
+                accept.value(),
+                config.limits.subscribe_message_frame_body_bytes,
+            ),
+            attempts: 0,
+        };
+
+        let handle = subscribe(
+            &mut relationship,
+            &offer_report(),
+            &mut client,
+            SubscribeInput::new(DOMAIN_ID, "camera-main"),
+            context(&config),
+        )
+        .await
+        .expect("retry succeeds");
+
+        assert_eq!(handle.payload_type(), "auki.frame");
+        assert_eq!(client.attempts, 2);
+        assert_eq!(
+            relationship.paths[0].state.as_deref(),
+            Some(SUBSCRIBE_ACTIVE)
+        );
+        assert!(relationship.last_failures.is_empty());
     }
 
     #[tokio::test]

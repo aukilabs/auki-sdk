@@ -1,26 +1,25 @@
 # auki-domain
 
-App-facing cluster lifecycle layer. `ClusterManager` is the single SDK entry point for Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalogs, transform edges, pose streams, registry-entry fetch, stream open, and clean shutdown.
+Internal cluster lifecycle layer. Apps do not construct `ClusterManager` directly — they use `Session::join_domain` in [`auki-session`](../auki-session), which bootstraps the `ClusterManager` and wires it a `SessionHandle` so the cluster can serve catalog rows to remote peers.
 
-A daemon (Booster, Sentinel, Park) becomes a cluster peer through this crate. Higher-level than [`auki-network`](../auki-network), which it composes on top of.
+`ClusterManager` handles Discovery + cluster bootstrap: list / create / join / bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, resource catalog serving (reads from a `SessionHandle: Send + Sync`), registry-entry fetch, stream open, and clean shutdown. `SessionHandle` is defined in `auki-network` to avoid a dependency cycle.
 
-**Status:** Shipped.
+**Status:** Shipped. Internal to `auki-session` for app use.
 
-## Public surface
+## Public surface (consumed by `auki-session`)
 
 - `ClusterManager` + `ClusterTarget`
 - Relay-aware cluster creation, Manager relay reservation, and Manager-rotation hint preservation
 - `ClusterMembership`, `ClusterMember`, `DaemonInfo`
-- `ResourceCatalogProvider`, `ResourceEntry`, `SensorStreamResource`, `TransformEdgeResource`, `PoseStreamResource`, `ResourcePinholeIntrinsics`, `ResourcesRequest`, `ResourcesResponse`
-- `ResourcesRequest::sensor_streams()` and `ResourcesRequest::pose_streams()` helpers for catalog discovery
-- `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`
+- `ResourceCatalogProvider` + `SessionHandle`-based catalog snapshot
+- `SensorCatalogProvider`, `SensorEntry`, `SensorKind`, `SensorsResponse`
 - Manager / election / bootstrap error types
 - `LIVENESS_CHECK_INTERVAL`, `elect_successor(...)`
 
 ## Depends on
 
 - [`auki-identity`](../auki-identity) — for Wallet → PeerId derivation.
-- [`auki-network`](../auki-network) — for libp2p, peer protocols, Discovery client.
+- [`auki-network`](../auki-network) — for libp2p, peer protocols, Discovery client, and `SessionHandle` trait.
 - [`auki-hash`](../auki-hash) (optional), [`auki-jcs`](../auki-jcs) (optional) — for canonical membership / cluster docs.
 - [`auki-registry`](../auki-registry) (optional) — for hash-pinned registry-entry fetch.
 - [`auki-time`](../auki-time) (optional) — for clock-stamped membership / heartbeat.

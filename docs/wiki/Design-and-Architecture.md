@@ -4,7 +4,7 @@ This section is for engineers reading or contributing to the Auki SDK source. It
 
 ## Where to start
 
-- [The Five Questions](The-Five-Questions) — the architectural backbone *(stub)*
+- [The Five Questions](The-Five-Questions) — the architectural backbone (Identity / Spatial / Temporal / Networking / Tokenomics)
 - [Glossary](Glossary) — what we mean when we say "log", "peer", "domain", "session", "frame", "clock" *(stub)*
 - [Crate map](Crate-Map) — what each Rust crate does, in narrative form *(stub)*
 

@@ -9,7 +9,7 @@
 ### Design + Architecture
 
 - [Overview](Design-and-Architecture)
-- [The Five Questions](The-Five-Questions) *(stub)*
+- [The Five Questions](The-Five-Questions)
 - [Glossary](Glossary) *(stub)*
 - [Crate map](Crate-Map) *(stub)*
 - [Release history](Release-History) *(stub)*

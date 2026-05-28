@@ -11,7 +11,7 @@ This section is for engineers building products on top of the Auki SDK. If you'r
 
 ## Where to start
 
-- [Quickstart](Quickstart) — get a peer running and registered *(stub — content to be drafted)*
+- [Quickstart](Quickstart) — boot a peer, register a sensor and log, inspect the catalog
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs) — the SDK's core data abstraction *(stub)*
 
 More concept primers and recipes coming as follow-up cards land:

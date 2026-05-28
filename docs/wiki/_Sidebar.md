@@ -3,7 +3,7 @@
 ### For SDK Consumers
 
 - [Overview](For-SDK-Consumers)
-- [Quickstart](Quickstart) *(stub)*
+- [Quickstart](Quickstart)
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs) *(stub)*
 
 ### Design + Architecture

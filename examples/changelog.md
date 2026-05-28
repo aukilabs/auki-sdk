@@ -6,6 +6,22 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer now awaits SDK stream-entry writes.** The native producer fanout now uses the async signaled Domain push path and covers chunked signaled WebRTC writes for large camera frames.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer signaled two-peer join regression covered.** The native producer tests now prove SDK-owned Discovery-signaled WebRTC completes `/auki/join/0.0.1` between native peers and still times out unanswered peers.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer signaled timeout regression covered.** The native producer test suite now locks the SDK-owned Discovery-signaled WebRTC no-answer path to a typed timeout instead of an indefinite startup wait.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`ios`](ios/changelog.md) — AukiCameraStreamer Discovery-signaled WebRTC transport enabled.** The native producer now uses SDK-owned Discovery-signaled WebRTC data channels for Overwatch browser interop instead of direct listen addresses.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **[`ios`](ios/changelog.md) — AukiCameraStreamer Overwatch staging documented.** The manual E2E flow now stages generated JavaScript packages before `npm install` so Overwatch starts from a fresh checkout.

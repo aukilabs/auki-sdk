@@ -1,5 +1,6 @@
 import Foundation
 import AukiProto
+import AukiDomainSignaledWebRTC
 import auki_domain
 
 enum CameraFrameCodec {
@@ -103,11 +104,26 @@ enum DomainCameraStreamSinkError: Error {
     case invalidStreamId(String)
 }
 
+protocol CameraDomainStreamPeer: AnyObject, Sendable {
+    func pushStreamEntry(streamId: UInt64, entry: DomainStreamEntry) throws
+    func pushStreamEntryAsync(streamId: UInt64, entry: DomainStreamEntry) async throws
+    func finishStream(streamId: UInt64) throws
+}
+
+extension DomainClusterManager {
+    func pushStreamEntryAsync(streamId: UInt64, entry: DomainStreamEntry) async throws {
+        try pushStreamEntry(streamId: streamId, entry: entry)
+    }
+}
+
+extension DomainClusterManager: CameraDomainStreamPeer {}
+extension AukiSignaledWebRTCDomainPeer: CameraDomainStreamPeer {}
+
 actor DomainCameraStreamSink: CameraStreamSink {
-    private let manager: DomainClusterManagerProtocol
+    private let manager: CameraDomainStreamPeer
     private var nextSequenceByStreamId: [String: UInt64] = [:]
 
-    init(manager: DomainClusterManagerProtocol) {
+    init(manager: CameraDomainStreamPeer) {
         self.manager = manager
     }
 
@@ -119,7 +135,7 @@ actor DomainCameraStreamSink: CameraStreamSink {
         let sequence = nextSequenceByStreamId[streamId, default: 0]
         nextSequenceByStreamId[streamId] = sequence + 1
 
-        try manager.pushStreamEntry(
+        try await manager.pushStreamEntryAsync(
             streamId: numericStreamId,
             entry: DomainStreamEntry(
                 sequence: sequence,

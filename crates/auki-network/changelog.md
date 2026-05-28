@@ -6,6 +6,36 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**Discovery-signaled WebRTC streams now chunk writes and redial stale browser connections.** The generated browser binding now forgets failed, closed, or disconnected Discovery-signaled WebRTC peer-connection state before the next dial so Overwatch does not keep awaiting a dead connection after a camera transport drop. The Swift `AukiNetworkSignaledWebRTC` support target now serializes length-prefixed data-channel writes behind an async gate and splits large frame payloads into bounded chunks, avoiding oversized or overlapping `RTCDataBuffer` sends during sustained camera streaming.
+
+Tests: red/green `npm --prefix bindings/javascript/auki-network test -- test/framed-handler.test.mjs`; `just generate-javascript-bindings auki-network`; `just generate-swift-bindings auki-network`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,id=5FDB8F06-16CE-444F-8852-A295466B114F' -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcLengthPrefixedFramesAreChunkedForDataChannelTransport -only-testing:AukiCameraStreamerTests/CameraStreamFanoutTests/testDomainCameraStreamSinkUsesAsyncPushPath CODE_SIGNING_ALLOWED=NO`; `node examples/overwatch/scripts/stage-sdk.mjs`.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled WebRTC initiators now become ready on ICE connection.** `AukiSignaledWebRTCPeer` now marks a peer connection ready when WebRTC ICE reaches `.connected` or `.completed`, matching the browser readiness model so native initiators can open `/auki/join/0.0.1` after Discovery offer/answer signaling completes instead of timing out while the control channel is already negotiated.
+
+Tests: red/green `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-two-peer-green CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestCompletesBetweenTwoPeers`; `just generate-swift-bindings auki-network`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-signaled-focused CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestCompletesBetweenTwoPeers -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestTimesOutWhenPeerNeverAnswers`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled WebRTC operations now time out.** `AukiSignaledWebRTCPeer` now applies a configurable operation timeout to framed requests and stream opens, closes timed-out peer connections, and closes retained data-channel streams during connection teardown so native startup does not wait forever when a Discovery-signaled peer never answers. The native Discovery binding-surface regression also proves a long `/signals` poll does not block peer registration on the same client, and the message-node-only parse helpers are cfg-gated to avoid swarm-only warning noise.
+
+Tests: red/green `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-timeout-green CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestTimesOutWhenPeerNeverAnswers`; `just generate-swift-bindings auki-network`; `cargo test -p auki-network --features discovery_client,swarm native_discovery_client -- --nocapture`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`; `plutil -lint examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj/project.pbxproj`; `git diff --check`.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Native Discovery bindings preserve signaled manager addresses.** `AukiDiscoveryClient.register_peer_json` and `discover_peers_json` now use raw Discovery JSON for cluster create, manager rotation, liveness, and listing so `/auki-webrtc-signaling/.../p2p/...` manager addresses are not rejected by libp2p `Multiaddr` parsing before reaching Discovery. The full binding-surface regression covers create, rotate, liveness, and discovery for a signaled cluster entry.
+
+Tests: red/green `cargo test -p auki-network --features discovery_client,swarm native_discovery_client_accepts_signaled_manager_addrs -- --nocapture`; `cargo test -p auki-network --features discovery_client,swarm native_discovery_client -- --nocapture`; `just generate-swift-bindings auki-network`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Swift Discovery-signaled WebRTC support target implemented.** The `auki-network` Swift binding template now renders a concrete `AukiNetworkSignaledWebRTC` target backed by `WebRTC.framework`, using `AukiDiscoveryClient` `/signals` send/poll for offers, answers, ICE candidates, and closes. The support target owns signaled multiaddr formatting, polling, peer-connection lifecycle, framed request data channels, and bidirectional stream data channels so native SDK hosts do not start `webrtc-direct` listeners for browser interop.
+
+Tests: `just generate-swift-bindings auki-network`; `xcodebuild -scheme AukiNetworkSignaledWebRTC -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/auki-network-swift-derived build CODE_SIGNING_ALLOWED=NO`; `cargo test -p auki-network signaled_peer -- --nocapture`; `cargo test -p auki-network --features discovery_client,swarm native_signaled_peer_core_is_exposed -- --nocapture`; `git diff --check`.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **Signaled peer core exposed to Swift bindings.** The native UniFFI surface now exports `AukiSignaledPeerCore` with a constructor, `local_peer_id()`, and `signaled_multiaddr()`, backed by the shared `SignaledPeerCore` and signaled address helper. The Swift package template now renders an `AukiNetworkSignaledWebRTC` support target with the `AukiWebRTCBackend` protocol for platform WebRTC implementations to supply peer-connection, data-channel, and close operations.

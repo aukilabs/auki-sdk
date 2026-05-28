@@ -7,41 +7,45 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0019F61117CC53955D777876 /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = E7829004627FBE7C8A73FA26 /* AukiProto */; };
 		0BCD19BADDCDC50880EF80A0 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891E1B31C1D9DF65E299DC79 /* App.swift */; };
-		13404A91A9909109733DC914 /* auki_layout in Frameworks */ = {isa = PBXBuildFile; productRef = 8FB8FB042DA7560406CACC66 /* auki_layout */; };
-		163CFEADBFD63306DB7A2897 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = E2012E9BCE092D404A5CDB96 /* SwiftProtobuf */; };
+		0D5A74008EF44D740282BF85 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = 512FB7CB617BABABC1667116 /* SwiftProtobuf */; };
+		13404A91A9909109733DC914 /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 3145EDF94CE78FA7150E1471 /* auki_time */; };
+		163CFEADBFD63306DB7A2897 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 4559FF030058F2A754F10F74 /* auki_manifests */; };
 		1D107C787954961D064D680F /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0BE30CE65F0E3CCC082DC4C /* Security.framework */; };
-		21BFBACE1296F50BC81C905C /* auki_domain in Frameworks */ = {isa = PBXBuildFile; productRef = F4C962277A04EDC31F4520E9 /* auki_domain */; };
-		26A8729673025A14055A4A81 /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = E7829004627FBE7C8A73FA26 /* AukiProto */; };
-		389964EF774ECCC25C671139 /* auki_domain in Frameworks */ = {isa = PBXBuildFile; productRef = 97FE6E8C15263FDEF65B813A /* auki_domain */; };
+		21BFBACE1296F50BC81C905C /* AukiNetworkSignaledWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = C0822C49A7FD9354BB33FD9A /* AukiNetworkSignaledWebRTC */; };
+		26A8729673025A14055A4A81 /* auki_layout in Frameworks */ = {isa = PBXBuildFile; productRef = 8FB8FB042DA7560406CACC66 /* auki_layout */; };
+		389964EF774ECCC25C671139 /* AukiNetworkSignaledWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 5E8ED79040FE785C594A33C7 /* AukiNetworkSignaledWebRTC */; };
+		409A4E370B69DF845658B82F /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = E2012E9BCE092D404A5CDB96 /* SwiftProtobuf */; };
 		437C6E3CFD0130F20AEF96B4 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1EC334FFB0D9E85892651700 /* AVFoundation.framework */; };
-		446AE3BB610EECFB995BBCD2 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 33F15E5D2061A6D6F8FADE25 /* auki_manifests */; };
+		446AE3BB610EECFB995BBCD2 /* auki_logs in Frameworks */ = {isa = PBXBuildFile; productRef = 451CC85FAD5347E0DE8D51D1 /* auki_logs */; };
 		47155437F9ECAF97619C744E /* CameraStreamFanout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 887BFECB67319AFC504E9868 /* CameraStreamFanout.swift */; };
-		48738FF0395C4F04C05B4004 /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = 5665E167757A9128E101A128 /* AukiProto */; };
+		48738FF0395C4F04C05B4004 /* auki_layout in Frameworks */ = {isa = PBXBuildFile; productRef = 273933697B615F3D67EFACB1 /* auki_layout */; };
 		4A3FE98B2CAB249AE4996D90 /* CameraCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC8E63E0DC6B3BFD460321E3 /* CameraCaptureService.swift */; };
 		5052563AA66A2A1FBB3726CC /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AAA6A9E4BFE29F546500F85 /* CoreImage.framework */; };
 		51E6980AA3007F64DD98FB39 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AECD862F2AAC975AB9D51EA1 /* ImageIO.framework */; };
 		5C82D5DEEDE5257BB7A499AA /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1EC334FFB0D9E85892651700 /* AVFoundation.framework */; };
-		5FC114121DDFC38F9FF0C522 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 4559FF030058F2A754F10F74 /* auki_manifests */; };
+		5FC114121DDFC38F9FF0C522 /* auki_logs in Frameworks */ = {isa = PBXBuildFile; productRef = EE38AC8AE47CF62C3A1D8588 /* auki_logs */; };
 		630AD149D0320F96170A62A6 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AECD862F2AAC975AB9D51EA1 /* ImageIO.framework */; };
 		69E9D0F6535ED59C11F89A40 /* AukiCameraModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF468E4976EB163DE51F9D5B /* AukiCameraModels.swift */; };
 		719FD68E149F5632538487C4 /* AukiCameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76E70384FBDA45752E09E788 /* AukiCameraSession.swift */; };
 		72553A7D1AB5E630A0B54FAB /* CameraStreamFanoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6548BF03C4D90A753F3ABE3 /* CameraStreamFanoutTests.swift */; };
-		73972F370BA6DFB47FFE81CA /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 3145EDF94CE78FA7150E1471 /* auki_time */; };
-		763FD55ABB44E59765315EE1 /* auki_logs in Frameworks */ = {isa = PBXBuildFile; productRef = EE38AC8AE47CF62C3A1D8588 /* auki_logs */; };
+		73972F370BA6DFB47FFE81CA /* AukiDomainSignaledWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 51827709648FD84CBF088A1B /* AukiDomainSignaledWebRTC */; };
+		763FD55ABB44E59765315EE1 /* auki_registry in Frameworks */ = {isa = PBXBuildFile; productRef = C1E6AC262B91BE303577D81E /* auki_registry */; };
 		782CDBB533A21CA9AE64F52E /* CameraFrameEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7ABDDB7E85DD6A69F9C72E9 /* CameraFrameEncodingTests.swift */; };
 		7A5A1A770AE14798F46998E4 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3025073D0969C7F11DA9D2C7 /* SystemConfiguration.framework */; };
+		7CCA78C09019C332CE0DF1FC /* AukiProto in Frameworks */ = {isa = PBXBuildFile; productRef = 5665E167757A9128E101A128 /* AukiProto */; };
 		83BD8CC983B638E602D59CAD /* auki_network in Frameworks */ = {isa = PBXBuildFile; productRef = 40388FAED53DA140B582B92D /* auki_network */; };
 		88DEEAC3DD42AD3D059326ED /* CameraStreamerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514C2F94890B3989EEC6A79 /* CameraStreamerViewModel.swift */; };
-		8AE306147B859685E1148281 /* auki_registry in Frameworks */ = {isa = PBXBuildFile; productRef = 0CC94C2683E7E25102098C45 /* auki_registry */; };
+		8AE306147B859685E1148281 /* auki_domain in Frameworks */ = {isa = PBXBuildFile; productRef = 97FE6E8C15263FDEF65B813A /* auki_domain */; };
 		9592CEEE2E0A838B05808C51 /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1AAA6A9E4BFE29F546500F85 /* CoreImage.framework */; };
 		A7ADC6DF9A5C18449D8D7340 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0BE30CE65F0E3CCC082DC4C /* Security.framework */; };
 		AF60F6EDC9E0B450DB7B23E2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BE91F46D52746058C338973 /* ContentView.swift */; };
-		B0B6D4206FBDEBEC2A5D497F /* auki_registry in Frameworks */ = {isa = PBXBuildFile; productRef = C1E6AC262B91BE303577D81E /* auki_registry */; };
-		BC02B78163146E65DBB4FD5F /* auki_layout in Frameworks */ = {isa = PBXBuildFile; productRef = 273933697B615F3D67EFACB1 /* auki_layout */; };
-		C6E7EA71A2A1218285D9FFC0 /* auki_logs in Frameworks */ = {isa = PBXBuildFile; productRef = 451CC85FAD5347E0DE8D51D1 /* auki_logs */; };
-		D70D7A3FF2DC1F1F46AAF923 /* SwiftProtobuf in Frameworks */ = {isa = PBXBuildFile; productRef = 512FB7CB617BABABC1667116 /* SwiftProtobuf */; };
-		D77398AD5F055E276ADA4E26 /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 8F3492ABA11653E4268945FC /* auki_time */; };
+		B0B6D4206FBDEBEC2A5D497F /* auki_domain in Frameworks */ = {isa = PBXBuildFile; productRef = F4C962277A04EDC31F4520E9 /* auki_domain */; };
+		BC02B78163146E65DBB4FD5F /* auki_time in Frameworks */ = {isa = PBXBuildFile; productRef = 8F3492ABA11653E4268945FC /* auki_time */; };
+		C6E7EA71A2A1218285D9FFC0 /* auki_registry in Frameworks */ = {isa = PBXBuildFile; productRef = 0CC94C2683E7E25102098C45 /* auki_registry */; };
+		D70D7A3FF2DC1F1F46AAF923 /* auki_manifests in Frameworks */ = {isa = PBXBuildFile; productRef = 33F15E5D2061A6D6F8FADE25 /* auki_manifests */; };
+		D77398AD5F055E276ADA4E26 /* AukiDomainSignaledWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 30246784D77D5C48335CE124 /* AukiDomainSignaledWebRTC */; };
 		E538AA4CEAFB2E1B03D508AD /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3025073D0969C7F11DA9D2C7 /* SystemConfiguration.framework */; };
 		E5EDF7C3E34334057067CB88 /* KeychainSeedStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19552C5075549A465277A7A /* KeychainSeedStore.swift */; };
 		EB541904BA6104E7EB629841 /* AukiCameraModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD57CB23DC8CC2EC4872D4F /* AukiCameraModelsTests.swift */; };
@@ -70,7 +74,7 @@
 		4AD57CB23DC8CC2EC4872D4F /* AukiCameraModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AukiCameraModelsTests.swift; sourceTree = "<group>"; };
 		4BD8088F7881D9D6F596B3F7 /* AukiCameraStreamerTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AukiCameraStreamerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		58B9B56ED272FD9E0ADE5311 /* auki-time */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-time"; path = "../../../bindings/swift/auki-time"; sourceTree = SOURCE_ROOT; };
-		5D843C07DB681D98ACF9D641 /* AukiCameraStreamer.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AukiCameraStreamer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5D843C07DB681D98ACF9D641 /* AukiCameraStreamer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AukiCameraStreamer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6000191001B2113E9106051E /* auki-manifests */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "auki-manifests"; path = "../../../bindings/swift/auki-manifests"; sourceTree = SOURCE_ROOT; };
 		76E70384FBDA45752E09E788 /* AukiCameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AukiCameraSession.swift; sourceTree = "<group>"; };
 		8514C2F94890B3989EEC6A79 /* CameraStreamerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStreamerViewModel.swift; sourceTree = "<group>"; };
@@ -93,14 +97,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				83BD8CC983B638E602D59CAD /* auki_network in Frameworks */,
-				21BFBACE1296F50BC81C905C /* auki_domain in Frameworks */,
-				B0B6D4206FBDEBEC2A5D497F /* auki_registry in Frameworks */,
-				73972F370BA6DFB47FFE81CA /* auki_time in Frameworks */,
-				763FD55ABB44E59765315EE1 /* auki_logs in Frameworks */,
-				13404A91A9909109733DC914 /* auki_layout in Frameworks */,
-				5FC114121DDFC38F9FF0C522 /* auki_manifests in Frameworks */,
-				26A8729673025A14055A4A81 /* AukiProto in Frameworks */,
-				163CFEADBFD63306DB7A2897 /* SwiftProtobuf in Frameworks */,
+				21BFBACE1296F50BC81C905C /* AukiNetworkSignaledWebRTC in Frameworks */,
+				B0B6D4206FBDEBEC2A5D497F /* auki_domain in Frameworks */,
+				73972F370BA6DFB47FFE81CA /* AukiDomainSignaledWebRTC in Frameworks */,
+				763FD55ABB44E59765315EE1 /* auki_registry in Frameworks */,
+				13404A91A9909109733DC914 /* auki_time in Frameworks */,
+				5FC114121DDFC38F9FF0C522 /* auki_logs in Frameworks */,
+				26A8729673025A14055A4A81 /* auki_layout in Frameworks */,
+				163CFEADBFD63306DB7A2897 /* auki_manifests in Frameworks */,
+				0019F61117CC53955D777876 /* AukiProto in Frameworks */,
+				409A4E370B69DF845658B82F /* SwiftProtobuf in Frameworks */,
 				437C6E3CFD0130F20AEF96B4 /* AVFoundation.framework in Frameworks */,
 				5052563AA66A2A1FBB3726CC /* CoreImage.framework in Frameworks */,
 				51E6980AA3007F64DD98FB39 /* ImageIO.framework in Frameworks */,
@@ -114,14 +120,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				EC377A68237750743E683EED /* auki_network in Frameworks */,
-				389964EF774ECCC25C671139 /* auki_domain in Frameworks */,
-				8AE306147B859685E1148281 /* auki_registry in Frameworks */,
-				D77398AD5F055E276ADA4E26 /* auki_time in Frameworks */,
-				C6E7EA71A2A1218285D9FFC0 /* auki_logs in Frameworks */,
-				BC02B78163146E65DBB4FD5F /* auki_layout in Frameworks */,
-				446AE3BB610EECFB995BBCD2 /* auki_manifests in Frameworks */,
-				48738FF0395C4F04C05B4004 /* AukiProto in Frameworks */,
-				D70D7A3FF2DC1F1F46AAF923 /* SwiftProtobuf in Frameworks */,
+				389964EF774ECCC25C671139 /* AukiNetworkSignaledWebRTC in Frameworks */,
+				8AE306147B859685E1148281 /* auki_domain in Frameworks */,
+				D77398AD5F055E276ADA4E26 /* AukiDomainSignaledWebRTC in Frameworks */,
+				C6E7EA71A2A1218285D9FFC0 /* auki_registry in Frameworks */,
+				BC02B78163146E65DBB4FD5F /* auki_time in Frameworks */,
+				446AE3BB610EECFB995BBCD2 /* auki_logs in Frameworks */,
+				48738FF0395C4F04C05B4004 /* auki_layout in Frameworks */,
+				D70D7A3FF2DC1F1F46AAF923 /* auki_manifests in Frameworks */,
+				7CCA78C09019C332CE0DF1FC /* AukiProto in Frameworks */,
+				0D5A74008EF44D740282BF85 /* SwiftProtobuf in Frameworks */,
 				5C82D5DEEDE5257BB7A499AA /* AVFoundation.framework in Frameworks */,
 				9592CEEE2E0A838B05808C51 /* CoreImage.framework in Frameworks */,
 				630AD149D0320F96170A62A6 /* ImageIO.framework in Frameworks */,
@@ -222,7 +230,9 @@
 			name = AukiCameraStreamer;
 			packageProductDependencies = (
 				40388FAED53DA140B582B92D /* auki_network */,
+				C0822C49A7FD9354BB33FD9A /* AukiNetworkSignaledWebRTC */,
 				F4C962277A04EDC31F4520E9 /* auki_domain */,
+				51827709648FD84CBF088A1B /* AukiDomainSignaledWebRTC */,
 				C1E6AC262B91BE303577D81E /* auki_registry */,
 				3145EDF94CE78FA7150E1471 /* auki_time */,
 				EE38AC8AE47CF62C3A1D8588 /* auki_logs */,
@@ -250,7 +260,9 @@
 			name = AukiCameraStreamerTests;
 			packageProductDependencies = (
 				6BB16078BF16502C5FD680CE /* auki_network */,
+				5E8ED79040FE785C594A33C7 /* AukiNetworkSignaledWebRTC */,
 				97FE6E8C15263FDEF65B813A /* auki_domain */,
+				30246784D77D5C48335CE124 /* AukiDomainSignaledWebRTC */,
 				0CC94C2683E7E25102098C45 /* auki_registry */,
 				8F3492ABA11653E4268945FC /* auki_time */,
 				451CC85FAD5347E0DE8D51D1 /* auki_logs */,
@@ -271,8 +283,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-				};
 			};
 			buildConfigurationList = D26CF1B39120F0732AEF29D4 /* Build configuration list for PBXProject "AukiCameraStreamer" */;
 			developmentRegion = en;
@@ -485,6 +495,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 49479XX86V;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "AukiCameraStreamer captures camera frames for local SDK stream tests.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AukiCameraStreamer discovers and connects to local Auki peers.";
@@ -524,6 +535,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 49479XX86V;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "AukiCameraStreamer captures camera frames for local SDK stream tests.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AukiCameraStreamer discovers and connects to local Auki peers.";
@@ -626,6 +638,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = auki_layout;
 		};
+		30246784D77D5C48335CE124 /* AukiDomainSignaledWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiDomainSignaledWebRTC;
+		};
 		3145EDF94CE78FA7150E1471 /* auki_time */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = auki_time;
@@ -651,9 +667,17 @@
 			package = F9495A33E0656A9991B232A0 /* XCRemoteSwiftPackageReference "swift-protobuf" */;
 			productName = SwiftProtobuf;
 		};
+		51827709648FD84CBF088A1B /* AukiDomainSignaledWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiDomainSignaledWebRTC;
+		};
 		5665E167757A9128E101A128 /* AukiProto */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AukiProto;
+		};
+		5E8ED79040FE785C594A33C7 /* AukiNetworkSignaledWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiNetworkSignaledWebRTC;
 		};
 		6BB16078BF16502C5FD680CE /* auki_network */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -670,6 +694,10 @@
 		97FE6E8C15263FDEF65B813A /* auki_domain */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = auki_domain;
+		};
+		C0822C49A7FD9354BB33FD9A /* AukiNetworkSignaledWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AukiNetworkSignaledWebRTC;
 		};
 		C1E6AC262B91BE303577D81E /* auki_registry */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -8,7 +8,13 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .library(name: "$crate_lib_name", targets: ["$crate_lib_name"])
+        .library(name: "$crate_lib_name", targets: ["$crate_lib_name"]),
+        .library(name: "AukiDomainSignaledWebRTC", targets: ["AukiDomainSignaledWebRTC"])
+    ],
+    dependencies: [
+        .package(name: "auki-network", path: "../auki-network"),
+        .package(name: "auki-proto", path: "../auki-proto"),
+        .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.38.0")
     ],
     targets: [
         .target(
@@ -20,6 +26,18 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("SystemConfiguration")
             ]
+        ),
+        .target(
+            name: "AukiDomainSignaledWebRTC",
+            dependencies: [
+                "$crate_lib_name",
+                .product(name: "auki_network", package: "auki-network"),
+                .product(name: "AukiNetworkSignaledWebRTC", package: "auki-network"),
+                .product(name: "AukiProto", package: "auki-proto"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf")
+            ],
+            path: "Sources/AukiDomainSignaledWebRTC",
+            sources: ["AukiSignaledDomainWebRTC.swift"]
         ),
         .binaryTarget(
             name: "${crate_lib_name}FFI",

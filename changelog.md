@@ -6,6 +6,58 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**Relay-backed libp2p migration now removes signaled WebRTC.** The plan now requires replacing, not preserving, the Discovery-signaled WebRTC path and `AukiSignaledWebRTCPeer`. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Relay-backed libp2p transport migration planned.** The docs now define a phased path from host-specific Discovery-signaled WebRTC adapters toward relay-backed libp2p addresses and streams. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**iOS camera streamer now awaits SDK stream-entry writes.** `AukiCameraStreamer` uses the async signaled Domain push path and covers chunked signaled WebRTC writes for camera frames. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled Domain streams now expose async push backpressure.** `auki-domain` now lets native producers await stream-entry writes instead of launching unbounded frame tasks. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Discovery-signaled WebRTC streams now handle sustained camera payloads.** `auki-network` now chunks Swift data-channel writes and redials stale browser signaled WebRTC connections. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled WebRTC readiness now follows ICE connection.** `auki-network` native initiators now unblock after Discovery-signaled WebRTC offer/answer reaches ICE connected/completed. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**iOS camera streamer covers signaled two-peer joins.** `AukiCameraStreamer` now proves `/auki/join/0.0.1` completes over SDK-owned Discovery-signaled WebRTC between native peers. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled WebRTC startup waits now time out.** `auki-network` now returns a typed timeout and closes the pending WebRTC connection when a Discovery-signaled peer never answers. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**iOS camera streamer covers signaled timeout behavior.** `AukiCameraStreamer` now has an app-facing regression for the no-answer Discovery-signaled WebRTC path. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Native Discovery bindings preserve signaled manager addresses.** `auki-network` no longer rejects `/auki-webrtc-signaling/.../p2p/...` cluster manager addresses before they reach Discovery. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**iOS camera streamer now uses Discovery-signaled WebRTC.** `AukiCameraStreamer` no longer starts the native `webrtc-direct` listen path for Overwatch interop. See [`examples/changelog.md`](examples/changelog.md) for examples-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Swift Discovery-signaled Domain WebRTC facade implemented.** `auki-domain` now renders a Swift support target that composes Discovery-signaled WebRTC with Domain protocols. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Swift Discovery-signaled WebRTC support target implemented.** `auki-network` now renders a concrete Swift WebRTC data-channel transport that signals via Discovery `/signals`. See [`crates/changelog.md`](crates/changelog.md) for crate-level propagation.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **SDK signaled WebRTC plan Task 7 completed.** The implementation plan now records the completed `auki-domain` signaled peer facade slice. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

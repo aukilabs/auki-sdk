@@ -1,5 +1,7 @@
 #[cfg(feature = "swarm")]
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+use std::sync::mpsc as std_mpsc;
 
 #[cfg(feature = "swarm")]
 static NEXT_RUNTIME_SEED: AtomicU8 = AtomicU8::new(17);
@@ -255,6 +257,123 @@ fn native_discovery_client_is_exposed() {
     );
 
     client.unregister_peer_json("demo".into(), 2_000).unwrap();
+}
+
+#[test]
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn native_discovery_client_accepts_signaled_manager_addrs() {
+    let server = MockDiscoveryServer::spawn();
+    let client = auki_network::discovery_client(server.base_url()).unwrap();
+    let manager_peer_id = auki_network::PeerIdentity::from_seed(&[53u8; 32])
+        .peer_id()
+        .to_string();
+    let manager_addr =
+        auki_network::format_signaled_address("http://discovery.local", &manager_peer_id).unwrap();
+
+    let created = client
+        .register_peer_json(
+            serde_json::json!({
+                "name": "signaled",
+                "manager_peer_id": manager_peer_id,
+                "manager_multiaddrs": [manager_addr],
+                "relay_multiaddrs": []
+            })
+            .to_string(),
+            2_000,
+        )
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["kind"], "created");
+    assert_eq!(created["entry"]["manager_multiaddrs"][0], manager_addr);
+
+    let rotated = client
+        .register_peer_json(
+            serde_json::json!({
+                "name": "signaled",
+                "mode": "rotate_manager",
+                "manager_peer_id": manager_peer_id,
+                "manager_multiaddrs": [manager_addr],
+                "relay_multiaddrs": []
+            })
+            .to_string(),
+            2_000,
+        )
+        .unwrap();
+    let rotated: serde_json::Value = serde_json::from_str(&rotated).unwrap();
+    assert_eq!(rotated["kind"], "updated");
+    assert_eq!(rotated["entry"]["manager_multiaddrs"][0], manager_addr);
+
+    let liveness = client
+        .register_peer_json(
+            serde_json::json!({
+                "name": "signaled",
+                "mode": "liveness",
+                "peer_count": 1
+            })
+            .to_string(),
+            2_000,
+        )
+        .unwrap();
+    let liveness: serde_json::Value = serde_json::from_str(&liveness).unwrap();
+    assert_eq!(liveness["kind"], "liveness");
+    assert_eq!(liveness["entry"]["manager_multiaddrs"][0], manager_addr);
+
+    let discovered = client
+        .discover_peers_json(serde_json::json!({ "name": "signaled" }).to_string(), 2_000)
+        .unwrap();
+    let discovered: serde_json::Value = serde_json::from_str(&discovered).unwrap();
+    assert_eq!(discovered["clusters"][0]["name"], "signaled");
+    assert_eq!(
+        discovered["clusters"][0]["manager_multiaddrs"][0],
+        manager_addr
+    );
+}
+
+#[test]
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn native_discovery_client_registration_is_not_blocked_by_signal_poll() {
+    let server = ConcurrentMockDiscoveryServer::spawn();
+    let client = auki_network::discovery_client(server.base_url()).unwrap();
+    let poll_client = client.clone();
+
+    let poll = std::thread::spawn(move || {
+        poll_client.poll_signals_json(
+            auki_network::BindingSignalPoll {
+                peer_id: "peer-a".into(),
+                since: 0,
+                timeout_ms: 2_000,
+            },
+            3_000,
+        )
+    });
+
+    server.wait_for_signal_poll();
+    let manager_peer_id = auki_network::PeerIdentity::from_seed(&[53u8; 32])
+        .peer_id()
+        .to_string();
+    let manager_addr =
+        auki_network::format_signaled_address("http://discovery.local", &manager_peer_id).unwrap();
+    let started = std::time::Instant::now();
+    let created = client
+        .register_peer_json(
+            serde_json::json!({
+                "name": "signaled",
+                "manager_peer_id": manager_peer_id,
+                "manager_multiaddrs": [manager_addr],
+                "relay_multiaddrs": []
+            })
+            .to_string(),
+            1_000,
+        )
+        .unwrap();
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(750),
+        "cluster registration waited behind an unrelated signal poll"
+    );
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["kind"], "created");
+    assert_eq!(poll.join().unwrap().unwrap(), r#"{"messages":[]}"#);
 }
 
 #[test]
@@ -942,10 +1061,20 @@ impl MockDiscoveryServer {
                 let request = read_http_request(&mut stream);
                 let (status, body) = if request.starts_with("POST /clusters/demo ") {
                     ("201 Created", discovery_entry_body())
+                } else if request.starts_with("POST /clusters/signaled ") {
+                    ("201 Created", discovery_signaled_entry_body())
+                } else if request.starts_with("POST /clusters/signaled/manager ") {
+                    ("200 OK", discovery_signaled_entry_body())
+                } else if request.starts_with("POST /clusters/signaled/liveness ") {
+                    ("200 OK", discovery_signaled_entry_body())
                 } else if request.starts_with("GET /clusters ") {
                     (
                         "200 OK",
-                        format!(r#"{{"clusters":[{}]}}"#, discovery_entry_body()),
+                        format!(
+                            r#"{{"clusters":[{},{}]}}"#,
+                            discovery_entry_body(),
+                            discovery_signaled_entry_body()
+                        ),
                     )
                 } else if request.starts_with("DELETE /clusters/demo ") {
                     ("204 No Content", String::new())
@@ -1026,6 +1155,25 @@ fn discovery_entry_body() -> String {
 }
 
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn discovery_signaled_entry_body() -> String {
+    let peer_id = auki_network::PeerIdentity::from_seed(&[53u8; 32])
+        .peer_id()
+        .to_string();
+    let manager_addr =
+        auki_network::format_signaled_address("http://discovery.local", &peer_id).unwrap();
+    serde_json::json!({
+        "name": "signaled",
+        "manager_peer_id": peer_id,
+        "manager_multiaddrs": [manager_addr],
+        "relay_multiaddrs": [],
+        "peer_count": 1,
+        "created_ns": 1,
+        "last_liveness_check_ns": 1
+    })
+    .to_string()
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
 fn discovery_nodes_body() -> String {
     let peer_id = auki_network::PeerIdentity::from_seed(&[54u8; 32])
         .peer_id()
@@ -1040,6 +1188,59 @@ fn discovery_nodes_body() -> String {
         }]
     })
     .to_string()
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+struct ConcurrentMockDiscoveryServer {
+    addr: std::net::SocketAddr,
+    poll_started: std_mpsc::Receiver<()>,
+    _handle: std::thread::JoinHandle<()>,
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+impl ConcurrentMockDiscoveryServer {
+    fn spawn() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (poll_started_tx, poll_started) = std_mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let poll_started_tx = poll_started_tx.clone();
+                std::thread::spawn(move || {
+                    let request = read_http_request(&mut stream);
+                    let (status, body) = if request.starts_with("GET /signals/peer-a") {
+                        poll_started_tx.send(()).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(1_500));
+                        ("200 OK", r#"{"messages":[]}"#.to_string())
+                    } else if request.starts_with("POST /clusters/signaled ") {
+                        ("201 Created", discovery_signaled_entry_body())
+                    } else {
+                        (
+                            "404 Not Found",
+                            r#"{"error":"unexpected concurrent mock discovery request"}"#.into(),
+                        )
+                    };
+                    write_http_response(&mut stream, status, &body);
+                });
+            }
+        });
+        Self {
+            addr,
+            poll_started,
+            _handle: handle,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn wait_for_signal_poll(&self) {
+        self.poll_started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("signal poll did not start");
+    }
 }
 
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]

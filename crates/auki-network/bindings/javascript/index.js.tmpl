@@ -259,6 +259,21 @@ export class AukiNetworkPeer {
         // Best effort shutdown.
       }
     }
+    this.signaling.connectionsById.clear();
+    this.signaling.connectionsByPeer.clear();
+  }
+
+  _forgetConnectionState(state) {
+    const signaling = this.signaling;
+    if (signaling == null) {
+      return;
+    }
+    if (signaling.connectionsById.get(state.connectionId) === state) {
+      signaling.connectionsById.delete(state.connectionId);
+    }
+    if (signaling.connectionsByPeer.get(state.remotePeerId) === state) {
+      signaling.connectionsByPeer.delete(state.remotePeerId);
+    }
   }
 
   _startSignalPolling() {
@@ -382,8 +397,17 @@ export class AukiNetworkPeer {
     }
     const existing = signaling.connectionsByPeer.get(remotePeerId);
     if (existing != null) {
-      await existing.ready;
-      return existing;
+      if (isClosedPeerConnectionState(existing.pc.connectionState)) {
+        this._forgetConnectionState(existing);
+        try {
+          existing.pc.close();
+        } catch {
+          // Best effort stale connection cleanup.
+        }
+      } else {
+        await existing.ready;
+        return existing;
+      }
     }
 
     const connectionId = randomConnectionId();
@@ -415,13 +439,37 @@ export class AukiNetworkPeer {
       pc,
       pendingCandidates: [],
       ready: null,
+      readySettled: false,
+      readyTimeout: null,
       resolveReady: null,
       rejectReady: null,
     };
     state.ready = new Promise((resolve, reject) => {
-      state.resolveReady = resolve;
-      state.rejectReady = reject;
-      setTimeout(() => reject(new Error(`WebRTC signaling timed out for ${remotePeerId}`)), 15_000);
+      state.resolveReady = (value) => {
+        if (state.readySettled) {
+          return;
+        }
+        state.readySettled = true;
+        clearTimeout(state.readyTimeout);
+        resolve(value);
+      };
+      state.rejectReady = (error) => {
+        if (state.readySettled) {
+          return;
+        }
+        state.readySettled = true;
+        clearTimeout(state.readyTimeout);
+        reject(error);
+      };
+      state.readyTimeout = setTimeout(() => {
+        state.rejectReady(new Error(`WebRTC signaling timed out for ${remotePeerId}`));
+        this._forgetConnectionState(state);
+        try {
+          pc.close();
+        } catch {
+          // Best effort timeout cleanup.
+        }
+      }, 15_000);
     });
     pc.onicecandidate = ({ candidate }) => {
       if (candidate != null) {
@@ -434,7 +482,8 @@ export class AukiNetworkPeer {
       if (pc.connectionState === "connected") {
         state.resolveReady(state);
       }
-      if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      if (isClosedPeerConnectionState(pc.connectionState)) {
+        this._forgetConnectionState(state);
         state.rejectReady(new Error(`WebRTC connection ${pc.connectionState}`));
       }
     };
@@ -724,6 +773,10 @@ function signalingAddress(discoveryUrl, peerId) {
 
 function isSignalingAddress(address) {
   return typeof address === "string" && address.startsWith("/auki-webrtc-signaling/");
+}
+
+function isClosedPeerConnectionState(connectionState) {
+  return ["failed", "closed", "disconnected"].includes(connectionState);
 }
 
 function parseSignalingAddress(address) {

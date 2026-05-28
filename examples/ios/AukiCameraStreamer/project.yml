@@ -32,8 +32,12 @@ targets:
     dependencies:
       - package: auki-network
         product: auki_network
+      - package: auki-network
+        product: AukiNetworkSignaledWebRTC
       - package: auki-domain
         product: auki_domain
+      - package: auki-domain
+        product: AukiDomainSignaledWebRTC
       - package: auki-registry
         product: auki_registry
       - package: auki-time
@@ -71,8 +75,12 @@ targets:
       - target: AukiCameraStreamer
       - package: auki-network
         product: auki_network
+      - package: auki-network
+        product: AukiNetworkSignaledWebRTC
       - package: auki-domain
         product: auki_domain
+      - package: auki-domain
+        product: AukiDomainSignaledWebRTC
       - package: auki-registry
         product: auki_registry
       - package: auki-time

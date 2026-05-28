@@ -6,6 +6,34 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — Swift signaled Domain stream pushes now have an async path.** Native producers can await stream-entry writes through the SDK so camera frame delivery applies signaled WebRTC backpressure and can surface transport errors.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Discovery-signaled WebRTC streams now chunk writes and redial stale browser connections.** Browser peers forget disconnected signaled WebRTC state before redial, and Swift data-channel writes are serialized and chunked for sustained camera payloads.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Swift signaled WebRTC initiators now become ready on ICE connection.** Native Discovery-signaled WebRTC initiators now mark connections ready on ICE `.connected`/`.completed`, unblocking `/auki/join/0.0.1` after offer/answer signaling.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Swift signaled WebRTC operations now time out.** Native framed requests and stream opens now fail with a typed timeout and close the pending WebRTC connection instead of leaving SDK startup pending when a signaled peer never answers.
+
+### Nils's codex · May 28, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — native Discovery bindings preserve signaled manager addresses.** Native cluster create, manager rotation, liveness, and list calls now keep `/auki-webrtc-signaling/.../p2p/...` addresses as Discovery JSON instead of parsing them as libp2p multiaddrs.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`auki-domain`](auki-domain/changelog.md) — Swift Discovery-signaled Domain WebRTC facade implemented.** The domain Swift templates now render `AukiDomainSignaledWebRTC`, composing Discovery-signaled data channels with Domain join, catalog, registry, and stream protocols.
+
+### Nils's codex · May 27, HKT, 2026
+
+**[`auki-network`](auki-network/changelog.md) — Swift Discovery-signaled WebRTC support target implemented.** The network Swift templates now render a concrete WebRTC data-channel peer that signals through Discovery `/signals` instead of direct browser-incompatible listeners.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **[`auki-domain`](auki-domain/changelog.md) — signaled Domain peer facade added.** The domain crate now wraps the network signaled peer core in `SignaledDomainPeer` / `AukiSignaledDomainPeer` with signaled multiaddr advertisement, static catalogs, registry JSON, and stream hooks.

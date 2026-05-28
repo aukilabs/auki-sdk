@@ -16,7 +16,10 @@ templates = ["pyproject.toml.tmpl", "setup.py.tmpl", "README.md.tmpl"]
 enabled = true
 generator = "uniffi"
 template_dir = "bindings/swift"
-templates = ["Package.swift.tmpl"]
+templates = [
+  "Package.swift.tmpl",
+  "Sources/AukiDomainSignaledWebRTC/AukiSignaledDomainWebRTC.swift.tmpl",
+]
 
 [bindings.javascript]
 enabled = true

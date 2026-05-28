@@ -1,5 +1,6 @@
 import XCTest
 import AukiProto
+import auki_domain
 @testable import AukiCameraStreamer
 
 private enum RecordingSinkError: Error {
@@ -29,6 +30,38 @@ private actor RecordingSink: CameraStreamSink {
     }
 
     func finishStream(streamId: String) async throws {}
+}
+
+private final class AsyncRecordingDomainPeer: CameraDomainStreamPeer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var syncPushCount = 0
+    private var asyncPushes: [DomainStreamEntry] = []
+
+    var counts: (sync: Int, async: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (syncPushCount, asyncPushes.count)
+    }
+
+    func pushedEntry() -> DomainStreamEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        return asyncPushes.first
+    }
+
+    func pushStreamEntry(streamId: UInt64, entry: DomainStreamEntry) throws {
+        lock.lock()
+        syncPushCount += 1
+        lock.unlock()
+    }
+
+    func pushStreamEntryAsync(streamId: UInt64, entry: DomainStreamEntry) async throws {
+        lock.lock()
+        asyncPushes.append(entry)
+        lock.unlock()
+    }
+
+    func finishStream(streamId: UInt64) throws {}
 }
 
 final class CameraStreamFanoutTests: XCTestCase {
@@ -95,5 +128,24 @@ final class CameraStreamFanoutTests: XCTestCase {
         XCTAssertEqual(pushedStreamIds, ["stream-good-a", "stream-good-b"])
         let count = await fanout.streamCount()
         XCTAssertEqual(count, 2)
+    }
+
+    func testDomainCameraStreamSinkUsesAsyncPushPath() async throws {
+        let peer = AsyncRecordingDomainPeer()
+        let sink = DomainCameraStreamSink(manager: peer)
+
+        try await sink.pushCameraFrame(
+            streamId: "42",
+            timestampNs: 1_234,
+            payload: Data([1, 2, 3])
+        )
+
+        let counts = peer.counts
+        XCTAssertEqual(counts.sync, 0)
+        XCTAssertEqual(counts.async, 1)
+        let entry = try XCTUnwrap(peer.pushedEntry())
+        XCTAssertEqual(entry.sequence, 0)
+        XCTAssertEqual(entry.timestampNs, 1_234)
+        XCTAssertEqual(entry.payload, Data([1, 2, 3]))
     }
 }

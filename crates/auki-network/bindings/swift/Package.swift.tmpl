@@ -11,6 +11,9 @@ let package = Package(
         .library(name: "$crate_lib_name", targets: ["$crate_lib_name"]),
         .library(name: "AukiNetworkSignaledWebRTC", targets: ["AukiNetworkSignaledWebRTC"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/stasel/WebRTC.git", exact: "147.0.0")
+    ],
     targets: [
         .target(
             name: "$crate_lib_name",
@@ -24,7 +27,10 @@ let package = Package(
         ),
         .target(
             name: "AukiNetworkSignaledWebRTC",
-            dependencies: ["$crate_lib_name"],
+            dependencies: [
+                "$crate_lib_name",
+                .product(name: "WebRTC", package: "WebRTC")
+            ],
             path: "Sources/AukiNetworkSignaledWebRTC",
             sources: ["AukiSignaledWebRTC.swift"]
         ),

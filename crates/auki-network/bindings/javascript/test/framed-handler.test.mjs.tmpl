@@ -78,9 +78,74 @@ test("AukiNetworkPeer rejects malformed Discovery signaling addresses through wa
   );
 });
 
+test("AukiNetworkPeer redials Discovery signaling peers after a disconnected peer connection", async () => {
+  const originalRTCPeerConnection = globalThis.RTCPeerConnection;
+  const createdPeerConnections = [];
+  globalThis.RTCPeerConnection = class FakeRTCPeerConnection {
+    constructor() {
+      this.connectionState = "new";
+      this.localDescription = null;
+      this.remoteDescription = null;
+      createdPeerConnections.push(this);
+    }
+
+    createDataChannel(label) {
+      return {
+        label,
+        readyState: "open",
+        binaryType: "arraybuffer",
+        addEventListener() {},
+        send() {},
+        close() {},
+      };
+    }
+
+    async createOffer() {
+      return { type: "offer", sdp: "offer-sdp" };
+    }
+
+    async setLocalDescription(description) {
+      this.localDescription = description;
+      queueMicrotask(() => {
+        this.connectionState = "connected";
+        this.onconnectionstatechange?.();
+      });
+    }
+
+    close() {
+      this.connectionState = "closed";
+      this.onconnectionstatechange?.();
+    }
+  };
+
+  try {
+    const peer = new AukiNetworkPeer(new FakeNode(new FakeStream(new Uint8Array())));
+    await peer.configureDiscoverySignaling({
+      discoveryUrl: "http://discovery.local",
+      discovery: new FakeDiscovery(),
+      startPolling: false,
+    });
+    const stale = peer._createConnectionState("remote-peer", "stale-connection", true);
+    stale.ready.catch(() => {});
+    peer.signaling.connectionsById.set(stale.connectionId, stale);
+    peer.signaling.connectionsByPeer.set(stale.remotePeerId, stale);
+
+    stale.pc.connectionState = "disconnected";
+    stale.pc.onconnectionstatechange();
+
+    const fresh = await peer._connectSignalingPeer("remote-peer");
+
+    assert.notEqual(fresh, stale);
+    assert.equal(fresh.pc.connectionState, "connected");
+    assert.equal(createdPeerConnections.length, 2);
+  } finally {
+    globalThis.RTCPeerConnection = originalRTCPeerConnection;
+  }
+});
+
 class FakeDiscovery {
   async sendSignalJson() {
-    throw new Error("unexpected sendSignalJson");
+    return "{}";
   }
 
   async pollSignalsJson() {

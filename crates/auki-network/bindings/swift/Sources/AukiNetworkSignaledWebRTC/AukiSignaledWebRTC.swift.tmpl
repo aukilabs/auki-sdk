@@ -1,8 +1,1071 @@
 import Foundation
 import $crate_lib_name
+@preconcurrency import WebRTC
 
-public protocol AukiWebRTCBackend {
-    func createPeerConnection(connectionId: String, remotePeerId: String, role: String) async throws
-    func createDataChannel(connectionId: String, label: String) async throws
-    func closeConnection(connectionId: String) async
+public enum AukiSignaledWebRTCError: Error, LocalizedError {
+    case missingPeerId
+    case malformedSignaledAddress(String)
+    case signalingNotStarted
+    case peerConnectionUnavailable(String)
+    case dataChannelUnavailable(String)
+    case dataChannelClosed(String)
+    case invalidSignalPayload(String)
+    case timedOut(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingPeerId:
+            return "missing peer id"
+        case .malformedSignaledAddress(let address):
+            return "malformed signaled WebRTC address: \(address)"
+        case .signalingNotStarted:
+            return "Discovery signaling is not started"
+        case .peerConnectionUnavailable(let connectionId):
+            return "peer connection unavailable: \(connectionId)"
+        case .dataChannelUnavailable(let label):
+            return "data channel unavailable: \(label)"
+        case .dataChannelClosed(let label):
+            return "data channel closed: \(label)"
+        case .invalidSignalPayload(let message):
+            return "invalid signal payload: \(message)"
+        case .timedOut(let message):
+            return "timed out: \(message)"
+        }
+    }
+}
+
+public struct AukiSignaledChannelContext: Sendable {
+    public let connectionId: String
+    public let remotePeerId: String
+    public let protocolId: String
+}
+
+public typealias AukiFramedProtocolHandler = @Sendable (Data, AukiSignaledChannelContext) async throws -> Data?
+public typealias AukiStreamProtocolHandler = @Sendable (AukiWebRTCDataChannelStream, AukiSignaledChannelContext) async throws -> Void
+
+public final class AukiSignaledWebRTCPeer: NSObject, @unchecked Sendable {
+    public let localPeerId: String
+    public let discoveryUrl: String
+    public let signaledMultiaddr: String
+
+    private let discovery: AukiDiscoveryClientProtocol
+    private let rtcConfiguration: RTCConfiguration
+    private let mediaConstraints: RTCMediaConstraints
+    private let factory: RTCPeerConnectionFactory
+    private let operationTimeoutNanoseconds: UInt64
+    private let lock = NSRecursiveLock()
+    private var cursor: UInt64 = 0
+    private var stopped = true
+    private var pollTask: Task<Void, Never>?
+    private var connectionsById: [String: PeerConnectionBox] = [:]
+    private var connectionIdByPeer: [String: String] = [:]
+    private var framedHandlers: [String: AukiFramedProtocolHandler] = [:]
+    private var streamHandlers: [String: AukiStreamProtocolHandler] = [:]
+
+    public init(
+        localPeerId: String,
+        discoveryUrl: String,
+        discovery: AukiDiscoveryClientProtocol? = nil,
+        iceServerUrls: [String] = [],
+        operationTimeoutNanoseconds: UInt64 = 15_000_000_000
+    ) throws {
+        guard !localPeerId.isEmpty else {
+            throw AukiSignaledWebRTCError.missingPeerId
+        }
+        let trimmedDiscoveryUrl = discoveryUrl.trimmedDiscoveryUrl()
+        self.localPeerId = localPeerId
+        self.discoveryUrl = trimmedDiscoveryUrl
+        if let discovery {
+            self.discovery = discovery
+        } else {
+            self.discovery = try discoveryClient(baseUrl: trimmedDiscoveryUrl)
+        }
+        self.signaledMultiaddr = try AukiSignaledWebRTCPeer.formatSignaledAddress(
+            discoveryUrl: trimmedDiscoveryUrl,
+            peerId: localPeerId
+        )
+        let config = RTCConfiguration()
+        config.iceServers = iceServerUrls.isEmpty ? [] : [RTCIceServer(urlStrings: iceServerUrls)]
+        self.rtcConfiguration = config
+        self.mediaConstraints = RTCMediaConstraints(
+            mandatoryConstraints: nil,
+            optionalConstraints: ["DtlsSrtpKeyAgreement": "true"]
+        )
+        self.factory = RTCPeerConnectionFactory()
+        self.operationTimeoutNanoseconds = operationTimeoutNanoseconds
+        super.init()
+    }
+
+    public func start() {
+        lock.withLock {
+            if !stopped {
+                return
+            }
+            stopped = false
+        }
+        pollTask = Task { [weak self] in
+            await self?.pollLoop()
+        }
+    }
+
+    public func stop() async {
+        let connections = lock.withLock { () -> [PeerConnectionBox] in
+            stopped = true
+            pollTask?.cancel()
+            pollTask = nil
+            let boxes = Array(connectionsById.values)
+            connectionsById.removeAll()
+            connectionIdByPeer.removeAll()
+            return boxes
+        }
+        for connection in connections {
+            connection.close()
+        }
+    }
+
+    public func handleFramed(
+        _ protocolId: String,
+        handler: @escaping AukiFramedProtocolHandler
+    ) {
+        lock.withLock {
+            framedHandlers[protocolId] = handler
+        }
+    }
+
+    public func handleStream(
+        _ protocolId: String,
+        handler: @escaping AukiStreamProtocolHandler
+    ) {
+        lock.withLock {
+            streamHandlers[protocolId] = handler
+        }
+    }
+
+    public func requestFramed(
+        peerMultiaddr: String,
+        protocolId: String,
+        payload: Data
+    ) async throws -> Data {
+        let remotePeerId = try Self.peerId(fromSignaledAddress: peerMultiaddr)
+        do {
+            return try await withAukiTimeout(
+                nanoseconds: operationTimeoutNanoseconds,
+                message: "framed request \(protocolId) to \(remotePeerId)"
+            ) { [self] in
+                let connection = try await connect(remotePeerId: remotePeerId)
+                let stream = try await openDataChannel(connection: connection, label: protocolId)
+                try await stream.writeLengthPrefixed(payload)
+                return try await stream.readLengthPrefixed()
+            }
+        } catch {
+            closeConnection(remotePeerId: remotePeerId)
+            throw error
+        }
+    }
+
+    public func openStream(
+        peerMultiaddr: String,
+        protocolId: String
+    ) async throws -> AukiWebRTCDataChannelStream {
+        let remotePeerId = try Self.peerId(fromSignaledAddress: peerMultiaddr)
+        do {
+            return try await withAukiTimeout(
+                nanoseconds: operationTimeoutNanoseconds,
+                message: "stream open \(protocolId) to \(remotePeerId)"
+            ) { [self] in
+                let connection = try await connect(remotePeerId: remotePeerId)
+                return try await openDataChannel(connection: connection, label: protocolId)
+            }
+        } catch {
+            closeConnection(remotePeerId: remotePeerId)
+            throw error
+        }
+    }
+
+    private func pollLoop() async {
+        while !Task.isCancelled {
+            if lock.withLock({ stopped }) {
+                return
+            }
+            do {
+                let response = try await blocking {
+                    try self.discovery.pollSignalsJson(
+                        query: BindingSignalPoll(
+                            peerId: self.localPeerId,
+                            since: self.cursor,
+                            timeoutMs: 25_000
+                        ),
+                        timeoutMs: 30_000
+                    )
+                }
+                let envelope = try JSONDecoder().decode(SignalListEnvelope.self, from: Data(response.utf8))
+                for message in envelope.messages {
+                    lock.withLock {
+                        cursor = max(cursor, message.id)
+                    }
+                    if message.fromPeerId != localPeerId {
+                        try await handleSignal(message)
+                    }
+                }
+            } catch {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
+
+    private func handleSignal(_ message: SignalMessage) async throws {
+        switch message.kind {
+        case "offer":
+            try await handleOffer(message)
+        case "answer":
+            try await handleAnswer(message)
+        case "candidate":
+            try await handleCandidate(message)
+        case "close":
+            closeConnection(connectionId: message.connectionId)
+        default:
+            return
+        }
+    }
+
+    private func handleOffer(_ message: SignalMessage) async throws {
+        let connection = try createConnection(
+            connectionId: message.connectionId,
+            remotePeerId: message.fromPeerId,
+            initiator: false
+        )
+        let sdp = try decodeSdp(message.payloadJson, expectedType: .offer)
+        try await connection.setRemoteDescription(sdp)
+        try await connection.flushQueuedCandidates()
+        let answer = try await connection.answer(constraints: mediaConstraints)
+        try await connection.setLocalDescription(answer)
+        try await sendSignal(
+            recipientPeerId: message.fromPeerId,
+            connectionId: message.connectionId,
+            kind: "answer",
+            payloadJson: #"{"type":"answer","sdp":\#(jsonString(answer.sdp))}"#
+        )
+    }
+
+    private func handleAnswer(_ message: SignalMessage) async throws {
+        let connection = try connection(connectionId: message.connectionId)
+        let sdp = try decodeSdp(message.payloadJson, expectedType: .answer)
+        try await connection.setRemoteDescription(sdp)
+        try await connection.flushQueuedCandidates()
+    }
+
+    private func handleCandidate(_ message: SignalMessage) async throws {
+        let connection = try connection(connectionId: message.connectionId)
+        let candidate = try decodeCandidate(message.payloadJson)
+        try await connection.addCandidate(candidate)
+    }
+
+    private func connect(remotePeerId: String) async throws -> PeerConnectionBox {
+        if let existing = lock.withLock({ connectionIdByPeer[remotePeerId].flatMap { connectionsById[$0] } }) {
+            try await existing.waitUntilReady()
+            return existing
+        }
+        let connectionId = UUID().uuidString.lowercased()
+        let connection = try createConnection(
+            connectionId: connectionId,
+            remotePeerId: remotePeerId,
+            initiator: true
+        )
+        _ = try createDataChannel(connection: connection, label: "__auki-control")
+        let offer = try await connection.offer(constraints: mediaConstraints)
+        try await connection.setLocalDescription(offer)
+        try await sendSignal(
+            recipientPeerId: remotePeerId,
+            connectionId: connectionId,
+            kind: "offer",
+            payloadJson: #"{"type":"offer","sdp":\#(jsonString(offer.sdp))}"#
+        )
+        try await connection.waitUntilReady()
+        return connection
+    }
+
+    private func createConnection(
+        connectionId: String,
+        remotePeerId: String,
+        initiator: Bool
+    ) throws -> PeerConnectionBox {
+        if let existing = lock.withLock({ connectionsById[connectionId] }) {
+            return existing
+        }
+        let delegate = PeerConnectionDelegate(
+            owner: self,
+            connectionId: connectionId,
+            remotePeerId: remotePeerId
+        )
+        guard let peerConnection = factory.peerConnection(
+            with: rtcConfiguration,
+            constraints: mediaConstraints,
+            delegate: delegate
+        ) else {
+            throw AukiSignaledWebRTCError.peerConnectionUnavailable(connectionId)
+        }
+        let connection = PeerConnectionBox(
+            id: connectionId,
+            remotePeerId: remotePeerId,
+            peerConnection: peerConnection,
+            delegate: delegate,
+            initiator: initiator
+        )
+        lock.withLock {
+            connectionsById[connectionId] = connection
+            connectionIdByPeer[remotePeerId] = connectionId
+        }
+        return connection
+    }
+
+    private func openDataChannel(
+        connection: PeerConnectionBox,
+        label: String
+    ) async throws -> AukiWebRTCDataChannelStream {
+        let stream = try createDataChannel(connection: connection, label: label)
+        try await stream.waitUntilOpen()
+        if label == "__auki-control" {
+            connection.markReady()
+        }
+        return stream
+    }
+
+    private func createDataChannel(
+        connection: PeerConnectionBox,
+        label: String
+    ) throws -> AukiWebRTCDataChannelStream {
+        let configuration = RTCDataChannelConfiguration()
+        guard let channel = connection.peerConnection.dataChannel(forLabel: label, configuration: configuration) else {
+            throw AukiSignaledWebRTCError.dataChannelUnavailable(label)
+        }
+        let stream = AukiWebRTCDataChannelStream(channel: channel, protocolId: label)
+        connection.retain(stream: stream)
+        return stream
+    }
+
+    fileprivate func handleOpenedDataChannel(
+        _ channel: RTCDataChannel,
+        connectionId: String,
+        remotePeerId: String
+    ) {
+        let protocolId = channel.label
+        let stream = AukiWebRTCDataChannelStream(channel: channel, protocolId: protocolId)
+        let connection = lock.withLock { connectionsById[connectionId] }
+        connection?.retain(stream: stream)
+        if protocolId == "__auki-control" {
+            connection?.markReady()
+            return
+        }
+        let context = AukiSignaledChannelContext(
+            connectionId: connectionId,
+            remotePeerId: remotePeerId,
+            protocolId: protocolId
+        )
+        if let streamHandler = lock.withLock({ streamHandlers[protocolId] }) {
+            Task {
+                try? await stream.waitUntilOpen()
+                try? await streamHandler(stream, context)
+            }
+            return
+        }
+        if let framedHandler = lock.withLock({ framedHandlers[protocolId] }) {
+            Task {
+                do {
+                    try await stream.waitUntilOpen()
+                    let request = try await stream.readLengthPrefixed()
+                    if let response = try await framedHandler(request, context) {
+                        try await stream.writeLengthPrefixed(response)
+                    }
+                } catch {
+                    stream.close()
+                }
+            }
+        }
+    }
+
+    fileprivate func markConnectionReady(connectionId: String) {
+        lock.withLock { connectionsById[connectionId] }?.markReady()
+    }
+
+    fileprivate func generatedIceCandidate(
+        _ candidate: RTCIceCandidate,
+        connectionId: String,
+        remotePeerId: String
+    ) {
+        Task {
+            let payload = #"{"candidate":{"candidate":\#(jsonString(candidate.sdp)),"sdpMid":\#(jsonString(candidate.sdpMid ?? "")),"sdpMLineIndex":\#(candidate.sdpMLineIndex)}}"#
+            try? await sendSignal(
+                recipientPeerId: remotePeerId,
+                connectionId: connectionId,
+                kind: "candidate",
+                payloadJson: payload
+            )
+        }
+    }
+
+    private func sendSignal(
+        recipientPeerId: String,
+        connectionId: String,
+        kind: String,
+        payloadJson: String
+    ) async throws {
+        _ = try await blocking {
+            try self.discovery.sendSignalJson(
+                request: BindingSignalRequest(
+                    recipientPeerId: recipientPeerId,
+                    fromPeerId: self.localPeerId,
+                    connectionId: connectionId,
+                    kind: kind,
+                    payloadJson: payloadJson
+                ),
+                timeoutMs: 10_000
+            )
+        }
+    }
+
+    private func connection(connectionId: String) throws -> PeerConnectionBox {
+        guard let connection = lock.withLock({ connectionsById[connectionId] }) else {
+            throw AukiSignaledWebRTCError.peerConnectionUnavailable(connectionId)
+        }
+        return connection
+    }
+
+    private func closeConnection(connectionId: String) {
+        let connection = lock.withLock { () -> PeerConnectionBox? in
+            let connection = connectionsById.removeValue(forKey: connectionId)
+            if let connection {
+                connectionIdByPeer.removeValue(forKey: connection.remotePeerId)
+            }
+            return connection
+        }
+        connection?.close()
+    }
+
+    private func closeConnection(remotePeerId: String) {
+        guard let connectionId = lock.withLock({ connectionIdByPeer[remotePeerId] }) else {
+            return
+        }
+        closeConnection(connectionId: connectionId)
+    }
+
+    private func withAukiTimeout<T: Sendable>(
+        nanoseconds: UInt64,
+        message: String,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        guard nanoseconds > 0 else {
+            return try await operation()
+        }
+
+        let state = AukiTimeoutState<T>()
+        let operationTask = Task {
+            try await operation()
+        }
+        let timeoutTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+                state.resume(.failure(AukiSignaledWebRTCError.timedOut(message)))
+                operationTask.cancel()
+            } catch {
+                return
+            }
+        }
+        let waiterTask = Task {
+            do {
+                let value = try await operationTask.value
+                state.resume(.success(value))
+            } catch {
+                state.resume(.failure(error))
+            }
+            timeoutTask.cancel()
+        }
+
+        defer {
+            operationTask.cancel()
+            timeoutTask.cancel()
+            waiterTask.cancel()
+        }
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.setContinuation(continuation)
+            }
+        } onCancel: {
+            operationTask.cancel()
+            timeoutTask.cancel()
+            waiterTask.cancel()
+        }
+    }
+
+    public static func peerId(fromSignaledAddress address: String) throws -> String {
+        guard let range = address.range(of: "/p2p/") else {
+            throw AukiSignaledWebRTCError.malformedSignaledAddress(address)
+        }
+        let peerId = String(address[range.upperBound...])
+        guard !peerId.isEmpty else {
+            throw AukiSignaledWebRTCError.malformedSignaledAddress(address)
+        }
+        return peerId
+    }
+
+    public static func formatSignaledAddress(discoveryUrl: String, peerId: String) throws -> String {
+        let trimmedDiscoveryUrl = discoveryUrl.trimmedDiscoveryUrl()
+        guard !trimmedDiscoveryUrl.isEmpty, !peerId.isEmpty else {
+            throw AukiSignaledWebRTCError.malformedSignaledAddress(discoveryUrl)
+        }
+        let encoded = Data(trimmedDiscoveryUrl.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "/auki-webrtc-signaling/\(encoded)/p2p/\(peerId)"
+    }
+}
+
+private actor AukiAsyncGate {
+    private var available = true
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if available {
+            available = false
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        guard !waiters.isEmpty else {
+            available = true
+            return
+        }
+
+        waiters.removeFirst().resume()
+    }
+}
+
+public final class AukiWebRTCDataChannelStream: NSObject, RTCDataChannelDelegate, @unchecked Sendable {
+    private static let defaultMaxDataChannelChunkBytes = 16_384
+
+    public let protocolId: String
+    private let channel: RTCDataChannel
+    private let lock = NSRecursiveLock()
+    private let writeGate = AukiAsyncGate()
+    private var chunks: [Data] = []
+    private var readContinuations: [CheckedContinuation<Data, Error>] = []
+    private var openContinuation: CheckedContinuation<Void, Error>?
+    private var pending = Data()
+    private var closed = false
+
+    fileprivate init(channel: RTCDataChannel, protocolId: String) {
+        self.channel = channel
+        self.protocolId = protocolId
+        super.init()
+        channel.delegate = self
+    }
+
+    public func waitUntilOpen() async throws {
+        if channel.readyState == .open {
+            return
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                if channel.readyState == .open {
+                    continuation.resume()
+                } else if closed {
+                    continuation.resume(throwing: AukiSignaledWebRTCError.dataChannelClosed(protocolId))
+                } else {
+                    openContinuation = continuation
+                }
+            }
+        }
+    }
+
+    public func send(_ data: Data) async throws {
+        try await waitUntilOpen()
+        let buffer = RTCDataBuffer(data: data, isBinary: true)
+        if !channel.sendData(buffer) {
+            throw AukiSignaledWebRTCError.dataChannelClosed(protocolId)
+        }
+    }
+
+    public func writeLengthPrefixed(_ payload: Data) async throws {
+        await writeGate.acquire()
+        do {
+            for chunk in Self.lengthPrefixedChunks(payload) {
+                try await send(chunk)
+            }
+            await writeGate.release()
+        } catch {
+            await writeGate.release()
+            throw error
+        }
+    }
+
+    static func lengthPrefixedChunks(
+        _ payload: Data,
+        maxChunkByteCount: Int = defaultMaxDataChannelChunkBytes
+    ) -> [Data] {
+        let chunkByteCount = max(maxChunkByteCount, 5)
+        var frame = Data(count: 4)
+        let length = UInt32(payload.count).bigEndian
+        frame.withUnsafeMutableBytes { pointer in
+            pointer.storeBytes(of: length, as: UInt32.self)
+        }
+        frame.append(payload)
+
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < frame.count {
+            let end = min(offset + chunkByteCount, frame.count)
+            chunks.append(frame.subdata(in: offset..<end))
+            offset = end
+        }
+        return chunks
+    }
+
+    public func readLengthPrefixed() async throws -> Data {
+        let header = try await readExactly(byteCount: 4)
+        let length = header.withUnsafeBytes { pointer in
+            UInt32(bigEndian: pointer.load(as: UInt32.self))
+        }
+        guard length > 0 else {
+            throw AukiSignaledWebRTCError.invalidSignalPayload("empty length-prefixed frame")
+        }
+        return try await readExactly(byteCount: Int(length))
+    }
+
+    public func close() {
+        channel.close()
+        finishClosed()
+    }
+
+    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        if dataChannel.readyState == .open {
+            lock.withLock {
+                openContinuation?.resume()
+                openContinuation = nil
+            }
+        }
+        if dataChannel.readyState == .closed {
+            finishClosed()
+        }
+    }
+
+    public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        let data = buffer.data
+        let continuation = lock.withLock { () -> CheckedContinuation<Data, Error>? in
+            if readContinuations.isEmpty {
+                chunks.append(data)
+                return nil
+            }
+            return readContinuations.removeFirst()
+        }
+        continuation?.resume(returning: data)
+    }
+
+    private func readChunk() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                if !chunks.isEmpty {
+                    continuation.resume(returning: chunks.removeFirst())
+                } else if closed {
+                    continuation.resume(throwing: AukiSignaledWebRTCError.dataChannelClosed(protocolId))
+                } else {
+                    readContinuations.append(continuation)
+                }
+            }
+        }
+    }
+
+    private func readExactly(byteCount: Int) async throws -> Data {
+        while pending.count < byteCount {
+            pending.append(try await readChunk())
+        }
+        let prefix = pending.prefix(byteCount)
+        pending.removeFirst(byteCount)
+        return Data(prefix)
+    }
+
+    private func finishClosed() {
+        let continuations = lock.withLock { () -> [CheckedContinuation<Data, Error>] in
+            closed = true
+            openContinuation?.resume(throwing: AukiSignaledWebRTCError.dataChannelClosed(protocolId))
+            openContinuation = nil
+            let continuations = readContinuations
+            readContinuations.removeAll()
+            return continuations
+        }
+        for continuation in continuations {
+            continuation.resume(throwing: AukiSignaledWebRTCError.dataChannelClosed(protocolId))
+        }
+    }
+}
+
+private final class AukiTimeoutState<T: Sendable>: @unchecked Sendable {
+    private let lock = NSRecursiveLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var result: Result<T, Error>?
+
+    func setContinuation(_ continuation: CheckedContinuation<T, Error>) {
+        let resolved = lock.withLock { () -> Result<T, Error>? in
+            if let result {
+                return result
+            }
+            self.continuation = continuation
+            return nil
+        }
+        if let resolved {
+            continuation.resume(with: resolved)
+        }
+    }
+
+    func resume(_ result: Result<T, Error>) {
+        let continuation = lock.withLock { () -> CheckedContinuation<T, Error>? in
+            guard self.result == nil else {
+                return nil
+            }
+            self.result = result
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: result)
+    }
+}
+
+private final class PeerConnectionBox: @unchecked Sendable {
+    let id: String
+    let remotePeerId: String
+    let peerConnection: RTCPeerConnection
+    let delegate: PeerConnectionDelegate
+    let initiator: Bool
+    private let lock = NSRecursiveLock()
+    private var streams: [AukiWebRTCDataChannelStream] = []
+    private var queuedCandidates: [RTCIceCandidate] = []
+    private var remoteDescriptionSet = false
+    private var readyContinuation: CheckedContinuation<Void, Error>?
+    private var ready = false
+
+    init(
+        id: String,
+        remotePeerId: String,
+        peerConnection: RTCPeerConnection,
+        delegate: PeerConnectionDelegate,
+        initiator: Bool
+    ) {
+        self.id = id
+        self.remotePeerId = remotePeerId
+        self.peerConnection = peerConnection
+        self.delegate = delegate
+        self.initiator = initiator
+    }
+
+    func retain(stream: AukiWebRTCDataChannelStream) {
+        lock.withLock {
+            streams.append(stream)
+        }
+    }
+
+    func markReady() {
+        lock.withLock {
+            ready = true
+            readyContinuation?.resume()
+            readyContinuation = nil
+        }
+    }
+
+    func waitUntilReady() async throws {
+        if lock.withLock({ ready }) {
+            return
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                if ready {
+                    continuation.resume()
+                } else {
+                    readyContinuation = continuation
+                }
+            }
+        }
+    }
+
+    func offer(constraints: RTCMediaConstraints) async throws -> RTCSessionDescription {
+        try await withCheckedThrowingContinuation { continuation in
+            peerConnection.offer(for: constraints) { sdp, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let sdp {
+                    continuation.resume(returning: sdp)
+                } else {
+                    continuation.resume(throwing: AukiSignaledWebRTCError.invalidSignalPayload("missing offer"))
+                }
+            }
+        }
+    }
+
+    func answer(constraints: RTCMediaConstraints) async throws -> RTCSessionDescription {
+        try await withCheckedThrowingContinuation { continuation in
+            peerConnection.answer(for: constraints) { sdp, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let sdp {
+                    continuation.resume(returning: sdp)
+                } else {
+                    continuation.resume(throwing: AukiSignaledWebRTCError.invalidSignalPayload("missing answer"))
+                }
+            }
+        }
+    }
+
+    func setLocalDescription(_ sdp: RTCSessionDescription) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            peerConnection.setLocalDescription(sdp) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func setRemoteDescription(_ sdp: RTCSessionDescription) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            peerConnection.setRemoteDescription(sdp) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    self.lock.withLock {
+                        self.remoteDescriptionSet = true
+                    }
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func addCandidate(_ candidate: RTCIceCandidate) async throws {
+        let shouldQueue = lock.withLock { !remoteDescriptionSet }
+        if shouldQueue {
+            lock.withLock {
+                queuedCandidates.append(candidate)
+            }
+            return
+        }
+        try await addCandidateNow(candidate)
+    }
+
+    func flushQueuedCandidates() async throws {
+        let candidates = lock.withLock { () -> [RTCIceCandidate] in
+            let candidates = queuedCandidates
+            queuedCandidates.removeAll()
+            return candidates
+        }
+        for candidate in candidates {
+            try await addCandidateNow(candidate)
+        }
+    }
+
+    func close() {
+        peerConnection.close()
+        let retainedStreams = lock.withLock { () -> [AukiWebRTCDataChannelStream] in
+            let retainedStreams = streams
+            streams.removeAll()
+            readyContinuation?.resume(throwing: AukiSignaledWebRTCError.dataChannelClosed(id))
+            readyContinuation = nil
+            return retainedStreams
+        }
+        for stream in retainedStreams {
+            stream.close()
+        }
+    }
+
+    private func addCandidateNow(_ candidate: RTCIceCandidate) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            peerConnection.add(candidate) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+}
+
+private final class PeerConnectionDelegate: NSObject, RTCPeerConnectionDelegate {
+    private weak var owner: AukiSignaledWebRTCPeer?
+    private let connectionId: String
+    private let remotePeerId: String
+
+    init(owner: AukiSignaledWebRTCPeer, connectionId: String, remotePeerId: String) {
+        self.owner = owner
+        self.connectionId = connectionId
+        self.remotePeerId = remotePeerId
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+        if newState == .connected || newState == .completed {
+            owner?.markConnectionReady(connectionId: connectionId)
+        }
+    }
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        owner?.generatedIceCandidate(candidate, connectionId: connectionId, remotePeerId: remotePeerId)
+    }
+
+    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        owner?.handleOpenedDataChannel(dataChannel, connectionId: connectionId, remotePeerId: remotePeerId)
+    }
+}
+
+private struct SignalListEnvelope: Decodable {
+    let messages: [SignalMessage]
+}
+
+private struct SignalMessage: Decodable {
+    let id: UInt64
+    let fromPeerId: String
+    let connectionId: String
+    let kind: String
+    let payload: JSONValue
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case fromPeerId = "from_peer_id"
+        case connectionId = "connection_id"
+        case kind
+        case payload
+    }
+
+    var payloadJson: String {
+        payload.jsonString
+    }
+}
+
+private struct SdpPayload: Decodable {
+    let type: String
+    let sdp: String
+}
+
+private struct CandidatePayload: Decodable {
+    let candidate: CandidateInit
+}
+
+private struct CandidateInit: Decodable {
+    let candidate: String
+    let sdpMid: String?
+    let sdpMLineIndex: Int32?
+}
+
+private enum JSONValue: Decodable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: JSONValue].self))
+        }
+    }
+
+    var jsonObject: Any {
+        switch self {
+        case .object(let values):
+            return values.mapValues(\.jsonObject)
+        case .array(let values):
+            return values.map(\.jsonObject)
+        case .string(let value):
+            return value
+        case .number(let value):
+            return value
+        case .bool(let value):
+            return value
+        case .null:
+            return NSNull()
+        }
+    }
+
+    var jsonString: String {
+        let data = try? JSONSerialization.data(withJSONObject: jsonObject, options: [.sortedKeys])
+        return data.map { String(decoding: $0, as: UTF8.self) } ?? "null"
+    }
+}
+
+private func decodeSdp(_ payloadJson: String, expectedType: RTCSdpType) throws -> RTCSessionDescription {
+    let payload = try JSONDecoder().decode(SdpPayload.self, from: Data(payloadJson.utf8))
+    let type: RTCSdpType
+    switch payload.type {
+    case "offer":
+        type = .offer
+    case "answer":
+        type = .answer
+    default:
+        throw AukiSignaledWebRTCError.invalidSignalPayload("unsupported SDP type \(payload.type)")
+    }
+    guard type == expectedType else {
+        throw AukiSignaledWebRTCError.invalidSignalPayload("expected \(expectedType), got \(payload.type)")
+    }
+    return RTCSessionDescription(type: type, sdp: payload.sdp)
+}
+
+private func decodeCandidate(_ payloadJson: String) throws -> RTCIceCandidate {
+    let payload = try JSONDecoder().decode(CandidatePayload.self, from: Data(payloadJson.utf8))
+    return RTCIceCandidate(
+        sdp: payload.candidate.candidate,
+        sdpMLineIndex: payload.candidate.sdpMLineIndex ?? 0,
+        sdpMid: payload.candidate.sdpMid
+    )
+}
+
+private func jsonString(_ value: String) -> String {
+    let data = try? JSONEncoder().encode(value)
+    return data.map { String(decoding: $0, as: UTF8.self) } ?? #""""#
+}
+
+private func blocking<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await Task.detached(priority: .utility) {
+        try work()
+    }.value
+}
+
+private extension String {
+    func trimmedDiscoveryUrl() -> String {
+        var result = trimmingCharacters(in: .whitespacesAndNewlines)
+        while result.hasSuffix("/") {
+            result.removeLast()
+        }
+        return result
+    }
+}
+
+private extension NSRecursiveLock {
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
 }

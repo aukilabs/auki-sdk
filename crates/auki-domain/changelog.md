@@ -6,6 +6,18 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**Swift signaled Domain stream pushes now have an awaited async path.** `AukiSignaledWebRTCDomainPeer` now exposes `pushStreamEntryAsync`, which serializes stream-entry envelopes and awaits the signaled WebRTC data-channel write so producers can apply SDK backpressure and surface transport errors instead of spawning unbounded fire-and-forget frame tasks. The existing synchronous `pushStreamEntry` remains as a compatibility shim.
+
+Tests: `just generate-swift-bindings auki-domain`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,id=5FDB8F06-16CE-444F-8852-A295466B114F' -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcLengthPrefixedFramesAreChunkedForDataChannelTransport -only-testing:AukiCameraStreamerTests/CameraStreamFanoutTests/testDomainCameraStreamSinkUsesAsyncPushPath CODE_SIGNING_ALLOWED=NO`.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Swift Discovery-signaled Domain WebRTC facade implemented.** The `auki-domain` Swift binding templates now render an `AukiDomainSignaledWebRTC` support target that composes `AukiNetworkSignaledWebRTC`, `AukiDiscoveryClient`, and generated `auki-proto` stream messages. Native Swift hosts can join or create a Discovery cluster with signaled WebRTC multiaddrs, serve Domain join/info/catalog/registry protocols over data channels, and accept, decline, push, and finish Domain camera streams without app-owned signaling or `webrtc-direct` listen addresses.
+
+Tests: `just generate-swift-bindings auki-domain`; `xcodebuild -scheme AukiDomainSignaledWebRTC -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/auki-domain-swift-derived build CODE_SIGNING_ALLOWED=NO`; `cargo test -p auki-domain --test full_binding_surface native_signaled_domain_peer_surface_is_exposed -- --nocapture`; `git diff --check`.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **Signaled Domain peer facade added.** `auki-domain` now has a minimal `SignaledDomainPeer` facade backed by `auki-network::SignaledPeerCore`, exposing local peer id, cluster name, signaled multiaddr advertisement, static sensor/resource/registry JSON setters, and stream accept/decline/push/finish hooks without making apps own Discovery signaling. Native UniFFI exports the facade as `AukiSignaledDomainPeer` for generated Swift/Python hosts.

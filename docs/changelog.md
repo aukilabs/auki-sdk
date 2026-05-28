@@ -4,6 +4,14 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+Revised the relay-backed libp2p migration plan to make transport replacement non-additive, remove the Swift Discovery-signaled WebRTC backend, and avoid fallback paths.
+
+### Nils's codex · May 28, HKT, 2026
+
+Added the Superpowers migration plan for relay-backed libp2p transport as the path away from host-specific Discovery-signaled WebRTC adapters.
+
 ### Nils's codex · May 27, HKT, 2026
 
 Updated the Superpowers SDK signaled WebRTC transport plan to mark the `auki-domain` signaled peer facade task complete.

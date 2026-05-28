@@ -1,0 +1,510 @@
+import Foundation
+import AukiNetworkSignaledWebRTC
+import AukiProto
+import SwiftProtobuf
+import auki_domain
+import auki_network
+
+public enum AukiSignaledDomainWebRTCError: Error, LocalizedError {
+    case missingManagerAddress(String)
+    case joinRejected(String)
+    case invalidJson(String)
+    case streamNotFound(UInt64)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingManagerAddress(let clusterName):
+            return "Discovery cluster \(clusterName) has no signaled Manager address"
+        case .joinRejected(let reason):
+            return "join rejected: \(reason)"
+        case .invalidJson(let message):
+            return "invalid json: \(message)"
+        case .streamNotFound(let streamId):
+            return "stream not found: \(streamId)"
+        }
+    }
+}
+
+public final class AukiSignaledWebRTCDomainPeer: @unchecked Sendable {
+    public static let transportKind = "discovery-signaled-webrtc"
+    public static let listenAddrs: [String] = []
+
+    private static let joinProtocol = "/auki/join/0.0.1"
+    private static let infoProtocol = "/auki/info/0.0.1"
+    private static let sensorsProtocol = "/auki/sensors/0.0.1"
+    private static let resourcesProtocol = "/auki/resources/0.0.1"
+    private static let registriesProtocol = "/auki/registries/0.0.1"
+    private static let streamProtocol = "/auki/stream/0.1.0"
+
+    public let localPeerIdValue: String
+    public let discoveryUrl: String
+    public let clusterNameValue: String
+    public let networkPeer: AukiSignaledWebRTCPeer
+
+    private let discovery: AukiDiscoveryClientProtocol
+    private let participantInfoJson: String
+    private let lock = NSRecursiveLock()
+    private var role: String = "idle"
+    private var managerPeerIdValue: String = ""
+    private var participants: [String: Participant] = [:]
+    private var sensorCatalog = #"{"sensors":[]}"#
+    private var resourceCatalog = #"{"resources":[]}"#
+    private var registryEntries = #"{"entries":[]}"#
+    private var openEvents: [DomainRuntimeEvent] = []
+    private var nextStreamId: UInt64 = 1
+    private var pendingStreams: [UInt64: PendingStream] = [:]
+    private var activeStreams: [UInt64: AukiWebRTCDataChannelStream] = [:]
+    private var livenessTask: Task<Void, Never>?
+
+    public init(
+        localPeerId: String,
+        discoveryUrl: String,
+        clusterName: String,
+        participantInfoJson: String,
+        iceServerUrls: [String] = []
+    ) throws {
+        self.localPeerIdValue = localPeerId
+        self.discoveryUrl = discoveryUrl.trimmedDiscoveryUrl()
+        self.clusterNameValue = clusterName
+        self.discovery = try discoveryClient(baseUrl: self.discoveryUrl)
+        self.participantInfoJson = participantInfoJson
+        self.networkPeer = try AukiSignaledWebRTCPeer(
+            localPeerId: localPeerId,
+            discoveryUrl: self.discoveryUrl,
+            discovery: self.discovery,
+            iceServerUrls: iceServerUrls
+        )
+        participants[localPeerId] = Participant(
+            peerId: localPeerId,
+            multiaddrs: [networkPeer.signaledMultiaddr],
+            participantInfoJson: participantInfoJson,
+            isManager: false
+        )
+    }
+
+    public func startJoinOrCreate() async throws {
+        registerProtocolHandlers()
+        networkPeer.start()
+        let outcome = try await discoveryRegister([
+            "name": clusterNameValue,
+            "manager_peer_id": localPeerIdValue,
+            "manager_multiaddrs": [networkPeer.signaledMultiaddr],
+            "relay_multiaddrs": []
+        ])
+        if string(outcome["kind"]) == "created" {
+            lock.withLock {
+                role = "manager"
+                managerPeerIdValue = localPeerIdValue
+                participants[localPeerIdValue]?.isManager = true
+            }
+            startLiveness()
+            return
+        }
+
+        let cluster = try await findCluster()
+        let managerPeerId = string(cluster["manager_peer_id"]) ?? ""
+        let managerAddrs = cluster["manager_multiaddrs"] as? [String] ?? []
+        guard let managerAddress = managerAddrs.first else {
+            throw AukiSignaledDomainWebRTCError.missingManagerAddress(clusterNameValue)
+        }
+        if managerPeerId == localPeerIdValue {
+            lock.withLock {
+                role = "manager"
+                managerPeerIdValue = localPeerIdValue
+                participants[localPeerIdValue]?.isManager = true
+            }
+            startLiveness()
+            return
+        }
+
+        let joinRequest = try jsonData([
+            "peer_id": localPeerIdValue,
+            "multiaddrs": [networkPeer.signaledMultiaddr],
+            "participant_info_json": participantInfoJson
+        ])
+        let responseBytes = try await networkPeer.requestFramed(
+            peerMultiaddr: managerAddress,
+            protocolId: Self.joinProtocol,
+            payload: joinRequest
+        )
+        let response = try jsonObject(responseBytes)
+        guard string(response["kind"]) == "accept" else {
+            throw AukiSignaledDomainWebRTCError.joinRejected(string(response["reason"]) ?? "unknown")
+        }
+        let membershipJson = string(response["membership_json"]) ?? #"{"peers":[]}"#
+        let membership = try jsonObject(Data(membershipJson.utf8))
+        let peers = membership["peers"] as? [[String: Any]] ?? []
+        lock.withLock {
+            role = "member"
+            managerPeerIdValue = string(response["manager_peer_id"]) ?? managerPeerId
+            participants.removeAll()
+            for peer in peers {
+                guard let peerId = string(peer["peer_id"]) else {
+                    continue
+                }
+                participants[peerId] = Participant(
+                    peerId: peerId,
+                    multiaddrs: peer["multiaddrs"] as? [String] ?? [],
+                    participantInfoJson: peerId == localPeerIdValue ? participantInfoJson : nil,
+                    isManager: peerId == managerPeerIdValue
+                )
+            }
+        }
+    }
+
+    public func shutdown() async throws {
+        livenessTask?.cancel()
+        livenessTask = nil
+        await networkPeer.stop()
+    }
+
+    public func localPeerId() -> String {
+        localPeerIdValue
+    }
+
+    public func clusterName() -> String {
+        clusterNameValue
+    }
+
+    public func managerPeerId() -> String {
+        lock.withLock { managerPeerIdValue }
+    }
+
+    public func isManager() -> Bool {
+        lock.withLock { role == "manager" }
+    }
+
+    public func localMultiaddrs() -> [String] {
+        [networkPeer.signaledMultiaddr]
+    }
+
+    public func setStaticSensorCatalogJson(catalogJson: String) throws {
+        _ = try jsonObject(Data(catalogJson.utf8))
+        lock.withLock {
+            sensorCatalog = catalogJson
+        }
+    }
+
+    public func setStaticResourceCatalogJson(catalogJson: String) throws {
+        _ = try jsonObject(Data(catalogJson.utf8))
+        lock.withLock {
+            resourceCatalog = catalogJson
+        }
+    }
+
+    public func setStaticRegistryEntriesJson(entriesJson: String) throws {
+        _ = try jsonObject(Data(entriesJson.utf8))
+        lock.withLock {
+            registryEntries = entriesJson
+        }
+    }
+
+    public func drainStreamOpenRequests(maxEvents: UInt32) -> [DomainRuntimeEvent] {
+        lock.withLock {
+            let count = min(Int(maxEvents), openEvents.count)
+            let drained = Array(openEvents.prefix(count))
+            openEvents.removeFirst(count)
+            return drained
+        }
+    }
+
+    public func acceptStreamOpen(responderId: UInt64, manifestJson: String) throws -> UInt64 {
+        let pending = try lock.withLock { () -> PendingStream in
+            guard let pending = pendingStreams.removeValue(forKey: responderId) else {
+                throw AukiSignaledDomainWebRTCError.streamNotFound(responderId)
+            }
+            activeStreams[responderId] = pending.stream
+            return pending
+        }
+        pending.resume(.accept(manifestJson))
+        return responderId
+    }
+
+    public func declineStreamOpen(responderId: UInt64, reason: String) throws {
+        let pending = try lock.withLock { () -> PendingStream in
+            guard let pending = pendingStreams.removeValue(forKey: responderId) else {
+                throw AukiSignaledDomainWebRTCError.streamNotFound(responderId)
+            }
+            return pending
+        }
+        pending.resume(.decline(reason))
+    }
+
+    public func pushStreamEntry(streamId: UInt64, entry: DomainStreamEntry) throws {
+        guard lock.withLock({ activeStreams[streamId] }) != nil else {
+            throw AukiSignaledDomainWebRTCError.streamNotFound(streamId)
+        }
+        Task {
+            try? await self.pushStreamEntryAsync(streamId: streamId, entry: entry)
+        }
+    }
+
+    public func pushStreamEntryAsync(streamId: UInt64, entry: DomainStreamEntry) async throws {
+        guard let stream = lock.withLock({ activeStreams[streamId] }) else {
+            throw AukiSignaledDomainWebRTCError.streamNotFound(streamId)
+        }
+        var message = Auki_Stream_StreamMessage()
+        var streamEntry = Auki_Stream_StreamEntry()
+        streamEntry.timestampNs = Int64(entry.timestampNs)
+        streamEntry.seq = entry.sequence
+        streamEntry.payload = entry.payload
+        message.entry = streamEntry
+        try await stream.writeLengthPrefixed(message.serializedData())
+    }
+
+    public func finishStream(streamId: UInt64) throws {
+        let stream = lock.withLock { activeStreams.removeValue(forKey: streamId) }
+        stream?.close()
+    }
+
+    private func registerProtocolHandlers() {
+        networkPeer.handleFramed(Self.joinProtocol) { [weak self] payload, _ in
+            try await self?.handleJoinRequest(payload)
+        }
+        networkPeer.handleFramed(Self.infoProtocol) { [weak self] _, _ in
+            guard let self else { return nil }
+            return try jsonData(["participant_info_json": self.participantInfoJson])
+        }
+        networkPeer.handleFramed(Self.sensorsProtocol) { [weak self] _, _ in
+            guard let self else { return nil }
+            return Data(self.lock.withLock { self.sensorCatalog }.utf8)
+        }
+        networkPeer.handleFramed(Self.resourcesProtocol) { [weak self] _, _ in
+            guard let self else { return nil }
+            return Data(self.lock.withLock { self.resourceCatalog }.utf8)
+        }
+        networkPeer.handleFramed(Self.registriesProtocol) { _, _ in
+            try jsonData(["entry": NSNull()])
+        }
+        networkPeer.handleStream(Self.streamProtocol) { [weak self] stream, context in
+            try await self?.handleStream(stream, context: context)
+        }
+    }
+
+    private func handleJoinRequest(_ payload: Data) async throws -> Data {
+        guard isManager() else {
+            return try jsonData(["kind": "reject", "reason": "not_manager"])
+        }
+        let request = try jsonObject(payload)
+        guard let peerId = string(request["peer_id"]) else {
+            return try jsonData(["kind": "reject", "reason": "missing_peer_id"])
+        }
+        let multiaddrs = request["multiaddrs"] as? [String] ?? []
+        let infoJson = string(request["participant_info_json"])
+        lock.withLock {
+            participants[peerId] = Participant(
+                peerId: peerId,
+                multiaddrs: multiaddrs,
+                participantInfoJson: infoJson,
+                isManager: false
+            )
+        }
+        return try jsonData([
+            "kind": "accept",
+            "membership_json": membershipJson(),
+            "manager_peer_id": localPeerIdValue
+        ])
+    }
+
+    private func handleStream(
+        _ stream: AukiWebRTCDataChannelStream,
+        context: AukiSignaledChannelContext
+    ) async throws {
+        let payload = try await stream.readLengthPrefixed()
+        let message = try Auki_Stream_StreamMessage(serializedBytes: payload)
+        guard case .request(let request)? = message.variant else {
+            stream.close()
+            return
+        }
+        let streamId = lock.withLock { () -> UInt64 in
+            let id = nextStreamId
+            nextStreamId += 1
+            pendingStreams[id] = PendingStream(stream: stream)
+            openEvents.append(DomainRuntimeEvent(
+                kind: "stream_open_request",
+                peerId: context.remotePeerId,
+                payloadJson: #"{"sensor_id":\#(jsonString(request.sensorID))}"#,
+                responderId: id
+            ))
+            return id
+        }
+        let decision = try await lock.withLock { pendingStreams[streamId] }?.decision()
+        switch decision {
+        case .accept(let manifestJson):
+            var response = Auki_Stream_StreamMessage()
+            response.accept = try streamManifest(fromJson: manifestJson)
+            try await stream.writeLengthPrefixed(response.serializedData())
+        case .decline(let reason):
+            var response = Auki_Stream_StreamMessage()
+            var decline = Auki_Stream_DeclineReason()
+            var other = Auki_Stream_DeclineReason.Other()
+            other.detail = reason
+            decline.kind = .other(other)
+            response.decline = decline
+            try await stream.writeLengthPrefixed(response.serializedData())
+            stream.close()
+        case .none:
+            stream.close()
+        }
+    }
+
+    private func discoveryRegister(_ body: [String: Any]) async throws -> [String: Any] {
+        let bodyString = String(decoding: try jsonData(body), as: UTF8.self)
+        let response = try await blocking {
+            try self.discovery.registerPeerJson(registrationJson: bodyString, timeoutMs: 10_000)
+        }
+        return try jsonObject(Data(response.utf8))
+    }
+
+    private func findCluster() async throws -> [String: Any] {
+        let query = String(decoding: try jsonData(["name": clusterNameValue]), as: UTF8.self)
+        let response = try await blocking {
+            try self.discovery.discoverPeersJson(queryJson: query, timeoutMs: 10_000)
+        }
+        let body = try jsonObject(Data(response.utf8))
+        let clusters = body["clusters"] as? [[String: Any]] ?? []
+        if let cluster = clusters.first(where: { string($0["name"]) == clusterNameValue }) {
+            return cluster
+        }
+        throw AukiSignaledDomainWebRTCError.missingManagerAddress(clusterNameValue)
+    }
+
+    private func startLiveness() {
+        livenessTask?.cancel()
+        livenessTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let peerCount = self.lock.withLock { self.participants.count }
+                _ = try? await self.discoveryRegister([
+                    "name": self.clusterNameValue,
+                    "mode": "liveness",
+                    "peer_count": peerCount
+                ])
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func membershipJson() throws -> String {
+        let peers = lock.withLock {
+            participants.values
+                .sorted { $0.peerId < $1.peerId }
+                .enumerated()
+                .map { index, participant in
+                    [
+                        "peer_id": participant.peerId,
+                        "multiaddrs": participant.multiaddrs,
+                        "join_ts_ns": UInt64(index + 1)
+                    ] as [String: Any]
+                }
+        }
+        return String(decoding: try jsonData([
+            "cluster_name": clusterNameValue,
+            "peers": peers
+        ]), as: UTF8.self)
+    }
+}
+
+private struct Participant {
+    let peerId: String
+    let multiaddrs: [String]
+    let participantInfoJson: String?
+    var isManager: Bool
+}
+
+private enum StreamDecision {
+    case accept(String)
+    case decline(String)
+}
+
+private final class PendingStream: @unchecked Sendable {
+    let stream: AukiWebRTCDataChannelStream
+    private let lock = NSRecursiveLock()
+    private var continuation: CheckedContinuation<StreamDecision, Error>?
+    private var resolved: StreamDecision?
+
+    init(stream: AukiWebRTCDataChannelStream) {
+        self.stream = stream
+    }
+
+    func decision() async throws -> StreamDecision {
+        if let resolved = lock.withLock({ self.resolved }) {
+            return resolved
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                if let resolved {
+                    continuation.resume(returning: resolved)
+                } else {
+                    self.continuation = continuation
+                }
+            }
+        }
+    }
+
+    func resume(_ decision: StreamDecision) {
+        let continuation = lock.withLock { () -> CheckedContinuation<StreamDecision, Error>? in
+            resolved = decision
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(returning: decision)
+    }
+}
+
+private func streamManifest(fromJson json: String) throws -> Auki_Stream_StreamManifest {
+    let object = try jsonObject(Data(json.utf8))
+    var manifest = Auki_Stream_StreamManifest()
+    manifest.sensorID = string(object["sensor_id"]) ?? ""
+    manifest.sensorHash = string(object["sensor_hash"]) ?? ""
+    manifest.clockID = string(object["clock_id"]) ?? ""
+    manifest.clockHash = string(object["clock_hash"]) ?? ""
+    manifest.frameID = string(object["frame_id"]) ?? ""
+    manifest.frameHash = string(object["frame_hash"]) ?? ""
+    return manifest
+}
+
+private func jsonObject(_ data: Data) throws -> [String: Any] {
+    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw AukiSignaledDomainWebRTCError.invalidJson("expected object")
+    }
+    return object
+}
+
+private func jsonData(_ object: [String: Any]) throws -> Data {
+    try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func string(_ value: Any?) -> String? {
+    value as? String
+}
+
+private func jsonString(_ value: String) -> String {
+    let data = try? JSONEncoder().encode(value)
+    return data.map { String(decoding: $0, as: UTF8.self) } ?? #""""#
+}
+
+private func blocking<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await Task.detached(priority: .utility) {
+        try work()
+    }.value
+}
+
+private extension String {
+    func trimmedDiscoveryUrl() -> String {
+        var result = trimmingCharacters(in: .whitespacesAndNewlines)
+        while result.hasSuffix("/") {
+            result.removeLast()
+        }
+        return result
+    }
+}
+
+private extension NSRecursiveLock {
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}

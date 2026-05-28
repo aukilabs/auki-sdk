@@ -2,7 +2,7 @@
 use crate::app_instance;
 use crate::core;
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]
-use crate::discovery_client::{self, CreateClusterOutcome, DiscoveryClient};
+use crate::discovery_client::{self, DiscoveryClient};
 #[cfg(feature = "message_node")]
 use crate::message_node::{MessageNode, MessageNodeConfig};
 #[cfg(feature = "swarm")]
@@ -920,60 +920,58 @@ impl AukiDiscoveryClient {
         let mode = registration.mode.as_deref().unwrap_or("create");
         match mode {
             "create" | "register" => {
-                let peer_id = parse_binding_peer_id(required_option(
-                    registration.manager_peer_id.as_deref(),
-                    "manager_peer_id",
-                )?)?;
-                let addrs = parse_binding_multiaddrs(required_option(
-                    registration.manager_multiaddrs,
-                    "manager_multiaddrs",
-                )?)?;
-                let relays =
-                    parse_binding_multiaddrs(registration.relay_multiaddrs.unwrap_or_default())?;
-                let outcome = self.block_on_discovery(
+                let peer_id =
+                    required_option(registration.manager_peer_id.as_deref(), "manager_peer_id")?;
+                let _ = parse_binding_peer_id(peer_id)?;
+                let addrs = required_option(registration.manager_multiaddrs, "manager_multiaddrs")?;
+                let body = serde_json::json!({
+                    "manager_peer_id": peer_id,
+                    "manager_multiaddrs": addrs,
+                    "relay_multiaddrs": registration.relay_multiaddrs.unwrap_or_default(),
+                });
+                let (status, text) = self.block_on_binding(
                     timeout_ms,
-                    self.inner.create_cluster_with_relays(
-                        &registration.name,
-                        &peer_id,
-                        &addrs,
-                        &relays,
+                    discovery_json_request(
+                        self.inner.base_url().to_string(),
+                        "POST",
+                        format!("/clusters/{}", registration.name),
+                        Some(body),
                     ),
                 )?;
-                match outcome {
-                    CreateClusterOutcome::Created(entry) => {
-                        json_result_string(&serde_json::json!({
-                            "kind": "created",
-                            "entry": discovery_entry_json(&entry),
-                        }))
-                    }
-                    CreateClusterOutcome::AlreadyExists => json_result_string(&serde_json::json!({
+                if status == reqwest::StatusCode::CONFLICT.as_u16() {
+                    return json_result_string(&serde_json::json!({
                         "kind": "already_exists",
-                    })),
+                    }));
                 }
+                ensure_discovery_success(status, &text)?;
+                json_result_string(&serde_json::json!({
+                    "kind": "created",
+                    "entry": normalize_discovery_cluster_entry(&text)?,
+                }))
             }
             "rotate" | "rotate_manager" => {
-                let peer_id = parse_binding_peer_id(required_option(
-                    registration.manager_peer_id.as_deref(),
-                    "manager_peer_id",
-                )?)?;
-                let addrs = parse_binding_multiaddrs(required_option(
-                    registration.manager_multiaddrs,
-                    "manager_multiaddrs",
-                )?)?;
-                let relays =
-                    parse_binding_multiaddrs(registration.relay_multiaddrs.unwrap_or_default())?;
-                let entry = self.block_on_discovery(
+                let peer_id =
+                    required_option(registration.manager_peer_id.as_deref(), "manager_peer_id")?;
+                let _ = parse_binding_peer_id(peer_id)?;
+                let addrs = required_option(registration.manager_multiaddrs, "manager_multiaddrs")?;
+                let body = serde_json::json!({
+                    "manager_peer_id": peer_id,
+                    "manager_multiaddrs": addrs,
+                    "relay_multiaddrs": registration.relay_multiaddrs.unwrap_or_default(),
+                });
+                let (status, text) = self.block_on_binding(
                     timeout_ms,
-                    self.inner.rotate_manager_with_relays(
-                        &registration.name,
-                        &peer_id,
-                        &addrs,
-                        &relays,
+                    discovery_json_request(
+                        self.inner.base_url().to_string(),
+                        "POST",
+                        format!("/clusters/{}/manager", registration.name),
+                        Some(body),
                     ),
                 )?;
+                ensure_discovery_success(status, &text)?;
                 json_result_string(&serde_json::json!({
                     "kind": "updated",
-                    "entry": discovery_entry_json(&entry),
+                    "entry": normalize_discovery_cluster_entry(&text)?,
                 }))
             }
             "liveness" => {
@@ -983,13 +981,20 @@ impl AukiDiscoveryClient {
                         .ok_or_else(|| BindingNetworkError::InvalidJson {
                             message: "missing numeric field `peer_count`".to_string(),
                         })?;
-                let entry = self.block_on_discovery(
+                let body = serde_json::json!({ "peer_count": peer_count });
+                let (status, text) = self.block_on_binding(
                     timeout_ms,
-                    self.inner.liveness_check(&registration.name, peer_count),
+                    discovery_json_request(
+                        self.inner.base_url().to_string(),
+                        "POST",
+                        format!("/clusters/{}/liveness", registration.name),
+                        Some(body),
+                    ),
                 )?;
+                ensure_discovery_success(status, &text)?;
                 json_result_string(&serde_json::json!({
                     "kind": "liveness",
-                    "entry": discovery_entry_json(&entry),
+                    "entry": normalize_discovery_cluster_entry(&text)?,
                 }))
             }
             other => Err(BindingNetworkError::Unsupported {
@@ -1009,12 +1014,21 @@ impl AukiDiscoveryClient {
         }
 
         let query = parse_json::<Query>(&query_json)?;
-        let mut entries = self.block_on_discovery(timeout_ms, self.inner.list_clusters())?;
+        let (status, text) = self.block_on_binding(
+            timeout_ms,
+            discovery_json_request(
+                self.inner.base_url().to_string(),
+                "GET",
+                "/clusters".to_string(),
+                None,
+            ),
+        )?;
+        ensure_discovery_success(status, &text)?;
+        let mut list = parse_json::<BindingDiscoveryClusterList>(&text)?;
         if let Some(name) = query.name {
-            entries.retain(|entry| entry.name == name);
+            list.clusters.retain(|entry| entry.name == name);
         }
-        let clusters = entries.iter().map(discovery_entry_json).collect::<Vec<_>>();
-        json_result_string(&serde_json::json!({ "clusters": clusters }))
+        json_result_string(&list)
     }
 
     pub fn discover_nodes_json(
@@ -1084,16 +1098,26 @@ impl AukiDiscoveryClient {
 
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]
 impl AukiDiscoveryClient {
-    fn block_on_discovery<T>(
+    fn block_on_binding<T>(
         &self,
         timeout_ms: u64,
-        future: impl std::future::Future<Output = Result<T, discovery_client::DiscoveryError>>,
+        future: impl std::future::Future<Output = Result<T, BindingNetworkError>>,
     ) -> Result<T, BindingNetworkError> {
         let duration = Duration::from_millis(timeout_ms.max(1));
         self.runtime
             .block_on(async move { tokio::time::timeout(duration, future).await })
             .map_err(|_| BindingNetworkError::Timeout)?
-            .map_err(discovery_error)
+    }
+
+    fn block_on_discovery<T>(
+        &self,
+        timeout_ms: u64,
+        future: impl std::future::Future<Output = Result<T, discovery_client::DiscoveryError>>,
+    ) -> Result<T, BindingNetworkError> {
+        self.block_on_binding(
+            timeout_ms,
+            async move { future.await.map_err(discovery_error) },
+        )
     }
 }
 
@@ -1489,14 +1513,14 @@ fn seed32_binding(seed: Vec<u8>) -> Result<[u8; 32], BindingNetworkError> {
         .map_err(|_| BindingNetworkError::InvalidSeedLength { len: len as u64 })
 }
 
-#[cfg(any(feature = "message_node", feature = "swarm"))]
+#[cfg(feature = "message_node")]
 fn parse_peer_id(value: &str) -> Result<Libp2pPeerId, NetworkError> {
     value.parse().map_err(|_| NetworkError::InvalidPeerId {
         value: value.to_string(),
     })
 }
 
-#[cfg(any(feature = "message_node", feature = "swarm"))]
+#[cfg(feature = "message_node")]
 fn parse_multiaddrs(values: Vec<String>) -> Result<Vec<Multiaddr>, NetworkError> {
     values
         .into_iter()
@@ -1717,23 +1741,84 @@ fn required_option<T>(value: Option<T>, field: &'static str) -> Result<T, Bindin
 }
 
 #[cfg(all(feature = "discovery_client", feature = "swarm"))]
-fn discovery_entry_json(entry: &discovery_client::ClusterEntry) -> serde_json::Value {
-    serde_json::json!({
-        "name": entry.name,
-        "manager_peer_id": entry.manager_peer_id.to_string(),
-        "manager_multiaddrs": entry
-            .manager_multiaddrs
-            .iter()
-            .map(|addr| addr.to_string())
-            .collect::<Vec<_>>(),
-        "relay_multiaddrs": entry
-            .relay_multiaddrs
-            .iter()
-            .map(|addr| addr.to_string())
-            .collect::<Vec<_>>(),
-        "peer_count": entry.peer_count,
-        "created_ns": entry.created_ns,
-        "last_liveness_check_ns": entry.last_liveness_check_ns,
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BindingDiscoveryClusterList {
+    clusters: Vec<BindingDiscoveryClusterEntry>,
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BindingDiscoveryClusterEntry {
+    name: String,
+    manager_peer_id: String,
+    manager_multiaddrs: Vec<String>,
+    #[serde(default)]
+    relay_multiaddrs: Vec<String>,
+    peer_count: u32,
+    created_ns: i64,
+    last_liveness_check_ns: i64,
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+async fn discovery_json_request(
+    base_url: String,
+    method: &'static str,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> Result<(u16, String), BindingNetworkError> {
+    let url = format!("{base_url}{path}");
+    let client = reqwest::Client::new();
+    let request = match method {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        other => {
+            return Err(BindingNetworkError::Unsupported {
+                message: format!("unsupported Discovery HTTP method: {other}"),
+            });
+        }
+    };
+    let request = if let Some(body) = body {
+        request.json(&body)
+    } else {
+        request
+    };
+    let response = request
+        .send()
+        .await
+        .map_err(|err| BindingNetworkError::Runtime {
+            message: err.to_string(),
+        })?;
+    let status = response.status().as_u16();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| BindingNetworkError::Runtime {
+            message: err.to_string(),
+        })?;
+    Ok((status, text))
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn ensure_discovery_success(status: u16, body: &str) -> Result<(), BindingNetworkError> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(BindingNetworkError::Runtime {
+            message: format!("Discovery HTTP {status}: {body}"),
+        })
+    }
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn normalize_discovery_cluster_entry(text: &str) -> Result<serde_json::Value, BindingNetworkError> {
+    let entry = parse_json::<BindingDiscoveryClusterEntry>(text)?;
+    json_value(&entry)
+}
+
+#[cfg(all(feature = "discovery_client", feature = "swarm"))]
+fn json_value<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, BindingNetworkError> {
+    serde_json::to_value(value).map_err(|err| BindingNetworkError::InvalidJson {
+        message: err.to_string(),
     })
 }
 

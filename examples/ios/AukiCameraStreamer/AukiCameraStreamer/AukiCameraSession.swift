@@ -1,4 +1,5 @@
 import Foundation
+import AukiDomainSignaledWebRTC
 import auki_domain
 import auki_logs
 import auki_manifests
@@ -117,6 +118,8 @@ struct AukiCameraSessionCatalog: Equatable {
 actor AukiCameraSession {
     private static let agentVersion = "ios-camera-streamer/0.1.0"
     private static let streamPollIntervalNs: UInt64 = 100_000_000
+    static let transportKind = AukiSignaledWebRTCDomainPeer.transportKind
+    static let listenAddrs = AukiSignaledWebRTCDomainPeer.listenAddrs
 
     let peerId: String
     let sessionId: String
@@ -126,7 +129,7 @@ actor AukiCameraSession {
     private let descriptor: CameraSensorDescriptor
     private let catalog: AukiCameraSessionCatalog
     private let clock: SessionClock
-    private let manager: DomainClusterManager
+    private let manager: AukiSignaledWebRTCDomainPeer
     private let log: BytesLog
     private let fanout: CameraStreamFanout
     private var loggingEnabled: Bool
@@ -145,7 +148,7 @@ actor AukiCameraSession {
         descriptor: CameraSensorDescriptor,
         catalog: AukiCameraSessionCatalog,
         clock: SessionClock,
-        manager: DomainClusterManager,
+        manager: AukiSignaledWebRTCDomainPeer,
         log: BytesLog,
         fanout: CameraStreamFanout,
         loggingEnabled: Bool,
@@ -215,23 +218,32 @@ actor AukiCameraSession {
         let log = try BytesLog.open(root: logRoot, manifestJson: manifestJson)
         try log.setRetention(retentionNs: Int64(AukiCameraDefaults.retentionNs))
 
-        let manager = try await bootstrapDomainClusterManagerAutoAdvertise(
-            targetMode: .joinOrCreate,
-            targetName: clusterName,
-            walletSeed: walletSeed,
-            listenAddrs: ["/ip4/0.0.0.0/udp/0/webrtc-direct"],
-            advertiseMultiaddrsOverride: [],
-            advertiseResolutionMs: 5_000,
-            discoveryUrl: discoveryUrl,
-            daemonInfo: DaemonInfo(
+        let daemonInfo = DaemonInfo(
                 app: "auki-camera-streamer",
                 name: "ios-camera",
                 sessionId: sessionId,
                 sessionClockId: clock.clockId(),
                 sessionClockHash: clock.clockHash(),
                 appInstance: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-            ),
-            agentVersion: agentVersion
+        )
+        let participantInfoJson = try AukiCameraSessionCatalog.jsonString([
+            "app": daemonInfo.app,
+            "name": daemonInfo.name,
+            "session_id": daemonInfo.sessionId,
+            "session_clock_id": daemonInfo.sessionClockId,
+            "session_clock_hash": daemonInfo.sessionClockHash,
+            "session_now_ns": Int64(clock.nowNs()),
+            "cluster_joined_at_ns": 1,
+            "peer_id": peerId,
+            "app_instance": daemonInfo.appInstance,
+            "is_manager": false,
+            "manager_peer_id": ""
+        ])
+        let manager = try AukiSignaledWebRTCDomainPeer(
+            localPeerId: peerId,
+            discoveryUrl: discoveryUrl,
+            clusterName: clusterName,
+            participantInfoJson: participantInfoJson
         )
 
         try manager.setStaticSensorCatalogJson(catalogJson: catalog.sensorCatalogJson())
@@ -241,6 +253,7 @@ actor AukiCameraSession {
             .init(kind: "frame", id: descriptor.frameId, hash: frameOutcome.hash, canonicalJson: frameJson),
             .init(kind: "sensor", id: descriptor.sensorId, hash: sensorOutcome.hash, canonicalJson: sensorCanonicalJson)
         ]))
+        try await manager.startJoinOrCreate()
 
         let fanout = CameraStreamFanout(sink: DomainCameraStreamSink(manager: manager))
         let session = AukiCameraSession(

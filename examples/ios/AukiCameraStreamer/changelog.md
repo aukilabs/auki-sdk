@@ -6,6 +6,30 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+**Camera stream fanout now awaits SDK stream-entry writes.** `DomainCameraStreamSink` now calls the signaled Domain peer's async stream-push path so camera frames are backpressured by the core Swift SDK data-channel transport instead of being launched as unbounded fire-and-forget tasks. The app-facing tests also lock the signaled WebRTC chunking contract used for large frame payloads.
+
+Checks: `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,id=5FDB8F06-16CE-444F-8852-A295466B114F' -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcLengthPrefixedFramesAreChunkedForDataChannelTransport -only-testing:AukiCameraStreamerTests/CameraStreamFanoutTests/testDomainCameraStreamSinkUsesAsyncPushPath CODE_SIGNING_ALLOWED=NO`.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Signaled WebRTC two-peer join regression covered.** `AukiCameraStreamerTests` now runs two `AukiSignaledWebRTCPeer` instances against an in-memory Discovery signal mailbox, proving `/auki/join/0.0.1` framed requests complete over SDK-owned signaled WebRTC data channels and preserving the existing no-answer timeout behavior.
+
+Checks: red/green `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-two-peer-green CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestCompletesBetweenTwoPeers`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-signaled-focused CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestCompletesBetweenTwoPeers -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestTimesOutWhenPeerNeverAnswers`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Signaled WebRTC timeout regression covered.** `AukiCameraStreamerTests` now directly exercises `AukiSignaledWebRTCPeer.requestFramed` with a no-answer Discovery fake and a short operation timeout, proving the app-facing generated SDK path fails with `.timedOut` instead of hanging in `Starting`. The XcodeGen spec and checked-in project now link `AukiNetworkSignaledWebRTC` explicitly for app/test targets that import or embed the signaled transport.
+
+Checks: red/green `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-timeout-green CODE_SIGNING_ALLOWED=NO -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcFramedRequestTimesOutWhenPeerNeverAnswers`; `xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`; `plutil -lint examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj/project.pbxproj`; `git diff --check`.
+
+### Nils's codex · May 27, HKT, 2026
+
+**Discovery-signaled WebRTC transport enabled.** `AukiCameraStreamer` now uses `AukiSignaledWebRTCDomainPeer` instead of `DomainClusterManager`'s auto-advertised `webrtc-direct` path, exposes the transport contract as `discovery-signaled-webrtc` with no listen addresses, and links the new `AukiDomainSignaledWebRTC` package product. The camera catalogs and registry entries are installed before the app joins an existing Overwatch-managed cluster, so Overwatch's first post-join catalog refresh can see the iOS camera sensor. The runbook now calls out the Discovery `/signals` path, binding-generation order, Discovery startup, and physical-device LAN URL requirement.
+
+Checks: `xcodegen generate --spec examples/ios/AukiCameraStreamer/project.yml`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,name=iPhone 15,OS=17.5' -derivedDataPath /tmp/auki-camera-streamer-derived-data CODE_SIGNING_ALLOWED=NO`; `git diff --check`.
+
 ### Nils's codex · May 27, HKT, 2026
 
 **Overwatch runbook staging documented.** The manual E2E runbook now includes JavaScript binding/protobuf generation and `examples/overwatch/scripts/stage-sdk.mjs` before `npm install`, so a fresh checkout prepares the ignored `examples/overwatch/sdk-generated` file packages that Overwatch depends on.

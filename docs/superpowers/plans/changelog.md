@@ -4,6 +4,14 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 28, HKT, 2026
+
+Revised the Relay-Backed Libp2p Transport migration plan to remove the Discovery-signaled WebRTC compatibility path, require `AukiSignaledWebRTCPeer` removal, and allow breaking existing demos during the transport replacement.
+
+### Nils's codex · May 28, HKT, 2026
+
+Added the Relay-Backed Libp2p Transport migration plan, sequencing the capability gate, relay catalog, relay node, native relay reservations, browser relay runtime, physical iOS smoke, and signaled backend deprecation.
+
 ### Nils's codex · May 27, HKT, 2026
 
 Marked Task 7 of the SDK signaled WebRTC transport plan complete after adding the `auki-domain` signaled peer facade and native binding surface.

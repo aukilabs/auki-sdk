@@ -72,14 +72,20 @@ enum GenericStreamPayloadKind {
 /// Resolve the stream payload kind for `resource_id` from the post-#216
 /// flat `ResourceEntry` catalog. Matches `sensor_log` rows by looking at
 /// the `sensor.kind` + `manifest` (sensor type), and `pose_log` rows.
-/// `resource_id` is matched against `entry.resource_id`.
+/// When `source_peer_id` is present, the full `(source_peer_id, resource_id)`
+/// identity is matched; an empty `source_peer_id` preserves the legacy
+/// resource-id-only open path.
 fn resolve_generic_stream_payload_kind_from_entries(
     resources: &[RustResourceEntry],
+    source_peer_id: &str,
     resource_id: &str,
 ) -> Result<GenericStreamPayloadKind, PyErr> {
     use auki_network::resources_protocol::{SensorKind, VariantContent};
     for entry in resources {
         if entry.resource_id != resource_id {
+            continue;
+        }
+        if !source_peer_id.is_empty() && entry.source_peer_id != source_peer_id {
             continue;
         }
         match &entry.variant_content {
@@ -111,8 +117,13 @@ fn resolve_generic_stream_payload_kind_from_entries(
             }
         }
     }
+    let scope = if source_peer_id.is_empty() {
+        format!("resource {resource_id:?}")
+    } else {
+        format!("resource {source_peer_id:?}/{resource_id:?}")
+    };
     Err(PyFileNotFoundError::new_err(format!(
-        "resource {resource_id:?} not found in remote resource catalog"
+        "{scope} not found in remote resource catalog"
     )))
 }
 
@@ -1555,7 +1566,8 @@ impl PyClusterManager {
     ) -> PyResult<PyStreamSubscription> {
         // Resolve the payload kind by fetching the resource catalog first.
         let resource_id = request.inner.resource_id.clone();
-        let kind = self.resolve_stream_payload_kind(py, peer_id, &resource_id)?;
+        let source_peer_id = request.inner.source_peer_id.clone();
+        let kind = self.resolve_stream_payload_kind(py, peer_id, &source_peer_id, &resource_id)?;
         let rust_request = request.inner.clone();
 
         match kind {
@@ -1596,7 +1608,7 @@ impl PyClusterManager {
         peer_id: &str,
         resource_id: &str,
     ) -> PyResult<PyStreamSubscription> {
-        match self.resolve_stream_payload_kind(py, peer_id, resource_id)? {
+        match self.resolve_stream_payload_kind(py, peer_id, "", resource_id)? {
             GenericStreamPayloadKind::Camera => {
                 self.open_typed_stream::<RustCameraFrame>(py, peer_id, resource_id, String::new(), |sub| {
                     PyStreamSubscription::from_rust_camera(sub)
@@ -1877,9 +1889,11 @@ impl PyClusterManager {
         &self,
         py: Python<'_>,
         peer_id: &str,
+        source_peer_id: &str,
         resource_id: &str,
     ) -> PyResult<GenericStreamPayloadKind> {
         let peer_id_parsed = parse_peer_id(peer_id)?;
+        let source_peer_id = source_peer_id.to_string();
         let resource_id = resource_id.to_string();
         let inner = self.inner.clone();
         py.allow_threads(|| {
@@ -1897,7 +1911,11 @@ impl PyClusterManager {
                     )
                     .await
                     .map_err(map_fetch_resources_catalog_error)?;
-                resolve_generic_stream_payload_kind_from_entries(&resp.resources, &resource_id)
+                resolve_generic_stream_payload_kind_from_entries(
+                    &resp.resources,
+                    &source_peer_id,
+                    &resource_id,
+                )
             })
         })
     }
@@ -2477,11 +2495,97 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_generic_stream_payload_kind_from_entries(&resources, "head_left_rgb").unwrap(),
+            resolve_generic_stream_payload_kind_from_entries(&resources, "galbot", "head_left_rgb")
+                .unwrap(),
             GenericStreamPayloadKind::Camera
         );
         assert_eq!(
-            resolve_generic_stream_payload_kind_from_entries(&resources, "head_array_4mic").unwrap(),
+            resolve_generic_stream_payload_kind_from_entries(
+                &resources,
+                "galbot",
+                "head_array_4mic",
+            )
+            .unwrap(),
+            GenericStreamPayloadKind::Audio
+        );
+    }
+
+    #[test]
+    fn generic_stream_resolver_matches_source_peer_id_before_resource_id() {
+        let resources = vec![
+            ResourceEntry {
+                source_peer_id: "galbot-a".into(),
+                writer_peer_id: "park".into(),
+                resource_id: "head_left_rgb".into(),
+                state: "live".into(),
+                head: Some(Head::Rolling {
+                    retention_ns: 5_000_000_000,
+                }),
+                extent: None,
+                available: Available {
+                    bytes: 0,
+                    entries: 0,
+                    duration_ns: 0,
+                },
+                sensor: Some(SensorBlock {
+                    kind: SensorKind::Camera,
+                    r#type: "rgb".into(),
+                    sensor_id: "head_left_rgb".into(),
+                    sensor_hash: "sh".into(),
+                }),
+                pose: None,
+                variant_content: VariantContent::SensorLog {
+                    manifest: SensorManifestPointer {
+                        clock: RegistryRef {
+                            peer_id: "a".into(),
+                            id: "clk".into(),
+                            hash: "ch".into(),
+                        },
+                        frame: None,
+                    },
+                },
+            },
+            ResourceEntry {
+                source_peer_id: "galbot-b".into(),
+                writer_peer_id: "park".into(),
+                resource_id: "head_left_rgb".into(),
+                state: "live".into(),
+                head: Some(Head::Rolling {
+                    retention_ns: 5_000_000_000,
+                }),
+                extent: None,
+                available: Available {
+                    bytes: 0,
+                    entries: 0,
+                    duration_ns: 0,
+                },
+                sensor: Some(SensorBlock {
+                    kind: SensorKind::Audio,
+                    r#type: "pcm".into(),
+                    sensor_id: "head_array_4mic".into(),
+                    sensor_hash: "sh".into(),
+                }),
+                pose: None,
+                variant_content: VariantContent::SensorLog {
+                    manifest: SensorManifestPointer {
+                        clock: RegistryRef {
+                            peer_id: "b".into(),
+                            id: "clk".into(),
+                            hash: "ch".into(),
+                        },
+                        frame: None,
+                    },
+                },
+            },
+        ];
+
+        assert_eq!(
+            resolve_generic_stream_payload_kind_from_entries(
+                &resources,
+                "galbot-b",
+                "head_left_rgb",
+            )
+            .unwrap(),
             GenericStreamPayloadKind::Audio
         );
     }
@@ -2513,7 +2617,12 @@ mod tests {
         }];
 
         assert_eq!(
-            resolve_generic_stream_payload_kind_from_entries(&resources, "world->base_link").unwrap(),
+            resolve_generic_stream_payload_kind_from_entries(
+                &resources,
+                "galbot",
+                "world->base_link",
+            )
+            .unwrap(),
             GenericStreamPayloadKind::Pose
         );
     }

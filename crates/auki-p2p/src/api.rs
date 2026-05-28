@@ -1839,7 +1839,12 @@ impl AukiNode {
         }
     }
 
-    fn open_publication_source(
+    pub(crate) fn has_local_publication(&self, domain_id: &str, offer_id: &str) -> bool {
+        self.local_publications
+            .contains_key(&(domain_id.to_owned(), offer_id.to_owned()))
+    }
+
+    pub(crate) fn open_publication_source(
         &mut self,
         domain_id: &str,
         offer_id: &str,
@@ -1853,7 +1858,7 @@ impl AukiNode {
             })
     }
 
-    fn next_publication_message(
+    pub(crate) fn next_publication_message(
         &mut self,
         domain_id: &str,
         offer_id: &str,
@@ -2495,8 +2500,8 @@ async fn drive_node_until<T>(node: &mut AukiP2pNode, future: impl Future<Output 
 mod tests {
     use super::*;
     use crate::{
-        AukiServeRuntime, OfferPolicy, PeerRelationshipState, accept_lifecycle_streams,
-        accept_offer_catalog_streams, exchange_peer_handshake_strict,
+        AukiServeRuntime, AukiServeRuntimeEvent, OfferPolicy, PeerRelationshipState,
+        accept_lifecycle_streams, accept_offer_catalog_streams, exchange_peer_handshake_strict,
         protocols::{get_protocol, subscribe_protocol},
         serve_offer_catalog_response,
     };
@@ -3853,7 +3858,7 @@ mod tests {
                         .expect("serve next inbound")
                         .expect("served inbound");
                     match served {
-                        AukiServedInbound::Subscribe(served) => {
+                        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Subscribe(served)) => {
                             assert!(served.accepted);
                             assert_eq!(
                                 served.domain_id.as_deref(),
@@ -3863,7 +3868,7 @@ mod tests {
                             active_subscription =
                                 Some(served.into_subscription().expect("accepted subscription"));
                         }
-                        AukiServedInbound::Get(served) => {
+                        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Get(served)) => {
                             assert!(served.success);
                             assert_eq!(
                                 served.domain_id.as_deref(),
@@ -3872,7 +3877,12 @@ mod tests {
                             assert_eq!(served.offer_id.as_deref(), Some("camera-main"));
                             served_get = Some(served);
                         }
-                        AukiServedInbound::Lifecycle(_) | AukiServedInbound::OfferCatalog(_) => {}
+                        AukiServeRuntimeEvent::Inbound(
+                            AukiServedInbound::Lifecycle(_) | AukiServedInbound::OfferCatalog(_),
+                        )
+                        | AukiServeRuntimeEvent::PublishedSubscriptionStarted(_)
+                        | AukiServeRuntimeEvent::PublishedSubscriptionMessageSent(_)
+                        | AukiServeRuntimeEvent::PublishedSubscriptionEnded(_) => {}
                     }
                 }
             })
@@ -3940,6 +3950,380 @@ mod tests {
         assert_eq!(outcome.message.sequence, Some(55));
         assert_eq!(status.subscriptions_accepted, 1);
         assert_eq!(status.gets_served, 1);
+        assert_eq!(final_status, status);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_streams_published_offer_and_serves_get() {
+        let listener_wallet = wallet(115);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[15; DOMAIN_NONCE_LEN],
+            Some("runtime-published"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(116), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "bytes-main",
+                    "frame",
+                    PayloadDescriptor::create("auki.frame"),
+                    || {
+                        stream::unfold(0_u8, |index| async move {
+                            if index >= 2 {
+                                None
+                            } else {
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                Some((vec![index], index.saturating_add(1)))
+                            }
+                        })
+                    },
+                )
+                .with_access_modes(vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]),
+            )
+            .expect("publish offer");
+        let get_domain_id = domain_id.clone();
+        listener
+            .upsert_get_provider(
+                domain_id.clone(),
+                "bytes-main",
+                move |_request: &GetRequest, _now: &str| {
+                    Ok(message(&get_domain_id, "bytes-main", 77))
+                },
+            )
+            .expect("get provider");
+        let remote_report = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: listener
+                .local_offers(&domain_id)
+                .into_iter()
+                .map(|offer| LoadedRemoteOffer {
+                    offer,
+                    usable: true,
+                    unusable_reason: None,
+                })
+                .collect(),
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let dialer_peer_id = dialer.peer_id();
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let mut started = false;
+            let mut get_served = false;
+            let mut ended = false;
+
+            timeout(Duration::from_secs(5), async {
+                while !ended || !get_served {
+                    let event = runtime
+                        .serve_next(ISSUED_AT)
+                        .await
+                        .expect("serve next runtime event")
+                        .expect("runtime event");
+                    match event {
+                        AukiServeRuntimeEvent::PublishedSubscriptionStarted(status) => {
+                            assert_eq!(status.peer_id, dialer_peer_id);
+                            assert_eq!(status.domain_id.as_str(), server_domain_id.as_str());
+                            assert_eq!(status.offer_id, "bytes-main");
+                            assert_eq!(status.messages_sent, 0);
+                            started = true;
+                        }
+                        AukiServeRuntimeEvent::PublishedSubscriptionMessageSent(status) => {
+                            assert!(started);
+                            assert_eq!(status.domain_id.as_str(), server_domain_id.as_str());
+                            assert_eq!(status.offer_id, "bytes-main");
+                            assert!(status.messages_sent >= 1);
+                        }
+                        AukiServeRuntimeEvent::PublishedSubscriptionEnded(status) => {
+                            assert_eq!(status.reason, SubscribeEndReason::Complete);
+                            assert_eq!(status.messages_sent, 2);
+                            ended = true;
+                        }
+                        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Get(served)) => {
+                            assert!(served.success);
+                            assert_eq!(
+                                served.domain_id.as_deref(),
+                                Some(server_domain_id.as_str())
+                            );
+                            assert_eq!(served.offer_id.as_deref(), Some("bytes-main"));
+                            get_served = true;
+                        }
+                        AukiServeRuntimeEvent::Inbound(_) => {}
+                    }
+                }
+            })
+            .await
+            .expect("runtime should stream and serve get");
+
+            let status = runtime.status().clone();
+            assert_eq!(status.active_subscriptions, 0);
+            assert_eq!(status.subscriptions_accepted, 1);
+            assert_eq!(status.subscriptions_completed, 1);
+            assert_eq!(status.gets_served, 1);
+            assert_eq!(status.frames_sent, 2);
+            served_tx.send(status.clone()).expect("send runtime status");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = runtime.node_mut().next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            status
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+        dialer.upsert_remote_offer_report(remote_report);
+
+        let mut subscription = timeout(
+            Duration::from_secs(5),
+            dialer.subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "bytes-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("subscribe should not time out")
+        .expect("subscribe should start");
+        let first = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first runtime-managed published message");
+        assert_eq!(first.sequence, Some(0));
+
+        let outcome = timeout(
+            Duration::from_secs(5),
+            dialer.get(
+                listener_peer_id,
+                GetInput::new(domain_id.clone(), "bytes-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("get should not time out")
+        .expect("get should succeed");
+
+        let second = dialer
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:01Z")
+            .await
+            .expect("second runtime-managed published message");
+        let status = served_rx.await.expect("runtime status");
+        drop(subscription);
+        let _ = stop_tx.send(());
+
+        let final_status = server.await.expect("server task");
+        assert_eq!(outcome.message.sequence, Some(77));
+        assert_eq!(second.sequence, Some(1));
+        assert_eq!(status.frames_sent, 2);
+        assert_eq!(status.gets_served, 1);
+        assert_eq!(final_status, status);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_streams_published_offer_to_multiple_subscribers() {
+        let listener_wallet = wallet(117);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[16; DOMAIN_NONCE_LEN],
+            Some("runtime-multisub"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer_a =
+            AukiNode::new(identity(118), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut dialer_b =
+            AukiNode::new(identity(119), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(PublishOfferInput::new(
+                domain_id.clone(),
+                "bytes-main",
+                "frame",
+                PayloadDescriptor::create("auki.frame"),
+                || {
+                    stream::unfold(0_u8, |index| async move {
+                        if index >= 2 {
+                            None
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            Some((vec![index.saturating_add(1)], index.saturating_add(1)))
+                        }
+                    })
+                },
+            ))
+            .expect("publish offer");
+        let loaded_offers = listener
+            .local_offers(&domain_id)
+            .into_iter()
+            .map(|offer| LoadedRemoteOffer {
+                offer,
+                usable: true,
+                unusable_reason: None,
+            })
+            .collect::<Vec<_>>();
+        let remote_report_a = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: loaded_offers.clone(),
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+        let remote_report_b = OfferLoadReport {
+            peer_id: listener_peer_id,
+            offers: loaded_offers,
+            diagnostics: Vec::new(),
+            generated_at: Some(ISSUED_AT.to_owned()),
+        };
+
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+
+            timeout(Duration::from_secs(5), async {
+                while runtime.status().subscriptions_completed < 2 {
+                    let _ = runtime
+                        .serve_next(ISSUED_AT)
+                        .await
+                        .expect("serve next runtime event")
+                        .expect("runtime event");
+                }
+            })
+            .await
+            .expect("runtime should complete both subscribers");
+
+            let status = runtime.status().clone();
+            assert_eq!(status.active_subscriptions, 0);
+            assert_eq!(status.subscriptions_accepted, 2);
+            assert_eq!(status.subscriptions_completed, 2);
+            assert_eq!(status.frames_sent, 4);
+            served_tx.send(status.clone()).expect("send runtime status");
+
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    event = runtime.node_mut().next_event(ISSUED_AT) => {
+                        if event.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            status
+        });
+
+        dialer_a
+            .upsert_configured_peer(listener_peer.clone())
+            .expect("configured peer a");
+        dialer_b
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer b");
+        dialer_a
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer a");
+        dialer_b
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer b");
+        wait_for_peer_connected(&mut dialer_a, listener_peer_id).await;
+        wait_for_peer_connected(&mut dialer_b, listener_peer_id).await;
+        dialer_a.upsert_remote_offer_report(remote_report_a);
+        dialer_b.upsert_remote_offer_report(remote_report_b);
+
+        let mut subscription_a = dialer_a
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "bytes-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscriber a should start");
+        let mut subscription_b = dialer_b
+            .subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "bytes-main"),
+                ISSUED_AT,
+            )
+            .await
+            .expect("subscriber b should start");
+
+        let first_a = dialer_a
+            .next_subscription_message(&mut subscription_a, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first subscriber a message");
+        let second_a = dialer_a
+            .next_subscription_message(&mut subscription_a, "2026-05-26T12:01:01Z")
+            .await
+            .expect("second subscriber a message");
+        let first_b = dialer_b
+            .next_subscription_message(&mut subscription_b, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first subscriber b message");
+        let second_b = dialer_b
+            .next_subscription_message(&mut subscription_b, "2026-05-26T12:01:01Z")
+            .await
+            .expect("second subscriber b message");
+        let status = served_rx.await.expect("runtime status");
+        drop(subscription_a);
+        drop(subscription_b);
+        let _ = stop_tx.send(());
+
+        let final_status = server.await.expect("server task");
+        assert_eq!(first_a.payload.bytes, Some(vec![1]));
+        assert_eq!(second_a.payload.bytes, Some(vec![2]));
+        assert_eq!(first_b.payload.bytes, Some(vec![1]));
+        assert_eq!(second_b.payload.bytes, Some(vec![2]));
+        assert_eq!(status.frames_sent, 4);
         assert_eq!(final_status, status);
     }
 

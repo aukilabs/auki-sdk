@@ -25,11 +25,11 @@ pub mod subscribe_serving;
 pub mod transport_path;
 
 pub use api::{
-    AukiGetProvider, AukiGetProviderError, AukiNode, AukiNodeError, AukiNodeEvent,
-    AukiServedInbound, AukiServedSubscription, AukiSubscribeProvider, AukiSubscribeProviderAccept,
-    AukiSubscribeProviderError, AukiSubscription, LifecycleDomainAccess, LifecycleInput,
-    LocalDomainRegistration, RemoteAllowedOffer, RemoteOfferAppPolicy, RemoteOfferLoadInput,
-    ServedGet, ServedOfferCatalog, ServedSubscribe,
+    AukiGetProvider, AukiGetProviderError, AukiInboundAcceptDiagnostics, AukiNode, AukiNodeError,
+    AukiNodeEvent, AukiServedInbound, AukiServedSubscription, AukiSubscribeProvider,
+    AukiSubscribeProviderAccept, AukiSubscribeProviderError, AukiSubscription,
+    LifecycleDomainAccess, LifecycleInput, LocalDomainRegistration, RemoteAllowedOffer,
+    RemoteOfferAppPolicy, RemoteOfferLoadInput, ServedGet, ServedOfferCatalog, ServedSubscribe,
 };
 pub use builder::{AukiNodeBuilder, AukiNodeBuilderError};
 pub use config::{

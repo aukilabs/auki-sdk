@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { peerIdFromSeed } from "./identity.js";
-import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
+import {
+  createAukiBrowserPeer,
+  type AukiBrowserPeerTraceEvent,
+  type SpatialMessage,
+} from "./peer.js";
 import { publishPreviewOffer } from "./preview.js";
 import { createSubscribeEndForPath } from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
@@ -212,6 +216,7 @@ describe("AukiBrowserPeer shell", () => {
     const accept = subscribeFixture.positive.accept_start_result.object as JsonObject;
     const inputs = subscribeFixture.inputs as JsonObject;
     const transport = new MemoryTransport("browser-peer", []);
+    const traces: AukiBrowserPeerTraceEvent[] = [];
     let subscribeAttempts = 0;
     transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
       const reader = new JsonFrameReader(stream);
@@ -241,6 +246,7 @@ describe("AukiBrowserPeer shell", () => {
       transport,
       bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
       protocolWasm: await protocolWasmInput(),
+      trace: (event) => traces.push(event),
     });
 
     const subscription = await peer.openSubscription({
@@ -259,6 +265,23 @@ describe("AukiBrowserPeer shell", () => {
       SUBSCRIBE_PROTOCOL_ID,
       SUBSCRIBE_PROTOCOL_ID,
     ]);
+    expect(traces.map((event) => `${event.operation}:${event.phase}:${event.attempt}`)).toEqual([
+      "subscribe:dialing:1",
+      "subscribe:opened:1",
+      "subscribe:request_sent:1",
+      "subscribe:stream_closed:1",
+      "subscribe:retrying:1",
+      "subscribe:dialing:2",
+      "subscribe:opened:2",
+      "subscribe:request_sent:2",
+      "subscribe:start_received:2",
+      "subscribe:accepted:2",
+    ]);
+    expect(traces[4]).toMatchObject({
+      error: "The stream has been reset",
+      retryable: true,
+      nextAttempt: 2,
+    });
   });
 
   it("aborts an active Subscribe stream when the caller aborts the signal", async () => {
@@ -411,6 +434,7 @@ describe("AukiBrowserPeer shell", () => {
     const response = getFixture.positive.success_response.object as JsonObject;
     const inputs = getFixture.inputs as JsonObject;
     const transport = new MemoryTransport("browser-peer", []);
+    const traces: AukiBrowserPeerTraceEvent[] = [];
     let getAttempts = 0;
     transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
       const reader = new JsonFrameReader(stream);
@@ -439,6 +463,7 @@ describe("AukiBrowserPeer shell", () => {
       transport,
       bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
       protocolWasm: await protocolWasmInput(),
+      trace: (event) => traces.push(event),
     });
 
     await expect(
@@ -457,6 +482,24 @@ describe("AukiBrowserPeer shell", () => {
       GET_PROTOCOL_ID,
       GET_PROTOCOL_ID,
     ]);
+    expect(traces.map((event) => `${event.operation}:${event.phase}:${event.attempt}`)).toEqual([
+      "get:dialing:1",
+      "get:opened:1",
+      "get:request_sent:1",
+      "get:stream_closed:1",
+      "get:retrying:1",
+      "get:dialing:2",
+      "get:opened:2",
+      "get:request_sent:2",
+      "get:response_received:2",
+      "get:completed:2",
+      "get:stream_closed:2",
+    ]);
+    expect(traces[4]).toMatchObject({
+      error: "The stream has been reset",
+      retryable: true,
+      nextAttempt: 2,
+    });
   });
 
   it("keeps maxMessageBytes scoped to Subscribe data messages", async () => {

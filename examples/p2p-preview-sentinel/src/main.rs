@@ -1,14 +1,16 @@
 use auki_identity::Wallet;
 use auki_p2p::{
-    AukiBrowserBootstrapRecord, AukiNodeBuilder, AukiServeRuntime, LatestPublishedByteSource,
-    PreviewOfferOptions, PublishedByteFrame, publish_preview_offer_with_latest_source,
+    AukiBrowserBootstrapRecord, AukiNodeBuilder, AukiServeRuntime, AukiServeRuntimeEvent,
+    AukiServedInbound, LatestPublishedByteSource, PreviewOfferOptions, PublishedByteFrame,
+    publish_preview_offer_with_latest_source,
 };
 use auki_protocol::v1::{domain::DOMAIN_NONCE_LEN, subscribe::SubscribeEndReason};
 use jpeg_encoder::{ColorType, Encoder};
 use serde_json::json;
 use std::{env, error::Error, fmt, fs, path::PathBuf, process::ExitCode, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::time::MissedTickBehavior;
+use tokio::time::Instant;
+use tracing_subscriber::EnvFilter;
 
 const DEFAULT_DOMAIN_LABEL: &str = "auki-p2p-preview-demo";
 const DEFAULT_OFFER_ID: &str = "sentinel-preview";
@@ -34,6 +36,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
     if config.help {
         println!("{}", DemoConfig::usage());
         return Ok(());
+    }
+    if config.trace_p2p {
+        init_p2p_tracing();
     }
 
     let now = now_rfc3339()?;
@@ -91,11 +96,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
-    let mut status_tick = tokio::time::interval(config.status_interval);
-    status_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    status_tick.tick().await;
+    let mut next_status_at = Instant::now() + config.status_interval;
     loop {
         let now = now_rfc3339()?;
+        // Do not race status ticks against serve_next: dropping serve_next
+        // after it accepts a stream resets that stream before it can reply.
         tokio::select! {
             _ = &mut shutdown => {
                 println!("shutdown: ctrl-c received");
@@ -109,14 +114,29 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 preview_producer.abort();
                 break;
             }
-            _ = status_tick.tick() => {
-                print_state(&mut runtime, last_failure.as_deref(), &domain_id, &config)?;
-            }
             result = runtime.serve_next(&now) => {
                 match result {
-                    Ok(Some(_)) | Ok(None) => {}
-                    Err(error) => last_failure = Some(error.to_string()),
+                    Ok(Some(event)) => {
+                        if config.trace_p2p {
+                            trace_runtime_event(&event)?;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if config.trace_p2p {
+                            println!("trace: at={now} runtime_error={error}");
+                        }
+                        last_failure = Some(error.to_string());
+                    }
                 }
+            }
+        }
+
+        let monotonic_now = Instant::now();
+        if monotonic_now >= next_status_at {
+            print_state(&mut runtime, last_failure.as_deref(), &domain_id, &config)?;
+            while next_status_at <= monotonic_now {
+                next_status_at += config.status_interval;
             }
         }
     }
@@ -158,6 +178,7 @@ struct DemoConfig {
     frame_interval: Duration,
     status_interval: Duration,
     once: bool,
+    trace_p2p: bool,
     help: bool,
 }
 
@@ -171,6 +192,7 @@ impl Default for DemoConfig {
             frame_interval: Duration::from_millis(DEFAULT_FRAME_INTERVAL_MS),
             status_interval: Duration::from_millis(DEFAULT_STATUS_INTERVAL_MS),
             once: false,
+            trace_p2p: false,
             help: false,
         }
     }
@@ -187,6 +209,9 @@ impl DemoConfig {
                 }
                 "--once" => {
                     config.once = true;
+                }
+                "--trace-p2p" => {
+                    config.trace_p2p = true;
                 }
                 "--source" => {
                     let value = next_value("--source", &mut args)?;
@@ -240,6 +265,7 @@ impl DemoConfig {
            --frames N                  Optional finite generated producer-frame limit. Default: continuous\n\
            --frame-interval-ms N       Generated stream frame interval. Default: 100\n\
            --status-interval-ms N      P2P state print interval. Default: 2000\n\
+           --trace-p2p                 Print per-operation P2P trace lines for troubleshooting\n\
            --once                      Print bootstrap/state once and exit.\n\
            -h, --help                  Show this help text"
     }
@@ -290,6 +316,16 @@ fn print_bootstrap_record(record: &AukiBrowserBootstrapRecord) -> Result<(), Box
     println!("browser_bootstrap_json:");
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn init_p2p_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("libp2p_stream=debug,libp2p_yamux=debug,auki_p2p=trace")
+    });
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn write_bootstrap_record(
@@ -343,7 +379,7 @@ fn print_state(
         config.frame_interval.as_millis(),
     );
     println!(
-        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_completed={} subscription_cancelled={} subscription_failed={} subscription_backpressure={} subscription_producer_closed={} frames_produced={} frames_sent={} frames_dropped={}",
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_completed={} subscription_cancelled={} subscription_failed={} subscription_backpressure={} subscription_producer_closed={} frames_produced={} frames_sent={} frames_dropped={} slow_writes={}",
         runtime_status.lifecycles_served,
         runtime_status.duplicate_lifecycle_attempts,
         runtime_status.offer_catalogs_served,
@@ -360,6 +396,18 @@ fn print_state(
         runtime_status.frames_produced,
         runtime_status.frames_sent,
         runtime_status.frames_dropped,
+        runtime_status.subscription_slow_writes,
+    );
+    println!(
+        "raw_inbound: lifecycles={} offer_catalogs={} gets={} subscribes={} pending={} handoff_queue={} handoff_full={} handoff_closed={}",
+        runtime_status.raw_inbound_lifecycles,
+        runtime_status.raw_inbound_offer_catalogs,
+        runtime_status.raw_inbound_gets,
+        runtime_status.raw_inbound_subscribes,
+        runtime_status.pending_inbound_streams,
+        runtime_status.inbound_accept_queue_depth,
+        runtime_status.inbound_accept_queue_full,
+        runtime_status.inbound_accept_queue_closed,
     );
     if let Some(error) = last_failure {
         println!("last_failure: {error}");
@@ -410,6 +458,77 @@ fn print_state(
     }
 
     Ok(())
+}
+
+fn trace_runtime_event(event: &AukiServeRuntimeEvent) -> Result<(), Box<dyn Error>> {
+    let now = now_rfc3339()?;
+    match event {
+        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Get(served)) => {
+            println!(
+                "trace: at={now} inbound=get peer={} domain={} offer={} success={} failure={}",
+                served.peer_id,
+                option_label(served.domain_id.as_deref()),
+                option_label(served.offer_id.as_deref()),
+                served.success,
+                option_label(served.failure_code.as_deref()),
+            );
+        }
+        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Subscribe(served)) => {
+            println!(
+                "trace: at={now} inbound=subscribe peer={} domain={} offer={} accepted={} failure={}",
+                served.peer_id,
+                option_label(served.domain_id.as_deref()),
+                option_label(served.offer_id.as_deref()),
+                served.accepted,
+                option_label(served.failure_code.as_deref()),
+            );
+        }
+        AukiServeRuntimeEvent::Inbound(AukiServedInbound::OfferCatalog(served)) => {
+            println!(
+                "trace: at={now} inbound=offer_catalog peer={} domains={} kinds={} inline_registry={}",
+                served.peer_id,
+                served.domain_ids.len(),
+                served.kinds.len(),
+                served.include_inline_registry_entries,
+            );
+        }
+        AukiServeRuntimeEvent::Inbound(AukiServedInbound::Lifecycle(_)) => {
+            println!("trace: at={now} inbound=lifecycle");
+        }
+        AukiServeRuntimeEvent::PublishedSubscriptionStarted(status) => {
+            println!(
+                "trace: at={now} subscription_started id={} peer={} domain={} offer={} payload={} policy={:?}",
+                status.subscription_id,
+                status.peer_id,
+                status.domain_id,
+                status.offer_id,
+                status.payload_type,
+                status.backpressure_policy,
+            );
+        }
+        AukiServeRuntimeEvent::PublishedSubscriptionMessageSent(_) => {}
+        AukiServeRuntimeEvent::PublishedSubscriptionEnded(status) => {
+            println!(
+                "trace: at={now} subscription_ended id={} peer={} domain={} offer={} reason={:?} error={} retryable={} messages_sent={}",
+                status.subscription_id,
+                status.peer_id,
+                status.domain_id,
+                status.offer_id,
+                status.reason,
+                option_label(status.error_code.as_deref()),
+                status
+                    .retryable
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                status.messages_sent,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn option_label(value: Option<&str>) -> &str {
+    value.unwrap_or("-")
 }
 
 fn frame_limit_label(frame_limit: Option<u64>) -> String {
@@ -500,6 +619,7 @@ mod tests {
             config.status_interval,
             Duration::from_millis(DEFAULT_STATUS_INTERVAL_MS)
         );
+        assert!(!config.trace_p2p);
     }
 
     #[test]
@@ -515,6 +635,7 @@ mod tests {
             "40".to_owned(),
             "--status-interval-ms".to_owned(),
             "250".to_owned(),
+            "--trace-p2p".to_owned(),
             "--once".to_owned(),
         ])
         .expect("explicit options parse");
@@ -527,6 +648,7 @@ mod tests {
         assert_eq!(config.frame_limit, Some(3));
         assert_eq!(config.frame_interval, Duration::from_millis(40));
         assert_eq!(config.status_interval, Duration::from_millis(250));
+        assert!(config.trace_p2p);
         assert!(config.once);
     }
 

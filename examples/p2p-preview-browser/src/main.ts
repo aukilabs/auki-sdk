@@ -1,6 +1,7 @@
 import {
   type AukiBrowserBootstrapRecord,
   type AukiBrowserPeer,
+  type AukiBrowserPeerTraceEvent,
   type AukiPreviewSubscription,
   type OfferSummary,
   type PeerSummary,
@@ -145,6 +146,7 @@ async function connect(): Promise<void> {
     const session = await createAukiPreviewBrowserSession({
       bootstrap,
       label: "p2p-preview-browser",
+      trace: handlePeerTrace,
     });
     const peer = session.peer;
     recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
@@ -641,6 +643,22 @@ function runtimeStatus(runtime: OfferRuntimeState): string {
 function recordEvent(level: "info" | "error", message: string, detail?: string): void {
   state.events.unshift({ at: new Date(), level, message, detail });
   state.events = state.events.slice(0, 80);
+}
+
+function handlePeerTrace(event: AukiBrowserPeerTraceEvent): void {
+  const level = event.phase === "failed" ? "error" : "info";
+  const detail = [
+    `attempt=${event.attempt}`,
+    event.nextAttempt ? `next=${event.nextAttempt}` : undefined,
+    `peer=${shortId(event.peerId, 12)}`,
+    event.domainId && event.offerId ? `offer=${event.domainId}/${event.offerId}` : undefined,
+    event.error ? `error=${event.error}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  recordEvent(level, `P2P ${event.operation} ${event.phase}`, detail);
+  console.debug(`[auki-p2p-browser] ${event.operation} ${event.phase} ${detail}`, event);
+  renderEvents();
 }
 
 async function stopSubscriptionTransport(

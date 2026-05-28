@@ -7,15 +7,13 @@ use crate::{
     AukiSubscriptionBackpressurePolicy, LifecycleStreamDirection, LifecycleStreamGuardError,
     PublishedByteFrame,
 };
-use auki_protocol::v1::{
-    error,
-    subscribe::{SubscribeEnd, SubscribeEndReason},
-};
+use auki_protocol::v1::{error, message::SpatialMessage, subscribe::SubscribeEndReason};
 use futures::StreamExt as _;
 use libp2p::PeerId;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::Arc,
+    time::Instant,
 };
 use tokio::{
     sync::{Mutex, Notify, mpsc},
@@ -24,7 +22,10 @@ use tokio::{
 };
 
 const SOURCE_READY_BUFFER: usize = 1024;
+const WRITER_EVENT_BUFFER: usize = 1024;
+const SUBSCRIPTION_WRITE_SLOW_THRESHOLD: Duration = Duration::from_millis(50);
 const CONSUMER_END_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const WRITER_CONSUMER_END_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Lightweight counters for the SDK serving loop.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,6 +64,24 @@ pub struct AukiServeRuntimeStatus {
     pub subscriptions_closed_by_producer: u64,
     /// Last runtime failure observed while serving active subscriptions.
     pub last_failure: Option<String>,
+    /// Raw lifecycle streams accepted below the protocol parser.
+    pub raw_inbound_lifecycles: u64,
+    /// Raw offer-catalog streams accepted below the protocol parser.
+    pub raw_inbound_offer_catalogs: u64,
+    /// Raw Get streams accepted below the protocol parser.
+    pub raw_inbound_gets: u64,
+    /// Raw Subscribe streams accepted below the protocol parser.
+    pub raw_inbound_subscribes: u64,
+    /// Raw accept handoff queue full count.
+    pub inbound_accept_queue_full: u64,
+    /// Raw accept handoff queue closed count.
+    pub inbound_accept_queue_closed: u64,
+    /// Streams queued inside the SDK runtime but not yet served.
+    pub pending_inbound_streams: usize,
+    /// Streams in the raw accept handoff queue.
+    pub inbound_accept_queue_depth: usize,
+    /// Subscription writes taking longer than the slow-write threshold.
+    pub subscription_slow_writes: u64,
 }
 
 /// Status for one active runtime-managed published subscription.
@@ -128,8 +147,9 @@ struct ActivePublishedSubscription {
     messages_sent: u64,
     backpressure_policy: AukiSubscriptionBackpressurePolicy,
     source_queue: SharedSourceQueue,
-    subscription: Option<AukiServedSubscription>,
     source_task: JoinHandle<()>,
+    writer_tx: mpsc::Sender<SubscriptionWriterCommand>,
+    closing: bool,
 }
 
 #[derive(Clone)]
@@ -155,9 +175,33 @@ enum QueuedSourceEvent {
 }
 
 enum RuntimePoll {
-    Inbound(Result<Option<AukiServedInbound>, AukiNodeError>),
+    InboundAvailable(Result<bool, AukiNodeError>),
     SourceReady(Option<u64>),
+    WriterEvent(Option<SubscriptionWriterEvent>),
     ConsumerEndTick,
+}
+
+enum SubscriptionWriterCommand {
+    Data(SpatialMessage),
+    End {
+        reason: SubscribeEndReason,
+        error_code: Option<String>,
+        retryable: Option<bool>,
+    },
+}
+
+enum SubscriptionWriterEvent {
+    MessageSent {
+        subscription_id: u64,
+        write_duration: Duration,
+    },
+    Ended {
+        subscription_id: u64,
+        reason: SubscribeEndReason,
+        error_code: Option<String>,
+        retryable: Option<bool>,
+        failure: Option<String>,
+    },
 }
 
 impl AukiServeRuntimeStatus {
@@ -388,12 +432,15 @@ pub struct AukiServeRuntime {
     next_subscription_id: u64,
     ready_tx: mpsc::Sender<u64>,
     ready_rx: mpsc::Receiver<u64>,
+    writer_event_tx: mpsc::Sender<SubscriptionWriterEvent>,
+    writer_event_rx: mpsc::Receiver<SubscriptionWriterEvent>,
 }
 
 impl AukiServeRuntime {
     /// Create a serving runtime around an already configured node.
     pub fn new(node: AukiNode) -> Self {
         let (ready_tx, ready_rx) = mpsc::channel(SOURCE_READY_BUFFER);
+        let (writer_event_tx, writer_event_rx) = mpsc::channel(WRITER_EVENT_BUFFER);
         Self {
             node,
             lifecycle_input: LifecycleInput::new(),
@@ -402,6 +449,8 @@ impl AukiServeRuntime {
             next_subscription_id: 0,
             ready_tx,
             ready_rx,
+            writer_event_tx,
+            writer_event_rx,
         }
     }
 
@@ -455,38 +504,33 @@ impl AukiServeRuntime {
             .copied()
             .collect::<Vec<_>>();
         let mut ended = Vec::new();
-        let mut first_error = None;
 
         for id in ids {
-            let Some(mut active) = self.active_subscriptions.remove(&id) else {
+            let Some(active) = self.active_subscriptions.remove(&id) else {
                 continue;
             };
             let ended_status = active.ended_status(reason, None, None);
-            if let Some(subscription) = active.subscription.take() {
-                if let Err(error) = self
-                    .node
-                    .end_served_subscription(subscription, reason, None, None)
-                    .await
-                {
-                    self.status.subscriptions_failed =
-                        self.status.subscriptions_failed.saturating_add(1);
-                    self.status.last_failure = Some(error.to_string());
-                    if first_error.is_none() {
-                        first_error = Some(error);
-                    }
-                } else {
-                    self.record_subscription_end_reason(reason);
-                }
+            if active
+                .writer_tx
+                .send(SubscriptionWriterCommand::End {
+                    reason,
+                    error_code: None,
+                    retryable: None,
+                })
+                .await
+                .is_err()
+            {
+                self.status.subscriptions_failed =
+                    self.status.subscriptions_failed.saturating_add(1);
+                self.status.last_failure = Some("subscription writer is closed".to_owned());
+            } else {
+                self.record_subscription_end_reason(reason);
             }
             ended.push(ended_status);
         }
 
         self.refresh_active_subscription_count();
-        if let Some(error) = first_error {
-            Err(error)
-        } else {
-            Ok(ended)
-        }
+        Ok(ended)
     }
 
     /// Serve one runtime event without fixed per-protocol timeout sequencing.
@@ -495,40 +539,31 @@ impl AukiServeRuntime {
         now: &str,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
         loop {
-            if let Some(event) = self.poll_consumer_end()? {
-                return Ok(Some(event));
-            }
+            self.refresh_node_diagnostics();
             if self.node.has_pending_inbound_streams() {
-                match self
-                    .node
-                    .serve_next_inbound(self.lifecycle_input.clone(), now)
-                    .await
-                {
-                    Ok(Some(served)) => return self.handle_inbound(served),
-                    Ok(None) => {}
-                    Err(error) if is_duplicate_inbound_lifecycle(&error) => {
-                        self.status.duplicate_lifecycle_attempts =
-                            self.status.duplicate_lifecycle_attempts.saturating_add(1);
-                    }
-                    Err(error) => return Err(error),
+                if let Some(event) = self.serve_available_inbound(now).await? {
+                    return Ok(Some(event));
                 }
             }
-            if let Some(event) = self.poll_inbound_once(now).await? {
+            if let Some(event) = self.poll_writer_event()? {
                 return Ok(Some(event));
             }
             if let Some(event) = self.pop_queued_source_event(now).await? {
                 return Ok(Some(event));
             }
 
-            let lifecycle_input = self.lifecycle_input.clone();
             let has_active_subscriptions = !self.active_subscriptions.is_empty();
             let poll = {
                 let node = &mut self.node;
                 let ready_rx = &mut self.ready_rx;
+                let writer_event_rx = &mut self.writer_event_rx;
                 tokio::select! {
                     biased;
-                    inbound = node.serve_next_inbound(lifecycle_input, now) => {
-                        RuntimePoll::Inbound(inbound)
+                    inbound = node.wait_for_inbound_stream() => {
+                        RuntimePoll::InboundAvailable(inbound)
+                    }
+                    writer_event = writer_event_rx.recv() => {
+                        RuntimePoll::WriterEvent(writer_event)
                     }
                     ready = ready_rx.recv(), if has_active_subscriptions => {
                         RuntimePoll::SourceReady(ready)
@@ -540,13 +575,19 @@ impl AukiServeRuntime {
             };
 
             match poll {
-                RuntimePoll::Inbound(Ok(Some(served))) => return self.handle_inbound(served),
-                RuntimePoll::Inbound(Ok(None)) => return Ok(None),
-                RuntimePoll::Inbound(Err(error)) if is_duplicate_inbound_lifecycle(&error) => {
-                    self.status.duplicate_lifecycle_attempts =
-                        self.status.duplicate_lifecycle_attempts.saturating_add(1);
+                RuntimePoll::InboundAvailable(Ok(true)) => {
+                    if let Some(event) = self.serve_available_inbound(now).await? {
+                        return Ok(Some(event));
+                    }
                 }
-                RuntimePoll::Inbound(Err(error)) => return Err(error),
+                RuntimePoll::InboundAvailable(Ok(false)) => return Ok(None),
+                RuntimePoll::InboundAvailable(Err(error)) => return Err(error),
+                RuntimePoll::WriterEvent(Some(event)) => {
+                    if let Some(event) = self.handle_writer_event(event)? {
+                        return Ok(Some(event));
+                    }
+                }
+                RuntimePoll::WriterEvent(None) => return Ok(None),
                 RuntimePoll::SourceReady(Some(_subscription_id)) => {
                     if let Some(event) = self.pop_queued_source_event(now).await? {
                         return Ok(Some(event));
@@ -558,29 +599,20 @@ impl AukiServeRuntime {
         }
     }
 
-    async fn poll_inbound_once(
+    async fn serve_available_inbound(
         &mut self,
         now: &str,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
         let lifecycle_input = self.lifecycle_input.clone();
-        let inbound = {
-            let node = &mut self.node;
-            tokio::select! {
-                biased;
-                inbound = node.serve_next_inbound(lifecycle_input, now) => Some(inbound),
-                _ = tokio::task::yield_now() => None,
-            }
-        };
-
-        match inbound {
-            Some(Ok(Some(served))) => self.handle_inbound(served),
-            Some(Ok(None)) | None => Ok(None),
-            Some(Err(error)) if is_duplicate_inbound_lifecycle(&error) => {
+        match self.node.serve_next_inbound(lifecycle_input, now).await {
+            Ok(Some(served)) => self.handle_inbound(served),
+            Ok(None) => Ok(None),
+            Err(error) if is_duplicate_inbound_lifecycle(&error) => {
                 self.status.duplicate_lifecycle_attempts =
                     self.status.duplicate_lifecycle_attempts.saturating_add(1);
                 Ok(None)
             }
-            Some(Err(error)) => Err(error),
+            Err(error) => Err(error),
         }
     }
 
@@ -588,6 +620,7 @@ impl AukiServeRuntime {
         &mut self,
         served: AukiServedInbound,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        self.refresh_node_diagnostics();
         self.status.record_inbound(&served);
 
         let AukiServedInbound::Subscribe(served_subscribe) = served else {
@@ -632,6 +665,15 @@ impl AukiServeRuntime {
         let payload_type = subscription.payload_type().to_owned();
         let source_queue = SharedSourceQueue::new(id, self.ready_tx.clone());
         let source_task = spawn_source_task(source, source_queue.clone(), backpressure_policy);
+        let (writer_tx, writer_rx) =
+            mpsc::channel(subscription_writer_command_capacity(backpressure_policy));
+        std::mem::drop(spawn_subscription_writer_task(
+            id,
+            subscription,
+            writer_rx,
+            self.writer_event_tx.clone(),
+            self.node.subscribe_message_frame_body_bytes(),
+        ));
         let active = ActivePublishedSubscription {
             id,
             peer_id,
@@ -641,8 +683,9 @@ impl AukiServeRuntime {
             messages_sent: 0,
             backpressure_policy,
             source_queue,
-            subscription: Some(subscription),
             source_task,
+            writer_tx,
+            closing: false,
         };
         let status = active.status();
         self.active_subscriptions.insert(id, active);
@@ -704,78 +747,46 @@ impl AukiServeRuntime {
         frame: PublishedByteFrame,
         now: &str,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
-        let Some(mut active) = self.active_subscriptions.remove(&subscription_id) else {
+        let Some((domain_id, offer_id, writer_tx, backpressure_policy, closing)) = self
+            .active_subscriptions
+            .get(&subscription_id)
+            .map(|active| {
+                (
+                    active.domain_id.clone(),
+                    active.offer_id.clone(),
+                    active.writer_tx.clone(),
+                    active.backpressure_policy,
+                    active.closing,
+                )
+            })
+        else {
             return Ok(None);
         };
-
-        match consumer_end_event(&mut active) {
-            Ok(Some(event)) => {
-                let ended = active.ended_status(
-                    event.reason,
-                    event.error.as_ref().map(|error| error.code.clone()),
-                    event.retryable,
-                );
-                self.record_subscription_end_reason(event.reason);
-                self.refresh_active_subscription_count();
-                return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-                    ended,
-                )));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.status.subscriptions_failed =
-                    self.status.subscriptions_failed.saturating_add(1);
-                self.status.last_failure = Some(format!("{error:?}"));
-                let ended = active.ended_status(
-                    SubscribeEndReason::Error,
-                    Some(error::TRANSPORT_FAILED.to_owned()),
-                    Some(true),
-                );
-                self.refresh_active_subscription_count();
-                return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-                    ended,
-                )));
-            }
+        if closing {
+            self.status.frames_dropped = self.status.frames_dropped.saturating_add(1);
+            return Ok(None);
         }
 
-        let message =
-            self.node
-                .next_publication_message(&active.domain_id, &active.offer_id, frame, now)?;
-        let send_result = self
+        let message = self
             .node
-            .send_served_subscription_message(
-                active
-                    .subscription
-                    .as_mut()
-                    .expect("active subscription should hold a stream"),
-                &message,
-            )
-            .await;
-        match send_result {
-            Ok(()) => {
-                active.messages_sent = active.messages_sent.saturating_add(1);
-                self.status.frames_sent = self.status.frames_sent.saturating_add(1);
-                let status = active.status();
-                self.active_subscriptions.insert(subscription_id, active);
-                self.refresh_active_subscription_count();
-                Ok(Some(
-                    AukiServeRuntimeEvent::PublishedSubscriptionMessageSent(status),
-                ))
-            }
-            Err(error) => {
-                self.status.subscriptions_failed =
-                    self.status.subscriptions_failed.saturating_add(1);
-                self.status.last_failure = Some(format!("{error:?}"));
-                self.refresh_active_subscription_count();
-                let ended = active.ended_status(
-                    SubscribeEndReason::Error,
-                    Some(error::TRANSPORT_FAILED.to_owned()),
-                    Some(true),
-                );
-                Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-                    ended,
-                )))
-            }
+            .next_publication_message(&domain_id, &offer_id, frame, now)?;
+        match writer_tx.try_send(SubscriptionWriterCommand::Data(message)) {
+            Ok(()) => Ok(None),
+            Err(mpsc::error::TrySendError::Full(_command)) => match backpressure_policy {
+                AukiSubscriptionBackpressurePolicy::LatestOnly => {
+                    self.status.frames_dropped = self.status.frames_dropped.saturating_add(1);
+                    Ok(None)
+                }
+                AukiSubscriptionBackpressurePolicy::Bounded { .. }
+                | AukiSubscriptionBackpressurePolicy::CloseOnFull { .. } => {
+                    self.close_subscription_for_backpressure(subscription_id)
+                }
+            },
+            Err(mpsc::error::TrySendError::Closed(_command)) => self
+                .end_subscription_for_writer_failure(
+                    subscription_id,
+                    "subscription writer is closed".to_owned(),
+                ),
         }
     }
 
@@ -783,101 +794,163 @@ impl AukiServeRuntime {
         &mut self,
         subscription_id: u64,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
-        let Some(mut active) = self.active_subscriptions.remove(&subscription_id) else {
-            return Ok(None);
-        };
-        let ended = active.ended_status(SubscribeEndReason::Complete, None, None);
-        let subscription = active
-            .subscription
-            .take()
-            .expect("active subscription should hold a stream");
-        self.node
-            .end_served_subscription(subscription, SubscribeEndReason::Complete, None, None)
-            .await?;
-        self.record_subscription_end_reason(SubscribeEndReason::Complete);
-        self.refresh_active_subscription_count();
-        Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-            ended,
-        )))
+        self.send_subscription_end_command(
+            subscription_id,
+            SubscribeEndReason::Complete,
+            None,
+            None,
+        )
     }
 
     async fn handle_source_backpressure_close(
         &mut self,
         subscription_id: u64,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
-        let Some(mut active) = self.active_subscriptions.remove(&subscription_id) else {
+        self.close_subscription_for_backpressure(subscription_id)
+    }
+
+    fn poll_writer_event(&mut self) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        match self.writer_event_rx.try_recv() {
+            Ok(event) => self.handle_writer_event(event),
+            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::error::TryRecvError::Disconnected) => Ok(None),
+        }
+    }
+
+    fn handle_writer_event(
+        &mut self,
+        event: SubscriptionWriterEvent,
+    ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        match event {
+            SubscriptionWriterEvent::MessageSent {
+                subscription_id,
+                write_duration,
+            } => {
+                let Some(active) = self.active_subscriptions.get_mut(&subscription_id) else {
+                    return Ok(None);
+                };
+                active.messages_sent = active.messages_sent.saturating_add(1);
+                self.status.frames_sent = self.status.frames_sent.saturating_add(1);
+                if write_duration >= SUBSCRIPTION_WRITE_SLOW_THRESHOLD {
+                    self.status.subscription_slow_writes =
+                        self.status.subscription_slow_writes.saturating_add(1);
+                }
+                Ok(Some(
+                    AukiServeRuntimeEvent::PublishedSubscriptionMessageSent(active.status()),
+                ))
+            }
+            SubscriptionWriterEvent::Ended {
+                subscription_id,
+                reason,
+                error_code,
+                retryable,
+                failure,
+            } => {
+                let Some(active) = self.active_subscriptions.remove(&subscription_id) else {
+                    return Ok(None);
+                };
+                if let Some(failure) = failure {
+                    self.status.subscriptions_failed =
+                        self.status.subscriptions_failed.saturating_add(1);
+                    self.status.last_failure = Some(failure);
+                } else {
+                    self.record_subscription_end_reason(reason);
+                }
+                let ended = active.ended_status(reason, error_code, retryable);
+                self.refresh_active_subscription_count();
+                Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
+                    ended,
+                )))
+            }
+        }
+    }
+
+    fn send_subscription_end_command(
+        &mut self,
+        subscription_id: u64,
+        reason: SubscribeEndReason,
+        error_code: Option<String>,
+        retryable: Option<bool>,
+    ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        let Some(writer_tx) = self
+            .active_subscriptions
+            .get_mut(&subscription_id)
+            .and_then(|active| {
+                if active.closing {
+                    return None;
+                }
+                active.closing = true;
+                Some(active.writer_tx.clone())
+            })
+        else {
             return Ok(None);
         };
-        let ended = active.ended_status(
-            SubscribeEndReason::Error,
-            Some(error::SUBSCRIBE_BACKPRESSURE.to_owned()),
-            Some(true),
-        );
-        let subscription = active
-            .subscription
-            .take()
-            .expect("active subscription should hold a stream");
-        self.node
-            .end_served_subscription(
-                subscription,
-                SubscribeEndReason::Error,
-                Some(error::SUBSCRIBE_BACKPRESSURE.to_owned()),
-                Some(true),
-            )
-            .await?;
+        match writer_tx.try_send(SubscriptionWriterCommand::End {
+            reason,
+            error_code: error_code.clone(),
+            retryable,
+        }) {
+            Ok(()) => Ok(None),
+            Err(mpsc::error::TrySendError::Full(_command)) => self
+                .end_subscription_for_writer_failure(
+                    subscription_id,
+                    "subscription writer command queue is full".to_owned(),
+                ),
+            Err(mpsc::error::TrySendError::Closed(_command)) => self
+                .end_subscription_for_writer_failure(
+                    subscription_id,
+                    "subscription writer is closed".to_owned(),
+                ),
+        }
+    }
+
+    fn close_subscription_for_backpressure(
+        &mut self,
+        subscription_id: u64,
+    ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
         self.status.subscriptions_closed_for_backpressure = self
             .status
             .subscriptions_closed_for_backpressure
             .saturating_add(1);
+        self.send_subscription_end_command(
+            subscription_id,
+            SubscribeEndReason::Error,
+            Some(error::SUBSCRIBE_BACKPRESSURE.to_owned()),
+            Some(true),
+        )
+    }
+
+    fn end_subscription_for_writer_failure(
+        &mut self,
+        subscription_id: u64,
+        failure: String,
+    ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
+        let Some(active) = self.active_subscriptions.remove(&subscription_id) else {
+            return Ok(None);
+        };
+        self.status.subscriptions_failed = self.status.subscriptions_failed.saturating_add(1);
+        self.status.last_failure = Some(failure);
+        let ended = active.ended_status(
+            SubscribeEndReason::Error,
+            Some(error::TRANSPORT_FAILED.to_owned()),
+            Some(true),
+        );
         self.refresh_active_subscription_count();
         Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
             ended,
         )))
     }
 
-    fn poll_consumer_end(&mut self) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
-        let ids = self
-            .active_subscriptions
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        for id in ids {
-            let Some(mut active) = self.active_subscriptions.remove(&id) else {
-                continue;
-            };
-            match consumer_end_event(&mut active) {
-                Ok(Some(end)) => {
-                    let ended = active.ended_status(
-                        end.reason,
-                        end.error.as_ref().map(|error| error.code.clone()),
-                        end.retryable,
-                    );
-                    self.record_subscription_end_reason(end.reason);
-                    self.refresh_active_subscription_count();
-                    return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-                        ended,
-                    )));
-                }
-                Ok(None) => {
-                    self.active_subscriptions.insert(id, active);
-                }
-                Err(error) => {
-                    self.status.subscriptions_failed =
-                        self.status.subscriptions_failed.saturating_add(1);
-                    self.status.last_failure = Some(format!("{error:?}"));
-                    let ended = active.ended_status(
-                        SubscribeEndReason::Error,
-                        Some(error::TRANSPORT_FAILED.to_owned()),
-                        Some(true),
-                    );
-                    self.refresh_active_subscription_count();
-                    return Ok(Some(AukiServeRuntimeEvent::PublishedSubscriptionEnded(
-                        ended,
-                    )));
-                }
-            }
-        }
-        Ok(None)
+    fn refresh_node_diagnostics(&mut self) {
+        let diagnostics = self.node.inbound_accept_diagnostics();
+        self.status.raw_inbound_lifecycles = diagnostics.raw_lifecycles;
+        self.status.raw_inbound_offer_catalogs = diagnostics.raw_offer_catalogs;
+        self.status.raw_inbound_gets = diagnostics.raw_gets;
+        self.status.raw_inbound_subscribes = diagnostics.raw_subscribes;
+        self.status.inbound_accept_queue_full = diagnostics.accept_queue_full;
+        self.status.inbound_accept_queue_closed = diagnostics.accept_queue_closed;
+        self.status.pending_inbound_streams = diagnostics.pending_inbound_streams;
+        self.status.inbound_accept_queue_depth = diagnostics.inbound_accept_queue_depth;
     }
 
     fn allocate_subscription_id(&mut self) -> u64 {
@@ -916,16 +989,6 @@ impl AukiServeRuntime {
     }
 }
 
-fn consumer_end_event(
-    active: &mut ActivePublishedSubscription,
-) -> Result<Option<SubscribeEnd>, crate::SubscribeServeError> {
-    active
-        .subscription
-        .as_mut()
-        .expect("active subscription should hold a stream")
-        .try_consumer_end()
-}
-
 fn is_duplicate_inbound_lifecycle(error: &AukiNodeError) -> bool {
     matches!(
         error,
@@ -954,6 +1017,143 @@ fn spawn_source_task(
             .push(backpressure_policy, QueuedSourceEvent::Complete)
             .await;
     })
+}
+
+fn subscription_writer_command_capacity(policy: AukiSubscriptionBackpressurePolicy) -> usize {
+    match policy {
+        AukiSubscriptionBackpressurePolicy::LatestOnly => 1,
+        AukiSubscriptionBackpressurePolicy::Bounded { capacity }
+        | AukiSubscriptionBackpressurePolicy::CloseOnFull { capacity } => capacity.max(1),
+    }
+}
+
+fn spawn_subscription_writer_task(
+    subscription_id: u64,
+    mut subscription: AukiServedSubscription,
+    mut command_rx: mpsc::Receiver<SubscriptionWriterCommand>,
+    event_tx: mpsc::Sender<SubscriptionWriterEvent>,
+    max_body_len: u64,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut consumer_tick = tokio::time::interval(WRITER_CONSUMER_END_POLL_INTERVAL);
+        consumer_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = consumer_tick.tick() => {
+                    if emit_consumer_end_if_ready(subscription_id, &mut subscription, &event_tx).await {
+                        return;
+                    }
+                }
+                command = command_rx.recv() => {
+                    let Some(command) = command else {
+                        return;
+                    };
+                    if emit_consumer_end_if_ready(subscription_id, &mut subscription, &event_tx).await {
+                        return;
+                    }
+                    match command {
+                        SubscriptionWriterCommand::Data(message) => {
+                            let frame = match subscription.encode_data_frame(&message, max_body_len) {
+                                Ok(frame) => frame,
+                                Err(error) => {
+                                    emit_writer_failure(subscription_id, error.to_string(), &event_tx).await;
+                                    return;
+                                }
+                            };
+                            let started = Instant::now();
+                            match subscription.write_encoded_data_frame(&frame).await {
+                                Ok(()) => {
+                                    let _ = event_tx
+                                        .send(SubscriptionWriterEvent::MessageSent {
+                                            subscription_id,
+                                            write_duration: started.elapsed(),
+                                        })
+                                        .await;
+                                }
+                                Err(error) => {
+                                    emit_writer_failure(subscription_id, error.to_string(), &event_tx).await;
+                                    return;
+                                }
+                            }
+                        }
+                        SubscriptionWriterCommand::End {
+                            reason,
+                            error_code,
+                            retryable,
+                        } => {
+                            let failure = subscription
+                                .write_end_frame(reason, error_code.clone(), retryable, max_body_len)
+                                .await
+                                .err()
+                                .map(|error| error.to_string());
+                            let (reason, error_code, retryable) = if failure.is_some() {
+                                (
+                                    SubscribeEndReason::Error,
+                                    Some(error::TRANSPORT_FAILED.to_owned()),
+                                    Some(true),
+                                )
+                            } else {
+                                (reason, error_code, retryable)
+                            };
+                            let _ = event_tx
+                                .send(SubscriptionWriterEvent::Ended {
+                                    subscription_id,
+                                    reason,
+                                    error_code,
+                                    retryable,
+                                    failure,
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+async fn emit_consumer_end_if_ready(
+    subscription_id: u64,
+    subscription: &mut AukiServedSubscription,
+    event_tx: &mpsc::Sender<SubscriptionWriterEvent>,
+) -> bool {
+    match subscription.try_consumer_end() {
+        Ok(Some(end)) => {
+            let _ = event_tx
+                .send(SubscriptionWriterEvent::Ended {
+                    subscription_id,
+                    reason: end.reason,
+                    error_code: end.error.map(|error| error.code),
+                    retryable: end.retryable,
+                    failure: None,
+                })
+                .await;
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            emit_writer_failure(subscription_id, error.to_string(), event_tx).await;
+            true
+        }
+    }
+}
+
+async fn emit_writer_failure(
+    subscription_id: u64,
+    failure: String,
+    event_tx: &mpsc::Sender<SubscriptionWriterEvent>,
+) {
+    let _ = event_tx
+        .send(SubscriptionWriterEvent::Ended {
+            subscription_id,
+            reason: SubscribeEndReason::Error,
+            error_code: Some(error::TRANSPORT_FAILED.to_owned()),
+            retryable: Some(true),
+            failure: Some(failure),
+        })
+        .await;
 }
 
 #[cfg(test)]

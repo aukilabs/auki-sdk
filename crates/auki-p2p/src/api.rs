@@ -48,6 +48,10 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
     future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{
@@ -71,6 +75,7 @@ pub struct AukiNode {
     subscribe_accept_task: Option<JoinHandle<()>>,
     inbound_accept_tx: mpsc::Sender<AcceptedInboundStream>,
     inbound_accept_rx: mpsc::Receiver<AcceptedInboundStream>,
+    inbound_accept_diagnostics: Arc<InboundAcceptDiagnostics>,
     get_providers: BTreeMap<(String, String), Box<dyn AukiGetProvider>>,
     subscribe_providers: BTreeMap<(String, String), Box<dyn AukiSubscribeProvider>>,
     local_publications: BTreeMap<(String, String), LocalOfferPublication>,
@@ -92,6 +97,37 @@ enum AcceptedInboundKind {
     Subscribe,
 }
 
+#[derive(Debug, Default)]
+struct InboundAcceptDiagnostics {
+    raw_lifecycles: AtomicU64,
+    raw_offer_catalogs: AtomicU64,
+    raw_gets: AtomicU64,
+    raw_subscribes: AtomicU64,
+    accept_queue_full: AtomicU64,
+    accept_queue_closed: AtomicU64,
+}
+
+/// Low-level inbound stream accept counters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AukiInboundAcceptDiagnostics {
+    /// Raw lifecycle streams yielded by `libp2p_stream` before request parsing.
+    pub raw_lifecycles: u64,
+    /// Raw offer-catalog streams yielded by `libp2p_stream` before request parsing.
+    pub raw_offer_catalogs: u64,
+    /// Raw Get streams yielded by `libp2p_stream` before request parsing.
+    pub raw_gets: u64,
+    /// Raw Subscribe streams yielded by `libp2p_stream` before request parsing.
+    pub raw_subscribes: u64,
+    /// Raw accepted streams that found the SDK accept queue full.
+    pub accept_queue_full: u64,
+    /// Raw accepted streams dropped because the SDK accept queue was closed.
+    pub accept_queue_closed: u64,
+    /// Streams queued inside the SDK runtime but not yet served.
+    pub pending_inbound_streams: usize,
+    /// Streams in the raw accept handoff queue.
+    pub inbound_accept_queue_depth: usize,
+}
+
 impl AcceptedInboundStream {
     fn kind(&self) -> AcceptedInboundKind {
         match self {
@@ -99,6 +135,54 @@ impl AcceptedInboundStream {
             Self::OfferCatalog(_, _) => AcceptedInboundKind::OfferCatalog,
             Self::Get(_, _) => AcceptedInboundKind::Get,
             Self::Subscribe(_, _) => AcceptedInboundKind::Subscribe,
+        }
+    }
+}
+
+impl AcceptedInboundKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Lifecycle => "lifecycle",
+            Self::OfferCatalog => "offer_catalog",
+            Self::Get => "get",
+            Self::Subscribe => "subscribe",
+        }
+    }
+}
+
+impl InboundAcceptDiagnostics {
+    fn record_raw(&self, kind: AcceptedInboundKind) {
+        match kind {
+            AcceptedInboundKind::Lifecycle => &self.raw_lifecycles,
+            AcceptedInboundKind::OfferCatalog => &self.raw_offer_catalogs,
+            AcceptedInboundKind::Get => &self.raw_gets,
+            AcceptedInboundKind::Subscribe => &self.raw_subscribes,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_queue_full(&self) {
+        self.accept_queue_full.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_queue_closed(&self) {
+        self.accept_queue_closed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn snapshot(
+        &self,
+        pending_inbound_streams: usize,
+        inbound_accept_queue_depth: usize,
+    ) -> AukiInboundAcceptDiagnostics {
+        AukiInboundAcceptDiagnostics {
+            raw_lifecycles: self.raw_lifecycles.load(Ordering::Relaxed),
+            raw_offer_catalogs: self.raw_offer_catalogs.load(Ordering::Relaxed),
+            raw_gets: self.raw_gets.load(Ordering::Relaxed),
+            raw_subscribes: self.raw_subscribes.load(Ordering::Relaxed),
+            accept_queue_full: self.accept_queue_full.load(Ordering::Relaxed),
+            accept_queue_closed: self.accept_queue_closed.load(Ordering::Relaxed),
+            pending_inbound_streams,
+            inbound_accept_queue_depth,
         }
     }
 }
@@ -123,9 +207,12 @@ fn spawn_inbound_accept_task(
     mut incoming: libp2p_stream::IncomingStreams,
     kind: AcceptedInboundKind,
     accepted_tx: mpsc::Sender<AcceptedInboundStream>,
+    diagnostics: Arc<InboundAcceptDiagnostics>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some((peer_id, stream)) = incoming.next().await {
+            diagnostics.record_raw(kind);
+            tracing::trace!(protocol = kind.label(), %peer_id, "accepted raw inbound stream");
             let accepted = match kind {
                 AcceptedInboundKind::Lifecycle => AcceptedInboundStream::Lifecycle(peer_id, stream),
                 AcceptedInboundKind::OfferCatalog => {
@@ -134,8 +221,23 @@ fn spawn_inbound_accept_task(
                 AcceptedInboundKind::Get => AcceptedInboundStream::Get(peer_id, stream),
                 AcceptedInboundKind::Subscribe => AcceptedInboundStream::Subscribe(peer_id, stream),
             };
-            if accepted_tx.send(accepted).await.is_err() {
-                break;
+            match accepted_tx.try_send(accepted) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(accepted)) => {
+                    diagnostics.record_queue_full();
+                    tracing::debug!(
+                        protocol = kind.label(),
+                        "raw inbound accept handoff queue full"
+                    );
+                    if accepted_tx.send(accepted).await.is_err() {
+                        diagnostics.record_queue_closed();
+                        break;
+                    }
+                }
+                Err(mpsc::error::TrySendError::Closed(_accepted)) => {
+                    diagnostics.record_queue_closed();
+                    break;
+                }
             }
         }
     })
@@ -620,6 +722,56 @@ impl AukiServedSubscription {
         self.max_message_bytes
     }
 
+    pub(crate) fn encode_data_frame(
+        &self,
+        message: &SpatialMessage,
+        max_body_len: u64,
+    ) -> Result<crate::EncodedSubscribeFrame, SubscribeServeError> {
+        let frame = encode_subscribe_data_frame(message, max_body_len)?;
+        self.accept
+            .validate_data_message_with_body_len(message, frame.body_len(), self.max_message_bytes)
+            .map_err(SubscribeServeError::Data)?;
+        Ok(frame)
+    }
+
+    pub(crate) async fn write_encoded_data_frame(
+        &mut self,
+        frame: &crate::EncodedSubscribeFrame,
+    ) -> Result<(), SubscribeServeError> {
+        if self.ended {
+            return Err(SubscribeServeError::AlreadyEnded);
+        }
+        write_encoded_subscribe_frame(&mut self.stream, frame).await
+    }
+
+    pub(crate) async fn write_end_frame(
+        &mut self,
+        reason: SubscribeEndReason,
+        error_code: Option<String>,
+        retryable: Option<bool>,
+        max_body_len: u64,
+    ) -> Result<(), SubscribeServeError> {
+        if self.ended {
+            return Err(SubscribeServeError::AlreadyEnded);
+        }
+
+        let error = error_code.map(ErrorObject::create);
+        let end = SubscribeEnd::create(
+            self.domain_id(),
+            self.offer_id(),
+            reason,
+            error,
+            retryable,
+            None,
+        )
+        .map_err(SubscribeServeError::End)?;
+        end.validate_for_offer(self.domain_id(), self.offer_id())
+            .map_err(SubscribeServeError::End)?;
+        write_subscribe_end(&mut self.stream, &end, max_body_len).await?;
+        self.ended = true;
+        Ok(())
+    }
+
     /// Return a consumer-sent SubscribeEnd frame, if one has arrived.
     pub fn try_consumer_end(&mut self) -> Result<Option<SubscribeEnd>, SubscribeServeError> {
         if self.ended {
@@ -818,6 +970,7 @@ impl AukiNode {
     ) -> Result<Self, AukiNodeError> {
         let node = AukiP2pNode::new(identity, config).map_err(AukiNodeError::from)?;
         let (inbound_accept_tx, inbound_accept_rx) = mpsc::channel(INBOUND_ACCEPT_BUFFER);
+        let inbound_accept_diagnostics = Arc::new(InboundAcceptDiagnostics::default());
         let mut this = Self {
             node,
             local_domains: BTreeMap::new(),
@@ -831,6 +984,7 @@ impl AukiNode {
             subscribe_accept_task: None,
             inbound_accept_tx,
             inbound_accept_rx,
+            inbound_accept_diagnostics,
             get_providers: BTreeMap::new(),
             subscribe_providers: BTreeMap::new(),
             local_publications: BTreeMap::new(),
@@ -889,6 +1043,20 @@ impl AukiNode {
     /// Configured local bind addresses.
     pub fn configured_listen_addresses(&self) -> &[Multiaddr] {
         self.node.configured_listen_addresses()
+    }
+
+    /// Snapshot low-level inbound stream accept diagnostics.
+    pub fn inbound_accept_diagnostics(&self) -> AukiInboundAcceptDiagnostics {
+        self.inbound_accept_diagnostics
+            .snapshot(self.pending_inbound.len(), self.inbound_accept_rx.len())
+    }
+
+    pub(crate) fn subscribe_message_frame_body_bytes(&self) -> u64 {
+        self.node
+            .config()
+            .p2p
+            .limits
+            .subscribe_message_frame_body_bytes
     }
 
     /// Listen addresses observed from libp2p after binding.
@@ -1820,6 +1988,7 @@ impl AukiNode {
             incoming,
             AcceptedInboundKind::Get,
             self.inbound_accept_tx.clone(),
+            Arc::clone(&self.inbound_accept_diagnostics),
         ));
         Ok(())
     }
@@ -1836,6 +2005,7 @@ impl AukiNode {
             incoming,
             AcceptedInboundKind::Lifecycle,
             self.inbound_accept_tx.clone(),
+            Arc::clone(&self.inbound_accept_diagnostics),
         ));
         Ok(())
     }
@@ -1852,6 +2022,7 @@ impl AukiNode {
             incoming,
             AcceptedInboundKind::OfferCatalog,
             self.inbound_accept_tx.clone(),
+            Arc::clone(&self.inbound_accept_diagnostics),
         ));
         Ok(())
     }
@@ -1868,6 +2039,7 @@ impl AukiNode {
             incoming,
             AcceptedInboundKind::Subscribe,
             self.inbound_accept_tx.clone(),
+            Arc::clone(&self.inbound_accept_diagnostics),
         ));
         Ok(())
     }
@@ -1918,6 +2090,17 @@ impl AukiNode {
 
     pub(crate) fn has_pending_inbound_streams(&self) -> bool {
         !self.pending_inbound.is_empty() || !self.inbound_accept_rx.is_empty()
+    }
+
+    pub(crate) async fn wait_for_inbound_stream(&mut self) -> Result<bool, AukiNodeError> {
+        if !self.pending_inbound.is_empty() {
+            return Ok(true);
+        }
+        let Some(accepted) = self.accept_live_inbound_stream().await? else {
+            return Ok(false);
+        };
+        self.pending_inbound.push_back(accepted);
+        Ok(true)
     }
 
     async fn accept_live_inbound_stream(
@@ -4659,6 +4842,166 @@ mod tests {
         assert!(status.subscriptions_accepted >= expected_subscriptions);
         assert!(status.frames_sent >= expected_subscriptions);
         assert!(final_status.subscriptions_accepted >= expected_subscriptions);
+    }
+
+    #[tokio::test]
+    async fn serve_runtime_serves_burst_gets_over_websocket_while_subscription_streams() {
+        let listener_wallet = wallet(140);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[24; DOMAIN_NONCE_LEN],
+            Some("runtime-websocket-burst-get"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut subscriber =
+            AukiNode::new(identity(141), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut getter =
+            AukiNode::new(identity(142), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_relay_server_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        let source = crate::LatestPublishedByteSource::new();
+        assert!(source.publish(PublishedByteFrame::new(vec![0]).with_sequence(0)));
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .publish_offer(
+                PublishOfferInput::new(
+                    domain_id.clone(),
+                    "camera-main",
+                    "frame",
+                    PayloadDescriptor::create("auki.frame"),
+                    source.clone(),
+                )
+                .with_access_modes(vec![OfferAccessMode::Get, OfferAccessMode::Subscribe])
+                .with_backpressure_policy(crate::AukiSubscriptionBackpressurePolicy::LatestOnly),
+            )
+            .expect("publish offer");
+        let get_domain_id = domain_id.clone();
+        listener
+            .upsert_get_provider(
+                domain_id.clone(),
+                "camera-main",
+                move |_request: &GetRequest, _now: &str| {
+                    Ok(message(&get_domain_id, "camera-main", 88))
+                },
+            )
+            .expect("get provider");
+
+        let producer_source = source.clone();
+        let producer = tokio::spawn(async move {
+            let mut sequence = 1_u64;
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                if !producer_source
+                    .publish(PublishedByteFrame::new(vec![1]).with_sequence(sequence))
+                {
+                    return;
+                }
+                sequence = sequence.saturating_add(1);
+            }
+        });
+
+        let expected_gets = 10_u64;
+        let (served_tx, served_rx) = tokio::sync::oneshot::channel();
+        let (server_stop_tx, mut server_stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut runtime = AukiServeRuntime::new(listener);
+            let mut served_tx = Some(served_tx);
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    tokio::select! {
+                        _ = &mut server_stop_rx, if served_tx.is_none() => break,
+                        result = runtime.serve_next(ISSUED_AT) => {
+                            result.expect("serve next runtime event");
+                            if runtime.status().gets_served >= expected_gets
+                                && let Some(tx) = served_tx.take()
+                            {
+                                tx.send(runtime.status().clone())
+                                    .expect("send runtime status");
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("runtime should serve websocket burst gets while subscription is active");
+
+            runtime.status().clone()
+        });
+
+        subscriber
+            .upsert_configured_peer(listener_peer.clone())
+            .expect("subscriber configured peer");
+        subscriber
+            .dial_configured_peer(listener_peer_id)
+            .expect("subscriber dials listener");
+        wait_for_peer_connected(&mut subscriber, listener_peer_id).await;
+        subscriber.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        let mut subscription = timeout(
+            Duration::from_secs(5),
+            subscriber.subscribe(
+                listener_peer_id,
+                SubscribeInput::new(domain_id.clone(), "camera-main"),
+                ISSUED_AT,
+            ),
+        )
+        .await
+        .expect("subscribe should not time out")
+        .expect("subscribe should start");
+        subscriber
+            .next_subscription_message(&mut subscription, "2026-05-26T12:01:00Z")
+            .await
+            .expect("first subscription message");
+
+        getter
+            .upsert_configured_peer(listener_peer)
+            .expect("getter configured peer");
+        getter
+            .dial_configured_peer(listener_peer_id)
+            .expect("getter dials listener");
+        wait_for_peer_connected(&mut getter, listener_peer_id).await;
+        getter.upsert_remote_offer_report(offer_report(listener_peer_id, &domain_id));
+
+        for index in 0..expected_gets {
+            let result = timeout(
+                Duration::from_secs(5),
+                getter.get(
+                    listener_peer_id,
+                    GetInput::new(domain_id.clone(), "camera-main"),
+                    ISSUED_AT,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("websocket get {index} should not time out"));
+            let outcome = result
+                .unwrap_or_else(|error| panic!("websocket get {index} should succeed: {error:?}"));
+            assert_eq!(outcome.message.sequence, Some(88));
+        }
+
+        let status = served_rx.await.expect("runtime status");
+        let _ = server_stop_tx.send(());
+        let final_status = server.await.expect("server task");
+        source.close();
+        producer.abort();
+        drop(subscription);
+
+        assert!(status.gets_served >= expected_gets);
+        assert!(status.raw_inbound_gets >= expected_gets);
+        assert!(final_status.gets_served >= expected_gets);
     }
 
     #[tokio::test]

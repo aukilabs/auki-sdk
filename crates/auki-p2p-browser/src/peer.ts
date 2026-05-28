@@ -100,6 +100,32 @@ export type AukiBrowserSubscription = {
   stop(): Promise<void>;
 };
 
+export type AukiBrowserPeerTraceEvent = {
+  at: string;
+  operation: "get" | "subscribe";
+  phase:
+    | "dialing"
+    | "opened"
+    | "request_sent"
+    | "response_received"
+    | "start_received"
+    | "accepted"
+    | "completed"
+    | "stream_closed"
+    | "retrying"
+    | "failed";
+  peerId: string;
+  protocol: string;
+  attempt: number;
+  domainId?: string;
+  offerId?: string;
+  error?: string;
+  retryable?: boolean;
+  nextAttempt?: number;
+};
+
+export type AukiBrowserPeerTraceSink = (event: AukiBrowserPeerTraceEvent) => void;
+
 export type AukiBrowserPeerConfig = {
   seed?: Uint8Array;
   seedStore?: SeedStore;
@@ -107,6 +133,7 @@ export type AukiBrowserPeerConfig = {
   transport?: BrowserTransport;
   bootstrap?: unknown;
   label?: string;
+  trace?: AukiBrowserPeerTraceSink;
 };
 
 export interface AukiBrowserPeer {
@@ -146,7 +173,14 @@ export async function createAukiBrowserPeer(
     throw new Error(`Browser transport peer id ${transport.peerId} does not match expected ${peerId}`);
   }
   await initializeProtocolWasm(config.protocolWasm);
-  return new DefaultAukiBrowserPeer(peerId, transport, config.bootstrap, seed, config.label);
+  return new DefaultAukiBrowserPeer(
+    peerId,
+    transport,
+    config.bootstrap,
+    seed,
+    config.label,
+    config.trace,
+  );
 }
 
 const LIFECYCLE_PROTOCOL_ID = "/auki/cluster-lifecycle/0.0.1";
@@ -174,6 +208,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     bootstrap: unknown,
     private readonly walletSeed?: Uint8Array,
     private readonly label?: string,
+    private readonly trace?: AukiBrowserPeerTraceSink,
   ) {
     if (bootstrap) {
       this.rememberBootstrap(parseBootstrapRecord(bootstrap));
@@ -242,8 +277,29 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       request.maxPayloadBytes,
     );
 
-    return withRetry(GET_CLIENT_RETRY_ATTEMPTS, undefined, () =>
-      this.getOnce(peer, getRequest, selectedPayloadType),
+    return withRetry(
+      GET_CLIENT_RETRY_ATTEMPTS,
+      undefined,
+      (attempt) =>
+        this.getOnce(peer, getRequest, selectedPayloadType, {
+          attempt,
+          domainId: request.domainId,
+          offerId: request.offerId,
+        }),
+      {
+        onRetry: (error, attempt, nextAttempt) =>
+          this.traceClientRetry("get", peer.peerId, GET_PROTOCOL_ID, request, {
+            error,
+            attempt,
+            nextAttempt,
+          }),
+        onFailed: (error, attempt, retryable) =>
+          this.traceClientFailure("get", peer.peerId, GET_PROTOCOL_ID, request, {
+            error,
+            attempt,
+            retryable,
+          }),
+      },
     );
   }
 
@@ -251,21 +307,48 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     peer: PeerSummary,
     getRequest: JsonObject,
     selectedPayloadType: string,
+    trace: {
+      attempt: number;
+      domainId: string;
+      offerId: string;
+    },
   ): Promise<SpatialMessage> {
-    const stream = await this.transport.dialProtocol(
-      peer.peerId,
-      peer.dialAddresses,
-      GET_PROTOCOL_ID,
-    );
-    const reader = new JsonFrameReader(stream);
+    const base = {
+      operation: "get" as const,
+      peerId: peer.peerId,
+      protocol: GET_PROTOCOL_ID,
+      attempt: trace.attempt,
+      domainId: trace.domainId,
+      offerId: trace.offerId,
+    };
+    this.emitTrace({ ...base, phase: "dialing" });
+    let stream: BrowserProtocolStream | undefined;
 
     try {
+      stream = await this.transport.dialProtocol(
+        peer.peerId,
+        peer.dialAddresses,
+        GET_PROTOCOL_ID,
+      );
+      this.emitTrace({ ...base, phase: "opened" });
+      const reader = new JsonFrameReader(stream);
       await writeJsonFrame(stream, getRequest, DEFAULT_FRAME_BODY_LIMIT);
+      this.emitTrace({ ...base, phase: "request_sent" });
       const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      this.emitTrace({ ...base, phase: "response_received" });
       const response = await parseGetResponse(frame.value);
-      return await validateGetResponseForRequest(getRequest, response, selectedPayloadType);
+      const message = await validateGetResponseForRequest(
+        getRequest,
+        response,
+        selectedPayloadType,
+      );
+      this.emitTrace({ ...base, phase: "completed" });
+      return message;
     } finally {
-      await closeStreamQuietly(stream);
+      if (stream) {
+        await closeStreamQuietly(stream);
+        this.emitTrace({ ...base, phase: "stream_closed" });
+      }
     }
   }
 
@@ -289,8 +372,24 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       request.acceptedPayloadTypes ?? [],
       request.maxMessageBytes,
     );
-    return withRetry(SUBSCRIBE_CLIENT_RETRY_ATTEMPTS, request.signal, () =>
-      this.openSubscriptionOnce(peer, request, subscribeRequest),
+    return withRetry(
+      SUBSCRIBE_CLIENT_RETRY_ATTEMPTS,
+      request.signal,
+      (attempt) => this.openSubscriptionOnce(peer, request, subscribeRequest, attempt),
+      {
+        onRetry: (error, attempt, nextAttempt) =>
+          this.traceClientRetry("subscribe", peer.peerId, SUBSCRIBE_PROTOCOL_ID, request, {
+            error,
+            attempt,
+            nextAttempt,
+          }),
+        onFailed: (error, attempt, retryable) =>
+          this.traceClientFailure("subscribe", peer.peerId, SUBSCRIBE_PROTOCOL_ID, request, {
+            error,
+            attempt,
+            retryable,
+          }),
+      },
     );
   }
 
@@ -298,12 +397,23 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     peer: PeerSummary,
     request: SubscribeRequest,
     subscribeRequest: JsonObject,
+    attempt: number,
   ): Promise<AukiBrowserSubscription> {
+    const base = {
+      operation: "subscribe" as const,
+      peerId: peer.peerId,
+      protocol: SUBSCRIBE_PROTOCOL_ID,
+      attempt,
+      domainId: request.domainId,
+      offerId: request.offerId,
+    };
+    this.emitTrace({ ...base, phase: "dialing" });
     const stream = await this.transport.dialProtocol(
       peer.peerId,
       peer.dialAddresses,
       SUBSCRIBE_PROTOCOL_ID,
     );
+    this.emitTrace({ ...base, phase: "opened" });
     const cleanupAbort = bindStreamAbort(request.signal, stream);
     const reader = new JsonFrameReader(stream);
 
@@ -314,9 +424,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       await writeJsonFrame(stream, subscribeRequest, DEFAULT_FRAME_BODY_LIMIT, {
         signal: request.signal,
       });
+      this.emitTrace({ ...base, phase: "request_sent" });
       const startFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT, {
         signal: request.signal,
       });
+      this.emitTrace({ ...base, phase: "start_received" });
       const startResult = await parseSubscribeStartResult(startFrame.value);
       const startValidation = await validateSubscribeStartForRequest(
         subscribeRequest,
@@ -328,6 +440,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       }
 
       cleanupAbort();
+      this.emitTrace({ ...base, phase: "accepted" });
       return new DefaultAukiBrowserSubscription(
         stream,
         reader,
@@ -338,6 +451,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     } catch (error) {
       cleanupAbort();
       await closeStreamQuietly(stream);
+      this.emitTrace({ ...base, phase: "stream_closed" });
       throw error;
     }
   }
@@ -756,6 +870,69 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         return summary;
       });
   }
+
+  private traceClientRetry(
+    operation: "get" | "subscribe",
+    peerId: string,
+    protocol: string,
+    request: GetRequest | SubscribeRequest,
+    retry: {
+      error: unknown;
+      attempt: number;
+      nextAttempt: number;
+    },
+  ): void {
+    this.emitTrace({
+      operation,
+      phase: "retrying",
+      peerId,
+      protocol,
+      attempt: retry.attempt,
+      domainId: request.domainId,
+      offerId: request.offerId,
+      error: errorMessage(retry.error),
+      retryable: true,
+      nextAttempt: retry.nextAttempt,
+    });
+  }
+
+  private traceClientFailure(
+    operation: "get" | "subscribe",
+    peerId: string,
+    protocol: string,
+    request: GetRequest | SubscribeRequest,
+    failure: {
+      error: unknown;
+      attempt: number;
+      retryable: boolean;
+    },
+  ): void {
+    this.emitTrace({
+      operation,
+      phase: "failed",
+      peerId,
+      protocol,
+      attempt: failure.attempt,
+      domainId: request.domainId,
+      offerId: request.offerId,
+      error: errorMessage(failure.error),
+      retryable: failure.retryable,
+    });
+  }
+
+  private emitTrace(event: Omit<AukiBrowserPeerTraceEvent, "at">): void {
+    if (!this.trace) {
+      return;
+    }
+    try {
+      this.trace({
+        at: new Date().toISOString(),
+        ...event,
+      });
+    } catch {
+      // Trace callbacks must not affect protocol behavior.
+    }
+  }
 }
 
 class DefaultAukiBrowserSubscription implements AukiBrowserSubscription {
@@ -956,20 +1133,27 @@ function abortReason(signal: AbortSignal): Error {
 async function withRetry<T>(
   retryAttempts: number,
   signal: AbortSignal | undefined,
-  operation: () => Promise<T>,
+  operation: (attempt: number) => Promise<T>,
+  hooks: {
+    onRetry?: (error: unknown, attempt: number, nextAttempt: number) => void;
+    onFailed?: (error: unknown, attempt: number, retryable: boolean) => void;
+  } = {},
 ): Promise<T> {
-  let attempts = 0;
+  let attempt = 1;
   for (;;) {
     try {
-      return await operation();
+      return await operation(attempt);
     } catch (error) {
       if (signal?.aborted) {
         throw abortReason(signal);
       }
-      if (attempts >= retryAttempts || !isRetryableTransportError(error)) {
+      const retryable = isRetryableTransportError(error);
+      if (attempt > retryAttempts || !retryable) {
+        hooks.onFailed?.(error, attempt, retryable);
         throw error;
       }
-      attempts += 1;
+      hooks.onRetry?.(error, attempt, attempt + 1);
+      attempt += 1;
       await yieldToEventLoop();
     }
   }
@@ -992,6 +1176,10 @@ function isRetryableTransportError(error: unknown): boolean {
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefined> {

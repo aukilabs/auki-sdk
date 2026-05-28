@@ -15,3 +15,4 @@ jpeg-encoder = "0.6"
 serde_json = "1"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

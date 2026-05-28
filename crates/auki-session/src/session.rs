@@ -200,6 +200,18 @@ impl Session {
         self
     }
 
+    /// In-place mutator equivalent of [`Session::with_storage_root`].
+    /// Useful for FFI / binding wrappers that can't easily express
+    /// take-by-value builder patterns (PyO3, UniFFI). Unlike
+    /// `with_storage_root`, this does not consume `self`.
+    ///
+    /// Both methods preserve `session_id` — the underlying
+    /// `SessionInner` is mutated in place via the inner `Arc<RwLock>`,
+    /// so the ULID generated at construction stays stable.
+    pub fn set_storage_root(&self, root: PathBuf) {
+        self.inner.write().storage_root = root;
+    }
+
     pub fn peer_id(&self) -> String {
         self.inner.read().peer_id.clone()
     }
@@ -900,6 +912,16 @@ mod tests {
     fn with_storage_root_sets_root() {
         let tmp = tempdir().unwrap();
         let s = Session::new("p", "a").with_storage_root(tmp.path().to_path_buf());
+        assert_eq!(s.storage_root(), tmp.path());
+    }
+
+    #[test]
+    fn set_storage_root_preserves_session_id() {
+        let tmp = tempdir().unwrap();
+        let s = Session::new("galbot", "ctrl");
+        let original_session_id = s.session_id();
+        s.set_storage_root(tmp.path().to_path_buf());
+        assert_eq!(s.session_id(), original_session_id);
         assert_eq!(s.storage_root(), tmp.path());
     }
 

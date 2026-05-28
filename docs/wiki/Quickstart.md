@@ -2,7 +2,7 @@
 
 Boot an `auki-session` peer, declare its sensors / clocks / frames, register a sensor log, and inspect what the SDK writes to the catalog and to disk. ~10 minutes.
 
-This page covers what the Session API exposes **today** (SDK v0.0.54). The remaining pieces — publishing frames into the log, joining a domain so other peers can see your catalog, materializing a remote peer's log — are tracked separately; see [Next steps](#next-steps).
+This page covers what the Session API exposes **today** (SDK v0.0.55). The remaining pieces — publishing frames into the log, joining a domain so other peers can see your catalog, materializing a remote peer's log — are tracked separately; see [Next steps](#next-steps).
 
 ## What you'll build
 
@@ -22,8 +22,8 @@ In `Cargo.toml`:
 
 ```toml
 [dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.54" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.54" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.55" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.55" }
 ```
 
 ### Python
@@ -31,7 +31,7 @@ auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.
 From source for now (PyPI publishing is on the roadmap):
 
 ```bash
-pip install "auki-session @ git+https://github.com/aukilabs/auki-sdk.git@v0.0.54#subdirectory=bindings/python/auki-session-py"
+pip install "auki-session @ git+https://github.com/aukilabs/auki-sdk.git@v0.0.55#subdirectory=bindings/python/auki-session-py"
 ```
 
 ## Boot a session

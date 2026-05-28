@@ -154,31 +154,6 @@ pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));
 }
 
-/// `auki.sensors` — `/auki/sensors/0.0.1` request/response messages.
-pub mod sensors {
-    include!(concat!(env!("OUT_DIR"), "/auki.sensors.rs"));
-
-    impl SensorsRequest {
-        pub fn catalog() -> Self {
-            Self::default()
-        }
-
-        pub fn with_registry_entries() -> Self {
-            Self {
-                include_registry_entries: true,
-                include_frame_entries: false,
-            }
-        }
-
-        pub fn with_frame_entries() -> Self {
-            Self {
-                include_registry_entries: true,
-                include_frame_entries: true,
-            }
-        }
-    }
-}
-
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
 /// `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. The
 /// libp2p substream wire shape; mono-`T` per substream, with

@@ -27,6 +27,7 @@ export { createBrowserLibp2pTransport, supportedBrowserTransports } from "./tran
 export type {
   AukiBrowserPeer,
   AukiBrowserPeerConfig,
+  AukiBrowserSubscription,
   ByteSource,
   ByteSourceFactory,
   ByteSourceInput,

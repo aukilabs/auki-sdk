@@ -18,9 +18,9 @@ use crate::{
     accept_subscribe_streams, build_relationship_status_snapshot, close_subscribe_stream,
     encode_subscribe_data_frame, exchange_peer_handshake_strict, get_over_libp2p,
     load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
-    read_subscribe_request, serve_offer_catalog_response, subscribe_over_libp2p,
-    validate_remote_handshake, write_encoded_subscribe_frame, write_get_response,
-    write_subscribe_end, write_subscribe_start_result,
+    read_subscribe_end, read_subscribe_request, serve_offer_catalog_response,
+    subscribe_over_libp2p, validate_remote_handshake, write_encoded_subscribe_frame,
+    write_get_response, write_subscribe_end, write_subscribe_start_result,
 };
 use auki_identity::PublicKey as WalletPublicKey;
 use auki_protocol::v1::{
@@ -41,10 +41,11 @@ use auki_protocol::v1::{
         SubscribeStartResult,
     },
 };
-use futures::StreamExt as _;
+use futures::{AsyncReadExt as _, StreamExt as _, io::WriteHalf};
 use libp2p::{Multiaddr, PeerId};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, fmt, future::Future};
+use tokio::sync::oneshot;
 
 /// High-level RFC-first runtime handle for SDK and app code.
 pub struct AukiNode {
@@ -85,7 +86,9 @@ pub struct AukiServedSubscription {
     peer_id: PeerId,
     request: SubscribeRequest,
     accept: SubscribeAccept,
-    stream: libp2p::Stream,
+    stream: WriteHalf<libp2p::Stream>,
+    consumer_end_rx: oneshot::Receiver<Result<SubscribeEnd, SubscribeServeError>>,
+    consumer_end_task: tokio::task::JoinHandle<()>,
     max_message_bytes: Option<u64>,
     ended: bool,
 }
@@ -526,6 +529,32 @@ impl AukiServedSubscription {
     /// Effective message byte limit for this served stream.
     pub fn max_message_bytes(&self) -> Option<u64> {
         self.max_message_bytes
+    }
+
+    /// Return a consumer-sent SubscribeEnd frame, if one has arrived.
+    pub fn try_consumer_end(&mut self) -> Result<Option<SubscribeEnd>, SubscribeServeError> {
+        if self.ended {
+            return Ok(None);
+        }
+
+        match self.consumer_end_rx.try_recv() {
+            Ok(Ok(end)) => {
+                end.validate_for_offer(self.domain_id(), self.offer_id())
+                    .map_err(SubscribeServeError::End)?;
+                self.ended = true;
+                self.consumer_end_task.abort();
+                Ok(Some(end))
+            }
+            Ok(Err(error)) => Err(error),
+            Err(oneshot::error::TryRecvError::Empty) => Ok(None),
+            Err(oneshot::error::TryRecvError::Closed) => Ok(None),
+        }
+    }
+}
+
+impl Drop for AukiServedSubscription {
+    fn drop(&mut self) {
+        self.consumer_end_task.abort();
     }
 }
 
@@ -1286,11 +1315,19 @@ impl AukiNode {
 
         let mut served = start.served;
         if let Some(accepted) = start.accepted {
+            let (mut read_stream, write_stream) = stream.split();
+            let (consumer_end_tx, consumer_end_rx) = oneshot::channel();
+            let consumer_end_task = tokio::spawn(async move {
+                let result = read_subscribe_end(&mut read_stream, max_body_len).await;
+                let _ = consumer_end_tx.send(result);
+            });
             served.subscription = Some(AukiServedSubscription {
                 peer_id,
                 request,
                 accept: accepted.accept,
-                stream,
+                stream: write_stream,
+                consumer_end_rx,
+                consumer_end_task,
                 max_message_bytes: accepted.max_message_bytes,
                 ended: false,
             });
@@ -1332,6 +1369,18 @@ impl AukiNode {
         let mut messages_sent = 0_u64;
 
         while let Some(chunk) = source.next().await {
+            if let Some(end) = subscription
+                .try_consumer_end()
+                .map_err(AukiNodeError::SubscribeServe)?
+            {
+                return Ok(Some(ServedPublishedSubscription::accepted(
+                    peer_id,
+                    domain_id,
+                    offer_id,
+                    messages_sent,
+                    end.reason,
+                )));
+            }
             let message = self.next_publication_message(&domain_id, &offer_id, chunk, now)?;
             self.send_served_subscription_message(&mut subscription, &message)
                 .await?;
@@ -2308,7 +2357,10 @@ mod tests {
         get::{GetRequest, GetResponse, GetResponseBody},
         message::{SPATIAL_MESSAGE_TYPE, SpatialMessage},
         offer::{OfferAccessMode, OfferStatus, PayloadDescriptor},
-        subscribe::{SubscribeAccept, SubscribeEndReason, SubscribeRequest, SubscribeStartResult},
+        subscribe::{
+            SubscribeAccept, SubscribeEnd, SubscribeEndReason, SubscribeRequest,
+            SubscribeStartResult,
+        },
     };
     use futures::{AsyncRead, AsyncReadExt, AsyncWriteExt, stream};
     use serde_json::{Value, json};
@@ -3578,6 +3630,147 @@ mod tests {
         assert_eq!(data.sequence, Some(1));
         assert_eq!(subscription.last_sequence(), Some(1));
         assert_eq!(subscription.sequence_gap_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn served_subscription_observes_consumer_cancel() {
+        let listener_wallet = wallet(111);
+        let listener_identity = identity_from_wallet(listener_wallet.clone());
+        let declaration = DomainDeclaration::create(
+            &listener_wallet,
+            &[13; DOMAIN_NONCE_LEN],
+            Some("subscribe-cancel"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut dialer =
+            AukiNode::new(identity(112), AukiP2pNodeConfig::dial_only_development()).unwrap();
+        let mut listener = AukiNode::new(
+            listener_identity,
+            AukiP2pNodeConfig::loopback_tcp_development(),
+        )
+        .unwrap();
+        let listener_peer_id = listener.peer_id();
+        let listener_addr = wait_for_listen_addr(&mut listener).await;
+        let mut listener_peer = ConfiguredPeer::new(listener_peer_id);
+        listener_peer.dial_addresses.push(listener_addr);
+
+        listener
+            .upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        listener
+            .upsert_local_offer(offer(&domain_id, "camera-main"))
+            .expect("local offer");
+        listener
+            .upsert_subscribe_provider(
+                domain_id.clone(),
+                "camera-main",
+                |_request: &SubscribeRequest, _now: &str| {
+                    Ok(AukiSubscribeProviderAccept {
+                        initial_sequence: Some(1),
+                        generated_at: Some(ISSUED_AT.to_owned()),
+                        metadata: None,
+                    })
+                },
+            )
+            .expect("subscribe provider");
+
+        let server_domain_id = domain_id.clone();
+        let server = tokio::spawn(async move {
+            let served = listener
+                .serve_next_subscribe(ISSUED_AT)
+                .await
+                .expect("serve next subscribe")
+                .expect("served subscribe");
+            assert!(served.accepted);
+            let mut subscription = served.into_subscription().expect("accepted subscription");
+
+            let end = timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(end) = subscription
+                        .try_consumer_end()
+                        .expect("consumer end should parse")
+                    {
+                        return end;
+                    }
+                    drive_node_until(
+                        &mut listener.node,
+                        tokio::time::sleep(Duration::from_millis(10)),
+                    )
+                    .await;
+                }
+            })
+            .await
+            .expect("consumer end should arrive");
+
+            assert_eq!(end.domain_id, server_domain_id);
+            assert_eq!(end.offer_id, "camera-main");
+            assert_eq!(end.reason, SubscribeEndReason::Cancelled);
+        });
+
+        dialer
+            .upsert_configured_peer(listener_peer)
+            .expect("configured peer");
+        dialer
+            .dial_configured_peer(listener_peer_id)
+            .expect("dial configured peer");
+        wait_for_peer_connected(&mut dialer, listener_peer_id).await;
+
+        let limits = dialer.node.config().p2p.limits;
+        let request = SubscribeRequest::create(
+            domain_id.clone(),
+            "camera-main",
+            None,
+            vec!["auki.frame".to_owned()],
+            None,
+        )
+        .expect("subscribe request");
+        let end = SubscribeEnd::create(
+            domain_id,
+            "camera-main",
+            SubscribeEndReason::Cancelled,
+            None,
+            None,
+            None,
+        )
+        .expect("subscribe end");
+        let mut control = dialer.node.stream_control();
+
+        drive_node_until(&mut dialer.node, async move {
+            let mut stream = control
+                .open_stream(listener_peer_id, subscribe_protocol())
+                .await
+                .expect("open subscribe stream");
+            let request_frame =
+                encode_json_frame(request.value(), limits.subscribe_message_frame_body_bytes)
+                    .expect("request frame");
+            stream
+                .write_all(&request_frame)
+                .await
+                .expect("write request");
+            stream.flush().await.expect("flush request");
+
+            let start_frame =
+                read_frame_bytes(&mut stream, limits.subscribe_message_frame_body_bytes).await;
+            let start = SubscribeStartResult::from_value(decode_request_frame(
+                &start_frame,
+                limits.subscribe_message_frame_body_bytes,
+            ))
+            .expect("subscribe start");
+            assert!(start.accept_body().is_some());
+
+            let end_frame =
+                encode_json_frame(end.value(), limits.subscribe_message_frame_body_bytes)
+                    .expect("end frame");
+            stream.write_all(&end_frame).await.expect("write end");
+            stream.flush().await.expect("flush end");
+            stream.close().await.expect("close stream");
+        })
+        .await;
+
+        server.await.expect("server task");
     }
 
     #[tokio::test]

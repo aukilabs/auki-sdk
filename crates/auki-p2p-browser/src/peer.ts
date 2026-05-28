@@ -36,6 +36,7 @@ import {
   createPublishedOffer,
   createSubscribeAccept,
   createSubscribeEnd,
+  createSubscribeEndForPath,
   createSubscribeReject,
   offerKey,
   offerSummary,
@@ -94,6 +95,11 @@ export type GetRequest = {
 
 export type SpatialMessage = JsonObject;
 
+export type AukiBrowserSubscription = {
+  readonly messages: AsyncIterable<SpatialMessage>;
+  stop(): Promise<void>;
+};
+
 export type AukiBrowserPeerConfig = {
   seed?: Uint8Array;
   seedStore?: SeedStore;
@@ -112,6 +118,7 @@ export interface AukiBrowserPeer {
   listPeers(): PeerSummary[];
   listOffers(peerId?: string): Promise<OfferSummary[]>;
   get(request: GetRequest): Promise<SpatialMessage>;
+  openSubscription(request: SubscribeRequest): Promise<AukiBrowserSubscription>;
   subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>;
   publishOffer(options: PublishOfferOptions): Promise<PublicationHandle>;
   stop(): Promise<void>;
@@ -148,6 +155,7 @@ const GET_PROTOCOL_ID = "/auki/get/0.0.1";
 const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const SUBSCRIBE_END_TYPE = "auki.subscribe_end.v1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
+const SUBSCRIBE_STOP_TIMEOUT_MS = 1_000;
 
 class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   readonly supportedTransports = supportedBrowserTransports();
@@ -248,9 +256,9 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
   }
 
-  async *subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage> {
+  async openSubscription(request: SubscribeRequest): Promise<AukiBrowserSubscription> {
     if (request.signal?.aborted) {
-      return;
+      throw abortReason(request.signal);
     }
     await this.ensureStarted();
     const peer = this.requirePeer(request.peerId);
@@ -258,7 +266,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       await this.loadOffers(peer);
     }
     if (request.signal?.aborted) {
-      return;
+      throw abortReason(request.signal);
     }
 
     const subscribeRequest = await createSubscribeRequest(
@@ -278,7 +286,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
 
     try {
       if (request.signal?.aborted) {
-        return;
+        throw abortReason(request.signal);
       }
       await writeJsonFrame(stream, subscribeRequest, DEFAULT_FRAME_BODY_LIMIT, {
         signal: request.signal,
@@ -296,36 +304,37 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         throw new Error(`Subscribe rejected by ${peer.peerId}: ${code}`);
       }
 
-      for (;;) {
-        if (request.signal?.aborted) {
-          return;
-        }
-        const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT, {
-          signal: request.signal,
-        });
-        if (frame.value.type === SUBSCRIBE_END_TYPE) {
-          await validateSubscribeEndForOffer(frame.value, request.domainId, request.offerId);
-          return;
-        }
-        yield await validateSubscribeDataMessage(
-          startResult,
-          frame.value,
-          frame.bodyLength,
-          request.maxMessageBytes,
-        );
-      }
+      cleanupAbort();
+      return new DefaultAukiBrowserSubscription(
+        stream,
+        reader,
+        request,
+        startResult,
+        () => undefined,
+      );
+    } catch (error) {
+      cleanupAbort();
+      await closeStreamQuietly(stream);
+      throw error;
+    }
+  }
+
+  async *subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage> {
+    let subscription: AukiBrowserSubscription;
+    try {
+      subscription = await this.openSubscription(request);
     } catch (error) {
       if (request.signal?.aborted) {
         return;
       }
       throw error;
-    } finally {
-      cleanupAbort();
-      if (request.signal?.aborted) {
-        await closeStreamQuietly(stream);
-      } else {
-        await closeStream(stream);
+    }
+    try {
+      for await (const message of subscription.messages) {
+        yield message;
       }
+    } finally {
+      await subscription.stop();
     }
   }
 
@@ -625,10 +634,50 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
 
       await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
       startSent = true;
-      for await (const chunk of toAsyncIterable(publication.source)) {
+      let consumerEnded = false;
+      let consumerEndError: unknown;
+      const consumerEndAbort = new AbortController();
+      const consumerEnd = watchSubscribeConsumerEnd(
+        reader,
+        request,
+        consumerEndAbort.signal,
+        () => {
+          consumerEnded = true;
+        },
+      )
+        .then(() => {
+          consumerEnded = true;
+        })
+        .catch((error: unknown) => {
+          if (!consumerEndAbort.signal.aborted) {
+            consumerEnded = true;
+            consumerEndError = error;
+          }
+        });
+      const consumerEndSignal = consumerEnd.then(() => ({ kind: "consumer-end" }) as const);
+      const source = toAsyncIterable(publication.source)[Symbol.asyncIterator]();
+      for (;;) {
+        const next = await Promise.race([
+          consumerEndSignal,
+          source.next().then((result) => ({ kind: "chunk", result }) as const),
+        ]);
+        if (next.kind === "consumer-end") {
+          break;
+        }
+        await Promise.resolve();
+        if (consumerEndError) {
+          throw consumerEndError;
+        }
+        if (consumerEnded) {
+          break;
+        }
+        if (next.result.done) {
+          break;
+        }
         if (publication.stopped) {
           break;
         }
+        const chunk = next.result.value;
         const message = await createPublicationSpatialMessage(publication, chunk);
         const maxMessageBytes = optionalNumberField(request, "max_message_bytes");
         const validMessage = await validateSubscribeDataMessage(
@@ -639,15 +688,25 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         );
         await writeJsonFrame(stream, validMessage, DEFAULT_FRAME_BODY_LIMIT);
       }
+      if (consumerEnded || publication.stopped) {
+        await source.return?.();
+      }
+      consumerEndAbort.abort(new Error("producer stream ended"));
+      await consumerEnd;
+      if (consumerEndError) {
+        throw consumerEndError;
+      }
 
-      await writeJsonFrame(
-        stream,
-        await createSubscribeEnd(
-          publication.offer,
-          publication.stopped ? "offer_withdrawn" : "complete",
-        ),
-        DEFAULT_FRAME_BODY_LIMIT,
-      );
+      if (!consumerEnded) {
+        await writeJsonFrame(
+          stream,
+          await createSubscribeEnd(
+            publication.offer,
+            publication.stopped ? "offer_withdrawn" : "complete",
+          ),
+          DEFAULT_FRAME_BODY_LIMIT,
+        );
+      }
     } catch (error) {
       if (request && !startSent) {
         await writeJsonFrame(
@@ -676,6 +735,113 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   }
 }
 
+class DefaultAukiBrowserSubscription implements AukiBrowserSubscription {
+  readonly messages: AsyncIterable<SpatialMessage>;
+  private readonly readAbort = new AbortController();
+  private stopPromise?: Promise<void>;
+  private closed = false;
+
+  constructor(
+    private readonly stream: BrowserProtocolStream,
+    private readonly reader: JsonFrameReader,
+    private readonly request: SubscribeRequest,
+    private readonly startResult: JsonObject,
+    private cleanupRequestAbort: () => void,
+  ) {
+    this.messages = this.readMessages();
+    if (request.signal) {
+      const stopFromRequestAbort = () => {
+        void this.stop();
+      };
+      request.signal.addEventListener("abort", stopFromRequestAbort, { once: true });
+      const cleanup = this.cleanupRequestAbort;
+      this.cleanupRequestAbort = () => {
+        request.signal?.removeEventListener("abort", stopFromRequestAbort);
+        cleanup();
+      };
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
+    }
+    if (this.closed) {
+      return;
+    }
+
+    this.closed = true;
+    this.readAbort.abort(new Error("subscription stopped"));
+    this.stopPromise = this.stopGracefully();
+    return this.stopPromise;
+  }
+
+  private async *readMessages(): AsyncIterable<SpatialMessage> {
+    try {
+      for (;;) {
+        if (this.closed) {
+          return;
+        }
+        const frame = await this.reader.read(DEFAULT_FRAME_BODY_LIMIT, {
+          signal: this.readAbort.signal,
+        });
+        if (frame.value.type === SUBSCRIBE_END_TYPE) {
+          await validateSubscribeEndForOffer(
+            frame.value,
+            this.request.domainId,
+            this.request.offerId,
+          );
+          this.closed = true;
+          return;
+        }
+        yield await validateSubscribeDataMessage(
+          this.startResult,
+          frame.value,
+          frame.bodyLength,
+          this.request.maxMessageBytes,
+        );
+      }
+    } catch (error) {
+      if (this.closed || this.readAbort.signal.aborted) {
+        return;
+      }
+      throw error;
+    } finally {
+      if (this.stopPromise) {
+        await this.stopPromise;
+      } else if (this.closed) {
+        this.cleanupRequestAbort();
+        await closeStreamQuietly(this.stream);
+      } else {
+        await this.stop();
+      }
+    }
+  }
+
+  private async stopGracefully(): Promise<void> {
+    try {
+      const end = await createSubscribeEndForPath(
+        this.request.domainId,
+        this.request.offerId,
+        "cancelled",
+      );
+      const timeout = timeoutSignal(SUBSCRIBE_STOP_TIMEOUT_MS, "Subscribe stop timed out");
+      try {
+        await writeJsonFrame(this.stream, end, DEFAULT_FRAME_BODY_LIMIT, {
+          signal: timeout.signal,
+        });
+      } catch {
+        this.stream.abort?.(new Error("Subscribe cancel write failed"));
+      } finally {
+        timeout.clear();
+      }
+      await closeStreamWithTimeout(this.stream, SUBSCRIBE_STOP_TIMEOUT_MS);
+    } finally {
+      this.cleanupRequestAbort();
+    }
+  }
+}
+
 function requiredSeed(seed: Uint8Array | undefined): Uint8Array {
   if (!seed) {
     throw new Error("A browser peer seed is required");
@@ -689,6 +855,30 @@ async function closeStream(stream: BrowserProtocolStream): Promise<void> {
 
 async function closeStreamQuietly(stream: BrowserProtocolStream): Promise<void> {
   await stream.close().catch(() => undefined);
+}
+
+async function closeStreamWithTimeout(
+  stream: BrowserProtocolStream,
+  timeoutMs: number,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      stream.close(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`stream close timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch {
+    stream.abort?.(new Error("stream close failed"));
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function bindStreamAbort(
@@ -717,6 +907,18 @@ function bindStreamAbort(
   return () => signal.removeEventListener("abort", abort);
 }
 
+function timeoutSignal(timeoutMs: number, message: string): {
+  signal: AbortSignal;
+  clear(): void;
+} {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error(message)), timeoutMs);
+  return {
+    signal: controller.signal,
+    clear: () => clearTimeout(timeout),
+  };
+}
+
 function abortReason(signal: AbortSignal): Error {
   const reason = signal.reason;
   if (reason instanceof Error) {
@@ -733,6 +935,21 @@ async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefin
     return chunk;
   }
   return undefined;
+}
+
+async function watchSubscribeConsumerEnd(
+  reader: JsonFrameReader,
+  request: JsonObject,
+  signal: AbortSignal,
+  onFrame: () => void,
+): Promise<void> {
+  const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT, { signal });
+  onFrame();
+  await validateSubscribeEndForOffer(
+    frame.value,
+    stringField(request, "domain_id"),
+    stringField(request, "offer_id"),
+  );
 }
 
 function nestedString(value: unknown, path: string[]): string | undefined {

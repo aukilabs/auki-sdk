@@ -345,6 +345,7 @@ struct DemoStats {
     subscriptions_served: u64,
     subscriptions_rejected: u64,
     subscriptions_closed: u64,
+    subscriptions_cancelled: u64,
     frames_sent: u64,
     lifecycle_polls: u64,
     lifecycle_events: u64,
@@ -462,6 +463,24 @@ async fn send_active_preview_frames(
 ) -> Result<(), Box<dyn Error>> {
     let mut index = 0;
     while index < active_subscriptions.len() {
+        match active_subscriptions[index].subscription.try_consumer_end() {
+            Ok(Some(end)) => {
+                stats.subscriptions_closed = stats.subscriptions_closed.saturating_add(1);
+                if end.reason == SubscribeEndReason::Cancelled {
+                    stats.subscriptions_cancelled = stats.subscriptions_cancelled.saturating_add(1);
+                }
+                active_subscriptions.remove(index);
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                stats.subscriptions_closed = stats.subscriptions_closed.saturating_add(1);
+                stats.record_error(error.to_string());
+                active_subscriptions.remove(index);
+                continue;
+            }
+        }
+
         if active_subscriptions[index].remaining_frames == Some(0) {
             let active = active_subscriptions.remove(index);
             node.end_served_subscription(
@@ -661,7 +680,7 @@ fn print_state(
         config.lifecycle_poll.as_millis(),
     );
     println!(
-        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_closed={} frames_sent={} lifecycle_polls={} lifecycle_events={}",
+        "serving: lifecycles={} duplicate_lifecycles={} offer_catalogs={} gets={} get_rejected={} subscriptions={} active_subscriptions={} subscription_rejected={} subscription_closed={} subscription_cancelled={} frames_sent={} lifecycle_polls={} lifecycle_events={}",
         stats.lifecycles_served,
         stats.duplicate_lifecycle_attempts,
         stats.offer_catalogs_served,
@@ -671,6 +690,7 @@ fn print_state(
         active_subscriptions.len(),
         stats.subscriptions_rejected,
         stats.subscriptions_closed,
+        stats.subscriptions_cancelled,
         stats.frames_sent,
         stats.lifecycle_polls,
         stats.lifecycle_events,

@@ -59,6 +59,21 @@ where
     SubscribeRequest::from_value(value).map_err(SubscribeServeError::Request)
 }
 
+/// Read one Subscribe end frame from an accepted inbound stream.
+pub async fn read_subscribe_end<S>(
+    stream: &mut S,
+    max_body_len: u64,
+) -> Result<SubscribeEnd, SubscribeServeError>
+where
+    S: AsyncRead + Unpin,
+{
+    let frame = read_complete_frame(stream, max_body_len).await?;
+    let (value, consumed) =
+        frame::decode_json_frame(&frame, max_body_len).map_err(SubscribeServeError::Frame)?;
+    debug_assert_eq!(consumed, frame.len());
+    SubscribeEnd::from_value(value).map_err(SubscribeServeError::End)
+}
+
 /// Encode a Subscribe data message without writing it.
 pub fn encode_subscribe_data_frame(
     message: &SpatialMessage,

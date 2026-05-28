@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { peerIdFromSeed } from "./identity.js";
 import { createAukiBrowserPeer, type SpatialMessage } from "./peer.js";
 import { publishPreviewOffer } from "./preview.js";
+import { createSubscribeEndForPath } from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   createGetRequest,
@@ -13,6 +14,7 @@ import {
   createSubscribeRequest,
   parseGetResponse,
   parseOfferCatalogResponse,
+  parseSubscribeEnd,
   parseSubscribeStartResult,
   validateGetResponseForRequest,
   validateSubscribeDataMessage,
@@ -255,6 +257,54 @@ describe("AukiBrowserPeer shell", () => {
     ]);
   });
 
+  it("stops a Subscribe handle by sending SubscribeEnd cancelled", async () => {
+    const offerFixture = await fixtureJson("v1_offer_catalogs.json");
+    const subscribeFixture = await fixtureJson("v1_subscribe.json");
+    const catalog = offerFixture.positive.response_with_offer.object as JsonObject;
+    const accept = subscribeFixture.positive.accept_start_result.object as JsonObject;
+    const inputs = subscribeFixture.inputs as JsonObject;
+    const transport = new MemoryTransport("browser-peer", []);
+    let endSeen!: (end: JsonObject) => void;
+    const endReceived = new Promise<JsonObject>((resolve) => {
+      endSeen = resolve;
+    });
+    transport.handleProtocol(OFFER_CATALOG_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, catalog, DEFAULT_FRAME_BODY_LIMIT);
+      await stream.close();
+    });
+    transport.handleProtocol(SUBSCRIBE_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      await writeJsonFrame(stream, accept, DEFAULT_FRAME_BODY_LIMIT);
+      const end = await parseSubscribeEnd((await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value);
+      endSeen(end);
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/native-direct"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    const subscription = await peer.openSubscription({
+      peerId: "native-peer",
+      domainId: inputs.domain_id as string,
+      offerId: inputs.offer_id as string,
+      acceptedPayloadTypes: [inputs.selected_payload_type as string],
+      maxMessageBytes: inputs.max_message_bytes as number,
+    });
+    await subscription.stop();
+
+    await expect(endReceived).resolves.toMatchObject({
+      domain_id: inputs.domain_id,
+      offer_id: inputs.offer_id,
+      reason: "cancelled",
+    });
+  });
+
   it("gets one spatial message over an RFC protocol stream", async () => {
     const offerFixture = await fixtureJson("v1_offer_catalogs.json");
     const getFixture = await fixtureJson("v1_get.json");
@@ -495,6 +545,66 @@ describe("AukiBrowserPeer shell", () => {
       offerId,
     );
     expect(end.reason).toBe("complete");
+  });
+
+  it("stops serving published Subscribe streams when the consumer cancels", async () => {
+    const fixture = await fixtureJson("v1_subscribe.json");
+    const inputs = fixture.inputs as JsonObject;
+    const domainId = inputs.domain_id as string;
+    const offerId = "browser-bytes";
+    const payloadType = "example.bytes.v1";
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+    let releaseSecondChunk!: () => void;
+    const secondChunk = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve;
+    });
+    await peer.publishOffer({
+      source: async function* () {
+        yield new Uint8Array([1, 2, 3]);
+        await secondChunk;
+        yield new Uint8Array([4, 5, 6]);
+      },
+      domainId,
+      offerId,
+      kind: "example.bytes",
+      payload: {
+        type: payloadType,
+        encoding: "binary",
+        media_type: "application/octet-stream",
+        schema_version: "1",
+      },
+    });
+
+    const stream = await transport.openInbound("remote-peer", SUBSCRIBE_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    await writeJsonFrame(
+      stream,
+      await createSubscribeRequest(domainId, offerId, undefined, [payloadType], 4096),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    const accept = await parseSubscribeStartResult(
+      (await reader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+    );
+    const firstDataFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+    await expect(
+      validateSubscribeDataMessage(accept, firstDataFrame.value, firstDataFrame.bodyLength, 4096),
+    ).resolves.toMatchObject({
+      sequence: "0",
+      payload: expect.objectContaining({ bytes: "AQID" }),
+    });
+
+    await writeJsonFrame(
+      stream,
+      await createSubscribeEndForPath(domainId, offerId, "cancelled"),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseSecondChunk();
+
+    await expect(reader.read(DEFAULT_FRAME_BODY_LIMIT)).rejects.toThrow(
+      "protocol stream closed before a complete frame arrived",
+    );
   });
 
   it("serves published offer bytes through inbound Get streams", async () => {

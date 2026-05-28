@@ -3,6 +3,7 @@ import {
   createAukiBrowserPeer,
   type AukiBrowserBootstrapRecord,
   type AukiBrowserPeer,
+  type AukiBrowserSubscription,
   type OfferSummary,
   type PeerSummary,
   type SpatialMessage,
@@ -47,6 +48,7 @@ type AppState = {
   streamStartedAt?: Date;
   streamFrameBase: number;
   activeSubscriptionKey?: string;
+  activeSubscription?: AukiBrowserSubscription;
   subscriptionAbort?: AbortController;
   status: string;
   lastError?: string;
@@ -230,14 +232,24 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
   render();
 
   try {
-    for await (const message of peer.subscribe({
+    const subscription = await peer.openSubscription({
       peerId: offer.peerId,
       domainId: offer.domainId,
       offerId: offer.offerId,
       acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
       maxMessageBytes: 1_048_576,
       signal: abortController.signal,
-    })) {
+    });
+    if (token !== state.subscriptionToken) {
+      await subscription.stop();
+      return;
+    }
+    state.activeSubscription = subscription;
+    setOfferStatus(key, "streaming");
+    state.status = "Receiving";
+    render();
+
+    for await (const message of subscription.messages) {
       if (token !== state.subscriptionToken) {
         break;
       }
@@ -253,6 +265,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
 
     if (token === state.subscriptionToken) {
       state.activeSubscriptionKey = undefined;
+      state.activeSubscription = undefined;
       state.subscriptionAbort = undefined;
       setOfferStatus(key, "complete");
       state.status = "Subscription complete";
@@ -265,6 +278,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     }
     const message = errorMessage(error);
     state.activeSubscriptionKey = undefined;
+    state.activeSubscription = undefined;
     state.subscriptionAbort = undefined;
     state.lastError = message;
     state.status = "Error";
@@ -287,20 +301,29 @@ function stopSubscription(reason: string): void {
     return;
   }
   const key = state.activeSubscriptionKey;
+  const subscription = state.activeSubscription;
   state.subscriptionAbort?.abort(new Error(reason));
   state.subscriptionAbort = undefined;
+  state.activeSubscription = undefined;
   state.subscriptionToken += 1;
   state.activeSubscriptionKey = undefined;
   setOfferStatus(key, "stopped");
   state.status = "Subscription stopped";
   recordEvent("info", "Subscribe stopped", reason);
   render();
+  void subscription?.stop().catch((error: unknown) => {
+    recordEvent("error", "Subscribe stop failed", errorMessage(error));
+    render();
+  });
 }
 
 async function stopPeer(): Promise<void> {
+  const subscription = state.activeSubscription;
   state.subscriptionAbort?.abort(new Error("Peer stopped"));
   state.subscriptionAbort = undefined;
+  state.activeSubscription = undefined;
   state.subscriptionToken += 1;
+  await subscription?.stop().catch(() => undefined);
   if (state.peer) {
     await state.peer.stop();
   }
@@ -320,6 +343,7 @@ async function stopPeer(): Promise<void> {
   state.streamStartedAt = undefined;
   state.streamFrameBase = 0;
   state.activeSubscriptionKey = undefined;
+  state.activeSubscription = undefined;
 }
 
 async function loadBootstrapFile(): Promise<void> {

@@ -89,7 +89,7 @@ pub use relationship::{
 };
 pub use subscribe_serving::{
     EncodedSubscribeFrame, SubscribeServeError, accept_subscribe_streams, close_subscribe_stream,
-    encode_subscribe_data_frame, read_subscribe_request, write_encoded_subscribe_frame,
-    write_subscribe_end, write_subscribe_start_result,
+    encode_subscribe_data_frame, read_subscribe_end, read_subscribe_request,
+    write_encoded_subscribe_frame, write_subscribe_end, write_subscribe_start_result,
 };
 pub use transport_path::{AukiConnectionDirection, AukiConnectionPath, AukiTransportProtocol};

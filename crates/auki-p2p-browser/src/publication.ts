@@ -159,20 +159,36 @@ export async function createSubscribeAccept(offer: LoadedOffer): Promise<JsonObj
   });
 }
 
+export type SubscribeEndReason =
+  | "complete"
+  | "cancelled"
+  | "offer_withdrawn"
+  | "not_authorized"
+  | "producer_shutdown"
+  | "error";
+
 export async function createSubscribeEnd(
   offer: LoadedOffer,
-  reason: "complete" | "offer_withdrawn",
+  reason: SubscribeEndReason,
+): Promise<JsonObject> {
+  return createSubscribeEndForPath(offer.domainId, offer.offerId, reason);
+}
+
+export async function createSubscribeEndForPath(
+  domainId: string,
+  offerId: string,
+  reason: SubscribeEndReason,
 ): Promise<JsonObject> {
   const end: JsonObject = {
     type: "auki.subscribe_end.v1",
-    domain_id: offer.domainId,
-    offer_id: offer.offerId,
+    domain_id: domainId,
+    offer_id: offerId,
     reason,
   };
   if (reason === "offer_withdrawn") {
     end.retryable = true;
   }
-  return validateSubscribeEndForOffer(end, offer.domainId, offer.offerId);
+  return validateSubscribeEndForOffer(end, domainId, offerId);
 }
 
 export async function createPublicationSpatialMessage(

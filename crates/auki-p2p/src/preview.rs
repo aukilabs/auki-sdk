@@ -2,7 +2,10 @@
 
 use crate::{
     api::{AukiGetProviderError, AukiNode, AukiNodeError},
-    publication::{AukiSubscriptionBackpressurePolicy, PublishOfferInput, PublishedOfferHandle},
+    publication::{
+        AukiSubscriptionBackpressurePolicy, LatestPublishedByteSource, PublishOfferInput,
+        PublishedByteFrame, PublishedByteSourceFactory, PublishedOfferHandle,
+    },
 };
 use auki_protocol::v1::{
     base64url, error,
@@ -10,7 +13,6 @@ use auki_protocol::v1::{
     message::{SPATIAL_MESSAGE_TYPE, SpatialMessage, SpatialMessageError},
     offer::{OfferAccessMode, PayloadDescriptor},
 };
-use futures::Stream;
 use serde_json::{Map, Value, json};
 
 /// Offer kind for live RGB camera preview frames.
@@ -101,13 +103,9 @@ pub fn preview_snapshot_and_stream_access_modes() -> Vec<OfferAccessMode> {
 }
 
 /// Build generic publication input for the preview profile.
-pub fn preview_offer_input<F, S>(
-    source_factory: F,
-    options: PreviewOfferOptions,
-) -> PublishOfferInput
+pub fn preview_offer_input<F>(source_factory: F, options: PreviewOfferOptions) -> PublishOfferInput
 where
-    F: FnMut() -> S + Send + 'static,
-    S: Stream<Item = Vec<u8>> + Send + 'static,
+    F: PublishedByteSourceFactory + 'static,
 {
     let mut input = PublishOfferInput::new(
         options.domain_id,
@@ -135,6 +133,22 @@ pub fn preview_spatial_message(
     bytes: &[u8],
     generated_at: Option<&str>,
 ) -> Result<SpatialMessage, SpatialMessageError> {
+    preview_spatial_message_with_optional_sequence(
+        domain_id,
+        offer_id,
+        Some(sequence),
+        bytes,
+        generated_at,
+    )
+}
+
+fn preview_spatial_message_with_optional_sequence(
+    domain_id: impl Into<String>,
+    offer_id: impl Into<String>,
+    sequence: Option<u64>,
+    bytes: &[u8],
+    generated_at: Option<&str>,
+) -> Result<SpatialMessage, SpatialMessageError> {
     let mut payload = preview_payload_descriptor()
         .value()
         .as_object()
@@ -150,7 +164,9 @@ pub fn preview_spatial_message(
     object.insert("domain_id".to_owned(), Value::String(domain_id.into()));
     object.insert("offer_id".to_owned(), Value::String(offer_id.into()));
     object.insert("payload".to_owned(), Value::Object(payload));
-    object.insert("sequence".to_owned(), Value::String(sequence.to_string()));
+    if let Some(sequence) = sequence {
+        object.insert("sequence".to_owned(), Value::String(sequence.to_string()));
+    }
     if let Some(generated_at) = generated_at {
         object.insert(
             "generated_at".to_owned(),
@@ -161,29 +177,43 @@ pub fn preview_spatial_message(
     SpatialMessage::from_value(Value::Object(object))
 }
 
+/// Build one preview spatial message from a producer frame.
+pub fn preview_spatial_message_from_frame(
+    domain_id: impl Into<String>,
+    offer_id: impl Into<String>,
+    frame: &PublishedByteFrame,
+    fallback_generated_at: Option<&str>,
+) -> Result<SpatialMessage, SpatialMessageError> {
+    preview_spatial_message_with_optional_sequence(
+        domain_id,
+        offer_id,
+        frame.sequence,
+        frame.bytes.as_slice(),
+        frame.generated_at.as_deref().or(fallback_generated_at),
+    )
+}
+
 /// Publish a preview offer through the generic native publication API.
-pub fn publish_preview_offer<F, S>(
+pub fn publish_preview_offer<F>(
     node: &mut AukiNode,
     source_factory: F,
     options: PreviewOfferOptions,
 ) -> Result<PublishedOfferHandle, AukiNodeError>
 where
-    F: FnMut() -> S + Send + 'static,
-    S: Stream<Item = Vec<u8>> + Send + 'static,
+    F: PublishedByteSourceFactory + 'static,
 {
     node.publish_offer(preview_offer_input(source_factory, options))
 }
 
 /// Publish a preview offer with one-shot Get snapshots and Subscribe streams.
-pub fn publish_preview_offer_with_snapshot<F, S, G>(
+pub fn publish_preview_offer_with_snapshot<F, G>(
     node: &mut AukiNode,
     source_factory: F,
     mut snapshot_factory: G,
     options: PreviewOfferOptions,
 ) -> Result<PublishedOfferHandle, AukiNodeError>
 where
-    F: FnMut() -> S + Send + 'static,
-    S: Stream<Item = Vec<u8>> + Send + 'static,
+    F: PublishedByteSourceFactory + 'static,
     G: FnMut(&GetRequest, &str) -> Result<Vec<u8>, AukiGetProviderError> + Send + 'static,
 {
     let domain_id = options.domain_id.clone();
@@ -205,11 +235,49 @@ where
                 .checked_add(1)
                 .ok_or_else(|| AukiGetProviderError::new(error::MESSAGE_INVALID_ENVELOPE))?;
             let bytes = snapshot_factory(request, now)?;
-            preview_spatial_message(
+            let frame = PublishedByteFrame::new(bytes).with_sequence(sequence);
+            preview_spatial_message_from_frame(
                 provider_domain_id.clone(),
                 provider_offer_id.clone(),
-                sequence,
-                bytes.as_slice(),
+                &frame,
+                Some(now),
+            )
+            .map_err(|_| AukiGetProviderError::new(error::MESSAGE_INVALID_ENVELOPE))
+        },
+    )?;
+
+    Ok(handle)
+}
+
+/// Publish a preview offer backed by one shared latest-frame source.
+///
+/// Get returns the current latest frame. Each Subscribe receives the same
+/// producer frame stream instead of opening an independent source instance.
+pub fn publish_preview_offer_with_latest_source(
+    node: &mut AukiNode,
+    source: LatestPublishedByteSource,
+    options: PreviewOfferOptions,
+) -> Result<PublishedOfferHandle, AukiNodeError> {
+    let domain_id = options.domain_id.clone();
+    let offer_id = options.offer_id.clone();
+    let handle = node.publish_offer(preview_offer_input(
+        source.clone(),
+        options.with_snapshot_and_stream_access(),
+    ))?;
+
+    let provider_domain_id = domain_id.clone();
+    let provider_offer_id = offer_id.clone();
+    node.upsert_get_provider(
+        domain_id,
+        offer_id,
+        move |_request: &GetRequest, now: &str| {
+            let frame = source
+                .latest()
+                .ok_or_else(|| AukiGetProviderError::new(error::OFFER_TEMPORARILY_UNAVAILABLE))?;
+            preview_spatial_message_from_frame(
+                provider_domain_id.clone(),
+                provider_offer_id.clone(),
+                &frame,
                 Some(now),
             )
             .map_err(|_| AukiGetProviderError::new(error::MESSAGE_INVALID_ENVELOPE))
@@ -363,5 +431,63 @@ mod tests {
         assert_eq!(message.generated_at.as_deref(), Some(ISSUED_AT));
         assert_eq!(message.payload.payload_type, PREVIEW_PAYLOAD_TYPE);
         assert_eq!(message.payload.bytes, Some(vec![0xff, 0xd8, 0xff, 0xd9]));
+    }
+
+    #[test]
+    fn preview_spatial_message_from_frame_uses_source_metadata() {
+        let frame = PublishedByteFrame::new(vec![0xff, 0xd8, 0xff, 0xd9])
+            .with_sequence(12)
+            .with_generated_at("2026-05-26T12:01:00Z");
+
+        let message =
+            preview_spatial_message_from_frame(DOMAIN_ID, "preview-main", &frame, Some(ISSUED_AT))
+                .expect("preview message");
+
+        assert_eq!(message.sequence, Some(12));
+        assert_eq!(
+            message.generated_at.as_deref(),
+            Some("2026-05-26T12:01:00Z")
+        );
+        assert_eq!(message.payload.bytes, Some(vec![0xff, 0xd8, 0xff, 0xd9]));
+    }
+
+    #[test]
+    fn publish_preview_offer_with_latest_source_registers_get_and_subscribe() {
+        let local_wallet = wallet(22);
+        let declaration = DomainDeclaration::create(
+            &local_wallet,
+            &[22; DOMAIN_NONCE_LEN],
+            Some("preview-latest"),
+        )
+        .expect("domain declaration");
+        let registration =
+            LocalDomainRegistration::owner(declaration, true).expect("owner registration");
+        let domain_id = registration.domain_id().to_owned();
+        let mut node = AukiNode::new(
+            identity_from_wallet(local_wallet),
+            AukiP2pNodeConfig::dial_only_development(),
+        )
+        .expect("node");
+        node.upsert_local_domain(registration, ISSUED_AT)
+            .expect("local domain");
+        let source = LatestPublishedByteSource::new();
+        assert!(
+            source.publish(PublishedByteFrame::new(vec![0xff, 0xd8, 0xff, 0xd9]).with_sequence(3))
+        );
+
+        let handle = publish_preview_offer_with_latest_source(
+            &mut node,
+            source,
+            PreviewOfferOptions::new(domain_id.clone(), "preview-main"),
+        )
+        .expect("publish preview");
+
+        assert_eq!(handle.domain_id(), domain_id);
+        assert_eq!(handle.offer_id(), "preview-main");
+        let offers = node.local_offers(&domain_id);
+        assert_eq!(
+            offers[0].access_modes,
+            vec![OfferAccessMode::Get, OfferAccessMode::Subscribe]
+        );
     }
 }

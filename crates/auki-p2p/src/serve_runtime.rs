@@ -1,9 +1,9 @@
 //! SDK-owned serving runtime for inbound protocol traffic and published streams.
 
-use crate::AukiSubscriptionBackpressurePolicy;
 use crate::api::{
     AukiNode, AukiNodeError, AukiServedInbound, AukiServedSubscription, LifecycleInput,
 };
+use crate::{AukiSubscriptionBackpressurePolicy, PublishedByteFrame};
 use auki_protocol::v1::{
     error,
     subscribe::{SubscribeEnd, SubscribeEndReason},
@@ -142,7 +142,7 @@ struct SourceQueueState {
 }
 
 enum QueuedSourceEvent {
-    Chunk(Vec<u8>),
+    Chunk(PublishedByteFrame),
     Complete,
     CloseForBackpressure,
 }
@@ -599,7 +599,7 @@ impl AukiServeRuntime {
     async fn handle_source_chunk(
         &mut self,
         subscription_id: u64,
-        chunk: Vec<u8>,
+        frame: PublishedByteFrame,
         now: &str,
     ) -> Result<Option<AukiServeRuntimeEvent>, AukiNodeError> {
         let Some(mut active) = self.active_subscriptions.remove(&subscription_id) else {
@@ -639,7 +639,7 @@ impl AukiServeRuntime {
 
         let message =
             self.node
-                .next_publication_message(&active.domain_id, &active.offer_id, chunk, now)?;
+                .next_publication_message(&active.domain_id, &active.offer_id, frame, now)?;
         let send_result = self
             .node
             .send_served_subscription_message(
@@ -834,7 +834,7 @@ mod tests {
             queue
                 .push(
                     AukiSubscriptionBackpressurePolicy::LatestOnly,
-                    QueuedSourceEvent::Chunk(vec![1]),
+                    QueuedSourceEvent::Chunk(PublishedByteFrame::new(vec![1])),
                 )
                 .await
         );
@@ -842,7 +842,7 @@ mod tests {
             queue
                 .push(
                     AukiSubscriptionBackpressurePolicy::LatestOnly,
-                    QueuedSourceEvent::Chunk(vec![2]),
+                    QueuedSourceEvent::Chunk(PublishedByteFrame::new(vec![2])),
                 )
                 .await
         );
@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(produced, 2);
         assert_eq!(dropped, 1);
         match queue.pop().await {
-            Some(QueuedSourceEvent::Chunk(chunk)) => assert_eq!(chunk, vec![2]),
+            Some(QueuedSourceEvent::Chunk(chunk)) => assert_eq!(chunk.bytes, vec![2]),
             _ => panic!("expected newest queued chunk"),
         }
         assert!(queue.pop().await.is_none());
@@ -864,8 +864,22 @@ mod tests {
         let queue = SharedSourceQueue::new(8, ready_tx);
         let policy = AukiSubscriptionBackpressurePolicy::CloseOnFull { capacity: 1 };
 
-        assert!(queue.push(policy, QueuedSourceEvent::Chunk(vec![1])).await);
-        assert!(!queue.push(policy, QueuedSourceEvent::Chunk(vec![2])).await);
+        assert!(
+            queue
+                .push(
+                    policy,
+                    QueuedSourceEvent::Chunk(PublishedByteFrame::new(vec![1]))
+                )
+                .await
+        );
+        assert!(
+            !queue
+                .push(
+                    policy,
+                    QueuedSourceEvent::Chunk(PublishedByteFrame::new(vec![2]))
+                )
+                .await
+        );
 
         let (produced, dropped) = queue.take_counters().await;
         assert_eq!(produced, 2);

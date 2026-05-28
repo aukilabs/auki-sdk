@@ -76,12 +76,14 @@ pub use preview::{
     PREVIEW_OFFER_KIND, PREVIEW_PAYLOAD_ENCODING, PREVIEW_PAYLOAD_MEDIA_TYPE,
     PREVIEW_PAYLOAD_SCHEMA_VERSION, PREVIEW_PAYLOAD_TYPE, PreviewOfferOptions, preview_offer_input,
     preview_payload_descriptor, preview_snapshot_and_stream_access_modes, preview_spatial_message,
-    publish_preview_offer, publish_preview_offer_with_snapshot,
+    preview_spatial_message_from_frame, publish_preview_offer,
+    publish_preview_offer_with_latest_source, publish_preview_offer_with_snapshot,
 };
 pub use publication::{
     AukiSubscriptionBackpressurePolicy, DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY,
-    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteSource,
-    PublishedByteSourceFactory, PublishedOfferHandle, ServedPublishedSubscription,
+    LatestPublishedByteSource, PublicationMessageError, PublishOfferError, PublishOfferInput,
+    PublishedByteFrame, PublishedByteSource, PublishedByteSourceFactory, PublishedOfferHandle,
+    ServedPublishedSubscription,
 };
 pub use relationship::{
     OfferCatalogLoadState, PeerRelationship, PeerRelationshipState, RelationshipFailureRecord,

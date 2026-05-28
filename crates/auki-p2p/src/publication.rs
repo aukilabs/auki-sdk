@@ -8,16 +8,54 @@ use auki_protocol::v1::{
     },
     subscribe::SubscribeEndReason,
 };
-use futures::Stream;
+use futures::{Stream, StreamExt as _, stream};
 use libp2p::PeerId;
 use serde_json::{Map, Value};
-use std::{fmt, pin::Pin};
+use std::{
+    fmt,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
+use tokio::sync::watch;
 
 /// Default per-subscription source queue capacity.
 pub const DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY: usize = 1024;
 
+/// One producer frame exposed by a published byte source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedByteFrame {
+    /// Raw payload bytes.
+    pub bytes: Vec<u8>,
+    /// Optional producer-assigned frame sequence.
+    pub sequence: Option<u64>,
+    /// Optional producer generation timestamp.
+    pub generated_at: Option<String>,
+}
+
 /// Boxed byte stream opened for one Subscribe request.
-pub type PublishedByteSource = Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>;
+pub type PublishedByteSource = Pin<Box<dyn Stream<Item = PublishedByteFrame> + Send>>;
+
+/// Shared latest-frame source for live producers that should fan out one stream
+/// of truth to Get and all Subscribe consumers.
+#[derive(Debug, Clone)]
+pub struct LatestPublishedByteSource {
+    state: Arc<Mutex<LatestPublishedByteSourceState>>,
+    signal_tx: watch::Sender<u64>,
+}
+
+#[derive(Debug, Default)]
+struct LatestPublishedByteSourceState {
+    latest: Option<PublishedByteFrame>,
+    frame_version: u64,
+    signal_version: u64,
+    closed: bool,
+}
+
+enum LatestSourceRead {
+    Frame(PublishedByteFrame, u64),
+    Pending,
+    Closed,
+}
 
 /// Factory that opens a byte stream for one Subscribe request.
 pub trait PublishedByteSourceFactory: Send {
@@ -28,11 +66,163 @@ pub trait PublishedByteSourceFactory: Send {
 impl<F, S> PublishedByteSourceFactory for F
 where
     F: FnMut() -> S + Send,
-    S: Stream<Item = Vec<u8>> + Send + 'static,
+    S: Stream + Send + 'static,
+    S::Item: Into<PublishedByteFrame> + Send + 'static,
 {
     fn open(&mut self) -> PublishedByteSource {
-        Box::pin(self())
+        Box::pin(self().map(Into::into))
     }
+}
+
+impl PublishedByteSourceFactory for LatestPublishedByteSource {
+    fn open(&mut self) -> PublishedByteSource {
+        self.stream()
+    }
+}
+
+impl PublishedByteFrame {
+    /// Create a producer frame from raw payload bytes.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            sequence: None,
+            generated_at: None,
+        }
+    }
+
+    /// Set the producer sequence for this frame.
+    pub fn with_sequence(mut self, sequence: u64) -> Self {
+        self.sequence = Some(sequence);
+        self
+    }
+
+    /// Set the producer generation timestamp for this frame.
+    pub fn with_generated_at(mut self, generated_at: impl Into<String>) -> Self {
+        self.generated_at = Some(generated_at.into());
+        self
+    }
+}
+
+impl From<Vec<u8>> for PublishedByteFrame {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::new(bytes)
+    }
+}
+
+impl Default for LatestPublishedByteSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LatestPublishedByteSource {
+    /// Create an empty shared latest-frame source.
+    pub fn new() -> Self {
+        let (signal_tx, _) = watch::channel(0);
+        Self {
+            state: Arc::new(Mutex::new(LatestPublishedByteSourceState::default())),
+            signal_tx,
+        }
+    }
+
+    /// Publish a new latest frame and notify active Subscribe streams.
+    ///
+    /// Returns `false` when the source has already been closed.
+    pub fn publish(&self, frame: impl Into<PublishedByteFrame>) -> bool {
+        let signal = {
+            let mut state = self.state.lock().expect("latest source mutex poisoned");
+            if state.closed {
+                return false;
+            }
+            state.latest = Some(frame.into());
+            state.frame_version = state.frame_version.saturating_add(1);
+            state.signal_version = state.signal_version.saturating_add(1);
+            state.signal_version
+        };
+        let _ = self.signal_tx.send(signal);
+        true
+    }
+
+    /// Return the current latest frame, if any.
+    pub fn latest(&self) -> Option<PublishedByteFrame> {
+        self.state
+            .lock()
+            .expect("latest source mutex poisoned")
+            .latest
+            .clone()
+    }
+
+    /// Return the current latest payload bytes, if any.
+    pub fn latest_bytes(&self) -> Option<Vec<u8>> {
+        self.latest().map(|frame| frame.bytes)
+    }
+
+    /// Close the source and let active/future streams complete after their
+    /// latest pending frame has been delivered.
+    pub fn close(&self) {
+        let signal = {
+            let mut state = self.state.lock().expect("latest source mutex poisoned");
+            if state.closed {
+                return;
+            }
+            state.closed = true;
+            state.signal_version = state.signal_version.saturating_add(1);
+            state.signal_version
+        };
+        let _ = self.signal_tx.send(signal);
+    }
+
+    /// Whether the source has been closed.
+    pub fn is_closed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("latest source mutex poisoned")
+            .closed
+    }
+
+    /// Open a stream that first yields the current latest frame, when present,
+    /// and then yields subsequent source updates.
+    pub fn stream(&self) -> PublishedByteSource {
+        let state = Arc::clone(&self.state);
+        let signal_rx = self.signal_tx.subscribe();
+
+        Box::pin(stream::unfold(
+            (state, signal_rx, 0_u64),
+            |(state, mut signal_rx, mut last_frame_version)| async move {
+                loop {
+                    match read_latest_source_state(&state, last_frame_version) {
+                        LatestSourceRead::Frame(frame, frame_version) => {
+                            last_frame_version = frame_version;
+                            return Some((frame, (state, signal_rx, last_frame_version)));
+                        }
+                        LatestSourceRead::Closed => return None,
+                        LatestSourceRead::Pending => {}
+                    }
+
+                    if signal_rx.changed().await.is_err() {
+                        return None;
+                    }
+                }
+            },
+        ))
+    }
+}
+
+fn read_latest_source_state(
+    state: &Arc<Mutex<LatestPublishedByteSourceState>>,
+    last_frame_version: u64,
+) -> LatestSourceRead {
+    let state = state.lock().expect("latest source mutex poisoned");
+    if state.frame_version > last_frame_version {
+        let Some(frame) = state.latest.clone() else {
+            return LatestSourceRead::Pending;
+        };
+        return LatestSourceRead::Frame(frame, state.frame_version);
+    }
+    if state.closed {
+        return LatestSourceRead::Closed;
+    }
+    LatestSourceRead::Pending
 }
 
 /// Backpressure policy for runtime-managed published Subscribe streams.
@@ -134,7 +324,7 @@ pub(crate) struct LocalOfferPublication {
 
 impl PublishOfferInput {
     /// Create high-level publication input from a byte-source factory.
-    pub fn new<F, S>(
+    pub fn new<F>(
         domain_id: impl Into<String>,
         offer_id: impl Into<String>,
         kind: impl Into<String>,
@@ -142,8 +332,7 @@ impl PublishOfferInput {
         source_factory: F,
     ) -> Self
     where
-        F: FnMut() -> S + Send + 'static,
-        S: Stream<Item = Vec<u8>> + Send + 'static,
+        F: PublishedByteSourceFactory + 'static,
     {
         Self {
             domain_id: domain_id.into(),
@@ -258,20 +447,31 @@ impl LocalOfferPublication {
 
     pub(crate) fn next_message(
         &mut self,
-        chunk: Vec<u8>,
-        generated_at: Option<&str>,
+        frame: PublishedByteFrame,
+        fallback_generated_at: Option<&str>,
     ) -> Result<SpatialMessage, PublicationMessageError> {
-        let sequence = self.next_sequence;
-        let next_sequence = sequence
-            .checked_add(1)
-            .ok_or(PublicationMessageError::SequenceOverflow)?;
+        let sequence = match frame.sequence {
+            Some(sequence) => {
+                if let Some(next_sequence) = sequence.checked_add(1) {
+                    self.next_sequence = self.next_sequence.max(next_sequence);
+                }
+                sequence
+            }
+            None => {
+                let sequence = self.next_sequence;
+                self.next_sequence = sequence
+                    .checked_add(1)
+                    .ok_or(PublicationMessageError::SequenceOverflow)?;
+                sequence
+            }
+        };
+        let generated_at = frame.generated_at.as_deref().or(fallback_generated_at);
         let message = create_publication_spatial_message(
             &self.offer,
             sequence,
-            chunk.as_slice(),
+            frame.bytes.as_slice(),
             generated_at,
         )?;
-        self.next_sequence = next_sequence;
         Ok(message)
     }
 }
@@ -516,7 +716,10 @@ mod tests {
         let mut publication = input.into_publication().expect("publication");
 
         let message = publication
-            .next_message(vec![1, 2, 3], Some("2026-05-26T12:00:00Z"))
+            .next_message(
+                PublishedByteFrame::new(vec![1, 2, 3]),
+                Some("2026-05-26T12:00:00Z"),
+            )
             .expect("message");
 
         assert_eq!(message.domain_id, DOMAIN_ID);
@@ -528,5 +731,54 @@ mod tests {
             message.generated_at.as_deref(),
             Some("2026-05-26T12:00:00Z")
         );
+    }
+
+    #[test]
+    fn creates_spatial_messages_from_producer_frame_metadata() {
+        let input = PublishOfferInput::new(
+            DOMAIN_ID,
+            "bytes",
+            "example.bytes",
+            PayloadDescriptor::create("example.bytes.v1"),
+            || stream::iter([vec![1, 2, 3]]),
+        );
+        let mut publication = input.into_publication().expect("publication");
+
+        let message = publication
+            .next_message(
+                PublishedByteFrame::new(vec![4, 5, 6])
+                    .with_sequence(42)
+                    .with_generated_at("2026-05-26T12:01:00Z"),
+                Some("2026-05-26T12:00:00Z"),
+            )
+            .expect("message");
+
+        assert_eq!(message.payload.bytes, Some(vec![4, 5, 6]));
+        assert_eq!(message.sequence, Some(42));
+        assert_eq!(
+            message.generated_at.as_deref(),
+            Some("2026-05-26T12:01:00Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_source_replays_latest_and_streams_updates() {
+        let source = LatestPublishedByteSource::new();
+        assert_eq!(source.latest(), None);
+
+        assert!(source.publish(PublishedByteFrame::new(vec![1]).with_sequence(4)));
+        let mut stream = source.stream();
+
+        let first = stream.next().await.expect("initial latest frame");
+        assert_eq!(first.bytes, vec![1]);
+        assert_eq!(first.sequence, Some(4));
+
+        assert!(source.publish(PublishedByteFrame::new(vec![2]).with_sequence(5)));
+        let second = stream.next().await.expect("updated frame");
+        assert_eq!(second.bytes, vec![2]);
+        assert_eq!(second.sequence, Some(5));
+
+        source.close();
+        assert!(stream.next().await.is_none());
     }
 }

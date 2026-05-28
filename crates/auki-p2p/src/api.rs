@@ -10,14 +10,14 @@ use crate::{
     LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer, LocalPeerIdentity,
     OfferCatalogLoadState, OfferCatalogServeError, OfferLoadContext, OfferLoadError,
     OfferLoadReport, PathClientError, PathContext, PathOrchestrationError, PeerRelationship,
-    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedOfferHandle,
-    RelationshipFailureRecord, RelationshipFailureScope, RelationshipLoadedOffer,
-    RelationshipRegistryReferenceStatus, RelationshipStatusBuildError, RelationshipStatusOptions,
-    ServedPublishedSubscription, SubscribeInput, SubscribeServeError, accept_get_streams,
-    accept_lifecycle_streams, accept_offer_catalog_streams, accept_subscribe_data_frame,
-    accept_subscribe_streams, build_relationship_status_snapshot, close_subscribe_stream,
-    encode_subscribe_data_frame, exchange_peer_handshake_strict, get_over_libp2p,
-    load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
+    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteFrame,
+    PublishedOfferHandle, RelationshipFailureRecord, RelationshipFailureScope,
+    RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
+    RelationshipStatusOptions, ServedPublishedSubscription, SubscribeInput, SubscribeServeError,
+    accept_get_streams, accept_lifecycle_streams, accept_offer_catalog_streams,
+    accept_subscribe_data_frame, accept_subscribe_streams, build_relationship_status_snapshot,
+    close_subscribe_stream, encode_subscribe_data_frame, exchange_peer_handshake_strict,
+    get_over_libp2p, load_remote_offers_over_libp2p, open_lifecycle_stream_once, read_get_request,
     read_subscribe_end, read_subscribe_request, serve_offer_catalog_response,
     subscribe_over_libp2p, validate_remote_handshake, write_encoded_subscribe_frame,
     write_get_response, write_subscribe_end, write_subscribe_start_result,
@@ -1872,7 +1872,7 @@ impl AukiNode {
         &mut self,
         domain_id: &str,
         offer_id: &str,
-        chunk: Vec<u8>,
+        frame: PublishedByteFrame,
         generated_at: &str,
     ) -> Result<SpatialMessage, AukiNodeError> {
         self.local_publications
@@ -1881,7 +1881,7 @@ impl AukiNode {
                 domain_id: domain_id.to_owned(),
                 offer_id: offer_id.to_owned(),
             })?
-            .next_message(chunk, Some(generated_at))
+            .next_message(frame, Some(generated_at))
             .map_err(AukiNodeError::PublicationMessage)
     }
 

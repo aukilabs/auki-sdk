@@ -10,7 +10,7 @@
 
 - [Overview](Design-and-Architecture)
 - [The Five Questions](The-Five-Questions)
-- [Glossary](Glossary) *(stub)*
+- [Glossary](Glossary)
 - [Crate map](Crate-Map) *(stub)*
 - [Release history](Release-History) *(stub)*
 

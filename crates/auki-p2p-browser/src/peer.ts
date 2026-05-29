@@ -73,7 +73,14 @@ export type PeerSummary = {
   peerId: string;
   connected: boolean;
   dialAddresses: string[];
+  observedAddresses: string[];
   connectionPaths: BrowserConnectionPath[];
+};
+
+type StoredPeer = {
+  peerId: string;
+  connected: boolean;
+  dialAddresses: string[];
 };
 
 export type {
@@ -226,7 +233,7 @@ const SUBSCRIBE_STOP_TIMEOUT_MS = 1_000;
 
 class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   readonly supportedTransports = supportedBrowserTransports();
-  private readonly peers = new Map<string, PeerSummary>();
+  private readonly peers = new Map<string, StoredPeer>();
   private readonly lifecyclePeers = new Set<string>();
   private readonly remoteOffers = new Map<string, LoadedOffer[]>();
   private readonly localPublications = new Map<string, LocalOfferPublication>();
@@ -276,7 +283,6 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         peerId: record.peerId,
         connected: true,
         dialAddresses,
-        connectionPaths: this.connectionPaths(record.peerId),
       });
     }
   }
@@ -335,15 +341,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       peerId,
       connected: true,
       dialAddresses,
-      connectionPaths: this.connectionPaths(peerId),
     });
   }
 
   listPeers(): PeerSummary[] {
-    return Array.from(this.peers.values()).map((peer) => ({
-      ...peer,
-      connectionPaths: this.connectionPaths(peer.peerId),
-    }));
+    return Array.from(this.peers.values()).map((peer) => this.peerSummary(peer));
   }
 
   async listOffers(peerId?: string): Promise<OfferSummary[]> {
@@ -351,7 +353,9 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     if (peerId === this.peerId) {
       return this.localOfferSummaries();
     }
-    const peers = peerId ? [this.requirePeer(peerId)] : Array.from(this.peers.values());
+    const peers = peerId
+      ? [this.requirePeer(peerId)]
+      : Array.from(this.peers.values()).map((peer) => this.peerSummary(peer));
     const offers = await Promise.all(peers.map((peer) => this.loadOffers(peer)));
     return [
       ...(peerId ? [] : this.localOfferSummaries()),
@@ -649,12 +653,20 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       peerId: record.peerId,
       connected: false,
       dialAddresses: preferredDialAddresses(record),
-      connectionPaths: [],
     });
   }
 
   private connectionPaths(peerId: string): BrowserConnectionPath[] {
     return this.transport.connectionPaths?.(peerId) ?? [];
+  }
+
+  private peerSummary(peer: StoredPeer): PeerSummary {
+    const connectionPaths = this.connectionPaths(peer.peerId);
+    return {
+      ...peer,
+      observedAddresses: observedAddressesFromConnectionPaths(connectionPaths),
+      connectionPaths,
+    };
   }
 
   private async exchangeLifecycle(record: AukiBrowserBootstrapRecord): Promise<void> {
@@ -728,7 +740,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     if (!peer) {
       throw new Error(`Unknown peer ${peerId}; connect bootstrap records before using it`);
     }
-    return peer;
+    return this.peerSummary(peer);
   }
 
   private async installInboundHandlers(): Promise<void> {
@@ -790,7 +802,6 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         peerId: remotePeerId,
         connected: true,
         dialAddresses: [],
-        connectionPaths: this.connectionPaths(remotePeerId),
       });
     } finally {
       await closeStream(stream);
@@ -1262,6 +1273,10 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function observedAddressesFromConnectionPaths(paths: BrowserConnectionPath[]): string[] {
+  return uniqueStrings(paths.map((path) => path.remoteAddress));
 }
 
 function randomBytes(length: number): Uint8Array {

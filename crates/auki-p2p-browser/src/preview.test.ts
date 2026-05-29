@@ -198,6 +198,7 @@ describe("preview offer profile", () => {
           peerId: "native-peer",
           connected: true,
           dialAddresses: ["/memory"],
+          observedAddresses: [],
           connectionPaths: [],
         },
       ],
@@ -248,6 +249,7 @@ describe("preview offer profile", () => {
         peerId: "native-peer",
         connected: true,
         dialAddresses: ["/memory"],
+        observedAddresses: [],
         connectionPaths: [],
       },
     ]);

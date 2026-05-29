@@ -995,11 +995,12 @@ function localPeerItem(peerId: string): HTMLElement {
 function remotePeerItem(peer: PeerSummary): HTMLElement {
   const offerCount = state.offers.filter((offer) => offer.peerId === peer.peerId).length;
   const status = peer.connected ? "Connected" : "Disconnected";
+  const addresses = uniqueStrings([...peer.dialAddresses, ...peer.observedAddresses]);
   return peerListItem(
     peer.peerId,
     status,
     `${offerCount} offer(s) | active ${connectionPathSummary(peer.connectionPaths)}`,
-    peer.dialAddresses,
+    addresses,
     peer.connected,
   );
 }
@@ -1083,8 +1084,10 @@ function peerDetail(
   const offers = state.offers.filter((offer) => offer.peerId === peerId);
   const bootstrap = state.bootstraps.find((record) => record.peerId === peerId);
   const addresses = isLocal ? state.peer?.multiaddrs() ?? [] : peer?.dialAddresses ?? [];
+  const observedAddresses = isLocal ? [] : peer?.observedAddresses ?? [];
   const bootstrapAddresses = bootstrapAddressList(bootstrap);
   const connectionPaths = isLocal ? [] : peer?.connectionPaths ?? [];
+  const visibleAddresses = uniqueStrings([...addresses, ...observedAddresses]);
 
   const summary = document.createElement("div");
   summary.className = "peer-detail-grid";
@@ -1095,13 +1098,21 @@ function peerDetail(
     detailMetric("Active Transport", connectionPathSummary(connectionPaths)),
     detailMetric("Connection Paths", connectionPaths.length.toString()),
     detailMetric("Dial Addresses", addresses.length.toString()),
-    detailMetric("Dialable Transports", transportSummary(addresses)),
+    detailMetric("Observed Addresses", observedAddresses.length.toString()),
+    detailMetric("Known Transports", transportSummary(visibleAddresses)),
     detailMetric("Offers", offers.length.toString()),
   );
 
   wrapper.append(summary);
   wrapper.append(
-    addressInventorySection(peerId, isLocal, addresses, bootstrapAddresses, connectionPaths),
+    addressInventorySection(
+      peerId,
+      isLocal,
+      addresses,
+      observedAddresses,
+      bootstrapAddresses,
+      connectionPaths,
+    ),
   );
   wrapper.append(offerSection(offers));
   return wrapper;
@@ -1124,6 +1135,7 @@ function addressInventorySection(
   peerId: string,
   isLocal: boolean,
   dialAddresses: string[],
+  observedAddresses: string[],
   bootstrapAddresses: string[],
   paths: PeerSummary["connectionPaths"],
 ): HTMLElement {
@@ -1133,7 +1145,7 @@ function addressInventorySection(
   heading.textContent = "Addresses";
   const list = document.createElement("div");
   list.className = "address-inventory";
-  const entries = addressInventory(dialAddresses, bootstrapAddresses, paths);
+  const entries = addressInventory(dialAddresses, observedAddresses, bootstrapAddresses, paths);
   if (entries.length === 0) {
     list.textContent = "None";
   } else {
@@ -1150,12 +1162,13 @@ function addressInventorySection(
 
 type AddressInventoryEntry = {
   address: string;
-  roles: Set<"active" | "dial" | "bootstrap">;
+  roles: Set<"active" | "dial" | "observed" | "bootstrap">;
   paths: PeerSummary["connectionPaths"];
 };
 
 function addressInventory(
   dialAddresses: string[],
+  observedAddresses: string[],
   bootstrapAddresses: string[],
   paths: PeerSummary["connectionPaths"],
 ): AddressInventoryEntry[] {
@@ -1176,6 +1189,9 @@ function addressInventory(
   }
   for (const address of dialAddresses) {
     upsert(address).roles.add("dial");
+  }
+  for (const address of observedAddresses) {
+    upsert(address).roles.add("observed");
   }
   for (const address of bootstrapAddresses) {
     upsert(address).roles.add("bootstrap");
@@ -1678,7 +1694,7 @@ function peerListEventDetail(peers: PeerSummary[]): string {
   return peers
     .map(
       (peer) =>
-        `${peerEventDetail(peer.peerId)} addresses=${peer.dialAddresses.length} transports=${transportSummary(peer.dialAddresses)} active=${connectionPathSummary(peer.connectionPaths)}`,
+        `${peerEventDetail(peer.peerId)} dial=${peer.dialAddresses.length} observed=${peer.observedAddresses.length} transports=${transportSummary(uniqueStrings([...peer.dialAddresses, ...peer.observedAddresses]))} active=${connectionPathSummary(peer.connectionPaths)}`,
     )
     .join(" ; ");
 }

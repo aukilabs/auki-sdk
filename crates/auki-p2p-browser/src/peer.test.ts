@@ -51,12 +51,14 @@ describe("AukiBrowserPeer shell", () => {
         peerId: "native-peer",
         connected: false,
         dialAddresses: ["/memory/native-direct"],
+        observedAddresses: [],
         connectionPaths: [],
       },
       {
         peerId: "relay-peer",
         connected: false,
         dialAddresses: ["/memory/relay"],
+        observedAddresses: [],
         connectionPaths: [],
       },
     ]);
@@ -73,12 +75,14 @@ describe("AukiBrowserPeer shell", () => {
         peerId: "native-peer",
         connected: true,
         dialAddresses: ["/memory/native-direct"],
+        observedAddresses: [],
         connectionPaths: [],
       },
       {
         peerId: "relay-peer",
         connected: true,
         dialAddresses: ["/memory/relay"],
+        observedAddresses: [],
         connectionPaths: [],
       },
     ]);
@@ -93,6 +97,32 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.started).toBe(1);
     expect(transport.stopped).toBe(1);
+  });
+
+  it("derives observed addresses from active connection paths", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/bootstrap"),
+      protocolWasm: await protocolWasmInput(),
+    });
+    transport.setConnectionPaths("native-peer", [
+      memoryConnectionPath("/memory/observed"),
+      memoryConnectionPath("/memory/observed"),
+    ]);
+
+    expect(peer.listPeers()).toEqual([
+      {
+        peerId: "native-peer",
+        connected: false,
+        dialAddresses: ["/memory/bootstrap"],
+        observedAddresses: ["/memory/observed"],
+        connectionPaths: [
+          memoryConnectionPath("/memory/observed"),
+          memoryConnectionPath("/memory/observed"),
+        ],
+      },
+    ]);
   });
 
   it("exports a local browser bootstrap record once dialable", async () => {
@@ -446,6 +476,7 @@ describe("AukiBrowserPeer shell", () => {
         peerId: remotePeerId,
         connected: true,
         dialAddresses: [],
+        observedAddresses: [],
         connectionPaths: [],
       },
     ]);

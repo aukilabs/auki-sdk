@@ -49,6 +49,7 @@ import {
   stringField,
   toAsyncIterable,
   type ByteSourceInput,
+  type PublishedByteFrameInput,
   type LoadedOffer,
   type LocalOfferPublication,
   type OfferSummary,
@@ -75,6 +76,8 @@ export type {
   ByteSource,
   ByteSourceFactory,
   ByteSourceInput,
+  PublishedByteFrame,
+  PublishedByteFrameInput,
   OfferSummary,
   PublicationHandle,
   PublishOfferOptions,
@@ -1398,7 +1401,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function firstChunk(source: ByteSourceInput): Promise<Uint8Array | undefined> {
+async function firstChunk(source: ByteSourceInput): Promise<PublishedByteFrameInput | undefined> {
   for await (const chunk of toAsyncIterable(source)) {
     return chunk;
   }

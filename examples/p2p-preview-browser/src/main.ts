@@ -1,14 +1,19 @@
 import {
   type AukiBrowserBootstrapRecord,
+  type AukiBrowserLocalDomain,
   type AukiBrowserPeer,
   type AukiBrowserPeerTraceEvent,
   type AukiPreviewSubscription,
   type OfferSummary,
+  type PublishedByteFrame,
+  type PublicationHandle,
   type PeerSummary,
   type PreviewFrame,
+  LatestPublishedByteSource,
   createAukiBrowserPeer,
   getPreviewSnapshot,
   openPreviewSubscription,
+  publishGeneratedPreview,
 } from "@aukilabs/auki-p2p-browser";
 import {
   bootstrapRecordText,
@@ -48,6 +53,17 @@ type EventLogEntry = {
   detail?: string;
 };
 
+type LocalPreviewPublication = {
+  domain: AukiBrowserLocalDomain;
+  offerId: string;
+  source: LatestPublishedByteSource;
+  handle: PublicationHandle;
+  timer: number;
+  nextSequence: number;
+  generating: boolean;
+  canvas: HTMLCanvasElement;
+};
+
 type AppState = {
   peer?: AukiBrowserPeer;
   bootstraps: AukiBrowserBootstrapRecord[];
@@ -56,6 +72,7 @@ type AppState = {
   offerStates: Map<string, OfferRuntimeState>;
   openOfferDetailKey?: string;
   events: EventLogEntry[];
+  localPreview?: LocalPreviewPublication;
   status: string;
   lastError?: string;
   busy: boolean;
@@ -89,6 +106,7 @@ const els = {
   peersPanel: element("peers-panel"),
   connectButton: element<HTMLButtonElement>("connect-button"),
   copyBootstrapButton: element<HTMLButtonElement>("copy-bootstrap-button"),
+  publishPreviewButton: element<HTMLButtonElement>("publish-preview-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
   addPeerButton: element<HTMLButtonElement>("add-peer-button"),
   streamSummary: element("stream-summary"),
@@ -132,6 +150,9 @@ els.connectButton.addEventListener("click", () => {
 });
 els.copyBootstrapButton.addEventListener("click", () => {
   void copyLocalBootstrap();
+});
+els.publishPreviewButton.addEventListener("click", () => {
+  void toggleGeneratedPreview();
 });
 els.stopButton.addEventListener("click", () => {
   void stop();
@@ -359,6 +380,74 @@ async function copyLocalBootstrap(): Promise<void> {
   });
 }
 
+async function toggleGeneratedPreview(): Promise<void> {
+  if (state.localPreview) {
+    await runShortAction("Stopping preview", async () => {
+      await stopGeneratedPreview();
+      await refreshPeerData();
+      state.status = "Preview stopped";
+      recordEvent("info", "Generated preview stopped");
+    });
+    return;
+  }
+
+  await runShortAction("Publishing preview", async () => {
+    const peer = state.peer;
+    if (!peer) {
+      throw new Error("Start peer before publishing preview");
+    }
+    const domain = await peer.createLocalDomain({
+      label: "browser-preview-domain",
+      metadata: { source: "browser-generated-preview" },
+    });
+    const source = new LatestPublishedByteSource();
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 180;
+    const offerId = "browser-generated-preview";
+    const firstFrame = await generatedPreviewFrame(canvas, peer.peerId, 0);
+    const handle = await publishGeneratedPreview(peer, source, {
+      domainId: domain.domainId,
+      offerId,
+      displayName: "Browser Generated Preview",
+      metadata: { source: "browser-generated" },
+    });
+    const localPreview: LocalPreviewPublication = {
+      domain,
+      offerId,
+      source,
+      handle,
+      canvas,
+      nextSequence: 1,
+      generating: false,
+      timer: 0,
+    };
+    source.publish(firstFrame);
+    renderLocalGeneratedFrame(localPreview, firstFrame);
+    localPreview.timer = window.setInterval(() => {
+      if (localPreview.generating) {
+        return;
+      }
+      localPreview.generating = true;
+      void publishGeneratedFrame(localPreview, peer.peerId)
+        .catch((error: unknown) => {
+          const message = errorMessage(error);
+          state.lastError = message;
+          recordEvent("error", "Generated preview failed", message);
+          window.clearInterval(localPreview.timer);
+          render();
+        })
+        .finally(() => {
+          localPreview.generating = false;
+        });
+    }, 100);
+    state.localPreview = localPreview;
+    await refreshPeerData();
+    state.status = "Preview published";
+    recordEvent("info", "Generated preview published", `${shortId(domain.domainId, 10)}/${offerId}`);
+  });
+}
+
 function clearAddPeerInput(): void {
   els.addPeerInput.value = "";
   els.addPeerFile.value = "";
@@ -563,6 +652,7 @@ async function stopOfferSubscriptionOnce(
 }
 
 async function stopPeer(): Promise<void> {
+  await stopGeneratedPreview();
   const stops = Array.from(state.offerStates.entries()).map(([key, runtime]) =>
     stopOfferSubscriptionOnce(key, runtime, "Peer stopped").catch(() => undefined),
   );
@@ -576,6 +666,7 @@ async function stopPeer(): Promise<void> {
   state.peers = [];
   state.offers = [];
   state.offerStates.clear();
+  state.localPreview = undefined;
   state.lastError = undefined;
   state.nextSubscriptionToken += 1;
 }
@@ -708,6 +799,7 @@ function renderLiveStats(): void {
   els.streamsPanel.hidden = !hasRemoteContext;
   els.diagnosticsButton.hidden = !hasPeer;
   els.copyBootstrapButton.hidden = !canCopyBootstrap;
+  els.publishPreviewButton.hidden = !hasPeer;
   els.stopButton.hidden = !hasPeer;
   els.connectButton.hidden = hasPeer;
   els.snapshotsReceived.textContent = totals.snapshots.toString();
@@ -733,6 +825,8 @@ function renderLiveStats(): void {
   els.connectButton.textContent = "Start Peer";
   els.copyBootstrapButton.disabled = state.busy || !canCopyBootstrap;
   els.copyBootstrapButton.textContent = "Copy Bootstrap";
+  els.publishPreviewButton.disabled = state.busy || !state.peer;
+  els.publishPreviewButton.textContent = state.localPreview ? "Stop Preview" : "Publish Preview";
   els.stopButton.disabled = state.busy || !state.peer;
   els.addPeerButton.disabled = state.busy || !state.peer;
   els.addPeerButton.textContent = "Add Peer";
@@ -1081,11 +1175,15 @@ function emptyOffersMessage(): string {
 function streamCard(offer: OfferSummary): HTMLElement {
   const key = offerKey(offer);
   const runtime = offerRuntime(key);
+  const isLocal = offer.peerId === state.peer?.peerId;
   const card = document.createElement("article");
   card.className = "stream-card";
   card.dataset.offerCard = encodeOfferKey(key);
   if (runtime.subscription || runtime.subscribing) {
     card.classList.add("streaming");
+  }
+  if (isLocal) {
+    card.classList.add("local-offer");
   }
 
   const frame = document.createElement("div");
@@ -1112,7 +1210,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
   const status = document.createElement("span");
   status.className = `status-pill ${statusClass(runtime)}`;
   status.dataset.role = "status";
-  status.textContent = runtime.status;
+  status.textContent = isLocal && runtime.status === "idle" ? "published" : runtime.status;
   header.append(title, status);
 
   const meta = document.createElement("div");
@@ -1131,7 +1229,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
         runtime.getting ? "Getting" : "Get",
         "get",
         key,
-        state.busy || !canRequestSnapshot(Boolean(state.peer), runtime),
+        isLocal || state.busy || !canRequestSnapshot(Boolean(state.peer), runtime),
       ),
     );
   }
@@ -1143,7 +1241,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
       label,
       action,
       key,
-      state.busy || !state.peer || runtime.stopping || runtime.getting,
+      isLocal || state.busy || !state.peer || runtime.stopping || runtime.getting,
     );
     if (runtime.stopping || runtime.subscribing) {
       button.classList.add("loading");
@@ -1437,6 +1535,121 @@ async function withTimeout<T>(
       clearTimeout(timeout);
     }
   }
+}
+
+async function stopGeneratedPreview(): Promise<void> {
+  const publication = state.localPreview;
+  if (!publication) {
+    return;
+  }
+  window.clearInterval(publication.timer);
+  publication.source.close();
+  await publication.handle.stop();
+  state.localPreview = undefined;
+}
+
+async function publishGeneratedFrame(
+  publication: LocalPreviewPublication,
+  peerId: string,
+): Promise<void> {
+  const sequence = publication.nextSequence;
+  publication.nextSequence += 1;
+  const frame = await generatedPreviewFrame(publication.canvas, peerId, sequence);
+  if (!publication.source.publish(frame)) {
+    window.clearInterval(publication.timer);
+    return;
+  }
+  renderLocalGeneratedFrame(publication, frame);
+}
+
+async function generatedPreviewFrame(
+  canvas: HTMLCanvasElement,
+  peerId: string,
+  sequence: number,
+): Promise<PublishedByteFrame> {
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Canvas 2D context unavailable");
+  }
+  const width = canvas.width;
+  const height = canvas.height;
+  const hue = stableHue(peerId);
+  const shift = sequence % width;
+  const gradient = context.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, `hsl(${hue}, 72%, 36%)`);
+  gradient.addColorStop(1, `hsl(${(hue + 78) % 360}, 76%, 48%)`);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = "rgba(0, 0, 0, 0.24)";
+  context.fillRect((shift * 3) % width, 0, width / 4, height);
+  context.fillStyle = "rgba(255, 255, 255, 0.62)";
+  context.beginPath();
+  context.arc((shift * 5) % width, height / 2, 26, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "rgba(15, 15, 15, 0.76)";
+  context.font = "600 22px system-ui, sans-serif";
+  context.fillText(sequence.toString().padStart(5, "0"), 16, height - 18);
+
+  return {
+    bytes: await canvasJpegBytes(canvas),
+    sequence,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function renderLocalGeneratedFrame(
+  publication: LocalPreviewPublication,
+  frame: PublishedByteFrame,
+): void {
+  const peer = state.peer;
+  if (!peer) {
+    return;
+  }
+  const key = `${peer.peerId}\u0000${publication.domain.domainId}\u0000${publication.offerId}`;
+  const runtime = offerRuntime(key);
+  const preview: PreviewFrame = {
+    message: {
+      type: "auki.spatial_message.v1",
+      domain_id: publication.domain.domainId,
+      offer_id: publication.offerId,
+      payload: {},
+    },
+    bytes: frame.bytes,
+    sequence: frame.sequence === undefined ? undefined : frame.sequence.toString(),
+    generatedAt: frame.generatedAt,
+  };
+  const bytes = renderOfferFrame(key, runtime, preview);
+  runtime.frames += 1;
+  runtime.totalBytes += bytes;
+  runtime.status = "published";
+  updateStreamCardRuntime(key, runtime);
+  updateOpenOfferDetail(key);
+  renderLiveStats();
+}
+
+async function canvasJpegBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (value) => {
+        if (value) {
+          resolve(value);
+        } else {
+          reject(new Error("Failed to encode generated preview frame"));
+        }
+      },
+      "image/jpeg",
+      0.82,
+    );
+  });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function stableHue(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) % 360;
+  }
+  return hash;
 }
 
 async function copyText(text: string): Promise<void> {

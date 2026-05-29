@@ -164,26 +164,26 @@ These decisions are locked for the browser-to-browser slice.
 
 ## Phase 3 - Browser Publishing
 
-- [ ] Add demo support for publishing a generated browser preview stream.
-- [ ] Keep generated preview as example/demo source code, not SDK core logic.
-- [ ] Use the existing generic `publishOffer(...)` and preview helper profile.
-- [ ] Add a browser equivalent of native `PublishedByteFrame`:
+- [x] Add demo support for publishing a generated browser preview stream.
+- [x] Keep generated preview as example/demo source code, not SDK core logic.
+- [x] Use the existing generic `publishOffer(...)` and preview helper profile.
+- [x] Add a browser equivalent of native `PublishedByteFrame`:
       `bytes`, optional `sequence`, optional `generatedAt`.
-- [ ] Add a browser equivalent of native `LatestPublishedByteSource` with:
+- [x] Add a browser equivalent of native `LatestPublishedByteSource` with:
       `publish(frame)`, `latest()`, `close()`, and per-subscriber streams.
-- [ ] Use one shared/latest generated source so Get and Subscribe observe the
+- [x] Use one shared/latest generated source so Get and Subscribe observe the
       same logical stream.
-- [ ] Make browser Get return the latest frame from that shared source, matching
+- [x] Make browser Get return the latest frame from that shared source, matching
       `publish_preview_offer_with_latest_source(...)` on native.
-- [ ] Make every browser Subscribe consume from the same producer source, not an
+- [x] Make every browser Subscribe consume from the same producer source, not an
       independent generator instance per subscriber.
-- [ ] Preserve producer sequence numbers and generated timestamps in browser
+- [x] Preserve producer sequence numbers and generated timestamps in browser
       spatial messages when the source provides them.
 - [ ] Add browser backpressure policy support for live published streams:
       `LatestOnly`, `Bounded`, and `CloseOnFull`.
 - [ ] Use `LatestOnly` as the browser generated-preview default to match native
       preview behavior.
-- [ ] Disable local Get/Subscribe buttons for offers published by the same tab,
+- [x] Disable local Get/Subscribe buttons for offers published by the same tab,
       unless we explicitly add local loopback later.
 - [ ] Add tests that browser A published offers are visible through browser B's
       Offer Catalog request.
@@ -204,9 +204,9 @@ These decisions are locked for the browser-to-browser slice.
 - [ ] After start, show the local browser peer and an Add Peer action.
 - [x] After connecting to a Sentinel/bootstrap node, expose a Copy Local Browser
       Bootstrap action.
-- [ ] Add a Publish Generated Preview action.
-- [ ] Show browser-published offers in the same offer grid as Sentinel offers.
-- [ ] Mark local offers clearly and disable remote-only actions on them.
+- [x] Add a Publish Generated Preview action.
+- [x] Show browser-published offers in the same offer grid as Sentinel offers.
+- [x] Mark local offers clearly and disable remote-only actions on them.
 - [ ] Show active connection path details in the peer modal:
       transport, relay involvement, direct/relayed, connection id, and address.
 - [ ] Show enough event detail to troubleshoot browser-to-browser dialing:

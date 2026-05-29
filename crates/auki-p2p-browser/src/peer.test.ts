@@ -8,7 +8,7 @@ import {
   type SpatialMessage,
 } from "./peer.js";
 import { publishPreviewOffer } from "./preview.js";
-import { createSubscribeEndForPath } from "./publication.js";
+import { createSubscribeEndForPath, LatestPublishedByteSource } from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
   createGetRequest,
@@ -1269,6 +1269,78 @@ describe("AukiBrowserPeer shell", () => {
         },
       }),
     );
+  });
+
+  it("serves Get and Subscribe from one latest published source", async () => {
+    const fixture = await fixtureJson("v1_get.json");
+    const inputs = fixture.inputs as JsonObject;
+    const domainId = inputs.domain_id as string;
+    const offerId = "browser-bytes";
+    const payloadType = inputs.selected_payload_type as string;
+    const source = new LatestPublishedByteSource();
+    source.publish({
+      bytes: new Uint8Array([7, 8, 9]),
+      sequence: 42,
+      generatedAt: "2026-05-29T00:00:00Z",
+    });
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+    await peer.publishOffer({
+      source,
+      domainId,
+      offerId,
+      kind: "example.bytes",
+      payload: {
+        type: payloadType,
+        encoding: "binary",
+        media_type: "application/octet-stream",
+        schema_version: "1",
+      },
+      accessModes: ["get", "subscribe"],
+    });
+
+    const getStream = await transport.openInbound("remote-peer", GET_PROTOCOL_ID);
+    const getReader = new JsonFrameReader(getStream);
+    const getRequest = await createGetRequest(domainId, offerId, undefined, [payloadType], 4096);
+    await writeJsonFrame(getStream, getRequest, DEFAULT_FRAME_BODY_LIMIT);
+    const getResponse = await parseGetResponse(
+      (await getReader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+    );
+    const getMessage = await validateGetResponseForRequest(
+      getRequest,
+      getResponse,
+      payloadType,
+    );
+
+    const subscribeStream = await transport.openInbound("remote-peer", SUBSCRIBE_PROTOCOL_ID);
+    const subscribeReader = new JsonFrameReader(subscribeStream);
+    await writeJsonFrame(
+      subscribeStream,
+      await createSubscribeRequest(domainId, offerId, undefined, [payloadType], 4096),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    const accept = await parseSubscribeStartResult(
+      (await subscribeReader.read(DEFAULT_FRAME_BODY_LIMIT)).value,
+    );
+    const subscribeDataFrame = await subscribeReader.read(DEFAULT_FRAME_BODY_LIMIT);
+    const subscribeData = await validateSubscribeDataMessage(
+      accept,
+      subscribeDataFrame.value,
+      subscribeDataFrame.bodyLength,
+      4096,
+    );
+
+    expect(getMessage).toMatchObject({
+      sequence: "42",
+      generated_at: "2026-05-29T00:00:00Z",
+      payload: expect.objectContaining({ bytes: "BwgJ" }),
+    });
+    expect(subscribeData).toMatchObject({
+      sequence: "42",
+      generated_at: "2026-05-29T00:00:00Z",
+      payload: expect.objectContaining({ bytes: "BwgJ" }),
+    });
+    source.close();
   });
 
   it("keeps preview publishing as a helper over generic offer publishing", async () => {

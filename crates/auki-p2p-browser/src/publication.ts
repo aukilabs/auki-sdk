@@ -15,7 +15,15 @@ export type OfferSummary = {
   accessModes: string[];
 };
 
-export type ByteSource = AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+export type PublishedByteFrame = {
+  readonly bytes: Uint8Array;
+  readonly sequence?: string | number | bigint;
+  readonly generatedAt?: string;
+};
+export type PublishedByteFrameInput = Uint8Array | PublishedByteFrame;
+export type ByteSource =
+  | AsyncIterable<PublishedByteFrameInput>
+  | Iterable<PublishedByteFrameInput>;
 export type ByteSourceFactory = () => ByteSource;
 export type ByteSourceInput = ByteSource | ByteSourceFactory;
 
@@ -47,6 +55,96 @@ export type LocalOfferPublication = {
   stopped: boolean;
   nextSequence: bigint;
 };
+
+type LatestPublishedByteSourceRead =
+  | {
+      kind: "frame";
+      frame: PublishedByteFrame;
+      version: number;
+    }
+  | { kind: "pending" }
+  | { kind: "closed" };
+
+export class LatestPublishedByteSource implements AsyncIterable<PublishedByteFrame> {
+  private latestFrame?: PublishedByteFrame;
+  private frameVersion = 0;
+  private closed = false;
+  private readonly waiters = new Set<() => void>();
+
+  publish(frame: PublishedByteFrameInput): boolean {
+    if (this.closed) {
+      return false;
+    }
+    this.latestFrame = clonePublishedByteFrame(normalizePublishedByteFrame(frame));
+    this.frameVersion += 1;
+    this.wake();
+    return true;
+  }
+
+  latest(): PublishedByteFrame | undefined {
+    return this.latestFrame ? clonePublishedByteFrame(this.latestFrame) : undefined;
+  }
+
+  latestBytes(): Uint8Array | undefined {
+    return this.latestFrame?.bytes.slice();
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.wake();
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  stream(): AsyncIterable<PublishedByteFrame> {
+    return this;
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<PublishedByteFrame> {
+    let lastVersion = 0;
+    for (;;) {
+      const read = this.readAfter(lastVersion);
+      if (read.kind === "frame") {
+        lastVersion = read.version;
+        yield read.frame;
+        continue;
+      }
+      if (read.kind === "closed") {
+        return;
+      }
+      await this.waitForFrame();
+    }
+  }
+
+  private readAfter(lastVersion: number): LatestPublishedByteSourceRead {
+    if (this.latestFrame && this.frameVersion > lastVersion) {
+      return {
+        kind: "frame",
+        frame: clonePublishedByteFrame(this.latestFrame),
+        version: this.frameVersion,
+      };
+    }
+    return this.closed ? { kind: "closed" } : { kind: "pending" };
+  }
+
+  private waitForFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      this.waiters.add(resolve);
+    });
+  }
+
+  private wake(): void {
+    for (const resolve of this.waiters) {
+      resolve();
+    }
+    this.waiters.clear();
+  }
+}
 
 export async function createPublishedOffer(
   peerId: string,
@@ -195,21 +293,26 @@ export async function createSubscribeEndForPath(
 
 export async function createPublicationSpatialMessage(
   publication: LocalOfferPublication,
-  chunk: Uint8Array,
+  chunk: PublishedByteFrameInput,
 ): Promise<JsonObject> {
-  const sequence = publication.nextSequence;
-  publication.nextSequence += 1n;
+  const frame = normalizePublishedByteFrame(chunk);
+  const sequence = sequenceString(frame.sequence, publication.nextSequence);
+  if (frame.sequence === undefined) {
+    publication.nextSequence += 1n;
+  } else {
+    publication.nextSequence = maxBigint(publication.nextSequence, BigInt(sequence) + 1n);
+  }
   const payload = {
     ...payloadDescriptor(publication.offer.raw),
-    bytes: base64UrlEncode(chunk),
+    bytes: base64UrlEncode(frame.bytes),
   };
   return {
     type: "auki.spatial_message.v1",
     domain_id: publication.offer.domainId,
     offer_id: publication.offer.offerId,
     payload,
-    sequence: sequence.toString(),
-    generated_at: new Date().toISOString(),
+    sequence,
+    generated_at: frame.generatedAt ?? new Date().toISOString(),
   };
 }
 
@@ -224,7 +327,9 @@ export function requestAcceptsPayload(
   return acceptedPayloadTypes.length === 0 || acceptedPayloadTypes.includes(payloadType);
 }
 
-export async function* toAsyncIterable(source: ByteSourceInput): AsyncIterable<Uint8Array> {
+export async function* toAsyncIterable(
+  source: ByteSourceInput,
+): AsyncIterable<PublishedByteFrameInput> {
   const opened = openByteSource(source);
   if (isAsyncIterable(opened)) {
     for await (const chunk of opened) {
@@ -298,8 +403,55 @@ function openByteSource(source: ByteSourceInput): ByteSource {
   return typeof source === "function" ? source() : source;
 }
 
-function isAsyncIterable(source: ByteSource): source is AsyncIterable<Uint8Array> {
+function isAsyncIterable(source: ByteSource): source is AsyncIterable<PublishedByteFrameInput> {
   return Symbol.asyncIterator in source;
+}
+
+function normalizePublishedByteFrame(frame: PublishedByteFrameInput): PublishedByteFrame {
+  if (frame instanceof Uint8Array) {
+    return { bytes: frame };
+  }
+  if (!(frame.bytes instanceof Uint8Array)) {
+    throw new Error("Published byte frame bytes must be a Uint8Array");
+  }
+  return frame;
+}
+
+function clonePublishedByteFrame(frame: PublishedByteFrame): PublishedByteFrame {
+  return {
+    bytes: frame.bytes.slice(),
+    ...(frame.sequence === undefined ? {} : { sequence: frame.sequence }),
+    ...(frame.generatedAt === undefined ? {} : { generatedAt: frame.generatedAt }),
+  };
+}
+
+function sequenceString(
+  sequence: PublishedByteFrame["sequence"],
+  fallback: bigint,
+): string {
+  if (sequence === undefined) {
+    return fallback.toString();
+  }
+  if (typeof sequence === "bigint") {
+    if (sequence < 0n) {
+      throw new Error("Published byte frame sequence must be non-negative");
+    }
+    return sequence.toString();
+  }
+  if (typeof sequence === "number") {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) {
+      throw new Error("Published byte frame sequence must be a non-negative safe integer");
+    }
+    return sequence.toString();
+  }
+  if (!/^(0|[1-9]\d*)$/.test(sequence)) {
+    throw new Error("Published byte frame sequence must be a non-negative integer string");
+  }
+  return sequence;
+}
+
+function maxBigint(left: bigint, right: bigint): bigint {
+  return left > right ? left : right;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

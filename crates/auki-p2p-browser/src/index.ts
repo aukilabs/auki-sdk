@@ -39,6 +39,8 @@ export type {
   ByteSource,
   ByteSourceFactory,
   ByteSourceInput,
+  PublishedByteFrame,
+  PublishedByteFrameInput,
   OfferSummary,
   PeerSummary,
   PublicationHandle,
@@ -49,6 +51,7 @@ export type {
   SubscribeRequest,
 } from "./peer.js";
 export { createAukiBrowserPeer } from "./peer.js";
+export { LatestPublishedByteSource } from "./publication.js";
 export {
   GENERATED_PREVIEW_OFFER_KIND,
   GENERATED_PREVIEW_PAYLOAD_TYPE,

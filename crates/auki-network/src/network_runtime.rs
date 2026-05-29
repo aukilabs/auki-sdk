@@ -1557,9 +1557,7 @@ impl StreamSubscriptionPointCloud {
 pub struct StreamSubscriptionJointEncoders {
     inner: tokio::sync::Mutex<
         Option<
-            crate::stream_runtime::StreamSubscription<
-                crate::stream_protocol::joint_encoders::Data,
-            >,
+            crate::stream_runtime::StreamSubscription<crate::stream_protocol::joint_encoders::Data>,
         >,
     >,
     manifest_bytes: Vec<u8>,
@@ -1650,9 +1648,7 @@ impl StreamSubscriptionDetection {
     /// Construct from an upstream typed subscription. Encodes the
     /// manifest once at construction.
     pub fn from_inner(
-        inner: crate::stream_runtime::StreamSubscription<
-            auki_datatypes::detection::DetectionFrame,
-        >,
+        inner: crate::stream_runtime::StreamSubscription<auki_datatypes::detection::DetectionFrame>,
     ) -> Arc<Self> {
         use prost::Message;
         let manifest_bytes = inner.manifest.encode_to_vec();

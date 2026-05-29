@@ -481,7 +481,8 @@ mod tests {
             let mut log: auki_logs::Log<point_cloud::Data> =
                 auki_logs::Log::open(dir.path(), manifest).unwrap();
             log.append(100, &step3_point_cloud_data()).unwrap();
-            log.append(200, &point_cloud::Data { data: vec![] }).unwrap();
+            log.append(200, &point_cloud::Data { data: vec![] })
+                .unwrap();
         }
         let reader: auki_logs::LogReader<point_cloud::Data> =
             auki_logs::Log::<point_cloud::Data>::read(dir.path()).unwrap();

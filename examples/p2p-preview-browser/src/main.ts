@@ -65,11 +65,13 @@ type LocalPreviewPublication = {
 
 type AppState = {
   peer?: AukiBrowserPeer;
+  peerRefreshTimer?: number;
   bootstraps: AukiBrowserBootstrapRecord[];
   peers: PeerSummary[];
   offers: OfferSummary[];
   offerStates: Map<string, OfferRuntimeState>;
   openOfferDetailKey?: string;
+  openPeerDetailPeerId?: string;
   events: EventLogEntry[];
   localPreview?: LocalPreviewPublication;
   status: string;
@@ -83,6 +85,7 @@ type AppState = {
 };
 
 const SUBSCRIPTION_STOP_TIMEOUT_MS = 2_500;
+const PEER_REFRESH_INTERVAL_MS = 500;
 
 const state: AppState = {
   bootstraps: [],
@@ -175,6 +178,9 @@ els.addPeerFile.addEventListener("change", () => {
 });
 els.peerDetailClose.addEventListener("click", () => {
   els.peerDetailDialog.close();
+});
+els.peerDetailDialog.addEventListener("close", () => {
+  state.openPeerDetailPeerId = undefined;
 });
 els.peerDetailContent.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) {
@@ -712,6 +718,7 @@ async function stopOfferSubscriptionOnce(
 }
 
 async function stopPeer(): Promise<void> {
+  stopPeerObserver();
   await stopGeneratedPreview();
   const stops = Array.from(state.offerStates.entries())
     .filter(([, runtime]) => runtime.subscription || runtime.abort || runtime.subscribing)
@@ -743,6 +750,7 @@ async function ensurePeerStarted(bootstrap?: unknown): Promise<AukiBrowserPeer> 
     trace: handlePeerTrace,
   });
   state.peer = peer;
+  startPeerObserver();
   state.status = "Peer started";
   recordEvent("info", "Browser peer started", shortId(peer.peerId, 12));
   return peer;
@@ -762,6 +770,68 @@ async function refreshPeerData(): Promise<void> {
   }
   state.offers = await peer.listOffers();
   recordEvent("info", "Offer catalog loaded", offerCatalogEventDetail(state.offers, peers));
+}
+
+function startPeerObserver(): void {
+  if (state.peerRefreshTimer !== undefined) {
+    return;
+  }
+  state.peerRefreshTimer = window.setInterval(refreshPeerStateFromSdk, PEER_REFRESH_INTERVAL_MS);
+}
+
+function stopPeerObserver(): void {
+  if (state.peerRefreshTimer === undefined) {
+    return;
+  }
+  window.clearInterval(state.peerRefreshTimer);
+  state.peerRefreshTimer = undefined;
+}
+
+function refreshPeerStateFromSdk(): void {
+  const peer = state.peer;
+  if (!peer) {
+    return;
+  }
+
+  const previousPeerIds = new Set(state.peers.map((summary) => summary.peerId));
+  const peers = peer.listPeers();
+  const observedPeers = peers.filter((summary) => !previousPeerIds.has(summary.peerId));
+  state.peers = peers;
+
+  for (const summary of observedPeers) {
+    recordEvent(
+      "info",
+      "Peer observed",
+      `${peerEventDetail(summary.peerId)} active=${connectionPathSummary(summary.connectionPaths)}`,
+    );
+  }
+
+  renderLiveStats();
+  renderPeerSidebar(state.peers);
+  if (state.openPeerDetailPeerId) {
+    refreshOpenPeerDetail(state.openPeerDetailPeerId);
+  }
+  renderEvents();
+  if (observedPeers.length > 0) {
+    void refreshOffersAfterPeerObservation(observedPeers);
+  }
+}
+
+async function refreshOffersAfterPeerObservation(observedPeers: PeerSummary[]): Promise<void> {
+  try {
+    await refreshPeerData();
+    render();
+  } catch (error) {
+    const message = errorMessage(error);
+    state.lastError = message;
+    recordEvent(
+      "error",
+      "Offer refresh failed",
+      `${peerListEventDetail(observedPeers)} error=${message}`,
+    );
+    renderLiveStats();
+    renderEvents();
+  }
 }
 
 function openAddPeerDialog(): void {
@@ -970,6 +1040,7 @@ function openPeerDetail(peerId: string): void {
     return;
   }
 
+  state.openPeerDetailPeerId = peerId;
   els.peerDetailContent.replaceChildren(peerDetail(peerId, remotePeer, isLocal));
   els.peerDetailDialog.showModal();
 }
@@ -982,6 +1053,7 @@ function refreshOpenPeerDetail(peerId: string): void {
   const isLocal = state.peer?.peerId === peerId;
   if (!remotePeer && !isLocal) {
     els.peerDetailDialog.close();
+    state.openPeerDetailPeerId = undefined;
     return;
   }
   els.peerDetailContent.replaceChildren(peerDetail(peerId, remotePeer, isLocal));

@@ -326,9 +326,6 @@ class Libp2pBrowserTransport implements BrowserTransport {
     addresses: string[],
     protocol: string,
   ): Promise<BrowserProtocolStream> {
-    if (addresses.length === 0) {
-      throw new Error(`No bootstrap addresses available for ${protocol}`);
-    }
     const peer = peerIdFromString(peerId);
     return openBrowserProtocolStream(
       this.node.getConnections(peer),
@@ -365,6 +362,10 @@ export async function openBrowserProtocolStream(
       }
       await connection.close().catch(() => undefined);
     }
+  }
+
+  if (addresses.length === 0) {
+    throw new Error(`No active connection or bootstrap addresses available for ${protocol}`);
   }
 
   const connection = await dial(addresses, { force: false });

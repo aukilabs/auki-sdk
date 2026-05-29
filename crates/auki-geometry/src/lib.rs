@@ -226,9 +226,24 @@ pub fn spatial_transform_to_matrix4(transform: &SpatialTransform) -> Result<Matr
     let rotation = spatial_transform_rotation(transform)?;
     let translation = spatial_transform_translation(transform);
     Ok([
-        [rotation[0][0], rotation[0][1], rotation[0][2], translation.x],
-        [rotation[1][0], rotation[1][1], rotation[1][2], translation.y],
-        [rotation[2][0], rotation[2][1], rotation[2][2], translation.z],
+        [
+            rotation[0][0],
+            rotation[0][1],
+            rotation[0][2],
+            translation.x,
+        ],
+        [
+            rotation[1][0],
+            rotation[1][1],
+            rotation[1][2],
+            translation.y,
+        ],
+        [
+            rotation[2][0],
+            rotation[2][1],
+            rotation[2][2],
+            translation.z,
+        ],
         [0.0, 0.0, 0.0, 1.0],
     ])
 }
@@ -893,8 +908,17 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_identity() {
         let identity = SpatialTransform {
-            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&identity).unwrap(),
@@ -910,8 +934,17 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_translation_only() {
         let t = SpatialTransform {
-            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }),
+            translation: Some(Vec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&t).unwrap(),
@@ -929,8 +962,17 @@ mod tests {
         // 90° rotation around +Z: x→y, y→−x
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let t = SpatialTransform {
-            translation: Some(Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: half,
+                w: half,
+            }),
         };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&t).unwrap(),
@@ -946,7 +988,10 @@ mod tests {
     #[test]
     fn spatial_transform_to_matrix4_treats_missing_as_zero_identity() {
         // Both None: should produce 4x4 identity.
-        let none = SpatialTransform { translation: None, orientation: None };
+        let none = SpatialTransform {
+            translation: None,
+            orientation: None,
+        };
         assert_matrix4_close(
             spatial_transform_to_matrix4(&none).unwrap(),
             [
@@ -963,8 +1008,17 @@ mod tests {
         // Build a pose, send it to matrix4, decode it back. Should round-trip.
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let original = SpatialTransform {
-            translation: Some(Vec3 { x: 1.0, y: 2.0, z: 3.0 }),
-            orientation: Some(Quat { x: 0.0, y: 0.0, z: half, w: half }),
+            translation: Some(Vec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: half,
+                w: half,
+            }),
         };
         let matrix = spatial_transform_to_matrix4(&original).unwrap();
         let decoded = spatial_transform_from_matrix4(matrix).unwrap();
@@ -981,10 +1035,22 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0],
         ];
         let decoded = spatial_transform_from_matrix4(identity).unwrap();
-        assert_vec3_close(decoded.translation.unwrap(), Vec3 { x: 0.0, y: 0.0, z: 0.0 });
+        assert_vec3_close(
+            decoded.translation.unwrap(),
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        );
         assert_quat_equivalent(
             decoded.orientation.unwrap(),
-            Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
+            Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
         );
     }
 }

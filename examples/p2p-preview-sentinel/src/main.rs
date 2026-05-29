@@ -399,7 +399,15 @@ fn print_state(
     let now = now_rfc3339()?;
     let runtime_status = runtime.status().clone();
     let active_subscriptions = runtime.active_subscriptions();
-    let (snapshot, offers, relationships, peer_id, dialable_addresses, browser_relay_addresses) = {
+    let (
+        snapshot,
+        offers,
+        relationships,
+        peer_id,
+        dialable_addresses,
+        browser_relay_addresses,
+        relay_status,
+    ) = {
         let node = runtime.node_mut();
         (
             node.status_snapshot(&now)?,
@@ -408,6 +416,7 @@ fn print_state(
             node.peer_id(),
             node.observed_dialable_listen_addresses().len(),
             node.observed_browser_relay_server_addresses().len(),
+            node.relay_server_status(),
         )
     };
 
@@ -458,6 +467,39 @@ fn print_state(
         runtime_status.inbound_accept_queue_full,
         runtime_status.inbound_accept_queue_closed,
     );
+    println!(
+        "relay_server: enabled={} reservations={} active_circuits={} reservation_accepts={} reservation_renewals={} reservation_denied={} reservation_closed={} reservation_timed_out={} circuit_accepts={} circuit_denied={} circuit_closed={} failures={}",
+        relay_status.enabled,
+        relay_status.active_reservations,
+        relay_status.active_circuits,
+        relay_status.reservations_accepted,
+        relay_status.reservations_renewed,
+        relay_status.reservations_denied,
+        relay_status.reservations_closed,
+        relay_status.reservations_timed_out,
+        relay_status.circuits_accepted,
+        relay_status.circuits_denied,
+        relay_status.circuits_closed,
+        relay_status.failures,
+    );
+    if !relay_status.reserved_peers.is_empty() {
+        println!("relay_reservations:");
+        for peer_id in &relay_status.reserved_peers {
+            println!("  peer={peer_id}");
+        }
+    }
+    if !relay_status.active_circuit_peers.is_empty() {
+        println!("relay_circuits:");
+        for circuit in &relay_status.active_circuit_peers {
+            println!(
+                "  src={} dst={} count={}",
+                circuit.src_peer_id, circuit.dst_peer_id, circuit.count,
+            );
+        }
+    }
+    if let Some(error) = &relay_status.last_failure {
+        println!("last_relay_failure: {error}");
+    }
     if let Some(error) = last_failure {
         println!("last_failure: {error}");
     }

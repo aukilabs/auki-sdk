@@ -27,7 +27,7 @@ use multiaddr::Protocol;
 use rand::thread_rng;
 use serde_json::{Map, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
     time::Duration,
 };
@@ -106,6 +106,52 @@ pub struct AukiBrowserBootstrapRecord {
     pub relay_server_addresses: Vec<Multiaddr>,
     /// Unique union of direct, relay-mediated, and relay-server bootstrap addresses.
     pub bootstrap_addresses: Vec<Multiaddr>,
+}
+
+/// Runtime diagnostics for the local Circuit Relay v2 server role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AukiRelayServerStatus {
+    /// Whether the relay server behaviour is enabled locally.
+    pub enabled: bool,
+    /// Number of peers with an active relay reservation.
+    pub active_reservations: usize,
+    /// Number of active relayed circuits through this node.
+    pub active_circuits: usize,
+    /// Reservation requests accepted since node start.
+    pub reservations_accepted: u64,
+    /// Reservation requests that renewed an existing reservation.
+    pub reservations_renewed: u64,
+    /// Reservation requests denied since node start.
+    pub reservations_denied: u64,
+    /// Reservations closed since node start.
+    pub reservations_closed: u64,
+    /// Reservations timed out since node start.
+    pub reservations_timed_out: u64,
+    /// Circuit requests accepted since node start.
+    pub circuits_accepted: u64,
+    /// Circuit requests denied since node start.
+    pub circuits_denied: u64,
+    /// Circuits closed since node start.
+    pub circuits_closed: u64,
+    /// Relay-server operation failures since node start.
+    pub failures: u64,
+    /// Peers currently holding relay reservations.
+    pub reserved_peers: Vec<PeerId>,
+    /// Active circuit pairs currently using this relay.
+    pub active_circuit_peers: Vec<AukiRelayCircuitStatus>,
+    /// Last relay-server failure or denial diagnostic.
+    pub last_failure: Option<String>,
+}
+
+/// One active relay circuit pair as observed by the relay server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AukiRelayCircuitStatus {
+    /// Peer opening the relayed circuit.
+    pub src_peer_id: PeerId,
+    /// Destination peer reached through the relayed circuit.
+    pub dst_peer_id: PeerId,
+    /// Active circuit count for this source/destination pair.
+    pub count: usize,
 }
 
 /// Public events surfaced by the node skeleton.
@@ -197,6 +243,7 @@ pub struct AukiP2pNode {
     observed_listen_addresses: Vec<Multiaddr>,
     pending_events: VecDeque<AukiP2pEvent>,
     connections: ConnectionTracker,
+    relay_server: RelayServerTracker,
     swarm: Swarm<Behaviour>,
 }
 
@@ -204,6 +251,22 @@ pub struct AukiP2pNode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ConnectionTracker {
     established: HashMap<PeerId, Vec<TrackedConnection>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RelayServerTracker {
+    reservations: HashSet<PeerId>,
+    circuits: HashMap<(PeerId, PeerId), usize>,
+    reservations_accepted: u64,
+    reservations_renewed: u64,
+    reservations_denied: u64,
+    reservations_closed: u64,
+    reservations_timed_out: u64,
+    circuits_accepted: u64,
+    circuits_denied: u64,
+    circuits_closed: u64,
+    failures: u64,
+    last_failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,6 +488,7 @@ impl AukiP2pNode {
             observed_listen_addresses: Vec::new(),
             pending_events: VecDeque::new(),
             connections: ConnectionTracker::default(),
+            relay_server: RelayServerTracker::default(),
             swarm,
         })
     }
@@ -576,6 +640,11 @@ impl AukiP2pNode {
         self.connections.active_paths(peer_id)
     }
 
+    /// Runtime diagnostics for this node's local Circuit Relay v2 server role.
+    pub fn relay_server_status(&self) -> AukiRelayServerStatus {
+        self.relay_server.snapshot(self.config.relay_server.enabled)
+    }
+
     /// Add one operator-supplied advertised address.
     pub fn add_advertised_address(&mut self, address: Multiaddr) {
         push_unique(&mut self.config.advertised_addresses, address);
@@ -615,6 +684,7 @@ impl AukiP2pNode {
             "relay_server_enabled".to_owned(),
             Value::Bool(self.config.relay_server.enabled),
         );
+        object.insert("relay_server".to_owned(), self.relay_server_status_value());
         object.insert(
             "relay_involved".to_owned(),
             Value::Bool(self.connections.relay_involved()),
@@ -776,6 +846,9 @@ impl AukiP2pNode {
                     return Some(AukiP2pEvent::IncomingConnectionError {
                         error: error.to_string(),
                     });
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Relay(event)) => {
+                    self.relay_server.record(event);
                 }
                 _ => {}
             }
@@ -941,6 +1014,173 @@ impl ConnectionTracker {
     }
 }
 
+impl RelayServerTracker {
+    #[allow(deprecated)]
+    fn record(&mut self, event: relay::Event) {
+        match event {
+            relay::Event::ReservationReqAccepted {
+                src_peer_id,
+                renewed,
+            } => {
+                if renewed {
+                    self.reservations_renewed = self.reservations_renewed.saturating_add(1);
+                } else {
+                    self.reservations_accepted = self.reservations_accepted.saturating_add(1);
+                }
+                self.reservations.insert(src_peer_id);
+            }
+            relay::Event::ReservationReqDenied {
+                src_peer_id,
+                status,
+            } => {
+                self.reservations_denied = self.reservations_denied.saturating_add(1);
+                self.last_failure = Some(format!(
+                    "relay reservation denied for {src_peer_id}: {status:?}"
+                ));
+            }
+            relay::Event::ReservationClosed { src_peer_id } => {
+                self.reservations_closed = self.reservations_closed.saturating_add(1);
+                self.reservations.remove(&src_peer_id);
+            }
+            relay::Event::ReservationTimedOut { src_peer_id } => {
+                self.reservations_timed_out = self.reservations_timed_out.saturating_add(1);
+                self.reservations.remove(&src_peer_id);
+            }
+            relay::Event::CircuitReqAccepted {
+                src_peer_id,
+                dst_peer_id,
+            } => {
+                self.circuits_accepted = self.circuits_accepted.saturating_add(1);
+                *self.circuits.entry((src_peer_id, dst_peer_id)).or_insert(0) += 1;
+            }
+            relay::Event::CircuitReqDenied {
+                src_peer_id,
+                dst_peer_id,
+                status,
+            } => {
+                self.circuits_denied = self.circuits_denied.saturating_add(1);
+                self.last_failure = Some(format!(
+                    "relay circuit denied from {src_peer_id} to {dst_peer_id}: {status:?}"
+                ));
+            }
+            relay::Event::CircuitClosed {
+                src_peer_id,
+                dst_peer_id,
+                error,
+            } => {
+                self.circuits_closed = self.circuits_closed.saturating_add(1);
+                self.decrement_circuit(src_peer_id, dst_peer_id);
+                if let Some(error) = error {
+                    self.record_failure(format!(
+                        "relay circuit closed from {src_peer_id} to {dst_peer_id}: {error}"
+                    ));
+                }
+            }
+            relay::Event::ReservationReqAcceptFailed { src_peer_id, error } => {
+                self.record_failure(format!(
+                    "relay reservation accept failed for {src_peer_id}: {error}"
+                ));
+            }
+            relay::Event::ReservationReqDenyFailed { src_peer_id, error } => {
+                self.record_failure(format!(
+                    "relay reservation deny failed for {src_peer_id}: {error}"
+                ));
+            }
+            relay::Event::CircuitReqDenyFailed {
+                src_peer_id,
+                dst_peer_id,
+                error,
+            } => {
+                self.record_failure(format!(
+                    "relay circuit deny failed from {src_peer_id} to {dst_peer_id}: {error}"
+                ));
+            }
+            relay::Event::CircuitReqOutboundConnectFailed {
+                src_peer_id,
+                dst_peer_id,
+                error,
+            } => {
+                self.record_failure(format!(
+                    "relay circuit outbound connect failed from {src_peer_id} to {dst_peer_id}: {error}"
+                ));
+            }
+            relay::Event::CircuitReqAcceptFailed {
+                src_peer_id,
+                dst_peer_id,
+                error,
+            } => {
+                self.record_failure(format!(
+                    "relay circuit accept failed from {src_peer_id} to {dst_peer_id}: {error}"
+                ));
+            }
+        }
+    }
+
+    fn snapshot(&self, enabled: bool) -> AukiRelayServerStatus {
+        let mut reserved_peers: Vec<_> = self.reservations.iter().copied().collect();
+        reserved_peers.sort_by_key(|peer_id| peer_id.to_string());
+
+        let mut active_circuit_peers: Vec<_> = self
+            .circuits
+            .iter()
+            .map(
+                |(&(src_peer_id, dst_peer_id), &count)| AukiRelayCircuitStatus {
+                    src_peer_id,
+                    dst_peer_id,
+                    count,
+                },
+            )
+            .collect();
+        active_circuit_peers.sort_by(|left, right| {
+            left.src_peer_id
+                .to_string()
+                .cmp(&right.src_peer_id.to_string())
+                .then_with(|| {
+                    left.dst_peer_id
+                        .to_string()
+                        .cmp(&right.dst_peer_id.to_string())
+                })
+        });
+
+        AukiRelayServerStatus {
+            enabled,
+            active_reservations: reserved_peers.len(),
+            active_circuits: active_circuit_peers
+                .iter()
+                .map(|circuit| circuit.count)
+                .sum(),
+            reservations_accepted: self.reservations_accepted,
+            reservations_renewed: self.reservations_renewed,
+            reservations_denied: self.reservations_denied,
+            reservations_closed: self.reservations_closed,
+            reservations_timed_out: self.reservations_timed_out,
+            circuits_accepted: self.circuits_accepted,
+            circuits_denied: self.circuits_denied,
+            circuits_closed: self.circuits_closed,
+            failures: self.failures,
+            reserved_peers,
+            active_circuit_peers,
+            last_failure: self.last_failure.clone(),
+        }
+    }
+
+    fn decrement_circuit(&mut self, src_peer_id: PeerId, dst_peer_id: PeerId) {
+        let key = (src_peer_id, dst_peer_id);
+        let Some(count) = self.circuits.get_mut(&key) else {
+            return;
+        };
+        *count = (*count).saturating_sub(1);
+        if *count == 0 {
+            self.circuits.remove(&key);
+        }
+    }
+
+    fn record_failure(&mut self, message: String) {
+        self.failures = self.failures.saturating_add(1);
+        self.last_failure = Some(message);
+    }
+}
+
 fn default_agent_version() -> String {
     format!("auki-p2p/{}", env!("CARGO_PKG_VERSION"))
 }
@@ -1010,6 +1250,92 @@ impl AukiP2pNode {
                 value
             })
             .collect()
+    }
+
+    fn relay_server_status_value(&self) -> Value {
+        let status = self.relay_server_status();
+        let mut object = Map::new();
+        object.insert("enabled".to_owned(), Value::Bool(status.enabled));
+        object.insert(
+            "active_reservations".to_owned(),
+            Value::Number((status.active_reservations as u64).into()),
+        );
+        object.insert(
+            "active_circuits".to_owned(),
+            Value::Number((status.active_circuits as u64).into()),
+        );
+        object.insert(
+            "reservations_accepted".to_owned(),
+            Value::Number(status.reservations_accepted.into()),
+        );
+        object.insert(
+            "reservations_renewed".to_owned(),
+            Value::Number(status.reservations_renewed.into()),
+        );
+        object.insert(
+            "reservations_denied".to_owned(),
+            Value::Number(status.reservations_denied.into()),
+        );
+        object.insert(
+            "reservations_closed".to_owned(),
+            Value::Number(status.reservations_closed.into()),
+        );
+        object.insert(
+            "reservations_timed_out".to_owned(),
+            Value::Number(status.reservations_timed_out.into()),
+        );
+        object.insert(
+            "circuits_accepted".to_owned(),
+            Value::Number(status.circuits_accepted.into()),
+        );
+        object.insert(
+            "circuits_denied".to_owned(),
+            Value::Number(status.circuits_denied.into()),
+        );
+        object.insert(
+            "circuits_closed".to_owned(),
+            Value::Number(status.circuits_closed.into()),
+        );
+        object.insert("failures".to_owned(), Value::Number(status.failures.into()));
+        object.insert(
+            "reserved_peers".to_owned(),
+            Value::Array(
+                status
+                    .reserved_peers
+                    .iter()
+                    .map(|peer_id| Value::String(peer_id.to_string()))
+                    .collect(),
+            ),
+        );
+        object.insert(
+            "active_circuit_peers".to_owned(),
+            Value::Array(
+                status
+                    .active_circuit_peers
+                    .iter()
+                    .map(|circuit| {
+                        let mut circuit_object = Map::new();
+                        circuit_object.insert(
+                            "src_peer_id".to_owned(),
+                            Value::String(circuit.src_peer_id.to_string()),
+                        );
+                        circuit_object.insert(
+                            "dst_peer_id".to_owned(),
+                            Value::String(circuit.dst_peer_id.to_string()),
+                        );
+                        circuit_object.insert(
+                            "count".to_owned(),
+                            Value::Number((circuit.count as u64).into()),
+                        );
+                        Value::Object(circuit_object)
+                    })
+                    .collect(),
+            ),
+        );
+        if let Some(last_failure) = status.last_failure {
+            object.insert("last_failure".to_owned(), Value::String(last_failure));
+        }
+        Value::Object(object)
     }
 }
 
@@ -1424,6 +1750,21 @@ mod tests {
                 .and_then(Value::as_str),
             Some(dialable_string.as_str())
         );
+        let relay_server_status = status
+            .value()
+            .get("relay_server")
+            .and_then(Value::as_object)
+            .expect("relay server status should be projected");
+        assert_eq!(
+            relay_server_status.get("enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            relay_server_status
+                .get("active_reservations")
+                .and_then(Value::as_u64),
+            Some(0)
+        );
     }
 
     #[test]
@@ -1576,6 +1917,60 @@ mod tests {
         assert_eq!(tracker.active_count(peer_id), 1);
         assert_eq!(tracker.established[&peer_id][0].connection_id, second);
         assert_eq!(tracker.active_paths(peer_id)[0], test_connection_path(2));
+    }
+
+    #[test]
+    fn relay_server_tracker_counts_reservations_and_circuits() {
+        let src_peer_id = identity(35).peer_id();
+        let dst_peer_id = identity(36).peer_id();
+        let mut tracker = RelayServerTracker::default();
+
+        tracker.record(relay::Event::ReservationReqAccepted {
+            src_peer_id,
+            renewed: false,
+        });
+        tracker.record(relay::Event::ReservationReqAccepted {
+            src_peer_id,
+            renewed: true,
+        });
+        tracker.record(relay::Event::CircuitReqAccepted {
+            src_peer_id,
+            dst_peer_id,
+        });
+        tracker.record(relay::Event::CircuitReqAccepted {
+            src_peer_id,
+            dst_peer_id,
+        });
+
+        let status = tracker.snapshot(true);
+
+        assert!(status.enabled);
+        assert_eq!(status.active_reservations, 1);
+        assert_eq!(status.reservations_accepted, 1);
+        assert_eq!(status.reservations_renewed, 1);
+        assert_eq!(status.active_circuits, 2);
+        assert_eq!(
+            status.active_circuit_peers,
+            vec![AukiRelayCircuitStatus {
+                src_peer_id,
+                dst_peer_id,
+                count: 2,
+            }]
+        );
+
+        tracker.record(relay::Event::CircuitClosed {
+            src_peer_id,
+            dst_peer_id,
+            error: None,
+        });
+        tracker.record(relay::Event::ReservationClosed { src_peer_id });
+
+        let status = tracker.snapshot(true);
+
+        assert_eq!(status.active_reservations, 0);
+        assert_eq!(status.active_circuits, 1);
+        assert_eq!(status.circuits_closed, 1);
+        assert_eq!(status.reservations_closed, 1);
     }
 
     #[test]

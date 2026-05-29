@@ -3,15 +3,15 @@
 use crate::publication::LocalOfferPublication;
 use crate::{
     AppAllowedOffer, AppDomainAccess, AppOfferPolicy, AukiBrowserBootstrapRecord, AukiP2pConfig,
-    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, ConfiguredPeer, GetInput, GetOutcome,
-    GetServeError, HandshakePolicyError, HandshakeValidationInput, HandshakeValidationResult,
-    Libp2pOfferCatalogClient, Libp2pPathClient, Libp2pSubscription, LifecycleHandshakeExchange,
-    LifecycleOpenStreamError, LifecycleProtocolError, LifecycleStreamDirection,
-    LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer, LocalPeerIdentity,
-    OfferCatalogLoadState, OfferCatalogServeError, OfferLoadContext, OfferLoadError,
-    OfferLoadReport, PathClientError, PathContext, PathOrchestrationError, PeerRelationship,
-    PublicationMessageError, PublishOfferError, PublishOfferInput, PublishedByteFrame,
-    PublishedOfferHandle, RelationshipFailureRecord, RelationshipFailureScope,
+    AukiP2pNode, AukiP2pNodeConfig, AukiP2pNodeError, AukiRelayServerStatus, ConfiguredPeer,
+    GetInput, GetOutcome, GetServeError, HandshakePolicyError, HandshakeValidationInput,
+    HandshakeValidationResult, Libp2pOfferCatalogClient, Libp2pPathClient, Libp2pSubscription,
+    LifecycleHandshakeExchange, LifecycleOpenStreamError, LifecycleProtocolError,
+    LifecycleStreamDirection, LifecycleStreamGuard, LifecycleStreamGuardError, LoadedRemoteOffer,
+    LocalPeerIdentity, OfferCatalogLoadState, OfferCatalogServeError, OfferLoadContext,
+    OfferLoadError, OfferLoadReport, PathClientError, PathContext, PathOrchestrationError,
+    PeerRelationship, PublicationMessageError, PublishOfferError, PublishOfferInput,
+    PublishedByteFrame, PublishedOfferHandle, RelationshipFailureRecord, RelationshipFailureScope,
     RelationshipLoadedOffer, RelationshipRegistryReferenceStatus, RelationshipStatusBuildError,
     RelationshipStatusOptions, ServedPublishedSubscription, SubscribeInput, SubscribeServeError,
     accept_get_streams, accept_lifecycle_streams, accept_offer_catalog_streams,
@@ -1077,6 +1077,11 @@ impl AukiNode {
     /// Observed WebSocket relay-server addresses usable by browser peers.
     pub fn observed_browser_relay_server_addresses(&self) -> Vec<Multiaddr> {
         self.node.observed_browser_relay_server_addresses()
+    }
+
+    /// Runtime diagnostics for this node's local Circuit Relay v2 server role.
+    pub fn relay_server_status(&self) -> AukiRelayServerStatus {
+        self.node.relay_server_status()
     }
 
     /// Connectivity-only bootstrap record for browser peers.

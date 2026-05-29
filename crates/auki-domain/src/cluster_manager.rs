@@ -3506,7 +3506,10 @@ fn spawn_manager_liveness_check(
             // Discovery hiccup shouldn't kill the cluster. Discovery
             // sweeps after 3s of no liveness check (3 missed at 1s
             // cadence), so persistent failures self-resolve.
-            if let Err(e) = discovery.liveness_check(cluster_name.clone(), peer_count).await {
+            if let Err(e) = discovery
+                .liveness_check(cluster_name.clone(), peer_count)
+                .await
+            {
                 eprintln!(
                     "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
                 );

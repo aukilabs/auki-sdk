@@ -57,6 +57,32 @@ describe("browser transport lifecycle", () => {
     ]);
   });
 
+  it("opens protocol streams on existing connections without bootstrap addresses", async () => {
+    const existing = new FakeConnection("/memory/relay/browser-peer");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [existing],
+      [],
+      "/auki/offer_catalog/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        throw new Error("dial should not be needed");
+      },
+    );
+
+    expect(stream).toBe(existing.stream);
+    expect(dials).toEqual([]);
+  });
+
+  it("rejects protocol streams without a live connection or bootstrap addresses", async () => {
+    await expect(
+      openBrowserProtocolStream([], [], "/auki/get/0.0.1", async () => {
+        throw new Error("dial should not be needed");
+      }),
+    ).rejects.toThrow("No active connection or bootstrap addresses available");
+  });
+
   it("force dials when a freshly dialed connection has a closing muxer", async () => {
     const closingDial = new FakeConnection(
       "/memory/websocket",

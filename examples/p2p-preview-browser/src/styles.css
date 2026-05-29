@@ -421,6 +421,73 @@ input[type="file"] {
   gap: 8px;
 }
 
+.toast-region {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 10000;
+  display: grid;
+  width: min(430px, calc(100vw - 32px));
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid rgba(253, 158, 47, 0.5);
+  border-left: 3px solid var(--danger);
+  border-radius: 8px;
+  background: rgba(21, 21, 21, 0.96);
+  padding: 12px;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  backdrop-filter: blur(12px);
+}
+
+.toast-content {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.toast-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.toast-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.toast-heading span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.toast p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.toast button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
 .peer-detail-card,
 .diagnostics-card {
   width: 100%;
@@ -1004,6 +1071,21 @@ tr.selected td {
   .modal-actions,
   .modal-actions button {
     width: 100%;
+  }
+
+  .toast-region {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+
+  .toast {
+    grid-template-columns: 1fr;
+  }
+
+  .toast button {
+    justify-self: start;
   }
 
   .row {

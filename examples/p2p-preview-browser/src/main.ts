@@ -52,6 +52,14 @@ type EventLogEntry = {
   detail?: string;
 };
 
+type ToastEntry = {
+  id: number;
+  at: Date;
+  message: string;
+  detail?: string;
+  timeout: ReturnType<typeof window.setTimeout>;
+};
+
 type LocalPreviewPublication = {
   domain: AukiBrowserLocalDomain;
   offerId: string;
@@ -73,6 +81,7 @@ type AppState = {
   openOfferDetailKey?: string;
   openPeerDetailPeerId?: string;
   events: EventLogEntry[];
+  toasts: ToastEntry[];
   localPreview?: LocalPreviewPublication;
   status: string;
   lastError?: string;
@@ -82,10 +91,13 @@ type AppState = {
     address: string;
   };
   nextSubscriptionToken: number;
+  nextToastId: number;
 };
 
 const SUBSCRIPTION_STOP_TIMEOUT_MS = 2_500;
 const PEER_REFRESH_INTERVAL_MS = 500;
+const ERROR_TOAST_TIMEOUT_MS = 7_000;
+const MAX_ERROR_TOASTS = 3;
 
 const state: AppState = {
   bootstraps: [],
@@ -93,13 +105,16 @@ const state: AppState = {
   offers: [],
   offerStates: new Map(),
   events: [],
+  toasts: [],
   status: "Idle",
   busy: false,
   switchingAddress: undefined,
   nextSubscriptionToken: 0,
+  nextToastId: 0,
 };
 
 const els = {
+  toastRegion: element("toast-region"),
   diagnosticsButton: element<HTMLButtonElement>("diagnostics-button"),
   diagnosticsDialog: element<HTMLDialogElement>("diagnostics-dialog"),
   diagnosticsClose: element<HTMLButtonElement>("diagnostics-close"),
@@ -145,6 +160,7 @@ const els = {
 
 els.diagnosticsButton.addEventListener("click", () => {
   els.diagnosticsDialog.showModal();
+  placeToastRegion();
 });
 els.diagnosticsClose.addEventListener("click", () => {
   els.diagnosticsDialog.close();
@@ -181,6 +197,13 @@ els.peerDetailClose.addEventListener("click", () => {
 });
 els.peerDetailDialog.addEventListener("close", () => {
   state.openPeerDetailPeerId = undefined;
+  placeToastRegion();
+});
+els.diagnosticsDialog.addEventListener("close", () => {
+  placeToastRegion();
+});
+els.addPeerDialog.addEventListener("close", () => {
+  placeToastRegion();
 });
 els.peerDetailContent.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) {
@@ -205,6 +228,7 @@ els.offerDetailClose.addEventListener("click", () => {
 });
 els.offerDetailDialog.addEventListener("close", () => {
   state.openOfferDetailKey = undefined;
+  placeToastRegion();
 });
 els.peerList.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) {
@@ -241,6 +265,16 @@ els.streamsGrid.addEventListener("keydown", (event) => {
   if (handled) {
     event.preventDefault();
   }
+});
+els.toastRegion.addEventListener("click", (event) => {
+  const button =
+    event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>("button[data-toast-id]")
+      : null;
+  if (!button) {
+    return;
+  }
+  dismissToast(Number(button.dataset.toastId));
 });
 
 function handleStreamAction(target: EventTarget | null): boolean {
@@ -839,6 +873,7 @@ function openAddPeerDialog(): void {
     return;
   }
   els.addPeerDialog.showModal();
+  placeToastRegion();
   els.addPeerInput.focus();
 }
 
@@ -922,6 +957,7 @@ function render(): void {
   renderPeerSidebar(state.peers);
   renderStreams(state.offers);
   renderEvents();
+  renderToasts();
 }
 
 function renderLiveStats(): void {
@@ -1044,6 +1080,7 @@ function openPeerDetail(peerId: string): void {
   state.openPeerDetailPeerId = peerId;
   els.peerDetailContent.replaceChildren(peerDetail(peerId, remotePeer, isLocal));
   els.peerDetailDialog.showModal();
+  placeToastRegion();
 }
 
 function refreshOpenPeerDetail(peerId: string): void {
@@ -1461,6 +1498,7 @@ function openOfferDetail(offer: OfferSummary): void {
   state.openOfferDetailKey = offerKey(offer);
   els.offerDetailContent.replaceChildren(offerDetail(offer));
   els.offerDetailDialog.showModal();
+  placeToastRegion();
 }
 
 function offerDetail(offer: OfferSummary): HTMLElement {
@@ -1657,6 +1695,43 @@ function renderEvents(): void {
   }
 }
 
+function renderToasts(): void {
+  placeToastRegion();
+  els.toastRegion.replaceChildren();
+  els.toastRegion.hidden = state.toasts.length === 0;
+  for (const toast of state.toasts) {
+    const item = document.createElement("section");
+    item.className = "toast error";
+    item.setAttribute("role", "alert");
+
+    const content = document.createElement("div");
+    content.className = "toast-content";
+
+    const heading = document.createElement("div");
+    heading.className = "toast-heading";
+    const title = document.createElement("strong");
+    title.textContent = toast.message;
+    const time = document.createElement("span");
+    time.textContent = toast.at.toLocaleTimeString();
+    heading.append(title, time);
+    content.append(heading);
+
+    if (toast.detail) {
+      const detail = document.createElement("p");
+      detail.textContent = toast.detail;
+      content.append(detail);
+    }
+
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.dataset.toastId = toast.id.toString();
+    dismiss.textContent = "Dismiss";
+
+    item.append(content, dismiss);
+    els.toastRegion.append(item);
+  }
+}
+
 function offerRuntime(key: string): OfferRuntimeState {
   let runtime = state.offerStates.get(key);
   if (!runtime) {
@@ -1761,8 +1836,63 @@ function connectionPathEventDetail(path: PeerSummary["connectionPaths"][number])
 }
 
 function recordEvent(level: "info" | "error", message: string, detail?: string): void {
-  state.events.unshift({ at: new Date(), level, message, detail });
+  const at = new Date();
+  state.events.unshift({ at, level, message, detail });
   state.events = state.events.slice(0, 80);
+  if (level === "error") {
+    pushErrorToast(at, message, detail);
+  }
+}
+
+function pushErrorToast(at: Date, message: string, detail?: string): void {
+  const id = state.nextToastId;
+  state.nextToastId += 1;
+  const toast: ToastEntry = {
+    id,
+    at,
+    message,
+    detail,
+    timeout: window.setTimeout(() => {
+      dismissToast(id);
+    }, ERROR_TOAST_TIMEOUT_MS),
+  };
+  state.toasts.unshift(toast);
+  while (state.toasts.length > MAX_ERROR_TOASTS) {
+    const stale = state.toasts.pop();
+    if (stale) {
+      window.clearTimeout(stale.timeout);
+    }
+  }
+  renderToasts();
+}
+
+function dismissToast(id: number): void {
+  const toast = state.toasts.find((candidate) => candidate.id === id);
+  if (toast) {
+    window.clearTimeout(toast.timeout);
+  }
+  state.toasts = state.toasts.filter((candidate) => candidate.id !== id);
+  renderToasts();
+}
+
+function placeToastRegion(): void {
+  const dialogs = [
+    els.offerDetailDialog,
+    els.peerDetailDialog,
+    els.addPeerDialog,
+    els.diagnosticsDialog,
+  ];
+  let host: HTMLElement = document.body;
+  for (let index = dialogs.length - 1; index >= 0; index -= 1) {
+    const dialog = dialogs[index];
+    if (dialog.open) {
+      host = dialog;
+      break;
+    }
+  }
+  if (els.toastRegion.parentElement !== host) {
+    host.append(els.toastRegion);
+  }
 }
 
 function handlePeerTrace(event: AukiBrowserPeerTraceEvent): void {

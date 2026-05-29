@@ -192,6 +192,20 @@ label,
   gap: 8px;
 }
 
+.start-panel {
+  display: grid;
+  min-height: min(560px, calc(100vh - 170px));
+  place-items: center;
+  border-bottom: 1px solid rgba(133, 133, 133, 0.18);
+}
+
+.start-panel #connect-button {
+  min-width: 180px;
+  min-height: 48px;
+  padding: 0 22px;
+  font-size: 16px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);

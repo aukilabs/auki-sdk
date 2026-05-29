@@ -200,8 +200,8 @@ These decisions are locked for the browser-to-browser slice.
 
 ## Phase 4 - Demo UX
 
-- [ ] Keep the first screen simple: Start Peer.
-- [ ] After start, show the local browser peer and an Add Peer action.
+- [x] Keep the first screen simple: Start Peer.
+- [x] After start, show the local browser peer and an Add Peer action.
 - [x] After connecting to a Sentinel/bootstrap node, expose a Copy Local Browser
       Bootstrap action.
 - [x] Add a Publish Generated Preview action.

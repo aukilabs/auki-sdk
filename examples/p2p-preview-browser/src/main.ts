@@ -101,6 +101,7 @@ const els = {
   diagnosticsButton: element<HTMLButtonElement>("diagnostics-button"),
   diagnosticsDialog: element<HTMLDialogElement>("diagnostics-dialog"),
   diagnosticsClose: element<HTMLButtonElement>("diagnostics-close"),
+  startPanel: element("start-panel"),
   workspace: element("workspace"),
   streamsPanel: element("streams-panel"),
   peersPanel: element("peers-panel"),
@@ -793,6 +794,7 @@ function renderLiveStats(): void {
   const hasPeer = Boolean(state.peer);
   const hasRemoteContext = state.peers.length > 0 || state.offers.length > 0;
   const canCopyBootstrap = hasPeer && state.peers.length > 0;
+  els.startPanel.hidden = hasPeer;
   els.workspace.hidden = !hasPeer;
   els.workspace.classList.toggle("peer-only", !hasRemoteContext);
   els.peersPanel.hidden = !hasPeer;

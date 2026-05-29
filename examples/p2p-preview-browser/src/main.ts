@@ -17,10 +17,12 @@ import {
 } from "@aukilabs/auki-p2p-browser";
 import {
   bootstrapRecordText,
+  canExportLocalBootstrap,
   canRequestSnapshot,
   mergeBootstrapRecords,
   parseBootstrapText,
   shortId,
+  supportsBrowserToBrowserBootstrap,
 } from "./app";
 import "./styles.css";
 
@@ -1002,14 +1004,17 @@ function renderLiveStats(): void {
   const totals = aggregateRuntimeStats();
   const hasPeer = Boolean(state.peer);
   const hasRemoteContext = state.peers.length > 0 || state.offers.length > 0;
-  const canCopyBootstrap = hasPeer && state.peers.length > 0;
+  const canShowCopyBootstrap = hasPeer && state.peers.length > 0;
+  const canCopyBootstrap = canShowCopyBootstrap
+    ? canExportLocalBootstrap(state.peer?.peerId, state.peer?.multiaddrs() ?? [])
+    : false;
   els.startPanel.hidden = hasPeer;
   els.workspace.hidden = !hasPeer;
   els.workspace.classList.toggle("peer-only", !hasRemoteContext);
   els.peersPanel.hidden = !hasPeer;
   els.streamsPanel.hidden = !hasRemoteContext;
   els.diagnosticsButton.hidden = !hasPeer;
-  els.copyBootstrapButton.hidden = !canCopyBootstrap;
+  els.copyBootstrapButton.hidden = !canShowCopyBootstrap;
   els.publishPreviewButton.hidden = !hasPeer;
   els.stopButton.hidden = !hasPeer;
   els.connectButton.hidden = hasPeer;
@@ -1036,6 +1041,9 @@ function renderLiveStats(): void {
   els.connectButton.textContent = "Start Peer";
   els.copyBootstrapButton.disabled = state.busy || !canCopyBootstrap;
   els.copyBootstrapButton.textContent = "Copy Bootstrap";
+  els.copyBootstrapButton.title = canCopyBootstrap
+    ? "Copy local browser bootstrap JSON"
+    : "Browser peer is not dialable. Use a relay/WebSocket path before copying bootstrap.";
   els.publishPreviewButton.disabled = state.busy || !state.peer;
   els.publishPreviewButton.textContent = state.localPreview ? "Stop Preview" : "Publish Preview";
   els.stopButton.disabled = state.busy || !state.peer;
@@ -1161,6 +1169,7 @@ function peerDetail(
   const addresses = isLocal ? state.peer?.multiaddrs() ?? [] : peer?.dialAddresses ?? [];
   const observedAddresses = isLocal ? [] : peer?.observedAddresses ?? [];
   const bootstrapAddresses = bootstrapAddressList(bootstrap);
+  const relayServerAddresses = bootstrap?.relayServerAddresses ?? [];
   const connectionPaths = isLocal ? [] : peer?.connectionPaths ?? [];
   const visibleAddresses = uniqueStrings([...addresses, ...observedAddresses]);
 
@@ -1186,6 +1195,7 @@ function peerDetail(
       addresses,
       observedAddresses,
       bootstrapAddresses,
+      relayServerAddresses,
       connectionPaths,
     ),
   );
@@ -1212,6 +1222,7 @@ function addressInventorySection(
   dialAddresses: string[],
   observedAddresses: string[],
   bootstrapAddresses: string[],
+  relayServerAddresses: string[],
   paths: PeerSummary["connectionPaths"],
 ): HTMLElement {
   const section = document.createElement("section");
@@ -1220,7 +1231,13 @@ function addressInventorySection(
   heading.textContent = "Addresses";
   const list = document.createElement("div");
   list.className = "address-inventory";
-  const entries = addressInventory(dialAddresses, observedAddresses, bootstrapAddresses, paths);
+  const entries = addressInventory(
+    dialAddresses,
+    observedAddresses,
+    bootstrapAddresses,
+    relayServerAddresses,
+    paths,
+  );
   if (entries.length === 0) {
     list.textContent = "None";
   } else {
@@ -1237,7 +1254,7 @@ function addressInventorySection(
 
 type AddressInventoryEntry = {
   address: string;
-  roles: Set<"active" | "dial" | "observed" | "bootstrap">;
+  roles: Set<"active" | "dial" | "observed" | "bootstrap" | "relay_server">;
   paths: PeerSummary["connectionPaths"];
 };
 
@@ -1245,6 +1262,7 @@ function addressInventory(
   dialAddresses: string[],
   observedAddresses: string[],
   bootstrapAddresses: string[],
+  relayServerAddresses: string[],
   paths: PeerSummary["connectionPaths"],
 ): AddressInventoryEntry[] {
   const byAddress = new Map<string, AddressInventoryEntry>();
@@ -1271,6 +1289,9 @@ function addressInventory(
   for (const address of bootstrapAddresses) {
     upsert(address).roles.add("bootstrap");
   }
+  for (const address of relayServerAddresses) {
+    upsert(address).roles.add("relay_server");
+  }
 
   return Array.from(byAddress.values());
 }
@@ -1289,7 +1310,20 @@ function addressInventoryRow(
   for (const role of entry.roles) {
     const flag = document.createElement("span");
     flag.className = `address-flag ${role}`;
-    flag.textContent = role;
+    flag.textContent = role.replaceAll("_", "-");
+    flags.append(flag);
+  }
+  if (
+    supportsBrowserToBrowserBootstrap(
+      peerId,
+      entry.address,
+      entry.roles.has("relay_server"),
+    )
+  ) {
+    const flag = document.createElement("span");
+    flag.className = "address-flag browser-to-browser";
+    flag.title = "This address can bootstrap browser-to-browser connectivity.";
+    flag.textContent = "browser-to-browser";
     flags.append(flag);
   }
 

@@ -615,7 +615,8 @@ input[type="file"] {
 }
 
 .address-flag.dial,
-.address-flag.bootstrap {
+.address-flag.bootstrap,
+.address-flag.relay_server {
   border-color: rgba(253, 158, 47, 0.36);
   color: var(--accent);
   background: rgba(253, 158, 47, 0.06);
@@ -625,6 +626,12 @@ input[type="file"] {
   border-color: rgba(132, 185, 255, 0.36);
   color: #9cc8ff;
   background: rgba(132, 185, 255, 0.06);
+}
+
+.address-flag.browser-to-browser {
+  border-color: rgba(207, 255, 176, 0.48);
+  color: var(--success);
+  background: rgba(207, 255, 176, 0.08);
 }
 
 .address-content {

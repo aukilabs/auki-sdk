@@ -1,4 +1,5 @@
 import {
+  createLocalBootstrapRecord,
   parseBootstrapRecords,
   type AukiBrowserBootstrapRecord,
   type OfferSummary,
@@ -35,6 +36,33 @@ export function bootstrapRecordText(record: AukiBrowserBootstrapRecord): string 
     },
     null,
     2,
+  );
+}
+
+export function canExportLocalBootstrap(peerId: string | undefined, addresses: string[]): boolean {
+  if (!peerId) {
+    return false;
+  }
+  try {
+    createLocalBootstrapRecord(peerId, addresses);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function supportsBrowserToBrowserBootstrap(
+  peerId: string,
+  address: string,
+  relayServerAddress = false,
+): boolean {
+  if (relayServerAddress && address.endsWith(`/p2p/${peerId}`)) {
+    return true;
+  }
+  return (
+    address.endsWith(`/p2p/${peerId}`) &&
+    (address.includes(`/p2p-circuit/p2p/${peerId}`) ||
+      address.includes(`/p2p-circuit/webrtc/p2p/${peerId}`))
   );
 }
 

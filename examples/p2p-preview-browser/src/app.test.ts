@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   bootstrapRecordText,
+  canExportLocalBootstrap,
   canRequestSnapshot,
   mergeBootstrapRecords,
   offerLabel,
   parseBootstrapText,
+  supportsBrowserToBrowserBootstrap,
 } from "./app";
 import {
   decodeBase64UrlBytes,
@@ -119,6 +121,47 @@ describe("p2p preview browser helpers", () => {
         2,
       ),
     );
+  });
+
+  it("detects whether the local browser peer is dialable", () => {
+    expect(
+      canExportLocalBootstrap("browser-peer", [
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ]),
+    ).toBe(true);
+    expect(canExportLocalBootstrap("browser-peer", ["/webrtc/p2p/browser-peer"])).toBe(false);
+    expect(canExportLocalBootstrap("browser-peer", [])).toBe(false);
+  });
+
+  it("detects browser-to-browser bootstrap addresses", () => {
+    expect(
+      supportsBrowserToBrowserBootstrap(
+        "browser-peer",
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ),
+    ).toBe(true);
+    expect(
+      supportsBrowserToBrowserBootstrap(
+        "browser-peer",
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
+      ),
+    ).toBe(true);
+    expect(
+      supportsBrowserToBrowserBootstrap(
+        "relay-peer",
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
+      ),
+    ).toBe(false);
+    expect(
+      supportsBrowserToBrowserBootstrap(
+        "relay-peer",
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
+        true,
+      ),
+    ).toBe(true);
+    expect(
+      supportsBrowserToBrowserBootstrap("browser-peer", "/webrtc/p2p/browser-peer"),
+    ).toBe(false);
   });
 
   it("selects the shared preview offer profile", () => {

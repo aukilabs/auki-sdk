@@ -827,21 +827,59 @@ function refreshPeerStateFromSdk(): void {
     return;
   }
 
-  const previousPeerIds = new Set(state.peers.map((summary) => summary.peerId));
+  const previousPeers = new Map(state.peers.map((summary) => [summary.peerId, summary]));
   const peers = peer.listPeers();
-  const observedPeers = peers.filter((summary) => !previousPeerIds.has(summary.peerId));
+  const observedPeers = peers.filter((summary) => !previousPeers.has(summary.peerId));
+  let peerDisplayChanged = observedPeers.length > 0;
   state.peers = peers;
 
-  for (const summary of observedPeers) {
-    recordEvent(
-      "info",
-      "Peer observed",
-      `${peerEventDetail(summary.peerId)} active=${connectionPathSummary(summary.connectionPaths)}`,
-    );
+  for (const summary of peers) {
+    const previous = previousPeers.get(summary.peerId);
+    if (!previous) {
+      recordEvent(
+        "info",
+        "Peer observed",
+        `${peerEventDetail(summary.peerId)} active=${connectionPathSummary(summary.connectionPaths)}`,
+      );
+      continue;
+    }
+
+    if (previous.connected !== summary.connected) {
+      peerDisplayChanged = true;
+      const detail = `${peerEventDetail(summary.peerId)} active=${connectionPathSummary(summary.connectionPaths)}`;
+      if (summary.connected) {
+        if (state.lastError?.startsWith("Peer disconnected:")) {
+          state.lastError = undefined;
+        }
+      } else {
+        state.lastError = `Peer disconnected: ${shortId(summary.peerId, 12)}`;
+      }
+      recordEvent(
+        summary.connected ? "info" : "error",
+        summary.connected ? "Peer connected" : "Peer disconnected",
+        detail,
+      );
+      continue;
+    }
+
+    if (
+      connectionPathSummary(previous.connectionPaths) !==
+      connectionPathSummary(summary.connectionPaths)
+    ) {
+      peerDisplayChanged = true;
+      recordEvent(
+        "info",
+        "Peer path changed",
+        `${peerEventDetail(summary.peerId)} active=${connectionPathSummary(summary.connectionPaths)}`,
+      );
+    }
   }
 
   renderLiveStats();
   renderPeerSidebar(state.peers);
+  if (peerDisplayChanged) {
+    renderStreams(state.offers);
+  }
   if (state.openPeerDetailPeerId) {
     refreshOpenPeerDetail(state.openPeerDetailPeerId);
   }
@@ -1309,7 +1347,10 @@ function connectionPathDetail(path: PeerSummary["connectionPaths"][number]): HTM
     addressValue("Path", connectionPathKind(path)),
     addressValue("Status", path.status),
     addressValue("Connection ID", path.connectionId, true),
-    addressValue("RTT", path.rttMs === undefined ? "unknown" : `${Math.round(path.rttMs)} ms`),
+    addressValue(
+      "RTT",
+      path.rttMs === undefined ? "not reported" : `${Math.round(path.rttMs)} ms`,
+    ),
   );
   return detail;
 }
@@ -1408,6 +1449,8 @@ function streamCard(offer: OfferSummary): HTMLElement {
   const key = offerKey(offer);
   const runtime = offerRuntime(key);
   const isLocal = offer.peerId === state.peer?.peerId;
+  const peerConnected = isOfferPeerConnected(offer);
+  const disconnected = !isLocal && !peerConnected;
   const card = document.createElement("article");
   card.className = "stream-card";
   card.dataset.offerCard = encodeOfferKey(key);
@@ -1440,9 +1483,9 @@ function streamCard(offer: OfferSummary): HTMLElement {
   const title = document.createElement("h3");
   title.textContent = offer.offerId;
   const status = document.createElement("span");
-  status.className = `status-pill ${statusClass(runtime)}`;
+  status.className = `status-pill ${offerStatusClass(offer, runtime)}`;
   status.dataset.role = "status";
-  status.textContent = isLocal && runtime.status === "idle" ? "published" : runtime.status;
+  status.textContent = offerStatusText(offer, runtime);
   header.append(title, status);
 
   const meta = document.createElement("div");
@@ -1461,7 +1504,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
         runtime.getting ? "Getting" : "Get",
         "get",
         key,
-        isLocal || state.busy || !canRequestSnapshot(Boolean(state.peer), runtime),
+        isLocal || disconnected || state.busy || !canRequestSnapshot(Boolean(state.peer), runtime),
       ),
     );
   }
@@ -1473,7 +1516,7 @@ function streamCard(offer: OfferSummary): HTMLElement {
       label,
       action,
       key,
-      isLocal || state.busy || !state.peer || runtime.stopping || runtime.getting,
+      isLocal || disconnected || state.busy || !state.peer || runtime.stopping || runtime.getting,
     );
     if (runtime.stopping || runtime.subscribing) {
       button.classList.add("loading");
@@ -1482,10 +1525,10 @@ function streamCard(offer: OfferSummary): HTMLElement {
     actions.append(button);
   }
 
-  if (runtime.lastError) {
+  if (runtime.lastError || disconnected) {
     const error = document.createElement("div");
     error.className = "stream-error";
-    error.textContent = runtime.lastError;
+    error.textContent = runtime.lastError ?? "Peer disconnected";
     body.append(header, meta, actions, error);
   } else {
     body.append(header, meta, actions);
@@ -1585,14 +1628,17 @@ function updateStreamCardImage(key: string, runtime: OfferRuntimeState): void {
 
 function updateStreamCardRuntime(key: string, runtime: OfferRuntimeState): void {
   const card = streamCardElement(key);
+  const offer = offerByKey(key);
   if (!card) {
     return;
   }
   card.classList.toggle("streaming", Boolean(runtime.subscription || runtime.subscribing));
   const status = card.querySelector<HTMLElement>('[data-role="status"]');
   if (status) {
-    status.className = `status-pill ${statusClass(runtime)}`;
-    status.textContent = runtime.status;
+    status.className = `status-pill ${
+      offer ? offerStatusClass(offer, runtime) : statusClass(runtime)
+    }`;
+    status.textContent = offer ? offerStatusText(offer, runtime) : runtime.status;
   }
   setMetric(card, "snapshots", runtime.snapshots.toString());
   setMetric(card, "frames", runtime.frames.toString());
@@ -1754,6 +1800,29 @@ function offerByKey(key: string): OfferSummary | undefined {
   return state.offers.find((offer) => offerKey(offer) === key);
 }
 
+function isOfferPeerConnected(offer: OfferSummary): boolean {
+  if (offer.peerId === state.peer?.peerId) {
+    return true;
+  }
+  return state.peers.find((peer) => peer.peerId === offer.peerId)?.connected ?? false;
+}
+
+function offerStatusText(offer: OfferSummary, runtime: OfferRuntimeState): string {
+  const isLocal = offer.peerId === state.peer?.peerId;
+  if (!isLocal && !isOfferPeerConnected(offer)) {
+    return "disconnected";
+  }
+  return isLocal && runtime.status === "idle" ? "published" : runtime.status;
+}
+
+function offerStatusClass(offer: OfferSummary, runtime: OfferRuntimeState): string {
+  const isLocal = offer.peerId === state.peer?.peerId;
+  if (!isLocal && !isOfferPeerConnected(offer)) {
+    return "error";
+  }
+  return statusClass(runtime);
+}
+
 function bootstrapRecordsEventDetail(records: AukiBrowserBootstrapRecord[]): string {
   return records.map(bootstrapRecordEventDetail).join(" ; ");
 }
@@ -1825,7 +1894,7 @@ function addressEventDetail(address: string): string {
 function activePathEventDetail(peerId: string): string {
   const peer = state.peers.find((candidate) => candidate.peerId === peerId);
   if (!peer || peer.connectionPaths.length === 0) {
-    return "unknown";
+    return "none";
   }
   return peer.connectionPaths.map(connectionPathEventDetail).join(",");
 }
@@ -2202,12 +2271,12 @@ function transportSummary(addresses: readonly string[]): string {
       transports.add("other");
     }
   }
-  return transports.size === 0 ? "unknown" : Array.from(transports).join(", ");
+  return transports.size === 0 ? "none" : Array.from(transports).join(", ");
 }
 
 function connectionPathSummary(paths: PeerSummary["connectionPaths"]): string {
   if (paths.length === 0) {
-    return "unknown";
+    return "No active path";
   }
   return paths
     .map((path) => {

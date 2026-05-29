@@ -70,20 +70,23 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.started).toBe(1);
     expect(transport.dials).toEqual([["/memory/native-direct"], ["/memory/relay"]]);
+    transport.setConnectionPaths("native-peer", [memoryConnectionPath("/memory/native-direct")]);
+    transport.setConnectionPaths("relay-peer", [memoryConnectionPath("/memory/relay")]);
+
     expect(peer.listPeers()).toEqual([
       {
         peerId: "native-peer",
         connected: true,
         dialAddresses: ["/memory/native-direct"],
-        observedAddresses: [],
-        connectionPaths: [],
+        observedAddresses: ["/memory/native-direct"],
+        connectionPaths: [memoryConnectionPath("/memory/native-direct")],
       },
       {
         peerId: "relay-peer",
         connected: true,
         dialAddresses: ["/memory/relay"],
-        observedAddresses: [],
-        connectionPaths: [],
+        observedAddresses: ["/memory/relay"],
+        connectionPaths: [memoryConnectionPath("/memory/relay")],
       },
     ]);
   });
@@ -114,7 +117,7 @@ describe("AukiBrowserPeer shell", () => {
     expect(peer.listPeers()).toEqual([
       {
         peerId: "native-peer",
-        connected: false,
+        connected: true,
         dialAddresses: ["/memory/bootstrap"],
         observedAddresses: ["/memory/observed"],
         connectionPaths: [
@@ -123,6 +126,31 @@ describe("AukiBrowserPeer shell", () => {
         ],
       },
     ]);
+  });
+
+  it("marks a peer disconnected after observed connection paths disappear", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      bootstrap: bootstrapRecord("native-peer", "/memory/bootstrap"),
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    await peer.connectBootstrap(bootstrapRecord("native-peer", "/memory/bootstrap"));
+    transport.setConnectionPaths("native-peer", [memoryConnectionPath("/memory/observed")]);
+
+    expect(peer.listPeers()[0]).toMatchObject({
+      peerId: "native-peer",
+      connected: true,
+    });
+
+    transport.setConnectionPaths("native-peer", []);
+
+    expect(peer.listPeers()[0]).toMatchObject({
+      peerId: "native-peer",
+      connected: false,
+      connectionPaths: [],
+    });
   });
 
   it("exports a local browser bootstrap record once dialable", async () => {

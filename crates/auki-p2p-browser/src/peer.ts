@@ -237,6 +237,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   readonly supportedTransports = supportedBrowserTransports();
   private readonly peers = new Map<string, StoredPeer>();
   private readonly lifecyclePeers = new Set<string>();
+  private readonly peersWithObservedConnectionPaths = new Set<string>();
   private readonly remoteOffers = new Map<string, LoadedOffer[]>();
   private readonly localPublications = new Map<string, LocalOfferPublication>();
   private readonly localDomains = new Map<string, AukiBrowserLocalDomain>();
@@ -673,8 +674,15 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
 
   private peerSummary(peer: StoredPeer): PeerSummary {
     const connectionPaths = this.connectionPaths(peer.peerId);
+    if (connectionPaths.length > 0) {
+      this.peersWithObservedConnectionPaths.add(peer.peerId);
+    }
+    const hasLiveConnectionObservation =
+      this.transport.connectionPaths !== undefined &&
+      this.peersWithObservedConnectionPaths.has(peer.peerId);
     return {
       ...peer,
+      connected: connectionPaths.length > 0 || (peer.connected && !hasLiveConnectionObservation),
       observedAddresses: observedAddressesFromConnectionPaths(connectionPaths),
       connectionPaths,
     };

@@ -192,7 +192,10 @@ function normalizeStreamChunk(value: Uint8Array | { subarray(): Uint8Array }): U
 class Libp2pBrowserTransport implements BrowserTransport {
   readonly peerId: string;
   private started = false;
-  private readonly retentionTimers = new Map<string, number>();
+  private readonly retentionTimers = new Map<
+    string,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
   private readonly peerKeepAddressPreference = new Map<string, string[]>();
 
   constructor(

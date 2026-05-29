@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bootstrapAddressBook,
   createLocalBootstrapRecord,
+  defaultDialAddresses,
   isExportableBrowserBootstrapAddress,
   parseBootstrapRecord,
   parseBootstrapRecords,
@@ -14,6 +15,7 @@ describe("browser bootstrap records", () => {
     const record = createLocalBootstrapRecord("browser-peer", [
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
       "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
     ]);
@@ -25,11 +27,13 @@ describe("browser bootstrap records", () => {
       webrtcDirectAddresses: ["/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer"],
       relayAddresses: [
         "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
       ],
       relayServerAddresses: [],
       bootstrapAddresses: [
         "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer",
         "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
       ],
     });
   });
@@ -42,22 +46,22 @@ describe("browser bootstrap records", () => {
     ).toThrow("not dialable yet");
   });
 
-  it("does not export transient browser WebRTC observed paths as bootstrap addresses", () => {
+  it("exports browser WebRTC dial addresses but not bare observed WebRTC paths", () => {
     const stableRelay =
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer";
-    const transientRelayWebrtc =
+    const browserWebrtc =
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer";
-    const transientDirectWebrtc = "/webrtc/p2p/browser-peer";
+    const observedDirectWebrtc = "/webrtc/p2p/browser-peer";
 
     const record = createLocalBootstrapRecord("browser-peer", [
-      transientRelayWebrtc,
-      transientDirectWebrtc,
+      browserWebrtc,
+      observedDirectWebrtc,
       stableRelay,
     ]);
 
     expect(record.directAddresses).toEqual([]);
-    expect(record.relayAddresses).toEqual([stableRelay]);
-    expect(record.bootstrapAddresses).toEqual([stableRelay]);
+    expect(record.relayAddresses).toEqual([stableRelay, browserWebrtc]);
+    expect(record.bootstrapAddresses).toEqual([stableRelay, browserWebrtc]);
   });
 
   it("classifies only durable browser bootstrap addresses as exportable", () => {
@@ -84,10 +88,28 @@ describe("browser bootstrap records", () => {
         "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
         "browser-peer",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(isExportableBrowserBootstrapAddress("/webrtc/p2p/browser-peer", "browser-peer")).toBe(
       false,
     );
+  });
+
+  it("dials browser peers over relay by default while keeping WebRTC switchable", () => {
+    const relay = "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer";
+    const browserWebrtc =
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer";
+    const record = parseBootstrapRecord({
+      peer_id: "browser-peer",
+      agent_version: "auki-p2p-browser/0.0.0",
+      direct_addresses: [],
+      webrtc_direct_addresses: [],
+      relay_addresses: [browserWebrtc, relay],
+      relay_server_addresses: [],
+      bootstrap_addresses: [browserWebrtc, relay],
+    });
+
+    expect(defaultDialAddresses(record)).toEqual([relay]);
+    expect(preferredDialAddresses(record)).toEqual([relay, browserWebrtc]);
   });
 
   it("parses Rust-shaped bootstrap records and preserves address roles", () => {

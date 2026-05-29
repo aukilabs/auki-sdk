@@ -1254,10 +1254,8 @@ function addressInventoryRow(
     button.textContent = isSwitching
       ? "Switching"
       : isOnlyActive
-        ? "Using"
-        : isActive
-          ? "Use only"
-          : "Use";
+        ? selectedAddressLabel(entry.address, "Using")
+        : selectedAddressLabel(entry.address, "Use");
     action.append(button);
   }
 
@@ -1277,6 +1275,22 @@ function connectionPathDetail(path: PeerSummary["connectionPaths"][number]): HTM
     addressValue("RTT", path.rttMs === undefined ? "unknown" : `${Math.round(path.rttMs)} ms`),
   );
   return detail;
+}
+
+function selectedAddressLabel(address: string, prefix: "Use" | "Using"): string {
+  if (address.includes("/p2p-circuit/webrtc/p2p/")) {
+    return `${prefix} WebRTC`;
+  }
+  if (address.includes("/p2p-circuit/p2p/")) {
+    return `${prefix} Relay`;
+  }
+  if (address.includes("/webrtc-direct")) {
+    return `${prefix} WebRTC Direct`;
+  }
+  if (address.includes("/ws") || address.includes("/wss")) {
+    return `${prefix} WebSocket`;
+  }
+  return prefix;
 }
 
 function addressValue(label: string, value: string, code = false): HTMLElement {

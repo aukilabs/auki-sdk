@@ -32,7 +32,7 @@ export function createLocalBootstrapRecord(
   );
   const directAddresses = peerAddresses.filter((address) => !isRelayAddress(address));
   const webrtcDirectAddresses = directAddresses.filter(isWebrtcDirectAddress);
-  const relayAddresses = peerAddresses.filter(isRelayAddress);
+  const relayAddresses = relayAddressesRelayFirst(peerAddresses.filter(isRelayAddress), peerId);
   const bootstrapAddresses = uniqueStrings([...directAddresses, ...relayAddresses]);
 
   if (bootstrapAddresses.length === 0) {
@@ -115,13 +115,42 @@ export function bootstrapAddressBook(record: AukiBrowserBootstrapRecord): Bootst
 }
 
 export function preferredDialAddresses(record: AukiBrowserBootstrapRecord): string[] {
+  const relayReservations = relayReservationAddresses(record.relayAddresses, record.peerId);
+  const browserWebrtc = browserWebrtcAddresses(record.relayAddresses, record.peerId);
+  const otherRelays = record.relayAddresses.filter(
+    (address) => !relayReservations.includes(address) && !browserWebrtc.includes(address),
+  );
+
+  if (relayReservations.length > 0 && (isBrowserRecord(record) || browserWebrtc.length > 0)) {
+    return uniqueStrings([
+      ...relayReservations,
+      ...browserWebrtc,
+      ...record.webrtcDirectAddresses,
+      ...record.directAddresses,
+      ...otherRelays,
+      ...record.bootstrapAddresses,
+      ...record.relayServerAddresses,
+    ]);
+  }
+
   return uniqueStrings([
     ...record.webrtcDirectAddresses,
     ...record.directAddresses,
-    ...record.relayAddresses,
+    ...relayReservations,
+    ...browserWebrtc,
+    ...otherRelays,
     ...record.bootstrapAddresses,
     ...record.relayServerAddresses,
   ]);
+}
+
+export function defaultDialAddresses(record: AukiBrowserBootstrapRecord): string[] {
+  const relayReservations = relayReservationAddresses(record.relayAddresses, record.peerId);
+  const browserWebrtc = browserWebrtcAddresses(record.relayAddresses, record.peerId);
+  if (relayReservations.length > 0 && (isBrowserRecord(record) || browserWebrtc.length > 0)) {
+    return relayReservations;
+  }
+  return preferredDialAddresses(record);
 }
 
 export function relayServerAddresses(record: AukiBrowserBootstrapRecord): string[] {
@@ -133,7 +162,7 @@ export function isExportableBrowserBootstrapAddress(address: string, peerId: str
     return false;
   }
   if (isRelayAddress(address)) {
-    return isStableRelayReservationAddress(address, peerId);
+    return isRelayReservationAddress(address, peerId) || isBrowserWebrtcAddress(address, peerId);
   }
   return isExportableDirectPeerAddress(address, peerId);
 }
@@ -204,10 +233,41 @@ function isRelayAddress(address: string): boolean {
   return address.includes("/p2p-circuit");
 }
 
-function isStableRelayReservationAddress(address: string, peerId: string): boolean {
+function isRelayReservationAddress(address: string, peerId: string): boolean {
   return address.endsWith(`/p2p/${peerId}`) && address.includes(`/p2p-circuit/p2p/${peerId}`);
+}
+
+function isBrowserWebrtcAddress(address: string, peerId: string): boolean {
+  return (
+    address.endsWith(`/p2p/${peerId}`) &&
+    address.includes(`/p2p-circuit/webrtc/p2p/${peerId}`)
+  );
 }
 
 function isWebrtcDirectAddress(address: string): boolean {
   return address.includes("/webrtc-direct");
+}
+
+function relayAddressesRelayFirst(addresses: string[], peerId: string): string[] {
+  return uniqueStrings([
+    ...relayReservationAddresses(addresses, peerId),
+    ...browserWebrtcAddresses(addresses, peerId),
+    ...addresses.filter(
+      (address) =>
+        !isRelayReservationAddress(address, peerId) &&
+        !isBrowserWebrtcAddress(address, peerId),
+    ),
+  ]);
+}
+
+function relayReservationAddresses(addresses: string[], peerId: string): string[] {
+  return addresses.filter((address) => isRelayReservationAddress(address, peerId));
+}
+
+function browserWebrtcAddresses(addresses: string[], peerId: string): string[] {
+  return addresses.filter((address) => isBrowserWebrtcAddress(address, peerId));
+}
+
+function isBrowserRecord(record: AukiBrowserBootstrapRecord): boolean {
+  return record.agentVersion?.startsWith(BROWSER_AGENT_VERSION.split("/")[0]) ?? false;
 }

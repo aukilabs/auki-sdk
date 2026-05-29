@@ -269,7 +269,6 @@ class Libp2pBrowserTransport implements BrowserTransport {
 
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
     const peer = peerIdFromString(peerId);
-    const keep = new Set(keepAddresses);
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < CONNECTION_CLEANUP_TIMEOUT_MS) {
@@ -278,7 +277,7 @@ class Libp2pBrowserTransport implements BrowserTransport {
         return;
       }
 
-      const targets = connectionsToClose(connections, keep);
+      const targets = connectionsToClose(connections, keepAddresses);
       if (targets.length > 0) {
         await Promise.all(targets.map((connection) => closeConnectionAttempt(connection)));
       }
@@ -452,9 +451,9 @@ function connectionCandidates<T extends BrowserConnectionCandidate>(
 
 function connectionsToClose<T extends BrowserConnectionCandidate>(
   connections: T[],
-  keep: Set<string>,
+  keepAddresses: string[],
 ): T[] {
-  const retained = retainedConnectionIds(connections, keep);
+  const retained = retainedConnectionIds(connections, keepAddresses);
   return connections.filter(
     (connection) => connection.status !== "closed" && !retained.has(connection.id),
   );
@@ -464,8 +463,7 @@ export function browserPeerConnectionCleanupComplete(
   connections: BrowserConnectionCleanupCandidate[],
   keepAddresses: string[],
 ): boolean {
-  const keep = new Set(keepAddresses);
-  const retained = retainedConnectionIds(connections, keep);
+  const retained = retainedConnectionIds(connections, keepAddresses);
   if (
     connections.some(
       (connection) => connection.status !== "closed" && !retained.has(connection.id),
@@ -475,19 +473,10 @@ export function browserPeerConnectionCleanupComplete(
   }
 
   const open = connections.filter((connection) => connection.status === "open");
-  if (keep.size === 0) {
+  if (keepAddresses.length === 0) {
     return open.length === 0;
   }
-
-  const seen = new Set<string>();
-  for (const connection of open) {
-    const address = connection.remoteAddr.toString();
-    if (!keep.has(address) || seen.has(address)) {
-      return false;
-    }
-    seen.add(address);
-  }
-  return seen.size > 0;
+  return retained.size === 1;
 }
 
 export function preferredBrowserConnectionAddresses(
@@ -502,20 +491,23 @@ export function preferredBrowserConnectionAddresses(
 
 function retainedConnectionIds<T extends BrowserConnectionCleanupCandidate>(
   connections: T[],
-  keep: Set<string>,
+  keepAddresses: string[],
 ): Set<string> {
+  const keep = new Set(keepAddresses);
   const retained = new Set<string>();
-  const retainedAddresses = new Set<string>();
-  for (const connection of connections) {
-    if (connection.status !== "open") {
-      continue;
+  if (keep.size === 0) {
+    return retained;
+  }
+
+  for (const keepAddress of keepAddresses) {
+    const connection = connections.find(
+      (candidate) =>
+        candidate.status === "open" && candidate.remoteAddr.toString() === keepAddress,
+    );
+    if (connection) {
+      retained.add(connection.id);
+      return retained;
     }
-    const address = connection.remoteAddr.toString();
-    if (!keep.has(address) || retainedAddresses.has(address)) {
-      continue;
-    }
-    retained.add(connection.id);
-    retainedAddresses.add(address);
   }
   return retained;
 }

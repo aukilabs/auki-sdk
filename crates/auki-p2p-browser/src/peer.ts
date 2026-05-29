@@ -1,6 +1,7 @@
 import {
   type AukiBrowserBootstrapRecord,
   createLocalBootstrapRecord,
+  defaultDialAddresses,
   parseBootstrapRecord,
   parseBootstrapRecords,
   preferredDialAddresses,
@@ -275,9 +276,10 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     for (const value of Array.isArray(records) ? records : [records]) {
       const record = parseBootstrapRecord(value);
       const dialAddresses = preferredDialAddresses(record);
+      const initialDialAddresses = defaultDialAddresses(record);
       this.rememberBootstrap(record);
       await this.transport.addRelayServerAddresses?.(relayServerAddresses(record));
-      await this.transport.dial(dialAddresses);
+      await this.transport.dial(initialDialAddresses);
       await this.exchangeLifecycle(record);
       this.peers.set(record.peerId, {
         peerId: record.peerId,
@@ -309,7 +311,10 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       await this.transport.dial([address], { force: true });
     } catch (firstError) {
       if (this.selectedAddressIsActive(peerId, address)) {
-        await this.transport.closePeerConnections?.(peerId, [address]);
+        await this.transport.closePeerConnections?.(
+          peerId,
+          this.keepAddressesForSelectedAddress(peerId, address),
+        );
         this.rememberSwitchedPeer(peerId, dialAddresses);
         return;
       }
@@ -318,7 +323,10 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         await this.transport.dial([address], { force: true });
       } catch (secondError) {
         if (this.selectedAddressIsActive(peerId, address)) {
-          await this.transport.closePeerConnections?.(peerId, [address]);
+          await this.transport.closePeerConnections?.(
+            peerId,
+            this.keepAddressesForSelectedAddress(peerId, address),
+          );
           this.rememberSwitchedPeer(peerId, dialAddresses);
           return;
         }
@@ -328,12 +336,31 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         );
       }
     }
-    await this.transport.closePeerConnections?.(peerId, [address]);
+    await this.transport.closePeerConnections?.(
+      peerId,
+      this.keepAddressesForSelectedAddress(peerId, address),
+    );
     this.rememberSwitchedPeer(peerId, dialAddresses);
   }
 
   private selectedAddressIsActive(peerId: string, address: string): boolean {
-    return this.connectionPaths(peerId).some((path) => path.remoteAddress === address);
+    return this.connectionPaths(peerId).some((path) =>
+      activePathMatchesSelectedAddress(path.remoteAddress, address, peerId),
+    );
+  }
+
+  private keepAddressesForSelectedAddress(peerId: string, address: string): string[] {
+    const activeAddresses = this.connectionPaths(peerId)
+      .filter((path) => activePathMatchesSelectedAddress(path.remoteAddress, address, peerId))
+      .map((path) => path.remoteAddress);
+    if (isBrowserWebrtcDialAddress(address, peerId)) {
+      const activeAddressCandidate = `/webrtc/p2p/${peerId}`;
+      const activeWebrtcAddress = activeAddresses.find((activeAddress) =>
+        activeAddress === activeAddressCandidate,
+      );
+      return uniqueStrings([activeWebrtcAddress ?? activeAddressCandidate, address]);
+    }
+    return [address];
   }
 
   private rememberSwitchedPeer(peerId: string, dialAddresses: string[]): void {
@@ -1277,6 +1304,34 @@ function uniqueStrings(values: string[]): string[] {
 
 function observedAddressesFromConnectionPaths(paths: BrowserConnectionPath[]): string[] {
   return uniqueStrings(paths.map((path) => path.remoteAddress));
+}
+
+function activePathMatchesSelectedAddress(
+  activeAddress: string,
+  selectedAddress: string,
+  peerId: string,
+): boolean {
+  if (activeAddress === selectedAddress) {
+    return true;
+  }
+  return (
+    isBrowserWebrtcDialAddress(selectedAddress, peerId) &&
+    browserWebrtcActiveAddressCandidates(selectedAddress, peerId).includes(activeAddress)
+  );
+}
+
+function browserWebrtcActiveAddressCandidates(selectedAddress: string, peerId: string): string[] {
+  if (!isBrowserWebrtcDialAddress(selectedAddress, peerId)) {
+    return [];
+  }
+  return [`/webrtc/p2p/${peerId}`];
+}
+
+function isBrowserWebrtcDialAddress(address: string, peerId: string): boolean {
+  return (
+    address.endsWith(`/p2p/${peerId}`) &&
+    address.includes(`/p2p-circuit/webrtc/p2p/${peerId}`)
+  );
 }
 
 function randomBytes(length: number): Uint8Array {

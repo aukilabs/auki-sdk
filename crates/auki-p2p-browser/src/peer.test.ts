@@ -199,6 +199,21 @@ describe("AukiBrowserPeer shell", () => {
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/websocket");
   });
 
+  it("connects browser peers over relay by default while remembering browser WebRTC", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    const relay = "/memory/relay/p2p-circuit/p2p/native-peer";
+    const browserWebrtc = "/memory/relay/p2p-circuit/webrtc/p2p/native-peer";
+
+    await peer.connectBootstrap(browserBootstrapRecord("native-peer", relay, browserWebrtc));
+
+    expect(transport.dials).toEqual([[relay]]);
+    expect(peer.listPeers()[0]?.dialAddresses).toEqual([relay, browserWebrtc]);
+  });
+
   it("force dials selected peer address even when it is already reported active", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({
@@ -258,6 +273,32 @@ describe("AukiBrowserPeer shell", () => {
       { peerId: "native-peer", keepAddresses: ["/memory/webrtc-direct"] },
     ]);
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/webrtc-direct");
+  });
+
+  it("retains the active WebRTC path when switching with a browser WebRTC dial address", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    const relay = "/memory/relay/p2p-circuit/p2p/native-peer";
+    const browserWebrtc = "/memory/relay/p2p-circuit/webrtc/p2p/native-peer";
+    await peer.connectBootstrap(browserBootstrapRecord("native-peer", relay, browserWebrtc));
+    transport.setConnectionPaths("native-peer", [
+      memoryConnectionPath(relay),
+      memoryConnectionPath("/webrtc/p2p/native-peer"),
+    ]);
+
+    await peer.switchPeerAddress("native-peer", browserWebrtc);
+
+    expect(transport.forcedDials).toEqual([[browserWebrtc]]);
+    expect(transport.closedPeers).toEqual([
+      {
+        peerId: "native-peer",
+        keepAddresses: ["/webrtc/p2p/native-peer", browserWebrtc],
+      },
+    ]);
+    expect(peer.listPeers()[0]?.dialAddresses[0]).toBe(browserWebrtc);
   });
 
   it("reconnects previous addresses when selected peer address cannot be dialed", async () => {
@@ -1716,6 +1757,18 @@ function switchableBootstrapRecord(): unknown {
     relay_addresses: [],
     relay_server_addresses: [],
     bootstrap_addresses: ["/memory/websocket", "/memory/webrtc-direct"],
+  };
+}
+
+function browserBootstrapRecord(peerId: string, relay: string, browserWebrtc: string): unknown {
+  return {
+    peer_id: peerId,
+    agent_version: "auki-p2p-browser/0.0.0",
+    direct_addresses: [],
+    webrtc_direct_addresses: [],
+    relay_addresses: [browserWebrtc, relay],
+    relay_server_addresses: [],
+    bootstrap_addresses: [browserWebrtc, relay],
   };
 }
 

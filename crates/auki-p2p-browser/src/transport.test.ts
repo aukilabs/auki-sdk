@@ -131,6 +131,27 @@ describe("browser transport lifecycle", () => {
     ).toBe(true);
   });
 
+  it("does not complete selected-address cleanup while two keep candidates are open", () => {
+    const relay = cleanupConnection("relay", "/memory/relay", "open");
+    const webrtc = cleanupConnection("webrtc", "/webrtc/p2p/browser", "open");
+
+    expect(
+      browserPeerConnectionCleanupComplete(
+        [relay, webrtc],
+        ["/webrtc/p2p/browser", "/memory/relay"],
+      ),
+    ).toBe(false);
+
+    relay.status = "closed";
+
+    expect(
+      browserPeerConnectionCleanupComplete(
+        [relay, webrtc],
+        ["/webrtc/p2p/browser", "/memory/relay"],
+      ),
+    ).toBe(true);
+  });
+
   it("prefers direct WebRTC over a relayed websocket path", () => {
     expect(
       preferredBrowserConnectionAddresses([
@@ -174,6 +195,7 @@ describe("browser transport lifecycle", () => {
       ),
     ).toEqual([
       "/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
       "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
     ]);
   });

@@ -59,6 +59,13 @@ export function supportsLocalBrowserExposure(
   return relayServerAddress && address.endsWith(`/p2p/${peerId}`);
 }
 
+export function shouldMarkObservedAddress(
+  address: string,
+  knownAddresses: readonly string[],
+): boolean {
+  return !knownAddresses.includes(address);
+}
+
 export function offerLabel(offer: OfferSummary | undefined): string {
   if (!offer) {
     return "None";

@@ -6,6 +6,7 @@ import {
   mergeBootstrapRecords,
   offerLabel,
   parseBootstrapText,
+  shouldMarkObservedAddress,
   supportsLocalBrowserExposure,
 } from "./app";
 import {
@@ -161,6 +162,19 @@ describe("p2p preview browser helpers", () => {
     ).toBe(true);
     expect(
       supportsLocalBrowserExposure("browser-peer", "/webrtc/p2p/browser-peer"),
+    ).toBe(false);
+  });
+
+  it("marks observed addresses only when they were not already known", () => {
+    expect(
+      shouldMarkObservedAddress("/webrtc/p2p/browser-peer", [
+        "/memory/relay/p2p-circuit/p2p/browser-peer",
+      ]),
+    ).toBe(true);
+    expect(
+      shouldMarkObservedAddress("/memory/relay/p2p-circuit/p2p/browser-peer", [
+        "/memory/relay/p2p-circuit/p2p/browser-peer",
+      ]),
     ).toBe(false);
   });
 

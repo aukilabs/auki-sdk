@@ -21,6 +21,7 @@ import {
   canRequestSnapshot,
   mergeBootstrapRecords,
   parseBootstrapText,
+  shouldMarkObservedAddress,
   shortId,
   supportsLocalBrowserExposure,
 } from "./app";
@@ -1283,8 +1284,15 @@ function addressInventory(
   for (const address of dialAddresses) {
     upsert(address).roles.add("dial");
   }
+  const knownAddresses = uniqueStrings([
+    ...dialAddresses,
+    ...bootstrapAddresses,
+    ...relayServerAddresses,
+  ]);
   for (const address of observedAddresses) {
-    upsert(address).roles.add("observed");
+    if (shouldMarkObservedAddress(address, knownAddresses)) {
+      upsert(address).roles.add("observed");
+    }
   }
   for (const address of bootstrapAddresses) {
     upsert(address).roles.add("bootstrap");

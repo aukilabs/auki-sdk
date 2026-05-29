@@ -1,161 +1,117 @@
-# P2P Preview Demo Presentation Draft
+# Turning The RFC Into SDK Code
 
-Audience: internal demo peers, mostly non-technical.
+Audience: internal weekly update.
 Length: 5-10 minutes.
-Tone: warm, short, and concrete. Use this as speaker notes, not a deep technical deck.
+Tone: short, personal, and concrete.
 
 ## One-line story
 
-We moved the networking work from "interesting code" toward an SDK story: a clear RFC baseline, a Rust runtime, and a browser peer that can use the same rules to receive preview data directly from a native Sentinel-style peer.
+I started turning the P2P RFC work into SDK code. The useful result this week is not a finished networking stack. It is that the RFC is now being forced through a real implementation path, and the gaps are becoming easier to see.
 
-## Presenter guardrails
-
-- Keep the meeting about what the demo proves, not about file trees or implementation details.
-- Say "preview" and "first slice" often; do not imply production or merge readiness.
-- If time is tight, show Get first and treat Subscribe as optional.
-- Do not raise PR conflict status unless someone asks.
-
-## Slide 1 - Warm opening
+## Slide 1 - Where I am
 
 Speaker script:
 
-> Thanks everyone. I want to show a small but important step in the SDK networking work. The goal today is not to walk through every crate or every protocol detail. The goal is to show the story from RFCs, to SDK code, to a simple peer-to-peer preview demo.
+> Last week I talked about keeping the protocol boring: write the rules first, then let implementation expose what is missing. This week I started doing the second part. I began implementing the RFC into the SDK.
 
 Bullets:
 
-- This is a short demo of the new RFC-first networking path.
-- We will focus on the story: why it matters, what exists now, what is still preview.
-- The live demo is intentionally narrow so we can learn from it.
+- The RFC is no longer only a document.
+- I started mapping it into SDK code and demo surfaces.
+- The goal is a small first slice, not the whole future SDK.
 
-## Slide 2 - Why we did this
+## Slide 2 - Why this matters
 
 Speaker script:
 
-> The problem we were running into is that networking code can get ahead of the shared language. If people use different words for peer, domain, cluster, authority, and data exchange, then bugs become hard to classify and features are hard to review.
+> The reason to do this now is simple: protocol text gets much better when it has to survive contact with code. If the SDK cannot implement a rule cleanly, then either the rule is unclear, the code is wrong, or the RFC is missing something.
 
 Bullets:
 
-- The RFCs make the first peer-to-peer path small, explicit, and reviewable.
-- The baseline defines how peers identify each other, decide what they can serve, and exchange domain-scoped data.
-- The SDK implementation now has a clearer target instead of relying on implementation folklore.
+- Implementation turns vague protocol language into concrete decisions.
+- It separates baseline behavior from product behavior.
+- It gives us real feedback instead of more abstract design discussion.
 
-## Slide 3 - What exists in this branch
+## Slide 3 - The shape of the first slice
 
 Speaker script:
 
-> The branch is more than documentation now. It has the protocol rules, a native Rust peer runtime, a browser package, and two demo apps that exercise the first preview path.
+> I am keeping the first slice intentionally small. A peer should be able to connect, identify itself, describe what it can serve, and exchange data through the basic Offer / Get / Subscribe path.
 
 Bullets:
 
-- `auki-protocol`: the shared rules for handshakes, offers, Get, Subscribe, status, and validation.
-- `auki-p2p`: the native Rust runtime that connects peers and serves or consumes offers.
-- `auki-p2p-browser`: a browser peer package that uses the Rust protocol rules through WASM instead of reimplementing them in TypeScript.
+- Connect peers.
+- Check identity and lifecycle behavior.
+- Work with served domains and offers.
+- Fetch or stream a small piece of data.
+- Keep everything narrow enough to test and reason about.
 
-## Slide 4 - The simple picture
+## Slide 4 - What changed this week
 
 Speaker script:
 
-> The mental model is: one native Sentinel-style peer publishes a small preview offer, and the browser becomes an Auki peer that can connect, discover that offer, and request or subscribe to preview frames.
+> The main change is that I moved from writing the baseline toward implementing it. I started putting the RFC concepts into SDK structure, and I started using demo code to check whether the shape makes sense.
 
 Bullets:
 
-- Native Sentinel preview producer: generates JPEG preview frames and publishes an offer.
-- Browser receiver: starts its own peer, loads bootstrap JSON, connects, and shows offers.
-- Demo path: connect -> load offers -> Get one frame -> optionally Subscribe to a stream.
+- RFC concepts are being translated into SDK code.
+- The implementation is starting to show which parts are clear.
+- The demo path is becoming a way to test the protocol shape, not just show a feature.
 
-## Slide 5 - Why Rust plus browser libp2p matters
+## Slide 5 - What I am learning
 
 Speaker script:
 
-> The important point is not that we used a specific library. The important point is that the SDK can have a native runtime and a browser runtime speaking the same peer-to-peer language.
+> The useful part is that the implementation is already making the protocol less theoretical. Some things are straightforward. Some things need sharper language. Some things probably belong outside the baseline.
 
 Bullets:
 
-- Rust gives us one careful implementation of the protocol rules and native peer behavior.
-- The browser package brings those same rules into a web app without a second protocol interpretation.
-- libp2p is the connectivity layer that lets peers talk directly when the network path allows it.
+- Clear rules are easy to turn into code.
+- Ambiguous rules become visible quickly.
+- Product decisions should not quietly become protocol requirements.
 
-Optional plain-language analogy:
+## Slide 6 - What this makes easier
 
-> Think of the RFC as the conversation rules, Rust as the careful reference speaker, and the browser package as a web speaker using the same phrasebook.
+Speaker script:
 
-## Slide 6 - Live demo talk track
+> Having a real SDK path makes the next decisions smaller. Instead of asking whether the whole networking design is right, I can ask whether this handshake shape is clear, whether this offer shape is enough, and whether this demo path proves the right thing.
 
-Before clicking:
+Bullets:
 
-> This is a development preview. I am going to show the smallest useful path first, then only go further if the connection is stable.
-
-Steps:
-
-1. Start the native preview Sentinel and point out the generated bootstrap JSON.
-2. Open the browser P2P Preview page and click **Start Peer**.
-3. Add or load the Sentinel bootstrap JSON with **Add Peer**.
-4. Point to the peer and offer panels: the browser now sees a remote peer and its preview offer.
-5. Click **Get** first if available: "This proves the browser can request one preview frame."
-6. Click **Subscribe** only if preflight was green: "This proves the browser can keep receiving preview frames over the peer-to-peer path."
-
-Keep the narration light:
-
-- "This browser tab is acting as an SDK peer, not just a static web page."
-- "The preview offer is a small stand-in for richer spatial data later."
-- "The diagnostics are here to help us debug the preview, not to define product UX."
+- Turn protocol language into API names and message shapes.
+- Write examples against the behavior we actually want to support.
+- Find the next missing compatibility notes, expected results, and validation cases.
 
 ## Slide 7 - What this does not prove yet
 
 Speaker script:
 
-> This is useful, but it is not the finish line. It proves the first narrow path and gives us something concrete to improve.
+> This is still a first implementation slice. It does not mean the networking stack is done, and it does not mean every transport or browser case is ready. It means we now have a concrete path to test, criticize, and improve.
 
 Bullets:
 
-- Camera capture is not part of this first slice; generated preview frames are used for repeatability.
-- Browser publishing, browser-to-browser preview, multi-browser and multi-Sentinel demos are still follow-up work.
-- Transport details, relay behavior, Playwright smoke coverage, and production hardening still need more evidence.
+- The first slice is for learning and alignment, not production readiness.
+- Browser, relay, multi-peer, and smoke-test coverage still need more evidence.
+- The RFC and SDK should keep changing together as implementation exposes gaps.
 
-## Slide 8 - If the live demo is flaky
-
-Use this if preflight is not green or Subscribe flakes:
-
-> I am going to switch to the fallback walkthrough. The useful result is still the same: we now have a concrete RFC-to-SDK path and a demo surface that shows where the next bugs are. Rather than spend the meeting debugging connectivity, I will show the intended flow and call out exactly what needs more preflight time.
-
-Fallback flow:
-
-- Show the Sentinel and browser README commands instead of live debugging.
-- Show the browser UI panels: Start Peer, Add Peer, Peers, Offers, Diagnostics.
-- Explain the sequence: bootstrap, lifecycle connection, offer loading, Get, Subscribe.
-- If only Get works, stop there and say Subscribe is the next preflight target.
-
-## Slide 9 - Feedback ask
+## Slide 8 - What I am doing next
 
 Speaker script:
 
-> The feedback I want is not whether every detail is final. I want to know whether this is the right first story for SDK networking: small baseline, shared language, native and browser peers, and a visible preview path.
+> Next I want to keep the loop tight: implement a small piece, check it against the RFC, update the language where it is wrong or vague, and then use the demo surface to show the current state honestly.
 
 Bullets:
 
-- Is this the right demo shape for explaining the SDK networking direction?
-- Is the Rust + browser peer story clear without going too deep?
-- Which next proof matters most: browser publishing, multi-peer demo, camera source, or stronger smoke tests?
-
-## Slide 10 - Closing
-
-Speaker script:
-
-> The headline is: the RFC work is now connected to an SDK implementation path and a visible demo. It is still a preview, but it is no longer abstract. We can run it, see peers and offers, request frames, and use the gaps to guide the next slice.
-
-Bullets:
-
-- We have a grounded RFC-to-runtime-to-browser story.
-- The demo is intentionally small and honest about unfinished work.
-- Next step: preflight the live path, gather feedback, then harden the highest-value follow-up.
+- Keep the first SDK path narrow.
+- Use implementation feedback to sharpen the RFC and backlog.
+- Demo only the behavior that has actually been preflighted.
 
 ## Quick 5-minute cut
 
 If the meeting runs short, use only these sections:
 
-1. Warm opening: this is the RFC-to-SDK-to-demo story.
-2. Why: shared language before protocol code grows too far.
-3. What exists: `auki-protocol`, `auki-p2p`, `auki-p2p-browser`, preview examples.
-4. Demo: Start Peer, Add Peer, Get; Subscribe only if stable.
-5. Caveat: preview slice, not production readiness.
-6. Ask: which next proof matters most?
+1. Where I am: I started implementing the RFC into the SDK.
+2. Why it matters: implementation exposes unclear protocol language.
+3. First slice: connect, identify, serve offers, Get / Subscribe small data.
+4. Learning: clear rules become code; unclear rules become visible.
+5. Next: keep the RFC and SDK moving together through small, testable slices.

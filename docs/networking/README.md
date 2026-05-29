@@ -11,8 +11,8 @@ Read in this order:
 4. [`backlog.md`](backlog.md) is the working task list. It is not part of the
    protocol requirements.
 5. [`glossary.md`](glossary.md) defines recurring terminology.
-6. [`demo-presentation.md`](demo-presentation.md) is a short, non-technical demo
-   talk track for the current RFC-to-SDK preview slice.
+6. [`demo-presentation.md`](demo-presentation.md) is a short weekly update
+   about turning the RFC into SDK implementation work.
 
 ## Baseline Compliance Profile
 

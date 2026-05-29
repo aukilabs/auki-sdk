@@ -280,6 +280,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       this.rememberBootstrap(record);
       await this.transport.addRelayServerAddresses?.(relayServerAddresses(record));
       await this.transport.dial(initialDialAddresses);
+      this.transport.preferPeerConnections?.(record.peerId, initialDialAddresses);
       await this.exchangeLifecycle(record);
       this.peers.set(record.peerId, {
         peerId: record.peerId,

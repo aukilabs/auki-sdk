@@ -211,6 +211,9 @@ describe("AukiBrowserPeer shell", () => {
     await peer.connectBootstrap(browserBootstrapRecord("native-peer", relay, browserWebrtc));
 
     expect(transport.dials).toEqual([[relay]]);
+    expect(transport.preferredPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [relay] },
+    ]);
     expect(peer.listPeers()[0]?.dialAddresses).toEqual([relay, browserWebrtc]);
   });
 
@@ -1803,6 +1806,7 @@ async function fixtureJson(name: string): Promise<JsonObject> {
 class MemoryTransport implements BrowserTransport {
   readonly dials: string[][] = [];
   readonly forcedDials: string[][] = [];
+  readonly preferredPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly closedPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly protocolDials: Array<{ peerId: string; addresses: string[]; protocol: string }> = [];
   private readonly relayServerAddresses: string[] = [];
@@ -1859,6 +1863,10 @@ class MemoryTransport implements BrowserTransport {
     if (failure) {
       throw failure;
     }
+  }
+
+  preferPeerConnections(peerId: string, keepAddresses: string[]): void {
+    this.preferredPeers.push({ peerId, keepAddresses: keepAddresses.slice() });
   }
 
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {

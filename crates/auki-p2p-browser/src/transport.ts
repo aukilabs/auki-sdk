@@ -45,6 +45,7 @@ export type BrowserTransport = {
   multiaddrs(): string[];
   addRelayServerAddresses?(addresses: string[]): Promise<void> | void;
   dial(addresses: string[], options?: { force?: boolean }): Promise<void>;
+  preferPeerConnections?(peerId: string, keepAddresses: string[]): void;
   closePeerConnections?(peerId: string, keepAddresses?: string[]): Promise<void>;
   connectionPaths?(peerId: string): BrowserConnectionPath[];
   registerProtocolHandler(
@@ -192,6 +193,7 @@ class Libp2pBrowserTransport implements BrowserTransport {
   readonly peerId: string;
   private started = false;
   private readonly retentionTimers = new Map<string, number>();
+  private readonly peerKeepAddressPreference = new Map<string, string[]>();
 
   constructor(
     private readonly node: Awaited<ReturnType<typeof createLibp2p>>,
@@ -247,6 +249,10 @@ class Libp2pBrowserTransport implements BrowserTransport {
     });
   }
 
+  preferPeerConnections(peerId: string, keepAddresses: string[]): void {
+    this.rememberPeerKeepAddressPreference(peerId, keepAddresses);
+  }
+
   private async listenOnRelayServers(addresses: string[]): Promise<void> {
     const listenAddresses = relayListenAddresses(addresses).map((address) => multiaddr(address));
     if (listenAddresses.length === 0) {
@@ -269,6 +275,7 @@ class Libp2pBrowserTransport implements BrowserTransport {
 
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
     const peer = peerIdFromString(peerId);
+    this.rememberPeerKeepAddressPreference(peerId, keepAddresses);
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < CONNECTION_CLEANUP_TIMEOUT_MS) {
@@ -309,11 +316,21 @@ class Libp2pBrowserTransport implements BrowserTransport {
     this.retentionTimers.delete(peerId);
     const peer = peerIdFromString(peerId);
     const connections = this.node.getConnections(peer);
-    const keepAddresses = preferredBrowserConnectionAddresses(connections);
+    const keepAddresses =
+      this.peerKeepAddressPreference.get(peerId) ??
+      preferredBrowserConnectionAddresses(connections);
     if (connections.filter((connection) => connection.status === "open").length <= keepAddresses.length) {
       return;
     }
     await this.closePeerConnections(peerId, keepAddresses).catch(() => undefined);
+  }
+
+  private rememberPeerKeepAddressPreference(peerId: string, keepAddresses: string[]): void {
+    if (keepAddresses.length > 0) {
+      this.peerKeepAddressPreference.set(peerId, uniqueStrings(keepAddresses));
+    } else {
+      this.peerKeepAddressPreference.delete(peerId);
+    }
   }
 
   connectionPaths(peerId: string): BrowserConnectionPath[] {

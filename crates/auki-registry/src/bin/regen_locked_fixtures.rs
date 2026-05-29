@@ -25,6 +25,10 @@ fn main() {
             canonical_sensor(&make_sensor_camera_rgb()),
         ),
         (
+            "sensor_camera_rgb_mirrored.json",
+            canonical_sensor(&make_sensor_camera_rgb_mirrored()),
+        ),
+        (
             "sensor_camera_depth.json",
             canonical_sensor(&make_sensor_camera_depth()),
         ),
@@ -60,6 +64,14 @@ fn main() {
         (
             "frame_ros_optical.json",
             canonical_frame(&make_frame_ros_optical()),
+        ),
+        (
+            "frame_raster_top_left.json",
+            canonical_frame(&make_frame_raster_top_left()),
+        ),
+        (
+            "frame_raster_mirrored.json",
+            canonical_frame(&make_frame_raster_mirrored()),
         ),
         ("frame_opengl.json", canonical_frame(&make_frame_opengl())),
         ("frame_unity.json", canonical_frame(&make_frame_unity())),
@@ -116,6 +128,7 @@ fn galbot_frame_ref(frame_id: &str, entry: &FrameRegistryEntry) -> RegistryRef {
 
 fn make_sensor_camera_rgb() -> SensorRegistryEntry {
     let optical_frame = FrameRegistryEntry::ros_optical("galbot", "head_left_camera_optical");
+    let raster_frame = FrameRegistryEntry::raster_top_left("galbot", "head_left_camera_raster");
     SensorRegistryEntry {
         peer_id: "galbot".into(),
         sensor_id: "head_left_rgb".into(),
@@ -129,6 +142,28 @@ fn make_sensor_camera_rgb() -> SensorRegistryEntry {
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
             frame: galbot_frame_ref("head_left_camera_optical", &optical_frame),
+            raster_frame: Some(galbot_frame_ref("head_left_camera_raster", &raster_frame)),
+        }),
+    }
+}
+
+fn make_sensor_camera_rgb_mirrored() -> SensorRegistryEntry {
+    let optical_frame = FrameRegistryEntry::ros_optical("galbot", "head_left_camera_optical");
+    let raster_frame = FrameRegistryEntry::raster_mirrored("galbot", "head_left_camera_raster_mirrored");
+    SensorRegistryEntry {
+        peer_id: "galbot".into(),
+        sensor_id: "head_left_rgb_mirrored".into(),
+        body: SensorBody::Camera(Camera {
+            r#type: "rgb".into(),
+            width: 1920,
+            height: 1200,
+            frame_rate_hz: 30,
+            pixel_format: "rgb8".into(),
+            color_space: "srgb".into(),
+            intrinsics_model: "pinhole".into(),
+            distortion_model: "brown_conrady".into(),
+            frame: galbot_frame_ref("head_left_camera_optical", &optical_frame),
+            raster_frame: Some(galbot_frame_ref("head_left_camera_raster_mirrored", &raster_frame)),
         }),
     }
 }
@@ -148,6 +183,7 @@ fn make_sensor_camera_depth() -> SensorRegistryEntry {
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
             frame: galbot_frame_ref("head_depth_optical", &optical_frame),
+            raster_frame: None,
         }),
     }
 }
@@ -324,6 +360,14 @@ fn make_frame_opengl() -> FrameRegistryEntry {
 
 fn make_frame_unity() -> FrameRegistryEntry {
     FrameRegistryEntry::unity("galbot", "world_unity")
+}
+
+fn make_frame_raster_top_left() -> FrameRegistryEntry {
+    FrameRegistryEntry::raster_top_left("galbot", "head_left_camera_raster")
+}
+
+fn make_frame_raster_mirrored() -> FrameRegistryEntry {
+    FrameRegistryEntry::raster_mirrored("galbot", "head_left_camera_raster_mirrored")
 }
 
 // ─── Detector fixtures ────────────────────────────────────────────────────────

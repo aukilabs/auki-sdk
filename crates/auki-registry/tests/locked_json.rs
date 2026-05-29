@@ -48,6 +48,11 @@ fn sensor_camera_rgb_locked() {
 }
 
 #[test]
+fn sensor_camera_rgb_mirrored_locked() {
+    assert_round_trip::<SensorRegistryEntry>("sensor_camera_rgb_mirrored.json");
+}
+
+#[test]
 fn sensor_camera_depth_locked() {
     assert_round_trip::<SensorRegistryEntry>("sensor_camera_depth.json");
 }
@@ -109,6 +114,16 @@ fn frame_opengl_locked() {
 #[test]
 fn frame_unity_locked() {
     assert_round_trip::<FrameRegistryEntry>("frame_unity.json");
+}
+
+#[test]
+fn frame_raster_top_left_locked() {
+    assert_round_trip::<FrameRegistryEntry>("frame_raster_top_left.json");
+}
+
+#[test]
+fn frame_raster_mirrored_locked() {
+    assert_round_trip::<FrameRegistryEntry>("frame_raster_mirrored.json");
 }
 
 // ─── Detector fixtures ────────────────────────────────────────────────────────

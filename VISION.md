@@ -45,7 +45,7 @@ Each transform edge is looked up or interpolated at time *t* in a Pose Log; the 
 
 | Registry | What it holds |
 |---|---|
-| **Frame Registry** | Coordinate convention metadata for named frames (handedness, axes, units, rotation semantics) |
+| **Frame Registry** | Coordinate convention metadata for named frames (handedness, axes, units, rotation semantics; optionally a 2D raster byte convention) |
 | **Sensor Registry** | Per-sensor identity and interpretation metadata (type, dimensions, format, sample rate) |
 | **Clock Registry** | Per-clock identity and semantics (monotonic vs UTC, scope, epoch) |
 
@@ -151,7 +151,7 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-logs`](crates/auki-logs) | `Log<T>`, `LogReader<T>`, `Entry<T>`, `Error`, `LogPayload` (trait — consumers pick the encoder; prost types in `auki-datatypes` get a blanket impl) |
 | [`auki-registry`](crates/auki-registry) | `SensorRegistryEntry` / `SensorBody` (`Camera`, `PointCloud`, `JointEncoders`, `Audio`), `ClockRegistryEntry`, `FrameRegistryEntry`, `write_sensor` / `read_sensor`, `write_clock` / `read_clock`, `write_frame` / `read_frame`. The crate's scope is identity catalogs only; log payloads live in [`auki-datatypes`](crates/auki-datatypes). |
 | [`auki-datatypes`](crates/auki-datatypes) | `camera::CameraFrame`, `camera::DynamicIntrinsics`, `point_cloud::Data`, `audio::Data`, `joint_encoders::Data`, `detection::DetectionFrame`, `pose::{SpatialTransform, Vec3, Quat}`, `time_transform::TimeTransformEntry`, and `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}` helpers. Each opaque-bytes / structured-vector module ships a single `Data` message used on both disk (Sensor Log segment) and wire (libp2p `/auki/stream/0.2.0` substream); the dual `*_stream` packages were collapsed in #176. |
-| [`auki-geometry`](crates/auki-geometry) | `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, `axis_convention_matrix`, `convention_matrix`, `meters_per_unit`. Pure math over `auki-registry` declarations + `auki-datatypes` pose types. |
+| [`auki-geometry`](crates/auki-geometry) | `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`, `axis_convention_matrix`, `convention_matrix`, `raster_convention_matrix`, `meters_per_unit`. Pure math over `auki-registry` declarations + `auki-datatypes` pose types. |
 | [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
 | [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-datatypes`) and `TimeTransformSource` (from `auki-manifests`). |

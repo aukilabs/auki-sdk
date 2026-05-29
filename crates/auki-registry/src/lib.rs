@@ -104,6 +104,8 @@ pub struct Camera {
     /// Frame Registry reference for the camera optical frame. Replaces
     /// the former `(frame_id, frame_hash)` pair.
     pub frame: RegistryRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raster_frame: Option<RegistryRef>,
 }
 
 /// Static layout of a rangefinder sensor's per-point bytes. The actual point
@@ -371,6 +373,62 @@ pub struct FrameRegistryEntry {
     pub handedness: Handedness,
     pub axes: AxisConvention,
     pub units: LengthUnit,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raster: Option<RasterConvention>,
+}
+
+/// A raster coordinate system. Tells a consumer how to interpret the
+/// (u, v) coordinate pair of a raster image/video: origin, which
+/// direction the u and v coordinates increase towards, and the unit
+/// used by the coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RasterConvention {
+    pub origin: RasterOrigin,
+    pub u: HorizontalDirection,
+    pub v: VerticalDirection,
+    pub units: RasterUnit,
+}
+
+/// Which corner the origin is located in the raster image/video.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RasterOrigin {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// Which direction the u coordinate increases towards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HorizontalDirection {
+    Left,
+    Right,
+}
+
+/// Which direction the v coordinate increases towards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalDirection {
+    Up,
+    Down,
+}
+
+/// What unit the `(u, v)` raster coordinates are measured in.
+///
+/// - `pixels` — integer pixel indices in `[0, width-1] × [0, height-1]`.
+///   The natural representation for stored image bytes.
+/// - `normalized` — floating-point fractions in `[0.0, 1.0]`, resolution
+///   independent. Survives a resize without losing meaning.
+///
+/// Converting between `pixels` and `normalized` requires the raster's
+/// `(width, height)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RasterUnit {
+    Pixels,
+    Normalized,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,6 +537,7 @@ impl FrameRegistryEntry {
                 z: AxisDirection::Up,
             },
             units: LengthUnit::Meters,
+            raster: None,
         }
     }
 
@@ -496,6 +555,7 @@ impl FrameRegistryEntry {
                 z: AxisDirection::Forward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         }
     }
 
@@ -514,6 +574,7 @@ impl FrameRegistryEntry {
                 z: AxisDirection::Backward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         }
     }
 
@@ -531,6 +592,71 @@ impl FrameRegistryEntry {
                 z: AxisDirection::Forward,
             },
             units: LengthUnit::Meters,
+            raster: None,
+        }
+    }
+
+    /// Standard top-left-origin raster (most cameras, OpenCV convention).
+    pub fn raster_top_left(
+        peer_id: impl Into<String>,
+        frame_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            raster: Some(RasterConvention {
+                origin: RasterOrigin::TopLeft,
+                u: HorizontalDirection::Right,
+                v: VerticalDirection::Down,
+                units: RasterUnit::Pixels,
+            }),
+            ..Self::ros_optical(peer_id, frame_id)
+        }
+    }
+
+    /// Horizontally mirrored raster (front-facing camera, FaceTime convention).
+    pub fn raster_mirrored(
+        peer_id: impl Into<String>,
+        frame_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            raster: Some(RasterConvention {
+                origin: RasterOrigin::TopRight,
+                u: HorizontalDirection::Left,
+                v: VerticalDirection::Down,
+                units: RasterUnit::Pixels,
+            }),
+            ..Self::ros_optical(peer_id, frame_id)
+        }
+    }
+
+    /// Normalized model-input space (e.g. detector input crop)
+    pub fn raster_normalized(
+        peer_id: impl Into<String>,
+        frame_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            raster: Some(RasterConvention {
+                origin: RasterOrigin::TopLeft,
+                u: HorizontalDirection::Right,
+                v: VerticalDirection::Down,
+                units: RasterUnit::Normalized,
+            }),
+            ..Self::ros_optical(peer_id, frame_id)
+        }
+    }
+
+    /// Normalized and mirrored model-input space (e.g. detector input crop)
+    pub fn raster_normalized_mirrored(
+        peer_id: impl Into<String>,
+        frame_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            raster: Some(RasterConvention {
+                origin: RasterOrigin::TopRight,
+                u: HorizontalDirection::Left,
+                v: VerticalDirection::Down,
+                units: RasterUnit::Normalized,
+            }),
+            ..Self::ros_optical(peer_id, frame_id)
         }
     }
 }
@@ -928,6 +1054,7 @@ mod tests {
                     id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
                     hash: M1_OPTICAL_FRAME_HASH.into(),
                 },
+                raster_frame: None,
             }),
         }
     }
@@ -1524,6 +1651,7 @@ mod tests {
                 z: AxisDirection::Up,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         assert_eq!(preset, explicit);
     }
@@ -1541,6 +1669,7 @@ mod tests {
                 z: AxisDirection::Forward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         assert_eq!(preset, explicit);
     }
@@ -1558,6 +1687,7 @@ mod tests {
                 z: AxisDirection::Backward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         assert_eq!(preset, explicit);
     }
@@ -1575,6 +1705,7 @@ mod tests {
                 z: AxisDirection::Forward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         assert_eq!(preset, explicit);
     }
@@ -1592,6 +1723,7 @@ mod tests {
                 z: AxisDirection::Up,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         match entry.validate() {
             Err(Error::InvalidAxes(msg)) => assert!(
@@ -1650,6 +1782,7 @@ mod tests {
                 z: AxisDirection::Forward,
             },
             units: LengthUnit::Meters,
+            raster: None,
         };
         match write_frame(dir.path(), &entry) {
             Err(Error::InvalidAxes(_)) => {}
@@ -1821,6 +1954,7 @@ mod tests {
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),
                 frame: frame_ref.clone(),
+                raster_frame: None,
             }),
         };
         let camera_json = std::str::from_utf8(&camera.canonical_bytes())

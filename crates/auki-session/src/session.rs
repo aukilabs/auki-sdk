@@ -667,6 +667,7 @@ mod register_log_tests {
             intrinsics_model: "pinhole".to_string(),
             distortion_model: "brown_conrady".to_string(),
             frame,
+            raster_frame: None,
         })
     }
 
@@ -893,6 +894,7 @@ mod session_logs_tests {
                     intrinsics_model: "pinhole".to_string(),
                     distortion_model: "brown_conrady".to_string(),
                     frame: frame.clone(),
+                    raster_frame: None,
                 }),
             )
             .unwrap();

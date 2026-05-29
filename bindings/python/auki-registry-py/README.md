@@ -9,7 +9,8 @@ Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash
 ## Public surface
 
 - `SensorRegistryEntry(...)`, `ClockRegistryEntry(...)`, `FrameRegistryEntry(...)`, `DetectorRegistryEntry(...)` — dict-style constructors.
-- Frame Registry presets: `FrameRegistryEntry.ros_body(peer_id, frame_id)`, `ros_optical(peer_id, frame_id)`, `opengl(peer_id, frame_id)`, `unity(peer_id, frame_id)` — all take `peer_id` as the first parameter.
+- Frame Registry presets: `FrameRegistryEntry.ros_body(peer_id, frame_id)`, `ros_optical(peer_id, frame_id)`, `opengl(peer_id, frame_id)`, `unity(peer_id, frame_id)` — all take `peer_id` as the first parameter. Raster-convention presets follow the same shape: `raster_top_left(...)`, `raster_mirrored(...)`, `raster_normalized(...)`, `raster_normalized_mirrored(...)`.
+- A `FrameRegistryEntry` optionally carries a `raster` block (`{ origin, u, v, units }`) describing the 2D byte layout of a published raster (image / video / depth map); it is absent on pure 3D spatial frames. The raster presets above return entries with this block populated.
 - `RegistryRef` pyclass — `{ peer_id, id, hash }`. Returned by `write_*` helpers and accepted as a `frame` argument. Replaces the old `(sensor_id, sensor_hash)` pair construction.
 - `LogRef` pyclass — `{ source_peer_id, resource_id }`. Used in manifest construction and catalog rows.
 - `canonical_json(entry) -> bytes`, `content_hash(entry) -> str`.

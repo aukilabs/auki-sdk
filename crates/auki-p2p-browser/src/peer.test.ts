@@ -118,6 +118,25 @@ describe("AukiBrowserPeer shell", () => {
     expect(transport.started).toBe(1);
   });
 
+  it("exports local relay addresses after adding a relay bootstrap peer", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+    await peer.connectBootstrap({
+      peer_id: "relay-peer",
+      direct_addresses: ["/memory/relay"],
+      webrtc_direct_addresses: [],
+      relay_addresses: [],
+      relay_server_addresses: ["/memory/relay/p2p/relay-peer"],
+      bootstrap_addresses: ["/memory/relay"],
+    });
+
+    await expect(peer.localBootstrapRecord()).resolves.toMatchObject({
+      peerId: "browser-peer",
+      relayAddresses: ["/memory/relay/p2p/relay-peer/p2p-circuit/p2p/browser-peer"],
+      bootstrapAddresses: ["/memory/relay/p2p/relay-peer/p2p-circuit/p2p/browser-peer"],
+    });
+  });
+
   it("rejects local browser bootstrap export before the peer is dialable", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
@@ -1336,6 +1355,7 @@ class MemoryTransport implements BrowserTransport {
   readonly forcedDials: string[][] = [];
   readonly closedPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly protocolDials: Array<{ peerId: string; addresses: string[]; protocol: string }> = [];
+  private readonly relayServerAddresses: string[] = [];
   private readonly paths = new Map<string, BrowserConnectionPath[]>();
   private readonly dialFailures: Error[] = [];
   private readonly protocolHandlers = new Map<
@@ -1363,7 +1383,20 @@ class MemoryTransport implements BrowserTransport {
   }
 
   multiaddrs(): string[] {
-    return this.addresses.slice();
+    return [
+      ...this.addresses,
+      ...this.relayServerAddresses.map(
+        (address) => `${address}/p2p-circuit/p2p/${this.peerId}`,
+      ),
+    ];
+  }
+
+  addRelayServerAddresses(addresses: string[]): void {
+    for (const address of addresses) {
+      if (!this.relayServerAddresses.includes(address)) {
+        this.relayServerAddresses.push(address);
+      }
+    }
   }
 
   async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {

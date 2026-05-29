@@ -22,6 +22,22 @@ export function mergeBootstrapRecords(
   return Array.from(byPeer.values());
 }
 
+export function bootstrapRecordText(record: AukiBrowserBootstrapRecord): string {
+  return JSON.stringify(
+    {
+      agent_version: record.agentVersion,
+      peer_id: record.peerId,
+      direct_addresses: record.directAddresses,
+      webrtc_direct_addresses: record.webrtcDirectAddresses,
+      relay_addresses: record.relayAddresses,
+      relay_server_addresses: record.relayServerAddresses,
+      bootstrap_addresses: record.bootstrapAddresses,
+    },
+    null,
+    2,
+  );
+}
+
 export function offerLabel(offer: OfferSummary | undefined): string {
   if (!offer) {
     return "None";

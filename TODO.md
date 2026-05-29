@@ -147,7 +147,7 @@ These decisions are locked for the browser-to-browser slice.
 
 - [ ] Make browser listen-address configuration explicit for browser-to-browser
       WebRTC.
-- [ ] Ensure browser peers can reserve/listen via Circuit Relay after connecting
+- [x] Ensure browser peers can reserve/listen via Circuit Relay after connecting
       to a native relay/bootstrap node.
 - [x] Add an SDK method for exporting the local browser bootstrap record,
       probably `localBootstrapRecord()`.
@@ -157,7 +157,7 @@ These decisions are locked for the browser-to-browser slice.
       browser should dial the browser peer through the relay, not accidentally
       dial the relay as if it were the browser.
 - [x] Add tests for local browser bootstrap record shape.
-- [ ] Add tests that preferred dial addresses prioritize actual browser target
+- [x] Add tests that preferred dial addresses prioritize actual browser target
       addresses correctly.
 - [ ] Add tests or manual QA steps for both WebRTC browser target addresses and
       plain relayed browser target addresses.
@@ -202,7 +202,7 @@ These decisions are locked for the browser-to-browser slice.
 
 - [ ] Keep the first screen simple: Start Peer.
 - [ ] After start, show the local browser peer and an Add Peer action.
-- [ ] After connecting to a Sentinel/bootstrap node, expose a Copy Local Browser
+- [x] After connecting to a Sentinel/bootstrap node, expose a Copy Local Browser
       Bootstrap action.
 - [ ] Add a Publish Generated Preview action.
 - [ ] Show browser-published offers in the same offer grid as Sentinel offers.

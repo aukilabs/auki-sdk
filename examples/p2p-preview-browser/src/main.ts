@@ -11,6 +11,7 @@ import {
   openPreviewSubscription,
 } from "@aukilabs/auki-p2p-browser";
 import {
+  bootstrapRecordText,
   canRequestSnapshot,
   mergeBootstrapRecords,
   offerLabel,
@@ -87,6 +88,7 @@ const els = {
   streamsPanel: element("streams-panel"),
   peersPanel: element("peers-panel"),
   connectButton: element<HTMLButtonElement>("connect-button"),
+  copyBootstrapButton: element<HTMLButtonElement>("copy-bootstrap-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
   addPeerButton: element<HTMLButtonElement>("add-peer-button"),
   streamSummary: element("stream-summary"),
@@ -127,6 +129,9 @@ els.diagnosticsClose.addEventListener("click", () => {
 });
 els.connectButton.addEventListener("click", () => {
   void start();
+});
+els.copyBootstrapButton.addEventListener("click", () => {
+  void copyLocalBootstrap();
 });
 els.stopButton.addEventListener("click", () => {
   void stop();
@@ -339,6 +344,19 @@ async function switchPeerAddress(peerId: string, address: string): Promise<void>
     render();
     refreshOpenPeerDetail(peerId);
   }
+}
+
+async function copyLocalBootstrap(): Promise<void> {
+  await runShortAction("Copying bootstrap", async () => {
+    const peer = state.peer;
+    if (!peer) {
+      throw new Error("Start peer before copying local bootstrap");
+    }
+    const record = await peer.localBootstrapRecord();
+    await copyText(bootstrapRecordText(record));
+    state.status = "Bootstrap copied";
+    recordEvent("info", "Local bootstrap copied", transportSummary(record.bootstrapAddresses));
+  });
 }
 
 function clearAddPeerInput(): void {
@@ -683,11 +701,13 @@ function renderLiveStats(): void {
   const totals = aggregateRuntimeStats();
   const hasPeer = Boolean(state.peer);
   const hasRemoteContext = state.peers.length > 0 || state.offers.length > 0;
+  const canCopyBootstrap = hasPeer && state.peers.length > 0;
   els.workspace.hidden = !hasPeer;
   els.workspace.classList.toggle("peer-only", !hasRemoteContext);
   els.peersPanel.hidden = !hasPeer;
   els.streamsPanel.hidden = !hasRemoteContext;
   els.diagnosticsButton.hidden = !hasPeer;
+  els.copyBootstrapButton.hidden = !canCopyBootstrap;
   els.stopButton.hidden = !hasPeer;
   els.connectButton.hidden = hasPeer;
   els.snapshotsReceived.textContent = totals.snapshots.toString();
@@ -711,6 +731,8 @@ function renderLiveStats(): void {
       : `${totals.activeStreams} active / ${state.offers.length} offer(s)`;
   els.connectButton.disabled = state.busy || hasPeer;
   els.connectButton.textContent = "Start Peer";
+  els.copyBootstrapButton.disabled = state.busy || !canCopyBootstrap;
+  els.copyBootstrapButton.textContent = "Copy Bootstrap";
   els.stopButton.disabled = state.busy || !state.peer;
   els.addPeerButton.disabled = state.busy || !state.peer;
   els.addPeerButton.textContent = "Add Peer";
@@ -1415,6 +1437,13 @@ async function withTimeout<T>(
       clearTimeout(timeout);
     }
   }
+}
+
+async function copyText(text: string): Promise<void> {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API unavailable");
+  }
+  await navigator.clipboard.writeText(text);
 }
 
 function offersByPeer(offers: OfferSummary[]): Map<string, OfferSummary[]> {

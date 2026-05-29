@@ -117,10 +117,10 @@ export function bootstrapAddressBook(record: AukiBrowserBootstrapRecord): Bootst
 export function preferredDialAddresses(record: AukiBrowserBootstrapRecord): string[] {
   return uniqueStrings([
     ...record.webrtcDirectAddresses,
-    ...record.relayServerAddresses,
-    ...record.bootstrapAddresses,
     ...record.directAddresses,
     ...record.relayAddresses,
+    ...record.bootstrapAddresses,
+    ...record.relayServerAddresses,
   ]);
 }
 

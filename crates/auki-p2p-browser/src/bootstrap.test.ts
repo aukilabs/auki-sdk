@@ -62,8 +62,27 @@ describe("browser bootstrap records", () => {
     expect(relayServerAddresses(record)).toEqual(["/ip4/127.0.0.1/tcp/2/ws/p2p/12D3KooWNative"]);
     expect(preferredDialAddresses(record)).toEqual([
       "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/12D3KooWNative",
-      "/ip4/127.0.0.1/tcp/2/ws/p2p/12D3KooWNative",
       "/ip4/127.0.0.1/tcp/2/ws/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWNative",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/12D3KooWNative",
+    ]);
+  });
+
+  it("prioritizes browser target addresses before relay-server hints", () => {
+    const record = parseBootstrapRecord({
+      peer_id: "browser-peer",
+      direct_addresses: [],
+      webrtc_direct_addresses: [],
+      relay_addresses: ["/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer"],
+      relay_server_addresses: ["/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer"],
+      bootstrap_addresses: [
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ],
+    });
+
+    expect(preferredDialAddresses(record)).toEqual([
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
     ]);
   });
 

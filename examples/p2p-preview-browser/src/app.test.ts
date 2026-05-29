@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bootstrapRecordText,
   canRequestSnapshot,
   mergeBootstrapRecords,
   offerLabel,
@@ -90,6 +91,34 @@ describe("p2p preview browser helpers", () => {
 
     expect(merged.map((record) => record.peerId)).toEqual(["peer-a", "peer-b"]);
     expect(merged[0].directAddresses).toEqual(["/memory/a2"]);
+  });
+
+  it("serializes local bootstrap records in native-compatible JSON shape", () => {
+    expect(
+      bootstrapRecordText({
+        peerId: "browser-peer",
+        agentVersion: "auki-p2p-browser/0.0.0",
+        directAddresses: [],
+        webrtcDirectAddresses: [],
+        relayAddresses: ["/memory/relay/p2p-circuit/p2p/browser-peer"],
+        relayServerAddresses: [],
+        bootstrapAddresses: ["/memory/relay/p2p-circuit/p2p/browser-peer"],
+      }),
+    ).toBe(
+      JSON.stringify(
+        {
+          agent_version: "auki-p2p-browser/0.0.0",
+          peer_id: "browser-peer",
+          direct_addresses: [],
+          webrtc_direct_addresses: [],
+          relay_addresses: ["/memory/relay/p2p-circuit/p2p/browser-peer"],
+          relay_server_addresses: [],
+          bootstrap_addresses: ["/memory/relay/p2p-circuit/p2p/browser-peer"],
+        },
+        null,
+        2,
+      ),
+    );
   });
 
   it("selects the shared preview offer profile", () => {

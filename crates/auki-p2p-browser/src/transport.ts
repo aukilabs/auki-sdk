@@ -42,6 +42,7 @@ export type BrowserTransport = {
   start(): Promise<void>;
   stop(): Promise<void>;
   multiaddrs(): string[];
+  addRelayServerAddresses?(addresses: string[]): void;
   dial(addresses: string[], options?: { force?: boolean }): Promise<void>;
   closePeerConnections?(peerId: string, keepAddresses?: string[]): Promise<void>;
   connectionPaths?(peerId: string): BrowserConnectionPath[];
@@ -188,9 +189,10 @@ class Libp2pBrowserTransport implements BrowserTransport {
 
   constructor(
     private readonly node: Awaited<ReturnType<typeof createLibp2p>>,
-    private readonly relayServerAddresses: string[],
+    private relayServerAddresses: string[],
   ) {
     this.peerId = node.peerId.toString();
+    this.relayServerAddresses = uniqueStrings(relayServerAddresses);
   }
 
   async start(): Promise<void> {
@@ -208,16 +210,15 @@ class Libp2pBrowserTransport implements BrowserTransport {
   }
 
   multiaddrs(): string[] {
-    const addresses = this.node.getMultiaddrs().map((address) => address.toString());
-    if (addresses.some((address) => address.includes("/p2p-circuit"))) {
-      return addresses;
-    }
-    return [
-      ...addresses,
-      ...this.relayServerAddresses.map(
-        (address) => `${address}/p2p-circuit/p2p/${this.peerId}`,
-      ),
-    ];
+    return browserReachableMultiaddrs(
+      this.peerId,
+      this.node.getMultiaddrs().map((address) => address.toString()),
+      this.relayServerAddresses,
+    );
+  }
+
+  addRelayServerAddresses(addresses: string[]): void {
+    this.relayServerAddresses = uniqueStrings([...this.relayServerAddresses, ...addresses]);
   }
 
   async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {
@@ -315,6 +316,17 @@ class Libp2pBrowserTransport implements BrowserTransport {
         this.node.dial(dialAddresses.map((address) => multiaddr(address)), options),
     );
   }
+}
+
+export function browserReachableMultiaddrs(
+  peerId: string,
+  observedAddresses: string[],
+  relayServerAddresses: string[],
+): string[] {
+  return uniqueStrings([
+    ...observedAddresses,
+    ...relayServerAddresses.map((address) => `${address}/p2p-circuit/p2p/${peerId}`),
+  ]);
 }
 
 export async function openBrowserProtocolStream(
@@ -495,4 +507,15 @@ function classifyTransport(address: string): BrowserConnectionTransport {
     return "tcp";
   }
   return "unknown";
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }

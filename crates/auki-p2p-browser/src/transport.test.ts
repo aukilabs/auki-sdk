@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   browserPeerConnectionCleanupComplete,
+  browserReachableMultiaddrs,
   echoPingStream,
   openBrowserProtocolStream,
   type BrowserProtocolStream,
@@ -101,6 +102,22 @@ describe("browser transport lifecycle", () => {
         ["/memory/websocket"],
       ),
     ).toBe(true);
+  });
+
+  it("adds relay-server reservations to browser-reachable addresses", () => {
+    expect(
+      browserReachableMultiaddrs(
+        "browser-peer",
+        ["/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer"],
+        [
+          "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+          "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+        ],
+      ),
+    ).toEqual([
+      "/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+    ]);
   });
 });
 

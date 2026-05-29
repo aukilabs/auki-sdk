@@ -138,7 +138,7 @@ These decisions are locked for the browser-to-browser slice.
       `auki-protocol-wasm`.
 - [x] Include browser-local declared domains in lifecycle handshakes when
       browser-published offers are meant to be authoritative.
-- [ ] Review browser public method names against native and document intentional
+- [x] Review browser public method names against native and document intentional
       differences.
 - [x] Expose `domainId`, `offerId`, and `stop()` on browser `PublicationHandle`.
 - [x] Keep `handle.stop()` as the browser withdraw/unpublish API for this slice.
@@ -149,14 +149,14 @@ These decisions are locked for the browser-to-browser slice.
       WebRTC.
 - [ ] Ensure browser peers can reserve/listen via Circuit Relay after connecting
       to a native relay/bootstrap node.
-- [ ] Add an SDK method for exporting the local browser bootstrap record,
+- [x] Add an SDK method for exporting the local browser bootstrap record,
       probably `localBootstrapRecord()`.
-- [ ] Ensure local browser bootstrap records advertise browser-target addresses,
+- [x] Ensure local browser bootstrap records advertise browser-target addresses,
       not only relay-server addresses.
-- [ ] Keep relay server addresses separate from browser peer addresses. A remote
+- [x] Keep relay server addresses separate from browser peer addresses. A remote
       browser should dial the browser peer through the relay, not accidentally
       dial the relay as if it were the browser.
-- [ ] Add tests for local browser bootstrap record shape.
+- [x] Add tests for local browser bootstrap record shape.
 - [ ] Add tests that preferred dial addresses prioritize actual browser target
       addresses correctly.
 - [ ] Add tests or manual QA steps for both WebRTC browser target addresses and

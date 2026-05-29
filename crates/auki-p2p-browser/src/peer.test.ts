@@ -95,6 +95,36 @@ describe("AukiBrowserPeer shell", () => {
     expect(transport.stopped).toBe(1);
   });
 
+  it("exports a local browser bootstrap record once dialable", async () => {
+    const transport = new MemoryTransport("browser-peer", [
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+    ]);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+
+    await expect(peer.localBootstrapRecord()).resolves.toEqual({
+      peerId: "browser-peer",
+      agentVersion: "auki-p2p-browser/0.0.0",
+      directAddresses: [],
+      webrtcDirectAddresses: [],
+      relayAddresses: [
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ],
+      relayServerAddresses: [],
+      bootstrapAddresses: [
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ],
+    });
+    expect(transport.started).toBe(1);
+  });
+
+  it("rejects local browser bootstrap export before the peer is dialable", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({ transport, protocolWasm: await protocolWasmInput() });
+
+    await expect(peer.localBootstrapRecord()).rejects.toThrow("not dialable yet");
+  });
+
   it("switches a connected peer to a selected dial address", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({

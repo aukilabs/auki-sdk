@@ -5,6 +5,7 @@ export type {
 } from "./bootstrap.js";
 export {
   bootstrapAddressBook,
+  createLocalBootstrapRecord,
   parseBootstrapRecord,
   parseBootstrapRecords,
   preferredDialAddresses,

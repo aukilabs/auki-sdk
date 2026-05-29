@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bootstrapAddressBook,
+  createLocalBootstrapRecord,
   parseBootstrapRecord,
   parseBootstrapRecords,
   preferredDialAddresses,
@@ -8,6 +9,38 @@ import {
 } from "./bootstrap.js";
 
 describe("browser bootstrap records", () => {
+  it("creates local browser records from browser-target addresses", () => {
+    const record = createLocalBootstrapRecord("browser-peer", [
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+      "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+    ]);
+
+    expect(record).toEqual({
+      peerId: "browser-peer",
+      agentVersion: "auki-p2p-browser/0.0.0",
+      directAddresses: ["/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer"],
+      webrtcDirectAddresses: ["/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer"],
+      relayAddresses: [
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ],
+      relayServerAddresses: [],
+      bootstrapAddresses: [
+        "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer",
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+      ],
+    });
+  });
+
+  it("does not export relay servers as local browser peer addresses", () => {
+    expect(() =>
+      createLocalBootstrapRecord("browser-peer", [
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+      ]),
+    ).toThrow("not dialable yet");
+  });
+
   it("parses Rust-shaped bootstrap records and preserves address roles", () => {
     const record = parseBootstrapRecord({
       peer_id: "12D3KooWNative",

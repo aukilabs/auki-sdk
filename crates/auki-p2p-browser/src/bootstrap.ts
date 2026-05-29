@@ -20,6 +20,36 @@ export type BootstrapAddress = {
   roles: BootstrapAddressRole[];
 };
 
+const BROWSER_AGENT_VERSION = "auki-p2p-browser/0.0.0";
+
+export function createLocalBootstrapRecord(
+  peerId: string,
+  addresses: string[],
+  agentVersion = BROWSER_AGENT_VERSION,
+): AukiBrowserBootstrapRecord {
+  const peerAddresses = uniqueStrings(addresses).filter((address) =>
+    addressTargetsPeer(address, peerId),
+  );
+  const directAddresses = peerAddresses.filter((address) => !isRelayAddress(address));
+  const webrtcDirectAddresses = directAddresses.filter(isWebrtcDirectAddress);
+  const relayAddresses = peerAddresses.filter(isRelayAddress);
+  const bootstrapAddresses = uniqueStrings([...directAddresses, ...relayAddresses]);
+
+  if (bootstrapAddresses.length === 0) {
+    throw new Error("Browser peer is not dialable yet");
+  }
+
+  return {
+    peerId,
+    agentVersion,
+    directAddresses,
+    webrtcDirectAddresses,
+    relayAddresses,
+    relayServerAddresses: [],
+    bootstrapAddresses,
+  };
+}
+
 export function parseBootstrapRecord(value: unknown): AukiBrowserBootstrapRecord {
   if (!value || typeof value !== "object") {
     throw new Error("Auki browser bootstrap record must be an object");
@@ -150,4 +180,16 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function addressTargetsPeer(address: string, peerId: string): boolean {
+  return address.endsWith(`/p2p/${peerId}`) || address.includes(`/p2p/${peerId}/`);
+}
+
+function isRelayAddress(address: string): boolean {
+  return address.includes("/p2p-circuit");
+}
+
+function isWebrtcDirectAddress(address: string): boolean {
+  return address.includes("/webrtc-direct");
 }

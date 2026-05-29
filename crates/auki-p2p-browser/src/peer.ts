@@ -1,5 +1,6 @@
 import {
   type AukiBrowserBootstrapRecord,
+  createLocalBootstrapRecord,
   parseBootstrapRecord,
   parseBootstrapRecords,
   preferredDialAddresses,
@@ -157,6 +158,7 @@ export interface AukiBrowserPeer {
   readonly peerId: string;
   readonly supportedTransports: readonly string[];
   multiaddrs(): string[];
+  localBootstrapRecord(): Promise<AukiBrowserBootstrapRecord>;
   dial(address: string): Promise<void>;
   connectBootstrap(records: unknown | unknown[]): Promise<void>;
   switchPeerAddress(peerId: string, address: string): Promise<void>;
@@ -240,6 +242,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
 
   multiaddrs(): string[] {
     return this.transport.multiaddrs();
+  }
+
+  async localBootstrapRecord(): Promise<AukiBrowserBootstrapRecord> {
+    await this.ensureStarted();
+    return createLocalBootstrapRecord(this.peerId, this.transport.multiaddrs());
   }
 
   async dial(address: string): Promise<void> {

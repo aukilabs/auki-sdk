@@ -69,9 +69,14 @@ handshake message shape, offer objects, catalog filters, registry-reference
 hashes, payload-type matching, message envelopes, and status objects are
 specified.
 
-The next work is implementing a first SDK path from this baseline, then using
-that implementation to drive compatibility examples, expected results,
-validation transcripts, and machine-readable schema aids.
+The first SDK path is now in progress across `auki-protocol`, `auki-p2p`,
+`auki-protocol-wasm`, and `auki-p2p-browser`. The preview examples prove the
+RFC-shaped path for browser-to-node and browser-to-browser demos without using
+Park, HTTP cache, or the legacy `auki-network` runtime for preview bytes.
+
+The current implementation backlog is no longer a protocol TODO. It is a demo
+and SDK validation queue for completing the remaining transport matrix,
+especially node-to-node direct/relay proofs and relay-fallback edge cases.
 
 ## Drafts And Parked Work
 
@@ -88,5 +93,5 @@ The following work is intentionally outside the first implementable baseline:
 
 ## Resume Here
 
-Start with [`backlog.md`](backlog.md), especially the first SDK implementation
-path.
+Start with [`backlog.md`](backlog.md), especially the remaining connectivity
+matrix.

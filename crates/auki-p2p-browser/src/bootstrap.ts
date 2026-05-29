@@ -28,7 +28,7 @@ export function createLocalBootstrapRecord(
   agentVersion = BROWSER_AGENT_VERSION,
 ): AukiBrowserBootstrapRecord {
   const peerAddresses = uniqueStrings(addresses).filter((address) =>
-    addressTargetsPeer(address, peerId),
+    isExportableBrowserBootstrapAddress(address, peerId),
   );
   const directAddresses = peerAddresses.filter((address) => !isRelayAddress(address));
   const webrtcDirectAddresses = directAddresses.filter(isWebrtcDirectAddress);
@@ -128,6 +128,16 @@ export function relayServerAddresses(record: AukiBrowserBootstrapRecord): string
   return record.relayServerAddresses.slice();
 }
 
+export function isExportableBrowserBootstrapAddress(address: string, peerId: string): boolean {
+  if (!addressTargetsPeer(address, peerId)) {
+    return false;
+  }
+  if (isRelayAddress(address)) {
+    return isStableRelayReservationAddress(address, peerId);
+  }
+  return isExportableDirectPeerAddress(address, peerId);
+}
+
 function addAddresses(
   byAddress: Map<string, Set<BootstrapAddressRole>>,
   addresses: string[],
@@ -186,8 +196,16 @@ function addressTargetsPeer(address: string, peerId: string): boolean {
   return address.endsWith(`/p2p/${peerId}`) || address.includes(`/p2p/${peerId}/`);
 }
 
+function isExportableDirectPeerAddress(address: string, peerId: string): boolean {
+  return address.endsWith(`/p2p/${peerId}`) && !address.includes("/webrtc/");
+}
+
 function isRelayAddress(address: string): boolean {
   return address.includes("/p2p-circuit");
+}
+
+function isStableRelayReservationAddress(address: string, peerId: string): boolean {
+  return address.endsWith(`/p2p/${peerId}`) && address.includes(`/p2p-circuit/p2p/${peerId}`);
 }
 
 function isWebrtcDirectAddress(address: string): boolean {

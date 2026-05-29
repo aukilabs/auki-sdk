@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bootstrapAddressBook,
   createLocalBootstrapRecord,
+  isExportableBrowserBootstrapAddress,
   parseBootstrapRecord,
   parseBootstrapRecords,
   preferredDialAddresses,
@@ -39,6 +40,54 @@ describe("browser bootstrap records", () => {
         "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
       ]),
     ).toThrow("not dialable yet");
+  });
+
+  it("does not export transient browser WebRTC observed paths as bootstrap addresses", () => {
+    const stableRelay =
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer";
+    const transientRelayWebrtc =
+      "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer";
+    const transientDirectWebrtc = "/webrtc/p2p/browser-peer";
+
+    const record = createLocalBootstrapRecord("browser-peer", [
+      transientRelayWebrtc,
+      transientDirectWebrtc,
+      stableRelay,
+    ]);
+
+    expect(record.directAddresses).toEqual([]);
+    expect(record.relayAddresses).toEqual([stableRelay]);
+    expect(record.bootstrapAddresses).toEqual([stableRelay]);
+  });
+
+  it("classifies only durable browser bootstrap addresses as exportable", () => {
+    expect(
+      isExportableBrowserBootstrapAddress(
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer",
+        "browser-peer",
+      ),
+    ).toBe(true);
+    expect(
+      isExportableBrowserBootstrapAddress(
+        "/ip4/127.0.0.1/udp/1/webrtc-direct/p2p/browser-peer",
+        "browser-peer",
+      ),
+    ).toBe(true);
+    expect(
+      isExportableBrowserBootstrapAddress(
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+        "browser-peer",
+      ),
+    ).toBe(true);
+    expect(
+      isExportableBrowserBootstrapAddress(
+        "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
+        "browser-peer",
+      ),
+    ).toBe(false);
+    expect(isExportableBrowserBootstrapAddress("/webrtc/p2p/browser-peer", "browser-peer")).toBe(
+      false,
+    );
   });
 
   it("parses Rust-shaped bootstrap records and preserves address roles", () => {

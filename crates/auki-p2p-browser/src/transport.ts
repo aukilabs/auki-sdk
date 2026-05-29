@@ -7,6 +7,7 @@ import { webSockets } from "@libp2p/websockets";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { multiaddr } from "@multiformats/multiaddr";
 import { createLibp2p } from "libp2p";
+import { isExportableBrowserBootstrapAddress } from "./bootstrap.js";
 import { derivePeerSeed } from "./identity.js";
 
 export type BrowserTransportName =
@@ -99,11 +100,17 @@ export type BrowserConnectionCleanupCandidate = Pick<
   "id" | "remoteAddr" | "status"
 >;
 
+type BrowserConnectionRetentionCandidate = BrowserConnectionCleanupCandidate & {
+  direct?: boolean;
+  limits?: unknown;
+};
+
 const PING_PROTOCOL_ID = "/ipfs/ping/1.0.0";
 const PING_MESSAGE_BYTES = 32;
 const CONNECTION_CLEANUP_TIMEOUT_MS = 3_000;
 const CONNECTION_CLEANUP_POLL_MS = 50;
 const CONNECTION_CLOSE_ATTEMPT_MS = 250;
+const CONNECTION_RETENTION_DELAY_MS = 250;
 const CONNECTION_CLOSE_REASON = "Closing non-selected Auki peer connection";
 
 export function supportedBrowserTransports(): BrowserTransportName[] {
@@ -184,6 +191,7 @@ function normalizeStreamChunk(value: Uint8Array | { subarray(): Uint8Array }): U
 class Libp2pBrowserTransport implements BrowserTransport {
   readonly peerId: string;
   private started = false;
+  private readonly retentionTimers = new Map<string, number>();
 
   constructor(
     private readonly node: Awaited<ReturnType<typeof createLibp2p>>,
@@ -191,6 +199,9 @@ class Libp2pBrowserTransport implements BrowserTransport {
   ) {
     this.peerId = node.peerId.toString();
     this.relayServerAddresses = uniqueStrings(relayServerAddresses);
+    this.node.addEventListener("connection:open", (event) => {
+      this.schedulePeerConnectionRetention(event.detail.remotePeer.toString());
+    });
   }
 
   async start(): Promise<void> {
@@ -203,6 +214,10 @@ class Libp2pBrowserTransport implements BrowserTransport {
   }
 
   async stop(): Promise<void> {
+    for (const timer of this.retentionTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.retentionTimers.clear();
     await this.node.stop();
     this.started = false;
   }
@@ -280,6 +295,28 @@ class Libp2pBrowserTransport implements BrowserTransport {
     );
   }
 
+  private schedulePeerConnectionRetention(peerId: string): void {
+    const existing = this.retentionTimers.get(peerId);
+    if (existing !== undefined) {
+      globalThis.clearTimeout(existing);
+    }
+    const timer = globalThis.setTimeout(() => {
+      void this.retainPreferredPeerConnection(peerId);
+    }, CONNECTION_RETENTION_DELAY_MS);
+    this.retentionTimers.set(peerId, timer);
+  }
+
+  private async retainPreferredPeerConnection(peerId: string): Promise<void> {
+    this.retentionTimers.delete(peerId);
+    const peer = peerIdFromString(peerId);
+    const connections = this.node.getConnections(peer);
+    const keepAddresses = preferredBrowserConnectionAddresses(connections);
+    if (connections.filter((connection) => connection.status === "open").length <= keepAddresses.length) {
+      return;
+    }
+    await this.closePeerConnections(peerId, keepAddresses).catch(() => undefined);
+  }
+
   connectionPaths(peerId: string): BrowserConnectionPath[] {
     const peer = peerIdFromString(peerId);
     return this.node
@@ -341,7 +378,9 @@ export function browserReachableMultiaddrs(
   peerId: string,
   observedAddresses: string[],
 ): string[] {
-  return uniqueStrings(observedAddresses).filter((address) => addressTargetsPeer(address, peerId));
+  return uniqueStrings(observedAddresses).filter((address) =>
+    isExportableBrowserBootstrapAddress(address, peerId),
+  );
 }
 
 export async function openBrowserProtocolStream(
@@ -451,6 +490,16 @@ export function browserPeerConnectionCleanupComplete(
   return seen.size > 0;
 }
 
+export function preferredBrowserConnectionAddresses(
+  connections: BrowserConnectionRetentionCandidate[],
+): string[] {
+  const open = connections.filter((connection) => connection.status === "open");
+  if (open.length === 0) {
+    return [];
+  }
+  return [open.slice().sort(compareConnectionPreference)[0].remoteAddr.toString()];
+}
+
 function retainedConnectionIds<T extends BrowserConnectionCleanupCandidate>(
   connections: T[],
   keep: Set<string>,
@@ -485,6 +534,39 @@ async function closeConnectionAttempt(connection: BrowserConnectionCandidate): P
 
 function connectionSummary(connection: BrowserConnectionCandidate): string {
   return `${connection.id}:${connection.status}:${connection.remoteAddr.toString()}`;
+}
+
+function compareConnectionPreference(
+  left: BrowserConnectionRetentionCandidate,
+  right: BrowserConnectionRetentionCandidate,
+): number {
+  return connectionPreferenceScore(right) - connectionPreferenceScore(left);
+}
+
+function connectionPreferenceScore(connection: BrowserConnectionRetentionCandidate): number {
+  const address = connection.remoteAddr.toString();
+  let score = 0;
+  if (!address.includes("/p2p-circuit")) {
+    score += 100;
+  }
+  if (connection.direct === true) {
+    score += 50;
+  }
+  if (connection.limits === undefined) {
+    score += 10;
+  }
+  if (address.includes("/webrtc") && !address.includes("/webrtc-direct")) {
+    score += 5;
+  } else if (address.includes("/webrtc-direct")) {
+    score += 4;
+  } else if (address.includes("/ws") || address.includes("/wss")) {
+    score += 3;
+  } else if (address.includes("/quic")) {
+    score += 2;
+  } else if (address.includes("/tcp/")) {
+    score += 1;
+  }
+  return score;
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -530,10 +612,6 @@ function classifyTransport(address: string): BrowserConnectionTransport {
 
 function relayListenAddresses(addresses: string[]): string[] {
   return uniqueStrings(addresses).map((address) => `${address}/p2p-circuit`);
-}
-
-function addressTargetsPeer(address: string, peerId: string): boolean {
-  return address.endsWith(`/p2p/${peerId}`) || address.includes(`/p2p/${peerId}/`);
 }
 
 function uniqueStrings(values: string[]): string[] {

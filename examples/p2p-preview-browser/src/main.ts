@@ -2048,6 +2048,8 @@ function transportSummary(addresses: readonly string[]): string {
   for (const address of addresses) {
     if (address.includes("/webrtc-direct")) {
       transports.add("webrtc-direct");
+    } else if (address.includes("/webrtc")) {
+      transports.add("webrtc");
     } else if (address.includes("/p2p-circuit")) {
       transports.add("relay");
     } else if (address.includes("/ws")) {

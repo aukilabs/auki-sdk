@@ -4,6 +4,7 @@ import {
   browserReachableMultiaddrs,
   echoPingStream,
   openBrowserProtocolStream,
+  preferredBrowserConnectionAddresses,
   type BrowserProtocolStream,
 } from "./transport.js";
 
@@ -130,6 +131,35 @@ describe("browser transport lifecycle", () => {
     ).toBe(true);
   });
 
+  it("prefers direct WebRTC over a relayed websocket path", () => {
+    expect(
+      preferredBrowserConnectionAddresses([
+        cleanupConnection(
+          "relay",
+          "/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser",
+          "open",
+          false,
+          { seconds: 120 },
+        ),
+        cleanupConnection("webrtc", "/webrtc/p2p/browser", "open", true),
+      ]),
+    ).toEqual(["/webrtc/p2p/browser"]);
+  });
+
+  it("keeps the only open path even when it is relayed", () => {
+    expect(
+      preferredBrowserConnectionAddresses([
+        cleanupConnection(
+          "relay",
+          "/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser",
+          "open",
+          false,
+          { seconds: 120 },
+        ),
+      ]),
+    ).toEqual(["/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser"]);
+  });
+
   it("does not fabricate relay reservations from relay-server addresses", () => {
     expect(
       browserReachableMultiaddrs(
@@ -137,7 +167,9 @@ describe("browser transport lifecycle", () => {
         [
           "/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer",
           "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+          "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
           "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
+          "/webrtc/p2p/browser-peer",
         ],
       ),
     ).toEqual([
@@ -181,11 +213,19 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
   return output;
 }
 
-function cleanupConnection(id: string, address: string, status: string) {
+function cleanupConnection(
+  id: string,
+  address: string,
+  status: string,
+  direct = true,
+  limits?: unknown,
+) {
   return {
     id,
     remoteAddr: { toString: () => address },
     status,
+    direct,
+    limits,
   };
 }
 

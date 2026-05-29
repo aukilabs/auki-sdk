@@ -46,10 +46,44 @@ untouched. They are not in the RFC preview data path.
 | Pair | Transport path | Status | Evidence |
 | --- | --- | --- | --- |
 | Browser <-> node | WebSocket direct | Working | Preview browser can connect to Sentinel WebSocket address, Get, and Subscribe. |
-| Browser <-> node | WebRTC Direct | Working | Preview browser can switch to Sentinel WebRTC Direct and Get/Subscribe. |
+| Browser <-> node | WebRTC Direct | Working locally; remote/headless proof pending | Preview browser can switch to Sentinel WebRTC Direct and Get/Subscribe on the local demo machine. Remote Linux/headless QA reported `signal timed out`. |
 | Browser <-> browser | Circuit Relay over native relay server | Working | Browser B can Get/Subscribe Browser A through Sentinel relay. |
 | Browser <-> browser | Browser WebRTC through relay/signaling | Working | Browser B can switch to browser WebRTC path and Get/Subscribe Browser A. |
 | Multiple browser/node offers | Mixed | Working manually | Browser UI can add multiple Sentinels and browser peers and render independent offer tiles. |
+
+## Transport Matrix Goal
+
+The SDK should eventually cover every libp2p transport path that matters for
+Auki peers, with explicit evidence for each pair. Keep two concerns separate:
+
+- **Peer data path:** the selected transport used to open lifecycle, offer
+  catalog, Get, Subscribe, and future protocol streams to a peer.
+- **Browser reachability path:** the relay/signaling reservation that lets
+  another browser dial this browser. This may be a different connection from
+  the selected node data path.
+
+Do not treat "one active selected peer path" as equivalent to "close all relay
+infrastructure." A browser may prefer WebRTC Direct for Browser -> Node data
+while still keeping a WebSocket/WebTransport/WebRTC relay reservation alive so
+Browser -> Browser can work.
+
+Target paths:
+
+| Pair | Data or reachability path | Status | Next proof |
+| --- | --- | --- | --- |
+| Browser -> node | WebSocket direct | Working | Keep in manual and scripted demo matrix. |
+| Browser -> node | WebRTC Direct | Local working; remote/headless pending | Reproduce/fix remote Linux `signal timed out` failure. |
+| Browser -> node | WebTransport direct | Not wired | Add browser and native support if compatible with current libp2p versions. |
+| Browser reachability | WebSocket Circuit Relay reservation | Working locally | Keep relay reservation status explicit in SDK/UI. |
+| Browser reachability | WebTransport Circuit Relay reservation | Not wired | Prove Browser A can reserve through a WebTransport relay-server path and export Browser A bootstrap. |
+| Browser reachability | WebRTC Direct Circuit Relay reservation | Not wired/proven | Prove Browser A can reserve through a WebRTC Direct relay-server path and export Browser A bootstrap. |
+| Browser <-> browser | Plain Circuit Relay data path | Working locally | Keep fallback proof and relay status/circuit counters. |
+| Browser <-> browser | Browser WebRTC via relay/signaling | Working locally | Prove relay shutdown behavior and record whether stream survives. |
+| Node <-> node | TCP direct | Implemented; unproven in demo matrix | Add native smoke. |
+| Node <-> node | QUIC direct | Implemented; unproven in demo matrix | Add native smoke variant. |
+| Node <-> node | WebSocket direct | Implemented; unproven in demo matrix | Add native smoke variant. |
+| Node <-> node | WebTransport direct | Not wired | Decide whether native WebTransport belongs in the SDK matrix. |
+| Node <-> node | Circuit Relay | Not proven in demo matrix | Add native relay smoke. |
 
 ## Remaining Matrix
 
@@ -63,6 +97,8 @@ covered.
 | Node <-> node | WebSocket direct | Transport is in `auki-p2p`; needs demo/matrix smoke | Add a WebSocket-native variant or option. |
 | Node <-> node | Circuit Relay | Not proven in demo matrix | Use one native relay node and two native peers. |
 | Browser <-> node | Circuit Relay fallback | Not yet isolated | Prove browser can reach a native producer when direct WebSocket/WebRTC Direct are not used. |
+| Browser reachability | WebTransport relay reservation | Not wired | Add and prove browser can export bootstrap through WebTransport relay-server path. |
+| Browser reachability | WebRTC Direct relay reservation | Not wired/proven | Add and prove browser can export bootstrap through WebRTC Direct relay-server path. |
 | Browser <-> browser | Relay shutdown after WebRTC setup | Observation pending | Establish browser WebRTC, stop relay, record whether stream survives. |
 | N browsers + N nodes | Mixed transports under load | Manual partial | Run two Sentinels plus two browsers with concurrent Get/Subscribe. |
 
@@ -86,12 +122,24 @@ covered.
    address rather than direct WebSocket or WebRTC Direct. Verify Get/Subscribe
    and UI path details.
 
-5. **Run relay-shutdown observation for browser WebRTC.**
+5. **Separate browser reachability from selected node transport.**
+   Keep relay reservations alive independently from the selected Browser -> Node
+   data path. The UI should be able to show `Sentinel data path:
+   webrtc-direct` and `Browser reachability: relay-server active` at the same
+   time.
+
+6. **Evaluate non-WebSocket browser reachability.**
+   Test whether current libp2p versions can reserve a browser relay path over
+   WebTransport or WebRTC Direct. If yes, add them to the supported SDK matrix;
+   if no, document WebSocket relay-server as the required browser reachability
+   path for now.
+
+7. **Run relay-shutdown observation for browser WebRTC.**
    After Browser B subscribes to Browser A over browser WebRTC, stop the native
    relay. Record whether the stream continues. This is evidence, not a protocol
    requirement.
 
-6. **Consolidate manual matrix notes into repeatable smoke scripts only after
+8. **Consolidate manual matrix notes into repeatable smoke scripts only after
    the flow stops changing.**
    The current manual demo is useful. Do not over-automate until the remaining
    native matrix is stable.

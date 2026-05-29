@@ -231,6 +231,7 @@ const DOMAIN_NONCE_BYTES = 16;
 const GET_CLIENT_RETRY_ATTEMPTS = 2;
 const SUBSCRIBE_CLIENT_RETRY_ATTEMPTS = 2;
 const SUBSCRIBE_STOP_TIMEOUT_MS = 1_000;
+const PEER_SWITCH_REDIAL_DELAY_MS = 500;
 
 class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   readonly supportedTransports = supportedBrowserTransports();
@@ -307,30 +308,18 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         .filter((candidate) => candidate !== address),
       ...peer.dialAddresses.filter((candidate) => candidate !== address),
     ]);
+    const hadActivePaths = this.connectionPaths(peerId).length > 0;
 
+    await this.transport.closePeerConnections?.(peerId, []);
+    if (hadActivePaths) {
+      await delay(PEER_SWITCH_REDIAL_DELAY_MS);
+    }
     try {
       await this.transport.dial([address], { force: true });
     } catch (firstError) {
-      if (this.selectedAddressIsActive(peerId, address)) {
-        await this.transport.closePeerConnections?.(
-          peerId,
-          this.keepAddressesForSelectedAddress(peerId, address),
-        );
-        this.rememberSwitchedPeer(peerId, dialAddresses);
-        return;
-      }
-      await this.transport.closePeerConnections?.(peerId, []);
       try {
         await this.transport.dial([address], { force: true });
       } catch (secondError) {
-        if (this.selectedAddressIsActive(peerId, address)) {
-          await this.transport.closePeerConnections?.(
-            peerId,
-            this.keepAddressesForSelectedAddress(peerId, address),
-          );
-          this.rememberSwitchedPeer(peerId, dialAddresses);
-          return;
-        }
         await reconnectPeerBestEffort(this.transport, fallbackAddresses);
         throw new Error(
           `Switch to selected address failed: ${describeError(secondError)}; first attempt: ${describeError(firstError)}`,
@@ -342,12 +331,6 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       this.keepAddressesForSelectedAddress(peerId, address),
     );
     this.rememberSwitchedPeer(peerId, dialAddresses);
-  }
-
-  private selectedAddressIsActive(peerId: string, address: string): boolean {
-    return this.connectionPaths(peerId).some((path) =>
-      activePathMatchesSelectedAddress(path.remoteAddress, address, peerId),
-    );
   }
 
   private keepAddressesForSelectedAddress(peerId: string, address: string): string[] {
@@ -1494,6 +1477,10 @@ function isRetryableTransportError(error: unknown): boolean {
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function errorMessage(error: unknown): string {

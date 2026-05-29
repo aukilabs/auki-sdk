@@ -194,6 +194,7 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.forcedDials).toEqual([["/memory/websocket"]]);
     expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [] },
       { peerId: "native-peer", keepAddresses: ["/memory/websocket"] },
     ]);
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/websocket");
@@ -232,6 +233,7 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.forcedDials).toEqual([["/memory/websocket"]]);
     expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [] },
       { peerId: "native-peer", keepAddresses: ["/memory/websocket"] },
     ]);
   });
@@ -257,7 +259,7 @@ describe("AukiBrowserPeer shell", () => {
     ]);
   });
 
-  it("accepts a selected peer address when dial rejects after the path became active", async () => {
+  it("retries a selected peer address when the first selected dial rejects", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({
       transport,
@@ -271,8 +273,12 @@ describe("AukiBrowserPeer shell", () => {
 
     await peer.switchPeerAddress("native-peer", "/memory/webrtc-direct");
 
-    expect(transport.forcedDials).toEqual([["/memory/webrtc-direct"]]);
+    expect(transport.forcedDials).toEqual([
+      ["/memory/webrtc-direct"],
+      ["/memory/webrtc-direct"],
+    ]);
     expect(transport.closedPeers).toEqual([
+      { peerId: "native-peer", keepAddresses: [] },
       { peerId: "native-peer", keepAddresses: ["/memory/webrtc-direct"] },
     ]);
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/webrtc-direct");
@@ -296,6 +302,10 @@ describe("AukiBrowserPeer shell", () => {
 
     expect(transport.forcedDials).toEqual([[browserWebrtc]]);
     expect(transport.closedPeers).toEqual([
+      {
+        peerId: "native-peer",
+        keepAddresses: [],
+      },
       {
         peerId: "native-peer",
         keepAddresses: ["/webrtc/p2p/native-peer", browserWebrtc],

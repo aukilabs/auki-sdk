@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   browserPeerConnectionCleanupComplete,
+  browserPeerConnectionRetentionAddresses,
   browserReachableMultiaddrs,
   echoPingStream,
   openBrowserProtocolStream,
@@ -74,6 +75,72 @@ describe("browser transport lifecycle", () => {
 
     expect(stream).toBe(existing.stream);
     expect(dials).toEqual([]);
+  });
+
+  it("does not use unrelated open connections when bootstrap addresses are selected", async () => {
+    const unrelated = new FakeConnection("/webrtc/p2p/browser-peer");
+    const selected = new FakeConnection("/memory/relay/p2p-circuit/p2p/browser-peer");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [unrelated],
+      ["/memory/relay/p2p-circuit/p2p/browser-peer"],
+      "/auki/get/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        return selected;
+      },
+      "browser-peer",
+    );
+
+    expect(stream).toBe(selected.stream);
+    expect(dials).toEqual([
+      { addresses: ["/memory/relay/p2p-circuit/p2p/browser-peer"], force: false },
+    ]);
+  });
+
+  it("matches active browser WebRTC connections to selected browser WebRTC dial addresses", async () => {
+    const active = new FakeConnection("/webrtc/p2p/browser-peer");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [active],
+      ["/memory/relay/p2p-circuit/webrtc/p2p/browser-peer"],
+      "/auki/subscribe/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        throw new Error("dial should not be needed");
+      },
+      "browser-peer",
+    );
+
+    expect(stream).toBe(active.stream);
+    expect(dials).toEqual([]);
+  });
+
+  it("tries selected bootstrap addresses before fallback addresses", async () => {
+    const fallback = new FakeConnection("/memory/webrtc");
+    const dials: Array<{ addresses: string[]; force?: boolean }> = [];
+
+    const stream = await openBrowserProtocolStream(
+      [],
+      ["/memory/relay", "/memory/webrtc"],
+      "/auki/get/0.0.1",
+      async (addresses, options) => {
+        dials.push({ addresses: addresses.slice(), force: options.force });
+        if (addresses[0] === "/memory/relay") {
+          throw new Error("relay unavailable");
+        }
+        return fallback;
+      },
+    );
+
+    expect(stream).toBe(fallback.stream);
+    expect(dials).toEqual([
+      { addresses: ["/memory/relay"], force: false },
+      { addresses: ["/memory/relay"], force: true },
+      { addresses: ["/memory/webrtc"], force: false },
+    ]);
   });
 
   it("rejects protocol streams without a live connection or bootstrap addresses", async () => {
@@ -179,6 +246,21 @@ describe("browser transport lifecycle", () => {
         ),
       ]),
     ).toEqual(["/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser"]);
+  });
+
+  it("does not infer a retention target without an explicit keep preference", () => {
+    expect(browserPeerConnectionRetentionAddresses(undefined)).toEqual([]);
+    expect(browserPeerConnectionRetentionAddresses([])).toEqual([]);
+  });
+
+  it("retains explicit keep preferences even when another path would be preferred", () => {
+    expect(
+      browserPeerConnectionRetentionAddresses([
+        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser",
+      ]),
+    ).toEqual([
+      "/ip4/127.0.0.1/tcp/1/ws/p2p/relay/p2p-circuit/p2p/browser",
+    ]);
   });
 
   it("does not fabricate relay reservations from relay-server addresses", () => {

@@ -209,7 +209,7 @@ These decisions are locked for the browser-to-browser slice.
 - [x] Mark local offers clearly and disable remote-only actions on them.
 - [x] Show active connection path details in the peer modal:
       transport, relay involvement, direct/relayed, connection id, and address.
-- [ ] Show enough event detail to troubleshoot browser-to-browser dialing:
+- [x] Show enough event detail to troubleshoot browser-to-browser dialing:
       lifecycle, offer catalog, Get, Subscribe, stream close, and transport
       switch events.
 

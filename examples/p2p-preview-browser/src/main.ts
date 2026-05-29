@@ -19,7 +19,6 @@ import {
   bootstrapRecordText,
   canRequestSnapshot,
   mergeBootstrapRecords,
-  offerLabel,
   parseBootstrapText,
   shortId,
 } from "./app";
@@ -319,11 +318,13 @@ async function addPeersFromInput(): Promise<void> {
     if (!peer) {
       throw new Error("Start peer before adding remote peers");
     }
+    recordEvent("info", "Lifecycle handshake starting", bootstrapRecordsEventDetail(records));
     await peer.connectBootstrap(records);
     state.bootstraps = mergeBootstrapRecords(state.bootstraps, records);
+    state.peers = peer.listPeers();
+    recordEvent("info", "Lifecycle authorized", connectedPeerEventDetail(records));
     await refreshPeerData();
     state.status = "Peer added";
-    recordEvent("info", "Connected bootstrap peers", records.length.toString());
     els.addPeerDialog.close();
     clearAddPeerInput();
   });
@@ -338,7 +339,11 @@ async function switchPeerAddress(peerId: string, address: string): Promise<void>
   state.switchingAddress = { peerId, address };
   state.status = "Switching address";
   state.lastError = undefined;
-  recordEvent("info", "Peer address switching", `${shortId(peerId, 12)} ${address}`);
+  recordEvent(
+    "info",
+    "Transport switch starting",
+    `${peerEventDetail(peerId)} selected=${addressEventDetail(address)}`,
+  );
   render();
   refreshOpenPeerDetail(peerId);
 
@@ -353,13 +358,21 @@ async function switchPeerAddress(peerId: string, address: string): Promise<void>
     await peer.switchPeerAddress(peerId, address);
     state.peers = peer.listPeers();
     state.status = "Address switched";
-    recordEvent("info", "Peer address switched", `${shortId(peerId, 12)} ${address}`);
+    recordEvent(
+      "info",
+      "Transport switch complete",
+      `${peerEventDetail(peerId)} active=${activePathEventDetail(peerId)}`,
+    );
     refreshOpenPeerDetail(peerId);
   } catch (error) {
     const message = errorMessage(error);
     state.lastError = message;
     state.status = "Error";
-    recordEvent("error", "Switch address failed", `${shortId(peerId, 12)} ${message}`);
+    recordEvent(
+      "error",
+      "Transport switch failed",
+      `${peerEventDetail(peerId)} selected=${addressEventDetail(address)} error=${message}`,
+    );
   } finally {
     state.busy = false;
     state.switchingAddress = undefined;
@@ -472,7 +485,11 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
   runtime.lastError = undefined;
   state.status = "Getting snapshot";
   state.lastError = undefined;
-  recordEvent("info", "Get requested", offerLabel(offer));
+  recordEvent(
+    "info",
+    "Get requested",
+    `${offerEventDetail(offer)} active=${activePathEventDetail(offer.peerId)}`,
+  );
   render();
   updateOpenOfferDetail(key);
 
@@ -487,7 +504,7 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
     recordEvent(
       "info",
       "Get snapshot received",
-      `${offerLabel(offer)} ${bytes} B in ${Math.round(performance.now() - startedAt)} ms`,
+      `${offerEventDetail(offer)} bytes=${bytes} sequence=${frame.sequence ?? "unknown"} duration=${Math.round(performance.now() - startedAt)}ms`,
     );
   } catch (error) {
     const message = errorMessage(error);
@@ -496,7 +513,7 @@ async function getOfferSnapshot(offer: OfferSummary): Promise<void> {
     state.lastError = message;
     state.status = "Error";
     updateOpenOfferDetail(key);
-    recordEvent("error", "Get failed", `${offerLabel(offer)} ${message}`);
+    recordEvent("error", "Get failed", `${offerEventDetail(offer)} error=${message}`);
   } finally {
     runtime.getting = false;
     render();
@@ -525,7 +542,11 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
   runtime.lastError = undefined;
   state.status = "Subscribing";
   state.lastError = undefined;
-  recordEvent("info", "Subscribe requested", offerLabel(offer));
+  recordEvent(
+    "info",
+    "Subscribe opening",
+    `${offerEventDetail(offer)} active=${activePathEventDetail(offer.peerId)}`,
+  );
   render();
   updateOpenOfferDetail(key);
 
@@ -544,9 +565,11 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     runtime.streamStartedAt = new Date();
     runtime.streamFrameBase = runtime.frames;
     state.status = "Receiving";
+    recordEvent("info", "Subscribe accepted", offerEventDetail(offer));
     render();
     updateOpenOfferDetail(key);
 
+    let firstFrame = true;
     for await (const frame of subscription.frames) {
       if (runtime.token !== token) {
         break;
@@ -559,13 +582,25 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
       updateStreamCardRuntime(key, runtime);
       updateOpenOfferDetail(key);
       renderLiveStats();
+      if (firstFrame) {
+        firstFrame = false;
+        recordEvent(
+          "info",
+          "Subscribe first frame",
+          `${offerEventDetail(offer)} bytes=${bytes} sequence=${frame.sequence ?? "unknown"}`,
+        );
+      }
     }
 
     if (runtime.token === token) {
       clearRuntimeSubscription(runtime);
       runtime.status = "complete";
       state.status = "Subscription complete";
-      recordEvent("info", "Subscribe complete", offerLabel(offer));
+      recordEvent(
+        "info",
+        "Subscribe stream closed",
+        `${offerEventDetail(offer)} reason=complete frames=${runtime.frames}`,
+      );
       render();
       updateOpenOfferDetail(key);
     }
@@ -579,7 +614,7 @@ async function subscribeToOffer(offer: OfferSummary): Promise<void> {
     runtime.lastError = message;
     state.lastError = message;
     state.status = "Error";
-    recordEvent("error", "Subscribe failed", `${offerLabel(offer)} ${message}`);
+    recordEvent("error", "Subscribe failed", `${offerEventDetail(offer)} error=${message}`);
     render();
     updateOpenOfferDetail(key);
   }
@@ -630,7 +665,12 @@ async function stopOfferSubscriptionOnce(
   runtime.status = "stopping";
   runtime.lastError = undefined;
   state.status = "Stopping subscription";
-  recordEvent("info", "Subscribe stopping", reason);
+  const offer = offerByKey(key);
+  recordEvent(
+    "info",
+    "Subscribe stop requested",
+    `${offer ? offerEventDetail(offer) : `offer=${key}`} reason=${reason}`,
+  );
   render();
   updateOpenOfferDetail(key);
 
@@ -647,6 +687,11 @@ async function stopOfferSubscriptionOnce(
     runtime.stopping = false;
     runtime.status = "stopped";
     state.status = "Subscription stopped";
+    recordEvent(
+      "info",
+      "Subscribe stream closed",
+      `${offer ? offerEventDetail(offer) : `offer=${key}`} reason=cancelled`,
+    );
     render();
     updateOpenOfferDetail(key);
   }
@@ -654,9 +699,11 @@ async function stopOfferSubscriptionOnce(
 
 async function stopPeer(): Promise<void> {
   await stopGeneratedPreview();
-  const stops = Array.from(state.offerStates.entries()).map(([key, runtime]) =>
-    stopOfferSubscriptionOnce(key, runtime, "Peer stopped").catch(() => undefined),
-  );
+  const stops = Array.from(state.offerStates.entries())
+    .filter(([, runtime]) => runtime.subscription || runtime.abort || runtime.subscribing)
+    .map(([key, runtime]) =>
+      stopOfferSubscriptionOnce(key, runtime, "Peer stopped").catch(() => undefined),
+    );
   await Promise.all(stops);
   if (state.peer) {
     await state.peer.stop();
@@ -694,9 +741,13 @@ async function refreshPeerData(): Promise<void> {
     state.offers = [];
     return;
   }
-  state.peers = peer.listPeers();
+  const peers = peer.listPeers();
+  state.peers = peers;
+  if (peers.length > 0) {
+    recordEvent("info", "Offer catalog requesting", peerListEventDetail(peers));
+  }
   state.offers = await peer.listOffers();
-  recordEvent("info", "Offer catalog loaded", `${state.offers.length} offer(s)`);
+  recordEvent("info", "Offer catalog loaded", offerCatalogEventDetail(state.offers, peers));
 }
 
 function openAddPeerDialog(): void {
@@ -1508,6 +1559,91 @@ function offerRuntime(key: string): OfferRuntimeState {
   return runtime;
 }
 
+function offerByKey(key: string): OfferSummary | undefined {
+  return state.offers.find((offer) => offerKey(offer) === key);
+}
+
+function bootstrapRecordsEventDetail(records: AukiBrowserBootstrapRecord[]): string {
+  return records.map(bootstrapRecordEventDetail).join(" ; ");
+}
+
+function bootstrapRecordEventDetail(record: AukiBrowserBootstrapRecord): string {
+  return [
+    peerEventDetail(record.peerId),
+    `addresses=${record.bootstrapAddresses.length}`,
+    `transports=${transportSummary(record.bootstrapAddresses)}`,
+    `relay_servers=${record.relayServerAddresses.length}`,
+  ].join(" ");
+}
+
+function connectedPeerEventDetail(records: AukiBrowserBootstrapRecord[]): string {
+  return records
+    .map(
+      (record) =>
+        `${peerEventDetail(record.peerId)} connected=true active=${activePathEventDetail(record.peerId)}`,
+    )
+    .join(" ; ");
+}
+
+function peerListEventDetail(peers: PeerSummary[]): string {
+  if (peers.length === 0) {
+    return "peers=0";
+  }
+  return peers
+    .map(
+      (peer) =>
+        `${peerEventDetail(peer.peerId)} addresses=${peer.dialAddresses.length} transports=${transportSummary(peer.dialAddresses)} active=${connectionPathSummary(peer.connectionPaths)}`,
+    )
+    .join(" ; ");
+}
+
+function offerCatalogEventDetail(offers: OfferSummary[], peers: PeerSummary[]): string {
+  const counts = new Map<string, number>();
+  for (const offer of offers) {
+    counts.set(offer.peerId, (counts.get(offer.peerId) ?? 0) + 1);
+  }
+  const byPeer = Array.from(counts.entries())
+    .map(([peerId, count]) => `${shortId(peerId, 12)}=${count}`)
+    .join(", ");
+  return [
+    `total=${offers.length}`,
+    `remote_peers=${peers.length}`,
+    byPeer ? `by_peer=${byPeer}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function peerEventDetail(peerId: string): string {
+  return `peer=${shortId(peerId, 12)}`;
+}
+
+function offerEventDetail(offer: OfferSummary): string {
+  return [
+    peerEventDetail(offer.peerId),
+    `domain=${shortId(offer.domainId, 10)}`,
+    `offer=${offer.offerId}`,
+    `payload=${offer.payloadType ?? "unknown"}`,
+  ].join(" ");
+}
+
+function addressEventDetail(address: string): string {
+  return `transport=${transportSummary([address])} address=${address}`;
+}
+
+function activePathEventDetail(peerId: string): string {
+  const peer = state.peers.find((candidate) => candidate.peerId === peerId);
+  if (!peer || peer.connectionPaths.length === 0) {
+    return "unknown";
+  }
+  return peer.connectionPaths.map(connectionPathEventDetail).join(",");
+}
+
+function connectionPathEventDetail(path: PeerSummary["connectionPaths"][number]): string {
+  const rtt = path.rttMs === undefined ? "" : ` rtt=${Math.round(path.rttMs)}ms`;
+  return `${formatTransportName(path.transport)}:${connectionPathKind(path)}:${path.direction}:${path.status}${rtt}`;
+}
+
 function recordEvent(level: "info" | "error", message: string, detail?: string): void {
   state.events.unshift({ at: new Date(), level, message, detail });
   state.events = state.events.slice(0, 80);
@@ -1518,8 +1654,10 @@ function handlePeerTrace(event: AukiBrowserPeerTraceEvent): void {
   const detail = [
     `attempt=${event.attempt}`,
     event.nextAttempt ? `next=${event.nextAttempt}` : undefined,
+    `protocol=${event.protocol}`,
     `peer=${shortId(event.peerId, 12)}`,
     event.domainId && event.offerId ? `offer=${event.domainId}/${event.offerId}` : undefined,
+    event.retryable === undefined ? undefined : `retryable=${event.retryable}`,
     event.error ? `error=${event.error}` : undefined,
   ]
     .filter(Boolean)

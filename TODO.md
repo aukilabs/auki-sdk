@@ -38,18 +38,18 @@ Useful libp2p references:
   publication will follow the same model: browser-published preview offers use
   a browser-local demo domain declared through lifecycle, not a silently reused
   Sentinel domain.
-- Browser outbound lifecycle exists, but browser inbound lifecycle is missing.
-  Another browser can dial us, but cannot yet complete the lifecycle handshake
-  against us.
-- Browser transport currently supports Circuit Relay and WebRTC pieces, but the
-  browser-to-browser dialable address shape needs to be explicit. The expected
-  target is a browser-dialable address through the relay, e.g.
-  `/p2p-circuit/webrtc/p2p/<browser-peer-id>`.
+- Browser outbound and inbound lifecycle both exist. Browser peers can complete
+  the handshake in either direction when the authenticated libp2p peer id
+  matches the signed peer binding.
+- Browser transport currently supports Circuit Relay and WebRTC pieces. The
+  matrix still needs manual proof of both browser-target address families:
+  WebRTC/WebRTC Direct when available, and plain relayed `/p2p-circuit/...`
+  fallback paths.
 - WebRTC Direct remains the right first target for browser-to-native Sentinel.
   Browser-to-browser should target WebRTC via relay signaling.
-- The preview browser demo can receive Sentinel offers. It does not yet publish
-  its own generated preview stream or expose a clean local browser bootstrap
-  record for another browser tab.
+- The preview browser demo can receive Sentinel offers, publish its own
+  generated preview stream, and export a local browser bootstrap record after
+  it has a browser-dialable address.
 
 ## SDK Ergonomics Contract
 
@@ -159,7 +159,7 @@ These decisions are locked for the browser-to-browser slice.
 - [x] Add tests for local browser bootstrap record shape.
 - [x] Add tests that preferred dial addresses prioritize actual browser target
       addresses correctly.
-- [ ] Add tests or manual QA steps for both WebRTC browser target addresses and
+- [x] Add tests or manual QA steps for both WebRTC browser target addresses and
       plain relayed browser target addresses.
 
 ## Phase 3 - Browser Publishing

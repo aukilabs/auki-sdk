@@ -27,6 +27,29 @@ export type ByteSource =
 export type ByteSourceFactory = () => ByteSource;
 export type ByteSourceInput = ByteSource | ByteSourceFactory;
 
+export const DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY = 1024;
+export const SUBSCRIBE_BACKPRESSURE_ERROR_CODE = "subscribe.backpressure";
+
+export type AukiSubscriptionBackpressurePolicy =
+  | { readonly kind: "LatestOnly" }
+  | { readonly kind: "Bounded"; readonly capacity?: number }
+  | { readonly kind: "CloseOnFull"; readonly capacity?: number };
+
+export type NormalizedSubscriptionBackpressurePolicy =
+  | { readonly kind: "LatestOnly" }
+  | { readonly kind: "Bounded"; readonly capacity: number }
+  | { readonly kind: "CloseOnFull"; readonly capacity: number };
+
+export const DEFAULT_SUBSCRIPTION_BACKPRESSURE_POLICY: NormalizedSubscriptionBackpressurePolicy = {
+  kind: "Bounded",
+  capacity: DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY,
+};
+
+export const LATEST_ONLY_SUBSCRIPTION_BACKPRESSURE_POLICY: NormalizedSubscriptionBackpressurePolicy =
+  {
+    kind: "LatestOnly",
+  };
+
 export type PublishOfferOptions = {
   source: ByteSourceInput;
   domainId: string;
@@ -37,6 +60,7 @@ export type PublishOfferOptions = {
   metadata?: JsonObject;
   registryRefs?: JsonObject[];
   accessModes?: string[];
+  backpressurePolicy?: AukiSubscriptionBackpressurePolicy;
 };
 
 export type PublicationHandle = {
@@ -54,7 +78,13 @@ export type LocalOfferPublication = {
   offer: LoadedOffer;
   stopped: boolean;
   nextSequence: bigint;
+  backpressurePolicy: NormalizedSubscriptionBackpressurePolicy;
 };
+
+export type SubscriptionSourceEvent =
+  | { kind: "chunk"; chunk: PublishedByteFrameInput }
+  | { kind: "complete" }
+  | { kind: "close_for_backpressure" };
 
 type LatestPublishedByteSourceRead =
   | {
@@ -270,14 +300,22 @@ export type SubscribeEndReason =
 export async function createSubscribeEnd(
   offer: LoadedOffer,
   reason: SubscribeEndReason,
+  options: SubscribeEndOptions = {},
 ): Promise<JsonObject> {
-  return createSubscribeEndForPath(offer.domainId, offer.offerId, reason);
+  return createSubscribeEndForPath(offer.domainId, offer.offerId, reason, options);
 }
+
+export type SubscribeEndOptions = {
+  errorCode?: string;
+  retryable?: boolean;
+  details?: JsonObject;
+};
 
 export async function createSubscribeEndForPath(
   domainId: string,
   offerId: string,
   reason: SubscribeEndReason,
+  options: SubscribeEndOptions = {},
 ): Promise<JsonObject> {
   const end: JsonObject = {
     type: "auki.subscribe_end.v1",
@@ -285,8 +323,16 @@ export async function createSubscribeEndForPath(
     offer_id: offerId,
     reason,
   };
-  if (reason === "offer_withdrawn") {
+  if (options.errorCode) {
+    end.error = { code: options.errorCode };
+  }
+  if (options.retryable !== undefined) {
+    end.retryable = options.retryable;
+  } else if (reason === "offer_withdrawn") {
     end.retryable = true;
+  }
+  if (options.details) {
+    end.details = options.details;
   }
   return validateSubscribeEndForOffer(end, domainId, offerId);
 }
@@ -339,6 +385,213 @@ export async function* toAsyncIterable(
   }
   for (const chunk of opened) {
     yield chunk;
+  }
+}
+
+export function normalizeSubscriptionBackpressurePolicy(
+  policy: AukiSubscriptionBackpressurePolicy | undefined,
+): NormalizedSubscriptionBackpressurePolicy {
+  if (!policy) {
+    return DEFAULT_SUBSCRIPTION_BACKPRESSURE_POLICY;
+  }
+  if (policy.kind === "LatestOnly") {
+    return LATEST_ONLY_SUBSCRIPTION_BACKPRESSURE_POLICY;
+  }
+  return {
+    kind: policy.kind,
+    capacity: normalizeBackpressureCapacity(policy.capacity),
+  };
+}
+
+export function openBackpressuredByteSource(
+  source: ByteSourceInput,
+  policy: AukiSubscriptionBackpressurePolicy | NormalizedSubscriptionBackpressurePolicy,
+): AsyncIterator<SubscriptionSourceEvent> {
+  const normalized = normalizeSubscriptionBackpressurePolicy(policy);
+  const sourceIterator = toAsyncIterable(source)[Symbol.asyncIterator]();
+  const queue = new SubscriptionSourceQueue(normalized);
+  const producer = pumpSubscriptionSource(sourceIterator, queue, normalized);
+
+  return {
+    async next(): Promise<IteratorResult<SubscriptionSourceEvent>> {
+      const event = await queue.pop();
+      if (!event) {
+        return { done: true, value: undefined };
+      }
+      return { done: false, value: event };
+    },
+    async return(): Promise<IteratorResult<SubscriptionSourceEvent>> {
+      queue.close();
+      await sourceIterator.return?.();
+      await producer.catch(() => undefined);
+      return { done: true, value: undefined };
+    },
+  };
+}
+
+async function pumpSubscriptionSource(
+  source: AsyncIterator<PublishedByteFrameInput>,
+  queue: SubscriptionSourceQueue,
+  policy: NormalizedSubscriptionBackpressurePolicy,
+): Promise<void> {
+  try {
+    for (;;) {
+      const next = await source.next();
+      if (next.done) {
+        await queue.push(policy, { kind: "complete" });
+        return;
+      }
+      if (!(await queue.push(policy, { kind: "chunk", chunk: next.value }))) {
+        await source.return?.();
+        return;
+      }
+    }
+  } catch (error) {
+    queue.fail(error);
+  }
+}
+
+class SubscriptionSourceQueue {
+  private readonly queue: SubscriptionSourceEvent[] = [];
+  private readonly itemWaiters = new Set<() => void>();
+  private readonly spaceWaiters = new Set<() => void>();
+  private closed = false;
+  private failure: unknown;
+
+  constructor(private readonly defaultPolicy: NormalizedSubscriptionBackpressurePolicy) {}
+
+  async push(
+    policy: NormalizedSubscriptionBackpressurePolicy = this.defaultPolicy,
+    event: SubscriptionSourceEvent,
+  ): Promise<boolean> {
+    switch (policy.kind) {
+      case "LatestOnly":
+        return this.pushLatestOnly(event);
+      case "Bounded":
+        return this.pushBounded(policy.capacity, event);
+      case "CloseOnFull":
+        return this.pushCloseOnFull(policy.capacity, event);
+    }
+  }
+
+  async pop(): Promise<SubscriptionSourceEvent | undefined> {
+    for (;;) {
+      const event = this.queue.shift();
+      if (event) {
+        this.wakeSpace();
+        return event;
+      }
+      if (this.failure) {
+        throw this.failure;
+      }
+      if (this.closed) {
+        return undefined;
+      }
+      await this.waitForItem();
+    }
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.wakeItem();
+    this.wakeSpace();
+  }
+
+  fail(error: unknown): void {
+    this.failure = error;
+    this.closed = true;
+    this.wakeItem();
+    this.wakeSpace();
+  }
+
+  private pushLatestOnly(event: SubscriptionSourceEvent): boolean {
+    if (this.closed) {
+      return false;
+    }
+    if (event.kind === "chunk") {
+      this.queue.splice(0, this.queue.length, event);
+      this.wakeItem();
+      return true;
+    }
+    if (event.kind === "close_for_backpressure") {
+      this.queue.splice(0, this.queue.length, event);
+    } else {
+      this.queue.push(event);
+    }
+    this.closed = true;
+    this.wakeItem();
+    this.wakeSpace();
+    return true;
+  }
+
+  private async pushBounded(
+    capacity: number,
+    event: SubscriptionSourceEvent,
+  ): Promise<boolean> {
+    for (;;) {
+      if (this.closed) {
+        return false;
+      }
+      if (this.queue.length < capacity) {
+        this.queue.push(event);
+        if (event.kind !== "chunk") {
+          this.closed = true;
+          this.wakeSpace();
+        }
+        this.wakeItem();
+        return true;
+      }
+      await this.waitForSpace();
+    }
+  }
+
+  private pushCloseOnFull(capacity: number, event: SubscriptionSourceEvent): boolean {
+    if (this.closed) {
+      return false;
+    }
+    if (event.kind === "chunk" && this.queue.length >= capacity) {
+      this.queue.splice(0, this.queue.length, { kind: "close_for_backpressure" });
+      this.closed = true;
+      this.wakeItem();
+      this.wakeSpace();
+      return false;
+    }
+    if (event.kind === "close_for_backpressure") {
+      this.queue.splice(0, this.queue.length, event);
+    } else {
+      this.queue.push(event);
+    }
+    if (event.kind !== "chunk") {
+      this.closed = true;
+      this.wakeSpace();
+    }
+    this.wakeItem();
+    return true;
+  }
+
+  private waitForItem(): Promise<void> {
+    return new Promise((resolve) => this.itemWaiters.add(resolve));
+  }
+
+  private waitForSpace(): Promise<void> {
+    return new Promise((resolve) => this.spaceWaiters.add(resolve));
+  }
+
+  private wakeItem(): void {
+    for (const resolve of this.itemWaiters) {
+      resolve();
+    }
+    this.itemWaiters.clear();
+  }
+
+  private wakeSpace(): void {
+    for (const resolve of this.spaceWaiters) {
+      resolve();
+    }
+    this.spaceWaiters.clear();
   }
 }
 
@@ -401,6 +654,16 @@ function optionalStringArrayField(value: JsonObject, field: string): string[] {
 
 function openByteSource(source: ByteSourceInput): ByteSource {
   return typeof source === "function" ? source() : source;
+}
+
+function normalizeBackpressureCapacity(capacity: number | undefined): number {
+  if (capacity === undefined) {
+    return DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY;
+  }
+  if (!Number.isSafeInteger(capacity) || capacity < 1) {
+    throw new Error("Backpressure capacity must be a positive safe integer");
+  }
+  return capacity;
 }
 
 function isAsyncIterable(source: ByteSource): source is AsyncIterable<PublishedByteFrameInput> {

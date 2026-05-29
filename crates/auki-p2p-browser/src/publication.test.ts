@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createPublicationSpatialMessage,
   LatestPublishedByteSource,
+  openBackpressuredByteSource,
   type LocalOfferPublication,
 } from "./publication.js";
 
@@ -89,6 +90,64 @@ describe("browser publication sources", () => {
       },
     });
   });
+
+  it("keeps only the newest queued frame with LatestOnly backpressure", async () => {
+    const iterator = openBackpressuredByteSource(
+      [new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])],
+      { kind: "LatestOnly" },
+    );
+
+    await flushMicrotasks();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "chunk", chunk: new Uint8Array([3]) },
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "complete" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it("preserves source order with bounded backpressure", async () => {
+    const iterator = openBackpressuredByteSource(
+      [new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])],
+      { kind: "Bounded", capacity: 2 },
+    );
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "chunk", chunk: new Uint8Array([1]) },
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "chunk", chunk: new Uint8Array([2]) },
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "chunk", chunk: new Uint8Array([3]) },
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "complete" },
+    });
+  });
+
+  it("closes the queued stream when CloseOnFull capacity is exceeded", async () => {
+    const iterator = openBackpressuredByteSource(
+      [new Uint8Array([1]), new Uint8Array([2])],
+      { kind: "CloseOnFull", capacity: 1 },
+    );
+
+    await flushMicrotasks();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { kind: "close_for_backpressure" },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
 });
 
 function testPublication(): LocalOfferPublication {
@@ -119,5 +178,12 @@ function testPublication(): LocalOfferPublication {
     },
     stopped: false,
     nextSequence: 0n,
+    backpressurePolicy: { kind: "Bounded", capacity: 1024 },
   };
+}
+
+async function flushMicrotasks(count = 8): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
 }

@@ -179,9 +179,9 @@ These decisions are locked for the browser-to-browser slice.
       independent generator instance per subscriber.
 - [x] Preserve producer sequence numbers and generated timestamps in browser
       spatial messages when the source provides them.
-- [ ] Add browser backpressure policy support for live published streams:
+- [x] Add browser backpressure policy support for live published streams:
       `LatestOnly`, `Bounded`, and `CloseOnFull`.
-- [ ] Use `LatestOnly` as the browser generated-preview default to match native
+- [x] Use `LatestOnly` as the browser generated-preview default to match native
       preview behavior.
 - [x] Disable local Get/Subscribe buttons for offers published by the same tab,
       unless we explicitly add local loopback later.

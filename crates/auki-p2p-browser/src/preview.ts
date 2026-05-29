@@ -1,5 +1,11 @@
 import type { OfferSummary, SpatialMessage } from "./peer.js";
-import type { ByteSourceInput, PublicationHandle, PublishOfferOptions } from "./publication.js";
+import type {
+  AukiSubscriptionBackpressurePolicy,
+  ByteSourceInput,
+  PublicationHandle,
+  PublishOfferOptions,
+} from "./publication.js";
+import { LATEST_ONLY_SUBSCRIPTION_BACKPRESSURE_POLICY } from "./publication.js";
 
 export const PREVIEW_OFFER_KIND = "auki.sensor.rgb_camera.preview";
 export const PREVIEW_PAYLOAD_TYPE = "auki.camera.jpeg_frame.v1";
@@ -16,6 +22,7 @@ export type PreviewOfferOptions = {
   displayName?: string;
   metadata?: Record<string, unknown>;
   accessModes?: string[];
+  backpressurePolicy?: AukiSubscriptionBackpressurePolicy;
 };
 
 export type OfferPublisher = {
@@ -54,6 +61,8 @@ export function publishPreviewOffer(
     displayName: options.displayName,
     metadata: options.metadata,
     accessModes: options.accessModes ?? [...PREVIEW_ACCESS_MODES],
+    backpressurePolicy:
+      options.backpressurePolicy ?? LATEST_ONLY_SUBSCRIPTION_BACKPRESSURE_POLICY,
   });
 }
 

@@ -39,6 +39,8 @@ export type {
   ByteSource,
   ByteSourceFactory,
   ByteSourceInput,
+  AukiSubscriptionBackpressurePolicy,
+  NormalizedSubscriptionBackpressurePolicy,
   PublishedByteFrame,
   PublishedByteFrameInput,
   OfferSummary,
@@ -51,7 +53,13 @@ export type {
   SubscribeRequest,
 } from "./peer.js";
 export { createAukiBrowserPeer } from "./peer.js";
-export { LatestPublishedByteSource } from "./publication.js";
+export {
+  DEFAULT_SUBSCRIPTION_BACKPRESSURE_POLICY,
+  DEFAULT_SUBSCRIPTION_QUEUE_CAPACITY,
+  LATEST_ONLY_SUBSCRIPTION_BACKPRESSURE_POLICY,
+  LatestPublishedByteSource,
+  SUBSCRIBE_BACKPRESSURE_ERROR_CODE,
+} from "./publication.js";
 export {
   GENERATED_PREVIEW_OFFER_KIND,
   GENERATED_PREVIEW_PAYLOAD_TYPE,

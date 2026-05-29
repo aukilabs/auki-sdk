@@ -42,11 +42,14 @@ import {
   createSubscribeEnd,
   createSubscribeEndForPath,
   createSubscribeReject,
+  normalizeSubscriptionBackpressurePolicy,
   offerKey,
   offerSummary,
+  openBackpressuredByteSource,
   optionalNumberField,
   requestAcceptsPayload,
   stringField,
+  SUBSCRIBE_BACKPRESSURE_ERROR_CODE,
   toAsyncIterable,
   type ByteSourceInput,
   type PublishedByteFrameInput,
@@ -55,6 +58,7 @@ import {
   type OfferSummary,
   type PublicationHandle,
   type PublishOfferOptions,
+  type SubscriptionSourceEvent,
 } from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
@@ -78,6 +82,8 @@ export type {
   ByteSourceInput,
   PublishedByteFrame,
   PublishedByteFrameInput,
+  AukiSubscriptionBackpressurePolicy,
+  NormalizedSubscriptionBackpressurePolicy,
   OfferSummary,
   PublicationHandle,
   PublishOfferOptions,
@@ -606,6 +612,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       offer,
       stopped: false,
       nextSequence: 0n,
+      backpressurePolicy: normalizeSubscriptionBackpressurePolicy(options.backpressurePolicy),
     };
     this.localPublications.set(key, publication);
 
@@ -887,6 +894,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     const reader = new JsonFrameReader(stream);
     let request: JsonObject | undefined;
     let startSent = false;
+    let source: AsyncIterator<SubscriptionSourceEvent> | undefined;
     try {
       const frame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
       request = await parseSubscribeRequest(frame.value);
@@ -945,11 +953,17 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
           }
         });
       const consumerEndSignal = consumerEnd.then(() => ({ kind: "consumer-end" }) as const);
-      const source = toAsyncIterable(publication.source)[Symbol.asyncIterator]();
+      source = openBackpressuredByteSource(
+        publication.source,
+        publication.backpressurePolicy,
+      );
+      let endReason: "complete" | "error" = "complete";
+      let endErrorCode: string | undefined;
+      let endRetryable: boolean | undefined;
       for (;;) {
         const next = await Promise.race([
           consumerEndSignal,
-          source.next().then((result) => ({ kind: "chunk", result }) as const),
+          source.next().then((result) => ({ kind: "source", result }) as const),
         ]);
         if (next.kind === "consumer-end") {
           break;
@@ -964,10 +978,19 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         if (next.result.done) {
           break;
         }
+        if (next.result.value.kind === "complete") {
+          break;
+        }
+        if (next.result.value.kind === "close_for_backpressure") {
+          endReason = "error";
+          endErrorCode = SUBSCRIBE_BACKPRESSURE_ERROR_CODE;
+          endRetryable = true;
+          break;
+        }
         if (publication.stopped) {
           break;
         }
-        const chunk = next.result.value;
+        const chunk = next.result.value.chunk;
         const message = await createPublicationSpatialMessage(publication, chunk);
         const maxMessageBytes = optionalNumberField(request, "max_message_bytes");
         const validMessage = await validateSubscribeDataMessage(
@@ -992,7 +1015,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
           stream,
           await createSubscribeEnd(
             publication.offer,
-            publication.stopped ? "offer_withdrawn" : "complete",
+            publication.stopped ? "offer_withdrawn" : endReason,
+            {
+              ...(endErrorCode ? { errorCode: endErrorCode } : {}),
+              ...(endRetryable === undefined ? {} : { retryable: endRetryable }),
+            },
           ),
           DEFAULT_FRAME_BODY_LIMIT,
         );
@@ -1007,6 +1034,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       }
       throw error;
     } finally {
+      await source?.return?.();
       await closeStream(stream);
     }
   }

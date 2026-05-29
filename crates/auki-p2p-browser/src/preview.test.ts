@@ -67,6 +67,7 @@ describe("preview offer profile", () => {
       kind: PREVIEW_OFFER_KIND,
       payload: previewPayloadDescriptor(),
       accessModes: PREVIEW_ACCESS_MODES,
+      backpressurePolicy: { kind: "LatestOnly" },
       displayName: "Preview Main",
       metadata: { source: "generated" },
     });
@@ -88,6 +89,25 @@ describe("preview offer profile", () => {
 
     expect(published?.kind).toBe(PREVIEW_OFFER_KIND);
     expect(published?.payload).toEqual(previewPayloadDescriptor());
+    expect(published?.backpressurePolicy).toEqual({ kind: "LatestOnly" });
+  });
+
+  it("allows preview publishers to override the Subscribe backpressure policy", async () => {
+    let published: PublishOfferOptions | undefined;
+    const publisher: OfferPublisher = {
+      publishOffer: async (options) => {
+        published = options;
+        return { stop: async () => undefined };
+      },
+    };
+
+    await publishPreviewOffer(publisher, [], {
+      domainId: "domain-id",
+      offerId: "preview-main",
+      backpressurePolicy: { kind: "Bounded", capacity: 2 },
+    });
+
+    expect(published?.backpressurePolicy).toEqual({ kind: "Bounded", capacity: 2 });
   });
 
   it("finds preview offers by shared kind or payload type", () => {

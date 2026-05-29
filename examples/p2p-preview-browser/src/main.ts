@@ -1014,7 +1014,7 @@ function addressInventorySection(
 type AddressInventoryEntry = {
   address: string;
   roles: Set<"active" | "dial" | "bootstrap">;
-  path?: PeerSummary["connectionPaths"][number];
+  paths: PeerSummary["connectionPaths"];
 };
 
 function addressInventory(
@@ -1026,7 +1026,7 @@ function addressInventory(
   const upsert = (address: string): AddressInventoryEntry => {
     let entry = byAddress.get(address);
     if (!entry) {
-      entry = { address, roles: new Set() };
+      entry = { address, roles: new Set(), paths: [] };
       byAddress.set(address, entry);
     }
     return entry;
@@ -1035,7 +1035,7 @@ function addressInventory(
   for (const path of paths) {
     const entry = upsert(path.remoteAddress);
     entry.roles.add("active");
-    entry.path = path;
+    entry.paths.push(path);
   }
   for (const address of dialAddresses) {
     upsert(address).roles.add("dial");
@@ -1068,12 +1068,13 @@ function addressInventoryRow(
   const content = document.createElement("div");
   content.className = "address-content";
   const meta = document.createElement("span");
-  meta.textContent = entry.path
-    ? formatConnectionPathMeta(entry.path)
+  meta.textContent = entry.paths.length > 0
+    ? `${entry.paths.length} active connection path${entry.paths.length === 1 ? "" : "s"}`
     : `dialable | ${transportSummary([entry.address])}`;
-  const address = document.createElement("code");
-  address.textContent = entry.address;
-  content.append(meta, address);
+  content.append(meta, addressValue("Address", entry.address, true));
+  for (const path of entry.paths) {
+    content.append(connectionPathDetail(path));
+  }
 
   const action = document.createElement("div");
   action.className = "address-action";
@@ -1109,6 +1110,31 @@ function addressInventoryRow(
 
   row.append(flags, content, action);
   return row;
+}
+
+function connectionPathDetail(path: PeerSummary["connectionPaths"][number]): HTMLElement {
+  const detail = document.createElement("div");
+  detail.className = "connection-path-detail";
+  detail.append(
+    addressValue("Transport", formatTransportName(path.transport)),
+    addressValue("Direction", path.direction),
+    addressValue("Path", connectionPathKind(path)),
+    addressValue("Status", path.status),
+    addressValue("Connection ID", path.connectionId, true),
+    addressValue("RTT", path.rttMs === undefined ? "unknown" : `${Math.round(path.rttMs)} ms`),
+  );
+  return detail;
+}
+
+function addressValue(label: string, value: string, code = false): HTMLElement {
+  const item = document.createElement("div");
+  item.className = "address-value";
+  const name = document.createElement("span");
+  name.textContent = label;
+  const content = code ? document.createElement("code") : document.createElement("strong");
+  content.textContent = value;
+  item.append(name, content);
+  return item;
 }
 
 function offerSection(offers: OfferSummary[]): HTMLElement {
@@ -1805,10 +1831,11 @@ function connectionPathSummary(paths: PeerSummary["connectionPaths"]): string {
     .join(", ");
 }
 
-function formatConnectionPathMeta(path: PeerSummary["connectionPaths"][number]): string {
-  const relay = path.relayInvolved ? "via relay" : "direct";
-  const rtt = path.rttMs === undefined ? "" : ` | rtt=${Math.round(path.rttMs)}ms`;
-  return `${path.connectionId} | ${path.direction} | ${formatTransportName(path.transport)} | ${relay} | ${path.status}${rtt}`;
+function connectionPathKind(path: PeerSummary["connectionPaths"][number]): string {
+  if (path.relayInvolved) {
+    return path.direct ? "direct via relay" : "relayed";
+  }
+  return path.direct ? "direct" : "limited";
 }
 
 function formatTransportName(value: string): string {

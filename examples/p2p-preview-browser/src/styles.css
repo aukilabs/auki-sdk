@@ -546,7 +546,7 @@ input[type="file"] {
 .address-content {
   display: grid;
   min-width: 0;
-  gap: 5px;
+  gap: 8px;
 }
 
 .address-content span {
@@ -554,10 +554,34 @@ input[type="file"] {
   font-size: 12px;
 }
 
-.address-content code {
+.address-content code,
+.address-value strong {
   overflow-wrap: anywhere;
+}
+
+.address-content code {
   color: var(--text);
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.connection-path-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.address-value {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.address-value strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .address-action {

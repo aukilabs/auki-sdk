@@ -207,7 +207,7 @@ These decisions are locked for the browser-to-browser slice.
 - [x] Add a Publish Generated Preview action.
 - [x] Show browser-published offers in the same offer grid as Sentinel offers.
 - [x] Mark local offers clearly and disable remote-only actions on them.
-- [ ] Show active connection path details in the peer modal:
+- [x] Show active connection path details in the peer modal:
       transport, relay involvement, direct/relayed, connection id, and address.
 - [ ] Show enough event detail to troubleshoot browser-to-browser dialing:
       lifecycle, offer catalog, Get, Subscribe, stream close, and transport

@@ -22,6 +22,7 @@
         </div>
         <div class="actions">
           <button id="diagnostics-button" type="button" hidden>Diagnostics</button>
+          <button id="peers-button" type="button" aria-controls="peers-panel" aria-expanded="false" hidden>Peers</button>
           <button id="copy-bootstrap-button" type="button" hidden>Copy Bootstrap</button>
           <button id="publish-preview-button" type="button" hidden>Publish Preview</button>
           <button id="stop-button" type="button" disabled hidden>Stop</button>
@@ -44,7 +45,10 @@
         <aside id="peers-panel" class="panel peers-panel" hidden>
           <div class="section-heading">
             <h2>Peers</h2>
-            <button id="add-peer-button" type="button">Add Peer</button>
+            <div class="peer-panel-actions">
+              <button id="add-peer-button" type="button">Add Peer</button>
+              <button id="peers-panel-close" class="peers-panel-close" type="button">Close</button>
+            </div>
           </div>
           <div id="peer-list" class="peer-list"></div>
         </aside>

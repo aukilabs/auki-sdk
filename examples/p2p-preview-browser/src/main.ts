@@ -80,6 +80,7 @@ type AppState = {
   peers: PeerSummary[];
   offers: OfferSummary[];
   offerStates: Map<string, OfferRuntimeState>;
+  peersPanelOpen: boolean;
   openOfferDetailKey?: string;
   openPeerDetailPeerId?: string;
   events: EventLogEntry[];
@@ -106,6 +107,7 @@ const state: AppState = {
   peers: [],
   offers: [],
   offerStates: new Map(),
+  peersPanelOpen: false,
   events: [],
   toasts: [],
   status: "Idle",
@@ -118,6 +120,7 @@ const state: AppState = {
 const els = {
   toastRegion: element("toast-region"),
   diagnosticsButton: element<HTMLButtonElement>("diagnostics-button"),
+  peersButton: element<HTMLButtonElement>("peers-button"),
   diagnosticsDialog: element<HTMLDialogElement>("diagnostics-dialog"),
   diagnosticsClose: element<HTMLButtonElement>("diagnostics-close"),
   startPanel: element("start-panel"),
@@ -129,6 +132,7 @@ const els = {
   publishPreviewButton: element<HTMLButtonElement>("publish-preview-button"),
   stopButton: element<HTMLButtonElement>("stop-button"),
   addPeerButton: element<HTMLButtonElement>("add-peer-button"),
+  peersPanelClose: element<HTMLButtonElement>("peers-panel-close"),
   streamSummary: element("stream-summary"),
   streamsGrid: element("streams-grid"),
   snapshotsReceived: element("snapshots-received"),
@@ -167,6 +171,9 @@ els.diagnosticsButton.addEventListener("click", () => {
 els.diagnosticsClose.addEventListener("click", () => {
   els.diagnosticsDialog.close();
 });
+els.peersButton.addEventListener("click", () => {
+  setPeersPanelOpen(true);
+});
 els.connectButton.addEventListener("click", () => {
   void start();
 });
@@ -181,6 +188,9 @@ els.stopButton.addEventListener("click", () => {
 });
 els.addPeerButton.addEventListener("click", () => {
   openAddPeerDialog();
+});
+els.peersPanelClose.addEventListener("click", () => {
+  setPeersPanelOpen(false);
 });
 els.addPeerSubmit.addEventListener("click", () => {
   void addPeersFromInput();
@@ -277,6 +287,11 @@ els.toastRegion.addEventListener("click", (event) => {
     return;
   }
   dismissToast(Number(button.dataset.toastId));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.peersPanelOpen && !isDialogOpen()) {
+    setPeersPanelOpen(false);
+  }
 });
 
 function handleStreamAction(target: EventTarget | null): boolean {
@@ -755,6 +770,7 @@ async function stopOfferSubscriptionOnce(
 
 async function stopPeer(): Promise<void> {
   stopPeerObserver();
+  state.peersPanelOpen = false;
   await stopGeneratedPreview();
   const stops = Array.from(state.offerStates.entries())
     .filter(([, runtime]) => runtime.subscription || runtime.abort || runtime.subscribing)
@@ -774,6 +790,20 @@ async function stopPeer(): Promise<void> {
   state.localPreview = undefined;
   state.lastError = undefined;
   state.nextSubscriptionToken += 1;
+}
+
+function setPeersPanelOpen(open: boolean): void {
+  state.peersPanelOpen = open && Boolean(state.peer);
+  renderLiveStats();
+}
+
+function isDialogOpen(): boolean {
+  return (
+    els.offerDetailDialog.open ||
+    els.peerDetailDialog.open ||
+    els.addPeerDialog.open ||
+    els.diagnosticsDialog.open
+  );
 }
 
 async function ensurePeerStarted(bootstrap?: unknown): Promise<AukiBrowserPeer> {
@@ -1003,17 +1033,17 @@ function render(): void {
 function renderLiveStats(): void {
   const totals = aggregateRuntimeStats();
   const hasPeer = Boolean(state.peer);
-  const hasRemoteContext = state.peers.length > 0 || state.offers.length > 0;
   const canShowCopyBootstrap = hasPeer && state.peers.length > 0;
   const canCopyBootstrap = canShowCopyBootstrap
     ? canExportLocalBootstrap(state.peer?.peerId, state.peer?.multiaddrs() ?? [])
     : false;
   els.startPanel.hidden = hasPeer;
   els.workspace.hidden = !hasPeer;
-  els.workspace.classList.toggle("peer-only", !hasRemoteContext);
+  els.workspace.classList.toggle("peer-only", false);
   els.peersPanel.hidden = !hasPeer;
-  els.streamsPanel.hidden = !hasRemoteContext;
+  els.streamsPanel.hidden = !hasPeer;
   els.diagnosticsButton.hidden = !hasPeer;
+  els.peersButton.hidden = !hasPeer;
   els.copyBootstrapButton.hidden = !canShowCopyBootstrap;
   els.publishPreviewButton.hidden = !hasPeer;
   els.stopButton.hidden = !hasPeer;
@@ -1050,6 +1080,10 @@ function renderLiveStats(): void {
   els.addPeerButton.disabled = state.busy || !state.peer;
   els.addPeerButton.textContent = "Add Peer";
   els.addPeerSubmit.disabled = state.busy || !state.peer;
+  els.peersButton.disabled = state.busy || !state.peer;
+  els.peersButton.textContent = `Peers (${state.peers.length + (state.peer ? 1 : 0)})`;
+  els.peersButton.setAttribute("aria-expanded", state.peersPanelOpen ? "true" : "false");
+  document.body.classList.toggle("peers-drawer-open", hasPeer && state.peersPanelOpen);
 }
 
 function renderPeerSidebar(peers: PeerSummary[]): void {

@@ -42,7 +42,7 @@ export type BrowserTransport = {
   start(): Promise<void>;
   stop(): Promise<void>;
   multiaddrs(): string[];
-  addRelayServerAddresses?(addresses: string[]): void;
+  addRelayServerAddresses?(addresses: string[]): Promise<void> | void;
   dial(addresses: string[], options?: { force?: boolean }): Promise<void>;
   closePeerConnections?(peerId: string, keepAddresses?: string[]): Promise<void>;
   connectionPaths?(peerId: string): BrowserConnectionPath[];
@@ -115,9 +115,7 @@ export async function createBrowserLibp2pTransport(
 ): Promise<BrowserTransport> {
   const { webRTC, webRTCDirect } = await import("@libp2p/webrtc");
   const privateKey = await generateKeyPairFromSeed("Ed25519", await derivePeerSeed(options.seed));
-  const relayListenAddrs = (options.relayServerAddresses ?? []).map(
-    (address) => `${address}/p2p-circuit`,
-  );
+  const relayListenAddrs = relayListenAddresses(options.relayServerAddresses ?? []);
   const node = await createLibp2p({
     privateKey,
     connectionMonitor: {
@@ -132,7 +130,7 @@ export async function createBrowserLibp2pTransport(
       denyDialMultiaddr: () => false,
     },
     addresses: {
-      listen: relayListenAddrs.length > 0 ? relayListenAddrs : ["/p2p-circuit"],
+      listen: uniqueStrings([...relayListenAddrs, "/p2p-circuit", "/webrtc"]),
     },
     transports: [webSockets(), webRTC(), webRTCDirect(), circuitRelayTransport()],
     connectionEncrypters: [noise()],
@@ -213,12 +211,16 @@ class Libp2pBrowserTransport implements BrowserTransport {
     return browserReachableMultiaddrs(
       this.peerId,
       this.node.getMultiaddrs().map((address) => address.toString()),
-      this.relayServerAddresses,
     );
   }
 
-  addRelayServerAddresses(addresses: string[]): void {
+  async addRelayServerAddresses(addresses: string[]): Promise<void> {
+    const added = addresses.filter((address) => !this.relayServerAddresses.includes(address));
     this.relayServerAddresses = uniqueStrings([...this.relayServerAddresses, ...addresses]);
+    if (!this.started || added.length === 0) {
+      return;
+    }
+    await this.listenOnRelayServers(added);
   }
 
   async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {
@@ -228,6 +230,26 @@ class Libp2pBrowserTransport implements BrowserTransport {
     await this.node.dial(addresses.map((address) => multiaddr(address)), {
       force: options.force ?? false,
     });
+  }
+
+  private async listenOnRelayServers(addresses: string[]): Promise<void> {
+    const listenAddresses = relayListenAddresses(addresses).map((address) => multiaddr(address));
+    if (listenAddresses.length === 0) {
+      return;
+    }
+    const internals = this.node as unknown as {
+      components?: {
+        transportManager?: {
+          listen(addrs: ReturnType<typeof multiaddr>[]): Promise<void>;
+        };
+      };
+    };
+    const transportManager = internals.components?.transportManager;
+    const listen = transportManager?.listen;
+    if (!listen) {
+      throw new Error("Browser transport cannot reserve relay addresses on this libp2p node");
+    }
+    await listen.call(transportManager, listenAddresses);
   }
 
   async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
@@ -321,12 +343,8 @@ class Libp2pBrowserTransport implements BrowserTransport {
 export function browserReachableMultiaddrs(
   peerId: string,
   observedAddresses: string[],
-  relayServerAddresses: string[],
 ): string[] {
-  return uniqueStrings([
-    ...observedAddresses,
-    ...relayServerAddresses.map((address) => `${address}/p2p-circuit/p2p/${peerId}`),
-  ]);
+  return uniqueStrings(observedAddresses).filter((address) => addressTargetsPeer(address, peerId));
 }
 
 export async function openBrowserProtocolStream(
@@ -507,6 +525,14 @@ function classifyTransport(address: string): BrowserConnectionTransport {
     return "tcp";
   }
   return "unknown";
+}
+
+function relayListenAddresses(addresses: string[]): string[] {
+  return uniqueStrings(addresses).map((address) => `${address}/p2p-circuit`);
+}
+
+function addressTargetsPeer(address: string, peerId: string): boolean {
+  return address.endsWith(`/p2p/${peerId}`) || address.includes(`/p2p/${peerId}/`);
 }
 
 function uniqueStrings(values: string[]): string[] {

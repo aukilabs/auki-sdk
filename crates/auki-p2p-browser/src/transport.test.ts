@@ -104,14 +104,14 @@ describe("browser transport lifecycle", () => {
     ).toBe(true);
   });
 
-  it("adds relay-server reservations to browser-reachable addresses", () => {
+  it("does not fabricate relay reservations from relay-server addresses", () => {
     expect(
       browserReachableMultiaddrs(
         "browser-peer",
-        ["/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer"],
         [
+          "/ip4/127.0.0.1/tcp/1/ws/p2p/browser-peer",
           "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
-          "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer",
+          "/ip4/127.0.0.1/tcp/2/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
         ],
       ),
     ).toEqual([

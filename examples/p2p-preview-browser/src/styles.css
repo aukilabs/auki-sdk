@@ -262,6 +262,17 @@ input[type="file"] {
   color: var(--muted-strong);
 }
 
+.form-feedback {
+  min-height: 20px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.form-feedback.error {
+  color: #ff8a8a;
+}
+
 .peers-panel {
   grid-area: peers;
   position: sticky;

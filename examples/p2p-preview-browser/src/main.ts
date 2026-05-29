@@ -127,6 +127,7 @@ const els = {
   eventLog: element("event-log"),
   addPeerDialog: element<HTMLDialogElement>("add-peer-dialog"),
   addPeerInput: element<HTMLTextAreaElement>("add-peer-input"),
+  addPeerFeedback: element("add-peer-feedback"),
   addPeerFile: element<HTMLInputElement>("add-peer-file"),
   addPeerSubmit: element<HTMLButtonElement>("add-peer-submit"),
   addPeerCancel: element<HTMLButtonElement>("add-peer-cancel"),
@@ -309,6 +310,7 @@ async function start(): Promise<void> {
 }
 
 async function addPeersFromInput(): Promise<void> {
+  setAddPeerFeedback("info", "Connecting...");
   await runShortAction("Adding peer", async () => {
     const records = parseBootstrapText(els.addPeerInput.value.trim());
     if (records.length === 0) {
@@ -317,6 +319,9 @@ async function addPeersFromInput(): Promise<void> {
     const peer = state.peer;
     if (!peer) {
       throw new Error("Start peer before adding remote peers");
+    }
+    if (records.some((record) => record.peerId === peer.peerId)) {
+      throw new Error("Cannot add this browser's own bootstrap record");
     }
     recordEvent("info", "Lifecycle handshake starting", bootstrapRecordsEventDetail(records));
     await peer.connectBootstrap(records);
@@ -328,6 +333,9 @@ async function addPeersFromInput(): Promise<void> {
     els.addPeerDialog.close();
     clearAddPeerInput();
   });
+  if (state.status === "Error" && state.lastError) {
+    setAddPeerFeedback("error", state.lastError);
+  }
 }
 
 async function switchPeerAddress(peerId: string, address: string): Promise<void> {
@@ -465,6 +473,12 @@ async function toggleGeneratedPreview(): Promise<void> {
 function clearAddPeerInput(): void {
   els.addPeerInput.value = "";
   els.addPeerFile.value = "";
+  setAddPeerFeedback("info", "");
+}
+
+function setAddPeerFeedback(level: "info" | "error", message: string): void {
+  els.addPeerFeedback.textContent = message;
+  els.addPeerFeedback.className = `form-feedback ${message ? level : ""}`.trim();
 }
 
 async function getOfferSnapshot(offer: OfferSummary): Promise<void> {

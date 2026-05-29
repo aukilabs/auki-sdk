@@ -269,7 +269,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       const record = parseBootstrapRecord(value);
       const dialAddresses = preferredDialAddresses(record);
       this.rememberBootstrap(record);
-      this.transport.addRelayServerAddresses?.(relayServerAddresses(record));
+      await this.transport.addRelayServerAddresses?.(relayServerAddresses(record));
       await this.transport.dial(dialAddresses);
       await this.exchangeLifecycle(record);
       this.peers.set(record.peerId, {

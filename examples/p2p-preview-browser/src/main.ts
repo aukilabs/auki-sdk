@@ -23,7 +23,6 @@ import {
   parseBootstrapText,
   shouldMarkObservedAddress,
   shortId,
-  supportsLocalBrowserExposure,
 } from "./app";
 import "./styles.css";
 
@@ -1321,20 +1320,6 @@ function addressInventoryRow(
     flag.textContent = role.replaceAll("_", "-");
     flags.append(flag);
   }
-  if (
-    supportsLocalBrowserExposure(
-      peerId,
-      entry.address,
-      entry.roles.has("relay_server"),
-    )
-  ) {
-    const flag = document.createElement("span");
-    flag.className = "address-flag local-browser-exposure";
-    flag.title = "Supports browser to browser for you to expose yourself.";
-    flag.textContent = "exposes you";
-    flags.append(flag);
-  }
-
   const content = document.createElement("div");
   content.className = "address-content";
   const meta = document.createElement("span");

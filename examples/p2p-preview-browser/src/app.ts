@@ -51,14 +51,6 @@ export function canExportLocalBootstrap(peerId: string | undefined, addresses: s
   }
 }
 
-export function supportsLocalBrowserExposure(
-  peerId: string,
-  address: string,
-  relayServerAddress = false,
-): boolean {
-  return relayServerAddress && address.endsWith(`/p2p/${peerId}`);
-}
-
 export function shouldMarkObservedAddress(
   address: string,
   knownAddresses: readonly string[],

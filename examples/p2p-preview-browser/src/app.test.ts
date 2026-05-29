@@ -7,7 +7,6 @@ import {
   offerLabel,
   parseBootstrapText,
   shouldMarkObservedAddress,
-  supportsLocalBrowserExposure,
 } from "./app";
 import {
   decodeBase64UrlBytes,
@@ -132,37 +131,6 @@ describe("p2p preview browser helpers", () => {
     ).toBe(true);
     expect(canExportLocalBootstrap("browser-peer", ["/webrtc/p2p/browser-peer"])).toBe(false);
     expect(canExportLocalBootstrap("browser-peer", [])).toBe(false);
-  });
-
-  it("detects relay-server addresses that expose the local browser", () => {
-    expect(
-      supportsLocalBrowserExposure(
-        "browser-peer",
-        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
-      ),
-    ).toBe(false);
-    expect(
-      supportsLocalBrowserExposure(
-        "browser-peer",
-        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
-      ),
-    ).toBe(false);
-    expect(
-      supportsLocalBrowserExposure(
-        "relay-peer",
-        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
-      ),
-    ).toBe(false);
-    expect(
-      supportsLocalBrowserExposure(
-        "relay-peer",
-        "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
-        true,
-      ),
-    ).toBe(true);
-    expect(
-      supportsLocalBrowserExposure("browser-peer", "/webrtc/p2p/browser-peer"),
-    ).toBe(false);
   });
 
   it("marks observed addresses only when they were not already known", () => {

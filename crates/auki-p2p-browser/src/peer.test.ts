@@ -21,6 +21,7 @@ import {
   parseSubscribeEnd,
   parseSubscribeStartResult,
   validateGetResponseForRequest,
+  validatePeerHandshakeAuthority,
   validateSubscribeDataMessage,
   validateSubscribeEndForOffer,
   type JsonObject,
@@ -257,6 +258,203 @@ describe("AukiBrowserPeer shell", () => {
         protocol: LIFECYCLE_PROTOCOL_ID,
       },
     ]);
+  });
+
+  it("declares browser local domains during outbound lifecycle", async () => {
+    const localSeed = new Uint8Array(32).fill(7);
+    const remoteSeed = new Uint8Array(32).fill(9);
+    const localPeerId = await peerIdFromSeed(localSeed);
+    const remotePeerId = await peerIdFromSeed(remoteSeed);
+    const transport = new MemoryTransport(localPeerId, []);
+    let declaredDomainId: string | undefined;
+    transport.handleProtocol(LIFECYCLE_PROTOCOL_ID, async (stream) => {
+      const reader = new JsonFrameReader(stream);
+      const localHandshake = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      expect(localHandshake.value).toMatchObject({
+        type: "auki.peer_handshake.v1",
+        declared_domains: [
+          expect.objectContaining({
+            domain_id: declaredDomainId,
+            metadata: { role: "producer" },
+          }),
+        ],
+      });
+      await expect(
+        validatePeerHandshakeAuthority(
+          localHandshake.value,
+          localPeerId,
+          true,
+          new Date(Date.now() + 1_000).toISOString(),
+        ),
+      ).resolves.toMatchObject({
+        accepted_served_domains: [
+          {
+            domain_id: declaredDomainId,
+            authority: "direct_owner",
+          },
+        ],
+        rejected_declared_domains: [],
+      });
+
+      const remoteBinding = await createPeerBinding(
+        remoteSeed,
+        remotePeerId,
+        new Date(Date.now() - 1_000).toISOString(),
+        "native-peer",
+      );
+      await writeJsonFrame(
+        stream,
+        await createPeerHandshake(remoteBinding),
+        DEFAULT_FRAME_BODY_LIMIT,
+      );
+      await stream.close();
+    });
+
+    const peer = await createAukiBrowserPeer({
+      seed: localSeed,
+      transport,
+      label: "browser-demo",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const localDomain = await peer.createLocalDomain({
+      nonce: new Uint8Array(16).fill(5),
+      label: "browser-demo-domain",
+      metadata: { role: "producer" },
+    });
+    declaredDomainId = localDomain.domainId;
+
+    await peer.connectBootstrap(bootstrapRecord(remotePeerId, "/memory/native-direct"));
+
+    expect(transport.protocolDials).toEqual([
+      {
+        peerId: remotePeerId,
+        addresses: ["/memory/native-direct"],
+        protocol: LIFECYCLE_PROTOCOL_ID,
+      },
+    ]);
+  });
+
+  it("serves inbound lifecycle handshakes with declared browser local domains", async () => {
+    const localSeed = new Uint8Array(32).fill(8);
+    const remoteSeed = new Uint8Array(32).fill(10);
+    const localPeerId = await peerIdFromSeed(localSeed);
+    const remotePeerId = await peerIdFromSeed(remoteSeed);
+    const transport = new MemoryTransport(localPeerId, []);
+    const peer = await createAukiBrowserPeer({
+      seed: localSeed,
+      transport,
+      label: "browser-demo",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const localDomain = await peer.createLocalDomain({
+      nonce: new Uint8Array(16).fill(6),
+      label: "browser-demo-domain",
+    });
+
+    const stream = await transport.openInbound(remotePeerId, LIFECYCLE_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    const localHandshake = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+    expect(localHandshake.value).toMatchObject({
+      type: "auki.peer_handshake.v1",
+      declared_domains: [
+        expect.objectContaining({
+          domain_id: localDomain.domainId,
+        }),
+      ],
+    });
+    await expect(
+      validatePeerHandshakeAuthority(
+        localHandshake.value,
+        localPeerId,
+        true,
+        new Date(Date.now() + 1_000).toISOString(),
+      ),
+    ).resolves.toMatchObject({
+      accepted_served_domains: [
+        {
+          domain_id: localDomain.domainId,
+          authority: "direct_owner",
+        },
+      ],
+      rejected_declared_domains: [],
+    });
+
+    const remoteBinding = await createPeerBinding(
+      remoteSeed,
+      remotePeerId,
+      new Date(Date.now() - 1_000).toISOString(),
+      "remote-browser",
+    );
+    await writeJsonFrame(
+      stream,
+      await createPeerHandshake(remoteBinding),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(peer.listPeers()).toEqual([
+      {
+        peerId: remotePeerId,
+        connected: true,
+        dialAddresses: [],
+        connectionPaths: [],
+      },
+    ]);
+  });
+
+  it("rejects inbound lifecycle when the signed peer binding does not match the authenticated peer id", async () => {
+    const localSeed = new Uint8Array(32).fill(8);
+    const remoteSeed = new Uint8Array(32).fill(10);
+    const wrongRemoteSeed = new Uint8Array(32).fill(11);
+    const localPeerId = await peerIdFromSeed(localSeed);
+    const remotePeerId = await peerIdFromSeed(remoteSeed);
+    const wrongRemotePeerId = await peerIdFromSeed(wrongRemoteSeed);
+    const transport = new MemoryTransport(localPeerId, []);
+    const peer = await createAukiBrowserPeer({
+      seed: localSeed,
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    await peer.createLocalDomain({
+      nonce: new Uint8Array(16).fill(6),
+      label: "browser-demo-domain",
+    });
+
+    const stream = await transport.openInbound(remotePeerId, LIFECYCLE_PROTOCOL_ID);
+    const reader = new JsonFrameReader(stream);
+    await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+    const mismatchedBinding = await createPeerBinding(
+      wrongRemoteSeed,
+      wrongRemotePeerId,
+      new Date(Date.now() - 1_000).toISOString(),
+      "wrong-remote-browser",
+    );
+    await writeJsonFrame(
+      stream,
+      await createPeerHandshake(mismatchedBinding),
+      DEFAULT_FRAME_BODY_LIMIT,
+    );
+
+    await expect(reader.read(DEFAULT_FRAME_BODY_LIMIT)).rejects.toThrow();
+    expect(peer.listPeers()).toEqual([]);
+  });
+
+  it("unregisters inbound lifecycle handlers when stopped", async () => {
+    const localSeed = new Uint8Array(32).fill(8);
+    const localPeerId = await peerIdFromSeed(localSeed);
+    const transport = new MemoryTransport(localPeerId, []);
+    const peer = await createAukiBrowserPeer({
+      seed: localSeed,
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+
+    await peer.dial("/memory/native");
+    await peer.stop();
+
+    await expect(transport.openInbound("remote-peer", LIFECYCLE_PROTOCOL_ID)).rejects.toThrow(
+      "No inbound handler registered",
+    );
   });
 
   it("loads offer catalogs over an RFC protocol stream", async () => {

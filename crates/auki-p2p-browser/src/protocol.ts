@@ -1,4 +1,5 @@
 import initProtocolWasm, {
+  createDomainDeclaration as wasmCreateDomainDeclaration,
   createOfferCatalogRequest as wasmCreateOfferCatalogRequest,
   createGetRequest as wasmCreateGetRequest,
   createPeerBinding as wasmCreatePeerBinding,
@@ -8,6 +9,7 @@ import initProtocolWasm, {
   decodeLength as wasmDecodeLength,
   encodeJsonFrame as wasmEncodeJsonFrame,
   encodeLength as wasmEncodeLength,
+  parseDomainDeclaration as wasmParseDomainDeclaration,
   parseGetRequest as wasmParseGetRequest,
   parseGetResponse as wasmParseGetResponse,
   parseOfferCatalogRequest as wasmParseOfferCatalogRequest,
@@ -26,6 +28,7 @@ import initProtocolWasm, {
   validateSubscribeDataMessage as wasmValidateSubscribeDataMessage,
   validateSubscribeEndForOffer as wasmValidateSubscribeEndForOffer,
   validateSubscribeStartForRequest as wasmValidateSubscribeStartForRequest,
+  verifyDomainDeclaration as wasmVerifyDomainDeclaration,
   verifyPeerBinding as wasmVerifyPeerBinding,
 } from "../../auki-protocol-wasm/pkg-web/auki_protocol_wasm.js";
 
@@ -136,6 +139,31 @@ export async function verifyPeerBinding(
 ): Promise<JsonObject> {
   return withProtocol(() =>
     expectJsonObject(wasmVerifyPeerBinding(value, authenticatedPeerId), "verified peer binding"),
+  );
+}
+
+export async function createDomainDeclaration(
+  ownerSeed: Uint8Array,
+  nonce: Uint8Array,
+  label?: string | null,
+): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(
+      wasmCreateDomainDeclaration(ownerSeed, nonce, label ?? undefined),
+      "domain declaration",
+    ),
+  );
+}
+
+export async function parseDomainDeclaration(value: JsonObject): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(wasmParseDomainDeclaration(value), "domain declaration"),
+  );
+}
+
+export async function verifyDomainDeclaration(value: JsonObject): Promise<JsonObject> {
+  return withProtocol(() =>
+    expectJsonObject(wasmVerifyDomainDeclaration(value), "verified domain declaration"),
   );
 }
 

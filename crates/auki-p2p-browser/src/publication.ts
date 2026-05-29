@@ -32,6 +32,8 @@ export type PublishOfferOptions = {
 };
 
 export type PublicationHandle = {
+  readonly domainId: string;
+  readonly offerId: string;
   stop(): Promise<void>;
 };
 

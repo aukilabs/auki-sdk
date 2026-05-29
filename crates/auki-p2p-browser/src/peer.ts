@@ -7,6 +7,7 @@ import {
 } from "./bootstrap.js";
 import { type SeedStore, indexedDbSeedStore, loadOrCreateSeed, peerIdFromSeed } from "./identity.js";
 import {
+  createDomainDeclaration,
   createGetRequest,
   createOfferCatalogRequest,
   createPeerBinding,
@@ -19,6 +20,7 @@ import {
   parsePeerHandshake,
   parseSubscribeRequest,
   parseSubscribeStartResult,
+  verifyDomainDeclaration,
   validateGetResponseForRequest,
   validatePeerHandshakeAuthority,
   validateSubscribeDataMessage,
@@ -139,6 +141,18 @@ export type AukiBrowserPeerConfig = {
   trace?: AukiBrowserPeerTraceSink;
 };
 
+export type CreateLocalDomainOptions = {
+  nonce?: Uint8Array;
+  label?: string;
+  metadata?: JsonObject;
+};
+
+export type AukiBrowserLocalDomain = {
+  readonly domainId: string;
+  readonly declaration: JsonObject;
+  readonly metadata?: JsonObject;
+};
+
 export interface AukiBrowserPeer {
   readonly peerId: string;
   readonly supportedTransports: readonly string[];
@@ -148,6 +162,7 @@ export interface AukiBrowserPeer {
   switchPeerAddress(peerId: string, address: string): Promise<void>;
   listPeers(): PeerSummary[];
   listOffers(peerId?: string): Promise<OfferSummary[]>;
+  createLocalDomain(options?: CreateLocalDomainOptions): Promise<AukiBrowserLocalDomain>;
   get(request: GetRequest): Promise<SpatialMessage>;
   openSubscription(request: SubscribeRequest): Promise<AukiBrowserSubscription>;
   subscribe(request: SubscribeRequest): AsyncIterable<SpatialMessage>;
@@ -193,6 +208,7 @@ const GET_PROTOCOL_ID = "/auki/get/0.0.1";
 const SUBSCRIBE_PROTOCOL_ID = "/auki/subscribe/0.0.1";
 const SUBSCRIBE_END_TYPE = "auki.subscribe_end.v1";
 const DEFAULT_FRAME_BODY_LIMIT = 1_048_576;
+const DOMAIN_NONCE_BYTES = 16;
 const GET_CLIENT_RETRY_ATTEMPTS = 2;
 const SUBSCRIBE_CLIENT_RETRY_ATTEMPTS = 2;
 const SUBSCRIBE_STOP_TIMEOUT_MS = 1_000;
@@ -203,6 +219,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
   private readonly lifecyclePeers = new Set<string>();
   private readonly remoteOffers = new Map<string, LoadedOffer[]>();
   private readonly localPublications = new Map<string, LocalOfferPublication>();
+  private readonly localDomains = new Map<string, AukiBrowserLocalDomain>();
   private started = false;
   private inboundHandlersRegistered = false;
 
@@ -544,6 +561,27 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
   }
 
+  async createLocalDomain(
+    options: CreateLocalDomainOptions = {},
+  ): Promise<AukiBrowserLocalDomain> {
+    await this.ensureStarted();
+    const declaration = await createDomainDeclaration(
+      requiredSeed(this.walletSeed),
+      options.nonce ?? randomBytes(DOMAIN_NONCE_BYTES),
+      options.label ?? this.label ?? "browser-domain",
+    );
+    const verified = await verifyDomainDeclaration(declaration);
+    const domainId = stringField(verified, "domain_id");
+    const domain: AukiBrowserLocalDomain = {
+      domainId,
+      declaration,
+      ...(options.metadata ? { metadata: options.metadata } : {}),
+    };
+    this.localDomains.set(domainId, domain);
+    this.lifecyclePeers.clear();
+    return domain;
+  }
+
   async publishOffer(options: PublishOfferOptions): Promise<PublicationHandle> {
     await this.ensureStarted();
     const offer = await createPublishedOffer(this.peerId, options);
@@ -561,6 +599,8 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     this.localPublications.set(key, publication);
 
     return {
+      domainId: offer.domainId,
+      offerId: offer.offerId,
       stop: async () => {
         publication.stopped = true;
         this.localPublications.delete(key);
@@ -605,13 +645,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     }
 
     const now = new Date().toISOString();
-    const peerBinding = await createPeerBinding(
-      this.walletSeed,
-      this.peerId,
-      now,
-      this.label ?? "browser-peer",
-    );
-    const handshake = await createPeerHandshake(peerBinding);
+    const handshake = await this.localPeerHandshake(now);
     const stream = await this.transport.dialProtocol(
       record.peerId,
       preferredDialAddresses(record),
@@ -684,6 +718,11 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       return;
     }
     await this.transport.registerProtocolHandler(
+      LIFECYCLE_PROTOCOL_ID,
+      (stream, remotePeerId) => this.serveLifecycle(stream, remotePeerId),
+      { maxInboundStreams: 32 },
+    );
+    await this.transport.registerProtocolHandler(
       OFFER_CATALOG_PROTOCOL_ID,
       (stream) => this.serveOfferCatalog(stream),
       { maxInboundStreams: 32 },
@@ -705,10 +744,39 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     if (!this.inboundHandlersRegistered) {
       return;
     }
+    await this.transport.unregisterProtocolHandler(LIFECYCLE_PROTOCOL_ID);
     await this.transport.unregisterProtocolHandler(OFFER_CATALOG_PROTOCOL_ID);
     await this.transport.unregisterProtocolHandler(GET_PROTOCOL_ID);
     await this.transport.unregisterProtocolHandler(SUBSCRIBE_PROTOCOL_ID);
     this.inboundHandlersRegistered = false;
+  }
+
+  private async serveLifecycle(
+    stream: BrowserProtocolStream,
+    remotePeerId: string,
+  ): Promise<void> {
+    if (!this.walletSeed) {
+      await closeStream(stream);
+      return;
+    }
+    const now = new Date().toISOString();
+    const reader = new JsonFrameReader(stream);
+    try {
+      const localHandshake = await this.localPeerHandshake(now);
+      await writeJsonFrame(stream, localHandshake, DEFAULT_FRAME_BODY_LIMIT);
+      const remoteFrame = await reader.read(DEFAULT_FRAME_BODY_LIMIT);
+      const remoteHandshake = await parsePeerHandshake(remoteFrame.value);
+      await validatePeerHandshakeAuthority(remoteHandshake, remotePeerId, true, now);
+      this.lifecyclePeers.add(remotePeerId);
+      this.peers.set(remotePeerId, {
+        peerId: remotePeerId,
+        connected: true,
+        dialAddresses: [],
+        connectionPaths: this.connectionPaths(remotePeerId),
+      });
+    } finally {
+      await closeStream(stream);
+    }
   }
 
   private async serveOfferCatalog(stream: BrowserProtocolStream): Promise<void> {
@@ -936,6 +1004,29 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     return createLocalOfferCatalogResponse(this.localPublications.values(), request);
   }
 
+  private async localPeerHandshake(now: string): Promise<JsonObject> {
+    const peerBinding = await createPeerBinding(
+      requiredSeed(this.walletSeed),
+      this.peerId,
+      now,
+      this.label ?? "browser-peer",
+    );
+    return createPeerHandshake(peerBinding, this.localDeclaredDomains());
+  }
+
+  private localDeclaredDomains(): JsonObject[] {
+    return Array.from(this.localDomains.values()).map((domain) => {
+      const declared: JsonObject = {
+        domain_id: domain.domainId,
+        domain_declaration: domain.declaration,
+      };
+      if (domain.metadata) {
+        declared.metadata = { ...domain.metadata };
+      }
+      return declared;
+    });
+  }
+
   private localOfferSummaries(): OfferSummary[] {
     return Array.from(this.localPublications.values())
       .filter((publication) => !publication.stopped)
@@ -1132,6 +1223,16 @@ function uniqueStrings(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function randomBytes(length: number): Uint8Array {
+  const cryptoObject = globalThis.crypto;
+  if (!cryptoObject?.getRandomValues) {
+    throw new Error("crypto.getRandomValues is required to create a browser local domain");
+  }
+  const bytes = new Uint8Array(length);
+  cryptoObject.getRandomValues(bytes);
+  return bytes;
 }
 
 async function reconnectPeerBestEffort(

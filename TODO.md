@@ -121,27 +121,27 @@ These decisions are locked for the browser-to-browser slice.
 
 ## Phase 1 - SDK Foundation
 
-- [ ] Add browser inbound lifecycle serving in `auki-p2p-browser`.
-- [ ] Register and unregister the lifecycle protocol with the other inbound
+- [x] Add browser inbound lifecycle serving in `auki-p2p-browser`.
+- [x] Register and unregister the lifecycle protocol with the other inbound
       protocol handlers.
-- [ ] Mirror native lifecycle ordering: write the local handshake first, then
+- [x] Mirror native lifecycle ordering: write the local handshake first, then
       read the remote handshake.
-- [ ] Parse inbound peer handshakes with `auki-protocol-wasm`.
-- [ ] Validate remote peer authority against the authenticated libp2p peer id.
-- [ ] Track lifecycle-authorized browser peers.
-- [ ] Add tests for successful inbound browser lifecycle.
-- [ ] Add tests for rejecting lifecycle when the authenticated peer id does not
+- [x] Parse inbound peer handshakes with `auki-protocol-wasm`.
+- [x] Validate remote peer authority against the authenticated libp2p peer id.
+- [x] Track lifecycle-authorized browser peers.
+- [x] Add tests for successful inbound browser lifecycle.
+- [x] Add tests for rejecting lifecycle when the authenticated peer id does not
       match the signed peer binding.
-- [ ] Add tests for lifecycle handler cleanup on peer stop.
-- [ ] Implement browser local-domain state for browser-published offers.
-- [ ] Expose a small SDK-facing browser local-domain helper backed by
+- [x] Add tests for lifecycle handler cleanup on peer stop.
+- [x] Implement browser local-domain state for browser-published offers.
+- [x] Expose a small SDK-facing browser local-domain helper backed by
       `auki-protocol-wasm`.
-- [ ] Include browser-local declared domains in lifecycle handshakes when
+- [x] Include browser-local declared domains in lifecycle handshakes when
       browser-published offers are meant to be authoritative.
 - [ ] Review browser public method names against native and document intentional
       differences.
-- [ ] Expose `domainId`, `offerId`, and `stop()` on browser `PublicationHandle`.
-- [ ] Keep `handle.stop()` as the browser withdraw/unpublish API for this slice.
+- [x] Expose `domainId`, `offerId`, and `stop()` on browser `PublicationHandle`.
+- [x] Keep `handle.stop()` as the browser withdraw/unpublish API for this slice.
 
 ## Phase 2 - Browser Dialability
 

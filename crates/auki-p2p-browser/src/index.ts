@@ -31,6 +31,7 @@ export { createBrowserLibp2pTransport, supportedBrowserTransports } from "./tran
 export type {
   AukiBrowserPeer,
   AukiBrowserPeerConfig,
+  AukiBrowserLocalDomain,
   AukiBrowserPeerTraceEvent,
   AukiBrowserPeerTraceSink,
   AukiBrowserSubscription,
@@ -41,6 +42,7 @@ export type {
   PeerSummary,
   PublicationHandle,
   PublishOfferOptions,
+  CreateLocalDomainOptions,
   SpatialMessage,
   GetRequest,
   SubscribeRequest,

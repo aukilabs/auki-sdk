@@ -1459,6 +1459,184 @@ describe("AukiBrowserPeer shell", () => {
     source.close();
   });
 
+  it("fans out one browser-published source to two browser subscribers", async () => {
+    const publisherSeed = new Uint8Array(32).fill(31);
+    const subscriberOneSeed = new Uint8Array(32).fill(32);
+    const subscriberTwoSeed = new Uint8Array(32).fill(33);
+    const publisherPeerId = await peerIdFromSeed(publisherSeed);
+    const subscriberOnePeerId = await peerIdFromSeed(subscriberOneSeed);
+    const subscriberTwoPeerId = await peerIdFromSeed(subscriberTwoSeed);
+    const publisherTransport = new MemoryTransport(publisherPeerId, [
+      `/memory/browser-a/p2p/${publisherPeerId}`,
+    ]);
+    const subscriberOneTransport = new MemoryTransport(subscriberOnePeerId, []);
+    const subscriberTwoTransport = new MemoryTransport(subscriberTwoPeerId, []);
+    subscriberOneTransport.connectPeer(publisherTransport);
+    subscriberTwoTransport.connectPeer(publisherTransport);
+    const publisher = await createAukiBrowserPeer({
+      seed: publisherSeed,
+      transport: publisherTransport,
+      label: "browser-a",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const subscriberOne = await createAukiBrowserPeer({
+      seed: subscriberOneSeed,
+      transport: subscriberOneTransport,
+      label: "browser-b",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const subscriberTwo = await createAukiBrowserPeer({
+      seed: subscriberTwoSeed,
+      transport: subscriberTwoTransport,
+      label: "browser-c",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const domain = await publisher.createLocalDomain({
+      nonce: new Uint8Array(16).fill(4),
+      label: "browser-a-domain",
+    });
+    const source = new LatestPublishedByteSource();
+    source.publish({
+      bytes: new Uint8Array([1, 2, 3]),
+      sequence: 1,
+      generatedAt: "2026-05-29T00:00:00Z",
+    });
+    await publishPreviewOffer(publisher, source, {
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+    });
+
+    const bootstrap = await publisher.localBootstrapRecord();
+    await subscriberOne.connectBootstrap(bootstrap);
+    await subscriberTwo.connectBootstrap(bootstrap);
+    await subscriberOne.listOffers(publisherPeerId);
+    await subscriberTwo.listOffers(publisherPeerId);
+
+    const subscriptionOne = await subscriberOne.openSubscription({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxMessageBytes: 4096,
+    });
+    const subscriptionTwo = await subscriberTwo.openSubscription({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxMessageBytes: 4096,
+    });
+    const iteratorOne = subscriptionOne.messages[Symbol.asyncIterator]();
+    const iteratorTwo = subscriptionTwo.messages[Symbol.asyncIterator]();
+
+    await expect(iteratorOne.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "1",
+        generated_at: "2026-05-29T00:00:00Z",
+        payload: expect.objectContaining({ bytes: "AQID" }),
+      }),
+    });
+    await expect(iteratorTwo.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "1",
+        generated_at: "2026-05-29T00:00:00Z",
+        payload: expect.objectContaining({ bytes: "AQID" }),
+      }),
+    });
+
+    source.publish({
+      bytes: new Uint8Array([4, 5, 6]),
+      sequence: 2,
+      generatedAt: "2026-05-29T00:00:01Z",
+    });
+    await expect(iteratorOne.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "2",
+        generated_at: "2026-05-29T00:00:01Z",
+        payload: expect.objectContaining({ bytes: "BAUG" }),
+      }),
+    });
+    await expect(iteratorTwo.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "2",
+        generated_at: "2026-05-29T00:00:01Z",
+        payload: expect.objectContaining({ bytes: "BAUG" }),
+      }),
+    });
+
+    await subscriptionOne.stop();
+    await subscriptionTwo.stop();
+    source.close();
+  });
+
+  it("ends active browser Subscribe streams when the shared source closes", async () => {
+    const publisherSeed = new Uint8Array(32).fill(41);
+    const subscriberSeed = new Uint8Array(32).fill(42);
+    const publisherPeerId = await peerIdFromSeed(publisherSeed);
+    const subscriberPeerId = await peerIdFromSeed(subscriberSeed);
+    const publisherTransport = new MemoryTransport(publisherPeerId, [
+      `/memory/browser-a/p2p/${publisherPeerId}`,
+    ]);
+    const subscriberTransport = new MemoryTransport(subscriberPeerId, []);
+    subscriberTransport.connectPeer(publisherTransport);
+    const publisher = await createAukiBrowserPeer({
+      seed: publisherSeed,
+      transport: publisherTransport,
+      label: "browser-a",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const subscriber = await createAukiBrowserPeer({
+      seed: subscriberSeed,
+      transport: subscriberTransport,
+      label: "browser-b",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const domain = await publisher.createLocalDomain({
+      nonce: new Uint8Array(16).fill(5),
+      label: "browser-a-domain",
+    });
+    const source = new LatestPublishedByteSource();
+    source.publish({
+      bytes: new Uint8Array([1, 2, 3]),
+      sequence: 1,
+      generatedAt: "2026-05-29T00:00:00Z",
+    });
+    await publishPreviewOffer(publisher, source, {
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+    });
+
+    await subscriber.connectBootstrap(await publisher.localBootstrapRecord());
+    await subscriber.listOffers(publisherPeerId);
+    const subscription = await subscriber.openSubscription({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxMessageBytes: 4096,
+    });
+    const iterator = subscription.messages[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "1",
+        payload: expect.objectContaining({ bytes: "AQID" }),
+      }),
+    });
+
+    source.close();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    });
+    await subscription.stop();
+  });
+
   it("keeps preview publishing as a helper over generic offer publishing", async () => {
     const fixture = await fixtureJson("v1_offer_catalogs.json");
     const transport = new MemoryTransport("browser-peer", []);

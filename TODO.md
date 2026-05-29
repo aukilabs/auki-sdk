@@ -191,11 +191,11 @@ These decisions are locked for the browser-to-browser slice.
 - [x] Add tests that browser B can Subscribe and Stop against browser A.
 - [x] Add tests that Get while Subscribe is active does not reset or starve
       streams.
-- [ ] Add tests that two browser subscribers can consume the same published
+- [x] Add tests that two browser subscribers can consume the same published
       source concurrently.
 - [x] Add tests that Get and Subscribe report the same latest source sequence
       instead of diverging generator offsets.
-- [ ] Add tests that closing the shared source ends active browser Subscribe
+- [x] Add tests that closing the shared source ends active browser Subscribe
       streams cleanly.
 
 ## Phase 4 - Demo UX

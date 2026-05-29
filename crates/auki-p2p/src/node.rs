@@ -36,6 +36,11 @@ use std::{
 pub const IDENTIFY_PROTOCOL_ID: &str = "/auki/p2p/identify/0.0.1";
 
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_RELAY_MAX_CIRCUIT_DURATION: Duration = Duration::from_secs(2 * 60);
+const DEFAULT_RELAY_MAX_CIRCUIT_BYTES: u64 = 1 << 17;
+const DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES: u64 = 0;
+const EFFECTIVE_UNCAPPED_RELAY_MAX_CIRCUIT_DURATION: Duration =
+    Duration::from_secs(u32::MAX as u64);
 
 /// Libp2p behaviour set for the clean runtime skeleton.
 #[derive(NetworkBehaviour)]
@@ -84,6 +89,11 @@ pub struct BrowserWebRtcDirectConfig {
 pub struct RelayServerConfig {
     /// Enable the local node as a relay server.
     pub enabled: bool,
+    /// Maximum lifetime of one relayed circuit. `None` means uncapped at the
+    /// SDK layer and maps to the largest duration supported by libp2p relay v2.
+    pub max_circuit_duration: Option<Duration>,
+    /// Maximum total bytes forwarded by one relayed circuit. Zero disables the byte cap.
+    pub max_circuit_bytes: u64,
 }
 
 /// Connectivity-only bootstrap record for browser peers.
@@ -135,6 +145,13 @@ pub struct AukiRelayServerStatus {
     pub circuits_closed: u64,
     /// Relay-server operation failures since node start.
     pub failures: u64,
+    /// Configured maximum lifetime of one relayed circuit. `None` means uncapped
+    /// at the SDK layer.
+    pub max_circuit_duration: Option<Duration>,
+    /// Effective libp2p relay duration used when `max_circuit_duration` is uncapped.
+    pub effective_max_circuit_duration: Duration,
+    /// Configured maximum total bytes forwarded by one relayed circuit.
+    pub max_circuit_bytes: u64,
     /// Peers currently holding relay reservations.
     pub reserved_peers: Vec<PeerId>,
     /// Active circuit pairs currently using this relay.
@@ -352,7 +369,7 @@ impl AukiP2pNodeConfig {
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
             browser_webrtc_direct: BrowserWebRtcDirectConfig::disabled(),
-            relay_server: RelayServerConfig::enabled(),
+            relay_server: RelayServerConfig::streaming_development(),
             agent_version: default_agent_version(),
         }
     }
@@ -371,7 +388,7 @@ impl AukiP2pNodeConfig {
             advertised_addresses: Vec::new(),
             relay_addresses: Vec::new(),
             browser_webrtc_direct: BrowserWebRtcDirectConfig::enabled(),
-            relay_server: RelayServerConfig::enabled(),
+            relay_server: RelayServerConfig::streaming_development(),
             agent_version: default_agent_version(),
         }
     }
@@ -392,12 +409,58 @@ impl BrowserWebRtcDirectConfig {
 impl RelayServerConfig {
     /// Disable local Circuit Relay v2 server support.
     pub fn disabled() -> Self {
-        Self { enabled: false }
+        Self {
+            enabled: false,
+            max_circuit_duration: Some(DEFAULT_RELAY_MAX_CIRCUIT_DURATION),
+            max_circuit_bytes: DEFAULT_RELAY_MAX_CIRCUIT_BYTES,
+        }
     }
 
-    /// Enable local Circuit Relay v2 server support.
+    /// Enable local Circuit Relay v2 server support with conservative circuit limits.
     pub fn enabled() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            max_circuit_duration: Some(DEFAULT_RELAY_MAX_CIRCUIT_DURATION),
+            max_circuit_bytes: DEFAULT_RELAY_MAX_CIRCUIT_BYTES,
+        }
+    }
+
+    /// Enable local relay support with stream-friendly development limits.
+    pub fn streaming_development() -> Self {
+        Self {
+            enabled: true,
+            max_circuit_duration: None,
+            max_circuit_bytes: DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES,
+        }
+    }
+
+    /// Override the relay circuit duration and byte limits.
+    pub fn with_circuit_limits(
+        mut self,
+        max_circuit_duration: Duration,
+        max_circuit_bytes: u64,
+    ) -> Self {
+        self.max_circuit_duration = Some(max_circuit_duration);
+        self.max_circuit_bytes = max_circuit_bytes;
+        self
+    }
+
+    /// Remove the SDK-level relay circuit duration cap.
+    pub fn without_circuit_duration_limit(mut self) -> Self {
+        self.max_circuit_duration = None;
+        self
+    }
+
+    fn to_libp2p_config(self) -> relay::Config {
+        let mut config = relay::Config::default();
+        config.max_circuit_duration = self.effective_max_circuit_duration();
+        config.max_circuit_bytes = self.max_circuit_bytes;
+        config
+    }
+
+    fn effective_max_circuit_duration(self) -> Duration {
+        self.max_circuit_duration
+            .unwrap_or(EFFECTIVE_UNCAPPED_RELAY_MAX_CIRCUIT_DURATION)
     }
 }
 
@@ -455,12 +518,9 @@ impl AukiP2pNode {
                     .with_agent_version(config.agent_version.clone()),
             ),
             ping: ping::Behaviour::default(),
-            relay: Toggle::from(
-                config
-                    .relay_server
-                    .enabled
-                    .then(|| relay::Behaviour::new(local_peer_id, relay::Config::default())),
-            ),
+            relay: Toggle::from(config.relay_server.enabled.then(|| {
+                relay::Behaviour::new(local_peer_id, config.relay_server.to_libp2p_config())
+            })),
             stream: libp2p_stream::Behaviour::new(),
         };
         let mut swarm = Swarm::new(
@@ -642,7 +702,7 @@ impl AukiP2pNode {
 
     /// Runtime diagnostics for this node's local Circuit Relay v2 server role.
     pub fn relay_server_status(&self) -> AukiRelayServerStatus {
-        self.relay_server.snapshot(self.config.relay_server.enabled)
+        self.relay_server.snapshot(self.config.relay_server)
     }
 
     /// Add one operator-supplied advertised address.
@@ -1116,7 +1176,7 @@ impl RelayServerTracker {
         }
     }
 
-    fn snapshot(&self, enabled: bool) -> AukiRelayServerStatus {
+    fn snapshot(&self, config: RelayServerConfig) -> AukiRelayServerStatus {
         let mut reserved_peers: Vec<_> = self.reservations.iter().copied().collect();
         reserved_peers.sort_by_key(|peer_id| peer_id.to_string());
 
@@ -1143,7 +1203,7 @@ impl RelayServerTracker {
         });
 
         AukiRelayServerStatus {
-            enabled,
+            enabled: config.enabled,
             active_reservations: reserved_peers.len(),
             active_circuits: active_circuit_peers
                 .iter()
@@ -1158,6 +1218,9 @@ impl RelayServerTracker {
             circuits_denied: self.circuits_denied,
             circuits_closed: self.circuits_closed,
             failures: self.failures,
+            max_circuit_duration: config.max_circuit_duration,
+            effective_max_circuit_duration: config.effective_max_circuit_duration(),
+            max_circuit_bytes: config.max_circuit_bytes,
             reserved_peers,
             active_circuit_peers,
             last_failure: self.last_failure.clone(),
@@ -1256,6 +1319,21 @@ impl AukiP2pNode {
         let status = self.relay_server_status();
         let mut object = Map::new();
         object.insert("enabled".to_owned(), Value::Bool(status.enabled));
+        object.insert(
+            "max_circuit_duration_ms".to_owned(),
+            match status.max_circuit_duration {
+                Some(duration) => Value::Number((duration.as_millis() as u64).into()),
+                None => Value::Null,
+            },
+        );
+        object.insert(
+            "effective_max_circuit_duration_ms".to_owned(),
+            Value::Number((status.effective_max_circuit_duration.as_millis() as u64).into()),
+        );
+        object.insert(
+            "max_circuit_bytes".to_owned(),
+            Value::Number(status.max_circuit_bytes.into()),
+        );
         object.insert(
             "active_reservations".to_owned(),
             Value::Number((status.active_reservations as u64).into()),
@@ -1555,6 +1633,11 @@ mod tests {
         let config = AukiP2pNodeConfig::loopback_relay_server_development();
 
         assert!(config.relay_server.enabled);
+        assert_eq!(config.relay_server.max_circuit_duration, None);
+        assert_eq!(
+            config.relay_server.max_circuit_bytes,
+            DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES
+        );
         assert!(!config.browser_webrtc_direct.enabled);
         assert_eq!(
             config.listen_addresses,
@@ -1568,6 +1651,11 @@ mod tests {
 
         assert!(config.browser_webrtc_direct.enabled);
         assert!(config.relay_server.enabled);
+        assert_eq!(config.relay_server.max_circuit_duration, None);
+        assert_eq!(
+            config.relay_server.max_circuit_bytes,
+            DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES
+        );
         assert_eq!(config.p2p.limits.active_connections_per_peer_id, 1);
         assert_eq!(
             config.listen_addresses,
@@ -1759,6 +1847,23 @@ mod tests {
             relay_server_status.get("enabled").and_then(Value::as_bool),
             Some(true)
         );
+        assert!(
+            relay_server_status
+                .get("max_circuit_duration_ms")
+                .is_some_and(Value::is_null)
+        );
+        assert_eq!(
+            relay_server_status
+                .get("effective_max_circuit_duration_ms")
+                .and_then(Value::as_u64),
+            Some(EFFECTIVE_UNCAPPED_RELAY_MAX_CIRCUIT_DURATION.as_millis() as u64)
+        );
+        assert_eq!(
+            relay_server_status
+                .get("max_circuit_bytes")
+                .and_then(Value::as_u64),
+            Some(DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES)
+        );
         assert_eq!(
             relay_server_status
                 .get("active_reservations")
@@ -1942,9 +2047,18 @@ mod tests {
             dst_peer_id,
         });
 
-        let status = tracker.snapshot(true);
+        let status = tracker.snapshot(RelayServerConfig::streaming_development());
 
         assert!(status.enabled);
+        assert_eq!(status.max_circuit_duration, None);
+        assert_eq!(
+            status.effective_max_circuit_duration,
+            EFFECTIVE_UNCAPPED_RELAY_MAX_CIRCUIT_DURATION
+        );
+        assert_eq!(
+            status.max_circuit_bytes,
+            DEVELOPMENT_RELAY_MAX_CIRCUIT_BYTES
+        );
         assert_eq!(status.active_reservations, 1);
         assert_eq!(status.reservations_accepted, 1);
         assert_eq!(status.reservations_renewed, 1);
@@ -1965,7 +2079,7 @@ mod tests {
         });
         tracker.record(relay::Event::ReservationClosed { src_peer_id });
 
-        let status = tracker.snapshot(true);
+        let status = tracker.snapshot(RelayServerConfig::streaming_development());
 
         assert_eq!(status.active_reservations, 0);
         assert_eq!(status.active_circuits, 1);

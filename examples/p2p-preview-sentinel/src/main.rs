@@ -468,8 +468,11 @@ fn print_state(
         runtime_status.inbound_accept_queue_closed,
     );
     println!(
-        "relay_server: enabled={} reservations={} active_circuits={} reservation_accepts={} reservation_renewals={} reservation_denied={} reservation_closed={} reservation_timed_out={} circuit_accepts={} circuit_denied={} circuit_closed={} failures={}",
+        "relay_server: enabled={} max_circuit_duration={} effective_max_circuit_duration_ms={} max_circuit_bytes={} reservations={} active_circuits={} reservation_accepts={} reservation_renewals={} reservation_denied={} reservation_closed={} reservation_timed_out={} circuit_accepts={} circuit_denied={} circuit_closed={} failures={}",
         relay_status.enabled,
+        relay_duration_limit_label(relay_status.max_circuit_duration),
+        relay_status.effective_max_circuit_duration.as_millis(),
+        relay_status.max_circuit_bytes,
         relay_status.active_reservations,
         relay_status.active_circuits,
         relay_status.reservations_accepted,
@@ -549,6 +552,13 @@ fn print_state(
     }
 
     Ok(())
+}
+
+fn relay_duration_limit_label(limit: Option<Duration>) -> String {
+    match limit {
+        Some(duration) => format!("{}ms", duration.as_millis()),
+        None => "uncapped".to_owned(),
+    }
 }
 
 fn trace_runtime_event(event: &AukiServeRuntimeEvent) -> Result<(), Box<dyn Error>> {

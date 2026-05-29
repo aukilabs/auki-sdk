@@ -7,7 +7,7 @@ import {
   type AukiBrowserPeerTraceEvent,
   type SpatialMessage,
 } from "./peer.js";
-import { publishPreviewOffer } from "./preview.js";
+import { PREVIEW_PAYLOAD_TYPE, publishPreviewOffer } from "./preview.js";
 import { createSubscribeEndForPath, LatestPublishedByteSource } from "./publication.js";
 import { JsonFrameReader, writeJsonFrame } from "./stream.js";
 import {
@@ -1343,6 +1343,122 @@ describe("AukiBrowserPeer shell", () => {
     source.close();
   });
 
+  it("loads, gets, subscribes, and stops a browser-published preview from another browser peer", async () => {
+    const publisherSeed = new Uint8Array(32).fill(21);
+    const subscriberSeed = new Uint8Array(32).fill(22);
+    const publisherPeerId = await peerIdFromSeed(publisherSeed);
+    const subscriberPeerId = await peerIdFromSeed(subscriberSeed);
+    const publisherTransport = new MemoryTransport(publisherPeerId, [
+      `/memory/browser-a/p2p/${publisherPeerId}`,
+    ]);
+    const subscriberTransport = new MemoryTransport(subscriberPeerId, []);
+    subscriberTransport.connectPeer(publisherTransport);
+    const publisher = await createAukiBrowserPeer({
+      seed: publisherSeed,
+      transport: publisherTransport,
+      label: "browser-a",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const subscriber = await createAukiBrowserPeer({
+      seed: subscriberSeed,
+      transport: subscriberTransport,
+      label: "browser-b",
+      protocolWasm: await protocolWasmInput(),
+    });
+    const domain = await publisher.createLocalDomain({
+      nonce: new Uint8Array(16).fill(3),
+      label: "browser-a-domain",
+    });
+    const source = new LatestPublishedByteSource();
+    source.publish({
+      bytes: new Uint8Array([1, 2, 3]),
+      sequence: 10,
+      generatedAt: "2026-05-29T00:00:00Z",
+    });
+    await publishPreviewOffer(publisher, source, {
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+    });
+
+    await subscriber.connectBootstrap(await publisher.localBootstrapRecord());
+    const offers = await subscriber.listOffers(publisherPeerId);
+
+    expect(subscriber.listPeers()).toEqual([
+      expect.objectContaining({
+        peerId: publisherPeerId,
+        connected: true,
+      }),
+    ]);
+    expect(offers).toEqual([
+      {
+        peerId: publisherPeerId,
+        domainId: domain.domainId,
+        offerId: "browser-preview",
+        kind: "auki.sensor.rgb_camera.preview",
+        payloadType: PREVIEW_PAYLOAD_TYPE,
+        accessModes: ["get", "subscribe"],
+      },
+    ]);
+
+    const firstGet = await subscriber.get({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxPayloadBytes: 4096,
+    });
+    expect(firstGet).toMatchObject({
+      sequence: "10",
+      generated_at: "2026-05-29T00:00:00Z",
+      payload: expect.objectContaining({ bytes: "AQID" }),
+    });
+
+    const subscription = await subscriber.openSubscription({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxMessageBytes: 4096,
+    });
+    const iterator = subscription.messages[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "10",
+        payload: expect.objectContaining({ bytes: "AQID" }),
+      }),
+    });
+
+    source.publish({
+      bytes: new Uint8Array([4, 5, 6]),
+      sequence: 11,
+      generatedAt: "2026-05-29T00:00:01Z",
+    });
+    const secondGet = await subscriber.get({
+      peerId: publisherPeerId,
+      domainId: domain.domainId,
+      offerId: "browser-preview",
+      acceptedPayloadTypes: [PREVIEW_PAYLOAD_TYPE],
+      maxPayloadBytes: 4096,
+    });
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: expect.objectContaining({
+        sequence: "11",
+        generated_at: "2026-05-29T00:00:01Z",
+        payload: expect.objectContaining({ bytes: "BAUG" }),
+      }),
+    });
+    expect(secondGet).toMatchObject({
+      sequence: "11",
+      generated_at: "2026-05-29T00:00:01Z",
+      payload: expect.objectContaining({ bytes: "BAUG" }),
+    });
+
+    await subscription.stop();
+    source.close();
+  });
+
   it("keeps preview publishing as a helper over generic offer publishing", async () => {
     const fixture = await fixtureJson("v1_offer_catalogs.json");
     const transport = new MemoryTransport("browser-peer", []);
@@ -1434,6 +1550,7 @@ class MemoryTransport implements BrowserTransport {
     string,
     (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
   >();
+  private readonly remoteTransports = new Map<string, MemoryTransport>();
   private readonly inboundHandlers = new Map<
     string,
     (stream: BrowserProtocolStream, peerId: string) => Promise<void> | void
@@ -1486,6 +1603,10 @@ class MemoryTransport implements BrowserTransport {
     this.closedPeers.push({ peerId, keepAddresses: keepAddresses.slice() });
   }
 
+  connectPeer(peer: MemoryTransport): void {
+    this.remoteTransports.set(peer.peerId, peer);
+  }
+
   setConnectionPaths(peerId: string, paths: BrowserConnectionPath[]): void {
     this.paths.set(peerId, paths.slice());
   }
@@ -1523,11 +1644,20 @@ class MemoryTransport implements BrowserTransport {
   ): Promise<BrowserProtocolStream> {
     this.protocolDials.push({ peerId, addresses: addresses.slice(), protocol });
     const handler = this.protocolHandlers.get(protocol);
-    if (!handler) {
+    if (handler) {
+      const [local, remote] = linkedStreams();
+      Promise.resolve(handler(remote, peerId)).catch((error: unknown) => {
+        remote.abort(error instanceof Error ? error : new Error(String(error)));
+      });
+      return local;
+    }
+    const remoteTransport = this.remoteTransports.get(peerId);
+    const remoteHandler = remoteTransport?.inboundHandlers.get(protocol);
+    if (!remoteHandler) {
       throw new Error(`No handler registered for ${protocol}`);
     }
     const [local, remote] = linkedStreams();
-    Promise.resolve(handler(remote, peerId)).catch((error: unknown) => {
+    Promise.resolve(remoteHandler(remote, this.peerId)).catch((error: unknown) => {
       remote.abort(error instanceof Error ? error : new Error(String(error)));
     });
     return local;

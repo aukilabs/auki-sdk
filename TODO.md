@@ -185,15 +185,15 @@ These decisions are locked for the browser-to-browser slice.
       preview behavior.
 - [x] Disable local Get/Subscribe buttons for offers published by the same tab,
       unless we explicitly add local loopback later.
-- [ ] Add tests that browser A published offers are visible through browser B's
+- [x] Add tests that browser A published offers are visible through browser B's
       Offer Catalog request.
-- [ ] Add tests that browser B can Get from browser A.
-- [ ] Add tests that browser B can Subscribe and Stop against browser A.
-- [ ] Add tests that Get while Subscribe is active does not reset or starve
+- [x] Add tests that browser B can Get from browser A.
+- [x] Add tests that browser B can Subscribe and Stop against browser A.
+- [x] Add tests that Get while Subscribe is active does not reset or starve
       streams.
 - [ ] Add tests that two browser subscribers can consume the same published
       source concurrently.
-- [ ] Add tests that Get and Subscribe report the same latest source sequence
+- [x] Add tests that Get and Subscribe report the same latest source sequence
       instead of diverging generator offsets.
 - [ ] Add tests that closing the shared source ends active browser Subscribe
       streams cleanly.

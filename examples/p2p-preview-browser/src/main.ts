@@ -22,7 +22,7 @@ import {
   mergeBootstrapRecords,
   parseBootstrapText,
   shortId,
-  supportsBrowserToBrowserBootstrap,
+  supportsLocalBrowserExposure,
 } from "./app";
 import "./styles.css";
 
@@ -1314,16 +1314,16 @@ function addressInventoryRow(
     flags.append(flag);
   }
   if (
-    supportsBrowserToBrowserBootstrap(
+    supportsLocalBrowserExposure(
       peerId,
       entry.address,
       entry.roles.has("relay_server"),
     )
   ) {
     const flag = document.createElement("span");
-    flag.className = "address-flag browser-to-browser";
-    flag.title = "This address can bootstrap browser-to-browser connectivity.";
-    flag.textContent = "browser-to-browser";
+    flag.className = "address-flag local-browser-exposure";
+    flag.title = "Supports browser to browser for you to expose yourself.";
+    flag.textContent = "exposes you";
     flags.append(flag);
   }
 

@@ -51,19 +51,12 @@ export function canExportLocalBootstrap(peerId: string | undefined, addresses: s
   }
 }
 
-export function supportsBrowserToBrowserBootstrap(
+export function supportsLocalBrowserExposure(
   peerId: string,
   address: string,
   relayServerAddress = false,
 ): boolean {
-  if (relayServerAddress && address.endsWith(`/p2p/${peerId}`)) {
-    return true;
-  }
-  return (
-    address.endsWith(`/p2p/${peerId}`) &&
-    (address.includes(`/p2p-circuit/p2p/${peerId}`) ||
-      address.includes(`/p2p-circuit/webrtc/p2p/${peerId}`))
-  );
+  return relayServerAddress && address.endsWith(`/p2p/${peerId}`);
 }
 
 export function offerLabel(offer: OfferSummary | undefined): string {

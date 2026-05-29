@@ -82,6 +82,7 @@ type StoredPeer = {
   peerId: string;
   connected: boolean;
   dialAddresses: string[];
+  relayServerAddresses: string[];
 };
 
 export type {
@@ -288,16 +289,19 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         peerId: record.peerId,
         connected: true,
         dialAddresses,
+        relayServerAddresses: relayServerAddresses(record),
       });
     }
   }
 
   async switchPeerAddress(peerId: string, address: string): Promise<void> {
     await this.ensureStarted();
-    const peer = this.requirePeer(peerId);
+    const storedPeer = this.requireStoredPeer(peerId);
+    const peer = this.peerSummary(storedPeer);
     if (!peer.dialAddresses.includes(address)) {
       throw new Error(`Address is not known for peer ${peerId}`);
     }
+    const refreshRelayReservation = storedPeer.relayServerAddresses.includes(address);
 
     const dialAddresses = uniqueStrings([
       address,
@@ -327,11 +331,14 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         );
       }
     }
+    if (refreshRelayReservation) {
+      await this.transport.addRelayServerAddresses?.([address]);
+    }
     await this.transport.closePeerConnections?.(
       peerId,
       this.keepAddressesForSelectedAddress(peerId, address),
     );
-    this.rememberSwitchedPeer(peerId, dialAddresses);
+    this.rememberSwitchedPeer(peerId, dialAddresses, storedPeer.relayServerAddresses);
   }
 
   private keepAddressesForSelectedAddress(peerId: string, address: string): string[] {
@@ -348,11 +355,16 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     return [address];
   }
 
-  private rememberSwitchedPeer(peerId: string, dialAddresses: string[]): void {
+  private rememberSwitchedPeer(
+    peerId: string,
+    dialAddresses: string[],
+    relayServerAddresses: string[],
+  ): void {
     this.peers.set(peerId, {
       peerId,
       connected: true,
       dialAddresses,
+      relayServerAddresses,
     });
   }
 
@@ -665,6 +677,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       peerId: record.peerId,
       connected: false,
       dialAddresses: preferredDialAddresses(record),
+      relayServerAddresses: relayServerAddresses(record),
     });
   }
 
@@ -681,8 +694,9 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
       this.transport.connectionPaths !== undefined &&
       this.peersWithObservedConnectionPaths.has(peer.peerId);
     return {
-      ...peer,
+      peerId: peer.peerId,
       connected: connectionPaths.length > 0 || (peer.connected && !hasLiveConnectionObservation),
+      dialAddresses: peer.dialAddresses,
       observedAddresses: observedAddressesFromConnectionPaths(connectionPaths),
       connectionPaths,
     };
@@ -754,12 +768,16 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
     return offer;
   }
 
-  private requirePeer(peerId: string): PeerSummary {
+  private requireStoredPeer(peerId: string): StoredPeer {
     const peer = this.peers.get(peerId);
     if (!peer) {
       throw new Error(`Unknown peer ${peerId}; connect bootstrap records before using it`);
     }
-    return this.peerSummary(peer);
+    return peer;
+  }
+
+  private requirePeer(peerId: string): PeerSummary {
+    return this.peerSummary(this.requireStoredPeer(peerId));
   }
 
   private async installInboundHandlers(): Promise<void> {
@@ -821,6 +839,7 @@ class DefaultAukiBrowserPeer implements AukiBrowserPeer {
         peerId: remotePeerId,
         connected: true,
         dialAddresses: [],
+        relayServerAddresses: [],
       });
     } finally {
       await closeStream(stream);

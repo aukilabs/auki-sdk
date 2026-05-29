@@ -228,6 +228,31 @@ describe("AukiBrowserPeer shell", () => {
     expect(peer.listPeers()[0]?.dialAddresses[0]).toBe("/memory/websocket");
   });
 
+  it("refreshes relay reservation when switching back to a relay server address", async () => {
+    const transport = new MemoryTransport("browser-peer", []);
+    const peer = await createAukiBrowserPeer({
+      transport,
+      protocolWasm: await protocolWasmInput(),
+    });
+    const relayServer = "/memory/relay/p2p/native-peer";
+    const webrtcDirect = "/memory/webrtc-direct";
+    const record = {
+      peer_id: "native-peer",
+      direct_addresses: [relayServer],
+      webrtc_direct_addresses: [webrtcDirect],
+      relay_addresses: [],
+      relay_server_addresses: [relayServer],
+      bootstrap_addresses: [relayServer, webrtcDirect],
+    };
+
+    await peer.connectBootstrap(record);
+    await peer.switchPeerAddress("native-peer", webrtcDirect);
+    await peer.switchPeerAddress("native-peer", relayServer);
+
+    expect(transport.relayServerAdds).toEqual([[relayServer], [relayServer]]);
+    expect(transport.forcedDials).toEqual([[webrtcDirect], [relayServer]]);
+  });
+
   it("connects browser peers over relay by default while remembering browser WebRTC", async () => {
     const transport = new MemoryTransport("browser-peer", []);
     const peer = await createAukiBrowserPeer({
@@ -1846,6 +1871,7 @@ class MemoryTransport implements BrowserTransport {
   readonly forcedDials: string[][] = [];
   readonly preferredPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
   readonly closedPeers: Array<{ peerId: string; keepAddresses: string[] }> = [];
+  readonly relayServerAdds: string[][] = [];
   readonly protocolDials: Array<{ peerId: string; addresses: string[]; protocol: string }> = [];
   private readonly relayServerAddresses: string[] = [];
   private readonly paths = new Map<string, BrowserConnectionPath[]>();
@@ -1885,6 +1911,7 @@ class MemoryTransport implements BrowserTransport {
   }
 
   addRelayServerAddresses(addresses: string[]): void {
+    this.relayServerAdds.push(addresses.slice());
     for (const address of addresses) {
       if (!this.relayServerAddresses.includes(address)) {
         this.relayServerAddresses.push(address);

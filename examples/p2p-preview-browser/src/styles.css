@@ -628,7 +628,7 @@ input[type="file"] {
   background: rgba(132, 185, 255, 0.06);
 }
 
-.address-flag.browser-to-browser {
+.address-flag.local-browser-exposure {
   border-color: rgba(207, 255, 176, 0.48);
   color: var(--success);
   background: rgba(207, 255, 176, 0.08);

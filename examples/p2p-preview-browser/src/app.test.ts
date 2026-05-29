@@ -6,7 +6,7 @@ import {
   mergeBootstrapRecords,
   offerLabel,
   parseBootstrapText,
-  supportsBrowserToBrowserBootstrap,
+  supportsLocalBrowserExposure,
 } from "./app";
 import {
   decodeBase64UrlBytes,
@@ -133,34 +133,34 @@ describe("p2p preview browser helpers", () => {
     expect(canExportLocalBootstrap("browser-peer", [])).toBe(false);
   });
 
-  it("detects browser-to-browser bootstrap addresses", () => {
+  it("detects relay-server addresses that expose the local browser", () => {
     expect(
-      supportsBrowserToBrowserBootstrap(
+      supportsLocalBrowserExposure(
         "browser-peer",
         "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/p2p/browser-peer",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      supportsBrowserToBrowserBootstrap(
+      supportsLocalBrowserExposure(
         "browser-peer",
         "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer/p2p-circuit/webrtc/p2p/browser-peer",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      supportsBrowserToBrowserBootstrap(
+      supportsLocalBrowserExposure(
         "relay-peer",
         "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
       ),
     ).toBe(false);
     expect(
-      supportsBrowserToBrowserBootstrap(
+      supportsLocalBrowserExposure(
         "relay-peer",
         "/ip4/127.0.0.1/tcp/1/ws/p2p/relay-peer",
         true,
       ),
     ).toBe(true);
     expect(
-      supportsBrowserToBrowserBootstrap("browser-peer", "/webrtc/p2p/browser-peer"),
+      supportsLocalBrowserExposure("browser-peer", "/webrtc/p2p/browser-peer"),
     ).toBe(false);
   });
 

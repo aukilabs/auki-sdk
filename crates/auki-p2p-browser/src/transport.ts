@@ -235,12 +235,12 @@ class Libp2pBrowserTransport implements BrowserTransport {
   }
 
   async addRelayServerAddresses(addresses: string[]): Promise<void> {
-    const added = addresses.filter((address) => !this.relayServerAddresses.includes(address));
+    const relayServers = uniqueStrings(addresses);
     this.relayServerAddresses = uniqueStrings([...this.relayServerAddresses, ...addresses]);
-    if (!this.started || added.length === 0) {
+    if (!this.started || relayServers.length === 0) {
       return;
     }
-    await this.listenOnRelayServers(added);
+    await this.listenOnRelayServers(relayServers);
   }
 
   async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {

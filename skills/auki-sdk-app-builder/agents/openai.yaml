@@ -1,0 +1,7 @@
+interface:
+  display_name: "Auki SDK App Builder"
+  short_description: "Build apps with official Auki SDK surfaces"
+  default_prompt: "Use $auki-sdk-app-builder to build this app with official Auki SDK APIs before adding local protocol code."
+
+policy:
+  allow_implicit_invocation: true

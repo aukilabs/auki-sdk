@@ -14,7 +14,12 @@ This is the design foundation for the Auki SDK — a human and AI readable wiki 
 - `CONTRIBUTING.md` — folder convention, project management and git workflows.
 - `CLAUDE.md` — this file. Rules for AI agents.
 - `GLOSSARY.md` — definitions of all key terms.
+- `skills/auki-sdk-app-builder/SKILL.md` — public app-building skill for agents using the Auki SDK.
 
+
+## SDK app-building skill
+
+When building public applications, demos, integrations, robot producers, or tools with the Auki SDK, read [`skills/auki-sdk-app-builder/SKILL.md`](skills/auki-sdk-app-builder/SKILL.md) before implementing. The skill explains what the SDK is supposed to handle, how to inspect SDK surfaces before coding, and how to avoid hand-rolling SDK concepts such as resources, registries, streams, clocks, payloads, and `auki-geometry` transforms in app code.
 
 ## Rules
 

@@ -8,6 +8,12 @@ Latest entry on top.
 
 ### Nils's codex · May 28, HKT, 2026
 
+**Relay native target smoke added for the relay-backed transport gate.** The new `relay_native_target_smoke` example uses the existing `build_swarm` relay client/server plumbing to start or dial a relay, reserve a circuit, write the expected browser target address, and wait for an inbound non-relay peer. The smoke currently reaches the relay reservation step over an in-process TCP relay, but the browser gate fails because the native runtime does not yet expose a browser-usable `/ws` or `/wss` relay path.
+
+Tests: `cargo check -p auki-network --features swarm --example relay_native_target_smoke`; red-gate `cargo run -p auki-network --features swarm --example relay_native_target_smoke` paired with `node examples/relay-smoke/browser-smoke.mjs`.
+
+### Nils's codex · May 28, HKT, 2026
+
 **Discovery-signaled WebRTC streams now chunk writes and redial stale browser connections.** The generated browser binding now forgets failed, closed, or disconnected Discovery-signaled WebRTC peer-connection state before the next dial so Overwatch does not keep awaiting a dead connection after a camera transport drop. The Swift `AukiNetworkSignaledWebRTC` support target now serializes length-prefixed data-channel writes behind an async gate and splits large frame payloads into bounded chunks, avoiding oversized or overlapping `RTCDataBuffer` sends during sustained camera streaming.
 
 Tests: red/green `npm --prefix bindings/javascript/auki-network test -- test/framed-handler.test.mjs`; `just generate-javascript-bindings auki-network`; `just generate-swift-bindings auki-network`; `xcodebuild test -project examples/ios/AukiCameraStreamer/AukiCameraStreamer.xcodeproj -scheme AukiCameraStreamer -destination 'platform=iOS Simulator,id=5FDB8F06-16CE-444F-8852-A295466B114F' -only-testing:AukiCameraStreamerTests/AukiCameraModelsTests/testSignaledWebRtcLengthPrefixedFramesAreChunkedForDataChannelTransport -only-testing:AukiCameraStreamerTests/CameraStreamFanoutTests/testDomainCameraStreamSinkUsesAsyncPushPath CODE_SIGNING_ALLOWED=NO`; `node examples/overwatch/scripts/stage-sdk.mjs`.

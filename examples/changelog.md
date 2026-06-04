@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 28, HKT, 2026
 
+**[`relay-smoke`](relay-smoke/changelog.md) — relay-backed libp2p decision-gate harness added.** The new example pairs a Rust native target relay reservation smoke with a js-libp2p browser dialer that rejects non-browser-usable relay paths.
+
+### Nils's codex · May 28, HKT, 2026
+
 **[`ios`](ios/changelog.md) — AukiCameraStreamer now awaits SDK stream-entry writes.** The native producer fanout now uses the async signaled Domain push path and covers chunked signaled WebRTC writes for large camera frames.
 
 ### Nils's codex · May 28, HKT, 2026

@@ -4,6 +4,14 @@ Append-only timeline of documentation changes under `docs/`. Latest entry on top
 
 ---
 
+### Nils's codex · May 29, HKT, 2026
+
+Added the corrected relay circuit libp2p implementation plan and marked the older `/p2p-circuit/webrtc` migration plan superseded.
+
+### Nils's codex · May 28, HKT, 2026
+
+Added the relay-backed libp2p transport ADR and recorded the Task 1 decision-gate blocker in the migration plan: the native smoke reserves a TCP relay circuit, but the browser smoke requires a `/ws` or `/wss` relay path before `/p2p-circuit`.
+
 ### Nils's codex · May 28, HKT, 2026
 
 Revised the relay-backed libp2p migration plan to make transport replacement non-additive, remove the Swift Discovery-signaled WebRTC backend, and avoid fallback paths.

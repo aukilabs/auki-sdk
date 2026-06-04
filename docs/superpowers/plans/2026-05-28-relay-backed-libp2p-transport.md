@@ -1,5 +1,10 @@
 # Relay-Backed Libp2p Transport Migration Plan
 
+> **Superseded:** This plan used the wrong native manager address contract
+> (`/p2p-circuit/webrtc/p2p/<target>`). Use
+> [`2026-05-29-relay-circuit-libp2p-transport.md`](2026-05-29-relay-circuit-libp2p-transport.md)
+> instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move Auki browser/mobile interop away from host-specific Discovery-signaled WebRTC adapters toward relay-backed libp2p transports that reuse the same Rust/network/domain protocol surfaces across hosts.
@@ -81,11 +86,15 @@ Discovery cluster response:
 **Files:**
 - Create: `docs/relay-backed-libp2p-transport.md`
 - Create: `examples/relay-smoke/README.md`
+- Create: `examples/relay-smoke/package.json`
 - Create: `examples/relay-smoke/browser-smoke.mjs`
+- Create: `examples/relay-smoke/changelog.md`
+- Create: `examples/relay-smoke/parking_lot.md`
 - Create: `crates/auki-network/examples/relay_native_target_smoke.rs`
+- Modify: `crates/auki-network/Cargo.toml`
 - Modify: `docs/superpowers/plans/2026-05-28-relay-backed-libp2p-transport.md`
 
-- [ ] **Step 1: Write the spike design note**
+- [x] **Step 1: Write the spike design note**
 
 Create `docs/relay-backed-libp2p-transport.md` with these sections:
 
@@ -111,7 +120,7 @@ Swift `AukiNetworkSignaledWebRTC` / `AukiDomainSignaledWebRTC` support targets
 as part of the relay-backed migration. Do not keep them as fallback transports.
 ```
 
-- [ ] **Step 2: Write the browser relay smoke target**
+- [x] **Step 2: Write the browser relay smoke target**
 
 Create `examples/relay-smoke/browser-smoke.mjs` that starts a js-libp2p browser-compatible node in Node.js and dials a relay-backed multiaddr from `process.env.AUKI_RELAY_TARGET_ADDR`.
 
@@ -122,7 +131,7 @@ AUKI_RELAY_TARGET_ADDR must be a full /p2p-circuit/.../p2p/<target> address.
 The script exits 0 only after libp2p reports a connection to the target peer id.
 ```
 
-- [ ] **Step 3: Write the native target smoke target**
+- [x] **Step 3: Write the native target smoke target**
 
 Create `crates/auki-network/examples/relay_native_target_smoke.rs` that starts the current Rust `auki-network` runtime, connects to a relay multiaddr from `AUKI_RELAY_ADDR`, and prints the target relay-backed address it expects the browser to dial.
 
@@ -133,12 +142,13 @@ The smoke exits 0 only if the native peer reserves a relay circuit and observes
 an inbound browser connection over that relay-backed address.
 ```
 
-- [ ] **Step 4: Run the decision-gate spike**
+- [x] **Step 4: Run the decision-gate spike**
 
 Run:
 
 ```bash
-cargo run -p auki-network --example relay_native_target_smoke
+npm install --prefix examples/relay-smoke
+cargo run -p auki-network --features swarm --example relay_native_target_smoke
 node examples/relay-smoke/browser-smoke.mjs
 ```
 
@@ -148,6 +158,26 @@ Expected:
 If both commands pass, proceed to Task 2.
 If native rust-libp2p cannot accept the private WebRTC relay dial, stop and record the architecture blocker in docs/relay-backed-libp2p-transport.md. Do not preserve or revive the Discovery-signaled Swift backend as a fallback.
 ```
+
+Actual result, May 28, 2026:
+
+```text
+cargo check -p auki-network --features swarm --example relay_native_target_smoke
+PASS
+
+npm install --prefix examples/relay-smoke
+PASS
+
+cargo run -p auki-network --features swarm --example relay_native_target_smoke
+PARTIAL: native Rust reserves an in-process TCP relay circuit and prints
+/ip4/127.0.0.1/tcp/<port>/p2p/<relay>/p2p-circuit/webrtc/p2p/<target>.
+
+node examples/relay-smoke/browser-smoke.mjs
+FAIL: relay target must use a browser-usable /ws or /wss relay path before /p2p-circuit.
+```
+
+Stop at this decision gate. The current native runtime does not provide the
+browser-usable relay/WebRTC target contract required by the migration.
 
 - [ ] **Step 5: Commit**
 

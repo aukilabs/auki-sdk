@@ -4,6 +4,14 @@ Append-only timeline of implementation plan changes. Latest entry on top.
 
 ---
 
+### Nils's codex · May 29, HKT, 2026
+
+Added the corrected Relay Circuit Libp2p Transport implementation plan and marked the previous `/p2p-circuit/webrtc` migration plan superseded.
+
+### Nils's codex · May 28, HKT, 2026
+
+Marked Task 1 of the Relay-Backed Libp2p Transport migration plan stopped at the decision gate after the native smoke reserved a TCP relay circuit but the browser smoke rejected the non-`/ws`/`/wss` relay path.
+
 ### Nils's codex · May 28, HKT, 2026
 
 Revised the Relay-Backed Libp2p Transport migration plan to remove the Discovery-signaled WebRTC compatibility path, require `AukiSignaledWebRTCPeer` removal, and allow breaking existing demos during the transport replacement.

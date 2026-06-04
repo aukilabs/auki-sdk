@@ -8,6 +8,10 @@ Latest entry on top.
 
 ### Nils's codex · May 28, HKT, 2026
 
+**[`auki-network`](auki-network/changelog.md) — relay native target smoke added for the relay-backed gate.** The smoke proves current Circuit Relay reservation over Rust TCP and records that the browser gate still fails without a `/ws` or `/wss` relay path.
+
+### Nils's codex · May 28, HKT, 2026
+
 **[`auki-domain`](auki-domain/changelog.md) — Swift signaled Domain stream pushes now have an async path.** Native producers can await stream-entry writes through the SDK so camera frame delivery applies signaled WebRTC backpressure and can surface transport errors.
 
 ### Nils's codex · May 28, HKT, 2026

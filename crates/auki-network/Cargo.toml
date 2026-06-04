@@ -142,6 +142,11 @@ name = "browser_probe_listener"
 path = "examples/browser_probe_listener.rs"
 required-features = ["browser_probe"]
 
+[[example]]
+name = "relay_native_target_smoke"
+path = "examples/relay_native_target_smoke.rs"
+required-features = ["swarm"]
+
 [dev-dependencies]
 tempfile = "3"
 # For the swarm tests (require `--features swarm`).

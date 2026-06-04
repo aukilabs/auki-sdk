@@ -6,6 +6,14 @@ Latest entry on top.
 
 ---
 
+### Nils's codex · May 29, HKT, 2026
+
+**Corrected relay circuit transport plan added.** The new plan replaces the previous `/p2p-circuit/webrtc` native manager target with pure Circuit Relay `/p2p-circuit/p2p` and sequences WebSocket relay transport, relay reservation, generated binding migration, signaled WebRTC removal, and public/iOS verification. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.
+
+### Nils's codex · May 28, HKT, 2026
+
+**Relay-backed libp2p decision gate is blocked on browser-usable relay transport.** The new smoke harness proves native Circuit Relay reservation over Rust TCP, then records that the generated/browser path requires `/ws` or `/wss` before `/p2p-circuit`. See [`docs/changelog.md`](docs/changelog.md), [`crates/changelog.md`](crates/changelog.md), and [`examples/changelog.md`](examples/changelog.md) for propagation.
+
 ### Nils's codex · May 28, HKT, 2026
 
 **Relay-backed libp2p migration now removes signaled WebRTC.** The plan now requires replacing, not preserving, the Discovery-signaled WebRTC path and `AukiSignaledWebRTCPeer`. See [`docs/changelog.md`](docs/changelog.md) for docs-level propagation.

@@ -4,6 +4,14 @@ Append-only timeline of Superpowers design artifacts. Latest entry on top.
 
 ---
 
+### Nils's codex · May 29, HKT, 2026
+
+Added the corrected relay circuit implementation plan under [`plans/`](plans/2026-05-29-relay-circuit-libp2p-transport.md), replacing the native manager `/p2p-circuit/webrtc` target with pure Circuit Relay `/p2p-circuit/p2p`.
+
+### Nils's codex · May 28, HKT, 2026
+
+Updated the relay-backed libp2p transport implementation plan under [`plans/`](plans/2026-05-28-relay-backed-libp2p-transport.md) to record the Task 1 decision-gate blocker: current native relay reservation works over Rust TCP, but the browser gate requires `/ws` or `/wss`.
+
 ### Nils's codex · May 27, HKT, 2026
 
 Updated the SDK signaled WebRTC transport implementation plan under [`plans/`](plans/2026-05-27-sdk-signaled-webrtc-transport.md) to mark Task 7 complete after the `auki-domain` signaled peer facade landed.

@@ -5,6 +5,7 @@
 - [Overview](For-SDK-Consumers)
 - [Quickstart](Quickstart)
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs)
+- [auki-time and Time Sync](auki-time)
 
 ### Design + Architecture
 

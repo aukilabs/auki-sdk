@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    ClockBody, ClockMeta, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, RegistryRef,
-    Scope, SensorBody, SensorRegistryEntry,
+    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, RegistryRef, SensorBody,
+    SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -70,14 +70,17 @@ pub struct Peer {
     inner: Arc<RwLock<PeerInner>>,
 }
 
-struct PeerInner {
-    peer_id: String,
-    app_id: String,
-    storage_root: PathBuf,
+/// Inner state shared between a [`Peer`] and every [`Session`] it starts.
+/// A `Session` holds an `Arc<RwLock<PeerInner>>` so it reads peer identity
+/// and registries live rather than copying them. See #274 (D7).
+pub(crate) struct PeerInner {
+    pub(crate) peer_id: String,
+    pub(crate) app_id: String,
+    pub(crate) storage_root: PathBuf,
 
-    sensors: RegistryStore<SensorRegistryEntry>,
-    frames: RegistryStore<FrameRegistryEntry>,
-    detectors: RegistryStore<DetectorRegistryEntry>,
+    pub(crate) sensors: RegistryStore<SensorRegistryEntry>,
+    pub(crate) frames: RegistryStore<FrameRegistryEntry>,
+    pub(crate) detectors: RegistryStore<DetectorRegistryEntry>,
 }
 
 impl Peer {
@@ -190,37 +193,7 @@ impl Peer {
     /// `start_session` again for a fresh timeline while the peer's registries
     /// persist.
     pub fn start_session(&self) -> Result<Session> {
-        let (peer_id, app_id, storage_root) = {
-            let inner = self.inner.read();
-            (
-                inner.peer_id.clone(),
-                inner.app_id.clone(),
-                inner.storage_root.clone(),
-            )
-        };
-        let session = Session::new(&peer_id, &app_id).with_storage_root(storage_root);
-        let session_id = session.session_id();
-
-        let monotonic = session.register_clock(
-            &format!("{peer_id}/{session_id}/monotonic"),
-            ClockBody::MonotonicClock(ClockMeta {
-                unit: "ns".to_string(),
-                monotonic: true,
-                epoch: None,
-                scope: Scope::DeviceLocal,
-            }),
-        )?;
-        let utc = session.register_clock(
-            &format!("{peer_id}/{session_id}/utc"),
-            ClockBody::UtcClock(ClockMeta {
-                unit: "ns".to_string(),
-                monotonic: false,
-                epoch: Some("1970-01-01T00:00:00Z".to_string()),
-                scope: Scope::DeviceLocal,
-            }),
-        )?;
-        session.attach_clock_refs(monotonic, utc);
-        Ok(session)
+        Session::start(self.inner.clone())
     }
 }
 
@@ -307,5 +280,39 @@ mod tests {
         assert_eq!(r.peer_id, "galbot");
         assert_eq!(r.id, "yolo_v8");
         assert!(!r.hash.is_empty());
+    }
+
+    #[test]
+    fn register_frame_rejects_invalid_id() {
+        let tmp = tempdir().unwrap();
+        let p = Peer::new("p", "a").with_storage_root(tmp.path().to_path_buf());
+        let result = p.register_frame("bad id", FrameDef::ros_body());
+        assert!(matches!(result, Err(crate::SessionError::InvalidId(_))));
+    }
+
+    #[test]
+    fn register_sensor_rejects_invalid_id() {
+        let tmp = tempdir().unwrap();
+        let p = Peer::new("p", "a").with_storage_root(tmp.path().to_path_buf());
+        let frame = p
+            .register_frame("head_left_camera_optical", FrameDef::ros_optical())
+            .unwrap();
+        let result = p.register_sensor("bad>id", camera_body(frame));
+        assert!(matches!(result, Err(crate::SessionError::InvalidId(_))));
+    }
+
+    #[test]
+    fn register_detector_rejects_invalid_id() {
+        use auki_registry::{DetectorBody, ObjectDetection};
+        let tmp = tempdir().unwrap();
+        let p = Peer::new("p", "a").with_storage_root(tmp.path().to_path_buf());
+        let result = p.register_detector(
+            "bad>id",
+            DetectorBody::ObjectDetection(ObjectDetection {
+                model: "yolo_v8n".to_string(),
+            }),
+            vec![],
+        );
+        assert!(matches!(result, Err(crate::SessionError::InvalidId(_))));
     }
 }

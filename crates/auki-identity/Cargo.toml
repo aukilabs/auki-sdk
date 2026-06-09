@@ -16,9 +16,6 @@ serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
-
 # Optional — only pulled in when the `swift-bindings` feature is on. Carries
 # the UniFFI proc-macros for the Swift binding crate under
 # `bindings/swift/auki-identity-swift/`. Default-off so non-Swift consumers
@@ -28,6 +25,9 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 # (`IdentityError`) exposed across the FFI; gated by the same feature so
 # default builds don't pull thiserror into the dep graph.
 thiserror = { version = "2", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 
 [features]
 # Enables UniFFI proc-macros on `Wallet` (and any future identity types

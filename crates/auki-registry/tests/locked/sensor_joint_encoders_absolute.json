@@ -1,0 +1,1 @@
+{"frame":{"hash":"16645bd8584e5ca5fa1030b439da92dc","id":"base_link","peer_id":"galbot"},"frame_rate_hz":100,"joint_count":7,"kind":"joint_encoders","peer_id":"galbot","sensor_id":"left_arm_joints","type":"absolute"}

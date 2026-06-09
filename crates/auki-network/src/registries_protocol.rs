@@ -1,4 +1,4 @@
-//! `/auki/registries/0.0.1` — libp2p protocol for fetching a peer's
+//! `/auki/registries/0.2.0` — libp2p protocol for fetching a peer's
 //! content-addressed registry entries over the cluster's libp2p plane.
 //!
 //! ## Why this exists
@@ -40,7 +40,7 @@ use thiserror::Error;
 
 /// libp2p protocol id for content-addressed registry entry fetches.
 /// Stable; bump version only on an incompatible wire-shape change.
-pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.0.1");
+pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.2.0");
 
 /// Cap on a single framed message. Registry entries are tiny today
 /// (~100s of bytes), but 64 KiB leaves room for future sensor bodies

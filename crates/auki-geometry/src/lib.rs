@@ -317,6 +317,7 @@ fn validate_frame(entry: &FrameRegistryEntry) -> Result<()> {
 
 fn validate_axes(axes: &AxisConvention) -> Result<()> {
     let entry = FrameRegistryEntry {
+        peer_id: String::new(),
         frame_id: "<anonymous>".into(),
         handedness: if determinant3(basis_matrix(axes)) >= 0 {
             Handedness::Right
@@ -619,8 +620,8 @@ mod tests {
 
     #[test]
     fn ros_optical_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::ros_optical("camera");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]],
@@ -629,8 +630,8 @@ mod tests {
 
     #[test]
     fn ros_body_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::ros_body("body");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_body("", "body");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]],
@@ -639,8 +640,8 @@ mod tests {
 
     #[test]
     fn unity_to_opengl_axis_matrix_is_locked() {
-        let from = FrameRegistryEntry::unity("unity");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::unity("", "unity");
+        let to = FrameRegistryEntry::opengl("", "world");
         assert_matrix3_close(
             axis_convention_matrix(&from.axes, &to.axes).unwrap(),
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]],
@@ -650,12 +651,13 @@ mod tests {
     #[test]
     fn point_conversion_applies_axes_and_units() {
         let from = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "source".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::ros_optical("source").axes,
+            axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
         };
-        let to = FrameRegistryEntry::opengl("target");
+        let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_point_convention(
             Vec3 {
                 x: 100.0,
@@ -679,12 +681,13 @@ mod tests {
     #[test]
     fn direction_conversion_does_not_apply_units() {
         let from = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "source".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::ros_optical("source").axes,
+            axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
         };
-        let to = FrameRegistryEntry::opengl("target");
+        let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_direction_convention(
             Vec3 {
                 x: 1.0,
@@ -708,10 +711,10 @@ mod tests {
     #[test]
     fn convention_matrix_round_trips_to_identity() {
         let frames = [
-            FrameRegistryEntry::ros_body("body"),
-            FrameRegistryEntry::ros_optical("optical"),
-            FrameRegistryEntry::opengl("opengl"),
-            FrameRegistryEntry::unity("unity"),
+            FrameRegistryEntry::ros_body("", "body"),
+            FrameRegistryEntry::ros_optical("", "optical"),
+            FrameRegistryEntry::opengl("", "opengl"),
+            FrameRegistryEntry::unity("", "unity"),
         ];
         for a in &frames {
             for b in &frames {
@@ -728,19 +731,20 @@ mod tests {
     #[test]
     fn handedness_mismatch_is_rejected() {
         let bad = FrameRegistryEntry {
+            peer_id: String::new(),
             frame_id: "bad".into(),
             handedness: Handedness::Right,
-            axes: FrameRegistryEntry::unity("unity").axes,
+            axes: FrameRegistryEntry::unity("", "unity").axes,
             units: LengthUnit::Meters,
         };
-        let err = convention_matrix(&bad, &FrameRegistryEntry::opengl("world")).unwrap_err();
+        let err = convention_matrix(&bad, &FrameRegistryEntry::opengl("", "world")).unwrap_err();
         assert!(matches!(err, GeometryError::HandednessMismatch { .. }));
     }
 
     #[test]
     fn convert_pose_convention_reexpresses_translation_and_orientation() {
-        let from = FrameRegistryEntry::ros_optical("camera");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "world");
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let pose = SpatialTransform {
             translation: Some(Vec3 {
@@ -777,8 +781,8 @@ mod tests {
 
     #[test]
     fn converted_orientation_preserves_rotated_vectors() {
-        let from = FrameRegistryEntry::ros_body("body");
-        let to = FrameRegistryEntry::opengl("world");
+        let from = FrameRegistryEntry::ros_body("", "body");
+        let to = FrameRegistryEntry::opengl("", "world");
         let half = std::f64::consts::FRAC_1_SQRT_2;
         let source_q = Quat {
             x: half,

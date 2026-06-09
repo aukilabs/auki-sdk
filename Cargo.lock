@@ -681,6 +681,7 @@ dependencies = [
  "auki-layout",
  "auki-network",
  "auki-registry",
+ "auki-session",
  "auki-time",
  "futures",
  "getrandom 0.2.17",
@@ -701,6 +702,7 @@ version = "0.0.0"
 dependencies = [
  "auki-domain",
  "auki-identity",
+ "auki-manifests",
  "auki-network",
  "auki-network-py",
  "auki-registry",
@@ -710,6 +712,7 @@ dependencies = [
  "multiaddr",
  "prost",
  "pyo3",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -839,6 +842,7 @@ dependencies = [
  "auki-hash",
  "auki-jcs",
  "auki-logs",
+ "auki-registry",
  "ciborium",
  "serde",
  "serde_json",
@@ -850,6 +854,7 @@ name = "auki-manifests-py"
 version = "0.0.0"
 dependencies = [
  "auki-manifests",
+ "auki-registry",
  "pyo3",
  "serde_json",
 ]
@@ -862,6 +867,8 @@ dependencies = [
  "auki-datatypes",
  "auki-identity",
  "auki-jcs",
+ "auki-manifests",
+ "auki-registry",
  "auki-time",
  "base64",
  "eventsource-stream",
@@ -1017,6 +1024,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1045,10 +1053,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-session"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-hash",
+ "auki-identity",
+ "auki-jcs",
+ "auki-logs",
+ "auki-manifests",
+ "auki-registry",
+ "auki-time",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
 name = "auki-session-py"
 version = "0.0.0"
 dependencies = [
+ "auki-manifests",
+ "auki-registry",
+ "auki-registry-py",
+ "auki-session",
+ "parking_lot",
  "pyo3",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -7207,6 +7244,16 @@ dependencies = [
  "memoffset 0.9.1",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.4",
+ "web-time",
 ]
 
 [[package]]

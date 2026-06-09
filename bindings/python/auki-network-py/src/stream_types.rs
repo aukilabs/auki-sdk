@@ -23,8 +23,12 @@
 //! sidecar; future Sentinel-as-consumer) stay sync-shaped.
 
 use auki_datatypes::{
-    audio::Data as RustAudioFrame, joint_encoders::Data as RustJointEncodersFrame,
+    audio::Data as RustAudioFrame,
+    joint_encoders::Data as RustJointEncodersFrame,
     point_cloud::Data as RustPointCloudFrame,
+    pose::{
+        Quat as RustPoseQuat, SpatialTransform as RustPoseSpatialTransform, Vec3 as RustPoseVec3,
+    },
 };
 use auki_logs_py_rs::{
     RawBytes as RustRawLogBytes, RetainedStreamSource as RustRetainedStreamSource,
@@ -34,8 +38,8 @@ use auki_logs_rs::{Error as RustLogError, Log as RustLog};
 use auki_network_rs::stream_protocol::{
     CameraFrame as RustCameraFrame, DeclineReason as RustDeclineReason,
     DynamicIntrinsics as RustDynamicIntrinsics, EndReason as RustEndReason,
-    StreamManifest as RustStreamManifest, StreamRequest as RustStreamRequest, decline_reason,
-    end_reason,
+    ReadFrom as RustReadFrom, StreamManifest as RustStreamManifest,
+    StreamRequest as RustStreamRequest, decline_reason, end_reason,
 };
 use auki_network_rs::stream_runtime::{
     OpenStreamError as RustOpenStreamError, SourceStream, StreamDispatch as RustStreamDispatch,
@@ -58,8 +62,8 @@ use crate::stream_bridge::PyAsyncIterStream;
 // ─── StreamRequest ───────────────────────────────────────────────────────────
 
 /// Inbound request the SDK delivers to the Python `stream_provider`.
-/// Today carries a single `sensor_id`; future additive fields land here
-/// without a wire-version bump (per grimsby D2).
+/// Carries `resource_id` (the log's stable identity) and `source_peer_id`
+/// (the peer that originally wrote the log).
 #[pyclass(name = "StreamRequest", frozen)]
 #[derive(Clone, Debug)]
 pub struct PyStreamRequest {
@@ -69,20 +73,32 @@ pub struct PyStreamRequest {
 #[pymethods]
 impl PyStreamRequest {
     #[new]
-    #[pyo3(signature = (*, sensor_id))]
-    fn new(sensor_id: String) -> Self {
+    #[pyo3(signature = (*, resource_id, source_peer_id = String::new()))]
+    fn new(resource_id: String, source_peer_id: String) -> Self {
         Self {
-            inner: RustStreamRequest { sensor_id },
+            inner: RustStreamRequest {
+                resource_id,
+                source_peer_id,
+                ..Default::default()
+            },
         }
     }
 
     #[getter]
-    fn sensor_id(&self) -> &str {
-        &self.inner.sensor_id
+    fn resource_id(&self) -> &str {
+        &self.inner.resource_id
+    }
+
+    #[getter]
+    fn source_peer_id(&self) -> &str {
+        &self.inner.source_peer_id
     }
 
     fn __repr__(&self) -> String {
-        format!("StreamRequest(sensor_id={:?})", self.inner.sensor_id)
+        format!(
+            "StreamRequest(resource_id={:?}, source_peer_id={:?})",
+            self.inner.resource_id, self.inner.source_peer_id
+        )
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -120,6 +136,37 @@ impl PyStreamManifest {
                 clock_hash,
                 frame_id: frame_id.unwrap_or_default(),
                 frame_hash: frame_hash.unwrap_or_default(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (*, resource_id, clock_id, clock_hash, from_frame_id, from_frame_hash, to_frame_id, to_frame_hash, writer_mode=None, expected_rate_hz=None))]
+    fn pose_stream(
+        resource_id: String,
+        clock_id: String,
+        clock_hash: String,
+        from_frame_id: String,
+        from_frame_hash: String,
+        to_frame_id: String,
+        to_frame_hash: String,
+        writer_mode: Option<String>,
+        expected_rate_hz: Option<u32>,
+    ) -> Self {
+        Self {
+            inner: RustStreamManifest {
+                resource_id,
+                payload: "spatial_transform".into(),
+                clock_id,
+                clock_hash,
+                from_frame_id,
+                from_frame_hash,
+                to_frame_id,
+                to_frame_hash,
+                writer_mode: writer_mode.unwrap_or_else(|| "movable".into()),
+                expected_rate_hz: expected_rate_hz.unwrap_or_default(),
+                ..Default::default()
             },
         }
     }
@@ -154,16 +201,67 @@ impl PyStreamManifest {
         &self.inner.frame_hash
     }
 
+    #[getter]
+    fn resource_id(&self) -> &str {
+        &self.inner.resource_id
+    }
+
+    #[getter]
+    fn payload(&self) -> &str {
+        &self.inner.payload
+    }
+
+    #[getter]
+    fn from_frame_id(&self) -> &str {
+        &self.inner.from_frame_id
+    }
+
+    #[getter]
+    fn from_frame_hash(&self) -> &str {
+        &self.inner.from_frame_hash
+    }
+
+    #[getter]
+    fn to_frame_id(&self) -> &str {
+        &self.inner.to_frame_id
+    }
+
+    #[getter]
+    fn to_frame_hash(&self) -> &str {
+        &self.inner.to_frame_hash
+    }
+
+    #[getter]
+    fn writer_mode(&self) -> &str {
+        &self.inner.writer_mode
+    }
+
+    #[getter]
+    fn expected_rate_hz(&self) -> u32 {
+        self.inner.expected_rate_hz
+    }
+
     fn __repr__(&self) -> String {
-        format!(
-            "StreamManifest(sensor_id={:?}, sensor_hash={:?}, clock_id={:?}, clock_hash={:?}, frame_id={:?}, frame_hash={:?})",
-            self.inner.sensor_id,
-            self.inner.sensor_hash,
-            self.inner.clock_id,
-            self.inner.clock_hash,
-            self.inner.frame_id,
-            self.inner.frame_hash,
-        )
+        if self.inner.resource_id.is_empty() {
+            format!(
+                "StreamManifest(sensor_id={:?}, sensor_hash={:?}, clock_id={:?}, clock_hash={:?}, frame_id={:?}, frame_hash={:?})",
+                self.inner.sensor_id,
+                self.inner.sensor_hash,
+                self.inner.clock_id,
+                self.inner.clock_hash,
+                self.inner.frame_id,
+                self.inner.frame_hash,
+            )
+        } else {
+            format!(
+                "StreamManifest(resource_id={:?}, payload={:?}, clock_id={:?}, from_frame_id={:?}, to_frame_id={:?})",
+                self.inner.resource_id,
+                self.inner.payload,
+                self.inner.clock_id,
+                self.inner.from_frame_id,
+                self.inner.to_frame_id,
+            )
+        }
     }
 
     fn __eq__(&self, other: &Self) -> bool {
@@ -442,6 +540,74 @@ impl PyAudioFrame {
     }
 }
 
+// ─── SpatialTransformFrame ──────────────────────────────────────────────────
+
+/// Live pose stream payload `T` — one flat
+/// `auki.pose.SpatialTransform` sample for the frame pair committed in
+/// the stream manifest. Python uses seven values:
+/// `[tx, ty, tz, qx, qy, qz, qw]`.
+#[pyclass(name = "SpatialTransformFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PySpatialTransformFrame {
+    pub(crate) inner: RustPoseSpatialTransform,
+}
+
+#[pymethods]
+impl PySpatialTransformFrame {
+    #[new]
+    #[pyo3(signature = (values, /))]
+    fn new(values: Vec<f64>) -> PyResult<Self> {
+        if values.len() != 7 {
+            return Err(PyValueError::new_err(format!(
+                "SpatialTransformFrame expects 7 values [tx, ty, tz, qx, qy, qz, qw]; got {}",
+                values.len()
+            )));
+        }
+        Ok(Self {
+            inner: RustPoseSpatialTransform {
+                translation: Some(RustPoseVec3 {
+                    x: values[0],
+                    y: values[1],
+                    z: values[2],
+                }),
+                orientation: Some(RustPoseQuat {
+                    x: values[3],
+                    y: values[4],
+                    z: values[5],
+                    w: values[6],
+                }),
+            },
+        })
+    }
+
+    #[getter]
+    fn values(&self) -> Vec<f64> {
+        let t = self.inner.translation.as_ref();
+        let q = self.inner.orientation.as_ref();
+        vec![
+            t.map(|v| v.x).unwrap_or(0.0),
+            t.map(|v| v.y).unwrap_or(0.0),
+            t.map(|v| v.z).unwrap_or(0.0),
+            q.map(|v| v.x).unwrap_or(0.0),
+            q.map(|v| v.y).unwrap_or(0.0),
+            q.map(|v| v.z).unwrap_or(0.0),
+            q.map(|v| v.w).unwrap_or(1.0),
+        ]
+    }
+
+    fn __len__(&self) -> usize {
+        7
+    }
+
+    fn __repr__(&self) -> String {
+        format!("SpatialTransformFrame({:?})", self.values())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── DeclineReason ───────────────────────────────────────────────────────────
 
 /// Tagged union mirroring [`RustDeclineReason`]. Construct via the
@@ -622,6 +788,7 @@ pub(crate) enum StreamPayload {
     PointCloud(PyPointCloudFrame),
     JointEncoders(PyJointEncodersFrame),
     Audio(PyAudioFrame),
+    Pose(PySpatialTransformFrame),
 }
 
 impl StreamPayload {
@@ -638,8 +805,11 @@ impl StreamPayload {
         if let Ok(a) = payload.extract::<PyAudioFrame>() {
             return Ok(Self::Audio(a));
         }
+        if let Ok(pose) = payload.extract::<PySpatialTransformFrame>() {
+            return Ok(Self::Pose(pose));
+        }
         Err(PyValueError::new_err(format!(
-            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, or AudioFrame; got {}",
+            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, or SpatialTransformFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -655,6 +825,9 @@ impl StreamPayload {
                 .expect("alloc JointEncodersFrame")
                 .into_py(py),
             Self::Audio(f) => Py::new(py, f).expect("alloc AudioFrame").into_py(py),
+            Self::Pose(f) => Py::new(py, f)
+                .expect("alloc SpatialTransformFrame")
+                .into_py(py),
         }
     }
 
@@ -664,6 +837,7 @@ impl StreamPayload {
             Self::PointCloud(f) => f.__repr__(),
             Self::JointEncoders(f) => f.__repr__(),
             Self::Audio(f) => f.__repr__(),
+            Self::Pose(f) => f.__repr__(),
         }
     }
 }
@@ -787,6 +961,24 @@ impl PyStreamItem {
             )),
         }
     }
+
+    /// Convert to a `RustStreamItem<RustPoseSpatialTransform>`. Errors
+    /// with a human-readable detail if the payload is the wrong variant.
+    /// Used by the producer-side source-stream pump for an `AcceptPose`
+    /// dispatch.
+    pub(crate) fn to_rust_pose(&self) -> Result<RustStreamItem<RustPoseSpatialTransform>, String> {
+        match &self.payload {
+            StreamPayload::Pose(f) => Ok(RustStreamItem {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            other => Err(format!(
+                "AcceptPose source yielded a StreamItem with {} payload; \
+                 the substream is mono-T — yield SpatialTransformFrame or use the matching factory",
+                other.kind_name(),
+            )),
+        }
+    }
 }
 
 impl StreamPayload {
@@ -796,6 +988,7 @@ impl StreamPayload {
             Self::PointCloud(_) => "PointCloudFrame",
             Self::JointEncoders(_) => "JointEncodersFrame",
             Self::Audio(_) => "AudioFrame",
+            Self::Pose(_) => "SpatialTransformFrame",
         }
     }
 }
@@ -886,6 +1079,16 @@ impl PyStreamEntry {
             }),
         }
     }
+
+    fn from_rust_pose(frame: RustStreamEntry<RustPoseSpatialTransform>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: StreamPayload::Pose(PySpatialTransformFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
@@ -918,7 +1121,7 @@ pub(crate) enum DecisionInner {
     },
     AcceptCameraRetained {
         manifest: PyStreamManifest,
-        source: SourceStream<RustCameraFrame>,
+        source: RustRetainedStreamSource,
     },
     AcceptPointCloud {
         manifest: PyStreamManifest,
@@ -926,7 +1129,7 @@ pub(crate) enum DecisionInner {
     },
     AcceptPointCloudRetained {
         manifest: PyStreamManifest,
-        source: SourceStream<RustPointCloudFrame>,
+        source: RustRetainedStreamSource,
     },
     AcceptJointEncoders {
         manifest: PyStreamManifest,
@@ -934,7 +1137,7 @@ pub(crate) enum DecisionInner {
     },
     AcceptJointEncodersRetained {
         manifest: PyStreamManifest,
-        source: SourceStream<RustJointEncodersFrame>,
+        source: RustRetainedStreamSource,
     },
     AcceptAudio {
         manifest: PyStreamManifest,
@@ -942,7 +1145,11 @@ pub(crate) enum DecisionInner {
     },
     AcceptAudioRetained {
         manifest: PyStreamManifest,
-        source: SourceStream<RustAudioFrame>,
+        source: RustRetainedStreamSource,
+    },
+    AcceptPose {
+        manifest: PyStreamManifest,
+        source: Py<PyAny>,
     },
     Decline {
         reason: PyDeclineReason,
@@ -1006,6 +1213,18 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with a pose source. The async iterator must
+    /// yield `StreamItem(payload=SpatialTransformFrame(values))`
+    /// values; frame-pair identity lives in the `StreamManifest`
+    /// resource fields.
+    #[staticmethod]
+    #[pyo3(signature = (*, manifest, source))]
+    fn accept_pose(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptPose { manifest, source })),
+        }
+    }
+
     /// Accept the request with an SDK-owned retained log source created
     /// by `auki_logs.Log.stream_source(...)`. This is the recommended
     /// producer API for apps: the SDK builds the stream manifest,
@@ -1021,19 +1240,19 @@ impl PyStreamDecision {
         let inner = match retained.payload_kind.as_str() {
             "camera" => DecisionInner::AcceptCameraRetained {
                 manifest,
-                source: retained_log_into_source_stream(retained, decode_retained_camera)?,
+                source: retained,
             },
             "pointcloud" => DecisionInner::AcceptPointCloudRetained {
                 manifest,
-                source: retained_log_into_source_stream(retained, decode_retained_pointcloud)?,
+                source: retained,
             },
             "joint_encoders" => DecisionInner::AcceptJointEncodersRetained {
                 manifest,
-                source: retained_log_into_source_stream(retained, decode_retained_joint_encoders)?,
+                source: retained,
             },
             "audio" => DecisionInner::AcceptAudioRetained {
                 manifest,
-                source: retained_log_into_source_stream(retained, decode_retained_audio)?,
+                source: retained,
             },
             other => {
                 return Err(PyValueError::new_err(format!(
@@ -1055,10 +1274,10 @@ impl PyStreamDecision {
     }
 
     /// Discriminator: `"accept_camera"`, `"accept_pointcloud"`,
-    /// `"accept_joint_encoders"`, `"accept_audio"`, `"decline"`, or
-    /// `"consumed"` (post-`take`). Read-only inspection; the actual
-    /// fields aren't exposed because the source iterator is consumed
-    /// by the SDK exactly once.
+    /// `"accept_joint_encoders"`, `"accept_audio"`, `"accept_pose"`,
+    /// `"decline"`, or `"consumed"` (post-`take`). Read-only
+    /// inspection; the actual fields aren't exposed because the source
+    /// iterator is consumed by the SDK exactly once.
     #[getter]
     fn kind(&self) -> &'static str {
         let guard = self.inner.lock().expect("PyStreamDecision mutex poisoned");
@@ -1071,6 +1290,7 @@ impl PyStreamDecision {
             | Some(DecisionInner::AcceptJointEncodersRetained { .. }) => "accept_joint_encoders",
             Some(DecisionInner::AcceptAudio { .. })
             | Some(DecisionInner::AcceptAudioRetained { .. }) => "accept_audio",
+            Some(DecisionInner::AcceptPose { .. }) => "accept_pose",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -1128,6 +1348,7 @@ impl PyStreamDecision {
 pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
     Arc::new(
         move |peer: libp2p_identity::PeerId, request: RustStreamRequest| {
+            let read_from = request.from;
             let py_request = PyStreamRequest { inner: request };
             let peer_str = peer.to_string();
 
@@ -1179,9 +1400,18 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     }
                 }
                 Ok(DecisionInner::AcceptCameraRetained { manifest, source }) => {
-                    RustStreamDispatch::AcceptCamera {
-                        manifest: manifest.inner,
+                    match retained_log_into_source_stream(
                         source,
+                        decode_retained_camera,
+                        &read_from,
+                    ) {
+                        Ok(source) => RustStreamDispatch::AcceptCamera {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
                     }
                 }
                 Ok(DecisionInner::AcceptPointCloud { manifest, source }) => {
@@ -1195,9 +1425,18 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     }
                 }
                 Ok(DecisionInner::AcceptPointCloudRetained { manifest, source }) => {
-                    RustStreamDispatch::AcceptPointCloud {
-                        manifest: manifest.inner,
+                    match retained_log_into_source_stream(
                         source,
+                        decode_retained_pointcloud,
+                        &read_from,
+                    ) {
+                        Ok(source) => RustStreamDispatch::AcceptPointCloud {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
                     }
                 }
                 Ok(DecisionInner::AcceptJointEncoders { manifest, source }) => {
@@ -1211,9 +1450,18 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     }
                 }
                 Ok(DecisionInner::AcceptJointEncodersRetained { manifest, source }) => {
-                    RustStreamDispatch::AcceptJointEncoders {
-                        manifest: manifest.inner,
+                    match retained_log_into_source_stream(
                         source,
+                        decode_retained_joint_encoders,
+                        &read_from,
+                    ) {
+                        Ok(source) => RustStreamDispatch::AcceptJointEncoders {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
                     }
                 }
                 Ok(DecisionInner::AcceptAudio { manifest, source }) => {
@@ -1227,9 +1475,25 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     }
                 }
                 Ok(DecisionInner::AcceptAudioRetained { manifest, source }) => {
-                    RustStreamDispatch::AcceptAudio {
+                    match retained_log_into_source_stream(source, decode_retained_audio, &read_from)
+                    {
+                        Ok(source) => RustStreamDispatch::AcceptAudio {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
+                    }
+                }
+                Ok(DecisionInner::AcceptPose { manifest, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustPoseSpatialTransform>(source, |pf| {
+                            pf.to_rust_pose()
+                        });
+                    RustStreamDispatch::AcceptPose {
                         manifest: manifest.inner,
-                        source,
+                        source: source_stream,
                     }
                 }
             }
@@ -1279,6 +1543,7 @@ fn manifest_from_retained_source(source: &RustRetainedStreamSource) -> RustStrea
         clock_hash: source.clock_hash.clone(),
         frame_id: source.frame_id.clone(),
         frame_hash: source.frame_hash.clone(),
+        ..Default::default()
     }
 }
 
@@ -1289,15 +1554,28 @@ fn log_error_to_string(e: RustLogError) -> String {
 fn retained_log_into_source_stream<T>(
     source: RustRetainedStreamSource,
     decode: fn(Vec<u8>) -> Result<T, String>,
+    read_from: &RustReadFrom,
 ) -> PyResult<SourceStream<T>>
 where
     T: Send + 'static,
 {
     let tail = RustLog::<RustRawLogBytes>::tail(&source.root)
         .map_err(|e| PyRuntimeError::new_err(format!("stream source tail: {e}")))?;
-    let historical = RustLog::<RustRawLogBytes>::read(&source.root)
-        .and_then(|reader| reader.entries())
-        .map_err(|e| PyRuntimeError::new_err(format!("stream source read: {e}")))?;
+    let historical = match read_from {
+        RustReadFrom::Latest => Vec::new(),
+        RustReadFrom::FromStart => RustLog::<RustRawLogBytes>::read(&source.root)
+            .and_then(|reader| reader.entries())
+            .map_err(|e| PyRuntimeError::new_err(format!("stream source read: {e}")))?,
+        RustReadFrom::FromTimestamp(start_ns) => RustLog::<RustRawLogBytes>::read(&source.root)
+            .and_then(|reader| reader.entries())
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.timestamp_ns >= *start_ns)
+                    .collect()
+            })
+            .map_err(|e| PyRuntimeError::new_err(format!("stream source read: {e}")))?,
+    };
     let state = RetainedSourceState {
         historical: historical.into(),
         tail: Some(tail),
@@ -1315,12 +1593,13 @@ where
         let Some(tail) = state.tail.take() else {
             return None;
         };
-        let joined = tokio::task::spawn_blocking(move || {
-            let mut tail = tail;
-            let next = tail.next();
-            (tail, next)
-        })
-        .await;
+        let joined = crate::cluster_tokio_runtime()
+            .spawn_blocking(move || {
+                let mut tail = tail;
+                let next = tail.next();
+                (tail, next)
+            })
+            .await;
 
         let (tail, next) = match joined {
             Ok(pair) => pair,
@@ -1491,6 +1770,12 @@ type RustJointEncodersFrameStream = Pin<
 >;
 type RustAudioFrameStream =
     Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustAudioFrame>, RustStreamError>> + Send>>;
+type RustPoseFrameStream = Pin<
+    Box<
+        dyn Stream<Item = Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>>
+            + Send,
+    >,
+>;
 
 /// Tagged union over the underlying typed entry stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -1501,6 +1786,7 @@ enum EntryStreamKind {
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
+    Pose(RustPoseFrameStream),
 }
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
@@ -1592,6 +1878,15 @@ impl PyStreamSubscription {
             entries: Mutex::new(Some(EntryStreamKind::Audio(rust_sub.entries))),
         }
     }
+
+    pub fn from_rust_pose(rust_sub: RustStreamSubscription<RustPoseSpatialTransform>) -> Self {
+        Self {
+            manifest: PyStreamManifest {
+                inner: rust_sub.manifest,
+            },
+            entries: Mutex::new(Some(EntryStreamKind::Pose(rust_sub.entries))),
+        }
+    }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s entries. Each
@@ -1613,6 +1908,7 @@ enum EntryNext {
     PointCloud(Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
+    Pose(Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>),
     Done,
 }
 
@@ -1666,6 +1962,10 @@ impl PyStreamEntryIterator {
                         Some(item) => EntryNext::Audio(item),
                         None => EntryNext::Done,
                     },
+                    EntryStreamKind::Pose(s) => match s.next().await {
+                        Some(item) => EntryNext::Pose(item),
+                        None => EntryNext::Done,
+                    },
                 }
             })
         });
@@ -1703,10 +2003,19 @@ impl PyStreamEntryIterator {
                 *guard = Some(stream);
                 Ok(PyStreamEntry::from_rust_audio(frame))
             }
+            EntryNext::Pose(Ok(frame)) => {
+                let mut guard = self
+                    .entries
+                    .lock()
+                    .expect("StreamEntryIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyStreamEntry::from_rust_pose(frame))
+            }
             EntryNext::Camera(Err(stream_err))
             | EntryNext::PointCloud(Err(stream_err))
             | EntryNext::JointEncoders(Err(stream_err))
-            | EntryNext::Audio(Err(stream_err)) => {
+            | EntryNext::Audio(Err(stream_err))
+            | EntryNext::Pose(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
@@ -1828,6 +2137,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyAudioFrame>()?;
+    cluster.add_class::<PySpatialTransformFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyStreamItem>()?;
@@ -1876,6 +2186,7 @@ mod tests {
     use auki_datatypes::camera::CameraFrame;
     use auki_datatypes::joint_encoders::Data as JointEncodersData;
     use auki_datatypes::point_cloud::Data as PointCloudData;
+    use auki_datatypes::pose::SpatialTransform as PoseSpatialTransform;
     use auki_logs_rs::Log as RawLog;
     use auki_network_rs::PeerIdentity;
     use auki_network_rs::stream_runtime::OPEN_STREAM_TIMEOUT;
@@ -1916,11 +2227,12 @@ mod tests {
     #[test]
     fn stream_request_round_trips() {
         Python::with_gil(|_py| {
-            let r = PyStreamRequest::new("K1-AABB/head_left_cam".into());
-            assert_eq!(r.sensor_id(), "K1-AABB/head_left_cam");
+            let r = PyStreamRequest::new("K1-AABB/head_left_cam".into(), "galbot".into());
+            assert_eq!(r.resource_id(), "K1-AABB/head_left_cam");
+            assert_eq!(r.source_peer_id(), "galbot");
             assert_eq!(
                 r.__repr__(),
-                r#"StreamRequest(sensor_id="K1-AABB/head_left_cam")"#,
+                r#"StreamRequest(resource_id="K1-AABB/head_left_cam", source_peer_id="galbot")"#,
             );
         });
     }
@@ -1990,6 +2302,7 @@ mod tests {
         let mut stream = retained_log_into_source_stream(
             retained_source_for(dir.path(), "camera"),
             decode_retained_camera,
+            &RustReadFrom::FromStart,
         )
         .unwrap();
         let got = crate::cluster_tokio_runtime()
@@ -1999,6 +2312,44 @@ mod tests {
 
         assert_eq!(got.timestamp_ns, 100);
         assert_eq!(got.payload.frame, b"jpeg");
+    }
+
+    #[test]
+    fn retained_latest_source_skips_existing_log_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = RawLog::<RustRawLogBytes>::open(dir.path(), raw_log_manifest()).unwrap();
+        let old_entry = CameraFrame {
+            dynamic_intrinsics: None,
+            frame: b"old-jpeg".to_vec(),
+        };
+        log.append(100, &RustRawLogBytes(old_entry.encode_to_vec()))
+            .unwrap();
+        log.flush().unwrap();
+
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "camera"),
+            decode_retained_camera,
+            &RustReadFrom::Latest,
+        )
+        .unwrap();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let new_entry = CameraFrame {
+                dynamic_intrinsics: None,
+                frame: b"new-jpeg".to_vec(),
+            };
+            log.append(200, &RustRawLogBytes(new_entry.encode_to_vec()))
+                .unwrap();
+            log.flush().unwrap();
+        });
+
+        let got = futures::executor::block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+
+        assert_eq!(got.timestamp_ns, 200);
+        assert_eq!(got.payload.frame, b"new-jpeg");
     }
 
     #[test]
@@ -2012,6 +2363,7 @@ mod tests {
         let mut stream = retained_log_into_source_stream(
             retained_source_for(dir.path(), "pointcloud"),
             decode_retained_pointcloud,
+            &RustReadFrom::FromStart,
         )
         .unwrap();
         let got = crate::cluster_tokio_runtime()
@@ -2034,6 +2386,7 @@ mod tests {
         let mut stream = retained_log_into_source_stream(
             retained_source_for(dir.path(), "joint_encoders"),
             decode_retained_joint_encoders,
+            &RustReadFrom::FromStart,
         )
         .unwrap();
         let got = crate::cluster_tokio_runtime()
@@ -2056,6 +2409,7 @@ mod tests {
         let mut stream = retained_log_into_source_stream(
             retained_source_for(dir.path(), "audio"),
             decode_retained_audio,
+            &RustReadFrom::FromStart,
         )
         .unwrap();
         let got = crate::cluster_tokio_runtime()
@@ -2065,6 +2419,37 @@ mod tests {
 
         assert_eq!(got.timestamp_ns, 400);
         assert_eq!(got.payload.data, b"pcm");
+    }
+
+    #[test]
+    fn retained_source_tail_does_not_require_ambient_tokio_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = RawLog::<RustRawLogBytes>::open(dir.path(), raw_log_manifest()).unwrap();
+        log.flush().unwrap();
+        drop(log);
+        let mut stream = retained_log_into_source_stream(
+            retained_source_for(dir.path(), "camera"),
+            decode_retained_camera,
+            &RustReadFrom::Latest,
+        )
+        .unwrap();
+        let writer_dir = dir.path().to_path_buf();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let entry = CameraFrame {
+                dynamic_intrinsics: None,
+                frame: b"tail-jpeg".to_vec(),
+            };
+            append_raw_payload(&writer_dir, 500, entry.encode_to_vec());
+        });
+
+        let got = futures::executor::block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+
+        assert_eq!(got.timestamp_ns, 500);
+        assert_eq!(got.payload.frame, b"tail-jpeg");
     }
 
     #[test]
@@ -2168,6 +2553,17 @@ mod tests {
     }
 
     #[test]
+    fn spatial_transform_frame_round_trips_flat_values() {
+        Python::with_gil(|_py| {
+            let f = PySpatialTransformFrame::new(vec![1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+            assert_eq!(f.values(), vec![1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(f.__len__(), 7);
+            assert!(f.__repr__().starts_with("SpatialTransformFrame("));
+            assert!(f.__repr__().contains("1.0"));
+        });
+    }
+
+    #[test]
     fn stream_item_extracts_to_rust_camera() {
         Python::with_gil(|py| {
             let payload_any = camera_frame_as_any(py, &[1, 2, 3]);
@@ -2197,6 +2593,21 @@ mod tests {
             let rust = pf.to_rust_audio().expect("payload is Audio");
             assert_eq!(rust.timestamp_ns, 987_654);
             assert_eq!(rust.payload.data, vec![0x01, 0x02, 0x03]);
+        });
+    }
+
+    #[test]
+    fn stream_item_extracts_to_rust_pose() {
+        Python::with_gil(|py| {
+            let frame =
+                PySpatialTransformFrame::new(vec![1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+            let payload_any = Py::new(py, frame).unwrap().bind(py).clone().into_any();
+            let item = PyStreamItem::new(123, payload_any).unwrap();
+            let rust: RustStreamItem<PoseSpatialTransform> =
+                item.to_rust_pose().expect("payload is pose");
+            assert_eq!(rust.timestamp_ns, 123);
+            assert_eq!(rust.payload.translation.unwrap().x, 1.0);
+            assert_eq!(rust.payload.orientation.unwrap().w, 1.0);
         });
     }
 
@@ -2377,7 +2788,8 @@ def _make(cluster):
 
             let rust_provider = build_stream_provider(provider.unbind());
             let request = RustStreamRequest {
-                sensor_id: "any".into(),
+                resource_id: "any".into(),
+                ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason }
@@ -2409,7 +2821,8 @@ def _bad(peer, req):
             let bad = py.eval_bound("_bad", None, None).unwrap();
             let rust_provider = build_stream_provider(bad.unbind());
             let request = RustStreamRequest {
-                sensor_id: "any".into(),
+                resource_id: "any".into(),
+                ..Default::default()
             };
             match rust_provider(test_peer_id(), request) {
                 RustStreamDispatch::Decline { reason } => match reason.kind {
@@ -2447,7 +2860,7 @@ def _make(cluster):
     def provider(peer, req):
         return cluster.StreamDecision.accept_camera(
             manifest=cluster.StreamManifest(
-                sensor_id=req.sensor_id,
+                sensor_id=req.resource_id,
                 sensor_hash="h",
                 clock_id="c",
                 clock_hash="ch",
@@ -2469,7 +2882,8 @@ def _make(cluster):
             match rust_provider(
                 test_peer_id(),
                 RustStreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
+                    ..Default::default()
                 },
             ) {
                 RustStreamDispatch::AcceptCamera {
@@ -2506,7 +2920,7 @@ def _make(cluster):
     def provider(peer, req):
         return cluster.StreamDecision.accept_pointcloud(
             manifest=cluster.StreamManifest(
-                sensor_id=req.sensor_id,
+                sensor_id=req.resource_id,
                 sensor_hash="pc",
                 clock_id="c",
                 clock_hash="ch",
@@ -2528,7 +2942,8 @@ def _make(cluster):
             match rust_provider(
                 test_peer_id(),
                 RustStreamRequest {
-                    sensor_id: "any".into(),
+                    resource_id: "any".into(),
+                    ..Default::default()
                 },
             ) {
                 RustStreamDispatch::AcceptPointCloud {

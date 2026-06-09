@@ -1,0 +1,27 @@
+[package]
+name = "auki-session"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Session — per-process declarative API for the Auki SDK."
+
+[dependencies]
+auki-identity = { path = "../auki-identity" }
+auki-registry = { path = "../auki-registry" }
+auki-manifests = { path = "../auki-manifests" }
+auki-datatypes = { path = "../auki-datatypes" }
+auki-logs = { path = "../auki-logs" }
+auki-jcs = { path = "../auki-jcs" }
+auki-hash = { path = "../auki-hash" }
+auki-time = { path = "../auki-time" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "fs", "macros", "rt", "rt-multi-thread"] }
+thiserror = "2"
+parking_lot = "0.12"
+ulid = "1"
+
+[dev-dependencies]
+tempfile = "3"

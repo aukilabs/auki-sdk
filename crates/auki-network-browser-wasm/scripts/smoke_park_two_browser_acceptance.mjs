@@ -136,12 +136,6 @@ try {
   if (!hasDisplayName(snapshotB, peerA.selfPeerId, "Park Smoke A")) {
     failures.push("peer B does not see peer A's display name from /auki/info/0.0.1");
   }
-  if (!hasAudioSensor(snapshotA, peerB.selfPeerId)) {
-    failures.push("peer A does not see peer B's audio sensor from /auki/sensors/0.0.1");
-  }
-  if (!hasAudioSensor(snapshotB, peerA.selfPeerId)) {
-    failures.push("peer B does not see peer A's audio sensor from /auki/sensors/0.0.1");
-  }
   for (const [name, result] of Object.entries({ publishA, publishB, listenAtoB, listenBtoA })) {
     if (!result?.ok) failures.push(`${name} failed: ${result?.error?.code ?? "unknown"}`);
   }
@@ -250,11 +244,6 @@ function hasParticipant(snapshot, peerId, isSelf) {
 function hasDisplayName(snapshot, peerId, displayName) {
   const participant = snapshot?.participants?.find((entry) => entry.peerId === peerId);
   return participant?.displayName === displayName;
-}
-
-function hasAudioSensor(snapshot, peerId) {
-  const participant = snapshot?.participants?.find((entry) => entry.peerId === peerId);
-  return Boolean(participant?.sensors?.some((sensor) => sensor.kind === "audio"));
 }
 
 function hasConnectedAudioHealth(snapshot, selfPeerId, remotePeerId) {

@@ -4,7 +4,7 @@ package auki.point_cloud;
 
 // Point-cloud payload — used on both disk (Sensor Log segment payload
 // for a log whose registry entry has body kind `point_cloud`) and on
-// the wire (the libp2p `/auki/stream/0.1.0` substream payload, raw CDR
+// the wire (the libp2p `/auki/stream/0.2.0` substream payload, raw CDR
 // `sensor_msgs/PointCloud2` per Dagaz D2). One type, one byte shape;
 // the framing's `timestamp_ns` carries the frame timestamp on both
 // paths.

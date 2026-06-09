@@ -9,8 +9,6 @@ describe("browser domain contract vocabulary", () => {
       "point_cloud",
       "joint_encoders",
       "audio",
-      "detection",
-      "unknown",
     ]);
 
     const kind: SensorKind = "audio";

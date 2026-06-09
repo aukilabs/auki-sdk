@@ -1,17 +1,19 @@
 # auki-registry-py
 
-PyO3 bindings for [`auki-registry`](../../../crates/auki-registry). Lets Python producers declare and persist Sensor / Clock / Frame Registry entries with the same content-addressed identity Rust uses.
+PyO3 bindings for [`auki-registry`](../../../crates/auki-registry). Lets Python producers declare and persist Sensor / Clock / Frame / Detector Registry entries with the same content-addressed identity Rust uses.
 
-Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash helpers, and hash-pinned `write_*` / `read_*` IO. Spatial sensors are validated against an exact `frame_id` + `frame_hash` reference.
+Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash helpers, and hash-pinned `write_*` / `read_*` IO. Spatial sensors are validated against a `frame: RegistryRef` reference (a `{ "peer_id": ..., "id": ..., "hash": ... }` dict or `RegistryRef` pyclass instance).
 
 **Status:** Shipped.
 
 ## Public surface
 
-- `SensorRegistryEntry(...)`, `ClockRegistryEntry(...)`, `FrameRegistryEntry(...)` — dict-style constructors.
-- Frame Registry presets: `FrameRegistryEntry.ros_body(...)`, `ros_optical(...)`, `opengl(...)`, `unity(...)`.
+- `SensorRegistryEntry(...)`, `ClockRegistryEntry(...)`, `FrameRegistryEntry(...)`, `DetectorRegistryEntry(...)` — dict-style constructors.
+- Frame Registry presets: `FrameRegistryEntry.ros_body(peer_id, frame_id)`, `ros_optical(peer_id, frame_id)`, `opengl(peer_id, frame_id)`, `unity(peer_id, frame_id)` — all take `peer_id` as the first parameter.
+- `RegistryRef` pyclass — `{ peer_id, id, hash }`. Returned by `write_*` helpers and accepted as a `frame` argument. Replaces the old `(sensor_id, sensor_hash)` pair construction.
+- `LogRef` pyclass — `{ source_peer_id, resource_id }`. Used in manifest construction and catalog rows.
 - `canonical_json(entry) -> bytes`, `content_hash(entry) -> str`.
-- `write_sensor(app_root, entry)`, `read_sensor(app_root, sensor_id, sensor_hash)` (and `_clock` / `_frame` variants).
+- `write_sensor(app_root, entry)` / `read_sensor(app_root, peer_id, sensor_id, sensor_hash)` (and `_clock` / `_frame` / `_detector` variants). Both read and write functions take `peer_id` as a parameter; disk paths include the `peer_id` segment.
 
 ## Depends on
 

@@ -29,9 +29,24 @@ extension-module = ["pyo3/extension-module"]
 # `abi3-py38` — stable-ABI extension that works on Python 3.8+ without
 # rebuilding per minor version.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
+# Core session crate being wrapped.
+auki-session-rs = { package = "auki-session", path = "../../../crates/auki-session" }
+# Re-used for RegistryRef / LogRef Rust types.
+auki-registry-rs = { package = "auki-registry", path = "../../../crates/auki-registry" }
+# Source-of-truth for RegistryRef / LogRef pyclasses.
+auki-registry-py = { path = "../auki-registry-py" }
+# Re-used for PoseSource / PoseWriterMode / TimeTransformSource Rust types.
+auki-manifests-rs = { package = "auki-manifests", path = "../../../crates/auki-manifests" }
+# ResourceEntry → serde_json serialization for catalog().
+serde_json = "1"
+# JSON serialization helpers.
+serde = { version = "1", features = ["derive"] }
+# Mutex used to wrap the (non-Send) session for PyO3 thread safety.
+parking_lot = "0.12"
 
 [dev-dependencies]
 # `auto-initialize` lets `Python::with_gil` work in `#[test]`s without
 # manually starting an interpreter; needs the runtime linked, which is
 # why we don't enable it on the production extension build.
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
+tempfile = "3"

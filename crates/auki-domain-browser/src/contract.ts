@@ -32,17 +32,13 @@ export type SensorKind =
   | "camera"
   | "point_cloud"
   | "joint_encoders"
-  | "audio"
-  | "detection"
-  | "unknown";
+  | "audio";
 
 export const SDK_SENSOR_KINDS = [
   "camera",
   "point_cloud",
   "joint_encoders",
   "audio",
-  "detection",
-  "unknown",
 ] as const satisfies readonly SensorKind[];
 
 export type SensorSummary = {

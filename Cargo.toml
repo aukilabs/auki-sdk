@@ -28,6 +28,7 @@ members = [
     "crates/auki-ros-adapter",
     "crates/auki-layout",
     "bindings/python/auki-layout-py",
+    "crates/auki-session",
     "bindings/python/auki-session-py",
     "crates/auki-time",
     "examples/diagnostic-app",

@@ -705,11 +705,16 @@ impl SessionClock {
         let session_id = session_id.into();
         let name = name.into();
         let registry_entry = ClockRegistryEntry {
+            peer_id: peer_id.clone(),
+            session_id: session_id.clone(),
             clock_id: format!("{peer_id}/{session_id}/{name}"),
             body: ClockBody::MonotonicClock(ClockMeta {
                 unit: "ns".into(),
                 monotonic: true,
-                epoch: Some(session_id),
+                // Monotonic clocks have no wall-clock zero — epoch is null.
+                // The session is carried by the typed `session_id` field, not
+                // smuggled into `epoch`. See #274 (D6).
+                epoch: None,
                 scope: Scope::DeviceLocal,
             }),
         };
@@ -790,6 +795,7 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_registry::RegistryRef;
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -826,18 +832,22 @@ mod tests {
     }
 
     #[test]
-    fn session_clock_builds_peer_anchored_registry_entry_with_epoch_marker() {
+    fn session_clock_builds_peer_anchored_registry_entry_with_typed_session_id() {
         let peer_id = "12D3KooWPeerExample";
         let clock = SessionClock::new(peer_id, "session-123", "monotonic");
 
         let entry = clock.registry_entry();
         assert_eq!(entry.clock_id, "12D3KooWPeerExample/session-123/monotonic");
+        // The session is carried by the typed `session_id` field…
+        assert_eq!(entry.session_id, "session-123");
         match &entry.body {
             ClockBody::MonotonicClock(meta) => {
                 assert_eq!(meta.unit, "ns");
                 assert!(meta.monotonic);
                 assert_eq!(meta.scope, Scope::DeviceLocal);
-                assert_eq!(meta.epoch.as_deref(), Some("session-123"));
+                // …not smuggled into `epoch`. A monotonic clock has no
+                // wall-clock zero, so epoch is null. See #274 (D6).
+                assert_eq!(meta.epoch, None);
             }
             ClockBody::UtcClock(_) => panic!("session clock must be monotonic"),
         }
@@ -1423,12 +1433,20 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let manifest = auki_manifests::build_time_transform_log_manifest(
+            "test-peer",
+            "test-peer",
             "test-app",
             "550e8400-e29b-41d4-a716-446655440000",
-            "test/from",
-            "fhash",
-            "test/to",
-            "thash",
+            RegistryRef {
+                peer_id: "test-peer".into(),
+                id: "test/from".into(),
+                hash: "fhash".into(),
+            },
+            RegistryRef {
+                peer_id: "test-peer".into(),
+                id: "test/to".into(),
+                hash: "thash".into(),
+            },
             &auki_manifests::TimeTransformSource::LocalClockRead,
             Duration::from_millis(100),
             Duration::from_secs(60),

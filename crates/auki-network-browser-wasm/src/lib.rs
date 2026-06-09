@@ -121,6 +121,7 @@ impl BrowserDomainSessionState {
             .is_some_and(|sender| sender.unbounded_send(message).is_ok())
     }
 
+    #[allow(dead_code)]
     fn set_sender(
         &self,
         sender: futures::channel::mpsc::UnboundedSender<BrowserSessionClientMessage>,
@@ -533,6 +534,7 @@ async fn subscribe_audio_stream(
         &mut substream,
         &StreamMessage::request(StreamRequest {
             sensor_id: sensor_id.clone(),
+            ..Default::default()
         }),
     )
     .await
@@ -627,14 +629,16 @@ struct BrowserDomainJoinError {
     message: String,
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+#[cfg(feature = "browser_libp2p")]
 #[derive(serde::Deserialize)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 struct BrowserDiscoveryList {
     clusters: Vec<BrowserDiscoveryCluster>,
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+#[cfg(feature = "browser_libp2p")]
 #[derive(serde::Deserialize)]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 struct BrowserDiscoveryCluster {
     name: String,
     manager_peer_id: String,
@@ -682,6 +686,7 @@ async fn join_browser_domain(
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "browser_libp2p"))]
+#[allow(dead_code)]
 async fn start_browser_session(
     _identity: PeerIdentity,
     _discovery_url: String,
@@ -692,6 +697,7 @@ async fn start_browser_session(
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+#[allow(dead_code)]
 async fn start_browser_session(
     identity: PeerIdentity,
     discovery_url: String,
@@ -705,7 +711,10 @@ async fn start_browser_session(
     use futures::{AsyncReadExt as _, FutureExt as _, StreamExt as _, select};
     use libp2p::{
         PeerId, StreamProtocol, SwarmBuilder,
+        core::{Transport as _, muxing::StreamMuxerBox, upgrade},
+        noise,
         swarm::{SwarmEvent, dial_opts::DialOpts},
+        yamux,
     };
 
     let entry = fetch_browser_discovery_cluster(discovery_url, &domain_name)
@@ -720,12 +729,29 @@ async fn start_browser_session(
     let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
         .with_wasm_bindgen()
         .with_other_transport(|keypair| {
-            libp2p::webrtc_websys::Transport::new(libp2p::webrtc_websys::Config::new(keypair))
+            let webrtc =
+                libp2p::webrtc_websys::Transport::new(libp2p::webrtc_websys::Config::new(keypair))
+                    .boxed();
+            let websocket = libp2p::websocket_websys::Transport::default()
+                .upgrade(upgrade::Version::V1Lazy)
+                .authenticate(
+                    noise::Config::new(keypair)
+                        .expect("browser websocket noise config should build"),
+                )
+                .multiplex(yamux::Config::default())
+                .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+                .boxed();
+            webrtc
+                .or_transport(websocket)
+                .map(|either, _| either.into_inner())
                 .boxed()
         })
         .map_err(|err| format!("transport setup failed: {err}"))?
-        .with_behaviour(|_| BrowserJoinBehaviour {
+        .with_relay_client(noise::Config::new, yamux::Config::default)
+        .map_err(|err| format!("relay client setup failed: {err}"))?
+        .with_behaviour(|_, relay_client| BrowserJoinBehaviour {
             stream: libp2p_stream::Behaviour::new(),
+            relay_client,
         })
         .map_err(|err| format!("behaviour setup failed: {err}"))?
         .build();
@@ -989,7 +1015,7 @@ async fn fetch_browser_discovery_cluster(
         })
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+#[cfg(feature = "browser_libp2p")]
 fn browser_manager_address(
     entry: &BrowserDiscoveryCluster,
 ) -> Result<libp2p::Multiaddr, (&'static str, String)> {
@@ -997,12 +1023,23 @@ fn browser_manager_address(
         .manager_multiaddrs
         .iter()
         .find(|addr| addr.contains("/webrtc-direct/"))
-        .or_else(|| entry.manager_multiaddrs.first())
+        .or_else(|| {
+            entry
+                .manager_multiaddrs
+                .iter()
+                .find(|addr| addr.contains("/p2p-circuit/") && is_browser_transport_addr(addr))
+        })
+        .or_else(|| {
+            entry
+                .manager_multiaddrs
+                .iter()
+                .find(|addr| is_browser_transport_addr(addr))
+        })
         .ok_or_else(|| {
             (
                 "domain_join_failed",
                 format!(
-                    "Discovery entry {:?} has no Manager multiaddrs.",
+                    "Discovery entry {:?} has no browser-dialable Manager multiaddrs.",
                     entry.name
                 ),
             )
@@ -1020,7 +1057,8 @@ fn browser_manager_address(
     })
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
+#[cfg(feature = "browser_libp2p")]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn browser_relay_address(
     entry: &BrowserDiscoveryCluster,
     manager_address: &libp2p::Multiaddr,
@@ -1029,9 +1067,22 @@ fn browser_relay_address(
         .relay_multiaddrs
         .iter()
         .find(|addr| addr.contains("/webrtc-direct/"))
-        .or_else(|| entry.relay_multiaddrs.first())
+        .or_else(|| {
+            entry
+                .relay_multiaddrs
+                .iter()
+                .find(|addr| is_browser_transport_addr(addr))
+        })
     else {
-        return Ok(manager_address.clone());
+        return relay_base_from_circuit_manager_addr(manager_address).ok_or_else(|| {
+            (
+                "domain_join_failed",
+                format!(
+                    "Discovery entry {:?} has no browser-dialable relay multiaddrs.",
+                    entry.name
+                ),
+            )
+        });
     };
     address.parse().map_err(|err| {
         (
@@ -1039,6 +1090,42 @@ fn browser_relay_address(
             format!("Discovery relay multiaddr is malformed: {err}"),
         )
     })
+}
+
+#[cfg(feature = "browser_libp2p")]
+fn is_browser_transport_addr(addr: &str) -> bool {
+    use libp2p::multiaddr::Protocol;
+
+    let Ok(addr) = addr.parse::<libp2p::Multiaddr>() else {
+        return false;
+    };
+    addr.iter().any(|protocol| {
+        matches!(
+            protocol,
+            Protocol::WebRTCDirect
+                | Protocol::WebRTC
+                | Protocol::WebTransport
+                | Protocol::Ws(_)
+                | Protocol::Wss(_)
+        )
+    })
+}
+
+#[cfg(feature = "browser_libp2p")]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn relay_base_from_circuit_manager_addr(
+    manager_address: &libp2p::Multiaddr,
+) -> Option<libp2p::Multiaddr> {
+    use libp2p::multiaddr::Protocol;
+
+    let mut relay = libp2p::Multiaddr::empty();
+    for protocol in manager_address.iter() {
+        if matches!(protocol, Protocol::P2pCircuit) {
+            return Some(relay);
+        }
+        relay.push(protocol);
+    }
+    None
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
@@ -1211,6 +1298,7 @@ pub async fn dial_browser_probe(
 #[derive(libp2p::swarm::NetworkBehaviour)]
 struct BrowserJoinBehaviour {
     stream: libp2p_stream::Behaviour,
+    relay_client: libp2p::relay::client::Behaviour,
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "browser_libp2p"))]
@@ -1233,7 +1321,10 @@ pub(crate) async fn dial_browser_join_inner(
     use futures::{FutureExt as _, StreamExt as _, select};
     use libp2p::{
         PeerId, StreamProtocol, SwarmBuilder,
+        core::{Transport as _, muxing::StreamMuxerBox, upgrade},
+        noise,
         swarm::{SwarmEvent, dial_opts::DialOpts},
+        yamux,
     };
 
     let remote_peer: PeerId = manager_peer_id
@@ -1242,12 +1333,29 @@ pub(crate) async fn dial_browser_join_inner(
     let mut swarm = SwarmBuilder::with_existing_identity(identity.keypair().clone())
         .with_wasm_bindgen()
         .with_other_transport(|keypair| {
-            libp2p::webrtc_websys::Transport::new(libp2p::webrtc_websys::Config::new(keypair))
+            let webrtc =
+                libp2p::webrtc_websys::Transport::new(libp2p::webrtc_websys::Config::new(keypair))
+                    .boxed();
+            let websocket = libp2p::websocket_websys::Transport::default()
+                .upgrade(upgrade::Version::V1Lazy)
+                .authenticate(
+                    noise::Config::new(keypair)
+                        .expect("browser websocket noise config should build"),
+                )
+                .multiplex(yamux::Config::default())
+                .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+                .boxed();
+            webrtc
+                .or_transport(websocket)
+                .map(|either, _| either.into_inner())
                 .boxed()
         })
         .map_err(|err| format!("transport setup failed: {err}"))?
-        .with_behaviour(|_| BrowserJoinBehaviour {
+        .with_relay_client(noise::Config::new, yamux::Config::default)
+        .map_err(|err| format!("relay client setup failed: {err}"))?
+        .with_behaviour(|_, relay_client| BrowserJoinBehaviour {
             stream: libp2p_stream::Behaviour::new(),
+            relay_client,
         })
         .map_err(|err| format!("behaviour setup failed: {err}"))?
         .build();
@@ -1661,5 +1769,87 @@ mod browser_probe_result_tests {
         assert_eq!(result.protocol, "/auki/browser-probe/0.0.1");
         assert_eq!(result.payload, vec![1, 2, 3]);
         assert!(result.error.is_none());
+    }
+}
+
+#[cfg(all(test, feature = "browser_libp2p"))]
+mod browser_discovery_address_tests {
+    use super::*;
+
+    const MANAGER: &str = "12D3KooWMqyFQLR7X5Qj2kVNVJ3xL5gPEWHPiC5o8KgAzSgWqV9N";
+    const RELAY: &str = "12D3KooWESKUn3Fh3xTMq1KzoxbQQ6PypHodP1JAb4p7qkxJxJ7n";
+
+    #[test]
+    fn browser_manager_address_prefers_relay_circuit_over_native_direct_addr() {
+        let native = format!("/ip4/192.168.9.130/tcp/4001/p2p/{MANAGER}");
+        let circuit =
+            format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}/p2p-circuit/p2p/{MANAGER}");
+        let entry = BrowserDiscoveryCluster {
+            name: "test2".to_string(),
+            manager_peer_id: MANAGER.to_string(),
+            manager_multiaddrs: vec![native, circuit.clone()],
+            relay_multiaddrs: vec![format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}")],
+        };
+
+        let selected = browser_manager_address(&entry).expect("selects browser-dialable address");
+
+        assert_eq!(selected.to_string(), circuit);
+    }
+
+    #[test]
+    fn browser_manager_address_rejects_native_only_discovery_entry() {
+        let entry = BrowserDiscoveryCluster {
+            name: "test2".to_string(),
+            manager_peer_id: MANAGER.to_string(),
+            manager_multiaddrs: vec![format!("/ip4/192.168.9.130/tcp/4001/p2p/{MANAGER}")],
+            relay_multiaddrs: Vec::new(),
+        };
+
+        let err = browser_manager_address(&entry).expect_err("native-only address rejected");
+
+        assert_eq!(err.0, "domain_join_failed");
+        assert!(
+            err.1.contains("no browser-dialable Manager multiaddrs"),
+            "{}",
+            err.1
+        );
+    }
+
+    #[test]
+    fn browser_relay_address_prefers_browser_transport_relay_hint() {
+        let native_relay = format!("/ip4/192.168.9.130/tcp/4001/p2p/{RELAY}");
+        let browser_relay = format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}");
+        let manager: libp2p::Multiaddr = format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
+            .parse()
+            .unwrap();
+        let entry = BrowserDiscoveryCluster {
+            name: "test2".to_string(),
+            manager_peer_id: MANAGER.to_string(),
+            manager_multiaddrs: vec![manager.to_string()],
+            relay_multiaddrs: vec![native_relay, browser_relay.clone()],
+        };
+
+        let selected =
+            browser_relay_address(&entry, &manager).expect("selects browser-dialable relay");
+
+        assert_eq!(selected.to_string(), browser_relay);
+    }
+
+    #[test]
+    fn browser_relay_address_derives_relay_base_from_manager_circuit() {
+        let browser_relay = format!("/ip4/192.168.9.130/tcp/4002/ws/p2p/{RELAY}");
+        let manager: libp2p::Multiaddr = format!("{browser_relay}/p2p-circuit/p2p/{MANAGER}")
+            .parse()
+            .unwrap();
+        let entry = BrowserDiscoveryCluster {
+            name: "test2".to_string(),
+            manager_peer_id: MANAGER.to_string(),
+            manager_multiaddrs: vec![manager.to_string()],
+            relay_multiaddrs: Vec::new(),
+        };
+
+        let selected = browser_relay_address(&entry, &manager).expect("derives relay base");
+
+        assert_eq!(selected.to_string(), browser_relay);
     }
 }

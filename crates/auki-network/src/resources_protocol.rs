@@ -1,86 +1,55 @@
-//! `/auki/resources/0.0.1` - libp2p protocol for fetching a peer's
+//! `/auki/resources/0.2.0` - libp2p protocol for fetching a peer's
 //! current resource catalog over the cluster's libp2p plane.
 //!
-//! Resources are the generalized discovery layer above one-off
-//! catalogs. A peer answers "what can I provide right now?" with an
-//! open set of resource rows. v0 ships two first-class rows:
-//! sensor streams (`kind = "sensor_stream"`) and rigid transform
-//! edges (`kind = "transform_edge"`). Sensor streams can also carry
-//! current pinhole intrinsics when the producer has them live. Future
-//! rows (pose streams, recordings, detection streams, calibration
-//! resources) add enum variants and/or open-string kinds without
-//! changing the cluster lifecycle machinery.
+//! Resources are the generalized discovery layer. A peer answers "what can
+//! I provide right now?" with a flat list of [`ResourceEntry`] rows. Each
+//! row is discriminated by a `variant` field (one of `sensor_log`,
+//! `pose_log`, `time_transform_log`, `detection_log`). The row also
+//! carries common fields (`source_peer_id`, `writer_peer_id`,
+//! `resource_id`, `state`, `head` | `extent`, `available`) plus
+//! variant-specific optional blocks (`sensor`, `pose`) and a typed
+//! `manifest` pointer block whose shape varies by variant.
+//!
+//! The response is a live, pollable snapshot. Cluster membership does not
+//! imply resource readiness: producers omit rows that cannot currently
+//! accept matching stream opens, and consumers reconcile resources as rows
+//! appear or disappear. `resource_id` is a stable logical id scoped to
+//! `source_peer_id`; temporary outages should remove and later restore the
+//! same row instead of minting a replacement id.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use thiserror::Error;
 
 /// libp2p protocol id for "what resources can this peer provide
 /// right now?". Stable; bump version only on an incompatible
 /// wire-shape change.
-pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.0.1");
+pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.2.0");
 
 /// Cap on a single framed message. 1 MiB leaves room for catalogs with
 /// embedded registry JSON and several transform edges while bounding
 /// malformed senders.
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 
+// ── ResourcesRequest / ResourcesResponse ────────────────────────────────────
+
 /// Body of the request the initiator sends.
 ///
-/// Default `{}` asks for every resource kind the peer is willing to
-/// advertise. `kinds` is an open-string filter; unknown kinds simply
-/// return no rows from peers that do not produce them.
+/// `variants` is an open filter — empty means "all variants this peer
+/// offers". Unknown variants simply return no rows from peers that do
+/// not produce them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourcesRequest {
-    /// Optional open-string resource kind filter. Examples:
-    /// `"sensor_stream"`, `"transform_edge"`.
+    /// Optional variant filter. Empty = all variants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub kinds: Vec<String>,
-    /// Include canonical Sensor Registry JSON in sensor-stream rows
-    /// when the producer can resolve `sensor_id + sensor_hash`.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub include_sensor_entries: bool,
-    /// Include canonical Frame Registry JSON in sensor-stream rows
-    /// and transform-edge rows when the producer can resolve the
-    /// referenced frame entries.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub include_frame_entries: bool,
+    pub variants: Vec<Variant>,
 }
 
 impl ResourcesRequest {
-    /// All advertised resources, lightweight rows only.
+    /// All advertised resources.
     pub fn all() -> Self {
         Self::default()
-    }
-
-    /// Only sensor-stream resources.
-    pub fn sensor_streams() -> Self {
-        Self {
-            kinds: vec![ResourceKind::SensorStream.as_str().into()],
-            ..Self::default()
-        }
-    }
-
-    /// Only transform-edge resources.
-    pub fn transform_edges() -> Self {
-        Self {
-            kinds: vec![ResourceKind::TransformEdge.as_str().into()],
-            ..Self::default()
-        }
-    }
-
-    /// Ask for sensor and frame registry details embedded by value.
-    pub fn with_registry_entries(mut self) -> Self {
-        self.include_sensor_entries = true;
-        self.include_frame_entries = true;
-        self
-    }
-
-    /// Returns true when `kind` should be included in the response.
-    pub fn wants_kind(&self, kind: ResourceKind) -> bool {
-        self.kinds.is_empty() || self.kinds.iter().any(|k| k == kind.as_str())
     }
 }
 
@@ -92,168 +61,232 @@ pub struct ResourcesResponse {
     pub resources: Vec<ResourceEntry>,
 }
 
-/// Canonical v0 resource kind labels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceKind {
-    /// Live sensor stream over `/auki/stream/0.1.0`.
-    SensorStream,
-    /// Direct frame transform edge.
-    TransformEdge,
+// ── Variant (discriminator) ──────────────────────────────────────────────────
+
+/// Closed enum identifying which log variant a catalog row describes.
+/// Wire values are `snake_case` strings; unknown values are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Variant {
+    /// Row describes a sensor log stream.
+    SensorLog,
+    /// Row describes a pose log stream.
+    PoseLog,
+    /// Row describes a time-transform log stream.
+    TimeTransformLog,
+    /// Row describes a detection log stream.
+    DetectionLog,
 }
 
-impl ResourceKind {
-    /// Stable open-string label carried on the wire.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            ResourceKind::SensorStream => "sensor_stream",
-            ResourceKind::TransformEdge => "transform_edge",
-        }
-    }
+// ── SensorKind ───────────────────────────────────────────────────────────────
+
+/// Closed enum for the high-level sensor family.
+/// Wire values are `snake_case` strings; unknown values are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorKind {
+    /// Optical camera (RGB, depth, IR, …).
+    Camera,
+    /// Distance-measuring sensor (lidar, ultrasonic, …).
+    Rangefinder,
+    /// Radio-frequency sensor (UWB, WiFi CSI, …).
+    Rf,
+    /// Microphone or acoustic sensor.
+    Audio,
+    /// Articulated joint encoders.
+    JointEncoders,
 }
 
-/// One row in a [`ResourcesResponse`].
+// ── Head / Extent / Available ────────────────────────────────────────────────
+
+/// Head-behavior block for live catalog rows.
 ///
-/// The serde tag is intentionally `kind` so cross-language clients
-/// can route by open string even if their SDK copy predates a future
-/// resource variant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `Rolling` rows retain only a sliding window of data; `Fixed` rows
+/// started at a known wall-clock timestamp and keep everything since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ResourceEntry {
-    /// Live sensor stream resource.
-    SensorStream(SensorStreamResource),
-    /// Direct transform edge resource.
-    TransformEdge(TransformEdgeResource),
+pub enum Head {
+    /// Sliding-window retention: only the most-recent `retention_ns`
+    /// nanoseconds of data are available.
+    Rolling {
+        /// Retention window in nanoseconds.
+        retention_ns: i64,
+    },
+    /// Fixed-start head: all data since `started_at_ns` is available.
+    Fixed {
+        /// Wall-clock timestamp (ns) when the producer started writing.
+        started_at_ns: i64,
+    },
 }
 
-impl ResourceEntry {
-    /// Open-string resource kind label.
-    pub const fn kind(&self) -> ResourceKind {
-        match self {
-            Self::SensorStream(_) => ResourceKind::SensorStream,
-            Self::TransformEdge(_) => ResourceKind::TransformEdge,
-        }
-    }
-
-    /// Resource identifier.
-    pub fn id(&self) -> &str {
-        match self {
-            Self::SensorStream(r) => &r.id,
-            Self::TransformEdge(r) => &r.id,
-        }
-    }
+/// Sealed bounds block — the time extent of data that is currently
+/// on-disk and retrievable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Extent {
+    /// Earliest available sample timestamp (ns, inclusive).
+    pub start_at_ns: i64,
+    /// Latest available sample timestamp (ns, inclusive).
+    pub finish_at_ns: i64,
 }
 
-/// Live sensor stream resource.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SensorStreamResource {
-    /// Resource id. Defaults to `sensor_id` for the v0 shape.
-    pub id: String,
+/// Snapshot of currently-retrievable data volume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Available {
+    /// Total compressed bytes available for retrieval.
+    pub bytes: u64,
+    /// Total number of log entries available.
+    pub entries: u64,
+    /// Duration covered by available data, in nanoseconds.
+    pub duration_ns: i64,
+}
+
+// ── SensorBlock / PoseBlock ──────────────────────────────────────────────────
+
+/// Content block for `sensor_log` variant rows.
+///
+/// Carries the closed `kind`, the open-string `type` (e.g. `"rgb"`,
+/// `"point_cloud"`, `"depth"`), plus the content-addressed
+/// `sensor_id` / `sensor_hash` pair from the Sensor Registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensorBlock {
+    /// Closed sensor family.
+    pub kind: SensorKind,
+    /// Open-string sensor type within the family (e.g. `"rgb"`, `"depth"`).
+    #[serde(rename = "type")]
+    pub r#type: String,
     /// Producer-scoped sensor identifier.
     pub sensor_id: String,
     /// Content-addressed Sensor Registry hash.
     pub sensor_hash: String,
-    /// Sensor kind - the `SensorBody` serde tag carried through as an
-    /// open string (`"camera"`, `"point_cloud"`, ...).
-    pub sensor_kind: String,
-    /// Protocol used to open the stream.
-    pub stream_protocol: String,
-    /// Payload type hint for consumers choosing a decoder.
-    pub payload: String,
-    /// Optional current pinhole intrinsics for camera-like streams.
-    /// Producers that have a live calibration snapshot (for example
-    /// ROS `CameraInfo`) can advertise it here; the auto-lifted
-    /// sensor catalog row leaves it empty.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pinhole_intrinsics: Option<ResourcePinholeIntrinsics>,
-    /// Optional canonical Sensor Registry JSON matching
-    /// `sensor_id + sensor_hash`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sensor_entry_json: Option<String>,
-    /// Optional canonical Frame Registry JSON for spatial sensors.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame_entry_json: Option<String>,
 }
 
-/// Numeric pinhole-camera intrinsics for projection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct ResourcePinholeIntrinsics {
-    /// Focal length in pixels along image X.
-    pub fx: f64,
-    /// Focal length in pixels along image Y.
-    pub fy: f64,
-    /// Principal point X coordinate in pixels.
-    pub cx: f64,
-    /// Principal point Y coordinate in pixels.
-    pub cy: f64,
+/// Content block for `pose_log` variant rows.
+///
+/// Carries the writer-mode hint from the Pose Log manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseBlock {
+    /// Whether the transform is stationary (`rigid`) or time-varying (`movable`).
+    pub writer_mode: auki_manifests::PoseWriterMode,
 }
 
-/// Direct transform edge resource.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TransformEdgeResource {
-    /// Resource id. Conventionally `<from_frame_id>-><to_frame_id>`.
-    pub id: String,
-    /// Parent/source frame id.
-    pub from_frame_id: String,
-    /// Content-addressed Frame Registry hash for `from_frame_id`.
-    pub from_frame_hash: String,
-    /// Child/target frame id.
-    pub to_frame_id: String,
-    /// Content-addressed Frame Registry hash for `to_frame_id`.
-    pub to_frame_hash: String,
-    /// `"rigid"` for stationary edges in v0; open string for future
-    /// writer modes.
-    pub writer_mode: String,
-    /// Producer/source identity. Mirrors PoseSource's tagged JSON
-    /// shape without making auki-network depend on auki-manifests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<Value>,
-    /// Transform from `from_frame_id` into `to_frame_id`, following
-    /// Pose Log semantics (parent/source frame to child/target frame).
-    pub transform: ResourceSpatialTransform,
-    /// Optional canonical Frame Registry JSON for `from_frame_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_frame_entry_json: Option<String>,
-    /// Optional canonical Frame Registry JSON for `to_frame_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub to_frame_entry_json: Option<String>,
+// ── Manifest pointer types ───────────────────────────────────────────────────
+
+use auki_registry::{LogRef, RegistryRef};
+
+/// Manifest pointer for `sensor_log` variant rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensorManifestPointer {
+    /// Clock registry reference.
+    pub clock: RegistryRef,
+    /// Optional frame registry reference (present when the sensor has a
+    /// spatial frame).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<RegistryRef>,
 }
 
-/// JSON-friendly counterpart of `auki_datatypes::pose::SpatialTransform`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct ResourceSpatialTransform {
-    /// Translation component.
-    pub translation: ResourceVec3,
-    /// Hamilton quaternion `(x, y, z, w)`.
-    pub orientation: ResourceQuat,
+/// Manifest pointer for `pose_log` variant rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoseManifestPointer {
+    /// Parent / source frame registry reference.
+    pub from_frame: RegistryRef,
+    /// Child / target frame registry reference.
+    pub to_frame: RegistryRef,
+    /// Clock registry reference.
+    pub clock: RegistryRef,
+    /// Producer identity (inline).
+    pub source: auki_manifests::PoseSource,
+    /// Expected producer cadence in Hz. Zero means unspecified.
+    pub expected_rate_hz: u32,
 }
 
-/// JSON-friendly 3D vector.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct ResourceVec3 {
-    /// X component.
-    pub x: f64,
-    /// Y component.
-    pub y: f64,
-    /// Z component.
-    pub z: f64,
+/// Manifest pointer for `time_transform_log` variant rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeTransformManifestPointer {
+    /// Source clock registry reference.
+    pub from_clock: RegistryRef,
+    /// Target clock registry reference.
+    pub to_clock: RegistryRef,
+    /// Producer identity (inline).
+    pub source: auki_manifests::TimeTransformSource,
 }
 
-/// JSON-friendly Hamilton quaternion.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct ResourceQuat {
-    /// X component.
-    pub x: f64,
-    /// Y component.
-    pub y: f64,
-    /// Z component.
-    pub z: f64,
-    /// W component.
-    pub w: f64,
+/// Manifest pointer for `detection_log` variant rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectionManifestPointer {
+    /// Detector registry reference.
+    pub detector: RegistryRef,
+    /// Input log reference (source_peer_id + resource_id).
+    pub input_log: LogRef,
+    /// Input sensor registry reference.
+    pub input_sensor: RegistryRef,
+    /// Clock registry reference.
+    pub clock: RegistryRef,
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
+// ── VariantContent enum ──────────────────────────────────────────────────────
+
+/// Variant-specific fields flattened into [`ResourceEntry`].
+///
+/// The `variant` tag is flattened to the top level of the resource row
+/// alongside `source_peer_id`, `writer_peer_id`, etc.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "variant", rename_all = "snake_case")]
+pub enum VariantContent {
+    /// Sensor log row.
+    SensorLog { manifest: SensorManifestPointer },
+    /// Pose log row.
+    PoseLog { manifest: PoseManifestPointer },
+    /// Time-transform log row.
+    TimeTransformLog {
+        manifest: TimeTransformManifestPointer,
+    },
+    /// Detection log row.
+    DetectionLog { manifest: DetectionManifestPointer },
 }
+
+// ── ResourceEntry ────────────────────────────────────────────────────────────
+
+/// One row in a [`ResourcesResponse`].
+///
+/// `variant` (from the flattened [`VariantContent`]) discriminates the
+/// row type. `sensor` is present only on `sensor_log` rows; `pose` only
+/// on `pose_log` rows. `head` and `extent` are mutually exclusive — live
+/// streams carry `head`, sealed archives carry `extent`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResourceEntry {
+    /// Peer whose physical sensors or logs this row describes.
+    pub source_peer_id: String,
+    /// Peer that holds the materialized log bytes (may differ from
+    /// `source_peer_id` when Park materializes a galbot stream).
+    pub writer_peer_id: String,
+    /// Stable resource identifier scoped to `source_peer_id`.
+    pub resource_id: String,
+    /// Open-string lifecycle state; v1 values: `"live"` | `"sealed"`.
+    /// This is not a health field; the current schema has no supported
+    /// unavailable/degraded state. Omit rows that cannot currently be opened.
+    pub state: String,
+    /// Present on live rows (`state = "live"`). Describes the rolling or
+    /// fixed-start retention window.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub head: Option<Head>,
+    /// Present on sealed rows (`state = "sealed"`). Describes the
+    /// inclusive time bounds of the archived data.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub extent: Option<Extent>,
+    /// Current data volume snapshot.
+    pub available: Available,
+    /// Sensor-family metadata. Only present on `sensor_log` rows.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sensor: Option<SensorBlock>,
+    /// Pose writer-mode metadata. Only present on `pose_log` rows.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pose: Option<PoseBlock>,
+    /// Variant discriminator and manifest pointer, flattened to row top level.
+    #[serde(flatten)]
+    pub variant_content: VariantContent,
+}
+
+// ── Protocol error ───────────────────────────────────────────────────────────
 
 /// Failure modes for the framed read/write helpers below.
 #[derive(Debug, Error)]
@@ -274,6 +307,8 @@ pub enum ResourcesProtocolError {
     #[error("frame too large: {actual} bytes (max {max})")]
     FrameTooLarge { actual: u64, max: u64 },
 }
+
+// ── Wire helpers ─────────────────────────────────────────────────────────────
 
 /// Write a [`ResourcesRequest`] to `stream`, length-prefixed JSON.
 pub async fn write_resources_request<S>(
@@ -370,69 +405,418 @@ where
     serde_json::from_slice(&payload).map_err(ResourcesProtocolError::Decode)
 }
 
-// Tests
+// ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_manifests::{PoseSource, PoseWriterMode, TimeTransformSource};
+    use auki_registry::{LogRef, RegistryRef};
+
+    // ── New ResourceEntry shape (post-#216 §1) ──────────────────────────
+
+    #[test]
+    fn sensor_log_row_canonical() {
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 3_000_000_000,
+                entries: 900,
+                duration_ns: 5_000_000_000,
+            },
+            sensor: Some(SensorBlock {
+                kind: SensorKind::Camera,
+                r#type: "rgb".to_string(),
+                sensor_id: "head_left_rgb".to_string(),
+                sensor_hash: "sh".to_string(),
+            }),
+            pose: None,
+            variant_content: VariantContent::SensorLog {
+                manifest: SensorManifestPointer {
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                    frame: Some(RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_camera_optical".to_string(),
+                        hash: "fh".to_string(),
+                    }),
+                },
+            },
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["variant"], "sensor_log");
+        assert_eq!(value["source_peer_id"], "galbot");
+        assert_eq!(value["sensor"]["kind"], "camera");
+        assert_eq!(value["sensor"]["type"], "rgb");
+        assert_eq!(value["manifest"]["clock"]["id"], "session/sdk_clock");
+        assert!(value.get("pose").is_none() || value["pose"].is_null());
+    }
+
+    #[test]
+    fn pose_log_rigid_row_canonical() {
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "world->base_link".to_string(),
+            state: "sealed".to_string(),
+            head: None,
+            extent: Some(Extent {
+                start_at_ns: 100,
+                finish_at_ns: 100,
+            }),
+            available: Available {
+                bytes: 80,
+                entries: 1,
+                duration_ns: 0,
+            },
+            sensor: None,
+            pose: Some(PoseBlock {
+                writer_mode: PoseWriterMode::Rigid,
+            }),
+            variant_content: VariantContent::PoseLog {
+                manifest: PoseManifestPointer {
+                    from_frame: RegistryRef {
+                        peer_id: "park".to_string(),
+                        id: "world".to_string(),
+                        hash: "fh".to_string(),
+                    },
+                    to_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "base_link".to_string(),
+                        hash: "th".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                    source: PoseSource::Manual,
+                    expected_rate_hz: 0,
+                },
+            },
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["variant"], "pose_log");
+        assert_eq!(value["pose"]["writer_mode"], "rigid");
+        assert_eq!(value["state"], "sealed");
+        assert!(value.get("head").is_none() || value["head"].is_null());
+        assert_eq!(value["extent"]["start_at_ns"], 100);
+        assert_eq!(value["manifest"]["from_frame"]["peer_id"], "park");
+    }
+
+    #[test]
+    fn time_transform_log_row_minimal() {
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "session/sdk_clock->wall_clock".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 60_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 4096,
+                entries: 60,
+                duration_ns: 60_000_000_000,
+            },
+            sensor: None,
+            pose: None,
+            variant_content: VariantContent::TimeTransformLog {
+                manifest: TimeTransformManifestPointer {
+                    from_clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "fh".to_string(),
+                    },
+                    to_clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "wall_clock".to_string(),
+                        hash: "th".to_string(),
+                    },
+                    source: TimeTransformSource::LocalClockRead,
+                },
+            },
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["variant"], "time_transform_log");
+        assert!(value.get("sensor").is_none() || value["sensor"].is_null());
+        assert!(value.get("pose").is_none() || value["pose"].is_null());
+    }
+
+    #[test]
+    fn detection_log_row_minimal() {
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "yolo_v8@head_left_rgb".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 250000,
+                entries: 150,
+                duration_ns: 5_000_000_000,
+            },
+            sensor: None,
+            pose: None,
+            variant_content: VariantContent::DetectionLog {
+                manifest: DetectionManifestPointer {
+                    detector: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "yolo_v8".to_string(),
+                        hash: "dh".to_string(),
+                    },
+                    input_log: LogRef {
+                        source_peer_id: "galbot".to_string(),
+                        resource_id: "head_left_rgb".to_string(),
+                    },
+                    input_sensor: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_rgb".to_string(),
+                        hash: "sh".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                },
+            },
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["variant"], "detection_log");
+        assert_eq!(
+            value["manifest"]["input_log"]["resource_id"],
+            "head_left_rgb"
+        );
+    }
+
+    #[test]
+    fn pose_log_catalog_row_drives_stream_request_by_resource_id() {
+        use crate::stream_protocol::{ReadFrom, StreamRequest};
+
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "galbot".to_string(),
+            resource_id: "base_link->head_left_rgb_optical".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 0,
+                entries: 0,
+                duration_ns: 0,
+            },
+            sensor: None,
+            pose: Some(PoseBlock {
+                writer_mode: PoseWriterMode::Movable,
+            }),
+            variant_content: VariantContent::PoseLog {
+                manifest: PoseManifestPointer {
+                    from_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "base_link".to_string(),
+                        hash: "from-frame-hash".to_string(),
+                    },
+                    to_frame: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_rgb_optical".to_string(),
+                        hash: "to-frame-hash".to_string(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "clock-hash".to_string(),
+                    },
+                    source: PoseSource::Manual,
+                    expected_rate_hz: 30,
+                },
+            },
+        };
+
+        assert!(matches!(
+            row.variant_content,
+            VariantContent::PoseLog { .. }
+        ));
+        assert_eq!(row.state, "live");
+        assert_eq!(
+            row.pose.as_ref().unwrap().writer_mode,
+            PoseWriterMode::Movable
+        );
+
+        let request = StreamRequest {
+            source_peer_id: row.source_peer_id.clone(),
+            resource_id: row.resource_id.clone(),
+            from: ReadFrom::Latest,
+        };
+        let value = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(request.source_peer_id, "galbot");
+        assert_eq!(request.resource_id, "base_link->head_left_rgb_optical");
+        assert_eq!(value["from"], "latest");
+        assert!(
+            value.get("writer_peer_id").is_none(),
+            "the serving writer is selected by the peer being dialed, not by StreamRequest"
+        );
+    }
+
+    #[test]
+    fn materialization_row_source_writer_differ() {
+        let row = ResourceEntry {
+            source_peer_id: "galbot".to_string(),
+            writer_peer_id: "park".to_string(),
+            resource_id: "head_left_rgb".to_string(),
+            state: "live".to_string(),
+            head: Some(Head::Rolling {
+                retention_ns: 300_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 12_000_000_000,
+                entries: 9000,
+                duration_ns: 300_000_000_000,
+            },
+            sensor: Some(SensorBlock {
+                kind: SensorKind::Camera,
+                r#type: "rgb".to_string(),
+                sensor_id: "head_left_rgb".to_string(),
+                sensor_hash: "sh".to_string(),
+            }),
+            pose: None,
+            variant_content: VariantContent::SensorLog {
+                manifest: SensorManifestPointer {
+                    clock: RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "session/sdk_clock".to_string(),
+                        hash: "ch".to_string(),
+                    },
+                    frame: Some(RegistryRef {
+                        peer_id: "galbot".to_string(),
+                        id: "head_left_camera_optical".to_string(),
+                        hash: "fh".to_string(),
+                    }),
+                },
+            },
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["source_peer_id"], "galbot");
+        assert_eq!(value["writer_peer_id"], "park");
+        assert_eq!(value["head"]["retention_ns"], 300_000_000_000i64);
+    }
+
+    // ── Wire round-trip ─────────────────────────────────────────────────
 
     #[tokio::test]
     async fn request_round_trips() {
-        let req = ResourcesRequest::transform_edges().with_registry_entries();
+        let req = ResourcesRequest {
+            variants: vec![Variant::SensorLog, Variant::PoseLog],
+        };
         let mut buf = Vec::new();
         write_resources_request(&mut buf, &req).await.unwrap();
         let mut cursor = futures::io::Cursor::new(buf);
         let back = read_resources_request(&mut cursor).await.unwrap();
         assert_eq!(req, back);
+
+        // Empty request (all variants)
+        let req_all = ResourcesRequest::all();
+        let mut buf = Vec::new();
+        write_resources_request(&mut buf, &req_all).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_resources_request(&mut cursor).await.unwrap();
+        assert_eq!(back.variants, vec![]);
     }
 
     #[tokio::test]
-    async fn response_round_trips_with_sensor_and_transform() {
+    async fn response_round_trips_sensor_and_pose() {
         let resp = ResourcesResponse {
             resources: vec![
-                ResourceEntry::SensorStream(SensorStreamResource {
-                    id: "K1-LIVE01/head_left_cam".into(),
-                    sensor_id: "K1-LIVE01/head_left_cam".into(),
-                    sensor_hash: "sensorhash".into(),
-                    sensor_kind: "camera".into(),
-                    stream_protocol: "/auki/stream/0.1.0".into(),
-                    payload: "camera_frame".into(),
-                    pinhole_intrinsics: Some(ResourcePinholeIntrinsics {
-                        fx: 400.0,
-                        fy: 401.0,
-                        cx: 272.5,
-                        cy: 244.5,
+                ResourceEntry {
+                    source_peer_id: "galbot".to_string(),
+                    writer_peer_id: "galbot".to_string(),
+                    resource_id: "head_left_rgb".to_string(),
+                    state: "live".to_string(),
+                    head: Some(Head::Rolling {
+                        retention_ns: 5_000_000_000,
                     }),
-                    sensor_entry_json: Some(r#"{"sensor_id":"K1-LIVE01/head_left_cam"}"#.into()),
-                    frame_entry_json: None,
-                }),
-                ResourceEntry::TransformEdge(TransformEdgeResource {
-                    id: "K1-LIVE01/camera_link->K1-LIVE01/head_left_cam_optical".into(),
-                    from_frame_id: "K1-LIVE01/camera_link".into(),
-                    from_frame_hash: "fromhash".into(),
-                    to_frame_id: "K1-LIVE01/head_left_cam_optical".into(),
-                    to_frame_hash: "tohash".into(),
-                    writer_mode: "rigid".into(),
-                    source: Some(serde_json::json!({
-                        "kind": "ros2_tf",
-                        "publishers": ["robot_state_publisher"]
-                    })),
-                    transform: ResourceSpatialTransform {
-                        translation: ResourceVec3 {
-                            x: 0.0,
-                            y: 0.0,
-                            z: 0.0,
-                        },
-                        orientation: ResourceQuat {
-                            x: 0.5,
-                            y: -0.5,
-                            z: 0.5,
-                            w: -0.5,
+                    extent: None,
+                    available: Available {
+                        bytes: 1024,
+                        entries: 10,
+                        duration_ns: 5_000_000_000,
+                    },
+                    sensor: Some(SensorBlock {
+                        kind: SensorKind::Camera,
+                        r#type: "rgb".to_string(),
+                        sensor_id: "head_left_rgb".to_string(),
+                        sensor_hash: "sh".to_string(),
+                    }),
+                    pose: None,
+                    variant_content: VariantContent::SensorLog {
+                        manifest: SensorManifestPointer {
+                            clock: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "session/sdk_clock".to_string(),
+                                hash: "ch".to_string(),
+                            },
+                            frame: None,
                         },
                     },
-                    from_frame_entry_json: None,
-                    to_frame_entry_json: None,
-                }),
+                },
+                ResourceEntry {
+                    source_peer_id: "galbot".to_string(),
+                    writer_peer_id: "galbot".to_string(),
+                    resource_id: "world->base_link".to_string(),
+                    state: "live".to_string(),
+                    head: Some(Head::Rolling {
+                        retention_ns: 60_000_000_000,
+                    }),
+                    extent: None,
+                    available: Available {
+                        bytes: 512,
+                        entries: 5,
+                        duration_ns: 60_000_000_000,
+                    },
+                    sensor: None,
+                    pose: Some(PoseBlock {
+                        writer_mode: PoseWriterMode::Movable,
+                    }),
+                    variant_content: VariantContent::PoseLog {
+                        manifest: PoseManifestPointer {
+                            from_frame: RegistryRef {
+                                peer_id: "park".to_string(),
+                                id: "world".to_string(),
+                                hash: "fh".to_string(),
+                            },
+                            to_frame: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "base_link".to_string(),
+                                hash: "th".to_string(),
+                            },
+                            clock: RegistryRef {
+                                peer_id: "galbot".to_string(),
+                                id: "session/sdk_clock".to_string(),
+                                hash: "ch".to_string(),
+                            },
+                            source: PoseSource::Manual,
+                            expected_rate_hz: 30,
+                        },
+                    },
+                },
             ],
         };
         let mut buf = Vec::new();
@@ -440,15 +824,107 @@ mod tests {
         let mut cursor = futures::io::Cursor::new(buf);
         let back = read_resources_response(&mut cursor).await.unwrap();
         assert_eq!(resp, back);
-        let ResourceEntry::SensorStream(sensor) = &back.resources[0] else {
-            panic!("expected sensor stream");
-        };
-        assert_eq!(sensor.pinhole_intrinsics.as_ref().unwrap().fx, 400.0);
+        assert_eq!(back.resources.len(), 2);
+    }
+
+    // ── Building-block canonicalization (retained from Task 3.2+3.3) ────
+
+    fn canon<T: serde::Serialize>(v: &T) -> String {
+        let value = serde_json::to_value(v).unwrap();
+        let bytes = auki_jcs::canonicalize(&value);
+        String::from_utf8(bytes).unwrap()
     }
 
     #[test]
-    fn resource_kinds_are_stable() {
-        assert_eq!(ResourceKind::SensorStream.as_str(), "sensor_stream");
-        assert_eq!(ResourceKind::TransformEdge.as_str(), "transform_edge");
+    fn variant_serializes_as_snake_case_strings() {
+        assert_eq!(canon(&Variant::SensorLog), r#""sensor_log""#);
+        assert_eq!(canon(&Variant::PoseLog), r#""pose_log""#);
+        assert_eq!(canon(&Variant::TimeTransformLog), r#""time_transform_log""#);
+        assert_eq!(canon(&Variant::DetectionLog), r#""detection_log""#);
+    }
+
+    #[test]
+    fn variant_rejects_unknown() {
+        let bad: Result<Variant, _> = serde_json::from_str(r#""foo_log""#);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn sensor_kind_closed_set() {
+        assert_eq!(canon(&SensorKind::Camera), r#""camera""#);
+        assert_eq!(canon(&SensorKind::Rangefinder), r#""rangefinder""#);
+        assert_eq!(canon(&SensorKind::Rf), r#""rf""#);
+        assert_eq!(canon(&SensorKind::Audio), r#""audio""#);
+        assert_eq!(canon(&SensorKind::JointEncoders), r#""joint_encoders""#);
+        let bad: Result<SensorKind, _> = serde_json::from_str(r#""point_cloud""#);
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn head_rolling_canonical() {
+        let h = Head::Rolling {
+            retention_ns: 5_000_000_000,
+        };
+        assert_eq!(canon(&h), r#"{"kind":"rolling","retention_ns":5000000000}"#);
+    }
+
+    #[test]
+    fn head_fixed_canonical() {
+        let h = Head::Fixed {
+            started_at_ns: 1733836800000000000,
+        };
+        assert_eq!(
+            canon(&h),
+            r#"{"kind":"fixed","started_at_ns":1733836800000000000}"#
+        );
+    }
+
+    #[test]
+    fn extent_canonical() {
+        let e = Extent {
+            start_at_ns: 100,
+            finish_at_ns: 200,
+        };
+        assert_eq!(canon(&e), r#"{"finish_at_ns":200,"start_at_ns":100}"#);
+    }
+
+    #[test]
+    fn available_canonical() {
+        let a = Available {
+            bytes: 3_000_000_000,
+            entries: 900,
+            duration_ns: 5_000_000_000,
+        };
+        assert_eq!(
+            canon(&a),
+            r#"{"bytes":3000000000,"duration_ns":5000000000,"entries":900}"#
+        );
+    }
+
+    #[test]
+    fn sensor_block_canonical() {
+        let b = SensorBlock {
+            kind: SensorKind::Camera,
+            r#type: "rgb".to_string(),
+            sensor_id: "head_left_rgb".to_string(),
+            sensor_hash: "abc123".to_string(),
+        };
+        assert_eq!(
+            canon(&b),
+            r#"{"kind":"camera","sensor_hash":"abc123","sensor_id":"head_left_rgb","type":"rgb"}"#
+        );
+    }
+
+    #[test]
+    fn pose_block_canonical() {
+        let b = PoseBlock {
+            writer_mode: PoseWriterMode::Rigid,
+        };
+        assert_eq!(canon(&b), r#"{"writer_mode":"rigid"}"#);
+
+        let b = PoseBlock {
+            writer_mode: PoseWriterMode::Movable,
+        };
+        assert_eq!(canon(&b), r#"{"writer_mode":"movable"}"#);
     }
 }

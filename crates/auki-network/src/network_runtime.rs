@@ -58,10 +58,6 @@ use crate::resources_protocol::{
     read_resources_request, read_resources_response, write_resources_request,
     write_resources_response,
 };
-use crate::sensors_protocol::{
-    SENSORS_PROTOCOL, SensorsProtocolError, SensorsRequest, SensorsResponse, read_sensors_request,
-    read_sensors_response, write_sensors_request, write_sensors_response,
-};
 #[cfg(test)]
 use crate::{
     PeerIdentity,
@@ -336,58 +332,6 @@ pub enum RequestInfoError {
     Timeout(Duration),
 }
 
-/// Inbound `/auki/sensors/0.0.1` event surfaced by the runtime to its
-/// owner via the channel returned from [`NetworkRuntime::spawn`].
-///
-/// The owner (typically `auki-domain`'s `ClusterManager`) snapshots
-/// the application-supplied sensor catalog and replies via `ack`. The
-/// runtime's per-substream task awaits the reply for up to
-/// [`SENSORS_RESPONSE_TIMEOUT`] before closing the substream silently.
-#[derive(Debug)]
-pub struct SensorsRequestEvent {
-    /// The peer-id of the requester. Authenticated by libp2p's noise
-    /// handshake at connection-establishment time.
-    pub peer: PeerId,
-    /// The body of the request. Empty today — reserved for future
-    /// filter fields (e.g. `kind: Some("camera")`).
-    pub request: SensorsRequest,
-    /// One-shot channel to reply on. Send a [`SensorsResponse`]
-    /// containing the producer's current catalog snapshot. Dropping
-    /// the sender without sending closes the substream silently —
-    /// the requester sees a [`SensorsProtocolError::Io`] with
-    /// `UnexpectedEof`.
-    pub ack: oneshot::Sender<SensorsResponse>,
-}
-
-/// How long the runtime's per-substream sensors task waits for the
-/// owner to reply via the [`SensorsRequestEvent::ack`] channel before
-/// closing the substream. Short — snapshotting a sensor catalog is
-/// reading an `Arc<dyn SensorCatalogProvider>` and constructing a
-/// `Vec<SensorEntry>`; >2 s means something is wrong with the
-/// handler.
-const SENSORS_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// How long [`NetworkRuntime::request_sensors_catalog`] waits for
-/// the full open-write-read round-trip before returning a timeout
-/// error.
-pub const SENSORS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Errors from [`NetworkRuntime::request_sensors_catalog`].
-#[derive(Debug, thiserror::Error)]
-pub enum RequestSensorsError {
-    /// `libp2p_stream::Control::open_stream` failed (peer not
-    /// reachable, not on the allow-list, etc.).
-    #[error("open_stream: {0}")]
-    OpenStream(#[source] libp2p_stream::OpenStreamError),
-    /// I/O or wire-format error reading/writing a framed message.
-    #[error("protocol: {0}")]
-    Protocol(#[source] SensorsProtocolError),
-    /// The round-trip didn't complete within
-    /// [`SENSORS_REQUEST_TIMEOUT`].
-    #[error("sensors request timed out after {0:?}")]
-    Timeout(Duration),
-}
-
 /// Inbound `/auki/resources/0.0.1` event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
@@ -567,6 +511,19 @@ pub enum UpdateError {
     RuntimeUnavailable,
 }
 
+/// Errors from reserving a relay-mediated listener through a running
+/// [`NetworkRuntime`].
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeRelayReservationError {
+    /// The runtime task isn't accepting commands — typically because
+    /// the runtime has shut down or is shutting down.
+    #[error("runtime shutting down")]
+    RuntimeUnavailable,
+    /// The underlying relay reservation failed.
+    #[error(transparent)]
+    Reservation(#[from] swarm::RelayReservationError),
+}
+
 /// Internal command from public methods to the driver task.
 enum RuntimeCmd {
     SetAllowedPeers {
@@ -576,6 +533,12 @@ enum RuntimeCmd {
     SetHeartbeatTargets {
         peers: Vec<PeerId>,
         ack: oneshot::Sender<Result<(), UpdateError>>,
+    },
+    ReserveRelayCircuitAddr {
+        relay_dial_multiaddr: Multiaddr,
+        relay_advertise_multiaddr: Multiaddr,
+        timeout: Duration,
+        ack: oneshot::Sender<Result<Multiaddr, RuntimeRelayReservationError>>,
     },
 }
 
@@ -675,6 +638,32 @@ impl NetworkRuntimeHandle {
         ack_rx.await.map_err(|_| UpdateError::RuntimeUnavailable)?
     }
 
+    /// Reserve a Circuit Relay v2 listener through a relay from the
+    /// runtime-owned swarm and return the Manager circuit address to
+    /// publish. See
+    /// [`swarm::reserve_relay_circuit_addr_with_advertised_addr`] for
+    /// dial-vs-advertise semantics.
+    pub async fn reserve_relay_circuit_addr(
+        &self,
+        relay_dial_multiaddr: Multiaddr,
+        relay_advertise_multiaddr: Multiaddr,
+        timeout: Duration,
+    ) -> Result<Multiaddr, RuntimeRelayReservationError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.command_tx
+            .send(RuntimeCmd::ReserveRelayCircuitAddr {
+                relay_dial_multiaddr,
+                relay_advertise_multiaddr,
+                timeout,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| RuntimeRelayReservationError::RuntimeUnavailable)?;
+        ack_rx
+            .await
+            .map_err(|_| RuntimeRelayReservationError::RuntimeUnavailable)?
+    }
+
     /// Same semantics as [`NetworkRuntime::connected_peers`].
     pub fn connected_peers(&self) -> Vec<PeerId> {
         self.connected
@@ -734,8 +723,7 @@ impl NetworkRuntime {
     /// carrier events + a receiver for inbound `/auki/membership/0.0.1`
     /// gossip events + a receiver for inbound `/auki/info/0.0.1`
     /// participant-info requests + a receiver for inbound
-    /// `/auki/resources/0.0.1` resource-catalog requests + a receiver for inbound
-    /// `/auki/sensors/0.0.1` sensor-catalog requests + a receiver for
+    /// `/auki/resources/0.2.0` resource-catalog requests + a receiver for
     /// inbound `/auki/registries/0.0.1` registry-entry requests.
     /// Owners that don't care about any of them (e.g. tests) can drop
     /// the receivers; the runtime drops events with no receiver.
@@ -753,7 +741,6 @@ impl NetworkRuntime {
             mpsc::Receiver<MembershipEvent>,
             mpsc::Receiver<InfoRequestEvent>,
             mpsc::Receiver<ResourcesRequestEvent>,
-            mpsc::Receiver<SensorsRequestEvent>,
             mpsc::Receiver<RegistryRequestEvent>,
             mpsc::Receiver<DiagnosticEvent>,
         ),
@@ -774,7 +761,6 @@ impl NetworkRuntime {
         let (membership_events_tx, membership_events_rx) = mpsc::channel::<MembershipEvent>(16);
         let (info_events_tx, info_events_rx) = mpsc::channel::<InfoRequestEvent>(16);
         let (resources_events_tx, resources_events_rx) = mpsc::channel::<ResourcesRequestEvent>(16);
-        let (sensors_events_tx, sensors_events_rx) = mpsc::channel::<SensorsRequestEvent>(16);
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let task = handle.spawn(run_task(
@@ -793,7 +779,6 @@ impl NetworkRuntime {
             membership_events_tx,
             info_events_tx,
             resources_events_tx,
-            sensors_events_tx,
             registry_events_tx,
             diagnostic_events_tx,
         ));
@@ -813,7 +798,6 @@ impl NetworkRuntime {
             membership_events_rx,
             info_events_rx,
             resources_events_rx,
-            sensors_events_rx,
             registry_events_rx,
             diagnostic_events_rx,
         ))
@@ -902,65 +886,8 @@ impl NetworkRuntime {
         Ok(response)
     }
 
-    /// Fetch a cluster peer's current sensor catalog over the
-    /// `/auki/sensors/0.0.1` libp2p protocol. Returns the response's
-    /// list of [`crate::sensors_protocol::SensorEntry`] rows.
-    ///
-    /// `peer_id` must be on the local allow-list — libp2p refuses
-    /// the substream otherwise. Operator UIs (Park, Sentinel)
-    /// typically call this against every entry in their
-    /// `ClusterMembership` to populate per-peer sensor chip rows.
-    ///
-    /// The full open-write-read round-trip is bounded by
-    /// [`SENSORS_REQUEST_TIMEOUT`] (5 s — well above LAN
-    /// round-trip, well below any operator-perceptible UI hang).
-    pub async fn request_sensors_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<SensorsResponse, RequestSensorsError> {
-        self.request_sensors_catalog_with(peer_id, SensorsRequest::catalog())
-            .await
-    }
-
-    /// Fetch a cluster peer's current sensor catalog using an explicit
-    /// [`SensorsRequest`]. This is the detail path for consumers that
-    /// want Sensor / Frame Registry entries embedded by value in the
-    /// response instead of fetching each entry in a follow-up
-    /// `/auki/registries/0.0.1` round trip.
-    pub async fn request_sensors_catalog_with(
-        &self,
-        peer_id: PeerId,
-        request: SensorsRequest,
-    ) -> Result<SensorsResponse, RequestSensorsError> {
-        let mut control = self.stream_control.clone();
-        let proto = SENSORS_PROTOCOL.clone();
-
-        let open_fut = control.open_stream(peer_id, proto);
-        let mut substream = match tokio::time::timeout(SENSORS_REQUEST_TIMEOUT, open_fut).await {
-            Err(_) => return Err(RequestSensorsError::Timeout(SENSORS_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(RequestSensorsError::OpenStream(e)),
-            Ok(Ok(s)) => s,
-        };
-
-        write_sensors_request(&mut substream, &request)
-            .await
-            .map_err(RequestSensorsError::Protocol)?;
-
-        let response = match tokio::time::timeout(
-            SENSORS_REQUEST_TIMEOUT,
-            read_sensors_response(&mut substream),
-        )
-        .await
-        {
-            Err(_) => return Err(RequestSensorsError::Timeout(SENSORS_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(RequestSensorsError::Protocol(e)),
-            Ok(Ok(r)) => r,
-        };
-        Ok(response)
-    }
-
     /// Fetch a cluster peer's current resource catalog over the
-    /// `/auki/resources/0.0.1` libp2p protocol. Returns the response's
+    /// `/auki/resources/0.2.0` libp2p protocol. Returns the response's
     /// list of resource rows.
     pub async fn request_resources_catalog(
         &self,
@@ -1714,10 +1641,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionAudio>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::audio::Data>(peer_id, request)
             .await
@@ -1735,10 +1663,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionCamera>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::CameraFrame>(peer_id, request)
             .await
@@ -1756,10 +1685,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionPointCloud>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::point_cloud::Data>(peer_id, request)
             .await
@@ -1777,10 +1707,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionJointEncoders>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<crate::stream_protocol::joint_encoders::Data>(peer_id, request)
             .await
@@ -1798,10 +1729,11 @@ impl NetworkRuntime {
         request_bytes: Vec<u8>,
     ) -> Result<Arc<StreamSubscriptionDetection>, OpenStreamError> {
         use prost::Message;
-        let request = crate::stream_protocol::StreamRequest::decode(request_bytes.as_slice())
+        let wire_req = auki_datatypes::stream::StreamRequest::decode(request_bytes.as_slice())
             .map_err(|e| OpenStreamError::Protocol {
                 message: format!("StreamRequest decode: {e}"),
             })?;
+        let request = crate::stream_protocol::stream_request_from_wire(wire_req);
         let sub = self
             .open_stream::<auki_datatypes::detection::DetectionFrame>(peer_id, request)
             .await
@@ -1829,7 +1761,6 @@ async fn run_task(
     membership_events_tx: mpsc::Sender<MembershipEvent>,
     info_events_tx: mpsc::Sender<InfoRequestEvent>,
     resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
-    sensors_events_tx: mpsc::Sender<SensorsRequestEvent>,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
 ) {
@@ -1928,15 +1859,6 @@ async fn run_task(
     let mut incoming_resources: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(resources_proto) {
-        Ok(s) => s.boxed(),
-        Err(_already_registered) => futures::stream::pending().boxed(),
-    };
-
-    // Register inbound `/auki/sensors/0.0.1` substream acceptance.
-    let sensors_proto = SENSORS_PROTOCOL.clone();
-    let mut incoming_sensors: std::pin::Pin<
-        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
-    > = match inbound_control.accept(sensors_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2083,19 +2005,6 @@ async fn run_task(
                 tokio::spawn(handle_inbound_resources_substream(peer, substream, tx));
             }
 
-            sensors = incoming_sensors.next() => {
-                let Some((peer, substream)) = sensors else { return; };
-                // Same cluster-trust gate. Non-cluster peers can't
-                // fetch a daemon's sensor catalog — privacy by
-                // membership.
-                if !known_peers.contains_key(&peer) {
-                    drop(substream);
-                    continue;
-                }
-                let tx = sensors_events_tx.clone();
-                tokio::spawn(handle_inbound_sensors_substream(peer, substream, tx));
-            }
-
             registry = incoming_registries.next() => {
                 let Some((peer, substream)) = registry else { return; };
                 // Same cluster-trust gate. Non-cluster peers can't
@@ -2150,7 +2059,7 @@ async fn run_task(
                     &liveness_tx,
                     &lifeline_rx,
                     &heartbeat_timestamps,
-                );
+                ).await;
             }
         }
     }
@@ -2228,7 +2137,7 @@ fn handle_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_command(
+async fn handle_command(
     cmd: RuntimeCmd,
     local_peer_id: PeerId,
     swarm: &mut Swarm<Behaviour>,
@@ -2277,6 +2186,22 @@ fn handle_command(
                 heartbeat_timestamps,
             );
             let _ = ack.send(Ok(()));
+        }
+        RuntimeCmd::ReserveRelayCircuitAddr {
+            relay_dial_multiaddr,
+            relay_advertise_multiaddr,
+            timeout,
+            ack,
+        } => {
+            let result = swarm::reserve_relay_circuit_addr_with_advertised_addr(
+                swarm,
+                relay_dial_multiaddr,
+                relay_advertise_multiaddr,
+                timeout,
+            )
+            .await
+            .map_err(RuntimeRelayReservationError::Reservation);
+            let _ = ack.send(result);
         }
     }
 }
@@ -2842,8 +2767,7 @@ async fn handle_inbound_info_substream(
 /// reply (up to [`RESOURCES_RESPONSE_TIMEOUT`]), writes the framed
 /// [`ResourcesResponse`] back, closes the substream.
 ///
-/// Mirrors `handle_inbound_sensors_substream` in lifecycle — errors
-/// at any stage drop the substream silently; the requester sees
+/// Errors at any stage drop the substream silently; the requester sees
 /// `UnexpectedEof` on read.
 async fn handle_inbound_resources_substream(
     peer: PeerId,
@@ -2891,69 +2815,13 @@ async fn handle_inbound_resources_substream(
     }
 }
 
-/// Per-substream task for an inbound `/auki/sensors/0.0.1` request.
-/// Reads the framed [`SensorsRequest`], forwards it to the runtime's
-/// owner via a [`SensorsRequestEvent`], awaits the owner's reply (up
-/// to [`SENSORS_RESPONSE_TIMEOUT`]), writes the framed
-/// [`SensorsResponse`] back, closes the substream.
-///
-/// Mirrors `handle_inbound_info_substream` in lifecycle — errors
-/// at any stage drop the substream silently; the requester sees
-/// `UnexpectedEof` on read.
-async fn handle_inbound_sensors_substream(
-    peer: PeerId,
-    mut substream: libp2p::Stream,
-    sensors_events_tx: mpsc::Sender<SensorsRequestEvent>,
-) {
-    let request = match read_sensors_request(&mut substream).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("auki-network: sensors substream from {peer}: read failed: {e}");
-            return;
-        }
-    };
-
-    let (ack_tx, ack_rx) = oneshot::channel();
-    if sensors_events_tx
-        .send(SensorsRequestEvent {
-            peer,
-            request,
-            ack: ack_tx,
-        })
-        .await
-        .is_err()
-    {
-        // Owner has dropped the receiver — drop silently.
-        return;
-    }
-
-    let response = match tokio::time::timeout(SENSORS_RESPONSE_TIMEOUT, ack_rx).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(_)) => {
-            eprintln!("auki-network: sensors handler dropped without replying for peer {peer}");
-            return;
-        }
-        Err(_) => {
-            eprintln!(
-                "auki-network: sensors handler timed out after {SENSORS_RESPONSE_TIMEOUT:?} for peer {peer}"
-            );
-            return;
-        }
-    };
-
-    if let Err(e) = write_sensors_response(&mut substream, &response).await {
-        eprintln!("auki-network: sensors substream to {peer}: write response failed: {e}");
-    }
-}
-
 /// Per-substream task for an inbound `/auki/registries/0.0.1`
 /// request. Reads the framed [`RegistryRequest`], forwards it to the
 /// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
 /// reply (up to [`REGISTRIES_RESPONSE_TIMEOUT`]), writes the framed
 /// [`RegistryResponse`] back, closes the substream.
 ///
-/// Mirrors `handle_inbound_sensors_substream` in lifecycle — errors
-/// at any stage drop the substream silently; the requester sees
+/// Errors at any stage drop the substream silently; the requester sees
 /// `UnexpectedEof` on read.
 async fn handle_inbound_registry_substream(
     peer: PeerId,
@@ -3139,6 +3007,18 @@ mod tests {
         build_swarm(&identity, cfg).expect("build_swarm succeeds")
     }
 
+    async fn wait_for_test_listen_addr(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SwarmEvent::NewListenAddr { address, .. }) = swarm.next().await {
+                    return address;
+                }
+            }
+        })
+        .await
+        .expect("listen address did not appear within timeout")
+    }
+
     #[tokio::test]
     async fn spawn_with_empty_allow_list_starts_invisible() {
         let swarm = build_test_swarm().await;
@@ -3149,7 +3029,6 @@ mod tests {
             _membership_events,
             _info_events,
             _resources_events,
-            _sensors_events,
             _registry_events,
             _diagnostic_events,
         ) = NetworkRuntime::spawn(
@@ -3179,7 +3058,6 @@ mod tests {
             _membership_events,
             _info_events,
             _resources_events,
-            _sensors_events,
             _registry_events,
             _diagnostic_events,
         ) = NetworkRuntime::spawn(
@@ -3207,7 +3085,6 @@ mod tests {
             _membership_events,
             _info_events,
             _resources_events,
-            _sensors_events,
             _registry_events,
             _diagnostic_events,
         ) = NetworkRuntime::spawn(
@@ -3244,6 +3121,84 @@ mod tests {
 
         assert_eq!(report.added, vec![pid_c]);
         assert_eq!(report.removed, vec![pid_b]);
+        rt.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_reserves_relay_circuit_addr_after_runtime_spawn() {
+        let relay_identity = PeerIdentity::from_seed(&[31u8; 32]);
+        let manager_identity = PeerIdentity::from_seed(&[32u8; 32]);
+
+        let mut relay_swarm = build_swarm(
+            &relay_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                agent_version: "relay/0".into(),
+                enable_relay_server: true,
+            },
+        )
+        .expect("relay swarm builds");
+        let relay_addr = wait_for_test_listen_addr(&mut relay_swarm).await;
+        relay_swarm.add_external_address(relay_addr.clone());
+        let relay_addr_with_peer =
+            relay_addr.with(libp2p::multiaddr::Protocol::P2p(relay_identity.peer_id()));
+        let advertised_relay_addr: Multiaddr = format!(
+            "/ip4/203.0.113.31/tcp/4002/ws/p2p/{}",
+            relay_identity.peer_id()
+        )
+        .parse()
+        .unwrap();
+        let expected = advertised_relay_addr
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(manager_identity.peer_id()));
+
+        let manager_swarm = build_swarm(
+            &manager_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                agent_version: "manager/0".into(),
+                enable_relay_server: false,
+            },
+        )
+        .expect("manager swarm builds");
+        let (
+            rt,
+            _join_events,
+            _liveness,
+            _membership_events,
+            _info_events,
+            _resources_events,
+            _registry_events,
+            _diagnostic_events,
+        ) = NetworkRuntime::spawn(
+            manager_swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .expect("spawn succeeds");
+        let handle = rt.handle();
+
+        let circuit_addr = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::select! {
+                reservation = handle.reserve_relay_circuit_addr(
+                    relay_addr_with_peer,
+                    advertised_relay_addr,
+                    Duration::from_secs(10),
+                ) => reservation,
+                _ = async {
+                    loop {
+                        let _ = relay_swarm.next().await;
+                    }
+                } => unreachable!("relay swarm stream ended"),
+            }
+        })
+        .await
+        .expect("runtime relay reservation timed out")
+        .expect("runtime relay reservation succeeds");
+
+        assert_eq!(circuit_addr, expected);
         rt.shutdown();
     }
 

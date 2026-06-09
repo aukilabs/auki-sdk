@@ -15,6 +15,7 @@ native_runtime = [
     "auki-network/discovery_client",
     "auki-network/swarm",
     "dep:auki-registry",
+    "dep:auki-session",
     "dep:auki-time",
     "dep:prost",
     "dep:tokio",
@@ -27,6 +28,9 @@ auki-hash = { path = "../auki-hash", optional = true }
 auki-jcs = { path = "../auki-jcs", optional = true }
 auki-network = { path = "../auki-network", default-features = false }
 auki-registry = { path = "../auki-registry", optional = true }
+# `Domain` composes a `&Peer` + `&Session` from auki-session and serves their
+# catalog; the dependency points domain → session (the #274 inversion).
+auki-session = { path = "../auki-session", optional = true }
 auki-time = { path = "../auki-time", optional = true }
 # `ClusterMembership` carries libp2p `PeerId`s on the wire; the
 # `serde` feature pins their canonical string form so the JSON

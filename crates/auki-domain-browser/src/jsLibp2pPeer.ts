@@ -28,10 +28,7 @@ import {
   JOIN_PROTOCOL,
   JoinRequest,
   JoinResponse,
-  SENSORS_PROTOCOL,
   STREAM_PROTOCOL,
-  SensorsRequest,
-  SensorsResponse,
   AudioData,
   StreamMessage,
   type ProtocolStream,
@@ -244,6 +241,10 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
   }
 
   async declareLocalSensors(sensors: SensorSummary[]): Promise<Result<void>> {
+    const unsupported = sensors.find((sensor) => !isSensorKind(sensor.kind));
+    if (unsupported) {
+      return fail("sensor_publish_failed", `unsupported sensor kind ${JSON.stringify(unsupported.kind)}`);
+    }
     this.sensors = sensors;
     this.refreshSelfParticipant();
     return ok(undefined);
@@ -362,17 +363,6 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
       await readFrame(stream, InfoRequest);
       await writeFrame(stream, InfoResponse, {
         participantInfoJson: JSON.stringify(this.localParticipantInfo()),
-      });
-      await stream.close();
-    });
-    await transport.handleProtocol(SENSORS_PROTOCOL, async (stream) => {
-      await readFrame(stream, SensorsRequest);
-      await writeFrame(stream, SensorsResponse, {
-        sensors: this.sensors.map((sensor) => ({
-          sensorId: sensor.id,
-          sensorHash: "",
-          kind: sensor.kind,
-        })),
       });
       await stream.close();
     });
@@ -499,8 +489,7 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
       if (target.multiaddrs.length === 0) continue;
       try {
         const info = await this.requestInfo(target.peerId, target.multiaddrs);
-        const sensors = await this.requestSensors(target.peerId, target.multiaddrs);
-        this.applyRemoteCatalog(target.peerId, info, sensors);
+        this.applyRemoteCatalog(target.peerId, info);
       } catch (_error) {
         // A freshly joined peer may see a member before that browser has
         // installed its handlers. The next membership refresh will fill it in.
@@ -516,30 +505,15 @@ class JsLibp2pBrowserPeer implements BrowserDomainPeer {
     return JSON.parse(response.participantInfoJson) as ParticipantInfo;
   }
 
-  private async requestSensors(peerId: PeerId, multiaddrs: string[]): Promise<SensorsResponse> {
-    const stream = await this.requireTransport().dialProtocol(peerId, multiaddrs, SENSORS_PROTOCOL);
-    await writeFrame(stream, SensorsRequest, {});
-    const response = await readFrame(stream, SensorsResponse);
-    await stream.close();
-    return response;
-  }
-
-  private applyRemoteCatalog(
-    peerId: PeerId,
-    info: ParticipantInfo,
-    sensors: SensorsResponse,
-  ): void {
+  private applyRemoteCatalog(peerId: PeerId, info: ParticipantInfo): void {
     this.snapshot = {
       ...this.snapshot,
       participants: this.snapshot.participants.map((participant) => {
         if (participant.peerId !== peerId) return participant;
-        const sensorSummaries = sensors.sensors.map((sensor) => sensorSummaryFromEntry(sensor));
         return {
           ...participant,
           appId: info.app ?? participant.appId,
           displayName: info.name ?? participant.displayName,
-          sensors: sensorSummaries,
-          mediaPresence: withSensorAvailability(participant.mediaPresence, sensorSummaries),
         };
       }),
     };
@@ -728,25 +702,12 @@ function parseMembership(membershipJson: string): MembershipDocument {
   return membership;
 }
 
-function sensorSummaryFromEntry(sensor: { sensorId: string; kind: string }): SensorSummary {
-  const kind = isSensorKind(sensor.kind) ? sensor.kind : "unknown";
-  return {
-    id: sensor.sensorId,
-    kind,
-    label: sensor.sensorId || kind,
-    publishable: true,
-    subscribable: true,
-  };
-}
-
 function isSensorKind(value: string): value is SensorKind {
   return (
     value === "camera" ||
     value === "point_cloud" ||
     value === "joint_encoders" ||
-    value === "audio" ||
-    value === "detection" ||
-    value === "unknown"
+    value === "audio"
   );
 }
 

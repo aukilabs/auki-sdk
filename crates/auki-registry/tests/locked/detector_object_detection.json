@@ -1,0 +1,1 @@
+{"detector_id":"yolo_v8","model":"yolo_v8n","output_types":["object_detection"],"peer_id":"galbot","type":"object_detection"}

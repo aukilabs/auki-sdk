@@ -10,7 +10,7 @@ A v0 exploration crate. The cluster runtime support is gated behind a feature fl
 
 - `sdkName() -> String`
 - `peerIdFromSeed(seed: &[u8]) -> Result<String, JsValue>`
-- Behind `browser_libp2p`: browser-flavored `ClusterManager` bootstrap + `BrowserSessionParticipant` / `BrowserMediaPresence` / `BrowserRosterSnapshot` / `BrowserSessionSensor` glue.
+- Behind `browser_libp2p`: browser-flavored `ClusterManager` bootstrap + `BrowserSessionParticipant` / `BrowserMediaPresence` / `BrowserRosterSnapshot` / `BrowserSessionSensor` glue. Browser joins prefer browser-dialable Manager addresses (`/webrtc-direct`, WebSocket, or WebSocket relay circuits) from Discovery and use WebSocket + Circuit Relay v2 transport when joining through a Domain Relay.
 
 ## Depends on
 

@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { PeerId } from "./contract.js";
 import { createJsLibp2pBrowserPeer, type BrowserPeerTransport, type ProtocolStream } from "./jsLibp2pPeer.js";
+import {
+  INFO_PROTOCOL,
+  InfoRequest,
+  InfoResponse,
+  readFrame,
+  writeFrame,
+} from "./protocol/control.js";
 
 describe("js-libp2p browser peer control plane", () => {
-  it("serves and fetches remote info and sensors over native Auki protocols", async () => {
+  it("serves and fetches remote info over native Auki protocols", async () => {
     const network = new MemoryNetwork();
     const transportA = network.createTransport("peer-a", ["/memory/peer-a"]);
     const transportB = network.createTransport("peer-b", ["/memory/peer-b"]);
@@ -61,22 +68,12 @@ describe("js-libp2p browser peer control plane", () => {
     });
 
     expect(network.openedProtocols).toContain("/auki/info/0.0.1");
-    expect(network.openedProtocols).toContain("/auki/sensors/0.0.1");
     expect(snapshots.at(-1)).toMatchObject({
       participants: expect.arrayContaining([
         expect.objectContaining({
           peerId: "peer-b",
           appId: "park",
           displayName: "Browser B",
-          sensors: [
-            {
-              id: "audio",
-              kind: "audio",
-              label: "audio",
-              publishable: true,
-              subscribable: true,
-            },
-          ],
         }),
       ]),
     });
@@ -205,6 +202,39 @@ describe("js-libp2p browser peer control plane", () => {
     });
     expect(network.openedProtocols.filter((protocol) => protocol === "/auki/stream/0.1.0")).toHaveLength(2);
   });
+
+  it("rejects local sensors with unsupported kinds", async () => {
+    const network = new MemoryNetwork();
+    const transport = network.createTransport("peer-a", ["/memory/peer-a"]);
+    const peer = await createJsLibp2pBrowserPeer({
+      peerId: "peer-a",
+      transport,
+      resolveJoinTarget: async () => ({
+        domainName: "demo",
+        managerPeerId: "manager-peer",
+        managerMultiaddrs: ["/memory/manager"],
+      }),
+    });
+
+    await expect(
+      peer.declareLocalSensors([
+        {
+          id: "legacy-head",
+          kind: "rgb_camera",
+          label: "Legacy head",
+          publishable: true,
+          subscribable: true,
+        },
+      ] as never),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "sensor_publish_failed",
+        message: expect.stringContaining('unsupported sensor kind "rgb_camera"'),
+      },
+    });
+  });
+
 });
 
 class MemoryNetwork {

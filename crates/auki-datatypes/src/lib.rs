@@ -45,11 +45,12 @@ pub mod camera {
 impl_log_payload!(camera::CameraFrame);
 
 /// `auki.point_cloud` — opaque-bytes point-cloud payload shared by disk
-/// (Sensor Log segment) and wire (`/auki/stream/0.1.0` substream). One
+/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). One
 /// `Data` type, byte-identical encoding on both paths. Layout fields
-/// (`fields`, `point_step`, `is_bigendian`, `frame_id`) live on the
-/// SensorRegistryEntry's `PointCloud` body — interpretation comes from
-/// `(sensor_id, sensor_hash)`, not from the per-frame payload.
+/// (`fields`, `point_step`, `is_bigendian`, `frame`) live on the
+/// SensorRegistryEntry's `Rangefinder` body (with `type: "point_cloud"`)
+/// — interpretation comes from `(peer_id, sensor_id, sensor_hash)`, not
+/// from the per-frame payload.
 pub mod point_cloud {
     include!(concat!(env!("OUT_DIR"), "/auki.point_cloud.rs"));
 }
@@ -57,11 +58,11 @@ pub mod point_cloud {
 impl_log_payload!(point_cloud::Data);
 
 /// `auki.joint_encoders` — joint-encoder payload shared by disk
-/// (Sensor Log segment) and wire (`/auki/stream/0.1.0` substream). One
+/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). One
 /// `Data` type, byte-identical encoding on both paths. Per-sample
 /// `repeated float angles_rad`; vector length pinned by the
 /// `SensorRegistryEntry`'s `JointEncoders { joint_count }` body via
-/// `(sensor_id, sensor_hash)`. Joint angles are encoder readings —
+/// `(peer_id, sensor_id, sensor_hash)`. Joint angles are encoder readings —
 /// measurements before any kinematic interpretation; FK against the
 /// URDF is a consumer-side derivation.
 pub mod joint_encoders {
@@ -71,11 +72,11 @@ pub mod joint_encoders {
 impl_log_payload!(joint_encoders::Data);
 
 /// `auki.audio` — opaque-bytes audio payload shared by disk (Sensor Log
-/// segment) and wire (`/auki/stream/0.1.0` substream). One `Data` type,
+/// segment) and wire (`/auki/stream/0.2.0` substream). One `Data` type,
 /// byte-identical encoding on both paths. `sample_format`, `channels`,
-/// `sample_rate_hz`, `channel_layout`, `frame_id` live on the
+/// `sample_rate_hz`, `channel_layout`, `frame` live on the
 /// SensorRegistryEntry's `Audio` body — interpretation comes from
-/// `(sensor_id, sensor_hash)`, not from the per-chunk payload. Sample
+/// `(peer_id, sensor_id, sensor_hash)`, not from the per-chunk payload. Sample
 /// count and chunk duration are derivable from the bytes plus the
 /// registry; the chunk start timestamp rides in the framing's
 /// `timestamp_ns`.
@@ -101,8 +102,8 @@ impl_log_payload!(detection::DetectionFrame);
 /// `auki.pose` — Pose Log segment payload (Migration Step 5). Flat
 /// `SpatialTransform` per entry — no `PoseLogEntry { transforms: Vec<…> }`
 /// wrapper, no per-sample `parent_frame` / `child_frame`. Frame identity
-/// lives in the log's manifest (`from_frame_id` / `from_frame_hash` /
-/// `to_frame_id` / `to_frame_hash`); each Pose Log holds one
+/// lives in the log's manifest (`from_frame` / `to_frame` as
+/// `RegistryRef { peer_id, id, hash }`); each Pose Log holds one
 /// `(from, to)` pair. Quaternion is `(x, y, z, w)` Hamilton.
 pub mod pose {
     include!(concat!(env!("OUT_DIR"), "/auki.pose.rs"));
@@ -151,31 +152,6 @@ pub mod join {
 /// `auki.info` — `/auki/info/0.0.1` request/response messages.
 pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));
-}
-
-/// `auki.sensors` — `/auki/sensors/0.0.1` request/response messages.
-pub mod sensors {
-    include!(concat!(env!("OUT_DIR"), "/auki.sensors.rs"));
-
-    impl SensorsRequest {
-        pub fn catalog() -> Self {
-            Self::default()
-        }
-
-        pub fn with_registry_entries() -> Self {
-            Self {
-                include_registry_entries: true,
-                include_frame_entries: false,
-            }
-        }
-
-        pub fn with_frame_entries() -> Self {
-            Self {
-                include_registry_entries: true,
-                include_frame_entries: true,
-            }
-        }
-    }
 }
 
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
@@ -412,7 +388,7 @@ mod tests {
     /// same input. Field 1 length-delimited: tag 0x0a, varint length
     /// 0x18 (24), then the 24 payload bytes. Same bytes whether the
     /// payload travels on disk (Sensor Log segment) or on the wire
-    /// (`/auki/stream/0.1.0` substream).
+    /// (`/auki/stream/0.2.0` substream).
     #[test]
     fn point_cloud_data_serializes_to_locked_wire_bytes() {
         let bytes = step3_point_cloud_data().encode_to_vec();
@@ -510,7 +486,7 @@ mod tests {
     /// payload bytes (`0x00, 0x11, 0x22, ..., 0xff`). Cross-language
     /// readers MUST reproduce them. Same bytes whether the payload
     /// travels on disk (Sensor Log segment) or on the wire
-    /// (`/auki/stream/0.1.0` substream).
+    /// (`/auki/stream/0.2.0` substream).
     #[test]
     fn audio_data_serializes_to_locked_wire_bytes() {
         let bytes = step4_audio_data().encode_to_vec();
@@ -976,7 +952,7 @@ mod tests {
     /// input. Field 1 packed-repeated float: tag 0x0a, varint length
     /// 0x18 (24 bytes = 6 × 4), then 6 little-endian f32s. Same bytes
     /// whether the payload travels on disk (Sensor Log segment) or on
-    /// the wire (`/auki/stream/0.1.0` substream).
+    /// the wire (`/auki/stream/0.2.0` substream).
     #[test]
     fn joint_encoders_data_serializes_to_locked_wire_bytes() {
         let bytes = step_joint_encoders_data().encode_to_vec();

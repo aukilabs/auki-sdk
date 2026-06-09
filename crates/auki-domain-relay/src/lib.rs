@@ -5,7 +5,7 @@ use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId, identify, noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmEvent},
-    yamux,
+    tcp, yamux,
 };
 use thiserror::Error;
 
@@ -62,9 +62,17 @@ impl DomainRelay {
         let agent_version = config.agent_version;
         let mut swarm = libp2p::SwarmBuilder::with_existing_identity(identity.keypair().clone())
             .with_tokio()
+            .with_tcp(
+                tcp::Config::default(),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .map_err(|err| DomainRelayError::Build(format!("tcp: {err}")))?
+            .with_dns()
+            .map_err(|err| DomainRelayError::Build(format!("dns: {err}")))?
             .with_websocket(noise::Config::new, yamux::Config::default)
             .await
-            .map_err(|err| DomainRelayError::Build(err.to_string()))?
+            .map_err(|err| DomainRelayError::Build(format!("websocket: {err}")))?
             .with_behaviour(|key| RelayBehaviour {
                 identify: identify::Behaviour::new(
                     identify::Config::new(IDENTIFY_PROTOCOL.into(), key.public())

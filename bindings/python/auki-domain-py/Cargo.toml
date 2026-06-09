@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for `auki-domain` — exposes the cluster membership document type to Python daemons."
+description = "PyO3 bindings for `auki-domain` — exposes ClusterManager and the post-#216 ResourceEntry catalog to Python daemons."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension; `rlib`
@@ -27,7 +27,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 # Renamed via `package =` so the upstream Rust crate's name doesn't
 # collide with our own lib name `auki_domain`.
-auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain" }
+auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain", features = ["native_runtime"] }
 # Required for `create_cluster`'s daemon-friendly façade: builds the
 # swarm + DiscoveryClient internally from the Python kwargs.
 auki-network = { path = "../../../crates/auki-network", features = ["discovery_client", "swarm"] }
@@ -47,6 +47,10 @@ libp2p-identity = { version = "0.2", default-features = false, features = ["ed25
 multiaddr = "0.18"
 # JSON round-trip for the `to_json` / `from_json` Python methods.
 serde_json = "1"
+# serde for resource entry serialization
+serde = { version = "1", features = ["derive"] }
+# RegistryRef / LogRef types used in resource catalog manifest pointers.
+auki-registry = { path = "../../../crates/auki-registry" }
 # Process-wide tokio runtime that `block_on`s the async cluster
 # manager calls behind a sync Python surface. Multi-thread because
 # the `NetworkRuntime`'s driver task needs `Handle::try_current()`
@@ -64,5 +68,6 @@ pyo3 = { version = "0.22", features = ["abi3-py38"] }
 
 [dev-dependencies]
 auki-registry = { path = "../../../crates/auki-registry" }
+auki-manifests = { path = "../../../crates/auki-manifests" }
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
 tempfile = "3"

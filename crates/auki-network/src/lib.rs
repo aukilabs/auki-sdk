@@ -8,7 +8,7 @@
 //! a [`libp2p-allow-block-list`] gate that enforces the cluster trust
 //! boundary at the handshake layer, and a [`NetworkRuntime`] that
 //! drives the swarm against a configurable allow-list. The runtime
-//! accepts inbound substreams on `/auki/stream/0.1.0` (delegating to
+//! accepts inbound substreams on `/auki/stream/0.2.0` (delegating to
 //! the consumer's `stream_provider`) and exposes outbound
 //! [`open_stream`].
 //!
@@ -111,13 +111,27 @@ pub mod diagnostic_protocol;
 pub mod info_protocol;
 
 #[cfg(feature = "swarm")]
-pub mod sensors_protocol;
-
-#[cfg(feature = "swarm")]
 pub mod resources_protocol;
 
 #[cfg(feature = "swarm")]
 pub mod registries_protocol;
+
+// ─── SessionHandle ────────────────────────────────────────────────────────────
+
+/// Source of resource catalog rows that `auki-domain`'s resources protocol
+/// handler reads from. Implemented by `auki_session::Session`.
+///
+/// The trait is defined here (in `auki-network`) so both `auki-domain` and
+/// `auki-session` can depend on it without a cycle:
+/// `auki-session` depends on `auki-network` and implements the trait;
+/// `auki-domain` depends on `auki-network` and consumes the trait.
+#[cfg(feature = "swarm")]
+pub trait SessionHandle: Send + Sync {
+    /// Returns all locally-known resource catalog rows: own logs plus
+    /// materialized logs from other peers. Called whenever a remote peer
+    /// asks this peer for its catalog over `/auki/resources/0.2.0`.
+    fn catalog(&self) -> Vec<resources_protocol::ResourceEntry>;
+}
 
 #[cfg(feature = "swarm")]
 pub use network_runtime::{
@@ -125,8 +139,8 @@ pub use network_runtime::{
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
     InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
     PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, RequestSensorsError, ResourcesRequestEvent, SendJoinRequestError,
-    SensorsRequestEvent, SpawnError, UpdateError, UpdateReport,
+    RequestResourcesError, ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError,
+    UpdateReport,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]
@@ -520,5 +534,19 @@ mod swift_bindings_tests {
         let a = PeerIdentity::from_wallet(Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed"));
         let b = PeerIdentity::from_wallet(Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed"));
         assert_ne!(a.peer_id_string(), b.peer_id_string());
+    }
+}
+
+#[cfg(all(test, feature = "swarm"))]
+mod protocol_id_tests {
+    use crate::registries_protocol::REGISTRIES_PROTOCOL;
+    use crate::resources_protocol::RESOURCES_PROTOCOL;
+    use crate::stream_protocol::STREAM_PROTOCOL;
+
+    #[test]
+    fn protocols_bumped_to_v0_2_0() {
+        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
+        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.2.0");
+        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

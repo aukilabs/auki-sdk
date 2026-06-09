@@ -22,7 +22,6 @@ fn main() -> std::io::Result<()> {
                 "proto/joint_encoders.proto",
                 "proto/point_cloud.proto",
                 "proto/pose.proto",
-                "proto/sensors.proto",
                 "proto/stream.proto",
                 "proto/time_transform.proto",
             ],

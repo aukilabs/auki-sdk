@@ -195,6 +195,38 @@ impl Peer {
     pub fn start_session(&self) -> Result<Session> {
         Session::start(self.inner.clone())
     }
+
+    /// A cheaply-cloneable read handle over this peer's registries, for
+    /// `auki-domain` to resolve registry entries (e.g. a sensor's kind/type)
+    /// while building the resource catalog. See [`PeerRegistries`].
+    pub fn registries(&self) -> PeerRegistries {
+        PeerRegistries {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// A cheaply-cloneable read handle over a [`Peer`]'s registries.
+///
+/// Obtained via [`Peer::registries`]. `auki-domain` holds one to look up
+/// registry entries when building catalog rows (the eternal capabilities a
+/// session's logs reference). Each accessor takes a brief read lock and
+/// returns an owned clone.
+#[derive(Clone)]
+pub struct PeerRegistries {
+    inner: Arc<RwLock<PeerInner>>,
+}
+
+impl PeerRegistries {
+    pub fn sensor(&self, sensor_id: &str) -> Option<SensorRegistryEntry> {
+        self.inner.read().sensors.get(sensor_id).cloned()
+    }
+    pub fn frame(&self, frame_id: &str) -> Option<FrameRegistryEntry> {
+        self.inner.read().frames.get(frame_id).cloned()
+    }
+    pub fn detector(&self, detector_id: &str) -> Option<DetectorRegistryEntry> {
+        self.inner.read().detectors.get(detector_id).cloned()
+    }
 }
 
 #[cfg(test)]

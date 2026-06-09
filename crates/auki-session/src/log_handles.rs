@@ -4,7 +4,6 @@ use auki_manifests::{
     DetectionLogManifest, PoseLogManifest, PoseWriterMode, SensorLogManifest,
     TimeTransformLogManifest,
 };
-use auki_network::resources_protocol::SensorKind;
 use auki_registry::LogRef;
 
 use crate::log_specs::HeadSpec;
@@ -12,14 +11,12 @@ use crate::log_specs::HeadSpec;
 pub struct SensorLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
-    /// Full manifest, used for catalog row production.
-    pub(crate) manifest: SensorLogManifest,
+    /// Full manifest. Public so `auki-domain` can build catalog rows; the
+    /// sensor kind/type are derived from the peer's sensor registry at
+    /// catalog-build time, not stored here. See #274 (D3).
+    pub manifest: SensorLogManifest,
     /// Head window spec, used for catalog row production.
-    pub(crate) head_spec: HeadSpec,
-    /// Closed sensor family (derived from manifest.sensor body).
-    pub(crate) sensor_kind: SensorKind,
-    /// Open-string sensor type (derived from manifest.sensor body).
-    pub(crate) sensor_type: String,
+    pub head_spec: HeadSpec,
 }
 
 impl SensorLogHandle {
@@ -35,11 +32,11 @@ pub struct PoseLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
     /// Full manifest, used for catalog row production.
-    pub(crate) manifest: PoseLogManifest,
+    pub manifest: PoseLogManifest,
     /// Head window spec, used for catalog row production.
-    pub(crate) head_spec: HeadSpec,
+    pub head_spec: HeadSpec,
     /// Writer mode (derived from spec).
-    pub(crate) writer_mode: PoseWriterMode,
+    pub writer_mode: PoseWriterMode,
 }
 
 impl PoseLogHandle {
@@ -55,9 +52,9 @@ pub struct TimeTransformLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
     /// Full manifest, used for catalog row production.
-    pub(crate) manifest: TimeTransformLogManifest,
+    pub manifest: TimeTransformLogManifest,
     /// Head window spec, used for catalog row production.
-    pub(crate) head_spec: HeadSpec,
+    pub head_spec: HeadSpec,
 }
 
 impl TimeTransformLogHandle {
@@ -73,9 +70,9 @@ pub struct DetectionLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
     /// Full manifest, used for catalog row production.
-    pub(crate) manifest: DetectionLogManifest,
+    pub manifest: DetectionLogManifest,
     /// Head window spec, used for catalog row production.
-    pub(crate) head_spec: HeadSpec,
+    pub head_spec: HeadSpec,
 }
 
 impl DetectionLogHandle {

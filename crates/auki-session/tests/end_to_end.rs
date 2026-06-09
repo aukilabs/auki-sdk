@@ -1,9 +1,11 @@
-//! End-to-end smoke for the post-#274 Peer / Session API.
+//! End-to-end smoke for the post-#274 Peer / Session API (no network).
+//!
+//! Catalog / wire-equivalence assertions live in `auki-domain` now that
+//! catalog building moved there (#274 step 6/7).
 
 use std::time::Duration;
 use tempfile::tempdir;
 
-use auki_network::resources_protocol::SensorKind;
 use auki_registry::{Camera, ClockBody, ClockMeta, Scope, SensorBody};
 use auki_session::{FrameDef, HeadSpec, Peer, SensorLogSpec};
 
@@ -50,7 +52,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         )
         .unwrap();
 
-    let _log = galbot
+    let log = galbot
         .register_sensor_log(SensorLogSpec {
             sensor: sensor.clone(),
             clock,
@@ -85,17 +87,11 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         "manifest missing retention_ns: {manifest_str}"
     );
 
-    // 2. Catalog produces one row for the sensor log
-    let catalog = galbot.catalog();
-    assert_eq!(catalog.len(), 1);
-    let row = &catalog[0];
-    assert_eq!(row.source_peer_id, "galbot");
-    assert_eq!(row.writer_peer_id, "galbot");
-    assert_eq!(row.resource_id, "head_left_rgb");
-    assert_eq!(row.state, "live");
-    let sensor_block = row.sensor.as_ref().unwrap();
-    assert_eq!(sensor_block.kind, SensorKind::Camera);
-    assert_eq!(sensor_block.r#type, "rgb");
+    // 2. The session's live-log view reflects the registered log.
+    let logs = galbot.logs();
+    assert_eq!(logs.sensor_logs().len(), 1);
+    assert_eq!(log.resource_id(), "head_left_rgb");
+    assert_eq!(log.log_ref().source_peer_id, "galbot");
 
     // 3. Park side — an independent peer + session with its own storage root
     // and a different peer_id; doesn't conflict with Galbot's session.
@@ -112,8 +108,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
     );
 
     let park = park_peer.start_session().unwrap();
-    let park_catalog = park.catalog();
-    assert_eq!(park_catalog.len(), 0, "Park hasn't registered any logs yet");
+    assert_eq!(park.logs().sensor_logs().len(), 0, "Park has no logs yet");
 }
 
 #[tokio::test]

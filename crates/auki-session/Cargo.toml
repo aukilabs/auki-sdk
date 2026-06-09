@@ -11,10 +11,7 @@ description = "Session — per-process declarative API for the Auki SDK."
 auki-identity = { path = "../auki-identity" }
 auki-registry = { path = "../auki-registry" }
 auki-manifests = { path = "../auki-manifests" }
-auki-network = { path = "../auki-network", features = ["swarm"] }
-auki-domain = { path = "../auki-domain", features = ["native_runtime"] }
 auki-datatypes = { path = "../auki-datatypes" }
-multiaddr = "0.18"
 auki-logs = { path = "../auki-logs" }
 auki-jcs = { path = "../auki-jcs" }
 auki-hash = { path = "../auki-hash" }

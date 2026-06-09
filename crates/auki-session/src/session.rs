@@ -216,6 +216,7 @@ impl Session {
         let mut inner = self.inner.write();
         let entry = ClockRegistryEntry {
             peer_id: inner.peer_id.clone(),
+            session_id: inner.session_id.clone(),
             clock_id: clock_id.to_string(),
             body,
         };

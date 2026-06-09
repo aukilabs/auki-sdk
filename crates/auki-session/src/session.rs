@@ -60,6 +60,12 @@ pub(crate) struct SessionInner {
     pub(crate) frames: RegistryStore<FrameRegistryEntry>,
     pub(crate) detectors: RegistryStore<DetectorRegistryEntry>,
 
+    // The session's auto-minted monotonic + UTC clocks, set by
+    // `Peer::start_session`. `None` for a bare `Session::new` (transitional —
+    // the Session/Peer rebuild in #274 removes the bare constructor).
+    pub(crate) monotonic_clock: Option<RegistryRef>,
+    pub(crate) utc_clock: Option<RegistryRef>,
+
     // Keyed by (source_peer_id, resource_id). For own logs source==self.peer_id;
     // for materializations source!=self.peer_id.
     pub(crate) sensor_logs: HashMap<(String, String), Arc<SensorLogHandle>>,
@@ -142,6 +148,8 @@ impl Session {
                 clocks: RegistryStore::default(),
                 frames: RegistryStore::default(),
                 detectors: RegistryStore::default(),
+                monotonic_clock: None,
+                utc_clock: None,
                 sensor_logs: HashMap::new(),
                 pose_logs: HashMap::new(),
                 time_logs: HashMap::new(),
@@ -179,6 +187,34 @@ impl Session {
     }
     pub fn storage_root(&self) -> PathBuf {
         self.inner.read().storage_root.clone()
+    }
+
+    /// The session's auto-minted monotonic clock (set by
+    /// [`crate::Peer::start_session`]). Panics on a bare `Session::new`.
+    pub fn monotonic_clock(&self) -> RegistryRef {
+        self.inner
+            .read()
+            .monotonic_clock
+            .clone()
+            .expect("monotonic clock; session was not started via Peer::start_session")
+    }
+
+    /// The session's auto-minted UTC clock (set by
+    /// [`crate::Peer::start_session`]). Panics on a bare `Session::new`.
+    pub fn utc_clock(&self) -> RegistryRef {
+        self.inner
+            .read()
+            .utc_clock
+            .clone()
+            .expect("utc clock; session was not started via Peer::start_session")
+    }
+
+    /// Record the auto-minted clock refs on the session. Called by
+    /// [`crate::Peer::start_session`] right after it registers them.
+    pub(crate) fn attach_clock_refs(&self, monotonic: RegistryRef, utc: RegistryRef) {
+        let mut inner = self.inner.write();
+        inner.monotonic_clock = Some(monotonic);
+        inner.utc_clock = Some(utc);
     }
 
     // ─── Registry registration ────────────────────────────────────────────
@@ -886,6 +922,25 @@ mod tests {
     fn storage_root_defaults_to_dot() {
         let s = Session::new("p", "a");
         assert_eq!(s.storage_root(), PathBuf::from("."));
+    }
+
+    #[test]
+    fn start_session_mints_session_and_registers_both_clocks() {
+        use crate::Peer;
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+
+        assert_eq!(session.session_id().len(), 26, "session_id should be a ULID");
+        let mono = session.monotonic_clock();
+        let utc = session.utc_clock();
+        assert!(mono.id.ends_with("/monotonic"), "mono id: {}", mono.id);
+        assert!(utc.id.ends_with("/utc"), "utc id: {}", utc.id);
+        // Both clock entries written to disk under the peer's storage root.
+        assert!(
+            tmp.path().join("registries/clocks/galbot").exists(),
+            "clock entries not registered on disk"
+        );
     }
 }
 

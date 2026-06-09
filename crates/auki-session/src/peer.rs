@@ -9,13 +9,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, RegistryRef, SensorBody,
-    SensorRegistryEntry,
+    ClockBody, ClockMeta, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, RegistryRef,
+    Scope, SensorBody, SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
 use crate::error::Result;
 use crate::registry_store::RegistryStore;
+use crate::session::Session;
 
 // ─── FrameDef ────────────────────────────────────────────────────────────────
 
@@ -178,6 +179,48 @@ impl Peer {
         };
         inner.detectors.insert(detector_id, entry);
         Ok(registry_ref)
+    }
+
+    /// Start a new session on this peer: mints a fresh `session_id` and
+    /// registers the session's monotonic + UTC clocks in the corrected shape
+    /// (`epoch: null` for monotonic, `unit: "ns"`, UTC `device-local`,
+    /// `session_id` carried as a typed field). See #274 (D6).
+    ///
+    /// One live session at a time is the intended model; a restart calls
+    /// `start_session` again for a fresh timeline while the peer's registries
+    /// persist.
+    pub fn start_session(&self) -> Result<Session> {
+        let (peer_id, app_id, storage_root) = {
+            let inner = self.inner.read();
+            (
+                inner.peer_id.clone(),
+                inner.app_id.clone(),
+                inner.storage_root.clone(),
+            )
+        };
+        let session = Session::new(&peer_id, &app_id).with_storage_root(storage_root);
+        let session_id = session.session_id();
+
+        let monotonic = session.register_clock(
+            &format!("{peer_id}/{session_id}/monotonic"),
+            ClockBody::MonotonicClock(ClockMeta {
+                unit: "ns".to_string(),
+                monotonic: true,
+                epoch: None,
+                scope: Scope::DeviceLocal,
+            }),
+        )?;
+        let utc = session.register_clock(
+            &format!("{peer_id}/{session_id}/utc"),
+            ClockBody::UtcClock(ClockMeta {
+                unit: "ns".to_string(),
+                monotonic: false,
+                epoch: Some("1970-01-01T00:00:00Z".to_string()),
+                scope: Scope::DeviceLocal,
+            }),
+        )?;
+        session.attach_clock_refs(monotonic, utc);
+        Ok(session)
     }
 }
 

@@ -283,9 +283,10 @@ fn make_sensor_joint_encoders_absolute() -> SensorRegistryEntry {
 fn make_clock_monotonic() -> ClockRegistryEntry {
     ClockRegistryEntry {
         peer_id: "galbot".into(),
-        clock_id: "session/sdk_clock".into(),
+        session_id: "sess-7f3a".into(),
+        clock_id: "galbot/sess-7f3a/monotonic".into(),
         body: ClockBody::MonotonicClock(ClockMeta {
-            unit: "nanoseconds".into(),
+            unit: "ns".into(),
             monotonic: true,
             epoch: None,
             scope: Scope::DeviceLocal,
@@ -296,12 +297,13 @@ fn make_clock_monotonic() -> ClockRegistryEntry {
 fn make_clock_utc() -> ClockRegistryEntry {
     ClockRegistryEntry {
         peer_id: "galbot".into(),
-        clock_id: "wall_clock".into(),
+        session_id: "sess-7f3a".into(),
+        clock_id: "galbot/sess-7f3a/utc".into(),
         body: ClockBody::UtcClock(ClockMeta {
-            unit: "nanoseconds".into(),
+            unit: "ns".into(),
             monotonic: false,
             epoch: Some("1970-01-01T00:00:00Z".into()),
-            scope: Scope::Global,
+            scope: Scope::DeviceLocal,
         }),
     }
 }

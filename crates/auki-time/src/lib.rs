@@ -25,7 +25,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub use auki_logs;
-use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, RegistryRef, Scope};
+use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
 
 // Re-exports for short call sites at consumer crates.
 pub use auki_datatypes::time_transform::TimeTransformEntry;
@@ -706,11 +706,15 @@ impl SessionClock {
         let name = name.into();
         let registry_entry = ClockRegistryEntry {
             peer_id: peer_id.clone(),
+            session_id: session_id.clone(),
             clock_id: format!("{peer_id}/{session_id}/{name}"),
             body: ClockBody::MonotonicClock(ClockMeta {
                 unit: "ns".into(),
                 monotonic: true,
-                epoch: Some(session_id),
+                // Monotonic clocks have no wall-clock zero — epoch is null.
+                // The session is carried by the typed `session_id` field, not
+                // smuggled into `epoch`. See #274 (D6).
+                epoch: None,
                 scope: Scope::DeviceLocal,
             }),
         };
@@ -791,6 +795,7 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_registry::RegistryRef;
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -827,18 +832,22 @@ mod tests {
     }
 
     #[test]
-    fn session_clock_builds_peer_anchored_registry_entry_with_epoch_marker() {
+    fn session_clock_builds_peer_anchored_registry_entry_with_typed_session_id() {
         let peer_id = "12D3KooWPeerExample";
         let clock = SessionClock::new(peer_id, "session-123", "monotonic");
 
         let entry = clock.registry_entry();
         assert_eq!(entry.clock_id, "12D3KooWPeerExample/session-123/monotonic");
+        // The session is carried by the typed `session_id` field…
+        assert_eq!(entry.session_id, "session-123");
         match &entry.body {
             ClockBody::MonotonicClock(meta) => {
                 assert_eq!(meta.unit, "ns");
                 assert!(meta.monotonic);
                 assert_eq!(meta.scope, Scope::DeviceLocal);
-                assert_eq!(meta.epoch.as_deref(), Some("session-123"));
+                // …not smuggled into `epoch`. A monotonic clock has no
+                // wall-clock zero, so epoch is null. See #274 (D6).
+                assert_eq!(meta.epoch, None);
             }
             ClockBody::UtcClock(_) => panic!("session clock must be monotonic"),
         }

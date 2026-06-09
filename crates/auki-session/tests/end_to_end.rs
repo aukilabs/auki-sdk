@@ -1,24 +1,27 @@
-//! End-to-end smoke for the post-#216 Session API.
+//! End-to-end smoke for the post-#274 Peer / Session API (no network).
+//!
+//! Catalog / wire-equivalence assertions live in `auki-domain` now that
+//! catalog building moved there (#274 step 6/7).
 
 use std::time::Duration;
 use tempfile::tempdir;
 
-use auki_network::resources_protocol::SensorKind;
 use auki_registry::{Camera, ClockBody, ClockMeta, Scope, SensorBody};
-use auki_session::{FrameDef, HeadSpec, SensorLogSpec, Session};
+use auki_session::{FrameDef, HeadSpec, Peer, SensorLogSpec};
 
 #[test]
 fn galbot_session_writes_manifest_then_park_session_independently_constructs_one() {
     let tmp = tempdir().unwrap();
 
     // ── Galbot side ──────────────────────────────────────────────────────────
-    let galbot = Session::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("galbot"));
+    // Peer owns identity + registries; a session is born from it.
+    let galbot_peer = Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("galbot"));
 
-    let frame = galbot
+    let frame = galbot_peer
         .register_frame("head_left_camera_optical", FrameDef::ros_optical())
         .unwrap();
 
-    let sensor = galbot
+    let sensor = galbot_peer
         .register_sensor(
             "head_left_rgb",
             SensorBody::Camera(Camera {
@@ -35,6 +38,8 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         )
         .unwrap();
 
+    let galbot = galbot_peer.start_session().unwrap();
+
     let clock = galbot
         .register_clock(
             "session/sdk_clock",
@@ -47,7 +52,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         )
         .unwrap();
 
-    let _log = galbot
+    let log = galbot
         .register_sensor_log(SensorLogSpec {
             sensor: sensor.clone(),
             clock,
@@ -82,34 +87,28 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         "manifest missing retention_ns: {manifest_str}"
     );
 
-    // 2. Catalog produces one row for the sensor log
-    let catalog = galbot.catalog();
-    assert_eq!(catalog.len(), 1);
-    let row = &catalog[0];
-    assert_eq!(row.source_peer_id, "galbot");
-    assert_eq!(row.writer_peer_id, "galbot");
-    assert_eq!(row.resource_id, "head_left_rgb");
-    assert_eq!(row.state, "live");
-    let sensor_block = row.sensor.as_ref().unwrap();
-    assert_eq!(sensor_block.kind, SensorKind::Camera);
-    assert_eq!(sensor_block.r#type, "rgb");
+    // 2. The session's live-log view reflects the registered log.
+    let logs = galbot.logs();
+    assert_eq!(logs.sensor_logs().len(), 1);
+    assert_eq!(log.resource_id(), "head_left_rgb");
+    assert_eq!(log.log_ref().source_peer_id, "galbot");
 
-    // 3. Park side — independently constructs a session with its own storage root
+    // 3. Park side — an independent peer + session with its own storage root
     // and a different peer_id; doesn't conflict with Galbot's session.
-    let park = Session::new("park", "park-vis").with_storage_root(tmp.path().join("park"));
+    let park_peer = Peer::new("park", "park-vis").with_storage_root(tmp.path().join("park"));
 
-    let park_frame = park
+    let park_frame = park_peer
         .register_frame("base_link", FrameDef::ros_body())
         .unwrap();
 
-    // The RegistryRef carries the peer_id of the session that registered it.
+    // The RegistryRef carries the peer_id of the peer that registered it.
     assert_eq!(
         park_frame.peer_id, "park",
         "park-registered frame should carry park's peer_id"
     );
 
-    let park_catalog = park.catalog();
-    assert_eq!(park_catalog.len(), 0, "Park hasn't registered any logs yet");
+    let park = park_peer.start_session().unwrap();
+    assert_eq!(park.logs().sensor_logs().len(), 0, "Park has no logs yet");
 }
 
 #[tokio::test]
@@ -117,7 +116,8 @@ async fn materialize_remote_log_returns_not_implemented() {
     // Full materialization requires a libp2p test harness which is out of scope.
     // Smoke that the surface returns an error as designed.
     let tmp = tempdir().unwrap();
-    let s = Session::new("park", "vis").with_storage_root(tmp.path().to_path_buf());
+    let peer = Peer::new("park", "vis").with_storage_root(tmp.path().to_path_buf());
+    let s = peer.start_session().unwrap();
     let result = s
         .materialize_remote_log(
             auki_registry::LogRef {

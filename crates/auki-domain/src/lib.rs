@@ -21,6 +21,8 @@ pub mod browser_session;
 pub mod cluster_manager;
 pub mod cluster_membership;
 #[cfg(feature = "native_runtime")]
+pub mod domain;
+#[cfg(feature = "native_runtime")]
 pub mod stream_manifest;
 
 #[cfg(feature = "native_runtime")]
@@ -42,5 +44,7 @@ pub use cluster_manager::{
     LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
+#[cfg(feature = "native_runtime")]
+pub use domain::{Domain, DomainConfig, DomainError, catalog_of};
 #[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

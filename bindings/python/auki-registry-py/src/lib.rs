@@ -421,10 +421,11 @@ fn validate_detector_id(id: &str) -> PyResult<()> {
 // ─── Clock Registry constructors ───────────────────────────────────
 
 #[pyfunction]
-#[pyo3(signature = (*, peer_id, clock_id, unit, scope, epoch=None))]
+#[pyo3(signature = (*, peer_id, session_id, clock_id, unit, scope, epoch=None))]
 fn monotonic_clock_entry(
     py: Python<'_>,
     peer_id: &str,
+    session_id: &str,
     clock_id: &str,
     unit: &str,
     scope: &str,
@@ -432,6 +433,7 @@ fn monotonic_clock_entry(
 ) -> PyResult<PyObject> {
     let entry = registry::ClockRegistryEntry {
         peer_id: peer_id.to_string(),
+        session_id: session_id.to_string(),
         clock_id: clock_id.to_string(),
         body: registry::ClockBody::MonotonicClock(registry::ClockMeta {
             unit: unit.to_string(),
@@ -444,10 +446,11 @@ fn monotonic_clock_entry(
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, peer_id, clock_id, unit, scope, epoch))]
+#[pyo3(signature = (*, peer_id, session_id, clock_id, unit, scope, epoch))]
 fn utc_clock_entry(
     py: Python<'_>,
     peer_id: &str,
+    session_id: &str,
     clock_id: &str,
     unit: &str,
     scope: &str,
@@ -455,6 +458,7 @@ fn utc_clock_entry(
 ) -> PyResult<PyObject> {
     let entry = registry::ClockRegistryEntry {
         peer_id: peer_id.to_string(),
+        session_id: session_id.to_string(),
         clock_id: clock_id.to_string(),
         body: registry::ClockBody::UtcClock(registry::ClockMeta {
             unit: unit.to_string(),

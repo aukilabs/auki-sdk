@@ -294,6 +294,10 @@ impl SensorRegistryEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockRegistryEntry {
     pub peer_id: String,
+    /// The session (boot) this clock belongs to. A monotonic clock's zero is
+    /// one process lifetime; a typed field so consumers resolve the session
+    /// without parsing it out of `clock_id`. See #274 (D6/D7).
+    pub session_id: String,
     pub clock_id: String,
     #[serde(flatten)]
     pub body: ClockBody,
@@ -940,6 +944,7 @@ mod tests {
     fn m1_monotonic_entry() -> ClockRegistryEntry {
         ClockRegistryEntry {
             peer_id: "galbot".into(),
+            session_id: "sess-m1".into(),
             clock_id: "K1-AABBCCDDEEFF/monotonic".into(),
             body: ClockBody::MonotonicClock(ClockMeta {
                 unit: "milliseconds".into(),
@@ -953,6 +958,7 @@ mod tests {
     fn m1_utc_entry() -> ClockRegistryEntry {
         ClockRegistryEntry {
             peer_id: "galbot".into(),
+            session_id: "sess-m1".into(),
             clock_id: "K1-AABBCCDDEEFF/utc".into(),
             body: ClockBody::UtcClock(ClockMeta {
                 unit: "milliseconds".into(),
@@ -984,7 +990,7 @@ mod tests {
         let bytes = m1_monotonic_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"clock_id":"K1-AABBCCDDEEFF/monotonic","epoch":null,"monotonic":true,"peer_id":"galbot","scope":"device-local","type":"monotonic_clock","unit":"milliseconds"}"#
+            r#"{"clock_id":"K1-AABBCCDDEEFF/monotonic","epoch":null,"monotonic":true,"peer_id":"galbot","scope":"device-local","session_id":"sess-m1","type":"monotonic_clock","unit":"milliseconds"}"#
         );
     }
 
@@ -993,7 +999,7 @@ mod tests {
         let bytes = m1_utc_entry().canonical_bytes();
         assert_eq!(
             std::str::from_utf8(&bytes).unwrap(),
-            r#"{"clock_id":"K1-AABBCCDDEEFF/utc","epoch":"1970-01-01T00:00:00Z","monotonic":false,"peer_id":"galbot","scope":"global","type":"utc_clock","unit":"milliseconds"}"#
+            r#"{"clock_id":"K1-AABBCCDDEEFF/utc","epoch":"1970-01-01T00:00:00Z","monotonic":false,"peer_id":"galbot","scope":"global","session_id":"sess-m1","type":"utc_clock","unit":"milliseconds"}"#
         );
     }
 
@@ -1010,13 +1016,33 @@ mod tests {
     fn monotonic_clock_hash_is_locked() {
         assert_eq!(
             m1_monotonic_entry().hash(),
-            "af8088eb29d34d076831763a30c07cbe"
+            "107238adc0441893cbfd35c41b5ec989"
         );
     }
 
     #[test]
     fn utc_clock_hash_is_locked() {
-        assert_eq!(m1_utc_entry().hash(), "010f5b2d0b8c616a9264ac6bb822a408");
+        assert_eq!(m1_utc_entry().hash(), "79eb38239c937eaa63863d25f822947a");
+    }
+
+    #[test]
+    fn clock_entry_carries_session_id() {
+        let e = ClockRegistryEntry {
+            peer_id: "galbot".into(),
+            session_id: "sess-7f3a".into(),
+            clock_id: "galbot/sess-7f3a/monotonic".into(),
+            body: ClockBody::MonotonicClock(ClockMeta {
+                unit: "ns".into(),
+                monotonic: true,
+                epoch: None,
+                scope: Scope::DeviceLocal,
+            }),
+        };
+        let s = String::from_utf8(e.canonical_bytes()).unwrap();
+        assert!(
+            s.contains(r#""session_id":"sess-7f3a""#),
+            "session_id missing from canonical bytes: {s}"
+        );
     }
 
     #[test]

@@ -1,1 +1,1 @@
-{"clock_id":"session/sdk_clock","epoch":null,"monotonic":true,"peer_id":"galbot","scope":"device-local","type":"monotonic_clock","unit":"nanoseconds"}
+{"clock_id":"galbot/sess-7f3a/monotonic","epoch":null,"monotonic":true,"peer_id":"galbot","scope":"device-local","session_id":"sess-7f3a","type":"monotonic_clock","unit":"ns"}

@@ -48,15 +48,6 @@ use auki_session_rs as session;
 
 // ─── JSON helpers ───────────────────────────────────────────────────────────
 
-/// Serialize a Rust value that implements serde::Serialize to a Python object
-/// via `json.loads(serde_json::to_string(...))`.
-fn rust_to_pyobject<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<PyObject> {
-    let s = serde_json::to_string(value)
-        .map_err(|e| PyRuntimeError::new_err(format!("internal serialize: {e}")))?;
-    let json = py.import_bound("json")?;
-    Ok(json.call_method1("loads", (s,))?.unbind())
-}
-
 /// Convert a Python object to `serde_json::Value` via `json.dumps(...)`.
 fn pyobject_to_json(
     py: Python<'_>,
@@ -145,16 +136,6 @@ fn map_session_error(err: session::SessionError) -> PyErr {
         ),
         session::SessionError::Materialization(e) => {
             PyRuntimeError::new_err(format!("materialization: {e}"))
-        }
-        session::SessionError::DomainBootstrap(e) => {
-            PyNotImplementedError::new_err(format!(
-                "join_domain not yet supported from Python (requires libp2p swarm): {e}"
-            ))
-        }
-        session::SessionError::DomainShutdown(e) => {
-            PyNotImplementedError::new_err(format!(
-                "leave_domain not yet supported from Python (requires libp2p swarm): {e}"
-            ))
         }
     }
 }
@@ -597,48 +578,40 @@ impl MaterializedLogHandle {
     }
 }
 
-// ─── Session pyclass ─────────────────────────────────────────────────────────
+// ─── Peer pyclass ─────────────────────────────────────────────────────────────
 
-/// Per-process declarative API for the Auki SDK.
+/// Stable, long-lived identity + registries for the Auki SDK.
+///
+/// A `Peer` owns `peer_id`, `app_id`, `storage_root`, and the eternal
+/// sensor / frame / detector registries. Start a fresh `Session` from it with
+/// `start_session()`; the peer's registries persist across sessions.
 ///
 /// Usage
 /// -----
 /// ```python
 /// import tempfile, pathlib
-/// from auki_session import Session, FrameDef, HeadSpec, SensorLogSpec
+/// from auki_session import Peer, FrameDef
 ///
 /// tmp = pathlib.Path(tempfile.mkdtemp())
-/// s = Session("galbot", "galbot-ctrl").with_storage_root(str(tmp))
-///
-/// frame_ref = s.register_frame("head_left_optical", FrameDef.ros_optical())
-/// sensor_ref = s.register_sensor(
+/// peer = Peer("galbot", "galbot-ctrl").with_storage_root(str(tmp))
+/// frame_ref = peer.register_frame("head_left_optical", FrameDef.ros_optical())
+/// sensor_ref = peer.register_sensor(
 ///     "head_left_rgb",
 ///     {"kind": "camera", "type": "rgb", "width": 1920, "height": 1200,
 ///      "frame_rate_hz": 30, "pixel_format": "rgb8", "color_space": "srgb",
 ///      "intrinsics_model": "pinhole", "distortion_model": "brown_conrady",
 ///      "frame": frame_ref},
 /// )
-/// clock_ref = s.register_clock(
-///     "sdk_clock",
-///     {"type": "monotonic_clock", "unit": "ns", "monotonic": True,
-///      "scope": "device-local"},
-/// )
-/// spec = SensorLogSpec(
-///     sensor=sensor_ref, clock=clock_ref, frame=frame_ref,
-///     head=HeadSpec.rolling(5_000_000_000),
-///     segment_duration_ns=1_000_000_000, retention_ns=5_000_000_000,
-/// )
-/// handle = s.register_sensor_log(spec)
-/// rows = s.catalog()   # list of dicts, one per registered log
+/// session = peer.start_session()   # mints session_id + monotonic/UTC clocks
 /// ```
 #[pyclass]
-pub struct Session {
-    inner: Arc<parking_lot::Mutex<session::Session>>,
+pub struct Peer {
+    inner: Arc<parking_lot::Mutex<session::Peer>>,
 }
 
 #[pymethods]
-impl Session {
-    /// Construct a new session.
+impl Peer {
+    /// Construct a new peer.
     ///
     /// Parameters
     /// ----------
@@ -649,20 +622,14 @@ impl Session {
     #[new]
     fn new(peer_id: String, app_id: String) -> Self {
         Self {
-            inner: Arc::new(parking_lot::Mutex::new(session::Session::new(
-                peer_id, app_id,
-            ))),
+            inner: Arc::new(parking_lot::Mutex::new(session::Peer::new(peer_id, app_id))),
         }
     }
 
     /// Set the storage root for registry and log files.
     ///
-    /// Preserves `session_id` — the underlying Rust `SessionInner` is
-    /// mutated in place via `Session::set_storage_root`, so the ULID
-    /// generated at construction stays stable across the call.
-    ///
-    /// Returns self for chaining: ``s = Session("p","a").with_storage_root("/tmp")``
-    fn with_storage_root(slf: Py<Session>, path: &str, py: Python<'_>) -> Py<Session> {
+    /// Returns self for chaining: ``peer = Peer("p","a").with_storage_root("/tmp")``
+    fn with_storage_root(slf: Py<Peer>, path: &str, py: Python<'_>) -> Py<Peer> {
         {
             let guard = slf.borrow(py);
             guard.inner.lock().set_storage_root(PathBuf::from(path));
@@ -682,29 +649,19 @@ impl Session {
         self.inner.lock().app_id()
     }
 
-    /// The ULID session identifier (unique per Session instance).
-    #[getter]
-    fn session_id(&self) -> String {
-        self.inner.lock().session_id()
-    }
-
     /// The storage root path (defaults to `.`).
     #[getter]
     fn storage_root(&self) -> String {
         self.inner.lock().storage_root().to_string_lossy().into_owned()
     }
 
-    // ─── Registry registration ────────────────────────────────────────
-
     /// Register a sensor, writing the entry to disk.
     ///
     /// Parameters
     /// ----------
     /// sensor_id : str
-    ///     Sensor identifier (e.g. ``"head_left_rgb"``).
-    /// body : dict or SensorRegistryEntry-shaped dict
-    ///     Sensor body dict as produced by `auki_registry.camera_sensor_entry`
-    ///     or equivalent. Must have ``"kind"`` and ``"type"`` fields.
+    /// body : dict
+    ///     Sensor body dict (must have ``"kind"`` and ``"type"`` fields).
     ///
     /// Returns
     /// -------
@@ -720,34 +677,6 @@ impl Session {
             .inner
             .lock()
             .register_sensor(sensor_id, sensor_body)
-            .map_err(map_session_error)?;
-        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
-    }
-
-    /// Register a clock, writing the entry to disk.
-    ///
-    /// Parameters
-    /// ----------
-    /// clock_id : str
-    ///     Clock identifier (e.g. ``"session/sdk_clock"``).
-    /// body : dict
-    ///     Clock body dict as produced by `auki_registry.monotonic_clock_entry`
-    ///     or equivalent.
-    ///
-    /// Returns
-    /// -------
-    /// RegistryRef
-    fn register_clock(
-        &self,
-        py: Python<'_>,
-        clock_id: &str,
-        body: &Bound<'_, PyAny>,
-    ) -> PyResult<registry_py::RegistryRef> {
-        let clock_body: registry::ClockBody = parse_py(py, body, "body")?;
-        let r = self
-            .inner
-            .lock()
-            .register_clock(clock_id, clock_body)
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
@@ -796,6 +725,129 @@ impl Session {
             .inner
             .lock()
             .register_detector(detector_id, detector_body, output_types)
+            .map_err(map_session_error)?;
+        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
+    }
+
+    /// Start a fresh session on this peer.
+    ///
+    /// Mints a new ``session_id`` and registers the session's monotonic + UTC
+    /// clocks. The peer's registries persist across sessions.
+    ///
+    /// Returns
+    /// -------
+    /// Session
+    fn start_session(&self) -> PyResult<Session> {
+        let s = self
+            .inner
+            .lock()
+            .start_session()
+            .map_err(map_session_error)?;
+        Ok(Session {
+            inner: Arc::new(parking_lot::Mutex::new(s)),
+        })
+    }
+}
+
+// ─── Session pyclass ─────────────────────────────────────────────────────────
+
+/// Per-session declarative API for the Auki SDK.
+///
+/// A `Session` is one timeline / run, created from a [`Peer`] via
+/// `peer.start_session()`. It owns the session clock registry (monotonic + UTC
+/// minted at start, plus any extra `register_clock`) and the live logs. Sensors,
+/// frames, and detectors are registered on the `Peer`, not the `Session`.
+///
+/// Usage
+/// -----
+/// ```python
+/// import tempfile, pathlib
+/// from auki_session import Peer, FrameDef, HeadSpec, SensorLogSpec
+///
+/// tmp = pathlib.Path(tempfile.mkdtemp())
+/// peer = Peer("galbot", "galbot-ctrl").with_storage_root(str(tmp))
+/// frame_ref = peer.register_frame("head_left_optical", FrameDef.ros_optical())
+/// sensor_ref = peer.register_sensor(
+///     "head_left_rgb",
+///     {"kind": "camera", "type": "rgb", "width": 1920, "height": 1200,
+///      "frame_rate_hz": 30, "pixel_format": "rgb8", "color_space": "srgb",
+///      "intrinsics_model": "pinhole", "distortion_model": "brown_conrady",
+///      "frame": frame_ref},
+/// )
+///
+/// session = peer.start_session()
+/// clock_ref = session.register_clock(
+///     "sdk_clock",
+///     {"type": "monotonic_clock", "unit": "ns", "monotonic": True,
+///      "scope": "device-local"},
+/// )
+/// spec = SensorLogSpec(
+///     sensor=sensor_ref, clock=clock_ref, frame=frame_ref,
+///     head=HeadSpec.rolling(5_000_000_000),
+///     segment_duration_ns=1_000_000_000, retention_ns=5_000_000_000,
+/// )
+/// handle = session.register_sensor_log(spec)
+/// ```
+///
+/// Catalog serving and cluster lifecycle live in the domain layer (a `Domain`
+/// composes a `Peer` + `Session`), not on `Session`.
+#[pyclass]
+pub struct Session {
+    inner: Arc<parking_lot::Mutex<session::Session>>,
+}
+
+#[pymethods]
+impl Session {
+    /// The peer identifier (e.g. device serial number).
+    #[getter]
+    fn peer_id(&self) -> String {
+        self.inner.lock().peer_id()
+    }
+
+    /// The application identifier.
+    #[getter]
+    fn app_id(&self) -> String {
+        self.inner.lock().app_id()
+    }
+
+    /// The ULID session identifier (unique per Session instance).
+    #[getter]
+    fn session_id(&self) -> String {
+        self.inner.lock().session_id()
+    }
+
+    /// The storage root path (defaults to `.`), read from the peer.
+    #[getter]
+    fn storage_root(&self) -> String {
+        self.inner.lock().storage_root().to_string_lossy().into_owned()
+    }
+
+    // ─── Clock registration ───────────────────────────────────────────
+
+    /// Register an additional session-scoped clock, writing the entry to disk.
+    ///
+    /// Parameters
+    /// ----------
+    /// clock_id : str
+    ///     Clock identifier (e.g. ``"session/sdk_clock"``).
+    /// body : dict
+    ///     Clock body dict as produced by `auki_registry.monotonic_clock_entry`
+    ///     or equivalent.
+    ///
+    /// Returns
+    /// -------
+    /// RegistryRef
+    fn register_clock(
+        &self,
+        py: Python<'_>,
+        clock_id: &str,
+        body: &Bound<'_, PyAny>,
+    ) -> PyResult<registry_py::RegistryRef> {
+        let clock_body: registry::ClockBody = parse_py(py, body, "body")?;
+        let r = self
+            .inner
+            .lock()
+            .register_clock(clock_id, clock_body)
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
     }
@@ -871,47 +923,6 @@ impl Session {
             resource_id: handle.resource_id().to_string(),
             log_ref_inner: handle.log_ref().clone(),
         })
-    }
-
-    // ─── Catalog ──────────────────────────────────────────────────────
-
-    /// Return the catalog as a list of dicts in the canonical `ResourceEntry` JSON shape.
-    ///
-    /// Returns
-    /// -------
-    /// list[dict]
-    fn catalog(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
-        let entries = self.inner.lock().catalog();
-        entries
-            .iter()
-            .map(|e| rust_to_pyobject(py, e))
-            .collect()
-    }
-
-    // ─── Domain stubs ─────────────────────────────────────────────────
-
-    /// Join or create a cluster domain.
-    ///
-    /// **Not yet supported from Python.** The Rust implementation requires
-    /// a pre-built libp2p swarm and stream provider, which cannot be
-    /// constructed from Python yet. Raises `NotImplementedError`.
-    fn join_domain(&self, _config: &Bound<'_, PyAny>) -> PyResult<()> {
-        Err(PyNotImplementedError::new_err(
-            "join_domain is not yet supported from Python: \
-             requires a pre-built libp2p swarm (DomainConfig). \
-             Use the Rust API or wait for a future Python binding.",
-        ))
-    }
-
-    /// Leave the current cluster domain.
-    ///
-    /// **Not yet supported from Python.** Raises `NotImplementedError`.
-    fn leave_domain(&self) -> PyResult<()> {
-        Err(PyNotImplementedError::new_err(
-            "leave_domain is not yet supported from Python: \
-             requires an active libp2p ClusterManager. \
-             Use the Rust API or wait for a future Python binding.",
-        ))
     }
 
     // ─── Materialization stubs ────────────────────────────────────────
@@ -1000,6 +1011,7 @@ fn auki_session(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TimeTransformLogHandle>()?;
     m.add_class::<DetectionLogHandle>()?;
     m.add_class::<MaterializedLogHandle>()?;
+    m.add_class::<Peer>()?;
     m.add_class::<Session>()?;
     Ok(())
 }
@@ -1009,7 +1021,7 @@ fn auki_session(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::{PyDict, PyList, PyModule};
+    use pyo3::types::{PyDict, PyModule};
 
     // ─── helpers ──────────────────────────────────────────────────────
 
@@ -1056,6 +1068,7 @@ mod tests {
         Python::with_gil(|py| {
             let module = PyModule::new_bound(py, "auki_session").unwrap();
             auki_session(py, &module).unwrap();
+            assert!(module.getattr("Peer").is_ok());
             assert!(module.getattr("Session").is_ok());
             assert!(module.getattr("HeadSpec").is_ok());
             assert!(module.getattr("FrameDef").is_ok());
@@ -1065,10 +1078,30 @@ mod tests {
         });
     }
 
+    /// Build a binding `Peer` rooted at `tmp` (bypasses the `Py<Peer>`
+    /// builder so tests can construct one inline).
+    fn peer_at(tmp: &std::path::Path) -> Peer {
+        Peer {
+            inner: Arc::new(parking_lot::Mutex::new(
+                session::Peer::new("galbot", "ctrl").with_storage_root(tmp.to_path_buf()),
+            )),
+        }
+    }
+
     #[test]
-    fn session_new_carries_peer_and_app_id() {
+    fn peer_carries_identity_and_starts_session() {
         Python::with_gil(|_py| {
-            let s = Session::new("galbot".to_string(), "galbot-ctrl".to_string());
+            let tmp = tempfile::tempdir().unwrap();
+            // start_session writes clock entries to disk, so root at a tempdir.
+            let p = Peer {
+                inner: Arc::new(parking_lot::Mutex::new(
+                    session::Peer::new("galbot", "galbot-ctrl")
+                        .with_storage_root(tmp.path().to_path_buf()),
+                )),
+            };
+            assert_eq!(p.peer_id(), "galbot");
+            assert_eq!(p.app_id(), "galbot-ctrl");
+            let s = p.start_session().unwrap();
             assert_eq!(s.peer_id(), "galbot");
             assert_eq!(s.app_id(), "galbot-ctrl");
             assert_eq!(s.session_id().len(), 26); // ULID
@@ -1076,30 +1109,26 @@ mod tests {
     }
 
     #[test]
-    fn session_with_storage_root() {
+    fn peer_with_storage_root() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();
-            let s = Py::new(py, Session::new("p".to_string(), "a".to_string())).unwrap();
-            let s2 = Session::with_storage_root(s, tmp.path().to_str().unwrap(), py);
-            let s2_ref = s2.borrow(py);
+            let p = Py::new(py, Peer::new("p".to_string(), "a".to_string())).unwrap();
+            let p2 = Peer::with_storage_root(p, tmp.path().to_str().unwrap(), py);
+            let p2_ref = p2.borrow(py);
             assert_eq!(
-                s2_ref.storage_root(),
+                p2_ref.storage_root(),
                 tmp.path().to_string_lossy().as_ref()
             );
         });
     }
 
     #[test]
-    fn register_frame_returns_registry_ref() {
+    fn peer_register_frame_returns_registry_ref() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();
-            let rust_session = session::Session::new("galbot", "ctrl")
-                .with_storage_root(tmp.path().to_path_buf());
-            let s = Session {
-                inner: Arc::new(parking_lot::Mutex::new(rust_session)),
-            };
+            let p = peer_at(tmp.path());
             let def = FrameDef::ros_optical();
-            let r = s.register_frame("head_optical", &def).unwrap();
+            let r = p.register_frame("head_optical", &def).unwrap();
             assert_eq!(r.peer_id, "galbot");
             assert_eq!(r.id, "head_optical");
             assert!(!r.hash.is_empty());
@@ -1111,26 +1140,22 @@ mod tests {
     fn register_sensor_log_end_to_end() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();
-            let rust_session = session::Session::new("galbot", "ctrl")
-                .with_storage_root(tmp.path().to_path_buf());
-            let s = Session {
-                inner: Arc::new(parking_lot::Mutex::new(rust_session)),
-            };
+            let peer = peer_at(tmp.path());
 
-            // register frame
+            // register frame + sensor on the peer
             let frame_def = FrameDef::ros_optical();
-            let frame_ref = s.register_frame("head_optical", &frame_def).unwrap();
+            let frame_ref = peer.register_frame("head_optical", &frame_def).unwrap();
 
-            // register sensor via dict
             let frame_dict = make_frame_dict(py);
             // Use the actual frame_ref hash
             frame_dict.set_item("hash", &frame_ref.hash).unwrap();
             let body_dict = make_camera_body_dict(py, &frame_dict);
-            let sensor_ref = s
+            let sensor_ref = peer
                 .register_sensor(py, "head_left_rgb", body_dict.as_any())
                 .unwrap();
 
-            // register clock
+            // start a session, register clock + log on it
+            let s = peer.start_session().unwrap();
             let clock_dict = make_monotonic_clock_dict(py);
             let clock_ref = s
                 .register_clock(py, "sdk_clock", clock_dict.as_any())
@@ -1156,14 +1181,6 @@ mod tests {
             assert_eq!(handle.resource_id, "head_left_rgb");
             assert_eq!(handle.log_ref_inner.source_peer_id, "galbot");
             assert_eq!(handle.log_ref_inner.resource_id, "head_left_rgb");
-
-            // catalog
-            let catalog = s.catalog(py).unwrap();
-            assert_eq!(catalog.len(), 1);
-            let row = catalog[0].bind(py);
-            let resource_id: String =
-                row.get_item("resource_id").unwrap().extract().unwrap();
-            assert_eq!(resource_id, "head_left_rgb");
         });
     }
 
@@ -1171,11 +1188,7 @@ mod tests {
     fn materialize_remote_log_raises_not_implemented() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();
-            let rust_session = session::Session::new("galbot", "ctrl")
-                .with_storage_root(tmp.path().to_path_buf());
-            let s = Session {
-                inner: Arc::new(parking_lot::Mutex::new(rust_session)),
-            };
+            let s = peer_at(tmp.path()).start_session().unwrap();
             let log_ref_dict = PyDict::new_bound(py);
             log_ref_dict
                 .set_item("source_peer_id", "galbot")
@@ -1198,11 +1211,7 @@ mod tests {
     fn resolve_static_transform_raises_not_implemented() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();
-            let rust_session = session::Session::new("galbot", "ctrl")
-                .with_storage_root(tmp.path().to_path_buf());
-            let s = Session {
-                inner: Arc::new(parking_lot::Mutex::new(rust_session)),
-            };
+            let s = peer_at(tmp.path()).start_session().unwrap();
             let log_ref_dict = PyDict::new_bound(py);
             log_ref_dict.set_item("source_peer_id", "park").unwrap();
             log_ref_dict

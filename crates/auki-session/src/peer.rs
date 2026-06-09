@@ -102,6 +102,13 @@ impl Peer {
         self
     }
 
+    /// In-place mutator equivalent of [`Peer::with_storage_root`], for FFI /
+    /// binding wrappers (PyO3, UniFFI) that can't express take-by-value
+    /// builders. Mutates through the inner `Arc<RwLock>`.
+    pub fn set_storage_root(&self, root: PathBuf) {
+        self.inner.write().storage_root = root;
+    }
+
     /// Register a coordinate frame using a [`FrameDef`] preset, writing the
     /// entry to disk and stashing it in the in-memory store.
     ///

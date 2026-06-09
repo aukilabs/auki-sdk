@@ -40,51 +40,7 @@ use crate::log_specs::{
 use crate::materialization::MaterializationError;
 use crate::registry_store::RegistryStore;
 
-// ─── FrameDef ────────────────────────────────────────────────────────────────
-
-/// Builder-style frame preset. Created from one of the four named presets
-/// (`FrameDef::ros_body()` etc.) and consumed by [`Session::register_frame`].
-/// The session fills in `peer_id` and `frame_id` at registration time.
-pub enum FrameDef {
-    RosBody,
-    RosOptical,
-    OpenGl,
-    Unity,
-}
-
-impl FrameDef {
-    /// REP-103 body frame: right-handed, X forward, Y left, Z up, meters.
-    pub fn ros_body() -> Self {
-        Self::RosBody
-    }
-    /// REP-103 camera optical frame: right-handed, X right, Y down, Z forward, meters.
-    pub fn ros_optical() -> Self {
-        Self::RosOptical
-    }
-    /// OpenGL / Three.js: right-handed, X right, Y up, Z backward, meters.
-    pub fn opengl() -> Self {
-        Self::OpenGl
-    }
-    /// Unity: left-handed, X right, Y up, Z forward, meters.
-    pub fn unity() -> Self {
-        Self::Unity
-    }
-
-    fn into_entry(
-        self,
-        peer_id: impl Into<String>,
-        frame_id: impl Into<String>,
-    ) -> FrameRegistryEntry {
-        let peer_id = peer_id.into();
-        let frame_id = frame_id.into();
-        match self {
-            Self::RosBody => FrameRegistryEntry::ros_body(peer_id, frame_id),
-            Self::RosOptical => FrameRegistryEntry::ros_optical(peer_id, frame_id),
-            Self::OpenGl => FrameRegistryEntry::opengl(peer_id, frame_id),
-            Self::Unity => FrameRegistryEntry::unity(peer_id, frame_id),
-        }
-    }
-}
+pub use crate::peer::FrameDef;
 
 pub struct Session {
     pub(crate) inner: Arc<RwLock<SessionInner>>,

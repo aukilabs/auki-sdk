@@ -1,35 +1,40 @@
 # auki-session-py
 
-PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the Auki SDK's declarative control-plane API. Shipped in #224 alongside the Rust `auki-session` crate.
+PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the SDK's declarative control-plane API. Shipped in #224; tracks the post-#282 `Peer` / `Session` split.
 
-Both the Rust crate and the Python binding are live and tested (22 passing Python tests in `tests/`).
-
-**Status:** Shipped.
+**Status:** Shipped. Tested in `python_tests/`. Cluster lifecycle is **not** in this package — Python daemons drive [`auki-domain-py`](../auki-domain-py)'s `ClusterManager` directly (the Rust `Domain::join` path has no Python binding yet).
 
 ## Public surface
 
-### Session class
+### Peer class
 
 ```python
-from auki_session import Session, FrameDef, HeadSpec, SensorLogSpec
+from auki_session import Peer, FrameDef, HeadSpec, SensorLogSpec
 
-s = Session("galbot", "galbot-ctrl").with_storage_root("/data/auki")
+peer = Peer("12D3KooW...", "galbot-ctrl").with_storage_root("/data/auki")
+frame = peer.register_frame("head_left_optical", FrameDef.ros_optical())
+sensor = peer.register_sensor("head_left_rgb", {"kind": "camera", "type": "rgb", ...})
+session = peer.start_session()
 ```
 
-- `Session(peer_id, app_id)` — constructor; generates a ULID `session_id`.
-- `with_storage_root(path)` — in-place builder. Mutates the session's storage root and returns `self` for chaining. **Preserves `session_id`** — calling it after the constructor does not regenerate the ULID. Under the hood, calls Rust's `Session::set_storage_root` (the binding-friendly sibling of `Session::with_storage_root(self, root) -> Self`).
-- Read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`.
-
-### Registry registration
-
-Each returns a `RegistryRef` instance (`peer_id`, `id`, `hash`). IDs must not contain `>`, `@`, or whitespace.
-
+- `Peer(peer_id, app_id)` — long-lived identity; `peer_id` is the libp2p peer-id string. The peer outlives any one session.
+- `with_storage_root(path)` — in-place builder; mutates the peer's storage root and returns `self` for chaining. Under the hood, calls Rust's `Peer::set_storage_root` (the binding-friendly sibling of `Peer::with_storage_root(self, root) -> Self`).
+- Read accessors: `peer_id`, `app_id`, `storage_root`.
 - `register_sensor(sensor_id, body_dict)` — `body_dict` has `"kind"` and `"type"` fields (e.g. `{"kind": "camera", "type": "rgb", ...}`).
-- `register_clock(clock_id, body_dict)`.
-- `register_frame(frame_id, FrameDef)` — takes a `FrameDef` preset object.
+- `register_frame(frame_id, FrameDef)` — takes a `FrameDef` preset object. Classmethods: `FrameDef.ros_body()`, `FrameDef.ros_optical()`, `FrameDef.opengl()`, `FrameDef.unity()`.
 - `register_detector(detector_id, body_dict, output_types: list[str])`.
+- `start_session()` → `Session` — mints a ULID `session_id` and auto-registers the session's monotonic + UTC clocks (`{peer_id}/{session_id}/monotonic` / `…/utc`).
 
-`FrameDef` classmethods: `FrameDef.ros_body()`, `FrameDef.ros_optical()`, `FrameDef.opengl()`, `FrameDef.unity()`.
+Each `register_*` returns a `RegistryRef` instance (`peer_id`, `id`, `hash`). IDs must not contain `>`, `@`, or whitespace.
+
+### Session class
+
+Sessions are born from `peer.start_session()` — there is no Python `Session` constructor.
+
+- Read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`.
+- `register_clock(clock_id, body_dict)` — additional session-scoped clocks.
+
+Not yet exposed: the Rust `Session::monotonic_clock()` / `utc_clock()` getters for the auto-minted clock pair — Python apps that need a clock `RegistryRef` for a log spec register their own via `register_clock`.
 
 ### Log registration
 
@@ -44,16 +49,14 @@ Each returns a typed handle with `resource_id` and `log_ref` attributes. Specs t
 
 `LogRef` class: `LogRef(source_peer_id, resource_id)`.
 
-### Catalog
-
-- `catalog()` → `list[dict]` — one `ResourceEntry` dict per registered log, in the `/auki/resources/0.2.0` wire shape.
-
 ### Async stubs (raise `NotImplementedError`)
 
-- `join_domain(config)` — not yet supported from Python; requires a pre-built libp2p swarm.
-- `leave_domain()` — not yet supported from Python.
 - `materialize_remote_log(log_ref, *, retention_ns, segment_duration_ns)` — deferred to Phase 5.
 - `resolve_static_transform(log_ref)` — deferred to Phase 5.
+
+### Catalog and domain — not here
+
+`catalog()` and `join_domain` / `leave_domain` were removed with the #282 split (they no longer exist on the Rust `Session` either). Resource catalogs and cluster lifecycle live in [`auki-domain-py`](../auki-domain-py) (`ClusterManager`, `ResourceEntry`).
 
 ## Type sharing
 

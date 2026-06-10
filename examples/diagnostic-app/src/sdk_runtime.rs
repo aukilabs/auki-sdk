@@ -1,9 +1,10 @@
 use crate::flash::FlashMode;
 use crate::tick_report::{PeerTickStats, TickReport, TickReportStore};
 use auki_domain::DiagnosticMessage;
-use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo};
+use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo, Domain, DomainConfig};
 use auki_identity::{Wallet, load_or_mint_seed};
 use auki_network::PeerIdentity;
+use auki_session::Peer;
 use auki_network::app_instance;
 use auki_network::stream_runtime::decline_all_streams;
 use auki_network::swarm::{SwarmConfig, build_swarm, collect_routable_listen_addrs};
@@ -217,7 +218,7 @@ struct RuntimeWorker {
     snapshot: Arc<Mutex<RuntimeSnapshot>>,
     commands: mpsc::UnboundedReceiver<WorkerCommand>,
     join_generation: JoinGeneration,
-    manager: Option<ClusterManager>,
+    domain: Option<Domain>,
     tick_reports: TickReportStore,
 }
 
@@ -262,7 +263,7 @@ impl SdkRuntime {
                 snapshot: Arc::clone(&snapshot),
                 commands: worker_commands,
                 join_generation: join_generation.clone(),
-                manager: None,
+                domain: None,
                 tick_reports: TickReportStore::default(),
             }
             .run(),
@@ -390,7 +391,7 @@ impl RuntimeWorker {
             return;
         }
 
-        if self.manager.is_some() {
+        if self.domain.is_some() {
             if self.join_generation.is_current(token) {
                 self.refresh_cluster_snapshot();
             }
@@ -436,55 +437,76 @@ impl RuntimeWorker {
         }
 
         let app_instance = app_instance::derive().unwrap_or_else(|_| "unknown".into());
+
+        // Become a proper peer: the peer's id IS the local network identity,
+        // and starting a session mints + registers the monotonic/UTC clocks.
+        let peer = Peer::new(identity.peer_id().to_string(), "auki-diagnostic-app")
+            .with_storage_root(storage_root());
+        let session = match peer.start_session() {
+            Ok(session) => session,
+            Err(error) => {
+                self.apply_join_failed_if_current(token, format!("start session: {error}"));
+                return;
+            }
+        };
+
+        // Domain::join stamps the session's clock identity into DaemonInfo, so
+        // the cluster's runtime clock and the registered clock share one
+        // identity — no hand-fed session id / clock placeholders.
         let daemon_info = DaemonInfo {
             app: "auki-diagnostic-app".into(),
             name: snapshot.display_name,
-            session_id: uuid::Uuid::new_v4().to_string(),
-            session_clock_id: "compat".into(),
-            session_clock_hash: "compat".into(),
+            session_id: String::new(),
+            session_clock_id: String::new(),
+            session_clock_hash: String::new(),
             app_instance,
         };
 
-        let manager = match ClusterManager::bootstrap(
-            ClusterTarget::join_or_create(snapshot.cluster_name),
-            identity,
-            local_multiaddrs,
-            snapshot.discovery_url,
-            swarm,
-            decline_all_streams(),
-            daemon_info,
+        let domain = match Domain::join(
+            &peer,
+            &session,
+            DomainConfig {
+                target: ClusterTarget::join_or_create(snapshot.cluster_name),
+                local_identity: identity,
+                local_multiaddrs,
+                discovery_url: snapshot.discovery_url,
+                swarm,
+                stream_provider: decline_all_streams(),
+                daemon_info,
+            },
         )
         .await
         {
-            Ok(manager) => manager,
+            Ok(domain) => domain,
             Err(error) => {
-                self.apply_join_failed_if_current(token, format!("cluster bootstrap: {error}"));
+                self.apply_join_failed_if_current(token, format!("domain join: {error}"));
                 return;
             }
         };
 
         if !self.join_generation.is_current(token) {
-            let _ = manager.shutdown().await;
+            let _ = domain.leave().await;
             return;
         }
 
-        let cluster_snapshot = cluster_snapshot(&manager);
-        self.manager = Some(manager);
+        let cluster_snapshot = cluster_snapshot(domain.cluster_manager());
+        self.domain = Some(domain);
         self.apply(RuntimeCommand::ClusterJoined(Box::new(cluster_snapshot)));
     }
 
     fn refresh_cluster_snapshot(&self) {
-        if let Some(manager) = &self.manager {
+        if let Some(domain) = &self.domain {
             self.apply(RuntimeCommand::ClusterJoined(Box::new(cluster_snapshot(
-                manager,
+                domain.cluster_manager(),
             ))));
         }
     }
 
     fn ingest_diagnostic_messages(&mut self) {
-        let Some(manager) = &self.manager else {
+        let Some(domain) = &self.domain else {
             return;
         };
+        let manager = domain.cluster_manager();
         for inbound in manager.drain_diagnostic_messages() {
             if inbound.message.topic != TICK_REPORT_TOPIC {
                 continue;
@@ -504,7 +526,8 @@ impl RuntimeWorker {
 
     fn publish_tick_report(&mut self, report: TickReport) {
         self.tick_reports.record_local(report.clone());
-        if let Some(manager) = &self.manager {
+        if let Some(domain) = &self.domain {
+            let manager = domain.cluster_manager();
             match serde_json::to_string(&report) {
                 Ok(payload_json) => {
                     let _ = manager.broadcast_diagnostic_message(DiagnosticMessage {
@@ -541,19 +564,28 @@ impl RuntimeWorker {
     }
 
     async fn shutdown_manager(&mut self) {
-        if let Some(manager) = self.manager.take() {
-            let _ = manager.shutdown().await;
+        if let Some(domain) = self.domain.take() {
+            let _ = domain.leave().await;
         }
     }
 }
 
-fn identity_seed_path() -> PathBuf {
+/// `~/.auki/diagnostic-app` — where identity and the session's registry
+/// (clock entries written by `start_session`) live.
+fn app_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".auki")
         .join("diagnostic-app")
-        .join("identity.seed")
+}
+
+fn identity_seed_path() -> PathBuf {
+    app_dir().join("identity.seed")
+}
+
+fn storage_root() -> PathBuf {
+    app_dir()
 }
 
 fn cluster_snapshot(manager: &ClusterManager) -> ClusterSnapshot {

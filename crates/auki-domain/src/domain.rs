@@ -59,6 +59,18 @@ pub struct DomainConfig {
 /// Errors returned by [`Domain::join`] / [`Domain::leave`].
 #[derive(Debug, thiserror::Error)]
 pub enum DomainError {
+    /// The peer's id is not the local network identity. The session's
+    /// registered clock is keyed by `peer.peer_id()`, while the cluster's
+    /// runtime clock is keyed by `local_identity.peer_id()`; if they differ
+    /// the two clocks silently diverge. The peer must be constructed with the
+    /// libp2p peer id as its `peer_id` (see the SDK identity convention).
+    #[error("peer id {peer:?} != local network identity {identity:?}")]
+    IdentityMismatch {
+        /// The `peer.peer_id()` the session's clock is registered under.
+        peer: String,
+        /// The local libp2p identity the cluster's runtime clock would use.
+        identity: String,
+    },
     /// Cluster bootstrap failed (Discovery unreachable, name collision, join
     /// rejection, etc.).
     #[error("domain bootstrap: {0}")]
@@ -88,8 +100,31 @@ impl Domain {
     pub async fn join(
         peer: &Peer,
         session: &Session,
-        config: DomainConfig,
+        mut config: DomainConfig,
     ) -> Result<Domain, DomainError> {
+        // The peer's id must be the local network identity: the session's
+        // registered clock is keyed by `peer.peer_id()`, and the cluster's
+        // runtime `SessionClock` is keyed by `local_identity.peer_id()`. They
+        // have to match or the registered and advertised clocks diverge.
+        let local_id = config.local_identity.peer_id().to_string();
+        if peer.peer_id() != local_id {
+            return Err(DomainError::IdentityMismatch {
+                peer: peer.peer_id(),
+                identity: local_id,
+            });
+        }
+
+        // Stamp the session's authoritative clock identity into DaemonInfo.
+        // The cluster rebuilds a `SessionClock` from `daemon_info.session_id`
+        // (+ the matching peer id), which reconstructs the identical
+        // `ClockRegistryEntry` `start_session` registered — so the advertised
+        // `(id, hash)` resolves to the registry entry. Replaces callers
+        // hand-feeding these (and the `"compat"` placeholders).
+        let mono = session.monotonic_clock();
+        config.daemon_info.session_id = session.session_id();
+        config.daemon_info.session_clock_id = mono.id;
+        config.daemon_info.session_clock_hash = mono.hash;
+
         let manager = ClusterManager::bootstrap(
             config.target,
             config.local_identity,

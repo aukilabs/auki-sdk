@@ -660,6 +660,7 @@ dependencies = [
  "auki-domain",
  "auki-identity",
  "auki-network",
+ "auki-session",
  "eframe",
  "egui",
  "libp2p",
@@ -668,7 +669,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "uuid",
 ]
 
 [[package]]

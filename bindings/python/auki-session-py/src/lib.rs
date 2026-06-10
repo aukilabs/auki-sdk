@@ -1,18 +1,23 @@
 //! PyO3 bindings for [`auki-session`](../../../../crates/auki-session).
 //!
-//! Exposes the declarative `Session` API to Python:
-//! - `Session(peer_id, app_id)` — create a session
+//! Exposes the declarative `Peer` / `Session` API to Python (post-#282 split):
+//! - `Peer(peer_id, app_id)` — long-lived identity + registries
 //! - `with_storage_root(path)` — builder method (returns self)
-//! - Read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`
-//! - Registry registration: `register_sensor`, `register_clock`,
-//!   `register_frame`, `register_detector` — each returns a `RegistryRef`
-//! - Log registration: `register_sensor_log`, `register_pose_log`,
+//! - Peer read accessors: `peer_id`, `app_id`, `storage_root`
+//! - Registry registration on `Peer`: `register_sensor`, `register_frame`,
+//!   `register_detector` — each returns a `RegistryRef`
+//! - `Peer.start_session()` → `Session` — mints `session_id` + session clocks
+//! - Session read accessors: `peer_id`, `app_id`, `session_id`, `storage_root`
+//! - `Session.register_clock` — additional session-scoped clocks
+//! - Log registration on `Session`: `register_sensor_log`, `register_pose_log`,
 //!   `register_time_transform_log`, `register_detection_log` — each
 //!   returns the corresponding handle
-//! - `catalog()` — returns a list of `dict`s (canonical JSON shape)
-//! - Async stubs: `join_domain`, `leave_domain`, `materialize_remote_log`,
-//!   `resolve_static_transform` — raise `NotImplementedError` with a clear
-//!   message (the Rust side returns `NotImplemented` on these paths)
+//! - Async stubs: `materialize_remote_log`, `resolve_static_transform` —
+//!   raise `NotImplementedError` with a clear message (the Rust side
+//!   returns `NotImplemented` on these paths)
+//!
+//! Cluster lifecycle (resource catalogs, domain join) is not in this
+//! package — Python daemons use `auki-domain-py`'s `ClusterManager`.
 //!
 //! ## Type sharing
 //!

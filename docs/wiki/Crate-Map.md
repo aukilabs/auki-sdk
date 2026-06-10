@@ -74,7 +74,7 @@ libp2p substrate: TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping. On t
 
 ### [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
 
-`ClusterManager` — cluster bootstrap, Manager election, membership exchange, Discovery liveness checks, relay-hint preservation, resource catalog exchange, registry-entry fetch, stream serving, graceful shutdown. **Internal post-#216**: app code never constructs `ClusterManager` directly; `Session::join_domain` builds and owns one internally. Re-exports `ResourceEntry` from `auki-network` so consumers of either crate see the same type.
+`Domain::join(&peer, &session, config)` — the app-facing network-presence API (#282) — on top of `ClusterManager`: cluster bootstrap, Manager election, membership exchange, Discovery liveness checks, relay-hint preservation, resource catalog exchange, registry-entry fetch, stream serving, graceful shutdown. App code never constructs `ClusterManager` directly; `Domain::join` builds and owns one internally. Re-exports `ResourceEntry` from `auki-network` so consumers of either crate see the same type.
 
 ### [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay)
 
@@ -88,7 +88,7 @@ One crate. The entry point for app code.
 
 ### [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session)
 
-Declarative app-facing API shipped in #216. Apps construct a `Session`, declare what they have (`register_sensor` / `register_clock` / `register_frame` / `register_detector`, then `register_sensor_log` / `register_pose_log` / `register_time_transform_log` / `register_detection_log`), and optionally join a domain. The SDK handles registry I/O, manifest persistence, catalog production, and cluster lifecycle internally. `materialize_remote_log` and `resolve_static_transform` ship as `NotImplemented` stubs — Phase 5 of #216.
+Declarative app-facing API shipped in #216, split into `Peer` / `Session` in #282. Apps construct a long-lived `Peer` and declare what it has (`register_sensor` / `register_frame` / `register_detector`), then mint sessions via `Peer::start_session()` — which auto-registers the session's monotonic + UTC clocks (#284) — and register the logs each session writes (`register_clock`, `register_sensor_log` / `register_pose_log` / `register_time_transform_log` / `register_detection_log`). The SDK handles registry I/O, manifest persistence, and session-clock registration internally; going on-network is [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)'s `Domain::join`. `materialize_remote_log` and `resolve_static_transform` ship as `NotImplemented` stubs — Phase 5 of #216.
 
 ---
 

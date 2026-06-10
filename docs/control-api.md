@@ -4,7 +4,7 @@ The Auki SDK's operator-control surface. Daemons that produce SDK sessions (Boos
 
 This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments). The Control API is a runtime, operator-facing concern: list and manage sensor logs (live and historical), peek at the latest captured frame, request a clean shutdown, and report the daemon's session-scoped identity ([`/api/info`](#get-apiinfo)) — the same content the libp2p cluster protocol exchanges peer-to-peer.
 
-> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. Subsequent control-plane evolution lands as libp2p protocols (`/auki/control/info/1.0.0`, `/auki/control/sensor_logs/1.0.0`, …) using the length-prefixed JSON framing pattern from `/auki/stream/1.0.0`. The data model in this document (unified `sensor_logs`, cross-session listing, `session_id` everywhere) is transport-neutral; libp2p protocols will adapt the same shapes once the in-process Python surface (`auki-session-py`, in design) stabilizes. No new HTTP endpoints will be added; existing endpoints stay maintained.
+> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. Subsequent control-plane evolution lands as libp2p protocols (`/auki/control/info/1.0.0`, `/auki/control/sensor_logs/1.0.0`, …) using the length-prefixed framing pattern of the existing `/auki/` peer protocols. The data model in this document (unified `sensor_logs`, cross-session listing, `session_id` everywhere) is transport-neutral; libp2p protocols will adapt the same shapes once the in-process surface (`auki-session` / `auki-session-py`, shipped in #216 / #224) stabilizes. No new HTTP endpoints will be added; existing endpoints stay maintained.
 
 ## Conformance
 
@@ -24,7 +24,7 @@ All endpoints live under `/api/`. Daemons bind `0.0.0.0:<port>` — no authentic
 
 ### `GET /api/info`
 
-Session-scoped identity. Returns the daemon's identity for the current session — operator-facing labels, the application + machine identifiers, the libp2p peer identity, the session UUID and current monotonic-clock value, and the cluster-join timestamp. This is the canonical "who am I, when did my session start, what time is it on my clock" surface; the libp2p `/auki/cluster/1.0.0` protocol carries the same content peer-to-peer.
+Session-scoped identity. Returns the daemon's identity for the current session — operator-facing labels, the application + machine identifiers, the libp2p peer identity, the session UUID and current monotonic-clock value, and the cluster-join timestamp. This is the canonical "who am I, when did my session start, what time is it on my clock" surface; the libp2p `/auki/info/0.0.1` protocol carries the same content peer-to-peer (the endpoint mirrors `auki_network::ParticipantInfo`).
 
 **Request.** No body.
 
@@ -40,7 +40,9 @@ Session-scoped identity. Returns the daemon's identity for the current session �
   "session_now_ns": 12345678900,
   "cluster_joined_at_ns": 1745000000,
   "peer_id": "12D3KooWAbc...",
-  "app_instance": "aabbccddeeff"
+  "app_instance": "aabbccddeeff",
+  "is_manager": false,
+  "manager_peer_id": "12D3KooWXyz..."
 }
 ```
 
@@ -55,6 +57,8 @@ Session-scoped identity. Returns the daemon's identity for the current session �
 | `cluster_joined_at_ns` | integer \| null | The session clock's value at the moment this peer first successfully connected to another peer in its libp2p cluster. Set once on first peer connection, never reset. `null` while the daemon is alone in the cluster. Consumers compute "time in cluster" as `session_now_ns − cluster_joined_at_ns`. |
 | `peer_id` | string | libp2p PeerId derived from `Wallet::derive_child("peer/v1")` — see [`auki-network`](../crates/auki-network/README.md). Stable across daemon restarts when the wallet seed is persisted. |
 | `app_instance` | string | Per-machine identifier — the first non-loopback IEEE-administered MAC, lowercased hex without separators (`aabbccddeeff`). Distinguishes two daemons of the same `app` running on different hardware. |
+| `is_manager` | boolean | `true` if this daemon is currently its cluster's Manager. Populated from the cluster runtime; daemons do not set it directly. (Added post-v0.0.23 as additive maintenance — the endpoint mirrors `auki_network::ParticipantInfo`.) |
+| `manager_peer_id` | string | Canonical libp2p peer-id of the current Manager. Equals `peer_id` when `is_manager` is `true`. Same additive-maintenance note as `is_manager`. |
 
 **No canonical clock.** The SDK does not assume UTC, monotonic, or any other specific clock as canonical for the API. Every timestamp is paired with an explicit clock identity (here, `session_clock_id` + `session_clock_hash`); cross-clock conversion is what the [TimeTransform Log](../crates/auki-time/README.md) and `convert_time` exist for. Apps that treat UTC as canonical do so by *convention* — they configure a TimeTransform between their session clock and a UTC clock and consumers walk it via `convert_time`.
 
@@ -332,7 +336,7 @@ Daemons that conform to this document MUST advertise the data model exactly as s
 A daemon is conformant when:
 
 - [ ] Every endpoint above responds with the exact JSON shapes documented.
-- [ ] `/api/info` returns the full session-scoped identity shape: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns` (`null` while the daemon is alone in the cluster), `peer_id`, `app_instance`.
+- [ ] `/api/info` returns the full session-scoped identity shape: `app`, `name`, `session_id`, `session_clock_id`, `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns` (`null` while the daemon is alone in the cluster), `peer_id`, `app_instance`, `is_manager`, `manager_peer_id`.
 - [ ] `/api/info`'s `name` / `app` match the mDNS TXT records when both are configured.
 - [ ] `/api/info`'s `session_id` is the same value `GET /api/sensor_logs?session_id=current` filters on.
 - [ ] `POST /api/sensor_logs` validates `sensor_id` / `sensor_hash` against the live session's bindings — `sensor_hash` mismatch returns `409`, unknown `sensor_id` returns `400`.

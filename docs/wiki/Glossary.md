@@ -22,12 +22,12 @@ A device participating in the Auki network — addressed by a libp2p `PeerId` de
 
 ## Session
 
-One process boot of an app on a peer. A `Session` is the SDK's app-facing entry point — it declares which peer / app it represents, holds the registry and log handles for the lifetime of the process, and (optionally) joins a cluster on the user's behalf.
+One timeline of an app on a peer. A `Session` is born from a long-lived `Peer` (the SDK's app-facing entry point since #282) — the peer declares which device / app it represents and owns the sensor / frame / detector registries; each session holds the clock registry and log handles for one timeline.
 
-**In code:** `auki_session::Session`. Constructed with `Session::new(peer_id, app_id)`; the SDK fills in a fresh ULID `session_id`. See `crates/auki-session/tests/end_to_end.rs` for a complete worked example.
+**In code:** `auki_session::Session`, constructed via `Peer::start_session()` — the SDK mints a fresh ULID `session_id` and auto-registers the session's monotonic + UTC clocks (#284). See `crates/auki-session/tests/end_to_end.rs` for a complete worked example.
 
 **Common confusions:**
-- *Session vs domain participation.* A session can register logs without ever joining a domain — `Session::join_domain` is opt-in. Domain membership is orthogonal to session lifetime.
+- *Session vs domain participation.* A session can register logs without ever joining a domain — `auki_domain::Domain::join(&peer, &session, config)` is opt-in. Domain membership is orthogonal to session lifetime.
 - *Session vs HTTP session.* Unrelated to web "sessions" — this is a process-boot scope.
 
 **See also:** [Quickstart](Quickstart), [Concept: Peer-Owned Logs](Concept-Peer-Owned-Logs).
@@ -54,7 +54,7 @@ A unique identifier — derived as `hash(domain_owner_pubkey)` — applied as a 
 
 A domain is **not** a scenegraph (the structured map of a space; many possible per domain), and **not** a session (one process boot of a daemon). The three IDs are independent and not derivable from each other.
 
-**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `ClusterManager` is the runtime layer; `Session::join_domain` is the app-facing API. The Domain ID itself surfaces in `DomainIdentity` / `ClusterTarget`.
+**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `Domain::join(&peer, &session, config)` is the app-facing API; `ClusterManager` is the runtime layer underneath. The Domain ID itself surfaces in `DomainIdentity` / `ClusterTarget`.
 
 **Common confusions:**
 - *Domain vs cluster.* The Domain is the *topic* (the conceptual identifier); the **cluster** is the runtime group of devices networking around that topic.

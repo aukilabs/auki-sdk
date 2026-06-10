@@ -2,14 +2,14 @@
 
 Boot an `auki-session` peer, declare its sensors / clocks / frames, register a sensor log, and inspect what the SDK writes to the catalog and to disk. ~10 minutes.
 
-This page covers what the Session API exposes **today** (SDK v0.0.55). The remaining pieces — publishing frames into the log, joining a domain so other peers can see your catalog, materializing a remote peer's log — are tracked separately; see [Next steps](#next-steps).
+This page covers what the Peer / Session API exposes **today** (SDK v0.0.57, post-#282 split). The remaining pieces — publishing frames into the log, joining a domain so other peers can see your catalog, materializing a remote peer's log — are tracked separately; see [Next steps](#next-steps).
 
 ## What you'll build
 
 A single peer that:
 
-- declares its peer / app / session identity
-- registers a reference frame, a camera sensor, and a clock
+- declares its peer / app identity and registers a reference frame and a camera sensor
+- starts a session (the SDK mints the session id and the session's clocks)
 - registers a sensor log (one peer-owned data product)
 - emits a catalog row for that log
 - writes a manifest to disk
@@ -22,8 +22,9 @@ In `Cargo.toml`:
 
 ```toml
 [dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.55" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.55" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
+auki-domain   = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
 ```
 
 ### Python
@@ -31,42 +32,44 @@ auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.
 From source for now (PyPI publishing is on the roadmap):
 
 ```bash
-pip install "auki-session @ git+https://github.com/aukilabs/auki-sdk.git@v0.0.55#subdirectory=bindings/python/auki-session-py"
+pip install "auki-session @ git+https://github.com/aukilabs/auki-sdk.git@v0.0.57#subdirectory=bindings/python/auki-session-py"
 ```
 
-## Boot a session
+## Construct a peer, start a session
 
-A `Session` is constructed with the three identities a peer needs to answer "who am I":
+Since #282 the entry point is a long-lived `Peer` that mints `Session`s. The identities split across the two:
 
-- `peer_id` — your network identity. Stable across boots for this device.
-- `app_id` — the app running on this peer (e.g. `galbot-ctrl` vs `galbot-teleop`).
-- `session_id` — fresh ULID generated per `Session` instance. Filled in by the SDK.
+- `peer_id` — your network identity, on the `Peer`. Stable across boots for this device. (Any string works for local experiments; to join a domain later it must be the libp2p peer-id derived from your wallet.)
+- `app_id` — the app running on this peer (e.g. `galbot-ctrl` vs `galbot-teleop`), on the `Peer`.
+- `session_id` — fresh ULID minted by `Peer::start_session()`, on the `Session`.
 
-The storage root is where the SDK writes its registry entries and log manifests.
+The storage root is where the SDK writes its registry entries and log manifests. Starting a session also auto-registers the session's monotonic + UTC clock pair (#284) — no hand-rolled session clock.
 
 **Rust**
 
 ```rust
-use auki_session::Session;
+use auki_session::Peer;
 
-let s = Session::new("galbot-01", "galbot-ctrl")
-    .with_storage_root("/data/auki/galbot-01");
+let peer = Peer::new("galbot-01", "galbot-ctrl")
+    .with_storage_root("/data/auki/galbot-01".into());
 
-println!("session_id: {}", s.session_id());
+let session = peer.start_session().unwrap();
+println!("session_id: {}", session.session_id());
 ```
 
 **Python**
 
 ```python
-from auki_session import Session
+from auki_session import Peer
 
-s = Session("galbot-01", "galbot-ctrl").with_storage_root("/data/auki/galbot-01")
-print("session_id:", s.session_id)
+peer = Peer("galbot-01", "galbot-ctrl").with_storage_root("/data/auki/galbot-01")
+session = peer.start_session()
+print("session_id:", session.session_id)
 ```
 
 ## Register a reference frame
 
-A sensor log carries spatial data, so the data needs to be expressed in some frame of reference. The SDK ships four presets covering the common conventions:
+A sensor log carries spatial data, so the data needs to be expressed in some frame of reference. Frames are peer-level (they outlive any one session), so registration happens on the `Peer`. The SDK ships four presets covering the common conventions:
 
 ```
 FrameDef::ros_body()      // x forward, y left, z up
@@ -80,7 +83,7 @@ FrameDef::unity()         // x right, y up, z forward (left-handed)
 ```rust
 use auki_session::FrameDef;
 
-let frame = s.register_frame("head_left_camera_optical", FrameDef::ros_optical()).unwrap();
+let frame = peer.register_frame("head_left_camera_optical", FrameDef::ros_optical()).unwrap();
 ```
 
 **Python**
@@ -88,21 +91,21 @@ let frame = s.register_frame("head_left_camera_optical", FrameDef::ros_optical()
 ```python
 from auki_session import FrameDef
 
-frame = s.register_frame("head_left_camera_optical", FrameDef.ros_optical())
+frame = peer.register_frame("head_left_camera_optical", FrameDef.ros_optical())
 ```
 
 The return value is a `RegistryRef { peer_id, id, hash }` — pass that to anything that needs to reference this frame.
 
 ## Register a sensor
 
-The sensor declares what the data looks like (camera intrinsics, format, etc.). The closed enum `SensorKind` (`Camera`, `Imu`, ...) keeps the family tight; the open `type` string differentiates within a family.
+The sensor declares what the data looks like (camera intrinsics, format, etc.). Sensors are peer-level too. The closed enum `SensorKind` (`Camera`, `Imu`, ...) keeps the family tight; the open `type` string differentiates within a family.
 
 **Rust**
 
 ```rust
 use auki_registry::{Camera, SensorBody};
 
-let sensor = s.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
+let sensor = peer.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
     r#type: "rgb".into(),
     width: 1920,
     height: 1200,
@@ -118,7 +121,7 @@ let sensor = s.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
 **Python**
 
 ```python
-sensor = s.register_sensor("head_left_rgb", {
+sensor = peer.register_sensor("head_left_rgb", {
     "kind": "camera",
     "type": "rgb",
     "width": 1920,
@@ -132,27 +135,24 @@ sensor = s.register_sensor("head_left_rgb", {
 })
 ```
 
-## Register a clock
+## Clocks
 
 Every timestamp the SDK records is qualified by a named clock, so consumers can transform between clocks rather than assuming a canonical one.
+
+Since #284 you usually don't register a clock yourself: `start_session()` already registered the session's monotonic + UTC pair, and Rust code grabs them directly:
 
 **Rust**
 
 ```rust
-use auki_registry::{ClockBody, ClockMeta, Scope};
-
-let clock = s.register_clock("session/sdk_clock", ClockBody::MonotonicClock(ClockMeta {
-    unit: "ns".into(),
-    monotonic: true,
-    epoch: None,
-    scope: Scope::DeviceLocal,
-})).unwrap();
+let clock = session.monotonic_clock(); // RegistryRef to the auto-minted session clock
 ```
+
+The Python binding doesn't expose the `monotonic_clock()` / `utc_clock()` getters yet, so from Python register an additional session-scoped clock (also the path for custom clocks in Rust, via `session.register_clock(...)`):
 
 **Python**
 
 ```python
-clock = s.register_clock("session/sdk_clock", {
+clock = session.register_clock("session/sdk_clock", {
     "type": "monotonic_clock",
     "unit": "ns",
     "monotonic": True,
@@ -162,7 +162,7 @@ clock = s.register_clock("session/sdk_clock", {
 
 ## Register a sensor log
 
-The log is the actual peer-owned data product. The spec ties together the sensor, the clock its samples are stamped against, the frame the data lives in, and a head window that controls retention.
+The log is the actual peer-owned data product, and it belongs to the session. The spec ties together the sensor, the clock its samples are stamped against, the frame the data lives in, and a head window that controls retention.
 
 **Rust**
 
@@ -170,7 +170,7 @@ The log is the actual peer-owned data product. The spec ties together the sensor
 use std::time::Duration;
 use auki_session::{HeadSpec, SensorLogSpec};
 
-let log = s.register_sensor_log(SensorLogSpec {
+let log = session.register_sensor_log(SensorLogSpec {
     sensor: sensor.clone(),
     clock,
     frame: Some(frame),
@@ -187,7 +187,7 @@ println!("log_ref: {}/{}", log.log_ref().source_peer_id, log.log_ref().resource_
 ```python
 from auki_session import HeadSpec, SensorLogSpec
 
-log = s.register_sensor_log(SensorLogSpec(
+log = session.register_sensor_log(SensorLogSpec(
     sensor=sensor,
     clock=clock,
     frame=frame,
@@ -200,7 +200,7 @@ print("log_ref:", log.log_ref.source_peer_id, "/", log.log_ref.resource_id)
 
 ## Inspect the catalog
 
-`Session::catalog()` returns one `ResourceEntry` row per registered log, in the `/auki/resources/0.2.0` wire shape. This is the same payload a peer publishes over the network so others can discover what it owns.
+`auki_domain::catalog_of(&peer, &session)` returns one `ResourceEntry` row per registered log, in the `/auki/resources/0.2.0` wire shape — pure and network-free. This is the same payload `Domain::join` serves over the network so others can discover what this peer owns.
 
 Over the network, `/auki/resources/0.2.0` is a live snapshot of resources that
 are currently requestable. A peer may join before every producer is ready.
@@ -211,23 +211,18 @@ same stable `resource_id` when they recover.
 **Rust**
 
 ```rust
-for row in s.catalog() {
+for row in auki_domain::catalog_of(&peer, &session) {
     println!("{} owns {} ({})", row.source_peer_id, row.resource_id, row.state);
 }
 ```
 
-**Python**
-
-```python
-for row in s.catalog():
-    print(f"{row['source_peer_id']} owns {row['resource_id']} ({row['state']})")
-```
-
-Both print:
+Prints:
 
 ```
 galbot-01 owns head_left_rgb (live)
 ```
+
+**Python** — catalog building moved to the domain layer with #282 and isn't exposed from `auki-session-py`; Python daemons see catalog rows through [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py)'s `ClusterManager` resource fetches.
 
 ## Inspect the manifest on disk
 
@@ -246,10 +241,10 @@ $ cat /data/auki/galbot-01/logs/galbot-01/head_left_rgb/manifest.json
 
 ## Next steps
 
-The Session API doesn't yet expose, at this layer:
+The Peer / Session API doesn't yet expose, at this layer:
 
-- **Publishing frames into the log.** A `SensorLogHandle::append`-style surface is planned. The underlying `auki-logs::Log::append` exists; lifting it onto the Session handle is the natural next step.
-- **Joining a domain so other peers see your catalog.** `Session::join_domain` works in Rust but requires building a libp2p swarm yourself; the Python binding currently raises `NotImplementedError`.
+- **Publishing frames into the log.** A `SensorLogHandle::append`-style surface is planned. The underlying `auki-logs::Log::append` exists; lifting it onto the session handle is the natural next step.
+- **Joining a domain so other peers see your catalog.** `auki_domain::Domain::join(&peer, &session, config)` works in Rust but requires building a libp2p swarm yourself; there is no Python binding for it yet — Python daemons drive `auki-domain-py`'s `ClusterManager` directly.
 - **Materializing a remote peer's log.** `Session::materialize_remote_log` returns `NotImplementedError` — this is the Phase 5 deliverable in the #216 plan.
 
 This page will grow to cover each as it lands.

@@ -29,7 +29,7 @@ The Auki protocol is built around five questions any node should be able to answ
 
 - **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
 - **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`.
-- **`Session`** — declarative app-facing API (in `auki-session`) for registering sensors, clocks, frames, detectors, and their logs, joining a domain, and advertising the resource catalog. `ClusterManager` is internal infrastructure that `Session::join_domain` constructs and owns.
+- **`Peer` / `Session` / `Domain`** — the app-facing API split (#282): a long-lived `Peer` (in `auki-session`) owns identity and the sensor / frame / detector registries and mints `Session`s — one timeline each, with a ULID session id and auto-registered monotonic + UTC clocks (#284) — which register the logs they write. `auki-domain`'s `Domain::join(&peer, &session, config)` puts the pair on the network and serves the resource catalog; `ClusterManager` is the engine `Domain` constructs and owns.
 - The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
 - `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
@@ -57,8 +57,8 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-layout`](crates/auki-layout) | On-disk path helpers for session/log layout | ✓ |
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
 | [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
-| [`auki-session`](crates/auki-session) | Declarative app API: `Session` + register_* + log registration + `catalog()` + `join_domain` | ✓ |
-| [`auki-domain`](crates/auki-domain) | `ClusterManager` — internal cluster lifecycle facade; consumed by `auki-session`; not app-facing directly | ✓ |
+| [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
+| [`auki-domain`](crates/auki-domain) | `Domain::join(&peer, &session, config)` — app-facing network presence; owns `ClusterManager`, the cluster lifecycle engine | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
 | [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Browser/WASM libp2p transport probe | WIP (v0.0.0) |

@@ -72,7 +72,7 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-identity-py`](bindings/python/auki-identity-py) | ✓ PyO3 bindings for the identity primitives BoosterApp's Python sidecar consumes — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id/seed`, `app_instance.derive` |
 | [`auki-registry-py`](bindings/python/auki-registry-py) | ✓ PyO3 bindings for Python producers to declare and persist Sensor / Clock / Frame Registry entries. Dict constructors, canonical JSON/hash helpers, and hash-pinned `write_*` / `read_*` helpers mirror `auki-registry`, including exact `frame_id` + `frame_hash` validation for spatial sensors. |
 | [`auki-network`](crates/auki-network) | ✓ libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping), typed `/auki/stream/0.2.0` streams for camera/point-cloud/joint-encoder/audio/pose payloads, join/membership/heartbeat/info/resources/sensors/registries peer protocols, `NetworkRuntime`, Discovery HTTP client (`list_clusters`, `create_cluster`, `create_cluster_with_relay_multiaddrs`, `liveness_check`, `rotate_manager`, `rotate_manager_with_relay_multiaddrs`, `deregister`), address-advertisement helpers, and MAC-derived `app_instance`. Peer identity from `Wallet::derive_child("peer/v1")`. |
-| [`auki-domain`](crates/auki-domain) | ✓ Cluster lifecycle layer. `ClusterManager` is the SDK's internal entry point for Discovery + cluster bootstrap: list/create/join/bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, `ResourceEntry` catalog exchange (`sensor_log` / `pose_log` / `time_transform_log` / `detection_log` rows), hash-pinned registry entry fetches, stream opening, and shutdown. Driven from app code through `auki-session::Session::join_domain`; apps don't construct `ClusterManager` directly post-#216. |
+| [`auki-domain`](crates/auki-domain) | ✓ Cluster lifecycle layer. `ClusterManager` is the SDK's internal entry point for Discovery + cluster bootstrap: list/create/join/bootstrap, membership, Manager election, Discovery liveness checks, relay hint preservation, participant info, `ResourceEntry` catalog exchange (`sensor_log` / `pose_log` / `time_transform_log` / `detection_log` rows), hash-pinned registry entry fetches, stream opening, and shutdown. Driven from app code through `auki-domain::Domain::join(&peer, &session, config)` (#282); apps don't construct `ClusterManager` directly. |
 | [`auki-domain-relay`](crates/auki-domain-relay) | WIP Domain Relay capability. Starts a native- and browser-compatible Circuit Relay v2 server, emits native Manager-reservation and browser Discovery relay multiaddrs, and lets Managers reserve through native TCP while advertising WebSocket relay circuits; domain-scoped reservation policy and grants are pending. |
 | [`auki-network-py`](bindings/python/auki-network-py) | ✓ PyO3 bindings for Discovery client value types, including relay multiaddrs, plus shared `auki_network.cluster` stream pyclasses (`CameraFrame`, `PointCloudFrame`, `JointEncodersFrame`, `AudioFrame`, `SpatialTransformFrame`, `StreamDecision`, `StreamSubscription`, etc.). Cluster runtime construction moved to `auki-domain-py`. |
 | [`auki-domain-py`](bindings/python/auki-domain-py) | ✓ Python daemon facade for `ClusterManager`: `ClusterTarget`, `ClusterManager.bootstrap/create_cluster/join_cluster`, participant info, `ResourceEntry` catalog exchange, registry serving root registration, `StreamManifestBuilder.from_registry`, stream-provider wiring, typed stream openers including `open_pose_stream`, and `external_addresses` advertisement override. Resurrected for the post-#216 schema in #231. |
@@ -155,7 +155,7 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
 | [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform`, `NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-datatypes`) and `TimeTransformSource` (from `auki-manifests`). |
-| [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `sensors_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
+| [`auki-network`](crates/auki-network) | `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`, plus modules `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `registries_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`. Constant `PEER_DERIVATION_LABEL = "peer/v1"` |
 | [`auki-domain`](crates/auki-domain) | `ClusterManager`, `ClusterTarget`, `ClusterMembership`, `ClusterMember`, `DaemonInfo`, `ResourceCatalogProvider`, `ResourceEntry`, `ResourcesRequest`, `ResourcesResponse`, `SensorCatalogProvider`, `SensorEntry`, `SensorsResponse`, Manager/election/bootstrap error types, `LIVENESS_CHECK_INTERVAL`, `elect_successor(...)`. (`SensorStreamResource` / `TransformEdgeResource` / `PoseStreamResource` / `ResourcePinholeIntrinsics` were deleted in #216; use `ResourceEntry` with `variant`.) |
 | [`auki-domain-relay`](crates/auki-domain-relay) | `DomainRelay`, `DomainRelayConfig`, `DomainRelayEvent`, `DomainRelayError`. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
@@ -224,7 +224,6 @@ For peer-to-peer participation. Not REST-shaped, but they are public protocols t
 | `/auki/membership/0.0.1` | Manager gossips its peer id plus membership JSON to current members. |
 | `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` fetch. |
 | `/auki/resources/0.2.0` | Peer-to-peer resource catalog fetch. Returns `ResourceEntry` rows discriminated by `variant`: `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Each row carries the canonical source / writer split (`source_peer_id`, `writer_peer_id`) plus variant-specific `sensor` / `pose` / `manifest` blocks. (Replaced the v0 `sensor_stream` / `transform_edge` / `pose_stream` row types in #216.) |
-| `/auki/sensors/0.0.1` | Peer-to-peer sensor catalog fetch. Superseded for new consumers by `/auki/resources/0.2.0` `sensor_log` rows. |
 | `/auki/registries/0.2.0` | Peer-to-peer hash-pinned Sensor / Clock / Frame / Detector Registry entry fetch. |
 | `/auki/stream/0.2.0` | Live streaming. `StreamRequest { source_peer_id, resource_id, from }` opens a substream against the canonical owner of a log; samples flow as prost-encoded `StreamMessage` frames carrying camera, point cloud, joint-encoder, audio, or pose `SpatialTransform` payloads. |
 
@@ -234,7 +233,7 @@ Python consumers open streams through `auki-domain-py`'s `ClusterManager.open_*_
 
 ## Networking — clusters, streams, discovery
 
-The SDK ships a libp2p substrate behind the `auki-network` `swarm` feature. A daemon (Booster, Sentinel, Park) becomes a peer in a **cluster** through `auki-domain::ClusterManager` (driven from app code via `auki-session::Session::join_domain`): create or join via Discovery, reserve relay-mediated Manager reachability when configured, preserve Manager and Relay reachability hints, exchange membership over libp2p, and open typed streams over `/auki/stream/0.2.0`.
+The SDK ships a libp2p substrate behind the `auki-network` `swarm` feature. A daemon (Booster, Sentinel, Park) becomes a peer in a **cluster** through `auki-domain::Domain::join(&peer, &session, config)`, which constructs and owns a `ClusterManager`: create or join via Discovery, reserve relay-mediated Manager reachability when configured, preserve Manager and Relay reachability hints, exchange membership over libp2p, and open typed streams over `/auki/stream/0.2.0`.
 
 The main live paths are:
 
@@ -253,27 +252,32 @@ Python sidecars (BoosterApp's K1 sensor capture, Sentinel, Park tooling) use [`a
 
 ## Quickstart
 
-App code interacts with the SDK through `auki-session`. Add it (and `auki-registry`, for the registry-body types you'll pass into log specs) as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
+App code interacts with the SDK through `auki-session`'s `Peer` / `Session` pair, plus `auki-domain` to go on-network. Add them (and `auki-registry`, for the registry-body types you'll pass into log specs) as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
 
 ```toml
 [dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.54" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.54" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
+auki-domain   = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
 ```
 
-Boot a session, declare a sensor and a log, inspect what the SDK advertises:
+Construct a peer, declare a sensor, start a session, register a log, inspect what the SDK advertises:
 
 ```rust
 use std::time::Duration;
-use auki_registry::{Camera, ClockBody, ClockMeta, Scope, SensorBody};
-use auki_session::{FrameDef, HeadSpec, SensorLogSpec, Session};
+use auki_registry::{Camera, SensorBody};
+use auki_session::{FrameDef, HeadSpec, Peer, SensorLogSpec};
 
-let s = Session::new("galbot-01", "galbot-ctrl")
-    .with_storage_root("/data/auki/galbot-01");
+let seed = auki_identity::load_or_mint_seed(&seed_path)?;
+let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
+let identity = auki_network::PeerIdentity::from_wallet(wallet);
 
-let frame = s.register_frame("head_left_camera_optical", FrameDef::ros_optical())?;
+let peer = Peer::new(identity.peer_id().to_string(), "galbot-ctrl")
+    .with_storage_root("/data/auki/galbot-01".into());
 
-let sensor = s.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
+let frame = peer.register_frame("head_left_camera_optical", FrameDef::ros_optical())?;
+
+let sensor = peer.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
     r#type: "rgb".into(),
     width: 1920, height: 1200, frame_rate_hz: 30,
     pixel_format: "rgb8".into(),
@@ -283,16 +287,13 @@ let sensor = s.register_sensor("head_left_rgb", SensorBody::Camera(Camera {
     frame: frame.clone(),
 }))?;
 
-let clock = s.register_clock("session/sdk_clock", ClockBody::MonotonicClock(ClockMeta {
-    unit: "ns".into(),
-    monotonic: true,
-    epoch: None,
-    scope: Scope::DeviceLocal,
-}))?;
+// Mints a ULID session_id and auto-registers the session's
+// monotonic + UTC clocks (#284) — no hand-rolled session clock.
+let session = peer.start_session()?;
 
-let _log = s.register_sensor_log(SensorLogSpec {
-    sensor: sensor.clone(),
-    clock,
+let _log = session.register_sensor_log(SensorLogSpec {
+    sensor,
+    clock: session.monotonic_clock(),
     frame: Some(frame),
     head: HeadSpec::Rolling { retention_ns: 5_000_000_000 },
     segment_duration: Duration::from_secs(1),
@@ -300,13 +301,14 @@ let _log = s.register_sensor_log(SensorLogSpec {
 })?;
 
 // The catalog is what other peers see over /auki/resources/0.2.0
-// once you `Session::join_domain`.
-for row in s.catalog() {
+// once `auki_domain::Domain::join(&peer, &session, config)` puts
+// this pair online.
+for row in auki_domain::catalog_of(&peer, &session) {
     println!("{} owns {} ({})", row.source_peer_id, row.resource_id, row.state);
 }
 ```
 
-For a deeper walkthrough — including the Python equivalent and the "what's pending" list (`Session::join_domain` from Python, `Session::materialize_remote_log`) — see the [wiki Quickstart](https://github.com/aukilabs/auki-sdk/wiki/Quickstart). Each crate's `README.md` has the contract spec for that layer.
+For a deeper walkthrough — including the Python equivalent and the "what's pending" list (`Domain::join` from Python, `Session::materialize_remote_log`) — see the [wiki Quickstart](https://github.com/aukilabs/auki-sdk/wiki/Quickstart). Each crate's `README.md` has the contract spec for that layer.
 
 ---
 

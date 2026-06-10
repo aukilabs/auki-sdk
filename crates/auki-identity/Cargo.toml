@@ -26,6 +26,9 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 # default builds don't pull thiserror into the dep graph.
 thiserror = { version = "2", optional = true }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [features]
 # Enables UniFFI proc-macros on `Wallet` (and any future identity types
 # the Swift binding needs). When off, the crate compiles exactly as today.

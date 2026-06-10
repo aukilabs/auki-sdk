@@ -32,6 +32,13 @@ The Auki protocol is built around five questions any node should be able to answ
 - **`Session`** — declarative app-facing API (in `auki-session`) for registering sensors, clocks, frames, detectors, and their logs, joining a domain, and advertising the resource catalog. `ClusterManager` is internal infrastructure that `Session::join_domain` constructs and owns.
 - The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
 - `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
+- **RFC-first networking path** — `auki-protocol` owns the pure v1 protocol
+  types, `auki-protocol-wasm` exposes those rules to browser code without a
+  TypeScript reimplementation, and `auki-p2p` is the new clean libp2p runtime
+  for configured peers, lifecycle authorization and serving, offer loading and
+  serving, Get/Subscribe consumers and providers, and status snapshots. It is
+  intentionally separate from the shipped `auki-network` / `ClusterManager`
+  path while it matures.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics
@@ -58,6 +65,10 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
 | [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Session` + register_* + log registration + `catalog()` + `join_domain` | ✓ |
+| [`auki-protocol`](crates/auki-protocol) | RFC-first v1 protocol types, frames, signed authority objects, lifecycle, offers, Get, Subscribe, status | WIP (v0.0.0) |
+| [`auki-protocol-wasm`](crates/auki-protocol-wasm) | wasm-bindgen adapter exposing `auki-protocol` validators, constructors, frame helpers, and failure codes to browser code | WIP (v0.0.0) |
+| [`auki-p2p`](crates/auki-p2p) | Clean RFC-first libp2p runtime with configured peers, lifecycle, offer loading/serving, Get/Subscribe consumers and providers, status snapshots | WIP (v0.0.0) |
+| [`auki-p2p-browser`](crates/auki-p2p-browser) | RFC-first TypeScript browser peer package with js-libp2p transports, bootstrap parsing, identity persistence, and browser peer orchestration | WIP (v0.0.0) |
 | [`auki-domain`](crates/auki-domain) | `ClusterManager` — internal cluster lifecycle facade; consumed by `auki-session`; not app-facing directly | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |

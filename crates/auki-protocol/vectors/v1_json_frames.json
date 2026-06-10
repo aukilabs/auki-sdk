@@ -1,0 +1,38 @@
+{
+  "name": "auki.protocol.v1.json_frame.vectors",
+  "version": 1,
+  "vectors": [
+    {
+      "name": "empty_object",
+      "description": "Smallest valid v1 JSON frame body.",
+      "body_utf8": "{}",
+      "body_len": 2,
+      "prefix_hex": "02",
+      "frame_hex": "027b7d"
+    },
+    {
+      "name": "single_integer_member",
+      "description": "Compact ASCII JSON object with one integer member.",
+      "body_utf8": "{\"a\":1}",
+      "body_len": 7,
+      "prefix_hex": "07",
+      "frame_hex": "077b2261223a317d"
+    },
+    {
+      "name": "utf8_length_counts_bytes",
+      "description": "The length prefix counts UTF-8 bytes, not Unicode scalar values.",
+      "body_utf8": "{\"a\":\"\u00e9\"}",
+      "body_len": 10,
+      "prefix_hex": "0a",
+      "frame_hex": "0a7b2261223a22c3a9227d"
+    },
+    {
+      "name": "two_byte_leb128_length",
+      "description": "A 128-byte body uses unsigned LEB128 prefix 0x80 0x01.",
+      "body_utf8": "{\"p\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+      "body_len": 128,
+      "prefix_hex": "8001",
+      "frame_hex": "80017b2270223a22616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161227d"
+    }
+  ]
+}

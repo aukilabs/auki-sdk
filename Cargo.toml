@@ -7,6 +7,9 @@ members = [
     "crates/auki-identity",
     "bindings/python/auki-identity-py",
     "crates/auki-jcs",
+    "crates/auki-protocol",
+    "crates/auki-protocol-wasm",
+    "crates/auki-p2p",
     "crates/auki-logs",
     "bindings/python/auki-logs-py",
     "crates/auki-manifests",
@@ -29,6 +32,7 @@ members = [
     "bindings/python/auki-session-py",
     "crates/auki-time",
     "examples/diagnostic-app",
+    "examples/p2p-preview-sentinel",
 ]
 
 [workspace.package]

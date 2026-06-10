@@ -1,0 +1,729 @@
+import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
+import { generateKeyPairFromSeed } from "@libp2p/crypto/keys";
+import { identify } from "@libp2p/identify";
+import { noise } from "@libp2p/noise";
+import { peerIdFromString } from "@libp2p/peer-id";
+import { webSockets } from "@libp2p/websockets";
+import { yamux } from "@chainsafe/libp2p-yamux";
+import { multiaddr } from "@multiformats/multiaddr";
+import { createLibp2p } from "libp2p";
+import { isExportableBrowserBootstrapAddress } from "./bootstrap.js";
+import { derivePeerSeed } from "./identity.js";
+
+export type BrowserTransportName =
+  | "websocket"
+  | "webrtc"
+  | "webrtc_direct"
+  | "circuit_relay_v2";
+
+export type BrowserConnectionDirection = "dialer" | "listener";
+
+export type BrowserConnectionTransport =
+  | "websocket"
+  | "webrtc"
+  | "webrtc_direct"
+  | "webtransport"
+  | "tcp"
+  | "quic"
+  | "unknown";
+
+export type BrowserConnectionPath = {
+  connectionId: string;
+  direction: BrowserConnectionDirection;
+  transport: BrowserConnectionTransport;
+  relayInvolved: boolean;
+  remoteAddress: string;
+  status: string;
+  direct: boolean;
+  rttMs?: number;
+};
+
+export type BrowserTransport = {
+  peerId: string;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  multiaddrs(): string[];
+  addRelayServerAddresses?(addresses: string[]): Promise<void> | void;
+  dial(addresses: string[], options?: { force?: boolean }): Promise<void>;
+  preferPeerConnections?(peerId: string, keepAddresses: string[]): void;
+  closePeerConnections?(peerId: string, keepAddresses?: string[]): Promise<void>;
+  connectionPaths?(peerId: string): BrowserConnectionPath[];
+  registerProtocolHandler(
+    protocol: string,
+    handler: BrowserProtocolHandler,
+    options?: BrowserProtocolHandlerOptions,
+  ): Promise<void>;
+  unregisterProtocolHandler(protocol: string): Promise<void>;
+  dialProtocol(
+    peerId: string,
+    addresses: string[],
+    protocol: string,
+  ): Promise<BrowserProtocolStream>;
+};
+
+export type BrowserProtocolStream = AsyncIterable<Uint8Array | { subarray(): Uint8Array }> & {
+  send(data: Uint8Array): boolean;
+  close(): Promise<void>;
+  closeRead?(): Promise<void>;
+  abort?(error: Error): void;
+  onDrain?(): Promise<void>;
+};
+
+export type BrowserProtocolHandler = (
+  stream: BrowserProtocolStream,
+  remotePeerId: string,
+) => Promise<void> | void;
+
+export type BrowserProtocolHandlerOptions = {
+  maxInboundStreams?: number;
+  maxOutboundStreams?: number;
+};
+
+export type CreateBrowserLibp2pTransportOptions = {
+  seed: Uint8Array;
+  relayServerAddresses?: string[];
+};
+
+type BrowserConnectionCandidate = {
+  id: string;
+  remoteAddr: { toString(): string };
+  status: string;
+  newStream(
+    protocol: string,
+    options: { runOnLimitedConnection: true },
+  ): Promise<BrowserProtocolStream>;
+  close(): Promise<void>;
+  abort?(error: Error): void;
+};
+
+export type BrowserConnectionCleanupCandidate = Pick<
+  BrowserConnectionCandidate,
+  "id" | "remoteAddr" | "status"
+>;
+
+type BrowserConnectionRetentionCandidate = BrowserConnectionCleanupCandidate & {
+  direct?: boolean;
+  limits?: unknown;
+};
+
+const PING_PROTOCOL_ID = "/ipfs/ping/1.0.0";
+const PING_MESSAGE_BYTES = 32;
+const CONNECTION_CLEANUP_TIMEOUT_MS = 3_000;
+const CONNECTION_CLEANUP_POLL_MS = 50;
+const CONNECTION_CLOSE_ATTEMPT_MS = 250;
+const CONNECTION_RETENTION_DELAY_MS = 250;
+const CONNECTION_CLOSE_REASON = "Closing non-selected Auki peer connection";
+
+export function supportedBrowserTransports(): BrowserTransportName[] {
+  return ["websocket", "webrtc", "webrtc_direct", "circuit_relay_v2"];
+}
+
+export async function createBrowserLibp2pTransport(
+  options: CreateBrowserLibp2pTransportOptions,
+): Promise<BrowserTransport> {
+  const { webRTC, webRTCDirect } = await import("@libp2p/webrtc");
+  const privateKey = await generateKeyPairFromSeed("Ed25519", await derivePeerSeed(options.seed));
+  const relayListenAddrs = relayListenAddresses(options.relayServerAddresses ?? []);
+  const node = await createLibp2p({
+    privateKey,
+    connectionMonitor: {
+      abortConnectionOnPingFailure: false,
+      pingInterval: 10_000,
+      pingTimeout: {
+        minTimeout: 10_000,
+        maxTimeout: 30_000,
+      },
+    },
+    connectionGater: {
+      denyDialMultiaddr: () => false,
+    },
+    addresses: {
+      listen: uniqueStrings([...relayListenAddrs, "/p2p-circuit", "/webrtc"]),
+    },
+    transports: [webSockets(), webRTC(), webRTCDirect(), circuitRelayTransport()],
+    connectionEncrypters: [noise()],
+    streamMuxers: [yamux()],
+    services: {
+      identify: identify({
+        protocolPrefix: "auki",
+      }),
+    },
+  });
+  await node.handle(PING_PROTOCOL_ID, (stream) => echoPingStream(stream), {
+    runOnLimitedConnection: true,
+    maxInboundStreams: 32,
+    force: true,
+  });
+  return new Libp2pBrowserTransport(node, options.relayServerAddresses ?? []);
+}
+
+export async function echoPingStream(stream: BrowserProtocolStream): Promise<void> {
+  let buffer = new Uint8Array();
+
+  try {
+    for await (const value of stream) {
+      const chunk = normalizeStreamChunk(value);
+      if (chunk.byteLength === 0) {
+        continue;
+      }
+
+      const merged = new Uint8Array(buffer.byteLength + chunk.byteLength);
+      merged.set(buffer);
+      merged.set(chunk, buffer.byteLength);
+      buffer = merged;
+
+      while (buffer.byteLength >= PING_MESSAGE_BYTES) {
+        const pong = buffer.slice(0, PING_MESSAGE_BYTES);
+        buffer = buffer.slice(PING_MESSAGE_BYTES);
+        if (!stream.send(pong) && stream.onDrain) {
+          await stream.onDrain();
+        }
+      }
+    }
+  } finally {
+    await stream.close().catch(() => undefined);
+  }
+}
+
+function normalizeStreamChunk(value: Uint8Array | { subarray(): Uint8Array }): Uint8Array {
+  return value instanceof Uint8Array ? value : value.subarray();
+}
+
+class Libp2pBrowserTransport implements BrowserTransport {
+  readonly peerId: string;
+  private started = false;
+  private readonly retentionTimers = new Map<
+    string,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
+  private readonly peerKeepAddressPreference = new Map<string, string[]>();
+
+  constructor(
+    private readonly node: Awaited<ReturnType<typeof createLibp2p>>,
+    private relayServerAddresses: string[],
+  ) {
+    this.peerId = node.peerId.toString();
+    this.relayServerAddresses = uniqueStrings(relayServerAddresses);
+    this.node.addEventListener("connection:open", (event) => {
+      this.schedulePeerConnectionRetention(event.detail.remotePeer.toString());
+    });
+  }
+
+  async start(): Promise<void> {
+    if (this.started) return;
+    await this.node.start();
+    for (const address of this.relayServerAddresses) {
+      await this.node.dial(multiaddr(address));
+    }
+    this.started = true;
+  }
+
+  async stop(): Promise<void> {
+    for (const timer of this.retentionTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.retentionTimers.clear();
+    await this.node.stop();
+    this.started = false;
+  }
+
+  multiaddrs(): string[] {
+    return browserReachableMultiaddrs(
+      this.peerId,
+      this.node.getMultiaddrs().map((address) => address.toString()),
+    );
+  }
+
+  async addRelayServerAddresses(addresses: string[]): Promise<void> {
+    const relayServers = uniqueStrings(addresses);
+    this.relayServerAddresses = uniqueStrings([...this.relayServerAddresses, ...addresses]);
+    if (!this.started || relayServers.length === 0) {
+      return;
+    }
+    await this.listenOnRelayServers(relayServers);
+  }
+
+  async dial(addresses: string[], options: { force?: boolean } = {}): Promise<void> {
+    if (addresses.length === 0) {
+      throw new Error("No bootstrap addresses available to dial");
+    }
+    await this.node.dial(addresses.map((address) => multiaddr(address)), {
+      force: options.force ?? false,
+    });
+  }
+
+  preferPeerConnections(peerId: string, keepAddresses: string[]): void {
+    this.rememberPeerKeepAddressPreference(peerId, keepAddresses);
+    this.schedulePeerConnectionRetention(peerId);
+  }
+
+  private async listenOnRelayServers(addresses: string[]): Promise<void> {
+    const listenAddresses = relayListenAddresses(addresses).map((address) => multiaddr(address));
+    if (listenAddresses.length === 0) {
+      return;
+    }
+    const internals = this.node as unknown as {
+      components?: {
+        transportManager?: {
+          listen(addrs: ReturnType<typeof multiaddr>[]): Promise<void>;
+        };
+      };
+    };
+    const transportManager = internals.components?.transportManager;
+    const listen = transportManager?.listen;
+    if (!listen) {
+      throw new Error("Browser transport cannot reserve relay addresses on this libp2p node");
+    }
+    await listen.call(transportManager, listenAddresses);
+  }
+
+  async closePeerConnections(peerId: string, keepAddresses: string[] = []): Promise<void> {
+    const peer = peerIdFromString(peerId);
+    this.rememberPeerKeepAddressPreference(peerId, keepAddresses);
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < CONNECTION_CLEANUP_TIMEOUT_MS) {
+      const connections = this.node.getConnections(peer);
+      if (browserPeerConnectionCleanupComplete(connections, keepAddresses)) {
+        return;
+      }
+
+      const targets = connectionsToClose(connections, keepAddresses);
+      if (targets.length > 0) {
+        await Promise.all(targets.map((connection) => closeConnectionAttempt(connection)));
+      }
+
+      await sleep(CONNECTION_CLEANUP_POLL_MS);
+    }
+
+    const remaining = this.node
+      .getConnections(peer)
+      .filter((connection) => connection.status === "open")
+      .map(connectionSummary);
+    throw new Error(
+      `Timed out closing non-selected peer connections for ${peerId}: ${remaining.join(", ")}`,
+    );
+  }
+
+  private schedulePeerConnectionRetention(peerId: string): void {
+    if (!this.peerKeepAddressPreference.has(peerId)) {
+      return;
+    }
+    const existing = this.retentionTimers.get(peerId);
+    if (existing !== undefined) {
+      globalThis.clearTimeout(existing);
+    }
+    const timer = globalThis.setTimeout(() => {
+      void this.retainPreferredPeerConnection(peerId);
+    }, CONNECTION_RETENTION_DELAY_MS);
+    this.retentionTimers.set(peerId, timer);
+  }
+
+  private async retainPreferredPeerConnection(peerId: string): Promise<void> {
+    this.retentionTimers.delete(peerId);
+    const peer = peerIdFromString(peerId);
+    const connections = this.node.getConnections(peer);
+    const keepAddresses = browserPeerConnectionRetentionAddresses(
+      this.peerKeepAddressPreference.get(peerId),
+    );
+    if (keepAddresses.length === 0) {
+      return;
+    }
+    const openConnectionCount = connections.filter(
+      (connection) => connection.status === "open",
+    ).length;
+    if (openConnectionCount <= keepAddresses.length) {
+      return;
+    }
+    await this.closePeerConnections(peerId, keepAddresses).catch(() => undefined);
+  }
+
+  private rememberPeerKeepAddressPreference(peerId: string, keepAddresses: string[]): void {
+    if (keepAddresses.length > 0) {
+      this.peerKeepAddressPreference.set(peerId, uniqueStrings(keepAddresses));
+    } else {
+      this.peerKeepAddressPreference.delete(peerId);
+    }
+  }
+
+  connectionPaths(peerId: string): BrowserConnectionPath[] {
+    const peer = peerIdFromString(peerId);
+    return this.node
+      .getConnections(peer)
+      .filter((connection) => connection.status === "open")
+      .map((connection) => {
+        const remoteAddress = connection.remoteAddr.toString();
+        const rtt = connection.rtt;
+        return {
+          connectionId: connection.id,
+          direction: connection.direction === "outbound" ? "dialer" : "listener",
+          transport: classifyTransport(remoteAddress),
+          relayInvolved: remoteAddress.includes("/p2p-circuit"),
+          remoteAddress,
+          status: connection.status,
+          direct: connection.direct,
+          rttMs: typeof rtt === "number" ? rtt : undefined,
+        };
+      });
+  }
+
+  async registerProtocolHandler(
+    protocol: string,
+    handler: BrowserProtocolHandler,
+    options: BrowserProtocolHandlerOptions = {},
+  ): Promise<void> {
+    await this.node.handle(
+      protocol,
+      (stream, connection) => handler(stream, connection.remotePeer.toString()),
+      {
+        ...options,
+        runOnLimitedConnection: true,
+        force: true,
+      },
+    );
+  }
+
+  async unregisterProtocolHandler(protocol: string): Promise<void> {
+    await this.node.unhandle(protocol);
+  }
+
+  async dialProtocol(
+    peerId: string,
+    addresses: string[],
+    protocol: string,
+  ): Promise<BrowserProtocolStream> {
+    const peer = peerIdFromString(peerId);
+    return openBrowserProtocolStream(
+      this.node.getConnections(peer),
+      addresses,
+      protocol,
+      (dialAddresses, options) =>
+        this.node.dial(dialAddresses.map((address) => multiaddr(address)), options),
+      peerId,
+    );
+  }
+}
+
+export function browserReachableMultiaddrs(
+  peerId: string,
+  observedAddresses: string[],
+): string[] {
+  return uniqueStrings(observedAddresses).filter((address) =>
+    isExportableBrowserBootstrapAddress(address, peerId),
+  );
+}
+
+export async function openBrowserProtocolStream(
+  connections: BrowserConnectionCandidate[],
+  addresses: string[],
+  protocol: string,
+  dial: (
+    addresses: string[],
+    options: { force?: boolean },
+  ) => Promise<BrowserConnectionCandidate>,
+  peerId?: string,
+): Promise<BrowserProtocolStream> {
+  for (const connection of connectionCandidates(connections, addresses, peerId)) {
+    try {
+      return await connection.newStream(protocol, { runOnLimitedConnection: true });
+    } catch (error) {
+      if (!isRetriableConnectionStateError(error)) {
+        throw error;
+      }
+      await connection.close().catch(() => undefined);
+    }
+  }
+
+  if (addresses.length === 0) {
+    throw new Error(`No active connection or bootstrap addresses available for ${protocol}`);
+  }
+
+  let lastError: unknown;
+  for (const address of addresses) {
+    try {
+      return await openDialedProtocolStream([address], protocol, false, dial);
+    } catch (error) {
+      if (!isRetriableConnectionStateError(error) && !isDialFailure(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+
+    try {
+      return await openDialedProtocolStream([address], protocol, true, dial);
+    } catch (error) {
+      if (!isRetriableConnectionStateError(error) && !isDialFailure(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Unable to open protocol stream for ${protocol}`);
+}
+
+async function openDialedProtocolStream(
+  addresses: string[],
+  protocol: string,
+  force: boolean,
+  dial: (
+    addresses: string[],
+    options: { force?: boolean },
+  ) => Promise<BrowserConnectionCandidate>,
+): Promise<BrowserProtocolStream> {
+  let connection: BrowserConnectionCandidate;
+  try {
+    connection = await dial(addresses, { force });
+  } catch (error) {
+    throw new BrowserDialFailure(error);
+  }
+  try {
+    return await connection.newStream(protocol, { runOnLimitedConnection: true });
+  } catch (error) {
+    if (isRetriableConnectionStateError(error)) {
+      await connection.close().catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+class BrowserDialFailure extends Error {
+  constructor(readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+function connectionCandidates<T extends BrowserConnectionCandidate>(
+  connections: T[],
+  addresses: string[],
+  peerId?: string,
+): T[] {
+  const ordered: T[] = [];
+  const used = new Set<T>();
+  const openConnections = connections.filter((connection) => connection.status === "open");
+
+  for (const address of addresses) {
+    for (const connection of openConnections) {
+      if (used.has(connection)) {
+        continue;
+      }
+      if (connectionMatchesDialAddress(connection.remoteAddr.toString(), address, peerId)) {
+        ordered.push(connection);
+        used.add(connection);
+      }
+    }
+  }
+
+  if (addresses.length === 0) {
+    for (const connection of openConnections) {
+      if (!used.has(connection)) {
+        ordered.push(connection);
+      }
+    }
+  }
+
+  return ordered;
+}
+
+function connectionMatchesDialAddress(
+  activeAddress: string,
+  dialAddress: string,
+  peerId: string | undefined,
+): boolean {
+  if (activeAddress === dialAddress) {
+    return true;
+  }
+  return Boolean(
+    peerId &&
+      activeAddress === `/webrtc/p2p/${peerId}` &&
+      dialAddress.endsWith(`/p2p/${peerId}`) &&
+      dialAddress.includes(`/p2p-circuit/webrtc/p2p/${peerId}`),
+  );
+}
+
+function connectionsToClose<T extends BrowserConnectionCandidate>(
+  connections: T[],
+  keepAddresses: string[],
+): T[] {
+  const retained = retainedConnectionIds(connections, keepAddresses);
+  return connections.filter(
+    (connection) => connection.status !== "closed" && !retained.has(connection.id),
+  );
+}
+
+export function browserPeerConnectionCleanupComplete(
+  connections: BrowserConnectionCleanupCandidate[],
+  keepAddresses: string[],
+): boolean {
+  const retained = retainedConnectionIds(connections, keepAddresses);
+  if (
+    connections.some(
+      (connection) => connection.status !== "closed" && !retained.has(connection.id),
+    )
+  ) {
+    return false;
+  }
+
+  const open = connections.filter((connection) => connection.status === "open");
+  if (keepAddresses.length === 0) {
+    return open.length === 0;
+  }
+  return retained.size === 1;
+}
+
+export function browserPeerConnectionRetentionAddresses(
+  keepAddresses: string[] | undefined,
+): string[] {
+  return keepAddresses && keepAddresses.length > 0 ? keepAddresses : [];
+}
+
+export function preferredBrowserConnectionAddresses(
+  connections: BrowserConnectionRetentionCandidate[],
+): string[] {
+  const open = connections.filter((connection) => connection.status === "open");
+  if (open.length === 0) {
+    return [];
+  }
+  return [open.slice().sort(compareConnectionPreference)[0].remoteAddr.toString()];
+}
+
+function retainedConnectionIds<T extends BrowserConnectionCleanupCandidate>(
+  connections: T[],
+  keepAddresses: string[],
+): Set<string> {
+  const keep = new Set(keepAddresses);
+  const retained = new Set<string>();
+  if (keep.size === 0) {
+    return retained;
+  }
+
+  for (const keepAddress of keepAddresses) {
+    const connection = connections.find(
+      (candidate) =>
+        candidate.status === "open" && candidate.remoteAddr.toString() === keepAddress,
+    );
+    if (connection) {
+      retained.add(connection.id);
+      return retained;
+    }
+  }
+  return retained;
+}
+
+async function closeConnectionAttempt(connection: BrowserConnectionCandidate): Promise<void> {
+  let settled = false;
+  await Promise.race([
+    connection.close().then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    ),
+    sleep(CONNECTION_CLOSE_ATTEMPT_MS),
+  ]);
+
+  if (!settled && connection.abort) {
+    connection.abort(new Error(CONNECTION_CLOSE_REASON));
+  }
+}
+
+function connectionSummary(connection: BrowserConnectionCandidate): string {
+  return `${connection.id}:${connection.status}:${connection.remoteAddr.toString()}`;
+}
+
+function compareConnectionPreference(
+  left: BrowserConnectionRetentionCandidate,
+  right: BrowserConnectionRetentionCandidate,
+): number {
+  return connectionPreferenceScore(right) - connectionPreferenceScore(left);
+}
+
+function connectionPreferenceScore(connection: BrowserConnectionRetentionCandidate): number {
+  const address = connection.remoteAddr.toString();
+  let score = 0;
+  if (!address.includes("/p2p-circuit")) {
+    score += 100;
+  }
+  if (connection.direct === true) {
+    score += 50;
+  }
+  if (connection.limits === undefined) {
+    score += 10;
+  }
+  if (address.includes("/webrtc") && !address.includes("/webrtc-direct")) {
+    score += 5;
+  } else if (address.includes("/webrtc-direct")) {
+    score += 4;
+  } else if (address.includes("/ws") || address.includes("/wss")) {
+    score += 3;
+  } else if (address.includes("/quic")) {
+    score += 2;
+  } else if (address.includes("/tcp/")) {
+    score += 1;
+  }
+  return score;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableConnectionStateError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("muxer is \"closing\"") ||
+    message.includes("muxer is \"closed\"") ||
+    message.includes("connection is \"closing\"") ||
+    message.includes("connection is \"closed\"") ||
+    message.includes("connection is closing") ||
+    message.includes("connection is closed")
+  );
+}
+
+function isDialFailure(error: unknown): boolean {
+  return error instanceof BrowserDialFailure;
+}
+
+function classifyTransport(address: string): BrowserConnectionTransport {
+  if (address.includes("/webrtc-direct")) {
+    return "webrtc_direct";
+  }
+  if (address.includes("/webrtc")) {
+    return "webrtc";
+  }
+  if (address.includes("/webtransport")) {
+    return "webtransport";
+  }
+  if (address.includes("/ws") || address.includes("/wss")) {
+    return "websocket";
+  }
+  if (address.includes("/quic")) {
+    return "quic";
+  }
+  if (address.includes("/tcp/")) {
+    return "tcp";
+  }
+  return "unknown";
+}
+
+function relayListenAddresses(addresses: string[]): string[] {
+  return uniqueStrings(addresses).map((address) => `${address}/p2p-circuit`);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}

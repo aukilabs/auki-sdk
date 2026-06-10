@@ -1,0 +1,12 @@
+{
+  "name": "auki-p2p-preview-browser",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "../../crates/auki-p2p-browser/node_modules/.bin/vite build",
+    "dev": "../../crates/auki-p2p-browser/node_modules/.bin/vite --host 127.0.0.1",
+    "test": "../../crates/auki-p2p-browser/node_modules/.bin/vitest run --config vitest.config.ts",
+    "typecheck": "../../crates/auki-p2p-browser/node_modules/.bin/tsc -p tsconfig.json --noEmit"
+  }
+}

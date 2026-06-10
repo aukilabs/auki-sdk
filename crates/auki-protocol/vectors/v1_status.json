@@ -1,0 +1,231 @@
+{
+  "inputs": {
+    "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+    "generated_at": "2026-05-26T12:00:00Z",
+    "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+    "wallet_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+  },
+  "name": "auki.protocol.v1.status.vectors",
+  "negative": {
+    "invalid_path_type": {
+      "expected": "invalid_array_item",
+      "object": {
+        "active_paths": [
+          {
+            "path_type": "stream"
+          }
+        ],
+        "generated_at": "2026-05-26T12:00:00Z",
+        "last_failures": [],
+        "local_domains": [],
+        "local_peer": {},
+        "remote_peers": [],
+        "type": "auki.status_snapshot.v1"
+      }
+    },
+    "invalid_registry_hash": {
+      "expected": "invalid_array_item",
+      "object": {
+        "active_paths": [],
+        "generated_at": "2026-05-26T12:00:00Z",
+        "last_failures": [],
+        "local_domains": [],
+        "local_peer": {},
+        "remote_peers": [
+          {
+            "loaded_offers": [
+              {
+                "registry_refs": [
+                  {
+                    "hash": "bad",
+                    "id": "camera-main",
+                    "registry": "sensor",
+                    "role": "primary"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "type": "auki.status_snapshot.v1"
+      }
+    },
+    "missing_local_domains": {
+      "expected": "missing_field",
+      "object": {
+        "active_paths": [],
+        "generated_at": "2026-05-26T12:00:00Z",
+        "last_failures": [],
+        "local_peer": {},
+        "remote_peers": [],
+        "type": "auki.status_snapshot.v1"
+      }
+    },
+    "unsupported_type": {
+      "expected": "unsupported_type",
+      "object": {
+        "active_paths": [],
+        "generated_at": "2026-05-26T12:00:00Z",
+        "last_failures": [],
+        "local_domains": [],
+        "local_peer": {},
+        "remote_peers": [],
+        "type": "auki.status.v1"
+      }
+    }
+  },
+  "positive": {
+    "full_snapshot": {
+      "expected": {
+        "authorization_mode": "whitelisted-only",
+        "last_failure_code": "offer.unknown_offer",
+        "loaded_offer_registry_hash": "sha256:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+        "local_domain_role": "owner",
+        "path_type": "subscribe"
+      },
+      "object": {
+        "active_paths": [
+          {
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "last_envelope_failure": null,
+            "last_failure": null,
+            "last_message_at": "2026-05-26T12:00:00Z",
+            "last_payload_failure": null,
+            "last_sequence": "7",
+            "offer_id": "camera-main",
+            "path_id": "path-1",
+            "path_type": "subscribe",
+            "payload_type": "auki.frame",
+            "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+            "sequence_gap_count": 0,
+            "started_at": "2026-05-26T12:00:00Z",
+            "state": "active"
+          }
+        ],
+        "discovery": {
+          "advertised_addresses": [
+            "/ip4/203.0.113.1/tcp/4001"
+          ],
+          "advertised_domains": [
+            "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+          ],
+          "degraded": false,
+          "discoverable": true,
+          "enabled": true,
+          "expires_at": "2026-05-26T13:00:00Z",
+          "last_failure": null,
+          "last_refresh_at": "2026-05-26T12:00:00Z"
+        },
+        "generated_at": "2026-05-26T12:00:00Z",
+        "last_failures": [
+          {
+            "at": "2026-05-26T12:00:00Z",
+            "code": "offer.unknown_offer",
+            "details": {
+              "missing": true
+            },
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "message": "unknown offer",
+            "offer_id": "camera-main",
+            "path_id": "path-1",
+            "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+            "retryable": false,
+            "scope": "offer"
+          }
+        ],
+        "local_domains": [
+          {
+            "advertised": true,
+            "declaration_present": true,
+            "declaration_valid": true,
+            "delegation_expires_at": null,
+            "delegation_present": false,
+            "delegation_scopes": [
+              "serve"
+            ],
+            "delegation_valid": null,
+            "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+            "last_failure": null,
+            "role": "owner",
+            "serving_offers": true
+          }
+        ],
+        "local_peer": {
+          "advertised_addresses": [
+            "/ip4/203.0.113.1/tcp/4001"
+          ],
+          "authorization_mode": "whitelisted-only",
+          "listen_addresses": [
+            "/ip4/0.0.0.0/tcp/0"
+          ],
+          "peer_binding_age_ms": 500,
+          "peer_binding_fresh": true,
+          "peer_binding_issued_at": "2026-05-26T12:00:00Z",
+          "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+          "wallet_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+        },
+        "metadata": {
+          "fixture": true
+        },
+        "remote_peers": [
+          {
+            "accepted_served_domains": [
+              "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs"
+            ],
+            "authorized": true,
+            "connected": true,
+            "dialable": true,
+            "learned_from": "configured",
+            "last_failure": null,
+            "lifecycle_state": "ready",
+            "loaded_offers": [
+              {
+                "access_modes": [
+                  "get",
+                  "subscribe"
+                ],
+                "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+                "expires_at": null,
+                "kind": "sensor.frame",
+                "last_failure": null,
+                "offer_id": "camera-main",
+                "payload_type": "auki.frame",
+                "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+                "registry_refs": [
+                  {
+                    "hash": "sha256:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+                    "id": "camera-main",
+                    "registry": "sensor",
+                    "role": "primary"
+                  }
+                ],
+                "status": "available",
+                "unusable_reason": null,
+                "updated_at": "2026-05-26T12:00:00Z",
+                "usable": true
+              }
+            ],
+            "offer_catalog_status": {
+              "last_failure": null,
+              "last_fetch_at": "2026-05-26T12:00:00Z",
+              "last_success_at": "2026-05-26T12:00:00Z",
+              "path_available": true
+            },
+            "peer_id": "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
+            "rejected_domains": [
+              {
+                "code": "domain.missing_delegation",
+                "domain_id": "noEv5Zu7UvR7qx9ooyAHd407PWcp8nUQLNRxrnd1ZRs",
+                "message": "missing delegation"
+              }
+            ],
+            "selected_protocol_version": "2026-05-baseline",
+            "verified_wallet_public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+          }
+        ],
+        "type": "auki.status_snapshot.v1"
+      }
+    }
+  },
+  "version": 1
+}

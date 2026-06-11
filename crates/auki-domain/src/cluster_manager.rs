@@ -983,7 +983,12 @@ impl ClusterManager {
             Arc::new(Mutex::new(Some(spawn_manager_liveness_check(
                 discovery.clone(),
                 cluster_name.clone(),
+                local_peer_id,
+                local_multiaddrs.clone(),
+                relay_multiaddrs.clone(),
+                manager_peer_id.clone(),
                 membership.clone(),
+                runtime.handle(),
             ))));
 
         // 5. Drain inbound `/auki/join/0.0.1` events.
@@ -2073,8 +2078,6 @@ async fn sync_heartbeat_targets(
 const REJOIN_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Errors from [`rejoin_via_manager`].
-// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 enum RejoinError {
     #[error("allow-list update: {0}")]
@@ -2094,8 +2097,13 @@ enum RejoinError {
 /// follower whose heartbeat link to the Manager lapsed (the Manager
 /// may have evicted it) and by a displaced ex-Manager adopting the
 /// Discovery-named winner.
-// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
-#[allow(dead_code)]
+///
+/// On any error after the allow-list union, the union persists —
+/// deliberate, it keeps the target dialable so a retry connects
+/// faster. A failure in the final allow-list push can leave the
+/// adopted document and Manager view in place; that only occurs when
+/// the runtime is shutting down, and gossip/retry converge
+/// regardless.
 #[allow(clippy::too_many_arguments)]
 async fn rejoin_via_manager(
     cluster_name: &str,
@@ -2265,8 +2273,6 @@ fn discovery_row_missing(e: &DiscoveryClientError) -> bool {
 
 /// Why a Manager claim did not commit at Discovery.
 #[derive(Debug)]
-// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
-#[allow(dead_code)]
 enum RegisterAsManagerError {
     /// Another peer holds the row (lost the re-create race). The
     /// caller must NOT promote; it should follow the row instead.
@@ -2279,8 +2285,6 @@ enum RegisterAsManagerError {
 /// re-create it when Discovery already swept it (hardening-plan Task
 /// 6). `Ok(())` is the commit signal — only then may the caller
 /// mutate local Manager state.
-// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
-#[allow(dead_code)]
 async fn register_as_manager(
     discovery: &DiscoveryClient,
     cluster_name: &str,
@@ -2463,7 +2467,12 @@ async fn handle_domain_peer_lost(
             let new_tick = spawn_manager_liveness_check(
                 discovery.clone(),
                 cluster_name.to_string(),
+                local_peer_id,
+                local_multiaddrs.to_vec(),
+                relay_multiaddrs.to_vec(),
+                manager_peer_id.clone(),
                 membership.clone(),
+                runtime.clone(),
             );
             let prev = liveness_check_task
                 .lock()
@@ -3488,6 +3497,23 @@ pub fn decide_manager_loss_action(
     }
 }
 
+/// Arbiter verdict for one Manager-side liveness tick: Discovery's
+/// row is the tiebreak authority, so a row naming someone else means
+/// the local Manager role is forfeit.
+#[derive(Debug, PartialEq, Eq)]
+enum LivenessTickDirective {
+    KeepRole,
+    StepDown(PeerId),
+}
+
+fn liveness_tick_directive(local_peer_id: PeerId, row_manager: PeerId) -> LivenessTickDirective {
+    if row_manager == local_peer_id {
+        LivenessTickDirective::KeepRole
+    } else {
+        LivenessTickDirective::StepDown(row_manager)
+    }
+}
+
 fn elect_successor_excluding_lost(
     membership: &ClusterMembership,
     local_peer_id: PeerId,
@@ -3504,16 +3530,21 @@ fn elect_successor_excluding_lost(
     elect_successor(&membership, local_peer_id, &connected)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_manager_liveness_check(
     discovery: Arc<DiscoveryClient>,
     cluster_name: String,
+    local_peer_id: PeerId,
+    local_multiaddrs: Vec<Multiaddr>,
+    relay_multiaddrs: Vec<Multiaddr>,
+    manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
+    runtime: auki_network::NetworkRuntimeHandle,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(LIVENESS_CHECK_INTERVAL);
-        // First tick fires immediately; skip it because Discovery
-        // already has our state from `create_cluster`'s synchronous
-        // `create` call. The next tick happens at +1s.
+        // First tick fires immediately; skip it — Discovery has our
+        // state from the create/rotate that committed this role.
         tick.tick().await;
         loop {
             tick.tick().await;
@@ -3521,21 +3552,124 @@ fn spawn_manager_liveness_check(
                 let m = membership.lock().expect("membership lock");
                 m.peers.len() as u32
             };
-            // Errors are logged to stderr (via the default
-            // tracing-or-print path) and tolerated — a transient
-            // Discovery hiccup shouldn't kill the cluster. Discovery
-            // sweeps after 3s of no liveness check (3 missed at 1s
-            // cadence), so persistent failures self-resolve.
-            if let Err(e) = discovery
+            match discovery
                 .liveness_check(cluster_name.clone(), peer_count)
                 .await
             {
-                eprintln!(
+                Ok(entry) => match liveness_tick_directive(local_peer_id, entry.manager_peer_id) {
+                    LivenessTickDirective::KeepRole => {}
+                    LivenessTickDirective::StepDown(winner) => {
+                        eprintln!(
+                            "auki-domain: cluster {cluster_name:?}: Discovery names \
+                            {winner} as Manager; {local_peer_id} steps down"
+                        );
+                        step_down_to(
+                            &cluster_name,
+                            local_peer_id,
+                            &local_multiaddrs,
+                            winner,
+                            entry.manager_multiaddrs.clone(),
+                            &manager_peer_id,
+                            &membership,
+                            &runtime,
+                        )
+                        .await;
+                        // No longer the Manager: stop ticking. The
+                        // liveness handler's heartbeat watchlist takes
+                        // over (it now watches the adopted winner).
+                        break;
+                    }
+                },
+                Err(e) if discovery_row_missing(&e) => {
+                    // Discovery swept (or lost) our row while we hold
+                    // the role: re-register (hardening-plan Task 6).
+                    match register_as_manager(
+                        &discovery,
+                        &cluster_name,
+                        local_peer_id,
+                        &local_multiaddrs,
+                        &relay_multiaddrs,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(RegisterAsManagerError::Displaced) => {
+                            let entry = discovery
+                                .list_clusters()
+                                .await
+                                .ok()
+                                .and_then(|l| l.into_iter().find(|e| e.name == cluster_name));
+                            if let Some(entry) = entry {
+                                eprintln!(
+                                    "auki-domain: cluster {cluster_name:?}: row re-created \
+                                    by {}; {local_peer_id} steps down",
+                                    entry.manager_peer_id
+                                );
+                                step_down_to(
+                                    &cluster_name,
+                                    local_peer_id,
+                                    &local_multiaddrs,
+                                    entry.manager_peer_id,
+                                    entry.manager_multiaddrs.clone(),
+                                    &manager_peer_id,
+                                    &membership,
+                                    &runtime,
+                                )
+                                .await;
+                                break;
+                            }
+                        }
+                        Err(RegisterAsManagerError::Discovery(e)) => eprintln!(
+                            "auki-domain: re-register after swept row failed for \
+                            {cluster_name:?}: {e}"
+                        ),
+                    }
+                }
+                Err(e) => eprintln!(
                     "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
-                );
+                ),
             }
         }
     })
+}
+
+/// Adopt `winner` as Manager and try to rejoin it. Best-effort: a
+/// failed rejoin is logged; the heartbeat watchlist (now watching
+/// `winner`) re-evaluates on the next timeout.
+#[allow(clippy::too_many_arguments)]
+async fn step_down_to(
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    local_multiaddrs: &[Multiaddr],
+    winner: PeerId,
+    winner_multiaddrs: Vec<Multiaddr>,
+    manager_peer_id: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    runtime: &auki_network::NetworkRuntimeHandle,
+) {
+    *manager_peer_id.lock().expect("manager_peer_id lock") = winner;
+    sync_heartbeat_targets(
+        runtime,
+        local_peer_id,
+        manager_peer_id,
+        membership,
+        cluster_name,
+    )
+    .await;
+    if let Err(e) = rejoin_via_manager(
+        cluster_name,
+        local_peer_id,
+        local_multiaddrs,
+        winner,
+        winner_multiaddrs,
+        manager_peer_id,
+        membership,
+        runtime,
+    )
+    .await
+    {
+        eprintln!("auki-domain: cluster {cluster_name:?}: rejoin toward {winner} failed: {e}");
+    }
 }
 
 /// Outcome of a Manager-side join request against the current doc.
@@ -3701,6 +3835,25 @@ mod tests {
         };
         assert!(discovery_row_missing(&missing));
         assert!(!discovery_row_missing(&other));
+        assert!(!discovery_row_missing(
+            &DiscoveryClientError::InvalidPeerId("x".into())
+        ));
+    }
+
+    #[test]
+    fn liveness_tick_keeps_role_when_row_names_local() {
+        assert_eq!(
+            liveness_tick_directive(peer(1), peer(1)),
+            LivenessTickDirective::KeepRole
+        );
+    }
+
+    #[test]
+    fn liveness_tick_steps_down_when_row_names_other() {
+        assert_eq!(
+            liveness_tick_directive(peer(1), peer(2)),
+            LivenessTickDirective::StepDown(peer(2))
+        );
     }
 
     #[test]

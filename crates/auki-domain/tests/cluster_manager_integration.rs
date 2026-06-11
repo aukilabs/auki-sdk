@@ -79,6 +79,61 @@ async fn wait_for_listen_addr(
     .expect("listen addr did not appear within timeout")
 }
 
+/// #295 recovery-latency budget for a clean-kill Manager failover.
+/// The survivor's first heartbeat timeout fires ~1.5–2.25s after the
+/// Manager dies; the Discovery gate still sees the dead Manager's row
+/// (3s sweep window) and **Defers** — one Defer cycle includes a
+/// rejoin attempt toward the dead peer with up to a 5s connect wait —
+/// then the re-armed watch times out again, finds the row swept,
+/// elects, and promotes only after `register_as_manager` commits.
+/// Typical end-to-end: ~8–10s. Budget 25s for LAN + Discovery jitter.
+const TAKEOVER_DEADLINE: Duration = Duration::from_secs(25);
+
+/// Discovery's server-side row-liveness sweep window
+/// (`LIVENESS_REQUIREMENT_NS`): a row whose Manager stops POSTing
+/// `liveness_check` is evicted ~3s after the last refresh. Verified
+/// against the live deployment (probe row swept between +3s and +4s).
+const DISCOVERY_SWEEP_WINDOW: Duration = Duration::from_secs(3);
+
+/// Fetch the cluster's current Discovery row, if any.
+async fn cluster_row(
+    discovery: &DiscoveryClient,
+    name: &str,
+) -> Option<auki_network::discovery_client::ClusterEntry> {
+    discovery
+        .list_clusters()
+        .await
+        .expect("list_clusters")
+        .into_iter()
+        .find(|c| c.name == name)
+}
+
+/// Block until the row's `last_liveness_check_ns` advances past its
+/// current value — i.e. until the Manager's 1s liveness tick has just
+/// refreshed it. Killing the Manager immediately afterwards pins the
+/// row sweep to ~`DISCOVERY_SWEEP_WINDOW` after the kill, which makes
+/// "the survivor must not promote before the sweep" lower bounds
+/// meaningful (#295).
+async fn wait_for_fresh_liveness_refresh(discovery: &DiscoveryClient, name: &str) {
+    let initial = cluster_row(discovery, name)
+        .await
+        .expect("cluster row exists while its Manager is alive")
+        .last_liveness_check_ns;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Manager liveness tick did not refresh the Discovery row within 3s"
+        );
+        if let Some(row) = cluster_row(discovery, name).await {
+            if row.last_liveness_check_ns > initial {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn cluster_manager_full_lifecycle_against_live_discovery() {
@@ -308,13 +363,21 @@ async fn two_managers_create_then_join_against_live_discovery() {
 /// Failover: A creates cluster, B joins, A "dies" (clean shutdown
 /// short of deregister), B detects the loss via the peer-side
 /// heartbeat timeout, runs the election, promotes itself to
-/// Manager, calls `rotate_manager` on Discovery, and starts the
-/// Manager-side Discovery heartbeat tick.
+/// Manager, commits the claim at Discovery, and starts the
+/// Manager-side Discovery liveness tick.
 ///
 /// To simulate A "dying" without it deregistering the cluster
 /// first (which would be the graceful exit path), we abort A's
 /// runtime via Rust's `Drop` without going through
 /// `ClusterManager::shutdown` — that's the unclean-exit path.
+///
+/// Re-timed for #295: detection still fires at ~1.5s, but B no
+/// longer promotes immediately — while Discovery's row still names
+/// dead A, B Defers (rejoin attempt + re-armed watch) and only
+/// elects once the row is swept (~3s after A's last liveness tick).
+/// See `TAKEOVER_DEADLINE` for the arithmetic; the dedicated
+/// sweep-bound regression is `dead_manager_drop_is_replaced_only_
+/// after_row_sweep`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn manager_failover_when_a_dies_b_takes_over() {
@@ -383,10 +446,16 @@ async fn manager_failover_when_a_dies_b_takes_over() {
     drop(manager_a);
 
     // B detects the loss via the domain-owned heartbeat timer
-    // (~1500ms) plus a margin for the election + rotate_manager
-    // round-trip.
-    eprintln!("waiting up to 5s for B to detect loss + run election + rotate Discovery…");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // (~1500ms). Under #295 the takeover then legitimately waits for
+    // Discovery: the row still names dead A, so B Defers (rejoin
+    // attempt toward A incl. up to a 5s dead-dial wait, re-armed
+    // watch) until the row sweeps ~3s after A's last liveness tick,
+    // and only then elects + commits. Typical ~8–10s end to end.
+    eprintln!(
+        "waiting up to {TAKEOVER_DEADLINE:?} for B to defer until the row sweep, \
+         elect, and commit at Discovery…"
+    );
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
             break;
@@ -395,7 +464,8 @@ async fn manager_failover_when_a_dies_b_takes_over() {
     }
     assert!(
         manager_b.is_manager(),
-        "B did not become Manager within 5s after A died"
+        "B did not become Manager within {TAKEOVER_DEADLINE:?} after A died \
+         (#295 defer-until-sweep failover)"
     );
     assert_eq!(manager_b.manager_peer_id(), pid_b);
 
@@ -523,7 +593,10 @@ async fn domain_clock_metadata_survives_manager_handoff() {
     eprintln!("A=({pid_a}) dropping after B has domain time…");
     drop(manager_a);
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    // Re-timed for #295: B defers while Discovery's row still names
+    // dead A and only elects after the ~3s row sweep (see
+    // `TAKEOVER_DEADLINE`), so the handoff lands at ~8–10s, not ~2s.
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
             break;
@@ -532,7 +605,8 @@ async fn domain_clock_metadata_survives_manager_handoff() {
     }
     assert!(
         manager_b.is_manager(),
-        "B did not become Manager within 6s after A died"
+        "B did not become Manager within {TAKEOVER_DEADLINE:?} after A died \
+         (#295 defer-until-sweep failover)"
     );
     assert_eq!(manager_b.manager_peer_id(), pid_b);
 
@@ -1110,31 +1184,62 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // --- A graceful-exits via shutdown() (NOT drop) ---
+    // `shutdown()` deregisters from Discovery only when the local
+    // peer is the LAST member; with B remaining it must leave the
+    // row in place (naming A) and stop ticking it. Sync the shutdown
+    // to a fresh liveness refresh so the row sweep lands a full
+    // `DISCOVERY_SWEEP_WINDOW` later — that pins the lower bound
+    // asserted below (#295).
+    wait_for_fresh_liveness_refresh(&discovery, &cluster_name).await;
     eprintln!("A=({pid_a}) calling shutdown() gracefully…");
+    let shutdown_at = std::time::Instant::now();
     manager_a.shutdown().await.expect("A graceful shutdown");
 
-    // B should detect, elect, promote, and rotate Discovery within
-    // a few seconds.
-    eprintln!("waiting up to 5s for B to take over after A's graceful exit…");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Re-timed for #295: B defers while the row still names A and
+    // elects only after the ~3s sweep — graceful and ungraceful
+    // Manager exits share the loss path, so the takeover lands at
+    // ~8–10s, not ~2s.
+    eprintln!("waiting up to {TAKEOVER_DEADLINE:?} for B to take over after A's graceful exit…");
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
+    let mut took_over_after: Option<Duration> = None;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
+            took_over_after = Some(shutdown_at.elapsed());
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let took_over_after = took_over_after.unwrap_or_else(|| {
+        panic!(
+            "B did not take over within {TAKEOVER_DEADLINE:?} after A's graceful shutdown \
+             (#295 defer-until-sweep failover)"
+        )
+    });
+    eprintln!("B took over {took_over_after:?} after A's graceful shutdown");
+
+    // #295 twist: since B's commit path re-creates a swept row
+    // (rotate → 404 → create), a wrongly-deregistering A would no
+    // longer show up as a *missing* row — it would show up as a
+    // takeover faster than the sweep window (the row would already
+    // be absent at B's first gate check, ~1.5–2.25s). The lower
+    // bound is what now pins "A left the row in place". The 200ms
+    // slack absorbs the one-RTT skew between Discovery stamping the
+    // refresh and the test observing it.
     assert!(
-        manager_b.is_manager(),
-        "B did not take over within 5s after A's graceful shutdown"
+        took_over_after >= DISCOVERY_SWEEP_WINDOW - Duration::from_millis(200),
+        "B took over {took_over_after:?} after A's graceful shutdown — before Discovery's \
+         {DISCOVERY_SWEEP_WINDOW:?} sweep window. A's shutdown() must have deregistered the \
+         row despite B remaining (the pre-Hagall graceful-exit bug)."
     );
 
-    // Discovery should still have the cluster (A did NOT
-    // deregister) and reflect B as the Manager.
+    // Discovery still has the cluster, now naming B. (The row may
+    // have been swept and re-created by B's commit in between —
+    // presence + manager==B is the post-handoff invariant.)
     let snapshot = discovery.list_clusters().await.expect("list_clusters");
     let entry = snapshot
         .iter()
         .find(|c| c.name == cluster_name)
-        .expect("cluster gone from Discovery — A wrongly deregistered on graceful exit?");
+        .expect("cluster gone from Discovery after B's takeover commit");
     assert_eq!(
         entry.manager_peer_id, pid_b,
         "Discovery's Manager hint should rotate to B after graceful handoff"
@@ -1176,8 +1281,11 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
 /// integration tests use TCP and pass even pre-fix because
 /// ConnectionClosed fires within ms). With QUIC + the
 /// pre-fix-missing-heartbeat substream, drop(A) would leave B waiting
-/// for QUIC's multi-second idle timeout. Post-fix, B's election fires
-/// in <2 s via the domain-owned heartbeat timer.
+/// for QUIC's multi-second idle timeout. Post-fix, B's loss DETECTION
+/// fires in <2 s via the domain-owned heartbeat timer; under #295 the
+/// takeover then completes only after Discovery's ~3s row sweep +
+/// a Defer cycle (see `TAKEOVER_DEADLINE`) — still far inside the
+/// tens-of-seconds QUIC idle window this test guards against.
 ///
 /// Seeds `[81]` (Manager) and `[82]` (Joiner) pin `pid_a > pid_b`.
 /// The Manager now opens the heartbeat regardless of peer-id ordering,
@@ -1248,11 +1356,13 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
     eprintln!("A=({pid_a}) dropping over QUIC…");
     drop(manager_a);
 
-    // Post-fix: heartbeat-timeout fires ~1.5 s; election + rotate
-    // should finish within 5 s. Pre-fix on QUIC: idle timeout is
-    // tens of seconds.
-    eprintln!("waiting up to 5s for B to take over via heartbeat-timeout…");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Post-fix: heartbeat-timeout fires ~1.5 s. Re-timed for #295:
+    // B then defers until Discovery sweeps dead A's row (~3s) and
+    // commits the claim — typically ~8–10s. Pre-fix on QUIC the
+    // DETECTION alone took tens of seconds (idle timeout), so the
+    // 25s budget still separates the two.
+    eprintln!("waiting up to {TAKEOVER_DEADLINE:?} for B to take over via heartbeat-timeout…");
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
             break;
@@ -1261,7 +1371,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
     }
     assert!(
         manager_b.is_manager(),
-        "B did not take over within 5s after A dropped over QUIC — \
+        "B did not take over within {TAKEOVER_DEADLINE:?} after A dropped over QUIC — \
          heartbeat substream probably didn't open (the BUG this test pins)"
     );
 
@@ -1344,8 +1454,10 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
     eprintln!("A=({pid_a}) dropping over QUIC (Manager-pid-lower)…");
     drop(manager_a);
 
-    eprintln!("waiting up to 5s for B to take over via heartbeat-timeout…");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Re-timed for #295: defer-until-sweep failover, see
+    // `TAKEOVER_DEADLINE`.
+    eprintln!("waiting up to {TAKEOVER_DEADLINE:?} for B to take over via heartbeat-timeout…");
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
             break;
@@ -1354,7 +1466,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
     }
     assert!(
         manager_b.is_manager(),
-        "B did not take over within 5s after A dropped over QUIC \
+        "B did not take over within {TAKEOVER_DEADLINE:?} after A dropped over QUIC \
          (Manager-pid-lower path — the exact scenario Nils hit on K1)"
     );
 
@@ -1432,7 +1544,9 @@ async fn manager_failover_when_manager_dies_before_first_heartbeat() {
     eprintln!("A=({pid_a}) dropping immediately after admitting B…");
     drop(manager_a);
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Re-timed for #295: defer-until-sweep failover, see
+    // `TAKEOVER_DEADLINE`.
+    let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
         if manager_b.is_manager() {
             break;
@@ -1441,13 +1555,581 @@ async fn manager_failover_when_manager_dies_before_first_heartbeat() {
     }
     assert!(
         manager_b.is_manager(),
-        "B did not take over within 5s after A died before the first heartbeat window"
+        "B did not take over within {TAKEOVER_DEADLINE:?} after A died before the first \
+         heartbeat window"
     );
     assert_eq!(manager_b.manager_peer_id(), pid_b);
 
     manager_b.shutdown().await.expect("B shutdown");
     eprintln!(
         "No-first-heartbeat failover OK against {}: A={pid_a} → B={pid_b}",
+        discovery_url()
+    );
+}
+
+/// #295 regression: a dropped (not shut down) Manager is replaced
+/// only AFTER Discovery sweeps its stale row — never before.
+///
+/// Mechanisms pinned:
+///
+/// - `ClusterManager::drop` aborts every SDK background task,
+///   including the Manager-side 1s Discovery liveness tick. A zombie
+///   tick would keep the row fresh forever and B would Defer forever
+///   (this test would time out at 30s).
+/// - B's Manager-loss gate: while the row still names dead A, B
+///   **Defers** — rejoin attempt toward A plus a re-armed watch —
+///   instead of electing. The pre-#295 code promoted at the first
+///   heartbeat timeout (~1.5s), racing live Managers into
+///   split-brain. Only once the row is swept does B elect, and
+///   `is_manager` flips only after `register_as_manager` commits at
+///   Discovery (rotate → 404 → create).
+///
+/// The drop is synced to a fresh liveness refresh so the sweep lands
+/// ~`DISCOVERY_SWEEP_WINDOW` after the drop, making the ≥sweep lower
+/// bound meaningful.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn dead_manager_drop_is_replaced_only_after_row_sweep() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-sweepgate-it");
+
+    // --- Peer A: creates the cluster ---
+    let id_a = PeerIdentity::from_seed(&[61u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-sweepgate-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // --- Peer B: joins A's cluster ---
+    let id_b = PeerIdentity::from_seed(&[62u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-sweepgate-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+    assert_eq!(manager_b.manager_peer_id(), pid_a);
+
+    // Kill A right after one of its liveness refreshes: the row then
+    // sweeps ~DISCOVERY_SWEEP_WINDOW later, so any B promotion before
+    // that is a gate violation.
+    wait_for_fresh_liveness_refresh(&discovery, &cluster_name).await;
+    eprintln!("A=({pid_a}) dropping WITHOUT shutdown right after a row refresh…");
+    let dropped_at = std::time::Instant::now();
+    drop(manager_a);
+
+    // Record the first instant B claims the role. 100ms sampling so
+    // the ≥sweep lower bound below can't be masked by poll
+    // granularity.
+    eprintln!("polling up to 30s for B's takeover…");
+    let poll_deadline = dropped_at + Duration::from_secs(30);
+    let mut flipped_after: Option<Duration> = None;
+    while std::time::Instant::now() < poll_deadline {
+        if manager_b.is_manager() {
+            flipped_after = Some(dropped_at.elapsed());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let flipped_after = flipped_after.expect(
+        "B never became Manager within 30s of A's drop — either A's row never swept \
+         (zombie liveness tick: Drop failed to abort it) or B's election never committed",
+    );
+    eprintln!("B promoted {flipped_after:?} after the drop");
+
+    // (i) Within the #295 recovery budget.
+    assert!(
+        flipped_after <= TAKEOVER_DEADLINE,
+        "B's takeover took {flipped_after:?} — beyond the {TAKEOVER_DEADLINE:?} #295 budget"
+    );
+
+    // (ii) Not before the sweep. The 200ms slack absorbs the one-RTT
+    // skew between Discovery stamping the refresh and the test
+    // observing it. The pre-#295 code promoted at the first
+    // heartbeat timeout (~1.5s) and would fail here.
+    assert!(
+        flipped_after >= DISCOVERY_SWEEP_WINDOW - Duration::from_millis(200),
+        "B promoted {flipped_after:?} after the drop — before Discovery's \
+         {DISCOVERY_SWEEP_WINDOW:?} sweep window. The Defer gate did not hold (#295)."
+    );
+    assert_eq!(manager_b.manager_peer_id(), pid_b);
+
+    // (iii) The committed row names B.
+    let row = cluster_row(&discovery, &cluster_name)
+        .await
+        .expect("cluster row exists after B's takeover commit");
+    assert_eq!(
+        row.manager_peer_id, pid_b,
+        "Discovery's row should name B after the commit-point promotion"
+    );
+
+    // --- Cleanup ---
+    manager_b.shutdown().await.expect("B shutdown");
+    if cluster_row(&discovery, &cluster_name).await.is_some() {
+        discovery
+            .deregister(cluster_name.clone())
+            .await
+            .expect("explicit cleanup deregister");
+    }
+
+    eprintln!(
+        "Defer-until-sweep failover OK against {}: A={pid_a} dropped, B={pid_b} \
+         promoted after {flipped_after:?}",
+        discovery_url()
+    );
+}
+
+/// #295: the Manager-side 1s liveness tick is the Discovery arbiter.
+/// When the cluster row is rotated to another member out-of-band, the
+/// incumbent must step down within ~3s (next tick → adopt the row's
+/// winner → rejoin attempt → STOP ticking) and must never rotate the
+/// row back to itself — no flapping.
+///
+/// Knock-on, also pinned: stepping down clears A's heartbeat targets,
+/// so B's own watch on A times out (~1.5s later); B's gate then finds
+/// the row naming B itself and B claims the role through the gate's
+/// names-local → ElectLocally arm (`register_as_manager` is an
+/// idempotent rotate on its own row). Full convergence — B Manager,
+/// row naming B, A following B — is therefore asserted at the end;
+/// the row must never name A again after the rotation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn foreign_rotation_steps_manager_down() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-stepdown-it");
+
+    // --- Peer A: creates the cluster ---
+    let id_a = PeerIdentity::from_seed(&[63u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-stepdown-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // --- Peer B: joins A's cluster ---
+    let id_b = PeerIdentity::from_seed(&[64u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-stepdown-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b.clone()],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(manager_a.is_manager(), "A starts as Manager");
+    assert!(!manager_b.is_manager(), "B starts as non-Manager");
+
+    // --- Out-of-band: rotate the row to B (a real, reachable member). ---
+    eprintln!("rotating Discovery row to B=({pid_b}) out-of-band…");
+    discovery
+        .rotate_manager(cluster_name.clone(), pid_b, vec![addr_b.clone()])
+        .await
+        .expect("out-of-band rotate_manager to B");
+    let rotated_at = std::time::Instant::now();
+
+    // A's next arbiter tick (≤1s) must observe the foreign row and
+    // step down: adopt B as Manager and stop being one.
+    let stepdown_deadline = rotated_at + Duration::from_secs(6);
+    while std::time::Instant::now() < stepdown_deadline {
+        if !manager_a.is_manager() && manager_a.manager_peer_id() == pid_b {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let stepped_down_after = rotated_at.elapsed();
+    assert!(
+        !manager_a.is_manager(),
+        "A still claims the Manager role 6s after the row rotated to B \
+         (#295 arbiter tick did not step down)"
+    );
+    assert_eq!(
+        manager_a.manager_peer_id(),
+        pid_b,
+        "A should adopt Discovery's named winner on step-down"
+    );
+    eprintln!("A stepped down {stepped_down_after:?} after the rotation");
+
+    // --- Hold: A must never reclaim the row. ---
+    // Poll for ~5s: the row must never name A again (A's tick must
+    // have stopped — a zombie tick would re-register A via the
+    // swept-row path or rotate back). The row is allowed to briefly
+    // go absent if B's claim races the sweep; what is forbidden is A.
+    let hold_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < hold_deadline {
+        assert!(
+            !manager_a.is_manager(),
+            "A re-promoted itself during the hold window — Manager-side flapping (#295)"
+        );
+        if let Some(row) = cluster_row(&discovery, &cluster_name).await {
+            assert_ne!(
+                row.manager_peer_id, pid_a,
+                "row names A again during the hold window — A rotated the row back (#295)"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // --- Convergence: B claims the role its row assignment gave it. ---
+    // A's step-down starved B's heartbeat watch on A, so B's gate ran
+    // with the row naming B itself → ElectLocally → idempotent rotate
+    // → promotion. (A real swept-row election is exercised by
+    // `dead_manager_drop_is_replaced_only_after_row_sweep`.)
+    let converge_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < converge_deadline {
+        if manager_b.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(
+        manager_b.is_manager(),
+        "B never claimed the Manager role Discovery assigned it — its watch on the \
+         silent ex-Manager A never re-entered the gate (#295 unconditional watch)"
+    );
+    let row = cluster_row(&discovery, &cluster_name)
+        .await
+        .expect("cluster row exists after B's claim");
+    assert_eq!(
+        row.manager_peer_id, pid_b,
+        "row still names B after convergence"
+    );
+    assert_eq!(
+        manager_a.manager_peer_id(),
+        pid_b,
+        "A keeps following B after convergence"
+    );
+
+    // --- Cleanup ---
+    manager_a.shutdown().await.expect("A shutdown");
+    // Let B (Manager) evict A so B's shutdown sees itself as last
+    // member and deregisters.
+    let evict_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < evict_deadline {
+        if manager_b.peer_count() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    manager_b.shutdown().await.expect("B shutdown");
+    if cluster_row(&discovery, &cluster_name).await.is_some() {
+        discovery
+            .deregister(cluster_name.clone())
+            .await
+            .expect("explicit cleanup deregister");
+    }
+
+    eprintln!(
+        "Foreign-rotation step-down OK against {}: A={pid_a} stepped down in \
+         {stepped_down_after:?}, B={pid_b} claimed the role",
+        discovery_url()
+    );
+}
+
+/// #295 amendment regression (the stranded-ex-Manager fix): a Manager
+/// displaced by a row naming an UNREACHABLE foreign peer must
+///
+/// 1. step down promptly (arbiter tick),
+/// 2. keep retrying — Defer cycles toward the row's peer — without
+///    ever self-promoting or rotating the row back while the row
+///    holds (no flapping), and
+/// 3. reclaim the role once the row names it again, through the
+///    unconditional-watch retry loop: the watch on the unreachable
+///    peer times out → the gate sees the row naming the local peer →
+///    ElectLocally → `register_as_manager` (idempotent rotate on its
+///    own row) → promote. Pre-amendment, a stepped-down ex-Manager
+///    whose membership doc had no entry for the foreign peer had an
+///    empty watchlist — no timeout could ever fire and it stayed
+///    stranded forever.
+///
+/// The fake peer never ticks Discovery, so a stranded row would sweep
+/// in ~3s and void the hold-phase invariant; the test plays the fake
+/// Manager's Discovery presence (out-of-band `liveness_check` every
+/// 1s) to hold the row alive. That IS the stranded scenario:
+/// Discovery keeps vouching for a Manager that A cannot reach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn displaced_manager_keeps_retrying_and_reclaims_when_row_returns() {
+    let discovery = DiscoveryClient::new(discovery_url());
+    let cluster_name = unique_cluster_name("sdk-displaced-it");
+
+    // --- Peer A: creates the cluster ---
+    let id_a = PeerIdentity::from_seed(&[65u8; 32]);
+    let pid_a = id_a.peer_id();
+    let mut swarm_a = build_swarm(
+        &id_a,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-displaced-it-A/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_a = wait_for_listen_addr(&mut swarm_a).await;
+
+    let manager_a = ClusterManager::create_cluster(
+        cluster_name.clone(),
+        id_a.clone(),
+        vec![addr_a.clone()],
+        discovery_url(),
+        swarm_a,
+        decline_all_streams(),
+        sample_daemon_info("test-A"),
+    )
+    .await
+    .expect("create_cluster A");
+
+    // --- Peer B: joins A's cluster ---
+    let id_b = PeerIdentity::from_seed(&[66u8; 32]);
+    let pid_b = id_b.peer_id();
+    let mut swarm_b = build_swarm(
+        &id_b,
+        SwarmConfig {
+            listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+            agent_version: "sdk-displaced-it-B/0".into(),
+            enable_relay_server: false,
+        },
+    )
+    .unwrap();
+    let addr_b = wait_for_listen_addr(&mut swarm_b).await;
+
+    let manager_b = ClusterManager::join_cluster(
+        cluster_name.clone(),
+        id_b.clone(),
+        vec![addr_b],
+        discovery_url(),
+        swarm_b,
+        decline_all_streams(),
+        sample_daemon_info("test-B"),
+    )
+    .await
+    .expect("join_cluster B");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(manager_a.is_manager(), "A starts as Manager");
+
+    // --- Out-of-band: rotate the row to a fake, unreachable peer. ---
+    let fake_pid = PeerIdentity::from_seed(&[99u8; 32]).peer_id();
+    let fake_addr: Multiaddr = "/ip4/10.255.255.1/tcp/4".parse().unwrap();
+    eprintln!("rotating Discovery row to fake peer {fake_pid} (unroutable)…");
+    discovery
+        .rotate_manager(cluster_name.clone(), fake_pid, vec![fake_addr])
+        .await
+        .expect("out-of-band rotate_manager to fake peer");
+
+    // Play the fake Manager's Discovery presence so the row outlives
+    // the 3s sweep for the whole hold phase.
+    let ticker = {
+        let name = cluster_name.clone();
+        let d = DiscoveryClient::new(discovery_url());
+        tokio::spawn(async move {
+            loop {
+                let _ = d.liveness_check(name.clone(), 2).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        })
+    };
+
+    // A's next arbiter tick must step down toward the fake peer.
+    let stepdown_deadline = std::time::Instant::now() + Duration::from_secs(6);
+    while std::time::Instant::now() < stepdown_deadline {
+        if !manager_a.is_manager() && manager_a.manager_peer_id() == fake_pid {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !manager_a.is_manager(),
+        "A still claims the Manager role 6s after the row rotated to the fake peer"
+    );
+    assert_eq!(
+        manager_a.manager_peer_id(),
+        fake_pid,
+        "A should adopt Discovery's named (unreachable) winner on step-down"
+    );
+    eprintln!("A stepped down toward the fake peer; holding to prove no flapping…");
+
+    // --- Hold ~5s: no self-promotion, no rotating the row back. ---
+    // A is mid Defer cycle (each: heartbeat timeout on the fake peer
+    // → gate sees the row still naming it → rejoin attempt with a 5s
+    // dead-dial wait → re-arm). B follows the row too and must not
+    // promote either.
+    let hold_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < hold_deadline {
+        assert!(
+            !manager_a.is_manager(),
+            "displaced A self-promoted while Discovery's row still names the fake peer \
+             — Defer gate flapping (#295)"
+        );
+        assert_eq!(
+            manager_a.manager_peer_id(),
+            fake_pid,
+            "A's Manager view flapped away from the row's named winner during the hold"
+        );
+        assert!(
+            !manager_b.is_manager(),
+            "follower B self-promoted while Discovery's row still names the fake peer"
+        );
+        let row = cluster_row(&discovery, &cluster_name)
+            .await
+            .expect("row stays alive during the hold (test ticks its liveness)");
+        assert_eq!(
+            row.manager_peer_id, fake_pid,
+            "row no longer names the fake peer during the hold — somebody rotated it"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // --- The row "returns": name A again. ---
+    ticker.abort();
+    eprintln!("rotating Discovery row back to A=({pid_a})…");
+    discovery
+        .rotate_manager(cluster_name.clone(), pid_a, vec![addr_a.clone()])
+        .await
+        .expect("rotate_manager back to A");
+    let returned_at = std::time::Instant::now();
+
+    // A's retry loop must reclaim: watch on the fake peer times out →
+    // gate sees the row naming A → ElectLocally → A wins → commit
+    // (idempotent rotate; or re-create if the unrefreshed row swept
+    // first) → promote. Worst case one full Defer cycle ≈ 5s dial
+    // wait + re-armed 1.5s timeout + tick granularity.
+    let reclaim_deadline = returned_at + Duration::from_secs(10);
+    while std::time::Instant::now() < reclaim_deadline {
+        if manager_a.is_manager() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let reclaimed_after = returned_at.elapsed();
+    assert!(
+        manager_a.is_manager(),
+        "A did not reclaim the Manager role within 10s of the row naming it again — \
+         the displaced-Manager retry loop is dead (#295 amendment)"
+    );
+    assert_eq!(manager_a.manager_peer_id(), pid_a);
+    eprintln!("A reclaimed the Manager role {reclaimed_after:?} after the row returned");
+
+    let row = cluster_row(&discovery, &cluster_name)
+        .await
+        .expect("cluster row exists after A's reclaim");
+    assert_eq!(row.manager_peer_id, pid_a, "row names A after the reclaim");
+
+    // Bonus, not load-bearing: B should converge on A via A's
+    // promotion gossip (`broadcast_current_membership`) or its own
+    // Follow retry cycle. Its cycle includes 5s dead-dial waits
+    // toward the fake peer, so it can lag past this window — log
+    // instead of asserting when it does; A's self-view and the row
+    // above are the #295 invariants.
+    let bonus_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut b_converged = false;
+    while std::time::Instant::now() < bonus_deadline {
+        if manager_b.manager_peer_id() == pid_a {
+            b_converged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    eprintln!(
+        "B's Manager view after reclaim: {} (converged on A: {b_converged})",
+        manager_b.manager_peer_id()
+    );
+
+    // --- Cleanup ---
+    manager_b.shutdown().await.expect("B shutdown");
+    // Let A (Manager again) evict B so A's shutdown sees itself as
+    // last member and deregisters.
+    let evict_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < evict_deadline {
+        if manager_a.peer_count() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    manager_a.shutdown().await.expect("A shutdown");
+    if cluster_row(&discovery, &cluster_name).await.is_some() {
+        discovery
+            .deregister(cluster_name.clone())
+            .await
+            .expect("explicit cleanup deregister");
+    }
+
+    eprintln!(
+        "Displaced-Manager retry + reclaim OK against {}: A={pid_a} reclaimed in \
+         {reclaimed_after:?}, B={pid_b} converged={b_converged}",
         discovery_url()
     );
 }

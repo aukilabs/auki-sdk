@@ -2139,6 +2139,90 @@ fn manager_rotation_discovery_request(
     }
 }
 
+/// `true` when Discovery answered "no such cluster row" — the row was
+/// swept (or Discovery restarted). Callers re-create instead of rotate.
+fn discovery_row_missing(e: &DiscoveryClientError) -> bool {
+    matches!(e, DiscoveryClientError::Status { status: 404, .. })
+}
+
+/// Why a Manager claim did not commit at Discovery.
+#[derive(Debug)]
+// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
+#[allow(dead_code)]
+enum RegisterAsManagerError {
+    /// Another peer holds the row (lost the re-create race). The
+    /// caller must NOT promote; it should follow the row instead.
+    Displaced,
+    /// Discovery unreachable or errored; retry on a later timeout.
+    Discovery(DiscoveryClientError),
+}
+
+/// Commit a Manager claim at Discovery: rotate the existing row, or
+/// re-create it when Discovery already swept it (hardening-plan Task
+/// 6). `Ok(())` is the commit signal — only then may the caller
+/// mutate local Manager state.
+// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
+#[allow(dead_code)]
+async fn register_as_manager(
+    discovery: &DiscoveryClient,
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    local_multiaddrs: &[Multiaddr],
+    relay_multiaddrs: &[Multiaddr],
+) -> Result<(), RegisterAsManagerError> {
+    let rotate_result = match manager_rotation_discovery_request(local_multiaddrs, relay_multiaddrs)
+    {
+        ManagerRotationDiscoveryRequest::DirectOnly { manager_multiaddrs } => {
+            discovery
+                .rotate_manager(cluster_name.to_string(), local_peer_id, manager_multiaddrs)
+                .await
+        }
+        ManagerRotationDiscoveryRequest::WithRelays {
+            manager_multiaddrs,
+            relay_multiaddrs,
+        } => {
+            discovery
+                .rotate_manager_with_relay_multiaddrs(
+                    cluster_name.to_string(),
+                    local_peer_id,
+                    manager_multiaddrs,
+                    relay_multiaddrs,
+                )
+                .await
+        }
+    };
+    let err = match rotate_result {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    if !discovery_row_missing(&err) {
+        return Err(RegisterAsManagerError::Discovery(err));
+    }
+    let create_result = if relay_multiaddrs.is_empty() {
+        discovery
+            .create_cluster(
+                cluster_name.to_string(),
+                local_peer_id,
+                local_multiaddrs.to_vec(),
+            )
+            .await
+    } else {
+        discovery
+            .create_cluster_with_relay_multiaddrs(
+                cluster_name.to_string(),
+                local_peer_id,
+                local_multiaddrs.to_vec(),
+                relay_multiaddrs.to_vec(),
+            )
+            .await
+    };
+    match create_result {
+        Ok(CreateClusterOutcome::Created(_)) => Ok(()),
+        Ok(CreateClusterOutcome::AlreadyExists) => Err(RegisterAsManagerError::Displaced),
+        Err(e) => Err(RegisterAsManagerError::Discovery(e)),
+    }
+}
+
 async fn reserve_manager_relay_multiaddr(
     swarm: &mut Swarm<Behaviour>,
     manager_multiaddrs: &mut Vec<Multiaddr>,
@@ -3485,6 +3569,20 @@ mod tests {
             app_instance: "abc".into(),
         };
         let _ = d.clone();
+    }
+
+    #[test]
+    fn discovery_row_missing_only_on_404() {
+        let missing = DiscoveryClientError::Status {
+            status: 404,
+            body: String::new(),
+        };
+        let other = DiscoveryClientError::Status {
+            status: 500,
+            body: String::new(),
+        };
+        assert!(discovery_row_missing(&missing));
+        assert!(!discovery_row_missing(&other));
     }
 
     #[test]

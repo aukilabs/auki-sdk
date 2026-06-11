@@ -2045,13 +2045,16 @@ fn heartbeat_watchlist_for(
             .filter(|pid| *pid != local_peer_id)
             .collect()
     } else {
-        membership
-            .peers
-            .iter()
-            .any(|p| p.peer_id == manager_peer_id)
-            .then_some(manager_peer_id)
-            .into_iter()
-            .collect()
+        // Watch the current Manager unconditionally — even when it is
+        // not (yet) in the local membership document. A displaced
+        // ex-Manager that stepped down toward a Discovery-named winner,
+        // or a follower told to Follow a row it has no doc entry for,
+        // has an empty doc-derived view of its Manager; if we gated on
+        // doc membership the watch would be empty, no timeout would
+        // ever fire, and the Defer/Follow rejoin loop could never retry
+        // (#295 amendment). A Manager that never heartbeats us times
+        // out within HEARTBEAT_TIMEOUT and re-enters the Discovery gate.
+        std::iter::once(manager_peer_id).collect()
     }
 }
 
@@ -2372,6 +2375,17 @@ fn push_unique_multiaddr(addrs: &mut Vec<Multiaddr>, addr: Multiaddr) {
     }
 }
 
+/// Whether a heartbeat-timeout was terminally acted on or should be
+/// re-evaluated after another timeout interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LossOutcome {
+    /// Deferred / commit failed / Discovery unreachable: reset the
+    /// heartbeat watch so the same peer can time out again.
+    RetryLater,
+    /// Promoted, followed, or evicted — done with this loss.
+    Settled,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_domain_peer_lost(
     cluster_name: &str,
@@ -2387,152 +2401,219 @@ async fn handle_domain_peer_lost(
     advertised_domain_clock_source: &Arc<Mutex<Option<HeartbeatDomainClock>>>,
     clock_sync: &ClockSyncHandle,
     domain_clock_sources: &DomainClockSources,
-    handled_manager_losses: &mut HashSet<PeerId>,
     lost_pid: PeerId,
-) {
+) -> LossOutcome {
     let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
     let am_manager = current_manager == local_peer_id;
 
     if !am_manager && lost_pid == current_manager {
-        if !handled_manager_losses.insert(lost_pid) {
-            return;
-        }
-
-        // For other reachable peers, give connection teardown a
-        // brief moment to settle. The heartbeat-lost peer is still
-        // excluded below even if the transport connected set lags.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let connected = runtime.connected_peers();
-        let membership_snapshot = membership.lock().expect("membership lock").clone();
-        let winner = elect_successor_excluding_lost(
-            &membership_snapshot,
-            local_peer_id,
-            &connected,
-            lost_pid,
-        );
-        if winner == Some(local_peer_id) {
-            // Become Manager.
-            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
-
-            let local_clock_now_ns = session_clock.now_i64_ns();
-            if let Err(e) = advertise_promoted_domain_clock_source(
-                advertised_domain_clock_source,
-                clock_sync,
-                domain_clock_sources,
-                cluster_name,
-                local_peer_id,
-                session_clock,
-                local_clock_now_ns,
-            ) {
+        // ── Gate: Discovery is the tiebreak authority (hardening-plan
+        // Task 5). Election only runs when Discovery's row is gone.
+        let entry = match discovery.list_clusters().await {
+            Ok(list) => list.into_iter().find(|e| e.name == cluster_name),
+            Err(e) => {
                 eprintln!(
-                    "auki-domain: cluster {cluster_name:?}: promoted Manager \
-                    {local_peer_id} cannot advertise domain clock yet: {e}"
+                    "auki-domain: cluster {cluster_name:?}: Manager {lost_pid} timed out but \
+                    Discovery is unreachable ({e}); deferring election"
                 );
+                return LossOutcome::RetryLater;
             }
-
-            // Tell Discovery about the rotation.
-            let rotate_result =
-                match manager_rotation_discovery_request(local_multiaddrs, relay_multiaddrs) {
-                    ManagerRotationDiscoveryRequest::DirectOnly { manager_multiaddrs } => {
-                        discovery
-                            .rotate_manager(
-                                cluster_name.to_string(),
-                                local_peer_id,
-                                manager_multiaddrs,
-                            )
-                            .await
-                    }
-                    ManagerRotationDiscoveryRequest::WithRelays {
-                        manager_multiaddrs,
+        };
+        match decide_manager_loss_action(entry.as_ref(), lost_pid, local_peer_id) {
+            ManagerLossAction::Defer { manager_multiaddrs } => {
+                eprintln!(
+                    "auki-domain: cluster {cluster_name:?}: Discovery still names {lost_pid}; \
+                    deferring and attempting rejoin"
+                );
+                if let Err(e) = rejoin_via_manager(
+                    cluster_name,
+                    local_peer_id,
+                    local_multiaddrs,
+                    lost_pid,
+                    manager_multiaddrs,
+                    manager_peer_id,
+                    membership,
+                    runtime,
+                )
+                .await
+                {
+                    eprintln!(
+                        "auki-domain: cluster {cluster_name:?}: rejoin toward {lost_pid} \
+                        failed: {e}"
+                    );
+                }
+                LossOutcome::RetryLater
+            }
+            ManagerLossAction::Follow {
+                manager,
+                manager_multiaddrs,
+            } => {
+                *manager_peer_id.lock().expect("manager_peer_id lock") = manager;
+                sync_heartbeat_targets(
+                    runtime,
+                    local_peer_id,
+                    manager_peer_id,
+                    membership,
+                    cluster_name,
+                )
+                .await;
+                if let Err(e) = rejoin_via_manager(
+                    cluster_name,
+                    local_peer_id,
+                    local_multiaddrs,
+                    manager,
+                    manager_multiaddrs,
+                    manager_peer_id,
+                    membership,
+                    runtime,
+                )
+                .await
+                {
+                    eprintln!(
+                        "auki-domain: cluster {cluster_name:?}: rejoin toward {manager} \
+                        failed: {e}"
+                    );
+                    return LossOutcome::RetryLater;
+                }
+                LossOutcome::Settled
+            }
+            ManagerLossAction::ElectLocally => {
+                // For other reachable peers, give connection teardown a
+                // brief moment to settle. The heartbeat-lost peer is still
+                // excluded below even if the transport connected set lags.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let connected = runtime.connected_peers();
+                let membership_snapshot = membership.lock().expect("membership lock").clone();
+                let winner = elect_successor_excluding_lost(
+                    &membership_snapshot,
+                    local_peer_id,
+                    &connected,
+                    lost_pid,
+                );
+                if winner == Some(local_peer_id) {
+                    // ── Commit at Discovery BEFORE any local promotion.
+                    match register_as_manager(
+                        discovery,
+                        cluster_name,
+                        local_peer_id,
+                        local_multiaddrs,
                         relay_multiaddrs,
-                    } => {
-                        discovery
-                            .rotate_manager_with_relay_multiaddrs(
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            // Become Manager.
+                            *manager_peer_id.lock().expect("manager_peer_id lock") = local_peer_id;
+
+                            let local_clock_now_ns = session_clock.now_i64_ns();
+                            if let Err(e) = advertise_promoted_domain_clock_source(
+                                advertised_domain_clock_source,
+                                clock_sync,
+                                domain_clock_sources,
+                                cluster_name,
+                                local_peer_id,
+                                session_clock,
+                                local_clock_now_ns,
+                            ) {
+                                eprintln!(
+                                    "auki-domain: cluster {cluster_name:?}: promoted Manager \
+                                    {local_peer_id} cannot advertise domain clock yet: {e}"
+                                );
+                            }
+
+                            // Start the Manager-side Discovery liveness-check tick.
+                            let new_tick = spawn_manager_liveness_check(
+                                discovery.clone(),
                                 cluster_name.to_string(),
                                 local_peer_id,
-                                manager_multiaddrs,
-                                relay_multiaddrs,
+                                local_multiaddrs.to_vec(),
+                                relay_multiaddrs.to_vec(),
+                                manager_peer_id.clone(),
+                                membership.clone(),
+                                runtime.clone(),
+                            );
+                            let prev = liveness_check_task
+                                .lock()
+                                .expect("liveness_check_task lock")
+                                .replace(new_tick);
+                            if let Some(p) = prev {
+                                p.abort();
+                            }
+
+                            // Evict the dead Manager from membership + push the
+                            // updated allow-list. (We won the election, so we own
+                            // membership now.)
+                            let new_allow_list = {
+                                let mut m = membership.lock().expect("membership lock");
+                                m.peers.retain(|p| p.peer_id != lost_pid);
+                                m.peers
+                                    .iter()
+                                    .filter(|p| p.peer_id != local_peer_id)
+                                    .map(|p| AllowedPeer {
+                                        peer_id: p.peer_id,
+                                        multiaddrs: p.multiaddrs.clone(),
+                                    })
+                                    .collect::<Vec<_>>()
+                            };
+                            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                                eprintln!(
+                                    "auki-domain: post-election set_allowed_peers \
+                                    failed for {cluster_name:?}: {e}"
+                                );
+                            }
+                            sync_heartbeat_targets(
+                                runtime,
+                                local_peer_id,
+                                manager_peer_id,
+                                membership,
+                                cluster_name,
                             )
-                            .await
+                            .await;
+
+                            // Gossip the post-handoff view so survivors converge on
+                            // the new Manager identity + the post-eviction
+                            // membership.
+                            broadcast_current_membership(runtime, manager_peer_id, membership);
+                            eprintln!(
+                                "auki-domain: cluster {cluster_name:?}: local peer \
+                                {local_peer_id} promoted to Manager after commit at \
+                                Discovery (detected Lost {lost_pid})"
+                            );
+                            LossOutcome::Settled
+                        }
+                        Err(RegisterAsManagerError::Displaced) => {
+                            eprintln!(
+                                "auki-domain: cluster {cluster_name:?}: lost the Manager \
+                                re-create race; following Discovery's row"
+                            );
+                            LossOutcome::RetryLater
+                        }
+                        Err(RegisterAsManagerError::Discovery(e)) => {
+                            eprintln!(
+                                "auki-domain: cluster {cluster_name:?}: won election but \
+                                commit at Discovery failed ({e}); not promoting"
+                            );
+                            LossOutcome::RetryLater
+                        }
                     }
-                };
-            if let Err(e) = rotate_result {
-                eprintln!(
-                    "auki-domain: rotate_manager failed for cluster \
-                    {cluster_name:?}: {e}"
-                );
+                } else if let Some(new_manager) = winner {
+                    // Someone else (earlier-joined, still reachable) wins.
+                    // Update the local view and wait for them to register
+                    // with Discovery.
+                    *manager_peer_id.lock().expect("manager_peer_id lock") = new_manager;
+                    sync_heartbeat_targets(
+                        runtime,
+                        local_peer_id,
+                        manager_peer_id,
+                        membership,
+                        cluster_name,
+                    )
+                    .await;
+                    LossOutcome::Settled
+                } else {
+                    LossOutcome::Settled
+                }
             }
-
-            // Start the Manager-side Discovery liveness-check tick.
-            let new_tick = spawn_manager_liveness_check(
-                discovery.clone(),
-                cluster_name.to_string(),
-                local_peer_id,
-                local_multiaddrs.to_vec(),
-                relay_multiaddrs.to_vec(),
-                manager_peer_id.clone(),
-                membership.clone(),
-                runtime.clone(),
-            );
-            let prev = liveness_check_task
-                .lock()
-                .expect("liveness_check_task lock")
-                .replace(new_tick);
-            if let Some(p) = prev {
-                p.abort();
-            }
-
-            // Evict the dead Manager from membership + push the
-            // updated allow-list. (We won the election, so we own
-            // membership now.)
-            let new_allow_list = {
-                let mut m = membership.lock().expect("membership lock");
-                m.peers.retain(|p| p.peer_id != lost_pid);
-                m.peers
-                    .iter()
-                    .filter(|p| p.peer_id != local_peer_id)
-                    .map(|p| AllowedPeer {
-                        peer_id: p.peer_id,
-                        multiaddrs: p.multiaddrs.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            };
-            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
-                eprintln!(
-                    "auki-domain: post-election set_allowed_peers \
-                    failed for {cluster_name:?}: {e}"
-                );
-            }
-            sync_heartbeat_targets(
-                runtime,
-                local_peer_id,
-                manager_peer_id,
-                membership,
-                cluster_name,
-            )
-            .await;
-
-            // Gossip the post-handoff view so survivors converge on
-            // the new Manager identity + the post-eviction
-            // membership.
-            broadcast_current_membership(runtime, manager_peer_id, membership);
-            eprintln!(
-                "auki-domain: cluster {cluster_name:?}: local peer \
-                {local_peer_id} promoted to Manager after detecting Lost {lost_pid}"
-            );
-        } else if let Some(new_manager) = winner {
-            // Someone else (earlier-joined, still reachable) wins.
-            // Update the local view and wait for them to register
-            // with Discovery.
-            *manager_peer_id.lock().expect("manager_peer_id lock") = new_manager;
-            sync_heartbeat_targets(
-                runtime,
-                local_peer_id,
-                manager_peer_id,
-                membership,
-                cluster_name,
-            )
-            .await;
         }
     } else if am_manager {
         // We're the Manager and a peer died. Evict from membership +
@@ -2542,7 +2623,7 @@ async fn handle_domain_peer_lost(
             let before = m.peers.len();
             m.peers.retain(|p| p.peer_id != lost_pid);
             if m.peers.len() == before {
-                return;
+                return LossOutcome::Settled;
             }
             m.peers
                 .iter()
@@ -2567,6 +2648,11 @@ async fn handle_domain_peer_lost(
         // Gossip the shrunken membership so remaining peers also
         // evict the dead one.
         broadcast_current_membership(runtime, manager_peer_id, membership);
+        LossOutcome::Settled
+    } else {
+        // Follower observing a non-Manager peer: the Manager's own
+        // eviction + gossip handles it.
+        LossOutcome::Settled
     }
 }
 
@@ -2578,13 +2664,16 @@ async fn handle_domain_peer_lost(
 /// **Election rule** (per Hagall T4 / SDK-T6): sort cluster members
 /// by `(join_ts_ns, peer_id)` ascending. The earliest-joined
 /// reachable peer wins. If the local peer is that earliest-joined
-/// reachable peer, it becomes the new Manager.
+/// reachable peer, it becomes the new Manager. The election only
+/// runs once Discovery's cluster row is gone (swept); while the row
+/// names a Manager, the follower defers to or follows it (#295).
 ///
-/// **Handoff** (per Hagall T7 / SDK-T7): the winner (a) updates
-/// `manager_peer_id` locally so subsequent calls see itself as the
-/// Manager, (b) calls Discovery's `rotate_manager` to update the
-/// directory hint, (c) spawns the Manager-side Discovery
-/// liveness-check tick.
+/// **Handoff** (per Hagall T7 / SDK-T7, hardened per #295): the
+/// winner (a) commits the claim at Discovery via
+/// `register_as_manager` (rotate, or re-create when swept), and only
+/// on success (b) updates `manager_peer_id` locally so subsequent
+/// calls see itself as the Manager, then (c) spawns the Manager-side
+/// Discovery liveness-check tick.
 ///
 /// **Reachability** is approximated as "in the runtime's
 /// `connected_peers()` set OR equal to local_peer_id," with the
@@ -2614,7 +2703,6 @@ fn spawn_liveness_handler(
     tokio::spawn(async move {
         let mut last_heartbeat_at: HashMap<PeerId, Instant> = HashMap::new();
         let mut lost_already: HashSet<PeerId> = HashSet::new();
-        let mut handled_manager_losses: HashSet<PeerId> = HashSet::new();
         let mut tick = tokio::time::interval(HEARTBEAT_TIMEOUT / 2);
 
         loop {
@@ -2687,7 +2775,7 @@ fn spawn_liveness_handler(
                         .collect();
                     for peer_id in timed_out {
                         lost_already.insert(peer_id);
-                        handle_domain_peer_lost(
+                        let outcome = handle_domain_peer_lost(
                             &cluster_name,
                             local_peer_id,
                             &local_multiaddrs,
@@ -2701,10 +2789,15 @@ fn spawn_liveness_handler(
                             &advertised_domain_clock_source,
                             &clock_sync,
                             &domain_clock_sources,
-                            &mut handled_manager_losses,
                             peer_id,
                         )
                         .await;
+                        if outcome == LossOutcome::RetryLater {
+                            // Re-arm: let the same peer time out again a full
+                            // HEARTBEAT_TIMEOUT from now and re-run the gate.
+                            lost_already.remove(&peer_id);
+                            last_heartbeat_at.insert(peer_id, Instant::now());
+                        }
                     }
                 }
             }
@@ -3474,6 +3567,10 @@ pub enum ManagerLossAction {
 
 /// Decide what a follower should do after its Manager heartbeat timed
 /// out, consulting Discovery's current cluster row.
+///
+/// `lost_manager` is never the local peer — a follower only ever
+/// watches a foreign Manager — so the Defer arm cannot shadow the
+/// names-local arm.
 ///
 /// This is a pure function for ease of testing.
 pub fn decide_manager_loss_action(
@@ -4954,6 +5051,22 @@ mod tests {
             decide_manager_loss_action(Some(&entry), lost, local),
             ManagerLossAction::ElectLocally
         );
+    }
+
+    // ── heartbeat watchlist ───────────────────────────────────────────
+
+    #[test]
+    fn follower_watches_slot_manager_even_when_not_in_membership() {
+        // #295 amendment: the slot Manager is watched unconditionally.
+        // A displaced ex-Manager (or a follower told to Follow a row
+        // it has no doc entry for) has no membership entry for its
+        // Manager; gating the watch on doc membership would leave the
+        // watchlist empty and the Defer/Follow retry loop dead.
+        let local = peer(1);
+        let absent_manager = peer(9);
+        let m = ClusterMembership::new("foo"); // empty doc
+        let watch = heartbeat_watchlist_for(local, absent_manager, &m);
+        assert!(watch.contains(&absent_manager));
     }
 
     // ── admit_or_refresh ──────────────────────────────────────────────

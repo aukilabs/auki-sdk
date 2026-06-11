@@ -2003,6 +2003,36 @@ impl ClusterManager {
     }
 }
 
+impl Drop for ClusterManager {
+    /// Process-local unclean exit: stop every SDK background task so
+    /// a dropped-not-shutdown handle can't keep refreshing Discovery
+    /// with a stale Manager hint. Discovery deregistration is left to
+    /// the liveness sweep / successor rotation — `Drop` can't await
+    /// HTTP. Idempotent with `shutdown()` (slots already taken).
+    fn drop(&mut self) {
+        for slot in [
+            &self.join_handler_task,
+            &self.liveness_handler_task,
+            &self.membership_handler_task,
+            &self.info_handler_task,
+            &self.resources_handler_task,
+            &self.registry_handler_task,
+            &self.diagnostic_handler_task,
+        ] {
+            if let Ok(mut guard) = slot.lock() {
+                if let Some(task) = guard.take() {
+                    task.abort();
+                }
+            }
+        }
+        if let Ok(mut guard) = self.liveness_check_task.lock() {
+            if let Some(task) = guard.take() {
+                task.abort();
+            }
+        }
+    }
+}
+
 // Lightweight wrapper for chaining a runtime error into JoinClusterError.
 // The compiler doesn't auto-coerce UpdateError -> SpawnError -> JoinClusterError;
 // we adapt explicitly.

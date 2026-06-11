@@ -22,6 +22,24 @@ The SDK's network-presence layer. An app that wants its peer and session visible
 
 `ClusterManager` handles Discovery + cluster bootstrap: list / create / join / bootstrap (policy-driven via `ClusterTarget`), membership, Manager election + rotation, Discovery liveness checks, relay hint preservation, participant info, resource catalog serving (reads from the `SessionHandle` installed by `Domain::join`, or a `ResourceCatalogProvider` fallback), hash-pinned registry-entry fetch, typed stream opens, domain clock estimates, and clean shutdown. `SessionHandle` is defined in `auki-network` to avoid a dependency cycle.
 
+### Manager arbitration
+
+Discovery's cluster row is the tiebreak authority for the Manager role: a peer
+holds the role only while the row names it. Election only nominates — a
+successful `rotate_manager` (or row re-create after a sweep) commits. A
+follower that loses Manager heartbeats consults Discovery before electing:
+**defer + rejoin** while the row still names the lost Manager, **follow +
+rejoin** when the row names someone else, **elect** only when the row was
+swept. A Manager whose liveness response names another peer steps down and
+rejoins it. Re-joining as a current member is idempotent (multiaddrs refresh;
+`join_ts_ns` — and therefore election order — unchanged). A follower watches
+its current Manager even when it is not in the local membership document, so
+displaced or evicted peers keep retrying instead of stranding. Discovery
+unreachable means no election can commit; the cluster runs headless on the
+data plane until Discovery returns. Dropping a `ClusterManager` without
+`shutdown()` aborts its background tasks, so a dead handle cannot keep the
+row fresh.
+
 Peers can join the cluster before their resource catalog is ready. The resources handler answers each inbound `/auki/resources/0.2.0` request with a fresh snapshot from the registered `ResourceCatalogProvider`, or from `SessionHandle::catalog()` when no provider is installed. Producers should only return resources that can currently accept stream opens; unavailable resources are omitted until they become requestable again.
 
 ### Also exported

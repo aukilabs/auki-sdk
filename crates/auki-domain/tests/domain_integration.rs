@@ -156,7 +156,10 @@ async fn domain_join_creates_cluster_and_serves_catalog() {
     let info = manager.participant_info();
     let mono = session.monotonic_clock();
     assert_eq!(info.session_id, session.session_id());
-    assert_eq!(info.session_clock_id, mono.id, "advertised clock id == registered");
+    assert_eq!(
+        info.session_clock_id, mono.id,
+        "advertised clock id == registered"
+    );
     assert_eq!(
         info.session_clock_hash, mono.hash,
         "advertised clock hash == registered"
@@ -168,7 +171,10 @@ async fn domain_join_creates_cluster_and_serves_catalog() {
     assert_eq!(rows[0].resource_id, "head_left_rgb");
     assert_eq!(rows[0].sensor.as_ref().unwrap().r#type, "rgb");
 
-    domain.leave().await.expect("Domain::leave shuts down cleanly");
+    domain
+        .leave()
+        .await
+        .expect("Domain::leave shuts down cleanly");
 }
 
 /// Hermetic (no Discovery): `Domain::join` rejects a peer whose id isn't the

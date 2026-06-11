@@ -3592,7 +3592,9 @@ fn spawn_manager_liveness_check(
                     )
                     .await
                     {
-                        Ok(()) => {}
+                        Ok(()) => eprintln!(
+                            "auki-domain: cluster {cluster_name:?}: Discovery row was swept; re-registered {local_peer_id} as Manager"
+                        ),
                         Err(RegisterAsManagerError::Displaced) => {
                             let entry = discovery
                                 .list_clusters()
@@ -3600,23 +3602,36 @@ fn spawn_manager_liveness_check(
                                 .ok()
                                 .and_then(|l| l.into_iter().find(|e| e.name == cluster_name));
                             if let Some(entry) = entry {
+                                match liveness_tick_directive(local_peer_id, entry.manager_peer_id)
+                                {
+                                    LivenessTickDirective::StepDown(winner) => {
+                                        eprintln!(
+                                            "auki-domain: cluster {cluster_name:?}: row re-created \
+                                            by {winner}; {local_peer_id} steps down"
+                                        );
+                                        step_down_to(
+                                            &cluster_name,
+                                            local_peer_id,
+                                            &local_multiaddrs,
+                                            winner,
+                                            entry.manager_multiaddrs.clone(),
+                                            &manager_peer_id,
+                                            &membership,
+                                            &runtime,
+                                        )
+                                        .await;
+                                        break;
+                                    }
+                                    LivenessTickDirective::KeepRole => {
+                                        eprintln!(
+                                            "auki-domain: cluster {cluster_name:?}: row already names {local_peer_id}; keeping role"
+                                        );
+                                    }
+                                }
+                            } else {
                                 eprintln!(
-                                    "auki-domain: cluster {cluster_name:?}: row re-created \
-                                    by {}; {local_peer_id} steps down",
-                                    entry.manager_peer_id
+                                    "auki-domain: cluster {cluster_name:?}: displaced from a swept row but no row visible yet; retrying next tick"
                                 );
-                                step_down_to(
-                                    &cluster_name,
-                                    local_peer_id,
-                                    &local_multiaddrs,
-                                    entry.manager_peer_id,
-                                    entry.manager_multiaddrs.clone(),
-                                    &manager_peer_id,
-                                    &membership,
-                                    &runtime,
-                                )
-                                .await;
-                                break;
                             }
                         }
                         Err(RegisterAsManagerError::Discovery(e)) => eprintln!(
@@ -3656,7 +3671,7 @@ async fn step_down_to(
         cluster_name,
     )
     .await;
-    if let Err(e) = rejoin_via_manager(
+    match rejoin_via_manager(
         cluster_name,
         local_peer_id,
         local_multiaddrs,
@@ -3668,7 +3683,12 @@ async fn step_down_to(
     )
     .await
     {
-        eprintln!("auki-domain: cluster {cluster_name:?}: rejoin toward {winner} failed: {e}");
+        Ok(()) => {
+            eprintln!("auki-domain: cluster {cluster_name:?}: rejoined as follower of {winner}")
+        }
+        Err(e) => {
+            eprintln!("auki-domain: cluster {cluster_name:?}: rejoin toward {winner} failed: {e}")
+        }
     }
 }
 

@@ -3336,6 +3336,36 @@ fn spawn_manager_liveness_check(
     })
 }
 
+/// Outcome of a Manager-side join request against the current doc.
+#[derive(Debug, PartialEq, Eq)]
+enum AdmitOutcome {
+    /// New member appended.
+    Admitted,
+    /// Already a member (a deferring peer re-establishing after a
+    /// heartbeat lapse): dialable addrs refreshed; `join_ts_ns` is
+    /// untouched so the election order stays stable.
+    Refreshed,
+}
+
+fn admit_or_refresh(
+    m: &mut ClusterMembership,
+    peer: PeerId,
+    multiaddrs: Vec<Multiaddr>,
+    join_ts_ns: i64,
+) -> AdmitOutcome {
+    if let Some(existing) = m.peers.iter_mut().find(|p| p.peer_id == peer) {
+        existing.multiaddrs = multiaddrs;
+        return AdmitOutcome::Refreshed;
+    }
+    m.admit(ClusterMember {
+        peer_id: peer,
+        multiaddrs,
+        join_ts_ns,
+        successor_token: Some(Vec::new()),
+    });
+    AdmitOutcome::Admitted
+}
+
 /// Spawn a task that drains inbound join events from `rx` and
 /// replies on each `ack`. Manager peers admit + push the updated
 /// allow-list via the runtime handle; non-Manager peers reject
@@ -3363,26 +3393,15 @@ fn spawn_join_handler(
                 continue;
             }
 
-            // Build the new member entry; check for duplicate
-            // membership; append + build the new allow-list inside
-            // a short lock window. The runtime call happens
-            // afterwards (locks released, no holding across await).
-            let (new_allow_list, member, full_membership_json) = {
+            // Admit a new peer or refresh the multiaddrs of a peer
+            // that is re-joining after a heartbeat lapse (idempotent).
+            // Either way, rebuild the allow-list and snapshot the
+            // membership JSON inside a short lock window. The runtime
+            // call happens afterwards (locks released, no holding
+            // across await).
+            let (new_allow_list, full_membership_json) = {
                 let mut m = membership.lock().expect("membership lock");
-                if m.peers.iter().any(|p| p.peer_id == peer) {
-                    drop(m);
-                    let _ = ack.send(JoinResponse::Reject {
-                        reason: "already a member".into(),
-                    });
-                    continue;
-                }
-                let member = ClusterMember {
-                    peer_id: peer,
-                    multiaddrs: request.multiaddrs.clone(),
-                    join_ts_ns: now_unix_nanos(),
-                    successor_token: Some(Vec::new()),
-                };
-                m.admit(member.clone());
+                admit_or_refresh(&mut m, peer, request.multiaddrs.clone(), now_unix_nanos());
                 let allow_list: Vec<AllowedPeer> = m
                     .peers
                     .iter()
@@ -3394,7 +3413,7 @@ fn spawn_join_handler(
                     .collect();
                 let json = serde_json::to_string(&*m)
                     .expect("ClusterMembership serializes by construction");
-                (allow_list, member, json)
+                (allow_list, json)
             };
 
             if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
@@ -3418,7 +3437,7 @@ fn spawn_join_handler(
 
             let _ = ack.send(JoinResponse::Accept {
                 membership_json: full_membership_json,
-                successor_token: member.successor_token.unwrap_or_default(),
+                successor_token: Vec::new(),
             });
 
             // Gossip the updated membership to every other connected
@@ -4285,9 +4304,8 @@ mod tests {
     }
 
     fn make_peer(seed: u8, join_ts: i64) -> ClusterMember {
-        let id = auki_network::PeerIdentity::from_seed(&[seed; 32]);
         ClusterMember {
-            peer_id: id.peer_id(),
+            peer_id: peer(seed),
             multiaddrs: vec![],
             join_ts_ns: join_ts,
             successor_token: None,
@@ -4537,6 +4555,42 @@ mod tests {
         assert_eq!(
             decide_manager_loss_action(Some(&entry), lost, local),
             ManagerLossAction::ElectLocally
+        );
+    }
+
+    // ── admit_or_refresh ──────────────────────────────────────────────
+
+    #[test]
+    fn admit_or_refresh_appends_new_peer() {
+        let mut m = ClusterMembership::new("foo");
+        let outcome = admit_or_refresh(
+            &mut m,
+            peer(1),
+            vec!["/ip4/10.0.0.1/tcp/4001".parse().unwrap()],
+            42,
+        );
+        assert_eq!(outcome, AdmitOutcome::Admitted);
+        assert_eq!(m.peers.len(), 1);
+        assert_eq!(m.peers[0].join_ts_ns, 42);
+    }
+
+    #[test]
+    fn admit_or_refresh_refreshes_existing_multiaddrs_keeps_join_ts() {
+        let mut m = ClusterMembership::new("foo");
+        admit_or_refresh(
+            &mut m,
+            peer(1),
+            vec!["/ip4/10.0.0.1/tcp/4001".parse().unwrap()],
+            42,
+        );
+        let new_addr: Multiaddr = "/ip4/192.168.1.5/tcp/4001".parse().unwrap();
+        let outcome = admit_or_refresh(&mut m, peer(1), vec![new_addr.clone()], 99);
+        assert_eq!(outcome, AdmitOutcome::Refreshed);
+        assert_eq!(m.peers.len(), 1, "no duplicate entry");
+        assert_eq!(m.peers[0].multiaddrs, vec![new_addr]);
+        assert_eq!(
+            m.peers[0].join_ts_ns, 42,
+            "election order must not reshuffle on rejoin"
         );
     }
 }

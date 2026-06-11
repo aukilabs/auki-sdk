@@ -2379,8 +2379,9 @@ fn push_unique_multiaddr(addrs: &mut Vec<Multiaddr>, addr: Multiaddr) {
 /// re-evaluated after another timeout interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LossOutcome {
-    /// Deferred / commit failed / Discovery unreachable: reset the
-    /// heartbeat watch so the same peer can time out again.
+    /// Deferred, commit failed, Discovery unreachable, or a Follow whose
+    /// rejoin failed: reset the heartbeat watch so the same peer can time
+    /// out again.
     RetryLater,
     /// Promoted, followed, or evicted — done with this loss.
     Settled,
@@ -2584,7 +2585,7 @@ async fn handle_domain_peer_lost(
                         Err(RegisterAsManagerError::Displaced) => {
                             eprintln!(
                                 "auki-domain: cluster {cluster_name:?}: lost the Manager \
-                                re-create race; following Discovery's row"
+                                re-create race; will follow Discovery's row on the next retry"
                             );
                             LossOutcome::RetryLater
                         }

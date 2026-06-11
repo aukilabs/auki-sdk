@@ -42,7 +42,16 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
+
+/// Upper bound on any single Discovery HTTP round-trip. Discovery is
+/// LAN-scale (its liveness sweep is 3s and Managers tick it at 1s);
+/// a black-holed deployment must surface as a transport error within
+/// the failover loop's cadence, not the OS TCP connect timeout.
+/// Callers needing different policy supply their own client via
+/// [`DiscoveryClient::with_http`].
+pub const DISCOVERY_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
 // ─── Public types ──────────────────────────────────────────────────
 
@@ -144,12 +153,21 @@ impl DiscoveryClient {
     /// Construct against `base_url` with a default `reqwest::Client`.
     /// Trailing `/` on `base_url` is stripped.
     ///
+    /// The client enforces a [`DISCOVERY_HTTP_TIMEOUT`] total-request
+    /// timeout on every call, keeping the Manager failover loop from
+    /// stalling on a black-holed deployment for the OS TCP connect
+    /// timeout.
+    ///
     /// Returns `Arc<Self>` to satisfy the UniFFI 0.31 object-constructor
     /// contract. Rust callers that need a plain `DiscoveryClient` should
     /// use [`Self::with_http`] instead.
     #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
     pub fn new(base_url: String) -> Arc<Self> {
-        Arc::new(Self::with_http(base_url, reqwest::Client::new()))
+        let http = reqwest::Client::builder()
+            .timeout(DISCOVERY_HTTP_TIMEOUT)
+            .build()
+            .expect("reqwest client with static config");
+        Arc::new(Self::with_http(base_url, http))
     }
 
     /// The base URL this client was constructed against (trailing `/`
@@ -715,5 +733,10 @@ mod tests {
         let req = WireLivenessCheckRequest { peer_count: 7 };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(json, r#"{"peer_count":7}"#);
+    }
+
+    #[test]
+    fn discovery_http_timeout_is_2s() {
+        assert_eq!(DISCOVERY_HTTP_TIMEOUT, Duration::from_secs(2));
     }
 }

@@ -2019,16 +2019,16 @@ impl Drop for ClusterManager {
             &self.registry_handler_task,
             &self.diagnostic_handler_task,
         ] {
-            if let Ok(mut guard) = slot.lock() {
-                if let Some(task) = guard.take() {
-                    task.abort();
-                }
-            }
-        }
-        if let Ok(mut guard) = self.liveness_check_task.lock() {
-            if let Some(task) = guard.take() {
+            if let Ok(mut guard) = slot.lock()
+                && let Some(task) = guard.take()
+            {
                 task.abort();
             }
+        }
+        if let Ok(mut guard) = self.liveness_check_task.lock()
+            && let Some(task) = guard.take()
+        {
+            task.abort();
         }
     }
 }
@@ -3763,8 +3763,7 @@ fn spawn_manager_liveness_check(
                             }
                         }
                         Err(RegisterAsManagerError::Discovery(e)) => eprintln!(
-                            "auki-domain: re-register after swept row failed for \
-                            {cluster_name:?}: {e}"
+                            "auki-domain: cluster {cluster_name:?}: re-register after swept row failed: {e}"
                         ),
                     }
                 }

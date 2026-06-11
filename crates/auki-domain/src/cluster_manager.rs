@@ -3361,16 +3361,18 @@ fn admit_or_refresh(
         peer_id: peer,
         multiaddrs,
         join_ts_ns,
+        // v1: empty successor token (signature verification disabled per Discovery v1 contract).
         successor_token: Some(Vec::new()),
     });
     AdmitOutcome::Admitted
 }
 
 /// Spawn a task that drains inbound join events from `rx` and
-/// replies on each `ack`. Manager peers admit + push the updated
-/// allow-list via the runtime handle; non-Manager peers reject
-/// with `"not the manager"`. The task lives for the lifetime of
-/// the `ClusterManager`; cancelled on `shutdown`.
+/// replies on each `ack`. Manager peers admit — or idempotently
+/// refresh a current member's multiaddrs on re-join — and push
+/// the updated allow-list via the runtime handle; non-Manager
+/// peers reject with `"not the manager"`. The task lives for the
+/// lifetime of the `ClusterManager`; cancelled on `shutdown`.
 fn spawn_join_handler(
     mut rx: mpsc::Receiver<JoinEvent>,
     cluster_name: String,
@@ -3399,9 +3401,10 @@ fn spawn_join_handler(
             // membership JSON inside a short lock window. The runtime
             // call happens afterwards (locks released, no holding
             // across await).
-            let (new_allow_list, full_membership_json) = {
+            let (outcome, new_allow_list, full_membership_json) = {
                 let mut m = membership.lock().expect("membership lock");
-                admit_or_refresh(&mut m, peer, request.multiaddrs.clone(), now_unix_nanos());
+                let outcome =
+                    admit_or_refresh(&mut m, peer, request.multiaddrs.clone(), now_unix_nanos());
                 let allow_list: Vec<AllowedPeer> = m
                     .peers
                     .iter()
@@ -3413,7 +3416,7 @@ fn spawn_join_handler(
                     .collect();
                 let json = serde_json::to_string(&*m)
                     .expect("ClusterMembership serializes by construction");
-                (allow_list, json)
+                (outcome, allow_list, json)
             };
 
             if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
@@ -3437,8 +3440,14 @@ fn spawn_join_handler(
 
             let _ = ack.send(JoinResponse::Accept {
                 membership_json: full_membership_json,
+                // v1: empty successor token (signature verification disabled per Discovery v1 contract).
                 successor_token: Vec::new(),
             });
+            if outcome == AdmitOutcome::Refreshed {
+                eprintln!(
+                    "auki-domain: join handler for cluster {cluster_name:?}: refreshed multiaddrs for re-joining member {peer}"
+                );
+            }
 
             // Gossip the updated membership to every other connected
             // peer so existing members learn about the new joiner.

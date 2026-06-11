@@ -16,7 +16,7 @@
 //!    Discovery, becomes the initial Manager, spawns the runtime.
 //! 2. `is_manager()`, `manager_peer_id()`, `peer_count()` reflect
 //!    the post-create state.
-//! 3. `participant_info(...)` produces the daemon's `/api/info`
+//! 3. `participant_info(...)` produces the daemon's `ParticipantInfo`
 //!    JSON shape with cluster-aware fields populated.
 //! 4. `admit_peer(...)` mutates the membership, updates the runtime
 //!    allow-list, increments peer_count.

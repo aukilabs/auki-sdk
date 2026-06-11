@@ -199,9 +199,10 @@ Daemons that produce SDK sessions (BoosterApp, Sentinel, future) implement a uni
 
 Specified in [`docs/control-api.md`](docs/control-api.md). All endpoints under `/api/`, JSON over HTTP, daemons bind `0.0.0.0:<port>`, trusted-LAN assumption (no auth in v1).
 
+Identity is **not** part of this surface: `ParticipantInfo` is exchanged only over libp2p `/auki/info/0.0.1`, gated by cluster membership ([#293](https://github.com/aukilabs/auki-sdk/issues/293)). Any app-local HTTP identity endpoint is operator-facing/debug, not contract.
+
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/info` | Session-scoped identity: `app`, `name`, `session_id`, `session_clock_id` + `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`, `is_manager`, `manager_peer_id`. Same shape as `auki_network::ParticipantInfo`. |
 | `GET` | `/api/sensor_logs` | List sensor logs across every session on disk. Filters: `session_id` (`<uuid>` or `current`), `sensor_id`, `sensor_hash`, `clock_id`, `started_after`, `started_before` (compose as AND). Each entry: `sensor_log_id`, `session_id`, `sensor_id` + `sensor_hash`, `clock_id` + `clock_hash`, `retention_ns`, `duration_ns`, `started_at_ns`, `stopped_at_ns` (`null` only for live logs in the live session). |
 | `GET` | `/api/registries/sensors/<sensor_id>/<sensor_hash>` | Hash-pinned Sensor Registry entry, served verbatim, immutable. |
 | `GET` | `/api/registries/clocks/<clock_id>/<clock_hash>` | Hash-pinned Clock Registry entry, same semantics. |

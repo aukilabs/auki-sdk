@@ -1,8 +1,9 @@
 //! PyO3 bindings for a tiny slice of the Auki SDK.
 //!
 //! This crate exposes exactly three things to Python so Boosterapp's
-//! Python sidecar can implement the `/api/info` v0.0.11 shape today,
-//! ahead of the full `auki-py` MVP (Swarm + async runtime):
+//! Python sidecar can build its SDK identity (`ParticipantInfo`
+//! fields) today, ahead of the full `auki-py` MVP (Swarm + async
+//! runtime):
 //!
 //! 1. [`load_or_mint_seed`] — wraps `auki_identity::load_or_mint_seed`
 //!    for persistent peer-key material across daemon restarts.
@@ -11,7 +12,7 @@
 //!    derivation recipe `auki_network::PeerIdentity::from_wallet` uses.
 //! 3. `app_instance::derive` — wraps
 //!    `auki_network::app_instance::derive` for the per-machine
-//!    identifier carried in `/api/info.app_instance`.
+//!    identifier carried in `ParticipantInfo.app_instance`.
 //!
 //! Out of scope: libp2p Swarm, async / Tokio integration, the cluster
 //! protocol, all signing primitives. Those land in the full `auki-py`
@@ -203,7 +204,7 @@ impl Wallet {
 
 /// `auki_identity.app_instance.derive()` — per-machine identifier
 /// (12 lowercase hex chars, no separators) used as the
-/// `/api/info.app_instance` field.
+/// `ParticipantInfo.app_instance` field.
 ///
 /// Wraps `auki_network::app_instance::derive`. Recipe: first
 /// non-loopback IEEE-administered MAC (skipping locally-administered

@@ -17,7 +17,7 @@ subscription types to Python daemons.
 | `ClusterMember` | One peer row in `ClusterMembership` |
 | `ClusterMembership` | Cluster membership document (JSON round-trip) |
 | `DaemonInfo` | Daemon-supplied identity fields for `participant_info` |
-| `ParticipantInfo` | SDK-produced `/api/info` wire shape (`.to_json()`) |
+| `ParticipantInfo` | SDK-produced identity wire shape, exchanged over libp2p `/auki/info/0.0.1` (`.to_json()` for local/debug surfaces) |
 | `SensorEntry` | One row in a peer's sensor catalog |
 | `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
 | `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |

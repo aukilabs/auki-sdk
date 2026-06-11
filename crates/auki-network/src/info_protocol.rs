@@ -50,8 +50,10 @@ use thiserror::Error;
 
 pub use auki_datatypes::info::{InfoRequest, InfoResponse};
 
-/// libp2p protocol id for the `/api/info` equivalent over libp2p.
-/// Stable; bump version only on an incompatible wire-shape change.
+/// libp2p protocol id for the peer-to-peer `ParticipantInfo`
+/// exchange — the canonical (and only) peer-facing identity surface
+/// (#293). Stable; bump version only on an incompatible wire-shape
+/// change.
 pub const INFO_PROTOCOL: &str = "/auki/info/0.0.1";
 
 /// Cap on a single framed message. 64 KiB — `ParticipantInfo` is

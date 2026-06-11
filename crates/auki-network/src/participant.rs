@@ -1,14 +1,17 @@
-//! `ParticipantInfo` — the SDK-provided wire shape a daemon serves on
-//! its Control API's `GET /api/info`.
+//! `ParticipantInfo` — the SDK-provided wire shape every Auki peer
+//! exchanges to introduce itself, served over the libp2p
+//! `/auki/info/0.0.1` protocol (cluster-membership-gated; see
+//! [`crate::info_protocol`]). The only peer-facing identity surface —
+//! HTTP `/api/info` is gone from the cross-app contract (#293).
 //!
-//! One schema, one transport (HTTP), one source of truth: the SDK
-//! constructs this; the daemon serializes it verbatim. Daemons
-//! (BoosterApp, Park, Sentinel) don't define their own `/api/info`
-//! handler logic — they instantiate this type with their current
-//! state and `serde_json::to_string` it onto the response. That
-//! uniformity is what lets cross-daemon operator tooling (status
-//! dashboards, ops scripts, debugging) work against one shape rather
-//! than per-daemon variants.
+//! One schema, one source of truth: the SDK constructs this; peers
+//! (BoosterApp, Park, Sentinel) don't define their own identity
+//! shapes — they instantiate this type with their current state and
+//! the runtime serves it. That uniformity is what lets cross-peer
+//! operator tooling (status dashboards, ops scripts, debugging) work
+//! against one shape rather than per-daemon variants. Apps that also
+//! show identity on a local operator UI (Park's browser-facing
+//! `/api/info`) serialize the same type verbatim.
 //!
 //! ## Field semantics
 //!
@@ -66,9 +69,9 @@
 use libp2p_identity::PeerId;
 use serde::{Deserialize, Serialize};
 
-/// Identity card a daemon serves over `GET /api/info`. Constructed by
-/// the SDK (with cluster-aware fields populated from the runtime) and
-/// serialized verbatim by the daemon.
+/// Identity card a peer serves over libp2p `/auki/info/0.0.1`.
+/// Constructed by the SDK (with cluster-aware fields populated from
+/// the runtime) and served verbatim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParticipantInfo {
     /// Application identifier (`"boosterapp"`, `"sentinel"`, …). Same
@@ -183,9 +186,10 @@ mod tests {
         assert_eq!(back.manager_peer_id, back.peer_id.to_string());
     }
 
-    /// Pins the wire shape against rename. Cross-daemon tooling
-    /// (operator dashboards, ops scripts) reads `/api/info` by these
-    /// exact JSON keys; a rename on the SDK side breaks every consumer.
+    /// Pins the wire shape against rename. Cross-peer tooling
+    /// (operator dashboards, ops scripts) reads `ParticipantInfo` by
+    /// these exact JSON keys; a rename on the SDK side breaks every
+    /// consumer.
     #[test]
     fn json_keys_are_snake_case_and_locked() {
         let info = fixture();
@@ -211,7 +215,7 @@ mod tests {
     }
 
     /// Rejects on extra fields — daemons that try to inject custom
-    /// /api/info fields go through SDK upgrades, not local additions.
+    /// identity fields go through SDK upgrades, not local additions.
     #[test]
     fn deserialize_rejects_missing_required_field() {
         let json = r#"{

@@ -205,7 +205,7 @@ impl std::error::Error for ManifestValidationError {}
 /// when a remote peer materializes the log, e.g. Park re-materializing
 /// Galbot's sensor log).
 /// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `ParticipantInfo.app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon run
 /// (same value as the parent session directory name).
 #[allow(clippy::too_many_arguments)]
@@ -269,7 +269,7 @@ pub fn build_sensor_log_manifest(
 /// differ when a remote peer materializes the log, e.g. Park
 /// re-materializing Galbot's pose log).
 /// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `ParticipantInfo.app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon
 /// run (same value as the parent session directory name).
 #[allow(clippy::too_many_arguments)]
@@ -335,7 +335,7 @@ pub fn build_pose_log_manifest(
 /// - `segment_duration_ns` / `retention_ns` — auki-logs framing.
 ///
 /// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field). `session_id` is the integrator-minted
+/// `ParticipantInfo.app` field). `session_id` is the integrator-minted
 /// UUIDv4 for the current daemon run.
 ///
 /// **No `intent` field.** Per PR #72 the keystone's `buffer | intent_recording`
@@ -389,7 +389,7 @@ pub fn build_detection_log_manifest(
 /// matching how Pose Log carries `PoseSource` inline.
 ///
 /// `app_id` is the application identifier (same string as the daemon's
-/// `/api/info` `app` field; e.g. `"boosterapp"`, `"sentinel"`).
+/// `ParticipantInfo.app` field; e.g. `"boosterapp"`, `"sentinel"`).
 /// `session_id` is the integrator-minted UUIDv4 for the current daemon
 /// run (same value as the parent session directory name).
 #[allow(clippy::too_many_arguments)]

@@ -1284,8 +1284,10 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
 /// for QUIC's multi-second idle timeout. Post-fix, B's loss DETECTION
 /// fires in <2 s via the domain-owned heartbeat timer; under #295 the
 /// takeover then completes only after Discovery's ~3s row sweep +
-/// a Defer cycle (see `TAKEOVER_DEADLINE`) — still far inside the
-/// tens-of-seconds QUIC idle window this test guards against.
+/// a Defer cycle (see `TAKEOVER_DEADLINE`). 25s still guards against
+/// the multi-tens-of-seconds PTO-style hangs observed on K1; a ~10s
+/// QUIC idle-close regression would NOT be separable from a legitimate
+/// #295 defer-until-sweep takeover (~8-10s) by any deadline.
 ///
 /// Seeds `[81]` (Manager) and `[82]` (Joiner) pin `pid_a > pid_b`.
 /// The Manager now opens the heartbeat regardless of peer-id ordering,
@@ -1359,8 +1361,10 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
     // Post-fix: heartbeat-timeout fires ~1.5 s. Re-timed for #295:
     // B then defers until Discovery sweeps dead A's row (~3s) and
     // commits the claim — typically ~8–10s. Pre-fix on QUIC the
-    // DETECTION alone took tens of seconds (idle timeout), so the
-    // 25s budget still separates the two.
+    // DETECTION alone took multiple tens of seconds (PTO-style hang); 25s
+    // still guards against those. A ~10s QUIC idle-close regression would
+    // NOT be separable from a legitimate #295 defer-until-sweep takeover
+    // (~8-10s) by any deadline.
     eprintln!("waiting up to {TAKEOVER_DEADLINE:?} for B to take over via heartbeat-timeout…");
     let deadline = std::time::Instant::now() + TAKEOVER_DEADLINE;
     while std::time::Instant::now() < deadline {
@@ -1814,7 +1818,8 @@ async fn foreign_rotation_steps_manager_down() {
     assert!(
         !manager_a.is_manager(),
         "A still claims the Manager role 6s after the row rotated to B \
-         (#295 arbiter tick did not step down)"
+         (#295 arbiter tick did not step down) \
+         (1s arbiter tick + 2s-bounded Discovery HTTP + rejoin attempt headroom; measured ~0.4s live)"
     );
     assert_eq!(
         manager_a.manager_peer_id(),
@@ -1997,6 +2002,7 @@ async fn displaced_manager_keeps_retrying_and_reclaims_when_row_returns() {
         let d = DiscoveryClient::new(discovery_url());
         tokio::spawn(async move {
             loop {
+                // Only the timestamp refresh matters to the sweep; peer_count is cosmetic here.
                 let _ = d.liveness_check(name.clone(), 2).await;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
@@ -2013,7 +2019,8 @@ async fn displaced_manager_keeps_retrying_and_reclaims_when_row_returns() {
     }
     assert!(
         !manager_a.is_manager(),
-        "A still claims the Manager role 6s after the row rotated to the fake peer"
+        "A still claims the Manager role 6s after the row rotated to the fake peer \
+         (1s arbiter tick + 2s-bounded Discovery HTTP + rejoin attempt headroom; measured ~0.4s live)"
     );
     assert_eq!(
         manager_a.manager_peer_id(),

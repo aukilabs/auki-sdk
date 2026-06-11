@@ -3236,6 +3236,56 @@ pub fn elect_successor(
     None
 }
 
+/// What a follower does after its Manager heartbeat timed out, given
+/// Discovery's current row for the cluster. Pure for testing; the
+/// liveness handler acts on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagerLossAction {
+    /// Discovery still names the lost peer: someone is keeping the
+    /// row alive, so the timeout is a transport problem on our side.
+    /// Keep the Manager view, reset the heartbeat watch, rejoin.
+    Defer {
+        /// Multiaddrs Discovery reports for the still-named Manager.
+        manager_multiaddrs: Vec<Multiaddr>,
+    },
+    /// Discovery names a different Manager: that claim already
+    /// committed. Adopt it and rejoin it.
+    Follow {
+        /// The peer Discovery currently lists as Manager.
+        manager: PeerId,
+        /// Multiaddrs Discovery reports for the new Manager.
+        manager_multiaddrs: Vec<Multiaddr>,
+    },
+    /// No row at Discovery (swept): the Manager fell silent long
+    /// enough for Discovery to evict the row. Run the local election.
+    ElectLocally,
+}
+
+/// Decide what a follower should do after its Manager heartbeat timed
+/// out, consulting Discovery's current cluster row.
+///
+/// This is a pure function for ease of testing.
+pub fn decide_manager_loss_action(
+    entry: Option<&DiscoveryClusterEntry>,
+    lost_manager: PeerId,
+    local_peer_id: PeerId,
+) -> ManagerLossAction {
+    match entry {
+        None => ManagerLossAction::ElectLocally,
+        Some(e) if e.manager_peer_id == lost_manager => ManagerLossAction::Defer {
+            manager_multiaddrs: e.manager_multiaddrs.clone(),
+        },
+        // Discovery already names us (e.g. a commit landed and the
+        // process restarted mid-promotion): run the election —
+        // re-registering as ourselves is idempotent.
+        Some(e) if e.manager_peer_id == local_peer_id => ManagerLossAction::ElectLocally,
+        Some(e) => ManagerLossAction::Follow {
+            manager: e.manager_peer_id,
+            manager_multiaddrs: e.manager_multiaddrs.clone(),
+        },
+    }
+}
+
 fn elect_successor_excluding_lost(
     membership: &ClusterMembership,
     local_peer_id: PeerId,
@@ -4427,5 +4477,66 @@ mod tests {
         let membership = ClusterMembership::new("foo");
         let local = auki_network::PeerIdentity::from_seed(&[9u8; 32]).peer_id();
         assert_eq!(elect_successor(&membership, local, &[]), None);
+    }
+
+    // ── Manager-loss decision gate ─────────────────────────────────────
+
+    fn peer(seed: u8) -> PeerId {
+        auki_network::PeerIdentity::from_seed(&[seed; 32]).peer_id()
+    }
+
+    fn discovery_entry(manager: PeerId) -> DiscoveryClusterEntry {
+        DiscoveryClusterEntry {
+            name: "foo".into(),
+            manager_peer_id: manager,
+            manager_multiaddrs: vec!["/ip4/10.0.0.9/tcp/4001".parse().unwrap()],
+            relay_multiaddrs: vec![],
+            peer_count: 2,
+            created_ns: 1,
+            last_liveness_check_ns: 1,
+        }
+    }
+
+    #[test]
+    fn loss_action_defers_when_discovery_still_names_lost_manager() {
+        let (lost, local) = (peer(1), peer(2));
+        let entry = discovery_entry(lost);
+        assert_eq!(
+            decide_manager_loss_action(Some(&entry), lost, local),
+            ManagerLossAction::Defer {
+                manager_multiaddrs: entry.manager_multiaddrs.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn loss_action_follows_foreign_discovery_manager() {
+        let (lost, local, third) = (peer(1), peer(2), peer(3));
+        let entry = discovery_entry(third);
+        assert_eq!(
+            decide_manager_loss_action(Some(&entry), lost, local),
+            ManagerLossAction::Follow {
+                manager: third,
+                manager_multiaddrs: entry.manager_multiaddrs.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn loss_action_elects_when_row_absent() {
+        assert_eq!(
+            decide_manager_loss_action(None, peer(1), peer(2)),
+            ManagerLossAction::ElectLocally
+        );
+    }
+
+    #[test]
+    fn loss_action_elects_when_discovery_names_local_peer() {
+        let (lost, local) = (peer(1), peer(2));
+        let entry = discovery_entry(local);
+        assert_eq!(
+            decide_manager_loss_action(Some(&entry), lost, local),
+            ManagerLossAction::ElectLocally
+        );
     }
 }

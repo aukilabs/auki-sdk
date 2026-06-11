@@ -2067,6 +2067,124 @@ async fn sync_heartbeat_targets(
     }
 }
 
+/// How long a rejoin waits for the runtime auto-dial (500ms tick) to
+/// connect the target Manager before giving up; the caller retries on
+/// a later heartbeat timeout.
+const REJOIN_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Errors from [`rejoin_via_manager`].
+// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
+#[allow(dead_code)]
+#[derive(Debug, Error)]
+enum RejoinError {
+    #[error("allow-list update: {0}")]
+    Runtime(#[from] auki_network::network_runtime::UpdateError),
+    #[error("manager not connected within {0:?}")]
+    Connect(Duration),
+    #[error("join round-trip: {0}")]
+    Send(#[from] SendJoinRequestError),
+    #[error("manager rejected rejoin: {0}")]
+    Rejected(String),
+    #[error("invalid membership JSON in rejoin accept: {0}")]
+    InvalidMembership(#[from] serde_json::Error),
+}
+
+/// Ask `manager` to (re-)admit the local peer over `/auki/join/0.0.1`
+/// and adopt the membership document it returns. Used by a deferring
+/// follower whose heartbeat link to the Manager lapsed (the Manager
+/// may have evicted it) and by a displaced ex-Manager adopting the
+/// Discovery-named winner.
+// TODO(#295): wired in by the arbiter-tick / loss-handler tasks.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+async fn rejoin_via_manager(
+    cluster_name: &str,
+    local_peer_id: PeerId,
+    local_multiaddrs: &[Multiaddr],
+    manager: PeerId,
+    manager_multiaddrs: Vec<Multiaddr>,
+    manager_peer_id_slot: &Arc<Mutex<PeerId>>,
+    membership: &Arc<Mutex<ClusterMembership>>,
+    runtime: &auki_network::NetworkRuntimeHandle,
+) -> Result<(), RejoinError> {
+    // 1. Make the Manager dialable again: current membership ∪ target.
+    //    (An evicting Manager dropped us from ITS allow-list; ours may
+    //    have dropped IT after an election. The union restores the dial;
+    //    the runtime auto-dial tick picks it up within 500ms.)
+    let mut allow: Vec<AllowedPeer> = {
+        let m = membership.lock().expect("membership lock");
+        m.peers
+            .iter()
+            .filter(|p| p.peer_id != local_peer_id)
+            .map(|p| AllowedPeer {
+                peer_id: p.peer_id,
+                multiaddrs: p.multiaddrs.clone(),
+            })
+            .collect()
+    };
+    if let Some(slot) = allow.iter_mut().find(|p| p.peer_id == manager) {
+        for a in manager_multiaddrs {
+            push_unique_multiaddr(&mut slot.multiaddrs, a);
+        }
+    } else {
+        allow.push(AllowedPeer {
+            peer_id: manager,
+            multiaddrs: manager_multiaddrs,
+        });
+    }
+    runtime.set_allowed_peers(allow).await?;
+
+    // 2. Wait for the auto-dial to connect it (mirrors join_cluster's
+    //    bootstrap wait, with a shorter deadline — the caller retries).
+    let deadline = Instant::now() + REJOIN_CONNECT_TIMEOUT;
+    while !runtime.connected_peers().contains(&manager) {
+        if Instant::now() >= deadline {
+            return Err(RejoinError::Connect(REJOIN_CONNECT_TIMEOUT));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // 3. Join round-trip.
+    let response = runtime
+        .send_join_request(
+            manager,
+            JoinRequest {
+                multiaddrs: local_multiaddrs.to_vec(),
+            },
+        )
+        .await?;
+    let membership_json = match response {
+        JoinResponse::Accept {
+            membership_json, ..
+        } => membership_json,
+        JoinResponse::Reject { reason } => return Err(RejoinError::Rejected(reason)),
+    };
+    let parsed: ClusterMembership = serde_json::from_str(&membership_json)?;
+
+    // 4. Adopt: document, Manager view, allow-list, heartbeat targets.
+    let new_allow: Vec<AllowedPeer> = parsed
+        .peers
+        .iter()
+        .filter(|p| p.peer_id != local_peer_id)
+        .map(|p| AllowedPeer {
+            peer_id: p.peer_id,
+            multiaddrs: p.multiaddrs.clone(),
+        })
+        .collect();
+    *membership.lock().expect("membership lock") = parsed;
+    *manager_peer_id_slot.lock().expect("manager_peer_id lock") = manager;
+    runtime.set_allowed_peers(new_allow).await?;
+    sync_heartbeat_targets(
+        runtime,
+        local_peer_id,
+        manager_peer_id_slot,
+        membership,
+        cluster_name,
+    )
+    .await;
+    Ok(())
+}
+
 fn reconcile_heartbeat_watchlist(
     last_heartbeat_at: &mut HashMap<PeerId, Instant>,
     lost_already: &mut HashSet<PeerId>,

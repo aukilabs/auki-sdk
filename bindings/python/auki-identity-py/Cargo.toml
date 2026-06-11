@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for a tiny slice of the Auki SDK — `load_or_mint_seed`, wallet/peer identity, and `app_instance.derive`. A stepping stone for Boosterapp's Python sidecar to implement `/api/info` v0.0.11 ahead of the full `auki-py` MVP."
+description = "PyO3 bindings for a tiny slice of the Auki SDK — `load_or_mint_seed`, wallet/peer identity, and `app_instance.derive`. A stepping stone for Boosterapp's Python sidecar to build its SDK identity (`ParticipantInfo` fields) ahead of the full `auki-py` MVP."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension.

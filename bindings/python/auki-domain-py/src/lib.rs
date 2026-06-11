@@ -6,10 +6,10 @@
 //!   mirroring the Rust types.
 //! - `DaemonInfo` — value-type pyclass the daemon constructs and
 //!   passes to `ClusterManager.participant_info`.
-//! - `ParticipantInfo` — the SDK-provided `/api/info` wire shape;
+//! - `ParticipantInfo` — the SDK-provided identity wire shape,
+//!   exchanged peer-to-peer over libp2p `/auki/info/0.0.1` (#293);
 //!   produced by `ClusterManager.participant_info`. Has a
-//!   `.to_json()` method daemons serve verbatim on their HTTP
-//!   surface.
+//!   `.to_json()` method for app-local operator/debug surfaces.
 //! - `ResourceEntry` — post-#216 flat resource catalog row with
 //!   `variant_content` discriminator (`sensor_log` | `pose_log` |
 //!   `time_transform_log` | `detection_log`).
@@ -388,9 +388,9 @@ impl PyDaemonInfo {
 
 // ─── ParticipantInfo pyclass ───────────────────────────────────────
 
-/// SDK-provided `/api/info` wire shape. Produced by
-/// `ClusterManager.participant_info`. Serve verbatim on the
-/// daemon's Control API.
+/// SDK-provided identity wire shape, exchanged peer-to-peer over
+/// libp2p `/auki/info/0.0.1` (#293). Produced by
+/// `ClusterManager.participant_info`.
 #[pyclass(name = "ParticipantInfo")]
 pub struct PyParticipantInfo {
     inner: RustParticipantInfo,
@@ -453,8 +453,9 @@ impl PyParticipantInfo {
         self.inner.manager_peer_id.clone()
     }
 
-    /// Serialize to the canonical `/api/info` JSON shape. Daemons
-    /// return this string verbatim from their HTTP handler.
+    /// Serialize to the canonical `ParticipantInfo` JSON shape — for
+    /// app-local operator/debug surfaces; the peer-facing copy is
+    /// served by the SDK runtime over `/auki/info/0.0.1`.
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner)
             .map_err(|e| PyTypeError::new_err(format!("serializing ParticipantInfo: {e}")))

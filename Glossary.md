@@ -96,7 +96,7 @@ Orthogonal to Domain and Scenegraph: a Session ID identifies *when and by whom* 
 
 ## App ID
 
-The identifier for the application that produced data — same string a daemon's `/api/info` endpoint returns under `app` (e.g. `"boosterapp"`, `"sentinel"`, `"park"`). Carried in every Sensor Log / Pose Log / TimeTransform Log manifest under `app_id`. Lets a reader of a session directory know which application produced the recording without inspecting the bytes.
+The identifier for the application that produced data — same string a daemon's `ParticipantInfo` carries under `app` (e.g. `"boosterapp"`, `"sentinel"`, `"park"`). Carried in every Sensor Log / Pose Log / TimeTransform Log manifest under `app_id`. Lets a reader of a session directory know which application produced the recording without inspecting the bytes.
 
 Orthogonal to Domain (which place?), Scenegraph (which structured map?), and Session ID (which run?). App ID answers *which application*.
 

@@ -1288,9 +1288,10 @@ impl ClusterManager {
     /// `manager_peer_id` from cluster state, and the local
     /// `peer_id`.
     ///
-    /// Daemons serve this verbatim on their Control API's
-    /// `GET /api/info`; cluster peers fetch each other's copies
-    /// over `/auki/info/0.0.1`.
+    /// Cluster peers fetch each other's copies over libp2p
+    /// `/auki/info/0.0.1` — the only peer-facing identity surface
+    /// (#293). Apps may also render it on their own local operator
+    /// UI.
     pub fn participant_info(&self) -> ParticipantInfo {
         let manager_peer_id = self.manager_peer_id();
         let session_now_ns = self.session_clock.now_ns();

@@ -606,7 +606,7 @@ pub struct NetworkRuntimeHandle {
     command_tx: mpsc::Sender<RuntimeCmd>,
     connected: Arc<Mutex<HashSet<PeerId>>>,
     /// Cloneable libp2p-stream `Control`. The handle holds this so
-    /// outbound substream opens (`broadcast_membership`) work without
+    /// outbound substream opens (`broadcast_membership`, `send_join_request`) work without
     /// reaching back into the owning `NetworkRuntime`.
     stream_control: Control,
 }
@@ -694,6 +694,19 @@ impl NetworkRuntimeHandle {
         message: DiagnosticMessage,
     ) -> Result<(), BroadcastDiagnosticError> {
         broadcast_diagnostic_impl(&self.stream_control, &self.connected, message)
+    }
+
+    /// Same semantics as [`NetworkRuntime::send_join_request`]: open an
+    /// outbound `/auki/join/0.0.1` substream to `peer_id`, write the
+    /// request, read the response. The peer must be on the local
+    /// allow-list — callers re-joining an evicting Manager add it back
+    /// via `set_allowed_peers` first.
+    pub async fn send_join_request(
+        &self,
+        peer_id: PeerId,
+        request: JoinRequest,
+    ) -> Result<JoinResponse, SendJoinRequestError> {
+        send_join_request_impl(self.stream_control.clone(), peer_id, request).await
     }
 }
 
@@ -817,30 +830,7 @@ impl NetworkRuntime {
         peer_id: PeerId,
         request: JoinRequest,
     ) -> Result<JoinResponse, SendJoinRequestError> {
-        let mut control = self.stream_control.clone();
-        let proto = StreamProtocol::try_from_owned(JOIN_PROTOCOL.to_string())
-            .expect("JOIN_PROTOCOL is a valid libp2p protocol id");
-
-        let open_fut = control.open_stream(peer_id, proto);
-        let mut substream = match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, open_fut).await {
-            Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
-            Ok(Err(e)) => return Err(SendJoinRequestError::OpenStream(e)),
-            Ok(Ok(s)) => s,
-        };
-
-        write_join_request(&mut substream, &request)
-            .await
-            .map_err(SendJoinRequestError::Protocol)?;
-
-        let response =
-            match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, read_join_response(&mut substream))
-                .await
-            {
-                Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
-                Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
-                Ok(Ok(r)) => r,
-            };
-        Ok(response)
+        send_join_request_impl(self.stream_control.clone(), peer_id, request).await
     }
 
     /// Fetch a cluster peer's [`crate::ParticipantInfo`] over the
@@ -2980,6 +2970,42 @@ fn broadcast_diagnostic_impl(
         });
     }
     Ok(())
+}
+
+/// Shared implementation for [`NetworkRuntime::send_join_request`] and
+/// [`NetworkRuntimeHandle::send_join_request`]. Opens an outbound
+/// `/auki/join/0.0.1` substream via `control`, writes `request`, and
+/// reads the response.
+async fn send_join_request_impl(
+    mut control: Control,
+    peer_id: PeerId,
+    request: JoinRequest,
+) -> Result<JoinResponse, SendJoinRequestError> {
+    let proto = StreamProtocol::try_from_owned(JOIN_PROTOCOL.to_string())
+        .expect("JOIN_PROTOCOL is a valid libp2p protocol id");
+
+    let open_fut = control.open_stream(peer_id, proto);
+    let mut substream = match tokio::time::timeout(JOIN_REQUEST_TIMEOUT, open_fut).await {
+        Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+        Ok(Err(e)) => return Err(SendJoinRequestError::OpenStream(e)),
+        Ok(Ok(s)) => s,
+    };
+
+    write_join_request(&mut substream, &request)
+        .await
+        .map_err(SendJoinRequestError::Protocol)?;
+
+    let response = match tokio::time::timeout(
+        JOIN_REQUEST_TIMEOUT,
+        read_join_response(&mut substream),
+    )
+    .await
+    {
+        Err(_) => return Err(SendJoinRequestError::Timeout(JOIN_REQUEST_TIMEOUT)),
+        Ok(Err(e)) => return Err(SendJoinRequestError::Protocol(e)),
+        Ok(Ok(r)) => r,
+    };
+    Ok(response)
 }
 
 fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {

@@ -41,7 +41,8 @@ pub use cluster_manager::{
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
     DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
     FetchResourcesCatalogError, InboundDiagnosticMessage, JoinClusterError,
-    LIVENESS_CHECK_INTERVAL, ResourceCatalogProvider, elect_successor,
+    LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
+    decide_manager_loss_action, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]

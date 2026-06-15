@@ -54,7 +54,7 @@ A unique identifier — derived as `hash(domain_owner_pubkey)` — applied as a 
 
 A domain is **not** a scenegraph (the structured map of a space; many possible per domain), and **not** a session (one process boot of a daemon). The three IDs are independent and not derivable from each other.
 
-**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `Domain::join(&peer, &session, config)` is the app-facing API; `ClusterManager` is the runtime layer underneath. The Domain ID itself surfaces in `DomainIdentity` / `ClusterTarget`.
+**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `Domain::join(&peer, &session, config)` is the app-facing API; `ClusterManager` is the runtime layer underneath. The Domain ID itself surfaces in `DomainIdentity` / `ClusterTarget`. Discovery's cluster row is the tiebreak authority for the Manager role — local election nominates, a successful Discovery rotation commits.
 
 **Common confusions:**
 - *Domain vs cluster.* The Domain is the *topic* (the conceptual identifier); the **cluster** is the runtime group of devices networking around that topic.

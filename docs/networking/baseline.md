@@ -38,8 +38,10 @@ and "OPTIONAL" are to be interpreted as described in RFC 2119.
 
 Terminology used by this document is defined in the related glossary.
 
-Future extension drafts are tracked in `drafts.md`. They are not part of this
-first implementable baseline until moved into this file.
+Future extension drafts are tracked in `drafts.md`. Discovery candidate
+semantics in this file are part of the draft implementable baseline when
+discovery is used; mechanism-specific discovery extensions remain future work
+until they are moved into this file.
 
 ## Protocol Structure
 
@@ -693,6 +695,12 @@ Baseline failure codes:
 - `domain.missing_delegation`
 - `domain.invalid_delegation`
 - `domain.expired_delegation`
+- `discovery.invalid_candidate`
+- `discovery.expired_candidate`
+- `discovery.dial_policy_rejected`
+- `discovery.source_unsupported`
+- `discovery.cache_replaced`
+- `discovery.no_eligible_candidate`
 - `authorization.peer_rejected`
 - `policy.domain_rejected`
 - `offer.unknown_offer`
@@ -888,64 +896,344 @@ A Discovery query MUST NOT be used to prove that a private peer does not exist.
 
 ## Discovery And Reachability
 
-### RFC-0014: Discovery Is Optional Entrypoint Rendezvous
+### RFC-0014: Discovery Candidate Pipeline Is Optional But Specified
 
 #### Requirement
 
-A peer MUST NOT be required to register with Discovery merely to use the
-baseline peer-to-peer lifecycle or to connect to another peer.
+The baseline protocol MUST support private or configured peer-to-peer
+connectivity without discovery. A peer MUST NOT be required to register with,
+query, or depend on any discovery mechanism merely to form a peer relationship,
+run the lifecycle handshake, authorize a peer, load offers, or exchange
+domain-scoped data.
 
-A peer MAY register with Discovery when it wants to be discoverable by other
-peers.
+Discovery is optional to use, but when an implementation uses discovery output
+to produce candidate dial targets, that candidate behavior is specified by the
+baseline discovery RFCs in this section. Optional discovery therefore means
+"optional candidate input," not "undefined candidate semantics."
 
-A peer that does not register with Discovery MAY still connect to other peers
-through manual configuration, invitation, direct address exchange, or another
-discovery mechanism.
+A peer MAY learn peer candidates from any mix of:
 
-The baseline peer-to-peer lifecycle does not require a concrete Discovery
-record schema.
+- configured peers and manual multiaddrs;
+- invitation, deep-link, or QR entrypoints;
+- LAN mDNS records;
+- persisted peer cache entries;
+- DHT peer routing results;
+- DHT provider mappings;
+- rendezvous mappings;
+- app-bundled bootstrap or relay peers;
+- Circuit Relay v2 reservation addresses;
+- connected-peer advertisements.
 
-#### Discovery Authority
+Each candidate source feeds the same candidate validation, cache, freshness,
+dial scheduling, retry, backoff, diagnostics, and authority-boundary rules.
 
-Discovery MUST be treated as rendezvous/presence infrastructure unless a later
-RFC explicitly expands its authority.
+Discovery candidate production is not authority. A peer candidate, discovery
+record, domain hint, data-type hint, capability hint, relay hint, freshness
+hint, or source label MUST NOT grant membership, trust, domain authority, offer
+authority, policy acceptance, payload correctness, or transport success.
+Authority remains validated after transport connection through `RFC-0001`,
+`RFC-0005`, `RFC-0007`, `RFC-0008`, `RFC-0009`, `RFC-0020`, and `RFC-0026`.
 
-Discovery is subject to `RFC-0001`.
+Configured or private peer relationships remain valid even when discovery is
+disabled, unavailable, unsupported, or stale.
 
-#### Discovery Records
+#### Protocol And SDK Boundary
 
-When implemented, a Discovery record SHOULD answer:
+These RFCs specify candidate semantics required for interoperable discovery
+behavior. They do not require a particular SDK helper method, storage backend,
+UI surface, developer-tool command, platform permission flow, or app demo. SDK
+helpers MAY wrap these semantics, but helper choices are not protocol
+requirements.
 
-- what domain is being advertised;
-- how a peer can dial it;
-- coarse, non-authoritative metadata about data types that may be available;
-- how fresh the advertisement is.
+### RFC-0015: Peer Candidate Object Shape And Source Enum
 
-Discovery record shapes and data-type hints are implementation-defined and
-MUST NOT be required for the baseline peer-to-peer lifecycle.
+#### Requirement
 
-A Discovery record MUST NOT be treated as an authoritative offer catalog.
+A peer candidate is a non-authoritative description of a possible dial target
+and optional coarse hints. When represented as a baseline JSON object, a v1 peer
+candidate MUST include:
 
-A peer that advertises a domain on behalf of another wallet MUST have a valid
-delegation with `advertise` scope. A peer that controls the domain owner wallet
-MAY advertise that domain directly.
+- `type`: string, exactly `auki.peer_candidate.v1`;
+- `peer_id`: libp2p PeerId string;
+- `addrs`: array of multiaddr strings, which MAY be empty only for an explicit
+  hint-only candidate that is not directly eligible for dialing;
+- `source`: source enum value;
+- `observed_at`: RFC3339 UTC timestamp for when the candidate was learned or
+  refreshed locally.
 
-Receiving an advertisement MUST NOT by itself cause the receiver to accept the
-advertised peer as a server for that domain. Served-domain acceptance still
-requires peer-to-peer authority validation with `serve` authority.
+A v1 peer candidate MAY include:
 
-Discovery records MAY advertise peer-graph entrypoints, but not authoritative
-membership. Discovery SHOULD attach freshness metadata and expire records that
-are not refreshed. Stale or expired Discovery data MUST NOT invalidate existing
-peer-to-peer connections by itself.
+- `domain_hints`: array of coarse domain-hint objects;
+- `capability_hints`: array of coarse strings;
+- `data_type_hints`: array of coarse strings;
+- `expires_at`: RFC3339 UTC timestamp;
+- `ttl_ms`: non-negative safe integer;
+- `relay`: relay or reachability metadata object;
+- `reachability`: coarse reachability metadata object;
+- `metadata`: diagnostic metadata object.
 
-#### Consequences
+The v1 `source` enum values are:
 
-Existing peer relationships SHOULD continue when Discovery is temporarily
-unavailable, assuming the underlying peer-to-peer transport remains healthy.
+- `configured`;
+- `invitation`;
+- `mdns`;
+- `peer_cache`;
+- `dht_peer_routing`;
+- `dht_provider`;
+- `bootstrap`;
+- `rendezvous`;
+- `relay_reservation`;
+- `connected_peer_advertisement`.
 
-Implementations SHOULD distinguish "Discovery presence degraded" from "peer
-relationship degraded" in status and diagnostics.
+Unsupported source values MUST be rejected with
+`discovery.source_unsupported`, unless local policy explicitly quarantines the
+candidate as a non-dialable diagnostic hint.
+
+A domain hint MAY name a `domain_id` and human-readable display label. Domain
+hints are not domain declarations, delegations, accepted served domains, or
+offers. Even if future candidate objects carry advertise-delegation material, a
+candidate MUST NOT be accepted as serving a domain until the post-connection
+handshake validates `serve` authority for that domain.
+
+Capability hints and data-type hints are coarse routing or UI hints. They are
+not offer catalogs, payload profiles, or policy acceptance.
+
+### RFC-0016: Candidate Validation, Rejection, And Dial Policy
+
+#### Requirement
+
+An implementation MUST validate a candidate before the candidate becomes queued
+or eligible for automatic dialing.
+
+Candidate validation MUST reject or quarantine candidates that have:
+
+- missing or unsupported `type`;
+- malformed `peer_id`;
+- missing, malformed, excessive, or policy-disallowed `addrs`;
+- a terminal `/p2p/<peer_id>` address component that conflicts with the
+  candidate `peer_id`, unless stored only as a non-dialable hint;
+- missing or unsupported `source`;
+- malformed, non-UTC, unsupported, or already-expired freshness fields;
+- malformed domain hints, domain ids, base64url fields, relay metadata,
+  reachability metadata, or diagnostic metadata;
+- exceeded local size, count, string-length, or nesting limits;
+- fields that attempt to override identity, authority, delegation, reachability
+  policy, offer policy, or local application policy.
+
+Implementations MUST define local size, count, and nesting limits before
+expensive parsing or validation work.
+
+Dial policy MUST be applied before a candidate becomes eligible for automatic
+new dial attempts. Unless explicitly configured, implementations SHOULD reject
+or quarantine addresses that are loopback, link-local, private/local network
+from non-local sources, local-service-only names, expensive relays, disabled
+transports, or addresses whose peer-id binding conflicts with the candidate
+`peer_id`.
+
+Dial-policy rejection uses `discovery.dial_policy_rejected`. A candidate with
+multiple addresses MAY remain eligible when at least one address passes policy.
+Rejected addresses SHOULD be retained only as diagnostics or quarantined hints.
+
+Candidate validation MUST NOT validate final peer identity, wallet authority,
+domain serving authority, offer-catalog correctness, trust, or membership.
+Those failures remain owned by the transport, identity, domain, authorization,
+offer, Get, Subscribe, and message RFCs after connection.
+
+### RFC-0016.1: Candidate Cache, Freshness, Refresh, Withdrawal, And Expiry
+
+#### Requirement
+
+Candidate caches MUST key entries deterministically from the candidate identity,
+at minimum using:
+
+```text
+(peer_id, normalized_multiaddr_or_hint_only_marker, source, domain_id_or_none)
+```
+
+Where a candidate carries multiple addresses, an implementation MAY store one
+candidate per normalized address or one peer/source entry with an address set.
+The chosen representation MUST produce deterministic duplicate detection.
+
+A newer valid candidate for the same cache key SHOULD replace an older candidate
+when its `observed_at` is later. A candidate with a later `expires_at` but an
+older `observed_at` MUST NOT silently replace a newer observation unless local
+source-priority policy explicitly allows it. Replacement MUST NOT reset backoff
+for unrelated addresses or sources.
+
+If both `expires_at` and `ttl_ms` are present, implementations MUST compute
+expiry from `observed_at + ttl_ms` and use the earlier of that computed expiry
+and `expires_at`.
+
+Expired candidates MUST NOT be used for new automatic dial attempts. Expiring,
+withdrawing, or removing a candidate MUST NOT invalidate an existing transport
+connection, peer relationship, accepted served-domain set, active subscription,
+or offer relationship by itself. Existing relationships remain governed by their
+identity, domain, offer, session, authority-freshness, and local-policy rules.
+
+Persistent peer caches SHOULD store only bounded candidate metadata needed for
+future bootstrapping: peer id, normalized allowed addresses, source, timestamps,
+coarse non-authoritative hints, capped counters, and last failure/status code.
+Persistent caches MUST NOT store secrets, bearer tokens, private invitation
+contents, private keys, or raw debug logs.
+
+Cache load MUST re-run current validators and dial policy before the loaded
+candidate becomes eligible, because local policy and network context may have
+changed since persistence.
+
+### RFC-0016.2: Candidate Lifecycle, Dial Scheduling, Retry, And Backoff
+
+#### Requirement
+
+Implementations SHOULD model candidate processing with state equivalent to:
+
+```text
+learned -> validated -> queued -> eligible -> dial_attempt
+  -> transport_connected -> identity_peer_binding_validated
+  -> domain_declaration_delegation_validated
+  -> accepted_served_domain_set -> offer_catalog_fetch
+```
+
+Failure and terminal transitions SHOULD include:
+
+```text
+learned -> rejected
+validated|queued|eligible -> stale
+queued|eligible -> evicted
+dial_attempt -> dial_failed -> backoff -> queued|stale|evicted
+transport_connected -> identity_failed
+identity_peer_binding_validated -> domain_validation_failed
+accepted_served_domain_set -> offer_catalog_fetch_failed
+any non-terminal state -> expired -> stale|evicted
+```
+
+A candidate that reaches `transport_connected` but later fails identity,
+domain, authorization, offer, or policy validation MUST NOT be reclassified as
+authoritative discovery evidence. It MAY update retry and backoff diagnostics
+for that peer, address, or source.
+
+Automatic dial attempts MUST use bounded retry and backoff. Backoff SHOULD be
+scoped at least by:
+
+```text
+(peer_id, normalized_addr, source)
+```
+
+Syntax and validation rejection SHOULD NOT be retried until a refreshed
+candidate is learned. Dial failure SHOULD use exponential backoff with jitter per
+peer/address/source. Identity or domain authority failure SHOULD apply stronger
+backoff per peer id independent of address, because the peer itself failed
+authority validation. Offer-catalog failure SHOULD leave discovery backoff
+unchanged unless the failure is transport/path-related.
+
+Manual or configured sources MAY expose shorter retry controls or user-visible
+retry actions. Remote `retryable`, labels, and diagnostics are untrusted hints
+and MUST NOT drive uncontrolled retry loops.
+
+### RFC-0016.3: Discovery Failure Codes And Diagnostics
+
+#### Requirement
+
+Discovery and candidate diagnostics SHOULD use stable `category.reason` failure
+codes. Baseline discovery codes are:
+
+- `discovery.invalid_candidate`: candidate shape, field encoding, multiaddr,
+  PeerId, domain id, base64url, time, size, count, or authority-boundary
+  validation failed;
+- `discovery.expired_candidate`: candidate was expired at validation, queue,
+  cache-load, or dial-scheduling time;
+- `discovery.dial_policy_rejected`: candidate address was syntactically valid
+  but rejected by local dial policy;
+- `discovery.source_unsupported`: candidate source was unsupported or disabled
+  by local policy;
+- `discovery.cache_replaced`: cache entry was replaced by a fresher valid
+  candidate; this is a status event, not necessarily an error;
+- `discovery.no_eligible_candidate`: scheduler found no fresh, policy-allowed,
+  non-backoff candidate for a requested peer, domain, or query.
+
+Discovery failures MUST NOT hide or reclassify authority failures. Transport
+failures stay in the transport/libp2p failure space. Peer-id and wallet binding
+failures stay in identity/handshake RFCs. Domain declaration/delegation failures
+stay in domain authority RFCs. Offer-catalog, Get, Subscribe, and message
+failures stay in their owning RFCs.
+
+Diagnostics SHOULD report the candidate source, freshness, cache state, dial
+eligibility, last failure code, and whether discovery degradation is independent
+from existing peer relationship health.
+
+### RFC-0016.4: Discovery Interop Vectors And Implementability Requirements
+
+#### Requirement
+
+Any implementation that claims baseline discovery candidate support MUST include
+or pass interop vectors covering at least:
+
+1. valid candidate with one public direct address;
+2. valid hint-only candidate with empty `addrs` and non-authoritative domain
+   hints;
+3. valid relay candidate containing Circuit Relay v2 metadata;
+4. invalid `type`;
+5. malformed `peer_id`;
+6. malformed multiaddr;
+7. address terminal `/p2p` peer-id mismatch;
+8. malformed timestamp or invalid timezone;
+9. unsupported source;
+10. malformed `domain_id` and malformed base64url in candidate metadata;
+11. expired `expires_at`;
+12. `ttl_ms` expiry earlier than `expires_at`;
+13. size, count, or nesting-limit excess;
+14. duplicate candidate with older `observed_at` not replacing a newer entry;
+15. duplicate candidate with newer `observed_at` replacing the old entry;
+16. dial-policy rejection for loopback, link-local, private, or local-service
+    addresses when the source is not allowed to use them;
+17. dial-policy rejection for expensive relay unless configured;
+18. source mapping for every source enum value;
+19. candidate with domain hint does not create an accepted served-domain set
+    before handshake validation;
+20. candidate with capability or data-type hints does not create an offer,
+    membership, trust, or policy acceptance;
+21. stale or expired candidate does not invalidate an already accepted live peer
+    relationship.
+
+The vector suite SHOULD include object-level fixtures and state-transition tests
+so later implementers do not invent incompatible candidate shape, replacement,
+expiry, retry, or failure behavior.
+
+### RFC-0016.5: Mechanism Mapping Boundary And Later Split Marker
+
+#### Requirement
+
+Discovery mechanism mappings convert external discovery or reachability systems
+into baseline peer candidates. They do not create Auki authority.
+
+- Configured peers map to `configured`; they are deployment/user provided and
+  still validated and policy checked.
+- Invitation, deep-link, or QR entrypoints map to `invitation`; they may be
+  private and should not be persisted raw.
+- mDNS maps to `mdns`; it is LAN-local discovery and normally local-network
+  only.
+- Kad-DHT peer routing maps to `dht_peer_routing`; it provides peer ids and
+  addresses only, not authority.
+- DHT provider records map to `dht_provider`; provider mappings are candidate
+  hints only.
+- Rendezvous maps to `rendezvous`; it is an optional input, and a centralized
+  service is not required Auki infrastructure.
+- Bootstrap peers map to `bootstrap`; they are app-bundled or
+  deployment-provided entrypoints.
+- Identify, identify-push, and peer exchange map to
+  `connected_peer_advertisement`; connected peers can share observed/listen
+  addresses and supported protocols as hints.
+- AutoNAT maps to reachability metadata; it does not override dial policy.
+- Circuit Relay v2 reservations map to `relay_reservation`; relay addresses may
+  help connectivity, but relay remains connectivity, not authority.
+- DCUtR and hole punching map to reachability metadata or a transport path after
+  candidates or relay paths exist.
+
+Future RFCs MAY split individual mechanism mappings into their own sections when
+implementation work needs mechanism-specific wire formats, provider records,
+rendezvous namespaces, relay reservation behavior, privacy rules, or transport
+upgrade vectors. Such splits MUST preserve the non-authoritative candidate
+boundary defined here unless a later human-approved authority RFC explicitly
+changes it.
 
 ### RFC-0017: Listen Addresses And Advertised Addresses Are Different
 

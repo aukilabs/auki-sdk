@@ -39,35 +39,25 @@ That work needs to define:
 - stale offer and subscription handling;
 - failure mapping.
 
-### Discovery Record Shape
+### Discovery Mechanism Extensions
 
-Baseline behavior: Discovery is optional rendezvous/presence infrastructure.
-Configured or manual peer-to-peer connectivity does not require a concrete
-Discovery record.
+Baseline behavior: Discovery is optional for forming peer relationships, but
+candidate semantics are specified when discovery is used. `baseline.md` now owns
+the peer candidate object shape, source enum, non-authoritative domain and
+data-type hints, validation, freshness, retry, failure codes, and vectors.
 
-Future work can define the concrete Discovery advertisement:
+Future work can split mechanism-specific discovery behavior out of the baseline
+candidate pipeline:
 
-- domain id and optional display label;
-- peer id and dialable advertised addresses;
-- freshness fields such as `ttl`, `expires_at`, or `last_seen_at`;
-- coarse, non-authoritative data-type hints;
-- refresh, update, remove, and expiry behavior.
+- DHT provider record keys and values;
+- rendezvous namespaces and service behavior;
+- mDNS record mapping details;
+- peer-exchange message shape;
+- relay reservation refresh behavior;
+- source-specific privacy and persistence rules.
 
-The record shape needs to preserve entrypoint advertisement semantics and avoid
-becoming an authoritative offer catalog.
-
-### Discovery Data-Type Hints
-
-Baseline behavior: Discovery hints are implementation-defined and are not
-required for baseline peer-to-peer interop.
-
-Future work can define coarse data-type hints for Discovery records:
-
-- hint vocabulary;
-- how hints differ from offers;
-- whether hints are free-form, registered, or both;
-- freshness behavior for hints;
-- client handling for missing, stale, or unsupported hints.
+These extensions need to preserve candidate semantics and avoid becoming an
+authoritative membership, domain, or offer catalog.
 
 ### Peer Graph Hints
 

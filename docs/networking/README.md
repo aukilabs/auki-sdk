@@ -1,16 +1,19 @@
 # Networking RFCs
 
-This directory contains the draft peer-to-peer cluster lifecycle RFCs.
+This directory contains the draft peer-to-peer cluster lifecycle RFCs and
+networking extension drafts.
 
 Read in this order:
 
 1. [`baseline.md`](baseline.md) is the draft implementable baseline.
 2. [`security-profile-v1.md`](security-profile-v1.md) is the short production
    guardrail profile for baseline deployments.
-3. [`drafts.md`](drafts.md) parks future extension drafts.
-4. [`backlog.md`](backlog.md) is the working task list. It is not part of the
+3. [`decentralized-peer-discovery.md`](decentralized-peer-discovery.md) defines
+   the draft candidate pipeline for decentralized peer discovery.
+4. [`drafts.md`](drafts.md) parks future extension drafts.
+5. [`backlog.md`](backlog.md) is the working task list. It is not part of the
    protocol requirements.
-5. [`glossary.md`](glossary.md) defines recurring terminology.
+6. [`glossary.md`](glossary.md) defines recurring terminology.
 
 ## Baseline Compliance Profile
 
@@ -21,8 +24,8 @@ Read in this order:
 | Domain delegation | Required when serving for another wallet |
 | Configured/manual peers | Required |
 | Discovery | Optional; not required for baseline interop |
-| Discovery record shape | Excluded from first implementable version |
-| Discovery data-type hints | Excluded from first implementable version |
+| Discovery candidate shape | Excluded from baseline; draft extension exists |
+| Discovery data-type hints | Excluded from baseline; draft extension exists |
 | Dynamic served-domain updates | Excluded; reconnect or fresh handshake required |
 | Peer graph hints | Excluded |
 | Clock sync protocol | Excluded; time and clock semantics still apply |
@@ -77,6 +80,35 @@ Park, HTTP cache, or the legacy `auki-network` runtime for preview bytes.
 The current implementation backlog is no longer a protocol TODO. It is a demo
 and SDK validation queue for completing the remaining transport matrix,
 especially node-to-node direct/relay proofs and relay-fallback edge cases.
+
+`decentralized-peer-discovery.md` is a draft protocol/RFC slice. It is intended
+as the prerequisite for later protocol crate validators, vectors, SDK helpers,
+runtime integration, and demos. Those later slices must not invent different
+candidate authority, expiry, state, or failure semantics.
+
+Current `develop` still ships the legacy HTTP Discovery/ClusterManager runtime
+path in `auki-network`. That runtime is current implementation evidence, not the
+target decentralized architecture specified by this draft.
+
+## Authority Boundary
+
+Discovery is not a centralized Auki service and is not authority. Discovery
+outputs candidate dial targets and hints only. Authority remains owned by the
+transport-authenticated libp2p peer id, wallet-signed peer binding, domain
+declarations/delegations, offer policy, and local application policy.
+
+## Open Decisions Before Implementation
+
+The draft intentionally leaves these human/protocol decisions open before SDK,
+runtime, helper, app, demo, or example work:
+
+- whether `advertise` delegation material is required inside candidate domain
+  hints or only validated at publication/handshake boundaries;
+- canonical candidate wire encoding, including whether this RFC should become
+  normative JSON/JCS now or remain a draft object until protocol crate work;
+- exact public API compatibility surface for later SDK helper methods;
+- any authority/security semantic change beyond documenting the
+  non-authoritative candidate boundary.
 
 ## Drafts And Parked Work
 

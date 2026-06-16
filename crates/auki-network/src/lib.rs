@@ -87,6 +87,9 @@ pub use libp2p::Swarm;
 pub mod network_runtime;
 
 #[cfg(feature = "swarm")]
+pub mod peer_candidate;
+
+#[cfg(feature = "swarm")]
 pub mod stream_protocol;
 
 #[cfg(feature = "swarm")]

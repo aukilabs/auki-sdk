@@ -197,21 +197,34 @@ system to a domain id.
 
 ### Discovery
 
-Optional rendezvous and presence infrastructure.
+Optional candidate production and rendezvous behavior that helps peers find
+entrypoints.
 
-Discovery helps peers find entrypoints.
+Discovery is optional for forming peer relationships. When it is used, baseline
+candidate semantics are specified in `baseline.md`.
+
+### Peer Candidate
+
+A non-authoritative possible dial target learned from configuration, invitation,
+cache, mDNS, DHT, rendezvous, relay reservation, bootstrap, or connected-peer
+advertisement.
+
+A peer candidate may include peer id, dial addresses, source, freshness,
+non-authoritative domain hints, data-type hints, capability hints, relay
+metadata, and reachability metadata. It is not membership, trust, domain
+authority, offer authority, or policy acceptance.
 
 ### Discovery Record
 
 A non-authoritative advertisement published through Discovery or an equivalent
-index.
+index and converted into peer candidates by an implementation.
 
 A Discovery record may include a domain id, peer id, advertised addresses,
 freshness metadata, entrypoint hints, and coarse data-type hints.
 
 ### Data-Type Hint
 
-Coarse, non-authoritative Discovery metadata about data types that may be
+Coarse, non-authoritative discovery metadata about data types that may be
 available behind an entrypoint.
 
 ### Entrypoint

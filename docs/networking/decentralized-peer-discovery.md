@@ -1,11 +1,17 @@
 # Decentralized Peer Discovery RFC Draft
 
-Status: draft protocol/RFC; not implemented.
+Status: companion protocol/RFC reference; not implemented.
 
 Base branch evidence: `develop` at `1682c38` still ships the legacy HTTP
 Discovery/ClusterManager runtime. PR #159 (`matt/docs` at `e1547b91`) is used as
 a design seed for authority boundaries and networking RFC structure, not as
 merged truth.
+
+Baseline relationship: `baseline.md` now owns the normative discovery candidate
+requirements in RFC-0014 through RFC-0016.5. This companion keeps design
+rationale, example candidate JSON, libp2p source mapping notes, and open
+implementation decisions. If this document conflicts with `baseline.md`,
+`baseline.md` is the normative source for the draft implementable baseline.
 
 Source links:
 
@@ -23,7 +29,7 @@ This draft defines decentralized peer discovery as a multi-source candidate
 pipeline over libp2p-compatible entrypoints. It does not define a centralized
 Auki Discovery service and does not make discovery authoritative.
 
-Normative draft requirements:
+Baseline-aligned requirements, restated from `baseline.md` RFC-0014 through RFC-0016.5:
 
 - Discovery candidates MUST be treated only as candidate dial targets and coarse
   non-authoritative hints.
@@ -454,20 +460,28 @@ If legacy/current runtime is mentioned, it MUST be framed as current
 `auki-network` HTTP Discovery/ClusterManager behavior or as an optional
 rendezvous-style input, not as the target architecture or authority layer.
 
-## 10. Prerequisites Before Later Work
+## 10. Protocol Baseline Vs SDK Helper Boundary
 
-Before later SDK/runtime/helper/app/demo/example work, these must be resolved:
+`baseline.md` RFC-0014 through RFC-0016.5 define the baseline candidate semantics
+when discovery is used: object shape, source enum, validation, rejection, dial
+policy, cache/freshness, lifecycle, retry/backoff, failure codes, interop
+vectors, and mechanism mapping boundaries.
 
-1. this RFC draft receives human/protocol review;
-2. the `advertise_authority` decision is resolved;
-3. canonical candidate encoding is resolved, including JSON/JCS vs another wire
-   form;
-4. public API compatibility for later helper surfaces is scoped by a separate
-   SDK/runtime card;
-5. any authority/security semantic change beyond non-authoritative candidates is
-   explicitly approved by a human/protocol owner;
-6. protocol crate validators and vector fixtures are planned before app/demo
-   code consumes candidate semantics.
+Before later SDK/runtime/helper/app/demo/example work, these items remain outside
+this protocol companion and need their own scoped cards or decisions:
+
+1. whether `advertise` delegation material is required inside candidate domain
+   hints or only validated at publication/handshake boundaries;
+2. whether the JSON-shaped example here becomes the final canonical wire
+   encoding, including JSON/JCS vs another wire form;
+3. public SDK helper API compatibility, method names, storage backend,
+   browser/native platform wiring, UI/devtools surfaces, and demo flows;
+4. any authority/security semantic change beyond non-authoritative candidates;
+5. concrete protocol crate validators and vector fixture placement.
+
+SDK helpers MAY make the candidate pipeline easier to use, but they MUST consume
+or implement the protocol semantics from `baseline.md`; they must not define a
+parallel discovery authority model.
 
 No later implementation should define discovery candidates as membership,
 trust, domain authority, offer authority, or policy acceptance.

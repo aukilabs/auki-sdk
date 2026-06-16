@@ -23,9 +23,9 @@ Read in this order:
 | Domain declaration | Required for serving |
 | Domain delegation | Required when serving for another wallet |
 | Configured/manual peers | Required |
-| Discovery | Optional; not required for baseline interop |
-| Discovery candidate shape | Excluded from baseline; draft extension exists |
-| Discovery data-type hints | Excluded from baseline; draft extension exists |
+| Discovery | Optional to use; candidate semantics specified when used |
+| Discovery candidate shape | Baseline-specified in `baseline.md` RFC-0014 through RFC-0016.5 |
+| Discovery data-type hints | Non-authoritative baseline hints when carried by peer candidates |
 | Dynamic served-domain updates | Excluded; reconnect or fresh handshake required |
 | Peer graph hints | Excluded |
 | Clock sync protocol | Excluded; time and clock semantics still apply |
@@ -58,8 +58,9 @@ remote data.
 ## Current Status
 
 The baseline is a bootstrapping protocol for configured or private peer-to-peer
-relationships. Discovery is optional rendezvous/presence infrastructure and is
-not required for the baseline peer-to-peer path.
+relationships. Discovery is optional for forming peer relationships, but when an
+implementation uses discovery output, peer-candidate behavior is specified in
+`baseline.md` RFC-0014 through RFC-0016.5.
 
 The baseline is not a complete production security profile by itself. Production
 or production-like deployments should also enforce
@@ -81,10 +82,10 @@ The current implementation backlog is no longer a protocol TODO. It is a demo
 and SDK validation queue for completing the remaining transport matrix,
 especially node-to-node direct/relay proofs and relay-fallback edge cases.
 
-`decentralized-peer-discovery.md` is a draft protocol/RFC slice. It is intended
-as the prerequisite for later protocol crate validators, vectors, SDK helpers,
-runtime integration, and demos. Those later slices must not invent different
-candidate authority, expiry, state, or failure semantics.
+`decentralized-peer-discovery.md` is a companion protocol/RFC reference for the
+baseline discovery RFCs. It keeps examples, source mapping notes, and open
+implementation decisions; `baseline.md` remains the normative home for candidate
+authority, expiry, state, retry, and failure semantics.
 
 Current `develop` still ships the legacy HTTP Discovery/ClusterManager runtime
 path in `auki-network`. That runtime is current implementation evidence, not the

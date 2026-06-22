@@ -5,7 +5,7 @@ on:
     branches: [develop]
     paths:
       - '.understand-anything/knowledge-graph.json'
-      - 'dashboard/**'
+      - '.understand-anything/dashboard/**'
   workflow_dispatch:
 
 permissions:
@@ -28,22 +28,22 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: dashboard/package-lock.json
+          cache-dependency-path: .understand-anything/dashboard/package-lock.json
 
       - name: Install dependencies
-        working-directory: dashboard
+        working-directory: .understand-anything/dashboard
         run: npm install
 
       - name: Copy latest knowledge graph into public/
-        run: cp .understand-anything/knowledge-graph.json dashboard/public/knowledge-graph.json
+        run: cp .understand-anything/knowledge-graph.json .understand-anything/dashboard/public/knowledge-graph.json
 
       - name: Build dashboard
-        working-directory: dashboard
+        working-directory: .understand-anything/dashboard
         run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dashboard/dist
+          path: .understand-anything/dashboard/dist
 
   deploy:
     needs: build

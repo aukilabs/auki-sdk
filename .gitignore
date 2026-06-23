@@ -3,6 +3,10 @@
 .DS_Store
 node_modules/
 dist/
+!.understand-anything/dashboard/packages/core/dist/
 .worktrees/
 __pycache__/
 *.pyc
+.understand-anything/intermediate/
+.understand-anything/tmp/
+.understand-anything/.trash-*/

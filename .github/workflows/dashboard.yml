@@ -1,0 +1,56 @@
+name: Deploy Knowledge Graph Dashboard
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - '.understand-anything/knowledge-graph.json'
+      - '.understand-anything/dashboard/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deploy at a time; cancel in-flight runs on new push
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: .understand-anything/dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: .understand-anything/dashboard
+        run: npm install
+
+      - name: Copy latest knowledge graph into public/
+        run: cp .understand-anything/knowledge-graph.json .understand-anything/dashboard/public/knowledge-graph.json
+
+      - name: Build dashboard
+        working-directory: .understand-anything/dashboard
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .understand-anything/dashboard/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

@@ -8,7 +8,6 @@ This is the design foundation for the Auki SDK — a human and AI readable wiki 
 
 ## Root files
 
-
 - `VISION.md` — The aspirational spec — what this project should be
 - `README.md` — start here. Overview of repo and crates.
 - `CONTRIBUTING.md` — folder convention, project management and git workflows.
@@ -16,6 +15,42 @@ This is the design foundation for the Auki SDK — a human and AI readable wiki 
 - `GLOSSARY.md` — definitions of all key terms.
 - `skills/auki-sdk-app-builder/SKILL.md` — public app-building skill; read before building apps or robot producers with the Auki SDK.
 
+## Knowledge graph
+
+`.understand-anything/knowledge-graph.json` is a pre-built map of this codebase. If you don't need to read every source file, you can use the knowledge graph to answer questions about architecture, crate relationships, and how to find things.
+
+### What it contains
+
+- **`nodes`** — every file, function, class, config, and doc node. Each has `id`, `name`, `summary`, `tags`, `filePath`, and `complexity`.
+- **`edges`** — relationships between nodes: `imports`, `calls`, `depends_on`, `documents`, `configures`, `tested_by`, etc.
+- **`layers`** — 10 architectural layers (Wire Protocol Schemas → Core Primitives → Session → Network → Domain → Browser SDK → Language Bindings → Examples → Documentation → Project Support). Each layer has a `description` and lists its `nodeIds`.
+- **`tour`** — 15 ordered steps that walk through the codebase from fundamentals to bindings. A fast way to orient before starting work.
+
+### How to query it
+
+The file is ~500 KB — do not read it whole. Search for what you need:
+
+```bash
+# Find nodes by name or keyword
+python3 -c "
+import json
+g = json.load(open('.understand-anything/knowledge-graph.json'))
+for n in g['nodes']:
+    if 'session' in n['name'].lower():
+        print(n['id'], '—', n['summary'][:80])
+"
+
+# Or grep for a node ID to find its edges
+grep 'file:crates/auki-session/src/peer.rs' .understand-anything/knowledge-graph.json
+```
+
+Read the `layers` array first when you need a high-level orientation. Read individual node `summary` fields before opening source files — they often answer the question without needing to read the code.
+
+### Limitations
+
+The graph is a snapshot taken at a specific commit (`project.gitCommitHash`). Summaries and edges reflect that point in time. For files changed since the snapshot, read the source directly and treat the graph as context rather than ground truth.
+
+The graph is a map, not a specification. Use it to find the right file; read the file for precise API details.
 
 ## Rules
 

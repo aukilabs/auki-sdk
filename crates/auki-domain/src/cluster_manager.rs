@@ -2791,6 +2791,18 @@ fn spawn_liveness_handler(
                         PeerLivenessEvent::HeartbeatNtpSampleObserved { observation, .. } => {
                             observe_heartbeat_ntp_sample(&clock_sync, observation);
                         }
+                        PeerLivenessEvent::HeartbeatWriteStalled { peer_id, waited } => {
+                            // Diagnostic only (#304): our outbound heartbeat
+                            // flush to this peer was slow, so it may declare us
+                            // Lost. Correlate with the remote's "no heartbeat
+                            // … declaring Lost" line to confirm carrier
+                            // congestion as the false-Lost mechanism.
+                            eprintln!(
+                                "auki-domain: cluster {cluster_name:?}: our heartbeat write to \
+                                 {peer_id} stalled {waited:?} — outbound liveness at risk \
+                                 (carrier congested?)"
+                            );
+                        }
                     }
                 }
 
@@ -2805,6 +2817,16 @@ fn spawn_liveness_handler(
                         })
                         .collect();
                     for peer_id in timed_out {
+                        // #304 diagnosis: record how stale the peer was when we
+                        // gave up, to correlate with its own HeartbeatWriteStalled.
+                        if let Some(ts) = last_heartbeat_at.get(&peer_id) {
+                            eprintln!(
+                                "auki-domain: cluster {cluster_name:?}: no heartbeat from \
+                                 {peer_id} for {:?} (> HEARTBEAT_TIMEOUT {HEARTBEAT_TIMEOUT:?}) \
+                                 — declaring Lost",
+                                now.duration_since(*ts)
+                            );
+                        }
                         lost_already.insert(peer_id);
                         let outcome = handle_domain_peer_lost(
                             &cluster_name,

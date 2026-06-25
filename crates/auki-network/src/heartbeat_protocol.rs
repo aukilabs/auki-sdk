@@ -54,6 +54,16 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 /// detection" the Hagall spec calls for.
 pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// A single heartbeat write should complete in microseconds. If
+/// flushing one to the carrier takes at least this long, the local
+/// peer's *outbound* liveness is at risk — the remote may declare it
+/// `Lost` before the next frame lands. Surfaced as
+/// [`PeerLivenessEvent::HeartbeatWriteStalled`][crate::PeerLivenessEvent]
+/// for field diagnosis (e.g. transport congestion starving the
+/// heartbeat substream). Set to one [`HEARTBEAT_INTERVAL`]: a write
+/// slower than the whole cadence has already cost a frame.
+pub const HEARTBEAT_WRITE_STALL_WARN: Duration = HEARTBEAT_INTERVAL;
+
 /// Cap on a single framed `Heartbeat`. 1 KiB — current payload is
 /// ~30 bytes; the cap is for defense against malformed senders.
 pub const MAX_HEARTBEAT_FRAME_BYTES: u32 = 1024;

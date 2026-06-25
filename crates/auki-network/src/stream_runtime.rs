@@ -743,6 +743,38 @@ mod tests {
         })
     }
 
+    /// Floods the consumer with large camera frames as fast as the
+    /// transport will accept them. Frames are generated lazily, so only the
+    /// handful that fit in the in-flight window are ever materialized before
+    /// the backpressured producer write blocks. Used by the #304
+    /// heartbeat-vs-backpressure repro.
+    fn flooding_camera_provider(generated: std::sync::Arc<std::sync::atomic::AtomicU64>) -> StreamProvider {
+        Arc::new(move |_peer, _req| {
+            let generated = generated.clone();
+            let frames = (0..1_000_000u64).map(move |i| {
+                generated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(StreamItem {
+                    timestamp_ns: (i + 1) as i64,
+                    payload: CameraFrame {
+                        dynamic_intrinsics: None,
+                        frame: vec![0u8; 1024 * 1024], // 1 MiB per frame
+                    },
+                })
+            });
+            StreamDispatch::AcceptCamera {
+                manifest: manifest(
+                    "test/cam",
+                    "sensor-hash-bp",
+                    "test/session-monotonic",
+                    "clock-hash-bp",
+                    "test/cam/frame",
+                    "frame-hash-bp",
+                ),
+                source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
     fn camera_provider_declines_unknown() -> StreamProvider {
         Arc::new(|_peer, req| {
             if req.resource_id == "exists" {
@@ -1175,6 +1207,296 @@ mod tests {
             other => panic!("expected SourceEnded, got {other:?}"),
         }
         assert!(entries.next().await.is_none());
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// Liveness invariant (#304): single-stream backpressure must not starve
+    /// the heartbeat carrier.
+    ///
+    /// Field symptom under investigation: a producer streaming to a slow
+    /// consumer gets wrongly declared `Lost`. One hypothesis was that heartbeat
+    /// frames, sharing the one yamux/TCP connection with bulk data, stall when
+    /// the data substream backpressures (consumer stops draining → its reader
+    /// channel(8) fills → socket send buffer backs up). This test pins
+    /// TCP+yamux (the harness listens TCP-only) and REFUTES that hypothesis:
+    /// yamux's per-stream flow control isolates the heartbeat substream, so the
+    /// consumer keeps receiving heartbeats with no gap reaching
+    /// `HEARTBEAT_TIMEOUT` even while the data stream is fully backpressured.
+    /// Kept as a regression guard for that isolation property.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "#304 characterization repro: real libp2p timing, heavy; run on \
+                demand with `--ignored`, not in the default (connect-flaky) suite"]
+    async fn heartbeat_survives_data_stream_backpressure() {
+        use crate::heartbeat_protocol::HEARTBEAT_TIMEOUT;
+        use crate::network_runtime::PeerLivenessEvent;
+
+        let generated = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        let id_p = PeerIdentity::from_seed(&[151u8; 32]); // producer ("Manager")
+        let id_c = PeerIdentity::from_seed(&[152u8; 32]); // consumer ("Park")
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-bp-producer/0").await;
+        let (swarm_c, _addr_c) = build_listening_swarm(&id_c, "test-bp-consumer/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![], // accept only; consumer dials (avoids mutual-dial race)
+            }],
+            flooding_camera_provider(generated.clone()),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+
+        let (consumer, _join_rx, mut liveness_rx, ..) =
+            crate::network_runtime::NetworkRuntime::spawn(
+                swarm_c,
+                vec![AllowedPeer {
+                    peer_id: id_p.peer_id(),
+                    multiaddrs: vec![addr_p],
+                }],
+                decline_all_streams(),
+                crate::network_runtime::test_heartbeat_timestamps(),
+            )
+            .expect("consumer spawn");
+
+        let producer_id = id_p.peer_id();
+
+        let connected = poll_until(
+            || consumer.connected_peers().contains(&producer_id),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(connected, "consumer did not connect to producer within 15s");
+
+        // Designate each peer as the other's heartbeat target — carriers are
+        // only opened for explicit targets (as a cluster owner would set).
+        consumer
+            .set_heartbeat_targets(vec![producer_id])
+            .await
+            .expect("consumer set_heartbeat_targets");
+        producer
+            .set_heartbeat_targets(vec![id_c.peer_id()])
+            .await
+            .expect("producer set_heartbeat_targets");
+
+        // Confirm the heartbeat carrier is healthy BEFORE applying load, so a
+        // startup gap can't masquerade as the bug.
+        let saw_first_hb = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match liveness_rx.recv().await {
+                    Some(PeerLivenessEvent::HeartbeatReceived { peer_id, .. })
+                        if peer_id == producer_id =>
+                    {
+                        return true;
+                    }
+                    Some(_) => continue,
+                    None => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        assert!(
+            saw_first_hb,
+            "no heartbeat from producer before load — carrier never established"
+        );
+
+        // Apply backpressure: open the stream, then NEVER read its entries.
+        // The consumer reader channel (bound 8) fills, its reader stops
+        // draining the substream, and the socket send buffer backs up.
+        let held: StreamSubscription<CameraFrame> = consumer
+            .open_stream(
+                producer_id,
+                StreamRequest {
+                    resource_id: "test/cam".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open_stream should succeed");
+
+        // Observe heartbeat continuity under load. A healthy carrier delivers
+        // one every HEARTBEAT_INTERVAL (500 ms); a gap reaching
+        // HEARTBEAT_TIMEOUT (1500 ms) is the false-Lost condition.
+        let observe = Duration::from_secs(6);
+        let start = Instant::now();
+        let mut last_hb = Instant::now();
+        let mut max_gap = Duration::ZERO;
+        while start.elapsed() < observe {
+            match tokio::time::timeout(Duration::from_millis(200), liveness_rx.recv()).await {
+                Ok(Some(PeerLivenessEvent::HeartbeatReceived { peer_id, .. }))
+                    if peer_id == producer_id =>
+                {
+                    let now = Instant::now();
+                    max_gap = max_gap.max(now.duration_since(last_hb));
+                    last_hb = now;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {
+                    max_gap = max_gap.max(last_hb.elapsed());
+                }
+            }
+        }
+
+        // Keep the subscription alive across the whole observation window so
+        // the backpressure persists; dropping it would release the stream.
+        drop(held);
+
+        // Backpressure must have genuinely engaged, or the test is vacuous: a
+        // stalled consumer (reader channel bound 8 + yamux window + socket
+        // buffer) blocks the producer's writes after only a handful of frames.
+        let pushed = generated.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            pushed < 100,
+            "expected the stalled consumer to backpressure the producer, but it pushed {pushed} \
+             frames — backpressure never engaged, test is vacuous"
+        );
+
+        assert!(
+            max_gap < HEARTBEAT_TIMEOUT,
+            "heartbeat from the backpressured-but-alive producer gapped {max_gap:?} \
+             (>= HEARTBEAT_TIMEOUT {HEARTBEAT_TIMEOUT:?}): it would be wrongly declared Lost"
+        );
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    /// #304 repro (real scenario): heartbeat liveness under *sustained
+    /// outbound throughput* on a contended scheduler.
+    ///
+    /// Unlike `heartbeat_survives_data_stream_backpressure` (consumer
+    /// STALLED → producer's data flow stops → its swarm task goes idle →
+    /// heartbeat trivially fine), here the consumer DRAINS as fast as it can,
+    /// so the producer floods continuously and its single libp2p swarm task
+    /// stays busy pushing an encrypted stream. The field setup is a weak CPU
+    /// over WiFi; we approximate the CPU pressure by pinning the whole test to
+    /// a single worker thread, forcing the producer's swarm/pump/heartbeat
+    /// tasks to contend.
+    ///
+    /// REFUTES swarm-task contention as the #304 mechanism on dev hardware:
+    /// the producer's heartbeats keep reaching the consumer with no gap
+    /// reaching `HEARTBEAT_TIMEOUT` even while it sustains >1 GiB of stream
+    /// throughput in 8 s on a single worker thread. (The field repro needs
+    /// real WiFi packet loss / a weak CPU, which loopback can't produce.)
+    /// Kept as a regression guard for liveness under throughput pressure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[ignore = "#304 characterization repro: saturates a single worker thread \
+                with >1 GiB of traffic; run on demand with `--ignored`"]
+    async fn heartbeat_survives_sustained_stream_throughput() {
+        use crate::heartbeat_protocol::HEARTBEAT_TIMEOUT;
+        use crate::network_runtime::PeerLivenessEvent;
+
+        let generated = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        let id_p = PeerIdentity::from_seed(&[161u8; 32]); // producer ("Manager")
+        let id_c = PeerIdentity::from_seed(&[162u8; 32]); // consumer ("Park")
+
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-sat-producer/0").await;
+        let (swarm_c, _addr_c) = build_listening_swarm(&id_c, "test-sat-consumer/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![], // accept only; consumer dials (avoids mutual-dial race)
+            }],
+            flooding_camera_provider(generated.clone()),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+
+        let (consumer, _join_rx, mut liveness_rx, ..) =
+            crate::network_runtime::NetworkRuntime::spawn(
+                swarm_c,
+                vec![AllowedPeer {
+                    peer_id: id_p.peer_id(),
+                    multiaddrs: vec![addr_p],
+                }],
+                decline_all_streams(),
+                crate::network_runtime::test_heartbeat_timestamps(),
+            )
+            .expect("consumer spawn");
+
+        let producer_id = id_p.peer_id();
+
+        let connected = poll_until(
+            || consumer.connected_peers().contains(&producer_id),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(connected, "consumer did not connect to producer within 15s");
+
+        consumer
+            .set_heartbeat_targets(vec![producer_id])
+            .await
+            .expect("consumer set_heartbeat_targets");
+        producer
+            .set_heartbeat_targets(vec![id_c.peer_id()])
+            .await
+            .expect("producer set_heartbeat_targets");
+
+        // Open the stream and DRAIN it as fast as possible in a background
+        // task — this keeps the producer's data flowing (no backpressure) so
+        // its swarm task stays saturated.
+        let held: StreamSubscription<CameraFrame> = consumer
+            .open_stream(
+                producer_id,
+                StreamRequest {
+                    resource_id: "test/cam".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open_stream should succeed");
+        let mut entries = held.entries;
+        let drain = tokio::spawn(async move { while entries.next().await.is_some() {} });
+
+        // Observe heartbeat continuity while the stream floods. Kept short so
+        // this CPU-heavy test doesn't destabilize neighbors run concurrently.
+        let observe = Duration::from_secs(5);
+        let start = Instant::now();
+        let mut last_hb = Instant::now();
+        let mut max_gap = Duration::ZERO;
+        while start.elapsed() < observe {
+            match tokio::time::timeout(Duration::from_millis(200), liveness_rx.recv()).await {
+                Ok(Some(PeerLivenessEvent::HeartbeatReceived { peer_id, .. }))
+                    if peer_id == producer_id =>
+                {
+                    let now = Instant::now();
+                    max_gap = max_gap.max(now.duration_since(last_hb));
+                    last_hb = now;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {
+                    max_gap = max_gap.max(last_hb.elapsed());
+                }
+            }
+        }
+
+        let pushed = generated.load(std::sync::atomic::Ordering::Relaxed);
+        drain.abort();
+
+        // Sustained throughput must have genuinely flowed, or the test is
+        // vacuous: a fast-draining consumer keeps the producer flooding for the
+        // whole window (observed ~1000+ 1 MiB frames in 8 s on one thread).
+        assert!(
+            pushed > 100,
+            "expected sustained high throughput, but the producer pushed only {pushed} frames \
+             — the stream did not flow, test is vacuous"
+        );
+
+        assert!(
+            max_gap < HEARTBEAT_TIMEOUT,
+            "heartbeat from the busy-but-alive producer gapped {max_gap:?} \
+             (>= HEARTBEAT_TIMEOUT {HEARTBEAT_TIMEOUT:?}): it would be wrongly declared Lost"
+        );
 
         producer.shutdown();
         consumer.shutdown();

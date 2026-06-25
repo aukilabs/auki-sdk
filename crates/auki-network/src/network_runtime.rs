@@ -35,8 +35,8 @@ use crate::diagnostic_protocol::{
     DIAGNOSTIC_PROTOCOL, DiagnosticMessage, read_diagnostic_message, write_diagnostic_message,
 };
 use crate::heartbeat_protocol::{
-    HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, Heartbeat, HeartbeatDomainClock, HeartbeatEcho,
-    read_heartbeat, write_heartbeat,
+    HEARTBEAT_INTERVAL, HEARTBEAT_PROTOCOL, HEARTBEAT_WRITE_STALL_WARN, Heartbeat,
+    HeartbeatDomainClock, HeartbeatEcho, read_heartbeat, write_heartbeat,
 };
 use crate::info_protocol::{
     INFO_PROTOCOL, InfoProtocolError, InfoRequest, InfoResponse, read_info_request,
@@ -260,6 +260,18 @@ pub enum PeerLivenessEvent {
     HeartbeatStreamClosed {
         /// The peer-id of the peer.
         peer_id: PeerId,
+    },
+    /// Flushing one outbound heartbeat to `peer_id` took at least
+    /// [`HEARTBEAT_WRITE_STALL_WARN`]. Diagnostic only — the local
+    /// peer's outbound liveness is at risk (the remote may declare us
+    /// `Lost`), typically because the shared transport is congested and
+    /// starving the heartbeat substream's flush. Owners log this; it
+    /// drives no state change.
+    HeartbeatWriteStalled {
+        /// The peer-id the stalled write was addressed to.
+        peer_id: PeerId,
+        /// How long the single `write_heartbeat` flush took.
+        waited: Duration,
     },
 }
 
@@ -2605,7 +2617,20 @@ async fn run_heartbeat_pair(
                     echo: pending_echo.take(),
                     domain_clock: (heartbeat_timestamps.domain_clock)(),
                 };
-                if write_heartbeat(&mut writer, &hb).await.is_err() {
+                // Time the flush. A heartbeat write is normally instant;
+                // a slow one means the carrier is congested and our
+                // outbound liveness is at risk (the remote may declare us
+                // Lost). Surface it for field diagnosis — see #304.
+                let write_started = Instant::now();
+                let write_result = write_heartbeat(&mut writer, &hb).await;
+                let waited = write_started.elapsed();
+                if waited >= HEARTBEAT_WRITE_STALL_WARN {
+                    let _ = liveness_tx.try_send(PeerLivenessEvent::HeartbeatWriteStalled {
+                        peer_id: peer,
+                        waited,
+                    });
+                }
+                if write_result.is_err() {
                     break;
                 }
             }

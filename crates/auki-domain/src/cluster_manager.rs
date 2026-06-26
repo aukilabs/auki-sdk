@@ -103,6 +103,21 @@ use tokio::task::JoinHandle;
 /// consecutive misses' tolerance before the cluster is swept.
 pub const LIVENESS_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Grace period before a watched peer that has stopped sending heartbeats
+/// is declared `Lost` (evicted, and its Manager role contested).
+/// Deliberately far longer than the wire-level [`HEARTBEAT_TIMEOUT`]
+/// (1.5s): a sender whose async runtime is briefly CPU-starved — e.g. a
+/// robot under SLAM/camera/depth load — can stall its heartbeat *writes*
+/// for several seconds (up to ~9.6s observed in the field, #304) while
+/// staying fully alive. Evicting on the 1.5s wire timeout makes such a
+/// peer flap out of the cluster and trigger spurious elections. This grace
+/// gates the destructive reaction so only sustained absence — a genuinely
+/// dead or partitioned peer — causes eviction. The trade-off is that real
+/// peer death now takes up to this long to detect, consistent with the
+/// existing policy that transport closure alone is not semantic death (a
+/// reconnect or resumed heartbeat before the grace expires heals it).
+pub const PEER_LOSS_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Relay reservation request for a Manager-capable peer.
 ///
 /// `relay_dial_multiaddr` is the address this native peer can dial to
@@ -2715,6 +2730,24 @@ async fn handle_domain_peer_lost(
 /// join_ts_ns less than the local peer's own that's also reachable
 /// wins; if none such exists, the local peer wins.
 #[allow(clippy::too_many_arguments)]
+/// Watched peers whose last heartbeat is older than `loss_timeout` and
+/// that have not already been declared lost — i.e. those that have
+/// exhausted the [`PEER_LOSS_TIMEOUT`] grace and should now be evicted.
+/// Pure so the grace policy is unit-testable without the full handler.
+fn peers_past_loss_timeout(
+    last_heartbeat_at: &HashMap<PeerId, Instant>,
+    lost_already: &HashSet<PeerId>,
+    now: Instant,
+    loss_timeout: Duration,
+) -> Vec<PeerId> {
+    last_heartbeat_at
+        .iter()
+        .filter_map(|(pid, ts)| {
+            (now.duration_since(*ts) > loss_timeout && !lost_already.contains(pid)).then_some(*pid)
+        })
+        .collect()
+}
+
 fn spawn_liveness_handler(
     mut rx: mpsc::Receiver<PeerLivenessEvent>,
     cluster_name: String,
@@ -2808,21 +2841,18 @@ fn spawn_liveness_handler(
 
                 _ = tick.tick() => {
                     let now = Instant::now();
-                    let timed_out: Vec<PeerId> = last_heartbeat_at
-                        .iter()
-                        .filter_map(|(pid, ts)| {
-                            (now.duration_since(*ts) > HEARTBEAT_TIMEOUT
-                                && !lost_already.contains(pid))
-                                .then_some(*pid)
-                        })
-                        .collect();
+                    // #304: evict only after the PEER_LOSS_TIMEOUT grace, not the
+                    // 1.5s wire timeout — a CPU-starved-but-alive peer can stall
+                    // its heartbeat writes for seconds without being dead.
+                    let timed_out =
+                        peers_past_loss_timeout(&last_heartbeat_at, &lost_already, now, PEER_LOSS_TIMEOUT);
                     for peer_id in timed_out {
                         // #304 diagnosis: record how stale the peer was when we
                         // gave up, to correlate with its own HeartbeatWriteStalled.
                         if let Some(ts) = last_heartbeat_at.get(&peer_id) {
                             eprintln!(
                                 "auki-domain: cluster {cluster_name:?}: no heartbeat from \
-                                 {peer_id} for {:?} (> HEARTBEAT_TIMEOUT {HEARTBEAT_TIMEOUT:?}) \
+                                 {peer_id} for {:?} (> PEER_LOSS_TIMEOUT {PEER_LOSS_TIMEOUT:?}) \
                                  — declaring Lost",
                                 now.duration_since(*ts)
                             );
@@ -2847,7 +2877,7 @@ fn spawn_liveness_handler(
                         .await;
                         if outcome == LossOutcome::RetryLater {
                             // Re-arm: let the same peer time out again a full
-                            // HEARTBEAT_TIMEOUT from now and re-run the gate.
+                            // PEER_LOSS_TIMEOUT from now and re-run the gate.
                             lost_already.remove(&peer_id);
                             last_heartbeat_at.insert(peer_id, Instant::now());
                         }
@@ -3978,6 +4008,51 @@ fn now_unix_nanos() -> i64 {
 mod tests {
     use super::*;
     use auki_time::SessionClock;
+
+    // ─── #304 heartbeat grace (peers_past_loss_timeout) ──────────────────
+
+    #[test]
+    fn peer_within_loss_grace_is_not_evicted() {
+        let now = Instant::now();
+        let peer = auki_network::PeerIdentity::from_seed(&[91u8; 32]).peer_id();
+        let mut last = HashMap::new();
+        // Stalled 5s — past the 1.5s wire timeout but within the 15s grace.
+        last.insert(peer, now - Duration::from_secs(5));
+        let out = peers_past_loss_timeout(&last, &HashSet::new(), now, PEER_LOSS_TIMEOUT);
+        assert!(
+            out.is_empty(),
+            "a peer stalled 5s must be tolerated within grace, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn peer_past_loss_grace_is_evicted() {
+        let now = Instant::now();
+        let peer = auki_network::PeerIdentity::from_seed(&[92u8; 32]).peer_id();
+        let mut last = HashMap::new();
+        last.insert(peer, now - PEER_LOSS_TIMEOUT - Duration::from_secs(1));
+        let out = peers_past_loss_timeout(&last, &HashSet::new(), now, PEER_LOSS_TIMEOUT);
+        assert_eq!(
+            out,
+            vec![peer],
+            "a peer absent beyond the grace must be declared lost"
+        );
+    }
+
+    #[test]
+    fn already_lost_peer_is_not_re_evicted() {
+        let now = Instant::now();
+        let peer = auki_network::PeerIdentity::from_seed(&[93u8; 32]).peer_id();
+        let mut last = HashMap::new();
+        last.insert(peer, now - PEER_LOSS_TIMEOUT - Duration::from_secs(5));
+        let mut lost = HashSet::new();
+        lost.insert(peer);
+        let out = peers_past_loss_timeout(&last, &lost, now, PEER_LOSS_TIMEOUT);
+        assert!(
+            out.is_empty(),
+            "a peer already declared lost must not be re-evicted, got {out:?}"
+        );
+    }
 
     #[test]
     fn daemon_info_is_cheap_to_clone() {

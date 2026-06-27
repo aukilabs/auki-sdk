@@ -72,7 +72,7 @@ A consumer walks the transform path, looks up or interpolates each edge at time 
 
 ### What addresses it
 
-- [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — Frame Registry with `FrameDef` presets (`ros_body`, `ros_optical`, `opengl`, `unity`)
+- [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — Frame Registry with `FrameDef` presets (`ros_body`, `ros_optical`, `opengl`, `unity`) plus an optional 2D raster byte convention (`raster_top_left`, `raster_mirrored`, …)
 - [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests) — `PoseLogManifest`, `PoseSource`, `PoseWriterMode` (rigid / movable)
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `register_pose_log`, `PoseLogSpec`, `PoseLogHandle`
 - [`auki-geometry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-geometry) — `convert_pose_convention`, `convert_point_convention`, `convert_vector_convention`, `convert_direction_convention`

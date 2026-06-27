@@ -72,6 +72,49 @@ def test_convention_matrix_round_trips_to_identity() -> None:
                     assert abs(product[r][c] - identity4[r][c]) < 1e-9
 
 
+def test_raster_convention_matrix_round_trips_to_identity() -> None:
+    import auki_geometry
+    import auki_registry
+
+    source = auki_registry.frame_raster_top_left("test-peer", "top_left")
+    target = auki_registry.frame_raster_mirrored("test-peer", "mirrored")
+
+    def matmul3(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+        return [
+            [sum(a[r][k] * b[k][c] for k in range(3)) for c in range(3)]
+            for r in range(3)
+        ]
+
+    ab = auki_geometry.raster_convention_matrix(source, target, 100, 100)
+    ba = auki_geometry.raster_convention_matrix(target, source, 100, 100)
+    assert matmul3(ba, ab) == [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+
+
+def test_raster_pixels_are_properly_mirrored_horizontally() -> None:
+    import auki_geometry
+    import auki_registry
+
+    def matmulvec3(a: list[list[float]], b: list[float]) -> list[float]:
+        return [
+            sum(a[r][k] * b[k] for k in range(3))
+            for r in range(3)
+        ]
+
+    width = 100
+    height = 100
+    source = auki_registry.frame_raster_top_left("test-peer", "top_left")
+    target = auki_registry.frame_raster_mirrored("test-peer", "mirrored")
+    matrix = auki_geometry.raster_convention_matrix(source, target, width, height)
+    for pixel in range(width):
+        original = [pixel, 0.0, 1.0]
+        transformed = matmulvec3(matrix, original)
+        assert transformed == pytest.approx([width - pixel - 1, 0.0, 1.0])
+
+
 def test_convert_point_convention_applies_axes_and_units() -> None:
     import auki_geometry
     import auki_registry

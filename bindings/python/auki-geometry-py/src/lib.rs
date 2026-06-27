@@ -34,7 +34,7 @@ create_exception!(
     auki_geometry,
     GeometryError,
     pyo3::exceptions::PyValueError,
-    "Auki geometry validation errors — invalid axes, handedness mismatch, or zero-length quaternion."
+    "Auki geometry validation errors — invalid axes, handedness mismatch, zero-length orientation quaternion, missing raster frame, raster origin mismatch, or raster unit mismatch."
 );
 
 fn err_to_py(e: geometry::GeometryError) -> PyErr {
@@ -225,6 +225,20 @@ fn convention_matrix(
     matrix4_to_pylist(py, matrix)
 }
 
+#[pyfunction]
+fn raster_convention_matrix(
+    py: Python<'_>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+    width: u32,
+    height: u32,
+) -> PyResult<PyObject> {
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let matrix = map_err(geometry::raster_convention_matrix(&from, &to, width, height))?;
+    matrix3_to_pylist(py, matrix)
+}
+
 // ─── Convention conversions ─────────────────────────────────────────
 
 #[pyfunction]
@@ -340,6 +354,7 @@ fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(meters_per_unit, m)?)?;
     m.add_function(wrap_pyfunction!(axis_convention_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(convention_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(raster_convention_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(convert_point_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_vector_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_direction_convention, m)?)?;

@@ -382,6 +382,7 @@ mod tests {
                     intrinsics_model: "pinhole".to_string(),
                     distortion_model: "brown_conrady".to_string(),
                     frame: frame.clone(),
+                    raster_frame: None,
                 }),
             )
             .unwrap();

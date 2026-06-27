@@ -128,9 +128,13 @@ The [registry](README.md) of named clocks. `ClockRegistryEntry` records describe
 
 The third [registry](README.md) alongside Sensor + Clock. Holds [`FrameRegistryEntry`](crates/auki-registry/src/lib.rs) records — `{frame_id, handedness, axes, units}` — that declare the coordinate convention of a named frame. Lives at `<app_root>/registries/frames/<frame_id>/<hash>.json`, content-addressed by the entry's JCS hash like the other registries.
 
+In addition to spatial 3D conventions, each `FrameRegistryEntry` can optionally describe its raster byte convention via its optional `raster` field using the [`RasterConvention`](crates/auki-registry/src/lib.rs) struct.
+
 Tree structure (parent-child relations between frames) lives in the Pose Log: each Pose Log is keyed per `(from_frame_id, to_frame_id)` pair pinned in its manifest. The registry declares what each frame *is in isolation*; the Pose Log manifests declare the edges between them. Rotation representation is fixed at the [SpatialTransform](#spatialtransform) layer (Hamilton quaternion `(x, y, z, w)`); not per-frame.
 
 Four preset constructors cover the conventions for almost every real-world frame: `ros_body` (REP-103: right, x=forward y=left z=up, meters), `ros_optical` (REP-103 optical: right, x=right y=down z=forward, meters), `opengl` (right, x=right y=up z=backward, meters), `unity` (left, x=right y=up z=forward, meters). The on-disk JSON is fully spelled-out either way — presets are pure ergonomics.
+
+Four additional preset constructors for raster byte conventions are also provided, describing most real-world frames: `raster_top_left` (laptop webcam, most robot RGB cameras), `raster_mirrored` (Sentinel FaceTime feed), `raster_normalized` (detector input crop), `raster_normalized_mirrored` (detector input crop on a back camera).
 
 ## Coordinate convention
 

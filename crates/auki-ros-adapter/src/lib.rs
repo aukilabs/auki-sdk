@@ -159,6 +159,7 @@ pub fn build_camera_registry_entry(
             intrinsics_model: meta.intrinsics_model.clone(),
             distortion_model: info.distortion_model.clone(),
             frame: meta.frame.clone(),
+            raster_frame: None,
         }),
     }
 }

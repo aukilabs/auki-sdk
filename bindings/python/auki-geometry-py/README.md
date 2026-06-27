@@ -19,6 +19,7 @@ Categorical types (`FrameRegistryEntry`, `AxisConvention`, axis directions, leng
 - `meters_per_unit(unit)` — `"meters"` / `"centimeters"` / `"millimeters"` → float multiplier.
 - `axis_convention_matrix(from_axes, to_axes)` → 3×3 nested list.
 - `convention_matrix(from_entry, to_entry)` → 4×4 nested list (axis permutation + unit scale).
+- `raster_convention_matrix(from_entry, to_entry, width, height)` → 3x3 nested list.
 - `convert_point_convention(point, from_entry, to_entry)` → 3-list (axis + unit).
 - `convert_vector_convention(vector, from_entry, to_entry)` → 3-list (axis + unit).
 - `convert_direction_convention(direction, from_entry, to_entry)` → 3-list (axis only, no unit scale).
@@ -31,7 +32,7 @@ Categorical types (`FrameRegistryEntry`, `AxisConvention`, axis directions, leng
 
 ### Errors
 
-- `GeometryError` (subclass of `ValueError`) — raised for invalid axes, handedness mismatch, or zero-length orientation quaternion.
+- `GeometryError` (subclass of `ValueError`) — raised for invalid axes, handedness mismatch, zero-length orientation quaternion, missing raster frame, raster origin mismatch, or raster unit mismatch.
 - Plain `ValueError` — raised for array length mismatches, non-numeric elements, or malformed registry dicts.
 
 ## Depends on

@@ -6,7 +6,11 @@
 //! values.
 
 use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
-use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry, Handedness, LengthUnit};
+use auki_registry::{
+    AxisConvention, AxisDirection, FrameRegistryEntry, Handedness,
+    HorizontalDirection, LengthUnit, RasterConvention, RasterOrigin, RasterUnit,
+    VerticalDirection,
+};
 use std::{error, fmt};
 
 pub type Matrix3 = [[f64; 3]; 3];
@@ -23,6 +27,17 @@ pub enum GeometryError {
         axes_determinant: i8,
     },
     ZeroQuaternion,
+    RasterNotDeclared(String),
+    RasterOriginMismatch {
+        frame_id: String,
+        declared: RasterOrigin,
+        direction: (HorizontalDirection, VerticalDirection),
+    },
+    RasterUnitMismatch {
+        frame_id: String,
+        declared: RasterUnit,
+        found: RasterUnit,
+    },
 }
 
 impl fmt::Display for GeometryError {
@@ -38,6 +53,20 @@ impl fmt::Display for GeometryError {
                 "frame {frame_id:?} declares {declared:?} handedness but axes have determinant {axes_determinant}"
             ),
             GeometryError::ZeroQuaternion => write!(f, "orientation quaternion has zero length"),
+            GeometryError::RasterNotDeclared(frame_id) => write!(f, "frame {frame_id:?} does not declare a raster convention"),
+            GeometryError::RasterOriginMismatch {
+                frame_id,
+                declared,
+                direction: (u, v),
+            } => write!(
+                f,
+                "frame {frame_id:?} declares {declared:?} origin but u grows towards {u:?} and v grows towards {v:?}"
+            ),
+            GeometryError::RasterUnitMismatch {
+                frame_id,
+                declared,
+                found,
+            } => write!(f, "frame {frame_id:?} declares {declared:?} units but operates on another frame with {found:?} units"),
         }
     }
 }
@@ -98,6 +127,56 @@ pub fn convention_matrix(from: &FrameRegistryEntry, to: &FrameRegistryEntry) -> 
             0.0,
         ],
         [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+/// Compute the 2D affine transform that maps pixel coordinates from `from`'s
+/// raster convention into `to`'s raster convention.
+///
+/// Returns a 3×3 homogeneous matrix operating on `[u, v, 1]^T`. Errors if
+/// either frame's `raster` field is `None`, if the unit kinds differ
+/// (e.g. pixels vs. normalized — those need width/height to be commensurable).
+pub fn raster_convention_matrix(
+    from: &FrameRegistryEntry,
+    to: &FrameRegistryEntry,
+    width: u32,
+    height: u32,
+) -> Result<Matrix3> {
+    let from_raster = validate_and_extract_raster(from)?;
+    let to_raster = validate_and_extract_raster(to)?;
+
+    if from_raster.units != to_raster.units {
+        return Err(GeometryError::RasterUnitMismatch {
+            frame_id: from.frame_id.clone(),
+            declared: from_raster.units,
+            found: to_raster.units,
+        });
+    }
+
+    let (b_u, t_u) = if from_raster.u == to_raster.u {
+        (1.0, 0.0)
+    } else {
+        let u_extent = match from_raster.units {
+            RasterUnit::Pixels => f64::from(width) - 1.0,
+            RasterUnit::Normalized => 1.0,
+        };
+        (-1.0, u_extent)
+    };
+
+    let (b_v, t_v) = if from_raster.v == to_raster.v {
+        (1.0, 0.0)
+    } else {
+        let v_extent = match from_raster.units {
+            RasterUnit::Pixels => f64::from(height) - 1.0,
+            RasterUnit::Normalized => 1.0,
+        };
+        (-1.0, v_extent)
+    };
+
+    Ok([
+        [b_u, 0.0, t_u],
+        [0.0, b_v, t_v],
+        [0.0, 0.0, 1.0],
     ])
 }
 
@@ -315,6 +394,28 @@ fn validate_frame(entry: &FrameRegistryEntry) -> Result<()> {
     Ok(())
 }
 
+fn validate_and_extract_raster(entry: &FrameRegistryEntry) -> Result<&RasterConvention> {
+    let Some(raster) = &entry.raster else {
+        return Err(GeometryError::RasterNotDeclared(entry.frame_id.clone()));
+    };
+
+    if !matches!(
+        (raster.origin, raster.u, raster.v),
+        (RasterOrigin::TopLeft, HorizontalDirection::Right, VerticalDirection::Down) |
+            (RasterOrigin::TopRight, HorizontalDirection::Left, VerticalDirection::Down) |
+            (RasterOrigin::BottomLeft, HorizontalDirection::Right, VerticalDirection::Up) |
+            (RasterOrigin::BottomRight, HorizontalDirection::Left, VerticalDirection::Up)
+    ) {
+        return Err(GeometryError::RasterOriginMismatch {
+            frame_id: entry.frame_id.clone(),
+            declared: raster.origin,
+            direction: (raster.u, raster.v),
+        });
+    }
+
+    Ok(raster)
+}
+
 fn validate_axes(axes: &AxisConvention) -> Result<()> {
     let entry = FrameRegistryEntry {
         peer_id: String::new(),
@@ -326,6 +427,7 @@ fn validate_axes(axes: &AxisConvention) -> Result<()> {
         },
         axes: *axes,
         units: LengthUnit::Meters,
+        raster: None,
     };
     entry
         .validate()
@@ -656,6 +758,7 @@ mod tests {
             handedness: Handedness::Right,
             axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
+            raster: None,
         };
         let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_point_convention(
@@ -686,6 +789,7 @@ mod tests {
             handedness: Handedness::Right,
             axes: FrameRegistryEntry::ros_optical("", "source").axes,
             units: LengthUnit::Centimeters,
+            raster: None,
         };
         let to = FrameRegistryEntry::opengl("", "target");
         let converted = convert_direction_convention(
@@ -736,9 +840,86 @@ mod tests {
             handedness: Handedness::Right,
             axes: FrameRegistryEntry::unity("", "unity").axes,
             units: LengthUnit::Meters,
+            raster: None,
         };
         let err = convention_matrix(&bad, &FrameRegistryEntry::opengl("", "world")).unwrap_err();
         assert!(matches!(err, GeometryError::HandednessMismatch { .. }));
+    }
+
+    #[test]
+    fn raster_convention_matrix_round_trips_to_identity() {
+        let from = FrameRegistryEntry::raster_top_left("", "top_left");
+        let to = FrameRegistryEntry::raster_mirrored("", "mirrored");
+        let ab = raster_convention_matrix(&from, &to, 100, 100).unwrap();
+        let ba = raster_convention_matrix(&to, &from, 100, 100).unwrap();
+        assert_matrix3_close(
+            mul3(ba, ab),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        );
+
+        let from = FrameRegistryEntry::raster_normalized("", "normalized");
+        let to = FrameRegistryEntry::raster_normalized_mirrored("", "normalized_mirrored");
+        let ab = raster_convention_matrix(&from, &to, 100, 100).unwrap();
+        let ba = raster_convention_matrix(&to, &from, 100, 100).unwrap();
+        assert_matrix3_close(
+            mul3(ba, ab),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        );
+    }
+
+    #[test]
+    fn mssing_raster_frame_is_rejected() {
+        let from = FrameRegistryEntry::ros_optical("", "source");
+        let to = FrameRegistryEntry::raster_top_left("", "target");
+        let err = raster_convention_matrix(&from, &to, 100, 100).unwrap_err();
+        assert!(matches!(err, GeometryError::RasterNotDeclared { .. }));
+
+        let from = FrameRegistryEntry::raster_top_left("", "source");
+        let to = FrameRegistryEntry::ros_optical("", "target");
+        let err = raster_convention_matrix(&from, &to, 100, 100).unwrap_err();
+        assert!(matches!(err, GeometryError::RasterNotDeclared { .. }));
+    }
+
+    #[test]
+    fn raster_origin_mismatch_is_rejected() {
+        let from = FrameRegistryEntry {
+            raster: Some(RasterConvention {
+                origin: RasterOrigin::TopRight,
+                u: HorizontalDirection::Right,
+                v: VerticalDirection::Down,
+                units: RasterUnit::Pixels,
+            }),
+            ..FrameRegistryEntry::ros_optical("", "top_left_mismatch")
+        };
+        let to = FrameRegistryEntry::raster_mirrored("", "normalized");
+        let err = raster_convention_matrix(&from, &to, 100, 100).unwrap_err();
+        assert!(matches!(err, GeometryError::RasterOriginMismatch { .. }));
+    }
+
+    #[test]
+    fn raster_unit_mismatch_is_rejected() {
+        let from = FrameRegistryEntry::raster_top_left("", "top_left");
+        let to = FrameRegistryEntry::raster_normalized("", "normalized");
+        let err = raster_convention_matrix(&from, &to, 100, 100).unwrap_err();
+        assert!(matches!(err, GeometryError::RasterUnitMismatch { .. }));
+    }
+
+    #[test]
+    fn raster_pixels_are_properly_mirrored_horizontally() {
+        let height = 100;
+        let width = 100;
+        let from = FrameRegistryEntry::raster_top_left("", "top_left");
+        let to = FrameRegistryEntry::raster_mirrored("", "mirrored");
+        let matrix = raster_convention_matrix(&from, &to, width, height).unwrap();
+
+        for pixel in 0..width {
+            let original = Vec3 { x: pixel as f64, y: 0.0, z: 1.0 };
+            let transformed = apply_matrix(matrix, original);
+            assert_vec3_close(
+                transformed,
+                Vec3 { x: (width - pixel - 1) as f64, y: 0.0, z: 1.0 },
+            );
+        }
     }
 
     #[test]

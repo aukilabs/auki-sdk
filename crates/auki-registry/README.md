@@ -10,7 +10,7 @@ The crate's scope is identity catalogs only — log payload types live in [`auki
 
 - `SensorRegistryEntry` (`peer_id`, `sensor_id`, body) + `SensorBody` (`Camera` / `Rangefinder` / `Rf` / `Audio` / `JointEncoders`). Every body has an open-string `type` field (e.g. `"rgb"`, `"point_cloud"`, `"pcm"`) and carries a `frame: RegistryRef` reference. `PointCloud` was renamed to `Rangefinder`; `point_cloud` is now a `sensor.type` value under that variant.
 - `ClockRegistryEntry` (`peer_id`, `clock_id`, body)
-- `FrameRegistryEntry` (`peer_id`, `frame_id`, convention fields) + preset constructors `FrameRegistryEntry::ros_body(peer_id, frame_id)`, `ros_optical(...)`, `opengl(...)`, `unity(...)` — all take `peer_id` as the first parameter.
+- `FrameRegistryEntry` (`peer_id`, `frame_id`, convention fields) + preset constructors `FrameRegistryEntry::ros_body(peer_id, frame_id)`, `ros_optical(...)`, `opengl(...)`, `unity(...)`, `raster_top_left(...)`, `raster_mirrored(...)`, `raster_normalized(...)`, `raster_normalized_mirrored(...)` — all take `peer_id` as the first parameter. `FrameRegistryEntry` now also has an optional `raster` field that represents the raster convention for the frame, which contain `origin`, `u`, `v` and `units` as its fields.
 - `DetectorRegistryEntry` (`peer_id`, `detector_id`, body, `output_types`)
 - `RegistryRef { peer_id, id, hash }` — shared reference type replacing per-field `(sensor_id, sensor_hash)` pairs in manifests and sensor bodies.
 - `LogRef { source_peer_id, resource_id }` — reference type for identifying logs by identity tuple (not a single content hash).

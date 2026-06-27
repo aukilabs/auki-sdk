@@ -112,7 +112,7 @@ A content-addressed catalog of long-lived entities. Four registries exist in the
 
 - **Sensor Registry** — what a sensor *is* (intrinsics, format, frame_rate)
 - **Clock Registry** — what a clock *is* (unit, monotonicity, scope, epoch)
-- **Frame Registry** — what a frame *is* (handedness, axes, units)
+- **Frame Registry** — what a frame *is* (handedness, axes, units; optionally a 2D raster byte convention)
 - **Detector Registry** — what a detector *is* (model, output types)
 
 Each entry is keyed by `(peer_id, id, hash)` — the hash is XXH3-128 over the entry's JCS-canonical JSON. The hash *is* the version; refining an entry produces a new sibling row under the same id.
@@ -132,6 +132,8 @@ Each entry is keyed by `(peer_id, id, hash)` — the hash is XXH3-128 over the e
 A coordinate system — a node in the SDK's transform graph. A frame's **convention** (handedness, what each axis points toward, length unit) is declared explicitly in the Frame Registry; the SDK never assumes a canonical frame.
 
 Four presets cover most cases: `FrameDef::ros_body()` (REP-103 body: x=forward, y=left, z=up, right-handed, meters), `FrameDef::ros_optical()` (REP-103 optical: x=right, y=down, z=forward, right-handed, meters), `FrameDef::opengl()` (x=right, y=up, z=back, right-handed, meters), `FrameDef::unity()` (x=right, y=up, z=forward, left-handed, meters). Custom conventions are spelled out in full in the registry entry.
+
+Beyond the 3D spatial convention, a `FrameRegistryEntry` can optionally declare a **2D raster byte convention** via an `raster` block — `origin` (which corner), `u`/`v` axis directions, and `units` (`pixels` / `normalized`). This describes how a published image / video / depth raster is laid out in memory, letting a consumer convert between producers' byte conventions (e.g. a mirrored front-camera feed). Preset raster conventions — `raster_top_left`, `raster_mirrored`, `raster_normalized`, `raster_normalized_mirrored` — cover the common cases; `auki-geometry::raster_convention_matrix` computes the conversion between two of them.
 
 **In code:** `auki_registry::FrameRegistryEntry`, `auki_session::FrameDef`. Registered via `Session::register_frame(frame_id, FrameDef)` → `RegistryRef`.
 

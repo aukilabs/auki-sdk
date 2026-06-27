@@ -34,6 +34,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),
                 frame: frame.clone(),
+                raster_frame: None,
             }),
         )
         .unwrap();

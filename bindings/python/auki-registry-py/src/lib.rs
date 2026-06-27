@@ -206,6 +206,26 @@ fn frame_unity(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObje
 }
 
 #[pyfunction]
+fn frame_raster_top_left(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::raster_top_left(peer_id, frame_id))
+}
+
+#[pyfunction]
+fn frame_raster_mirrored(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::raster_mirrored(peer_id, frame_id))
+}
+
+#[pyfunction]
+fn frame_raster_normalized(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::raster_normalized(peer_id, frame_id))
+}
+
+#[pyfunction]
+fn frame_raster_normalized_mirrored(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObject> {
+    struct_to_pyobject(py, &registry::FrameRegistryEntry::raster_normalized_mirrored(peer_id, frame_id))
+}
+
+#[pyfunction]
 #[pyo3(signature = (*, peer_id, frame_id, handedness, x, y, z, units))]
 fn frame_entry(
     py: Python<'_>,
@@ -227,6 +247,7 @@ fn frame_entry(
             z: parse_string_enum("z", z)?,
         },
         units: parse_string_enum("units", units)?,
+        raster: None,
     };
     struct_to_pyobject(py, &entry)
 }
@@ -282,6 +303,7 @@ fn camera_sensor_entry(
             intrinsics_model: intrinsics_model.to_string(),
             distortion_model: distortion_model.to_string(),
             frame: frame_ref,
+            raster_frame: None,
         }),
     };
     struct_to_pyobject(py, &entry)
@@ -589,6 +611,10 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(frame_opengl, m)?)?;
     m.add_function(wrap_pyfunction!(frame_unity, m)?)?;
     m.add_function(wrap_pyfunction!(frame_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(frame_raster_top_left, m)?)?;
+    m.add_function(wrap_pyfunction!(frame_raster_mirrored, m)?)?;
+    m.add_function(wrap_pyfunction!(frame_raster_normalized, m)?)?;
+    m.add_function(wrap_pyfunction!(frame_raster_normalized_mirrored, m)?)?;
     m.add_function(wrap_pyfunction!(point_field, m)?)?;
     m.add_function(wrap_pyfunction!(camera_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(rangefinder_sensor_entry, m)?)?;

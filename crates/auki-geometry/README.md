@@ -10,7 +10,7 @@ No registry IO, no log IO, no networking; just math.
 
 - `convert_pose_convention(pose, from, to)` — translate a `SpatialTransform` between frames whose only difference is convention.
 - `convert_point_convention(...)`, `convert_vector_convention(...)`, `convert_direction_convention(...)` — the three companion conversions for points, length-bearing vectors, and unitless directions.
-- `axis_convention_matrix(...)`, `convention_matrix(...)`, `meters_per_unit(...)` — the underlying primitives.
+- `axis_convention_matrix(...)`, `convention_matrix(...)`, `raster_convention_matrix(...)`, `meters_per_unit(...)` — the underlying primitives.
 
 ## Depends on
 

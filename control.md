@@ -252,6 +252,14 @@ the consumer starts or refreshes a local deadman deadline from the intent's
 declared validity duration. If the deadline passes, the consumer applies its
 safe transition even if the producer has not consumed an outcome.
 
+A delayed same-epoch entry must not restart motion after that transition. A
+safety-sensitive profile therefore declares a post-deadman re-arm rule. The
+locomotion profile should invalidate the actuation epoch, return to
+non-actuating pre-session mode, and reattach at the producer's current live head
+without backfill. Motion then requires a new `open_session` exchange and an
+accepted zero-velocity arming intent under the new epoch. Buffered entries from
+the old epoch remain inert.
+
 Issue timestamps may be included for diagnostics, but are not a safety clock by
 themselves. Absolute expiry or scheduled execution uses Auki's named-clock
 model: the timestamp identifies its `clock_id` and `clock_hash`, conversion
@@ -393,10 +401,13 @@ rejected
 Longer-running instructions may also report `executing`, `completed`, or `failed`. The event identifies the producer peer and Resource, session epoch, command ID, and sequence number of the intent it answers.
 
 For high-rate continuous intents, the consumer may publish cumulative
-`processed_through_sequence` and `latest_accepted_sequence` watermarks at a
-bounded rate instead of one durable event per refresh. Rejections, lease loss,
-and safety transitions remain prompt. Producer outcome consumption never paces
-the consumer's deadman or actuation loop.
+outcomes at a bounded rate instead of one durable event per refresh.
+`processed_through_sequence` is the inclusive highest sequence the consumer has
+processed regardless of disposition. `latest_accepted_sequence` is only the
+highest accepted sequence; it does not imply that every intervening sequence
+was accepted. Rejections identify their exact sequence, while lease loss and
+safety transitions remain prompt. Producer outcome consumption never paces the
+consumer's deadman or actuation loop.
 
 A control producer should follow the consumer's current authenticated live outcome Resource. Profiles that depend on timely acceptance, rejection, or progress may make outcome consumption a requirement rather than a recommendation. Other authorized peers may consume the same Resource or its materialized copies for diagnostics.
 
@@ -412,6 +423,7 @@ The outcome Resource should provide structured rejection reasons, for example:
 unauthorized
 lease_held
 expired
+stale_epoch
 estop_active
 not_working_mode
 inhibited
@@ -433,7 +445,12 @@ Different effectors need different policies:
 
 The control consumer may be paired with more than one producer Resource. Its advertised arbitration policy determines which live producer epochs are currently actionable and how their intentions combine. Under an exclusive policy, intents from other paired producers receive a structured rejection such as `lease_held`; their presence in a valid live log does not bypass arbitration.
 
-The arbitration policy also determines whether the consumer follows every paired live producer and rejects non-selected intents, or follows only producers with currently actionable epochs. The controller must not infer arbitration from Resource type.
+The consumer follows every paired producer's current authenticated live head so
+that any producer can request a session. A producer without an actionable epoch
+is followed in lifecycle-only, non-actuating mode. Arbitration determines which
+established epochs may actuate and whether non-selected actuation intents are
+rejected or ignored; it never prevents session lifecycle entries from reaching
+the consumer. The controller must not infer arbitration from Resource type.
 
 Disconnect behavior must also be explicit:
 
@@ -527,7 +544,8 @@ The intended separation is:
 
 - The Resource catalog is the single discovery surface for typed network capabilities.
 - A control-producer Resource is the live intent log and sole command-delivery path.
-- A paired control consumer follows only the producer's current authenticated live origin under an active session epoch.
+- A paired control consumer actuates only from the producer's current
+  authenticated live origin under an active session epoch.
 - Before an epoch exists, a paired consumer follows in non-actuating pre-session
   mode and accepts only session lifecycle entries.
 - `open_session` is epoch-less; `session_opened` returns the consumer-minted

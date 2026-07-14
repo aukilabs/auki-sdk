@@ -376,6 +376,9 @@ responsive and stops safely when input or connectivity is lost.
 10. Before enabling keyboard input, the application appends an expiring
     zero-velocity intent. It enables driving only after consuming the
     correlated `accepted` outcome and confirming measured velocity remains zero.
+    While the driving surface stays armed, its control loop continues refreshing
+    the complete target at the declared cadence, including when that target is
+    zero.
 
 For the remainder of this story, every velocity append uses that authenticated
 live origin and carries the active epoch, command ID, sequence, and validity
@@ -411,10 +414,12 @@ duration unless a step explicitly says otherwise.
 22. The pose Resource reports the robot's changing position.
 23. While Up remains pressed, the application periodically appends fresh
     velocity intents with increasing sequence numbers and renewed validity
-    durations. For processed refreshes, the consumer publishes cumulative
-    `processed_through_sequence` and `latest_accepted_sequence` watermarks at a
-    bounded rate. Rejections remain immediate and cause the application to
-    clear its pressed-key state and stop issuing nonzero targets.
+    durations. For processed refreshes, the consumer publishes
+    `processed_through_sequence` as an inclusive cumulative watermark and
+    `latest_accepted_sequence` as the highest accepted sequence at a bounded
+    rate. The latter does not imply that intervening sequences were accepted.
+    Rejections remain immediate and cause the application to clear its
+    pressed-key state and stop issuing nonzero targets.
 24. The robot requires fresh accepted intents to continue motion. Its local
     deadman cadence never waits for the application to consume outcomes.
 
@@ -430,8 +435,8 @@ duration unless a step explicitly says otherwise.
     ```
 
 28. The consumer accepts the fresh intent under the same epoch and lease and
-    advances the next cumulative processing and acceptance watermarks past its
-    sequence.
+    sets both `processed_through_sequence` and `latest_accepted_sequence` to
+    that sequence.
 29. The base controller follows a forward-left arc.
 30. Measured velocity and pose Resources show the resulting motion.
 31. The application renders those measurements separately from its keyboard
@@ -443,13 +448,14 @@ duration unless a step explicitly says otherwise.
 33. The local key state becomes `Up = released, Left = pressed`.
 34. The application immediately appends a fresh target with zero forward
     velocity and nonzero yaw velocity.
-35. The consumer accepts the target, advances its cumulative processing and
-    acceptance watermarks, and transitions to turning in place if permitted by
-    the profile.
+35. The consumer accepts the target, advances
+    `processed_through_sequence` inclusively, sets
+    `latest_accepted_sequence` to that sequence, and transitions to turning in
+    place if permitted by the profile.
 36. The operator releases Left.
 37. The application immediately appends an explicit zero-velocity intent.
-38. The outcome Resource advances its cumulative processing and acceptance
-    watermarks.
+38. The outcome Resource advances `processed_through_sequence` inclusively and
+    sets `latest_accepted_sequence` to the zero target's sequence.
 39. The base controller decelerates according to local safety limits.
 40. The measured-velocity Resource reaches zero.
 41. The application displays stopped only when measured feedback confirms it.
@@ -463,14 +469,16 @@ duration unless a step explicitly says otherwise.
 46. The robot does not rely on receiving that final entry.
 47. If the zero intent is lost, the consumer-local deadline for the last
     accepted movement intent passes because no refresh arrives.
-48. The consumer applies its deadman policy and commands a safe stop.
-49. If an intent fails the profile's freshness check, the outcome is `rejected`
-    with `expired`.
-    Lease loss and deadman activation are exposed through the consumer's
-    declared outcome or status semantics.
+48. The consumer applies its deadman policy, commands a safe stop, invalidates
+    the actuation epoch, and returns to non-actuating pre-session mode.
+49. Any delayed or buffered intent from the invalidated epoch is `rejected`
+    with `stale_epoch`; receiving one cannot restart motion. Lease loss and
+    deadman activation are exposed through the consumer's declared outcome or
+    status semantics.
 50. The measured-velocity Resource confirms the stop.
 51. A network disconnect has the same safety shape: loss of the current live
-    producer stream prevents refresh and ends its liveness contribution.
+    producer stream prevents refresh, ends its liveness contribution, and
+    requires re-arming under a new epoch.
 
 ### Arbitration, rejection, and replay behavior
 
@@ -483,20 +491,24 @@ duration unless a step explicitly says otherwise.
 55. New movement intents receive a structured rejection such as `estop_active`.
 56. The reporting Resource for E-stop or operating mode independently reveals
     the local condition.
-57. On reconnect, the consumer follows only the producer's new current live
-    head under an accepted epoch.
-58. It never backfills missed velocity intentions for actuation.
-59. A sealed or materialized copy of the drive log can reconstruct what the
+57. On reconnect, the consumer reattaches to the producer's current live head in
+    non-actuating pre-session mode and never backfills missed velocity intents
+    for actuation.
+58. The application completes a new `open_session` exchange and obtains a new
+    epoch.
+59. It sends a fresh zero-velocity arming intent and waits for acceptance and
+    measured zero velocity before enabling keyboard input.
+60. A sealed or materialized copy of the drive log can reconstruct what the
     operator requested but can never move the robot.
-60. Previously processed command IDs and sequence numbers remain protected
+61. Previously processed command IDs and sequence numbers remain protected
     against replay across consumer restart.
 
 ### End state
 
 - The robot is stopped.
 - Motion occurred only while fresh, authorized velocity intentions arrived.
-- The outcome Resource records cumulative processing and acceptance watermarks
-  and prompt rejection or safety events.
+- The outcome Resource records an inclusive cumulative processing watermark,
+  the highest accepted sequence, and prompt rejection or safety events.
 - Velocity and pose Resources show what the robot physically did.
 
 ## Story 3: Play Robot-Local Audio Remotely
@@ -613,14 +625,17 @@ otherwise.
 28. While it is playing, they select `follow_up_chime` and press Play.
 29. The application appends another intent with a new command ID and sequence.
 30. The consumer applies its advertised arbitration policy.
-31. Under a queue policy, it records `accepted` for the intent.
+31. Under a queue policy, it durably persists the queued command and records
+    `accepted`. Queue persistence is not yet an execution reservation.
 32. The playback-status Resource reports that the second asset is queued while
     continuing to report the first asset as playing.
-33. After the first asset completes, the robot starts `follow_up_chime`.
-34. The outcome Resource records `executing` and later `completed` for the
-    second command.
-35. Under a replace policy, the consumer would instead stop the first asset
-    according to local rules before starting the second.
+33. After the first asset completes and immediately before actuator handoff, the
+    consumer durably records `execution_reserved` for `follow_up_chime`.
+34. The robot starts `follow_up_chime`, and the outcome Resource records
+    `executing` and later `completed` for the second command.
+35. Under a replace policy, the consumer would instead durably record
+    `execution_reserved` before stopping the first asset or starting the second.
+    Both effects are part of the reserved replacement command.
 36. Under a reject-while-busy policy, it would publish event `rejected` with an
     illustrative reason such as `busy`, without changing playback.
 
@@ -681,7 +696,8 @@ Across all three stories:
 6. The consumer enforces authorization, arbitration, replay protection, and
    local safety before actuation.
 7. Desired-state and discrete outcomes are correlated per intent; continuous
-   control may use cumulative acceptance watermarks.
+   control may use an inclusive cumulative processing watermark plus the
+   highest accepted sequence and exact rejection events.
 8. The producer should consume the current authenticated live outcome origin.
 9. Reporting Resources provide independent observed-state evidence; physical
    effects require appropriate physical sensing.

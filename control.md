@@ -38,7 +38,8 @@ Controlled peer / device
     |-- control consumer
     |   `-- follows paired live origin: ambient-controller
     |-- outcome Resource: behavior/ambient/outcomes
-    `-- reporting Resources: behavior-status, joint, and pose
+    |-- proposed status Resource: behavior/ambient/status
+    `-- existing feedback: joint encoders; pose derived by the UI
 ```
 
 The same pattern applies independently to locomotion, manipulation, speakers, displays, lights, and higher-level behaviors. Each may expose a control consumer with its own accepted profiles, arbitration policy, outcome Resource, and reporting Resources.
@@ -79,9 +80,14 @@ Advertising or reading a producer Resource does not prove authority to control a
 
 ### Control-consumer Resource
 
-A Resource owned by a controlled peer that identifies an executor of authorized intentions. It describes the semantic profiles it accepts, its arbitration and disconnect policies, the outcome Resource it publishes, and the reporting Resources that reveal physical effects.
+A Resource owned by a controlled peer that identifies an executor of authorized
+intentions. It describes the semantic profiles it accepts, its arbitration and
+disconnect policies, the outcome Resource it publishes, and related reporting
+Resources with their observed-state roles.
 
-The consumer follows the current live origin of a paired producer Resource. It never actuates from a historical, relayed, or materialized copy. A control consumer is also referred to as a control endpoint in this note.
+The consumer follows the current live origin of a paired producer Resource. It
+never actuates from a historical, materialized, or otherwise re-served copy. A
+control consumer is also referred to as a control endpoint in this note.
 
 ### Outcome Resource
 
@@ -91,7 +97,9 @@ An outcome Resource reports the consumer's protocol and execution decisions, not
 
 ### Controller
 
-An SDK peer that owns a control-producer Resource, obtains a pairing grant for a compatible control-consumer Resource, and consumes the consumer's outcome and measured-state Resources.
+An SDK peer that owns a control-producer Resource, obtains a pairing grant for a
+compatible control-consumer Resource, and consumes the consumer's outcome and
+observed-state Resources.
 
 ### Pairing grant
 
@@ -104,6 +112,10 @@ A live, paired following relationship between a control-producer Resource and a 
 A control session is an authorization, arbitration, epoch, and liveness boundary. It is not an alternative command transport outside the Resource streams.
 
 The control-session epoch is distinct from the SDK recording Session and its Session ID.
+
+Before a control session exists, a paired consumer follows the producer's live
+head in a non-actuating pre-session mode. This is how session lifecycle entries
+reach the consumer without granting actuator authority.
 
 ### Control lease
 
@@ -134,9 +146,37 @@ Resource
     `-- outcome Resource: consumer decision log
 ```
 
-The Resource catalog remains the single discovery surface, and Resource streams carry both intentions and outcomes. The consumer opens and follows the paired producer's intent log. The producer opens and should follow the outcome Resource referenced by the consumer from its current authenticated origin. Reporting Resources independently carry observations of physical state.
+The Resource catalog remains the single discovery surface, and Resource streams
+carry both intentions and outcomes. The consumer opens and follows the paired
+producer's intent log. The producer opens and should follow the outcome Resource
+referenced by the consumer from its current authenticated origin. Reporting
+Resources independently carry observations of controlled-system state.
 
 The intent and outcome logs are both transport and record. Diagnostics consume the same records used by the control loop; there is no optional mirror that can diverge from a separate direct command path.
+
+### Session bootstrap
+
+Pairing authorizes a consumer to follow a producer, but does not establish an
+actionable epoch. Session bootstrap uses the same intent and outcome logs:
+
+1. The paired consumer follows the producer's current authenticated live head
+   in non-actuating pre-session mode.
+2. The producer appends an epoch-less `open_session` lifecycle request with a
+   stable request ID, a monotonic pairing-scoped lifecycle sequence, requested
+   profile, and requested lease or arbitration terms.
+3. The consumer verifies the pairing grant, origin, requested scope, local
+   safety state, and arbitration availability.
+4. If accepted, the consumer mints an epoch and publishes a `session_opened`
+   outcome correlated to the request. The outcome includes the epoch, granted
+   lease terms, and validity.
+5. The producer consumes `session_opened` before appending any actuation intent
+   for that epoch.
+
+Pre-session mode recognizes session lifecycle entries but never actuates.
+Actuation intents without an accepted epoch are rejected with a structured
+reason such as `session_required`. Rejected session requests receive a
+correlated `rejected` outcome. The consumer retains enough lifecycle request
+state to reject duplicate or stale session requests.
 
 ### Live-origin actuation boundary
 
@@ -146,32 +186,76 @@ The existence of an intent entry in a log is not sufficient authority to actuate
 
 2) The entry arrives while following that producer Resource's current live origin directly from its authenticated owner.
 
-3) The entry belongs to the session epoch currently accepted by the consumer's arbitration policy.
+3) The actuation entry belongs to the session epoch currently accepted by the
+consumer's arbitration policy.
 
-4) Its command ID has not been processed, its sequence is strictly greater than the last accepted sequence in that epoch, and its expiry has not passed.
+4) Its command ID has not been processed, its sequence is strictly greater than
+the last accepted sequence in that epoch, and its class-specific freshness
+policy is satisfied.
 
 5) The requested operation and interface version are within the pairing grant.
 
-Historical reads and backfill are never eligible for actuation. Neither are entries read from sealed, relayed, cached, or materialized copies, even when those copies preserve the original `source_peer_id`. Such entries remain useful for diagnostics and audit.
+Historical reads and backfill are never eligible for actuation. Neither are
+entries read from sealed, cached, materialized, or otherwise re-served copies
+held by a peer other than the authenticated origin, even when those copies
+preserve the original `source_peer_id`. Such entries remain useful for
+diagnostics and audit.
 
-The live-origin rule separates availability from authority. Authorized diagnostic peers may read and materialize intent and outcome logs, but only the paired consumer following the authenticated origin under its active epoch may interpret new entries as actionable.
+The live-origin rule separates availability from authority. Authorized
+diagnostic peers may read and materialize intent and outcome logs, but only the
+paired consumer following the authenticated origin under its active epoch may
+interpret new entries as actionable. An end-to-end authenticated connection
+that traverses a libp2p circuit relay still comes from the origin; transport
+relay is not Resource re-serving.
 
-The producer should likewise consume outcomes from the consumer's current authenticated live origin when making current control decisions. Historical, backfilled, sealed, relayed, cached, or materialized outcomes remain valid diagnostic records, but do not establish the consumer's current control state.
+The producer should likewise consume outcomes from the consumer's current
+authenticated live origin when making current control decisions. Historical,
+backfilled, sealed, cached, materialized, or otherwise re-served outcomes
+remain valid diagnostic records, but do not establish the consumer's current
+control state.
 
 ### Epochs, ordering, and replay protection
 
-Every intent needs:
+Every actuation intent needs:
 
 - A stable command ID
 - A session epoch
 - A sequence number monotonic within that epoch
-- An issue time and explicit expiry
+- Freshness or scheduling semantics appropriate to its instruction class
 - An authenticated producer origin established by the live transport,
   per-entry authentication, or both
 
-The consumer must retain enough command and sequence state across reconnects and restarts to reject duplicates. Reopening a stream does not make earlier entries actionable, and a new epoch does not revive commands from an old one. The exact epoch-establishment and crash-consistency mechanisms remain protocol design questions.
+The consumer must retain enough command and sequence state across reconnects
+and restarts to reject duplicates. Reopening a stream does not make earlier
+entries actionable, and a new epoch does not revive commands from an old one.
+The exact lifecycle wire shapes and durable storage mechanisms remain protocol
+design questions.
+
+Desired-state entries should be idempotent. Continuous intents are expiring,
+latest-value inputs. Discrete commands use at-most-once delivery at the consumer
+boundary: before handing a command to the actuator, the consumer durably records
+`execution_reserved` or `committed_for_execution`.
+
+If the consumer restarts after that reservation but before recording a terminal
+outcome, it publishes `unknown_after_restart` and never retries the physical
+effect automatically. This avoids duplicate actuation but does not claim
+whether the effect occurred. Stronger guarantees require an idempotent actuator
+that participates using the same command ID.
 
 Loss of the live origin stream ends its liveness contribution immediately. Continuous intentions expire or transition according to the consumer's declared deadman and disconnect policy. Desired state may persist only when the consumer explicitly declares that behavior.
+
+### Timing and freshness
+
+Safety-sensitive continuous control uses consumer-local monotonic elapsed time,
+not direct comparison with a remote wall clock. On each accepted fresh intent,
+the consumer starts or refreshes a local deadman deadline from the intent's
+declared validity duration. If the deadline passes, the consumer applies its
+safe transition even if the producer has not consumed an outcome.
+
+Issue timestamps may be included for diagnostics, but are not a safety clock by
+themselves. Absolute expiry or scheduled execution uses Auki's named-clock
+model: the timestamp identifies its `clock_id` and `clock_hash`, conversion
+uncertainty remains explicit, and the profile declares late-arrival behavior.
 
 ### A control-producer Resource is not proof of authority
 
@@ -237,7 +321,13 @@ Conceptually, a consumer descriptor may need:
 - Timing, expiry, and scheduling support
 - Optional presentation metadata
 
-An outcome Resource descriptor should identify the consumer that publishes it, the control profiles it reports on, and the correlation model that links each outcome to a producer Resource, session epoch, and command ID. Whether one outcome Resource serves all paired producers or each relationship receives its own Resource remains open.
+An outcome Resource descriptor should identify the consumer that publishes it,
+the control profiles it reports on, and its correlation model. Actuation
+outcomes correlate to producer Resource, session epoch, command ID, and
+sequence. Pre-session lifecycle outcomes correlate to producer Resource,
+request ID, and lifecycle sequence; `session_opened` carries the newly minted
+epoch as result data. Whether one outcome Resource serves all paired producers
+or each relationship receives its own Resource remains open.
 
 Known semantic profiles should be preferred over an unstructured collection of arbitrary variables. Vendor-specific extensions should remain possible without weakening the common profiles.
 
@@ -250,6 +340,22 @@ The common intent-log model should generalize instruction lifecycle, not pretend
 Append an explicit target state, such as ambient enabled, display brightness, or speaker volume. Desired-state entries should be idempotent.
 
 For example, ambient control should expose `ambient.enabled = true | false`, not a `toggle` instruction. A toggle UI can render this property, but retries must not invert the state accidentally.
+
+Desired state is not effective activity. An ambient profile should report these
+separately:
+
+```text
+desired.enabled
+activity = idle | running | inhibited | faulted
+inhibition_reason
+resume_policy
+```
+
+An E-stop or other local safety gate may stop physical movement while
+`desired.enabled` remains true. Releasing the E-stop does not imply automatic
+restart under an explicit-resume policy. A fresh
+`desired.enabled = true` intent with a new command ID may reassert consent and
+resume the behavior without introducing a special-purpose resume operation.
 
 ### Discrete command
 
@@ -267,11 +373,15 @@ Tell a display or speaker to present content already addressable through an SDK 
 
 ### Scheduled instruction
 
-Request an effect at a named-clock time. This could coordinate displays, speakers, lights, and robot behavior against Auki's temporal model. Timing uncertainty and expiry must remain explicit.
+Request an effect at a named-clock time. This could coordinate displays,
+speakers, lights, and robot behavior against Auki's temporal model. The request
+identifies `clock_id`, `clock_hash`, timestamp, expiry, and late-arrival policy.
+Conversion uncertainty remains explicit.
 
 ## Outcomes Versus Observation
 
-For every processed intent, the control consumer publishes a correlated event to its outcome Resource, such as:
+For desired-state and discrete intents, the control consumer publishes a
+correlated event to its outcome Resource, such as:
 
 ```text
 received
@@ -282,10 +392,19 @@ rejected
 
 Longer-running instructions may also report `executing`, `completed`, or `failed`. The event identifies the producer peer and Resource, session epoch, command ID, and sequence number of the intent it answers.
 
+For high-rate continuous intents, the consumer may publish cumulative
+`processed_through_sequence` and `latest_accepted_sequence` watermarks at a
+bounded rate instead of one durable event per refresh. Rejections, lease loss,
+and safety transitions remain prompt. Producer outcome consumption never paces
+the consumer's deadman or actuation loop.
+
 A control producer should follow the consumer's current authenticated live outcome Resource. Profiles that depend on timely acceptance, rejection, or progress may make outcome consumption a requirement rather than a recommendation. Other authorized peers may consume the same Resource or its materialized copies for diagnostics.
 
-An outcome records what the consumer received and decided. `accepted` means the intent passed authorization, arbitration, validation, and current safety gates. Even `completed` is an executor claim, not proof of physical state. Measured
-evidence of what happened comes from the consumer's reporting Resources.
+An outcome records what the consumer received and decided. `accepted` means the
+intent passed authorization, arbitration, validation, and current safety gates.
+Even `completed` is an executor claim, not proof of physical state. Reporting
+Resources provide independent observed-state evidence; proof of a physical
+effect requires appropriate physical sensing.
 
 The outcome Resource should provide structured rejection reasons, for example:
 
@@ -340,8 +459,16 @@ accepts: ambient_control.v1
 desired state: ambient.enabled = true | false
 outcome Resource: behavior/ambient/outcomes
 authorization: producer-to-consumer pairing grant
-observation: behavior status plus existing joint and pose Resources
+proposed status: behavior/ambient/status
+existing observation: joint encoders; pose currently derived by the UI
 ```
+
+The current AmbientMovement runtime launches one bounded 30-300 second run and
+then returns to idle. The vertical slice proposes a supervisor above that
+runtime: while `desired.enabled` is true and no safety condition inhibits it,
+the supervisor continuously schedules bounded runs using the effective
+settings. `desired.enabled = false` stops scheduling and handles any current run
+according to the declared stop policy.
 
 The slice should prove:
 
@@ -351,13 +478,14 @@ The slice should prove:
 3. Default-deny access before pairing
 4. Relationship- and operation-scoped authorization after pairing
 5. The consumer following only the producer's current authenticated live origin
-6. A session epoch with command IDs, ordering, expiry, and replay protection
+6. A session epoch with command IDs, ordering, class-specific freshness, and
+   replay protection
 7. Idempotent desired-state entries
 8. Correlated acknowledgement and rejection through the outcome Resource
 9. The producer consuming the current live outcome origin while independently
    observing measured state
-10. Historical, backfilled, sealed, relayed, cached, and materialized intent and
-    outcome copies remaining diagnostic-only
+10. Historical, backfilled, sealed, cached, materialized, and otherwise
+    re-served intent and outcome copies remaining diagnostic-only
 11. Revocation and safe behavior after disconnect or epoch loss
 12. No direct command-delivery path alongside the intent log
 
@@ -375,14 +503,16 @@ It should not attempt generic locomotion or arm teleoperation yet.
 - How are control schemas content-addressed and version-negotiated?
 - What stability and lifecycle rules apply to producer Resource IDs?
 - Is an outcome Resource shared across a consumer's pairings or allocated per producer-consumer relationship?
-- How are session epochs established, acknowledged, rotated, and invalidated?
+- What exact wire shapes represent `open_session`, `session_opened`, epoch
+  rotation, and session closure?
 - How does reconnect avoid gaps between attaching to a live head and activating an epoch?
 - Which retention policies apply to intent and outcome logs?
 - Is authenticated origin provided by the direct peer connection, per-entry signatures, or both?
 - How are stream admission and diagnostic read scopes represented?
-- How does the catalog distinguish an origin stream eligible for actuation from a relayed or materialized diagnostic copy?
-- What command and sequence state must survive consumer restart, and how is it
-made crash-consistent with non-idempotent physical effects?
+- How does the catalog distinguish an origin stream eligible for actuation from
+  a materialized or otherwise re-served diagnostic copy?
+- What durable store and actuator integrations implement
+  `execution_reserved`, terminal outcomes, and `unknown_after_restart`?
 - Which arbitration policies belong in the first protocol revision?
 - How are controller priority and local autonomy represented?
 - How should control status and fault events appear as reporting Resources?
@@ -398,13 +528,22 @@ The intended separation is:
 - The Resource catalog is the single discovery surface for typed network capabilities.
 - A control-producer Resource is the live intent log and sole command-delivery path.
 - A paired control consumer follows only the producer's current authenticated live origin under an active session epoch.
-- Historical, sealed, relayed, cached, backfilled, and materialized intent entries never actuate.
+- Before an epoch exists, a paired consumer follows in non-actuating pre-session
+  mode and accepts only session lifecycle entries.
+- `open_session` is epoch-less; `session_opened` returns the consumer-minted
+  epoch, lease terms, and validity through the outcome Resource.
+- Historical, sealed, cached, backfilled, materialized, and otherwise re-served
+  intent entries never actuate.
 - The consumer's outcome Resource records what it received and decided; the producer should consume its current authenticated live origin.
-- Historical, backfilled, sealed, relayed, cached, and materialized outcome copies do not establish current control state.
-- Reporting Resources record measured state independently of intentions and outcomes.
+- Historical, backfilled, sealed, cached, materialized, and otherwise re-served
+  outcome copies do not establish current control state.
+- Reporting Resources record observed state independently of intentions and
+  outcomes; physical claims require appropriate sensing.
 - Pairing grants bind a specific producer Resource and peer identity to a specific consumer Resource, interface version, and operation scope.
 - Control sessions define epochs, arbitration, and liveness around the paired log-following relationship; they are not a second command transport.
-- Every intent is bound to an authenticated origin and carries a control-session
-  epoch, stable command ID, monotonic sequence, issue time, and expiry.
-  Consumers retain replay-protection state across reconnects and restarts.
+- Every actuation intent is bound to an authenticated origin and carries a
+  control-session epoch, stable command ID, monotonic sequence, and
+  class-specific freshness or scheduling semantics.
+- Discrete commands are reserved durably before actuation; ambiguous restarts
+  produce `unknown_after_restart` and never automatic physical retry.
 - The controlled device remains the final authority over limits and safety.

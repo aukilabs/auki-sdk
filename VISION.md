@@ -8,7 +8,7 @@ The on-device SDK for the Auki **real world web** — a collaborative spatial co
 
 ## What this SDK is for
 
-Each physical space — a warehouse, a hospital ward, a retail floor — gets a **Domain**: a unique tag applied to data, asserting that the data is *about* that space. Domains are to the real world what websites are to the internet — privately owned, independently operated, linked by a shared protocol. A Domain has one or more **scenegraphs** — structured representations of typed nodes (frames, sensors, clocks) connected by transform edges. The Domain Owner designates one as the canonical **Map**, served by default when a peer asks for "the map" without naming a scenegraph. See [Glossary.md](Glossary.md) for the full term list, including the distinction between Domain ID, Scenegraph ID, and Session ID.
+Each physical space — a warehouse, a hospital ward, a retail floor — gets a **Domain**: a unique tag applied to data, asserting that the data is *about* that space. Domains are to the real world what websites are to the internet — privately owned, independently operated, linked by a shared protocol. A Domain has one or more **scenegraphs** — structured representations of typed nodes (frames, sensors, clocks) connected by transform edges. The Domain Owner designates one as the canonical **Map**, served by default when a peer asks for "the map" without naming a scenegraph. See [GLOSSARY.md](GLOSSARY.md) for the full term list, including the distinction between Domain ID, Scenegraph ID, and Session ID.
 
 The Auki protocol is built around five questions any node — a phone, a robot, a cloud server, a browser tab — should be able to answer about any other node:
 
@@ -131,7 +131,7 @@ Files within an app:
 
 **A sensor log is one sensor stream.** Each `<sensor_log_id>/` directory is a complete `auki-logs` log (manifest + segments) for exactly one sensor. Multi-sensor capture means multiple parallel sensor logs sharing a session, not a multi-sensor log. Buffers, intent recordings, and time-bounded captures are all sensor logs — they differ only in their `retention_ns` (backward window kept on disk; `0` = no eviction) and `duration_ns` (forward auto-stop cap; `0` = run indefinitely). The sensor identity lives in the log's manifest (`sensor_id` + `sensor_hash`), not in the path. **A pose log is one ordered frame pair.** Each `<from_id>__<to_id>/` directory holds samples for exactly one `(from_frame_id, to_frame_id)` pair — same shape as TimeTransform Logs key per ordered clock pair. Multi-pair capture (a ROS `TFMessage`) fans into N parallel pose logs.
 
-The on-disk shape is pre-1.0 and changes accumulate by tag — see [`changelog.md`](changelog.md) for the per-tag history. Recent shape changes include Frame Registry entries, pose logs keyed per `(from, to)` frame pair, detection log paths keyed by `(detector_id, input_log_id)`, and protobuf-owned payload types in `auki-datatypes`.
+The on-disk shape is pre-1.0 and changes accumulate by tag — see the [wiki Release History](https://github.com/aukilabs/auki-sdk/wiki/Release-History) for the per-tag history. Recent shape changes include Frame Registry entries, pose logs keyed per `(from, to)` frame pair, detection log paths keyed by `(detector_id, input_log_id)`, and protobuf-owned payload types in `auki-datatypes`.
 
 ---
 
@@ -257,9 +257,9 @@ App code interacts with the SDK through `auki-session`'s `Peer` / `Session` pair
 
 ```toml
 [dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
-auki-domain   = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.57" }
+auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
+auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
+auki-domain   = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
 ```
 
 Construct a peer, declare a sensor, start a session, register a log, inspect what the SDK advertises:

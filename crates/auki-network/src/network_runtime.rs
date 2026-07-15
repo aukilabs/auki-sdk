@@ -49,6 +49,11 @@ use crate::join_protocol::{
 use crate::membership_protocol::{
     MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
 };
+use crate::message_protocol::{
+    MESSAGE_PROTOCOL, MessageChannelRegistration, MessageChannelRouter, MessageChannelSender,
+    MessageFrameMemoryBudget, OpenMessageChannelError, RegistrationError,
+    handle_inbound_substream as handle_inbound_message, open_message_channel,
+};
 use crate::registries_protocol::{
     REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
     read_registry_request, read_registry_response, write_registry_request, write_registry_response,
@@ -57,6 +62,15 @@ use crate::resources_protocol::{
     RESOURCES_PROTOCOL, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
     read_resources_request, read_resources_response, write_resources_request,
     write_resources_response,
+};
+use crate::resources_v3_protocol::{
+    RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL, ResourceEntry as ResourceEntryV3,
+    ResourceVariant as ResourceVariantV3, ResourcesProtocolError as ResourcesV3ProtocolError,
+    ResourcesRequest as ResourcesRequestV3, ResourcesResponse as ResourcesResponseV3,
+    read_resources_request as read_resources_request_v3,
+    read_resources_response as read_resources_response_v3,
+    write_resources_request as write_resources_request_v3,
+    write_resources_response as write_resources_response_v3,
 };
 #[cfg(test)]
 use crate::{
@@ -393,6 +407,28 @@ pub enum RequestResourcesError {
     Timeout(Duration),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RequestResourcesV3Error {
+    /// The remote peer does not implement Resource Catalog v0.3.
+    #[error("remote peer does not support Resource Catalog v0.3")]
+    UnsupportedProtocol,
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] ResourcesV3ProtocolError),
+    #[error("resources v3 request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+fn map_resources_v3_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV3Error {
+    match error {
+        libp2p_stream::OpenStreamError::UnsupportedProtocol(_) => {
+            RequestResourcesV3Error::UnsupportedProtocol
+        }
+        error => RequestResourcesV3Error::OpenStream(error),
+    }
+}
+
 /// Inbound `/auki/registries/0.0.1` event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
@@ -554,10 +590,132 @@ enum RuntimeCmd {
     },
 }
 
+enum PendingMessageDriverWork {
+    Command(RuntimeCmd),
+    Completion { peer_id: PeerId, task_id: u64 },
+}
+
+fn take_pending_runtime_shutdown(shutdown_rx: &mut oneshot::Receiver<()>) -> bool {
+    match shutdown_rx.try_recv() {
+        Ok(()) | Err(oneshot::error::TryRecvError::Closed) => true,
+        Err(oneshot::error::TryRecvError::Empty) => false,
+    }
+}
+
+fn take_pending_message_driver_work(
+    command_rx: &mut mpsc::Receiver<RuntimeCmd>,
+    message_task_done_rx: &mut mpsc::UnboundedReceiver<(PeerId, u64)>,
+) -> Option<PendingMessageDriverWork> {
+    if let Ok(command) = command_rx.try_recv() {
+        return Some(PendingMessageDriverWork::Command(command));
+    }
+    message_task_done_rx
+        .try_recv()
+        .ok()
+        .map(|(peer_id, task_id)| PendingMessageDriverWork::Completion { peer_id, task_id })
+}
+
 /// Per-peer dial scheduling state.
 struct PeerSchedule {
     next_dial_at: Option<Instant>,
     backoff: Duration,
+}
+
+const MAX_ACTIVE_MESSAGE_STREAMS: usize = 128;
+const MAX_ACTIVE_MESSAGE_STREAMS_PER_PEER: usize = 8;
+
+struct ActiveMessageTask {
+    revoke: watch::Sender<bool>,
+    handle: JoinHandle<()>,
+}
+
+#[derive(Default)]
+struct ActiveMessageTasks {
+    next_id: u64,
+    by_peer: HashMap<PeerId, HashMap<u64, ActiveMessageTask>>,
+}
+
+impl ActiveMessageTasks {
+    fn len(&self) -> usize {
+        self.by_peer.values().map(HashMap::len).sum()
+    }
+
+    fn has_capacity(&self, peer: PeerId) -> bool {
+        self.len() < MAX_ACTIVE_MESSAGE_STREAMS
+            && self.by_peer.get(&peer).map_or(0, HashMap::len) < MAX_ACTIVE_MESSAGE_STREAMS_PER_PEER
+    }
+
+    fn allocate_id(&mut self, peer: PeerId) -> Option<u64> {
+        if !self.has_capacity(peer) {
+            return None;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        Some(id)
+    }
+
+    fn track(
+        &mut self,
+        peer: PeerId,
+        id: u64,
+        revoke: watch::Sender<bool>,
+        handle: JoinHandle<()>,
+    ) {
+        self.by_peer
+            .entry(peer)
+            .or_default()
+            .insert(id, ActiveMessageTask { revoke, handle });
+    }
+
+    async fn complete(&mut self, peer: PeerId, id: u64) {
+        let Some(tasks) = self.by_peer.get_mut(&peer) else {
+            return;
+        };
+        let task = tasks.remove(&id);
+        if tasks.is_empty() {
+            self.by_peer.remove(&peer);
+        }
+        if let Some(task) = task {
+            let _ = task.handle.await;
+        }
+    }
+
+    async fn cancel_peer(&mut self, peer: PeerId) {
+        let Some(tasks) = self.by_peer.remove(&peer) else {
+            return;
+        };
+        for task in tasks.values() {
+            let _ = task.revoke.send(true);
+        }
+        for task in tasks.values() {
+            task.handle.abort();
+        }
+        for (_, task) in tasks {
+            let _ = task.handle.await;
+        }
+    }
+
+    async fn cancel_all(&mut self) {
+        let peers: Vec<PeerId> = self.by_peer.keys().copied().collect();
+        for peer in peers {
+            self.cancel_peer(peer).await;
+        }
+    }
+}
+
+impl Drop for ActiveMessageTasks {
+    fn drop(&mut self) {
+        for tasks in self.by_peer.values() {
+            for task in tasks.values() {
+                let _ = task.revoke.send(true);
+                task.handle.abort();
+            }
+        }
+    }
+}
+
+fn authorize_inbound_message_stream<S>(is_known_peer: bool, stream: S) -> Option<S> {
+    is_known_peer.then_some(stream)
 }
 
 /// Drives a libp2p swarm against the allow-list set, auto-dialing
@@ -606,6 +764,8 @@ pub struct NetworkRuntime {
     _lifeline_tx: watch::Sender<()>,
     /// Command channel from public methods to the driver task.
     command_tx: mpsc::Sender<RuntimeCmd>,
+    /// Receiver-owned live message channels registered on this peer.
+    message_router: MessageChannelRouter,
 }
 
 /// Cloneable handle to a [`NetworkRuntime`] for command-style
@@ -788,6 +948,7 @@ impl NetworkRuntime {
         let (resources_events_tx, resources_events_rx) = mpsc::channel::<ResourcesRequestEvent>(16);
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
+        let message_router = MessageChannelRouter::new(local_peer_id);
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -806,6 +967,7 @@ impl NetworkRuntime {
             resources_events_tx,
             registry_events_tx,
             diagnostic_events_tx,
+            message_router.clone(),
         ));
         Ok((
             Self {
@@ -817,6 +979,7 @@ impl NetworkRuntime {
                 inbound_shutdown_tx,
                 _lifeline_tx: lifeline_tx,
                 command_tx,
+                message_router,
             },
             join_events_rx,
             liveness_rx,
@@ -933,6 +1096,59 @@ impl NetworkRuntime {
             Ok(Ok(r)) => r,
         };
         Ok(response)
+    }
+
+    pub async fn request_resources_catalog_v3_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequestV3,
+    ) -> Result<ResourcesResponseV3, RequestResourcesV3Error> {
+        let mut control = self.stream_control.clone();
+        let open_fut = control.open_stream(peer_id, RESOURCES_V3_PROTOCOL.clone());
+        let mut substream = match tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(RequestResourcesV3Error::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(error)) => return Err(map_resources_v3_open_error(error)),
+            Ok(Ok(substream)) => substream,
+        };
+        write_resources_request_v3(&mut substream, &request)
+            .await
+            .map_err(RequestResourcesV3Error::Protocol)?;
+        tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            read_resources_response_v3(&mut substream),
+        )
+        .await
+        .map_err(|_| RequestResourcesV3Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+        .map_err(RequestResourcesV3Error::Protocol)
+    }
+
+    /// Atomically register a receiver-owned live message channel and its
+    /// Resource Catalog row. The row owner must be this runtime's peer id.
+    pub fn register_message_channel(
+        &self,
+        resource: crate::resources_v3_protocol::MessageChannelResource,
+        receiver_capacity: usize,
+    ) -> Result<MessageChannelRegistration, RegistrationError> {
+        self.message_router.register(resource, receiver_capacity)
+    }
+
+    /// Open one exact receiver-owned `/auki/message/0.1.0` channel.
+    /// The returned sender is live-only and never retries or replays.
+    pub async fn open_message_channel(
+        &self,
+        owner_peer_id: PeerId,
+        resource_id: impl Into<String>,
+        expected_clock: auki_registry::RegistryRef,
+    ) -> Result<MessageChannelSender, OpenMessageChannelError> {
+        open_message_channel(
+            self.stream_control.clone(),
+            owner_peer_id,
+            resource_id.into(),
+            expected_clock,
+            self.inbound_shutdown_tx.subscribe(),
+            self._lifeline_tx.subscribe(),
+        )
+        .await
     }
 
     /// Fetch one registry entry from a cluster peer over the
@@ -1064,6 +1280,7 @@ impl NetworkRuntime {
     }
 
     fn cleanup(&self) {
+        self.message_router.shutdown();
         if let Some(tx) = self
             .shutdown_tx
             .lock()
@@ -1117,6 +1334,7 @@ impl NetworkRuntime {
     /// `task` already taken and no-op. Safe to call from multiple
     /// threads concurrently.
     pub fn shutdown(&self) {
+        self.message_router.shutdown();
         let _ = self.inbound_shutdown_tx.send(true);
         if let Some(tx) = self
             .shutdown_tx
@@ -1765,6 +1983,7 @@ async fn run_task(
     resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
+    message_router: MessageChannelRouter,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -1865,6 +2084,13 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
+    let mut incoming_resources_v3: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(RESOURCES_V3_PROTOCOL.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
     // Register inbound `/auki/registries/0.0.1` substream acceptance.
     let registries_proto = REGISTRIES_PROTOCOL.clone();
     let mut incoming_registries: std::pin::Pin<
@@ -1884,18 +2110,93 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
+    let message_proto = StreamProtocol::try_from_owned(MESSAGE_PROTOCOL.to_owned())
+        .expect("MESSAGE_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_messages: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(message_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+    let (message_task_done_tx, mut message_task_done_rx) =
+        mpsc::unbounded_channel::<(PeerId, u64)>();
+    let mut active_message_tasks = ActiveMessageTasks::default();
+    let message_frame_memory = MessageFrameMemoryBudget::new();
+
     loop {
+        if take_pending_runtime_shutdown(&mut shutdown_rx) {
+            active_message_tasks.cancel_all().await;
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+            return;
+        }
+        if let Some(work) =
+            take_pending_message_driver_work(&mut command_rx, &mut message_task_done_rx)
+        {
+            match work {
+                PendingMessageDriverWork::Command(cmd) => {
+                    handle_command(
+                        cmd,
+                        local_peer_id,
+                        &mut swarm,
+                        &mut known_peers,
+                        &mut schedules,
+                        &connected,
+                        &inbound_control,
+                        &mut outbound_heartbeat_tasks,
+                        &mut inbound_heartbeat_tasks,
+                        &mut heartbeat_targets,
+                        &liveness_tx,
+                        &lifeline_rx,
+                        &heartbeat_timestamps,
+                        &mut active_message_tasks,
+                    )
+                    .await;
+                }
+                PendingMessageDriverWork::Completion { peer_id, task_id } => {
+                    active_message_tasks.complete(peer_id, task_id).await;
+                }
+            }
+            continue;
+        }
+
         tokio::select! {
             biased;
 
             _ = &mut shutdown_rx => {
+                active_message_tasks.cancel_all().await;
                 tokio::time::sleep(SHUTDOWN_GRACE).await;
                 return;
             }
 
+            cmd = command_rx.recv() => {
+                let Some(cmd) = cmd else { continue; };
+                handle_command(
+                    cmd,
+                    local_peer_id,
+                    &mut swarm,
+                    &mut known_peers,
+                    &mut schedules,
+                    &connected,
+                    &inbound_control,
+                    &mut outbound_heartbeat_tasks,
+                    &mut inbound_heartbeat_tasks,
+                    &mut heartbeat_targets,
+                    &liveness_tx,
+                    &lifeline_rx,
+                    &heartbeat_timestamps,
+                    &mut active_message_tasks,
+                ).await;
+            }
+
+            completed = message_task_done_rx.recv() => {
+                if let Some((peer, task_id)) = completed {
+                    active_message_tasks.complete(peer, task_id).await;
+                }
+            }
+
             event = swarm.next() => {
                 let Some(event) = event else { return; };
-                handle_event(
+                if let Some(disconnected_peer) = handle_event(
                     event,
                     local_peer_id,
                     &mut swarm,
@@ -1909,7 +2210,9 @@ async fn run_task(
                     &heartbeat_targets,
                     &liveness_tx,
                     &heartbeat_timestamps,
-                );
+                ) {
+                    active_message_tasks.cancel_peer(disconnected_peer).await;
+                }
             }
 
             inbound = incoming_streams.next() => {
@@ -2007,6 +2310,20 @@ async fn run_task(
                 tokio::spawn(handle_inbound_resources_substream(peer, substream, tx));
             }
 
+            resources = incoming_resources_v3.next() => {
+                let Some((peer, substream)) = resources else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                tokio::spawn(handle_inbound_resources_v3_substream(
+                    peer,
+                    substream,
+                    resources_events_tx.clone(),
+                    message_router.clone(),
+                ));
+            }
+
             registry = incoming_registries.next() => {
                 let Some((peer, substream)) = registry else { return; };
                 // Same cluster-trust gate. Non-cluster peers can't
@@ -2030,6 +2347,40 @@ async fn run_task(
                 tokio::spawn(handle_inbound_diagnostic_substream(peer, substream, tx));
             }
 
+            message = incoming_messages.next() => {
+                let Some((peer, substream)) = message else { return; };
+                // Authorization is complete before the open frame or any
+                // Message payload is read.
+                let Some(substream) = authorize_inbound_message_stream(
+                    known_peers.contains_key(&peer),
+                    substream,
+                ) else {
+                    continue;
+                };
+                let Some(task_id) = active_message_tasks.allocate_id(peer) else {
+                    drop(substream);
+                    continue;
+                };
+                let (revoke_tx, revoke_rx) = watch::channel(false);
+                let done_tx = message_task_done_tx.clone();
+                let router = message_router.clone();
+                let frame_memory = message_frame_memory.clone();
+                let task_shutdown = inbound_shutdown_rx.clone();
+                let task = tokio::spawn(async move {
+                    handle_inbound_message(
+                        peer,
+                        substream,
+                        router,
+                        frame_memory,
+                        task_shutdown,
+                        revoke_rx,
+                    )
+                    .await;
+                    let _ = done_tx.send((peer, task_id));
+                });
+                active_message_tasks.track(peer, task_id, revoke_tx, task);
+            }
+
             _ = tick.tick() => {
                 drive_pending_dials(&mut swarm, &known_peers, &mut schedules);
                 reconcile_heartbeat_tasks(
@@ -2045,24 +2396,6 @@ async fn run_task(
                 );
             }
 
-            cmd = command_rx.recv() => {
-                let Some(cmd) = cmd else { continue; };
-                handle_command(
-                    cmd,
-                    local_peer_id,
-                    &mut swarm,
-                    &mut known_peers,
-                    &mut schedules,
-                    &connected,
-                    &inbound_control,
-                    &mut outbound_heartbeat_tasks,
-                    &mut inbound_heartbeat_tasks,
-                    &mut heartbeat_targets,
-                    &liveness_tx,
-                    &lifeline_rx,
-                    &heartbeat_timestamps,
-                ).await;
-            }
         }
     }
 }
@@ -2082,7 +2415,7 @@ fn handle_event(
     heartbeat_targets: &HashSet<PeerId>,
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     heartbeat_timestamps: &HeartbeatTimestampSource,
-) {
+) -> Option<PeerId> {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             if known_peers.contains_key(&peer_id) {
@@ -2109,23 +2442,22 @@ fn handle_event(
                     heartbeat_timestamps,
                 );
             }
+            None
         }
-        SwarmEvent::ConnectionClosed { peer_id, .. } => {
-            connected
-                .lock()
-                .expect("connected set mutex poisoned")
-                .remove(&peer_id);
-            if let Some(task) = outbound_heartbeat_tasks.remove(&peer_id) {
-                task.abort();
-            }
-            if let Some(task) = inbound_heartbeat_tasks.remove(&peer_id) {
-                task.abort();
-            }
-            if known_peers.contains_key(&peer_id) {
-                let _ = liveness_tx.try_send(PeerLivenessEvent::Disconnected { peer_id });
-                schedule_retry(schedules, peer_id);
-            }
-        }
+        SwarmEvent::ConnectionClosed {
+            peer_id,
+            num_established,
+            ..
+        } => handle_connection_closed(
+            peer_id,
+            num_established,
+            known_peers,
+            schedules,
+            connected,
+            outbound_heartbeat_tasks,
+            inbound_heartbeat_tasks,
+            liveness_tx,
+        ),
         SwarmEvent::OutgoingConnectionError {
             peer_id: Some(peer_id),
             ..
@@ -2133,9 +2465,42 @@ fn handle_event(
             if known_peers.contains_key(&peer_id) {
                 schedule_retry(schedules, peer_id);
             }
+            None
         }
-        _ => {}
+        _ => None,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_connection_closed(
+    peer_id: PeerId,
+    num_established: u32,
+    known_peers: &HashMap<PeerId, Vec<Multiaddr>>,
+    schedules: &mut HashMap<PeerId, PeerSchedule>,
+    connected: &Arc<Mutex<HashSet<PeerId>>>,
+    outbound_heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
+    inbound_heartbeat_tasks: &mut HashMap<PeerId, JoinHandle<()>>,
+    liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
+) -> Option<PeerId> {
+    if num_established > 0 {
+        return None;
+    }
+
+    connected
+        .lock()
+        .expect("connected set mutex poisoned")
+        .remove(&peer_id);
+    if let Some(task) = outbound_heartbeat_tasks.remove(&peer_id) {
+        task.abort();
+    }
+    if let Some(task) = inbound_heartbeat_tasks.remove(&peer_id) {
+        task.abort();
+    }
+    if known_peers.contains_key(&peer_id) {
+        let _ = liveness_tx.try_send(PeerLivenessEvent::Disconnected { peer_id });
+        schedule_retry(schedules, peer_id);
+    }
+    Some(peer_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2153,9 +2518,21 @@ async fn handle_command(
     liveness_tx: &mpsc::Sender<PeerLivenessEvent>,
     lifeline_rx: &watch::Receiver<()>,
     heartbeat_timestamps: &HeartbeatTimestampSource,
+    active_message_tasks: &mut ActiveMessageTasks,
 ) {
     match cmd {
         RuntimeCmd::SetAllowedPeers { new_peers, ack } => {
+            let new_peer_ids: HashSet<PeerId> = new_peers.iter().map(|peer| peer.peer_id).collect();
+            let removed_peers: Vec<PeerId> = known_peers
+                .keys()
+                .copied()
+                .filter(|peer| !new_peer_ids.contains(peer))
+                .collect();
+            // Revoke and join active handlers before mutating the allow-list,
+            // disconnecting, or acknowledging the update.
+            for peer in removed_peers {
+                active_message_tasks.cancel_peer(peer).await;
+            }
             let report = apply_peer_update(swarm, known_peers, schedules, connected, new_peers);
             prune_inbound_heartbeat_tasks(known_peers, inbound_heartbeat_tasks);
             reconcile_heartbeat_tasks(
@@ -2830,6 +3207,76 @@ async fn handle_inbound_resources_substream(
     }
 }
 
+async fn handle_inbound_resources_v3_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
+    message_router: MessageChannelRouter,
+) {
+    let request = match read_resources_request_v3(&mut substream).await {
+        Ok(request) => request,
+        Err(_) => return,
+    };
+
+    let wants_v2 = request.variants.is_empty()
+        || request
+            .variants
+            .iter()
+            .any(|variant| *variant != ResourceVariantV3::MessageChannel);
+    let mut resources = if wants_v2 {
+        let variants = request
+            .variants
+            .iter()
+            .filter_map(|variant| match variant {
+                ResourceVariantV3::SensorLog => Some(crate::resources_protocol::Variant::SensorLog),
+                ResourceVariantV3::PoseLog => Some(crate::resources_protocol::Variant::PoseLog),
+                ResourceVariantV3::TimeTransformLog => {
+                    Some(crate::resources_protocol::Variant::TimeTransformLog)
+                }
+                ResourceVariantV3::DetectionLog => {
+                    Some(crate::resources_protocol::Variant::DetectionLog)
+                }
+                ResourceVariantV3::MessageChannel => None,
+            })
+            .collect();
+        let (ack, response) = oneshot::channel();
+        if resources_events_tx
+            .send(ResourcesRequestEvent {
+                peer,
+                request: ResourcesRequest { variants },
+                ack,
+            })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let response = match tokio::time::timeout(RESOURCES_RESPONSE_TIMEOUT, response).await {
+            Ok(Ok(response)) => response,
+            _ => return,
+        };
+        response
+            .resources
+            .into_iter()
+            .map(Box::new)
+            .map(ResourceEntryV3::V2)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if request.includes(ResourceVariantV3::MessageChannel) {
+        resources.extend(
+            message_router
+                .catalog()
+                .into_iter()
+                .map(ResourceEntryV3::MessageChannel),
+        );
+    }
+    let response = ResourcesResponseV3 { resources }.filtered(&request);
+    let _ = write_resources_response_v3(&mut substream, &response).await;
+}
+
 /// Per-substream task for an inbound `/auki/registries/0.0.1`
 /// request. Reads the framed [`RegistryRequest`], forwards it to the
 /// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
@@ -3048,6 +3495,38 @@ fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId
 mod tests {
     use super::*;
     use crate::stream_runtime::decline_all_streams;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct EagerRawMessageStream {
+        bytes: Vec<u8>,
+        offset: usize,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl futures::AsyncRead for EagerRawMessageStream {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            output: &mut [u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            let remaining = &self.bytes[self.offset..];
+            let read = remaining.len().min(output.len());
+            output[..read].copy_from_slice(&remaining[..read]);
+            self.offset += read;
+            std::task::Poll::Ready(Ok(read))
+        }
+    }
+
+    impl Drop for EagerRawMessageStream {
+        fn drop(&mut self) {
+            assert_eq!(
+                self.reads.load(Ordering::SeqCst),
+                0,
+                "unknown-peer message bytes must not be consumed"
+            );
+        }
+    }
 
     async fn build_test_swarm() -> Swarm<Behaviour> {
         let identity = PeerIdentity::from_seed(&[7u8; 32]);
@@ -3056,6 +3535,18 @@ mod tests {
             ..SwarmConfig::default()
         };
         build_swarm(&identity, cfg).expect("build_swarm succeeds")
+    }
+
+    #[test]
+    fn resources_v3_unsupported_protocol_is_explicit_and_never_a_v2_response() {
+        let protocol = RESOURCES_V3_PROTOCOL.clone();
+        let error = map_resources_v3_open_error(
+            libp2p_stream::OpenStreamError::UnsupportedProtocol(protocol),
+        );
+        assert!(matches!(
+            error,
+            RequestResourcesV3Error::UnsupportedProtocol
+        ));
     }
 
     async fn wait_for_test_listen_addr(swarm: &mut Swarm<Behaviour>) -> Multiaddr {
@@ -3068,6 +3559,13 @@ mod tests {
         })
         .await
         .expect("listen address did not appear within timeout")
+    }
+
+    async fn wait_for_watch_true(receiver: &mut watch::Receiver<bool>) {
+        if *receiver.borrow() {
+            return;
+        }
+        let _ = receiver.changed().await;
     }
 
     #[tokio::test]
@@ -3120,6 +3618,340 @@ mod tests {
         .expect("spawn succeeds");
         assert_eq!(rt.local_peer_id(), expected);
         rt.shutdown();
+    }
+
+    #[test]
+    fn unknown_peer_gate_drops_an_eager_raw_message_stream_without_reading_it() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let stream = EagerRawMessageStream {
+            // Complete open and payload-like bytes are already available, as
+            // they would be from an eager writer that does not await accept.
+            bytes: vec![0, 0, 0, 3, 1, 0xff, 0xff, 0, 0, 0, 5, 3, 1, 2, 3, 4],
+            offset: 0,
+            reads: reads.clone(),
+        };
+
+        assert!(authorize_inbound_message_stream(false, stream).is_none());
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn active_message_substreams_are_capped_per_peer_and_globally() {
+        let peer = PeerIdentity::from_seed(&[101; 32]).peer_id();
+        let mut tasks = ActiveMessageTasks::default();
+        for _ in 0..MAX_ACTIVE_MESSAGE_STREAMS_PER_PEER {
+            let (revoke, _) = watch::channel(false);
+            let handle = tokio::spawn(futures::future::pending());
+            let id = tasks.allocate_id(peer).unwrap();
+            tasks.track(peer, id, revoke, handle);
+        }
+        assert!(!tasks.has_capacity(peer));
+        assert!(tasks.has_capacity(PeerIdentity::from_seed(&[102; 32]).peer_id()));
+        tasks.cancel_all().await;
+
+        for seed in 0..MAX_ACTIVE_MESSAGE_STREAMS {
+            let peer = PeerIdentity::from_seed(&[(seed % 200) as u8; 32]).peer_id();
+            let (revoke, _) = watch::channel(false);
+            let handle = tokio::spawn(futures::future::pending());
+            let id = tasks.allocate_id(peer).unwrap();
+            tasks.track(peer, id, revoke, handle);
+        }
+        assert!(!tasks.has_capacity(PeerIdentity::from_seed(&[250; 32]).peer_id()));
+        tasks.cancel_all().await;
+    }
+
+    #[tokio::test]
+    async fn completed_message_task_is_reaped_by_its_stable_id() {
+        let peer = PeerIdentity::from_seed(&[103; 32]).peer_id();
+        let mut tasks = ActiveMessageTasks::default();
+        let (revoke, _) = watch::channel(false);
+        let (completion_sent, completion_seen) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _ = completion_sent.send(());
+            let _ = released.await;
+        });
+        let id = tasks.allocate_id(peer).unwrap();
+        tasks.track(peer, id, revoke, handle);
+        completion_seen.await.unwrap();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = release.send(());
+        });
+
+        tasks.complete(peer, id).await;
+        assert_eq!(tasks.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn closing_one_of_multiple_connections_keeps_peer_tasks_and_presence() {
+        let peer = PeerIdentity::from_seed(&[104; 32]).peer_id();
+        let known_peers = HashMap::from([(peer, Vec::new())]);
+        let mut schedules = HashMap::from([(
+            peer,
+            PeerSchedule {
+                next_dial_at: None,
+                backoff: INITIAL_BACKOFF,
+            },
+        )]);
+        let connected = Arc::new(Mutex::new(HashSet::from([peer])));
+        let mut outbound_heartbeat_tasks =
+            HashMap::from([(peer, tokio::spawn(futures::future::pending()))]);
+        let mut inbound_heartbeat_tasks =
+            HashMap::from([(peer, tokio::spawn(futures::future::pending()))]);
+        let (liveness_tx, mut liveness_rx) = mpsc::channel(4);
+
+        assert_eq!(
+            handle_connection_closed(
+                peer,
+                1,
+                &known_peers,
+                &mut schedules,
+                &connected,
+                &mut outbound_heartbeat_tasks,
+                &mut inbound_heartbeat_tasks,
+                &liveness_tx,
+            ),
+            None
+        );
+        assert!(connected.lock().unwrap().contains(&peer));
+        assert!(outbound_heartbeat_tasks.contains_key(&peer));
+        assert!(inbound_heartbeat_tasks.contains_key(&peer));
+        assert!(matches!(
+            liveness_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(schedules[&peer].next_dial_at.is_none());
+
+        assert_eq!(
+            handle_connection_closed(
+                peer,
+                0,
+                &known_peers,
+                &mut schedules,
+                &connected,
+                &mut outbound_heartbeat_tasks,
+                &mut inbound_heartbeat_tasks,
+                &liveness_tx,
+            ),
+            Some(peer)
+        );
+        assert!(!connected.lock().unwrap().contains(&peer));
+        assert!(!outbound_heartbeat_tasks.contains_key(&peer));
+        assert!(!inbound_heartbeat_tasks.contains_key(&peer));
+        assert!(matches!(
+            liveness_rx.recv().await,
+            Some(PeerLivenessEvent::Disconnected { peer_id }) if peer_id == peer
+        ));
+        assert!(schedules[&peer].next_dial_at.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn sustained_message_opens_do_not_starve_revocation_or_task_slot_recovery() {
+        use crate::resources_v3_protocol::MessageChannelResource;
+        use auki_registry::RegistryRef;
+
+        let receiver_identity = PeerIdentity::from_seed(&[105; 32]);
+        let sender_identity = PeerIdentity::from_seed(&[106; 32]);
+        let receiver_peer = receiver_identity.peer_id();
+        let sender_peer = sender_identity.peer_id();
+        let mut receiver_swarm = build_swarm(
+            &receiver_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let receiver_addr = wait_for_test_listen_addr(&mut receiver_swarm).await;
+        let sender_swarm = build_swarm(
+            &sender_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let (
+            receiver_runtime,
+            _receiver_joins,
+            _receiver_liveness,
+            _receiver_memberships,
+            _receiver_info,
+            _receiver_resources,
+            _receiver_registries,
+            _receiver_diagnostics,
+        ) = NetworkRuntime::spawn(
+            receiver_swarm,
+            vec![AllowedPeer {
+                peer_id: sender_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            sender_runtime,
+            _sender_joins,
+            _sender_liveness,
+            _sender_memberships,
+            _sender_info,
+            _sender_resources,
+            _sender_registries,
+            _sender_diagnostics,
+        ) = NetworkRuntime::spawn(
+            sender_swarm,
+            vec![AllowedPeer {
+                peer_id: receiver_peer,
+                multiaddrs: vec![receiver_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let fairness_resource = MessageChannelResource {
+            owner_peer_id: receiver_peer,
+            resource_id: "fairness".into(),
+            clock: RegistryRef {
+                peer_id: receiver_peer.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let mut registration = receiver_runtime
+            .register_message_channel(fairness_resource.clone(), 16)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("initial connection");
+
+        let protocol = StreamProtocol::try_from_owned(MESSAGE_PROTOCOL.to_owned()).unwrap();
+        let mut held_streams = Vec::new();
+        let mut control = sender_runtime.stream_control().clone();
+        for _ in 0..MAX_ACTIVE_MESSAGE_STREAMS_PER_PEER {
+            let mut stream = control
+                .open_stream(receiver_peer, protocol.clone())
+                .await
+                .unwrap();
+            crate::message_protocol::write_open_frame(
+                &mut stream,
+                receiver_peer,
+                "fairness",
+                &fairness_resource.clock,
+            )
+            .await
+            .unwrap();
+            held_streams.push(stream);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let (stop_flood_tx, stop_flood_rx) = watch::channel(false);
+        let mut flood_tasks = Vec::new();
+        for _ in 0..32 {
+            let mut flood_control = sender_runtime.stream_control().clone();
+            let flood_protocol = protocol.clone();
+            let mut stop = stop_flood_rx.clone();
+            flood_tasks.push(tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = wait_for_watch_true(&mut stop) => return,
+                        stream = flood_control.open_stream(receiver_peer, flood_protocol.clone()) => {
+                            drop(stream);
+                        }
+                    }
+                }
+            }));
+        }
+
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            receiver_runtime.set_allowed_peers(Vec::new()),
+        )
+        .await
+        .expect("revocation must outrank sustained message accepts")
+        .unwrap();
+        stop_flood_tx.send(true).unwrap();
+        for task in flood_tasks {
+            task.await.unwrap();
+        }
+        drop(held_streams);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("disconnect after revocation");
+
+        receiver_runtime
+            .set_allowed_peers(vec![AllowedPeer {
+                peer_id: sender_peer,
+                multiaddrs: vec![],
+            }])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("reconnection after revocation");
+        let channel = sender_runtime
+            .open_message_channel(receiver_peer, "fairness", fairness_resource.clock.clone())
+            .await
+            .unwrap();
+        channel.send("after-flood", 1, vec![1]).await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), registration.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .message
+                .r#type,
+            "after-flood"
+        );
+
+        receiver_runtime.shutdown();
+        sender_runtime.shutdown();
+        tokio::time::sleep(SHUTDOWN_GRACE + Duration::from_millis(50)).await;
+    }
+
+    #[test]
+    fn queued_commands_and_completions_precede_more_message_accepts() {
+        let peer = PeerIdentity::from_seed(&[107; 32]).peer_id();
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        shutdown_tx.send(()).unwrap();
+        let (command_tx, mut command_rx) = mpsc::channel(2);
+        let (ack, _ack_rx) = oneshot::channel();
+        command_tx
+            .try_send(RuntimeCmd::SetAllowedPeers {
+                new_peers: Vec::new(),
+                ack,
+            })
+            .unwrap();
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+        done_tx.send((peer, 7)).unwrap();
+
+        assert!(take_pending_runtime_shutdown(&mut shutdown_rx));
+        assert!(matches!(
+            take_pending_message_driver_work(&mut command_rx, &mut done_rx),
+            Some(PendingMessageDriverWork::Command(
+                RuntimeCmd::SetAllowedPeers { .. }
+            ))
+        ));
+        assert!(matches!(
+            take_pending_message_driver_work(&mut command_rx, &mut done_rx),
+            Some(PendingMessageDriverWork::Completion {
+                peer_id,
+                task_id: 7
+            }) if peer_id == peer
+        ));
     }
 
     #[tokio::test]
@@ -3328,5 +4160,436 @@ mod tests {
         assert_eq!(observation.remote_clock_id, heartbeat.clock_id);
         assert_eq!(observation.sample.offset_ns, 1_000_000);
         assert_eq!(observation.sample.uncertainty_ns, 100);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn authenticated_peer_sends_distinct_opaque_messages_with_transport_ack() {
+        use crate::resources_v3_protocol::{
+            MessageChannelResource, ResourceEntry as V3ResourceEntry, ResourceVariant,
+            ResourcesRequest as V3ResourcesRequest,
+        };
+        use auki_registry::RegistryRef;
+
+        let receiver_identity = PeerIdentity::from_seed(&[81; 32]);
+        let sender_identity = PeerIdentity::from_seed(&[82; 32]);
+        let receiver_peer = receiver_identity.peer_id();
+        let sender_peer = sender_identity.peer_id();
+
+        let mut receiver_swarm = build_swarm(
+            &receiver_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let receiver_addr = wait_for_test_listen_addr(&mut receiver_swarm).await;
+        let sender_swarm = build_swarm(
+            &sender_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            receiver_runtime,
+            _receiver_joins,
+            _receiver_liveness,
+            _receiver_memberships,
+            _receiver_info,
+            _receiver_resources,
+            _receiver_registries,
+            _receiver_diagnostics,
+        ) = NetworkRuntime::spawn(
+            receiver_swarm,
+            vec![AllowedPeer {
+                peer_id: sender_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            sender_runtime,
+            _sender_joins,
+            _sender_liveness,
+            _sender_memberships,
+            _sender_info,
+            _sender_resources,
+            _sender_registries,
+            _sender_diagnostics,
+        ) = NetworkRuntime::spawn(
+            sender_swarm,
+            vec![AllowedPeer {
+                peer_id: receiver_peer,
+                multiaddrs: vec![receiver_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+
+        let live_events_resource = MessageChannelResource {
+            owner_peer_id: receiver_peer,
+            resource_id: "live-events".into(),
+            clock: RegistryRef {
+                peer_id: receiver_peer.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let mut receiver: crate::MessageChannelRegistration = receiver_runtime
+            .register_message_channel(live_events_resource.clone(), 16)
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("peers connect");
+
+        let catalog = sender_runtime
+            .request_resources_catalog_v3_with(
+                receiver_peer,
+                V3ResourcesRequest {
+                    variants: vec![ResourceVariant::MessageChannel],
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            catalog.resources.as_slice(),
+            [V3ResourceEntry::MessageChannel(row)]
+                if row.owner_peer_id == receiver_peer && row.resource_id == "live-events"
+        ));
+
+        let channel = sender_runtime
+            .open_message_channel(
+                receiver_peer,
+                "live-events",
+                live_events_resource.clock.clone(),
+            )
+            .await
+            .unwrap();
+
+        // Neither send waits for application-level consumption. Each resolves
+        // when the receiver runtime queues the frame and returns its transport ack.
+        channel
+            .send("vendor/type-a", 100, vec![0x00, 0xff])
+            .await
+            .unwrap();
+        channel
+            .send("another.type/b", 101, vec![0xde, 0xad, 0xbe, 0xef])
+            .await
+            .unwrap();
+
+        let first = receiver.recv().await.unwrap();
+        let second = receiver.recv().await.unwrap();
+        assert_eq!(first.sender, sender_peer);
+        assert_eq!(first.message.r#type, "vendor/type-a");
+        assert_eq!(first.message.payload, vec![0x00, 0xff]);
+        assert_eq!(second.sender, sender_peer);
+        assert_eq!(second.message.r#type, "another.type/b");
+        assert_eq!(second.message.payload, vec![0xde, 0xad, 0xbe, 0xef]);
+
+        // Receiver-side membership revocation is synchronous with respect to
+        // active message streams: after this returns, no later frame can be
+        // delivered or acknowledged.
+        receiver_runtime
+            .set_allowed_peers(Vec::new())
+            .await
+            .unwrap();
+        let revoked_send = tokio::time::timeout(
+            Duration::from_secs(1),
+            channel.send("after-revocation", 102, vec![1]),
+        )
+        .await
+        .expect("peer revocation closes the channel promptly");
+        assert!(revoked_send.is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+                .await
+                .is_err()
+        );
+
+        drop(channel);
+        receiver_runtime.shutdown();
+        sender_runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unknown_peer_is_rejected_before_it_can_deliver_a_message_payload() {
+        use crate::resources_v3_protocol::MessageChannelResource;
+        use auki_datatypes::message::Message;
+        use auki_registry::RegistryRef;
+        use futures::AsyncWriteExt;
+
+        let receiver_identity = PeerIdentity::from_seed(&[83; 32]);
+        let member_identity = PeerIdentity::from_seed(&[84; 32]);
+        let unknown_identity = PeerIdentity::from_seed(&[85; 32]);
+        let receiver_peer = receiver_identity.peer_id();
+
+        let mut receiver_swarm = build_swarm(
+            &receiver_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let receiver_addr = wait_for_test_listen_addr(&mut receiver_swarm).await;
+        let unknown_swarm = build_swarm(
+            &unknown_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            receiver_runtime,
+            _receiver_joins,
+            _receiver_liveness,
+            _receiver_memberships,
+            _receiver_info,
+            _receiver_resources,
+            _receiver_registries,
+            _receiver_diagnostics,
+        ) = NetworkRuntime::spawn(
+            receiver_swarm,
+            vec![AllowedPeer {
+                peer_id: member_identity.peer_id(),
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            unknown_runtime,
+            _unknown_joins,
+            _unknown_liveness,
+            _unknown_memberships,
+            _unknown_info,
+            _unknown_resources,
+            _unknown_registries,
+            _unknown_diagnostics,
+        ) = NetworkRuntime::spawn(
+            unknown_swarm,
+            vec![AllowedPeer {
+                peer_id: receiver_peer,
+                multiaddrs: vec![receiver_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+
+        let private_resource = MessageChannelResource {
+            owner_peer_id: receiver_peer,
+            resource_id: "private".into(),
+            clock: RegistryRef {
+                peer_id: receiver_peer.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let mut receiver = receiver_runtime
+            .register_message_channel(private_resource.clone(), 16)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !unknown_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("transport connection forms before protocol gate");
+
+        let mut control = unknown_runtime.stream_control().clone();
+        let protocol = StreamProtocol::try_from_owned(MESSAGE_PROTOCOL.to_owned()).unwrap();
+        let mut raw_stream = tokio::time::timeout(
+            Duration::from_secs(1),
+            control.open_stream(receiver_peer, protocol),
+        )
+        .await
+        .expect("raw message stream opens")
+        .expect("transport permits the connection before protocol authorization");
+        let mut eager_bytes = Vec::new();
+        crate::message_protocol::write_open_frame(
+            &mut eager_bytes,
+            receiver_peer,
+            "private",
+            &private_resource.clock,
+        )
+        .await
+        .unwrap();
+        crate::message_protocol::write_message_frame(
+            &mut eager_bytes,
+            1,
+            &Message {
+                r#type: "must-not-decode".into(),
+                timestamp_ns: 77,
+                payload: vec![0xde, 0xad, 0xbe, 0xef],
+            },
+        )
+        .await
+        .unwrap();
+        // One eager write puts the open header and payload bytes in flight
+        // without waiting for an open response. The receiver's known-peer
+        // gate must drop the substream before either frame is consumed.
+        let _ = raw_stream.write_all(&eager_bytes).await;
+        let _ = raw_stream.flush().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), receiver.recv())
+                .await
+                .is_err()
+        );
+
+        receiver_runtime.shutdown();
+        unknown_runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_send_fails_and_is_not_replayed_after_reconnect() {
+        use crate::resources_v3_protocol::MessageChannelResource;
+        use auki_registry::RegistryRef;
+
+        let receiver_identity = PeerIdentity::from_seed(&[86; 32]);
+        let sender_identity = PeerIdentity::from_seed(&[87; 32]);
+        let receiver_peer = receiver_identity.peer_id();
+        let sender_peer = sender_identity.peer_id();
+        let mut receiver_swarm = build_swarm(
+            &receiver_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let receiver_addr = wait_for_test_listen_addr(&mut receiver_swarm).await;
+        let sender_swarm = build_swarm(
+            &sender_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            receiver_runtime,
+            _receiver_joins,
+            mut receiver_liveness,
+            _receiver_memberships,
+            _receiver_info,
+            _receiver_resources,
+            _receiver_registries,
+            _receiver_diagnostics,
+        ) = NetworkRuntime::spawn(
+            receiver_swarm,
+            vec![AllowedPeer {
+                peer_id: sender_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            sender_runtime,
+            _sender_joins,
+            _sender_liveness,
+            _sender_memberships,
+            _sender_info,
+            _sender_resources,
+            _sender_registries,
+            _sender_diagnostics,
+        ) = NetworkRuntime::spawn(
+            sender_swarm,
+            vec![AllowedPeer {
+                peer_id: receiver_peer,
+                multiaddrs: vec![receiver_addr.clone()],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let ephemeral_resource = MessageChannelResource {
+            owner_peer_id: receiver_peer,
+            resource_id: "ephemeral".into(),
+            clock: RegistryRef {
+                peer_id: receiver_peer.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let mut receiver = receiver_runtime
+            .register_message_channel(ephemeral_resource.clone(), 16)
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("initial connection");
+        let channel = sender_runtime
+            .open_message_channel(receiver_peer, "ephemeral", ephemeral_resource.clock.clone())
+            .await
+            .unwrap();
+
+        sender_runtime.set_allowed_peers(Vec::new()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if matches!(
+                    receiver_liveness.recv().await,
+                    Some(PeerLivenessEvent::Disconnected { peer_id }) if peer_id == sender_peer
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("disconnect event");
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                channel.send("not-replayed", 200, vec![9, 8, 7]),
+            )
+            .await
+            .expect("failed send resolves promptly")
+            .is_err()
+        );
+
+        sender_runtime
+            .set_allowed_peers(vec![AllowedPeer {
+                peer_id: receiver_peer,
+                multiaddrs: vec![receiver_addr],
+            }])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !sender_runtime.connected_peers().contains(&receiver_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("reconnect");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), receiver.recv())
+                .await
+                .is_err(),
+            "failed live send must not be replayed after reconnect"
+        );
+
+        receiver_runtime.shutdown();
+        sender_runtime.shutdown();
     }
 }

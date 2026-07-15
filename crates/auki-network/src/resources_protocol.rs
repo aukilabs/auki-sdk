@@ -742,6 +742,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_empty_request_and_response_bytes_are_locked() {
+        let mut request = Vec::new();
+        write_resources_request(&mut request, &ResourcesRequest::all())
+            .await
+            .unwrap();
+        assert_eq!(request, b"\0\0\0\x02{}".to_vec());
+
+        let mut response = Vec::new();
+        write_resources_response(
+            &mut response,
+            &ResourcesResponse {
+                resources: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response, b"\0\0\0\x10{\"resources\":[]}".to_vec());
+    }
+
+    #[tokio::test]
     async fn response_round_trips_sensor_and_pose() {
         let resp = ResourcesResponse {
             resources: vec![

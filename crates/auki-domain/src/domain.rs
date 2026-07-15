@@ -9,8 +9,9 @@
 //! `auki-session` has no network dependencies; everything network-facing lives
 //! here. See #274 (D3).
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 
 use auki_network::resources_protocol::{
@@ -19,7 +20,15 @@ use auki_network::resources_protocol::{
 };
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
-use auki_network::{PeerIdentity, SessionHandle, Swarm};
+use auki_network::{
+    MessageChannelRegistration, MessageChannelResource, MessageChannelSender,
+    OpenMessageChannelError, PeerIdentity, RegistrationError, SendMessageError, SessionHandle,
+    Swarm,
+    resources_v3_protocol::{
+        ResourcesProtocolError as ResourcesProtocolErrorV3, ResourcesRequest as ResourcesRequestV3,
+        ResourcesResponse as ResourcesResponseV3,
+    },
+};
 
 use auki_registry::SensorBody;
 use auki_session::{
@@ -54,11 +63,134 @@ pub struct DomainConfig {
     pub daemon_info: DaemonInfo,
 }
 
+/// A receiver-owned message-channel declaration composed before the Domain
+/// joins. Registrations become visible atomically with their bounded live
+/// receiver before [`DomainBuilder::join`] returns.
+pub struct DomainBuilder<'a> {
+    peer: &'a Peer,
+    session: &'a Session,
+    config: DomainConfig,
+    message_channels: Vec<(MessageChannelResource, usize)>,
+}
+
+impl<'a> DomainBuilder<'a> {
+    /// Start composing a Domain join.
+    pub fn new(peer: &'a Peer, session: &'a Session, config: DomainConfig) -> Self {
+        Self {
+            peer,
+            session,
+            config,
+            message_channels: Vec::new(),
+        }
+    }
+
+    /// Add a bounded, live-only receiver-owned message channel.
+    ///
+    /// The owner must equal `peer.peer_id()`, the clock reference must exactly
+    /// match a clock registered in the supplied Session, the resource must be
+    /// valid, the capacity must be nonzero, and the owner/resource id pair must
+    /// be unique within this builder.
+    pub fn message_channel(
+        mut self,
+        resource: MessageChannelResource,
+        receiver_capacity: usize,
+    ) -> Result<Self, DomainBuilderError> {
+        resource
+            .validate()
+            .map_err(DomainBuilderError::InvalidMessageChannel)?;
+        if resource.owner_peer_id.to_string() != self.peer.peer_id() {
+            return Err(DomainBuilderError::ChannelOwnerMismatch {
+                expected: self.peer.peer_id(),
+                actual: resource.owner_peer_id.to_string(),
+            });
+        }
+        if receiver_capacity == 0 {
+            return Err(DomainBuilderError::ZeroReceiverCapacity);
+        }
+        if !self.session.contains_clock_ref(&resource.clock) {
+            return Err(DomainBuilderError::UnregisteredChannelClock {
+                peer_id: resource.clock.peer_id.clone(),
+                clock_id: resource.clock.id.clone(),
+                clock_hash: resource.clock.hash.clone(),
+            });
+        }
+        if self.message_channels.iter().any(|(existing, _)| {
+            existing.owner_peer_id == resource.owner_peer_id
+                && existing.resource_id == resource.resource_id
+        }) {
+            return Err(DomainBuilderError::DuplicateMessageChannel {
+                owner_peer_id: resource.owner_peer_id.to_string(),
+                resource_id: resource.resource_id,
+            });
+        }
+        self.message_channels.push((resource, receiver_capacity));
+        Ok(self)
+    }
+
+    /// Join the configured cluster and bind every declared message channel.
+    pub async fn join(self) -> Result<Domain, DomainError> {
+        Domain::join_with_message_channels(
+            self.peer,
+            self.session,
+            self.config,
+            self.message_channels,
+        )
+        .await
+    }
+}
+
+/// Invalid message-channel composition detected before Domain bootstrap.
+#[derive(Debug, thiserror::Error)]
+pub enum DomainBuilderError {
+    /// The channel owner differs from the Peer that will join.
+    #[error("message channel owner {actual} does not match Domain peer {expected}")]
+    ChannelOwnerMismatch {
+        /// Peer identity the Domain will use.
+        expected: String,
+        /// Owner declared by the channel row.
+        actual: String,
+    },
+    /// The same owner/resource id was declared twice.
+    #[error("duplicate message channel {owner_peer_id}/{resource_id}")]
+    DuplicateMessageChannel {
+        /// Receiver owner.
+        owner_peer_id: String,
+        /// Owner-scoped resource id.
+        resource_id: String,
+    },
+    /// A bounded receiver cannot have zero capacity.
+    #[error("message channel receiver capacity must be greater than zero")]
+    ZeroReceiverCapacity,
+    /// The channel clock does not exactly identify a clock in this Session.
+    #[error(
+        "message channel clock is not registered in Session: {peer_id}/{clock_id}@{clock_hash}"
+    )]
+    UnregisteredChannelClock {
+        /// Peer identity carried by the clock reference.
+        peer_id: String,
+        /// Clock registry id.
+        clock_id: String,
+        /// Clock declaration hash.
+        clock_hash: String,
+    },
+    /// The v0.3 resource row is malformed.
+    #[error("invalid message channel resource: {0}")]
+    InvalidMessageChannel(#[source] ResourcesProtocolErrorV3),
+}
+
 // ─── DomainError ──────────────────────────────────────────────────────────────
 
 /// Errors returned by [`Domain::join`] / [`Domain::leave`].
 #[derive(Debug, thiserror::Error)]
 pub enum DomainError {
+    /// The supplied Session was started by a different Peer.
+    #[error("session peer id {session:?} != Domain peer id {peer:?}")]
+    SessionIdentityMismatch {
+        /// Identity of the Peer supplied to the Domain.
+        peer: String,
+        /// Identity retained by the supplied Session.
+        session: String,
+    },
     /// The peer's id is not the local network identity. The session's
     /// registered clock is keyed by `peer.peer_id()`, while the cluster's
     /// runtime clock is keyed by `local_identity.peer_id()`; if they differ
@@ -71,15 +203,100 @@ pub enum DomainError {
         /// The local libp2p identity the cluster's runtime clock would use.
         identity: String,
     },
+    /// The pre-built swarm uses a different identity than `local_identity`.
+    #[error("swarm local peer id {swarm:?} != configured local identity {identity:?}")]
+    SwarmIdentityMismatch {
+        /// Peer id derived from `DomainConfig::local_identity`.
+        identity: String,
+        /// Local peer id of `DomainConfig::swarm`.
+        swarm: String,
+    },
     /// Cluster bootstrap failed (Discovery unreachable, name collision, join
     /// rejection, etc.).
     #[error("domain bootstrap: {0}")]
     Bootstrap(#[from] BootstrapError),
+    /// A predeclared message channel could not be bound to the runtime.
+    #[error("domain message channel registration: {0}")]
+    MessageChannelRegistration(#[from] RegistrationError),
     /// Discovery deregistration failed while leaving (the local peer was the
     /// last Manager and the HTTP DELETE failed). The manager is dropped
     /// regardless.
     #[error("domain shutdown: {0}")]
     Shutdown(DiscoveryClientError),
+}
+
+/// One live inbound application event.
+///
+/// All fields are opaque to the SDK except the authenticated sender and channel
+/// routing identity. Applications own interpretation, freshness, scheduling,
+/// and action policy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageEvent {
+    /// Receiver-owned Resource Catalog row that accepted the message.
+    pub channel: MessageChannelResource,
+    /// Noise-authenticated cluster peer that sent the message.
+    pub sender: PeerId,
+    /// Opaque application type string.
+    pub r#type: String,
+    /// Application timestamp expressed in the channel's declared clock.
+    pub timestamp_ns: i64,
+    /// Opaque application bytes.
+    pub payload: Vec<u8>,
+}
+
+/// Bounded async receiver for one live-only message channel.
+pub struct MessageChannelReceiver {
+    registration: MessageChannelRegistration,
+}
+
+impl MessageChannelReceiver {
+    /// Exact Resource Catalog row bound to this receiver.
+    pub fn resource(&self) -> &MessageChannelResource {
+        self.registration.resource()
+    }
+
+    /// Receive the next live event, or `None` after runtime closure.
+    pub async fn recv(&mut self) -> Option<MessageEvent> {
+        let channel = self.registration.resource().clone();
+        let inbound = self.registration.recv().await?;
+        Some(MessageEvent {
+            channel,
+            sender: inbound.sender,
+            r#type: inbound.message.r#type,
+            timestamp_ns: inbound.message.timestamp_ns,
+            payload: inbound.message.payload,
+        })
+    }
+}
+
+/// Failure to open a discovered receiver-owned message channel.
+#[derive(Debug, thiserror::Error)]
+pub enum DomainOpenMessageChannelError {
+    /// The catalog row owner is not the authenticated peer being opened.
+    #[error("message channel owner {owner} does not match target peer {target}")]
+    OwnerMismatch {
+        /// Authenticated serving peer being dialed.
+        target: PeerId,
+        /// Owner in the discovered catalog row.
+        owner: PeerId,
+    },
+    /// The discovered row is invalid.
+    #[error("invalid message channel resource: {0}")]
+    InvalidResource(#[source] ResourcesProtocolErrorV3),
+    /// Network open or protocol negotiation failed.
+    #[error("open message channel: {0}")]
+    Open(#[from] OpenMessageChannelError),
+}
+
+/// Failure from [`Domain::send_message`].
+#[derive(Debug, thiserror::Error)]
+pub enum DomainSendMessageError {
+    /// Opening the one-shot sender failed.
+    #[error(transparent)]
+    Open(#[from] DomainOpenMessageChannelError),
+    /// Sending or receiving the transport ACK failed.
+    #[error("send message: {0}")]
+    Send(#[from] SendMessageError),
 }
 
 // ─── Domain ────────────────────────────────────────────────────────────────────
@@ -88,6 +305,7 @@ pub enum DomainError {
 pub struct Domain {
     manager: ClusterManager,
     catalog: Arc<DomainCatalog>,
+    message_channels: HashMap<String, MessageChannelRegistration>,
 }
 
 impl Domain {
@@ -100,17 +318,39 @@ impl Domain {
     pub async fn join(
         peer: &Peer,
         session: &Session,
-        mut config: DomainConfig,
+        config: DomainConfig,
     ) -> Result<Domain, DomainError> {
-        // The peer's id must be the local network identity: the session's
-        // registered clock is keyed by `peer.peer_id()`, and the cluster's
-        // runtime `SessionClock` is keyed by `local_identity.peer_id()`. They
-        // have to match or the registered and advertised clocks diverge.
+        DomainBuilder::new(peer, session, config).join().await
+    }
+
+    async fn join_with_message_channels(
+        peer: &Peer,
+        session: &Session,
+        mut config: DomainConfig,
+        message_channels: Vec<(MessageChannelResource, usize)>,
+    ) -> Result<Domain, DomainError> {
+        // Validate the complete identity chain before bootstrap can touch the
+        // network or Discovery.
+        let peer_id = peer.peer_id();
+        let session_id = session.peer_id();
+        if session_id != peer_id {
+            return Err(DomainError::SessionIdentityMismatch {
+                peer: peer_id,
+                session: session_id,
+            });
+        }
         let local_id = config.local_identity.peer_id().to_string();
-        if peer.peer_id() != local_id {
+        if peer_id != local_id {
             return Err(DomainError::IdentityMismatch {
-                peer: peer.peer_id(),
+                peer: peer_id,
                 identity: local_id,
+            });
+        }
+        let swarm_id = config.swarm.local_peer_id().to_string();
+        if swarm_id != local_id {
+            return Err(DomainError::SwarmIdentityMismatch {
+                identity: local_id,
+                swarm: swarm_id,
             });
         }
 
@@ -143,11 +383,24 @@ impl Domain {
         let handle: Arc<dyn SessionHandle> = catalog.clone();
         manager.set_session_handle(handle);
 
-        Ok(Domain { manager, catalog })
+        let mut registrations = HashMap::new();
+        for (resource, capacity) in message_channels {
+            let resource_id = resource.resource_id.clone();
+            let registration = manager.register_message_channel(resource, capacity)?;
+            registrations.insert(resource_id, registration);
+        }
+
+        Ok(Domain {
+            manager,
+            catalog,
+            message_channels: registrations,
+        })
     }
 
-    /// The catalog this domain currently serves: one row per registered log,
-    /// in the canonical `/auki/resources/*` wire shape.
+    /// The unchanged Resource Catalog v0.2 snapshot this Domain currently
+    /// serves: one row per registered log in `/auki/resources/0.2.0` shape.
+    ///
+    /// Message channels are v0.3-only and are not returned here.
     pub fn catalog(&self) -> Vec<ResourceEntry> {
         self.catalog.catalog()
     }
@@ -155,6 +408,103 @@ impl Domain {
     /// The active [`ClusterManager`].
     pub fn cluster_manager(&self) -> &ClusterManager {
         &self.manager
+    }
+
+    /// Remove and return the app receiver created by a builder declaration.
+    ///
+    /// The registration remains active and advertised while the returned
+    /// receiver is alive. Dropping it deregisters the channel immediately.
+    pub fn take_message_channel_receiver(
+        &mut self,
+        resource_id: &str,
+    ) -> Option<MessageChannelReceiver> {
+        self.message_channels
+            .remove(resource_id)
+            .map(|registration| MessageChannelReceiver { registration })
+    }
+
+    /// Fetch a peer's unchanged Resource Catalog v0.2.
+    pub async fn fetch_resources_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<
+        auki_network::resources_protocol::ResourcesResponse,
+        crate::cluster_manager::FetchResourcesCatalogError,
+    > {
+        self.manager.fetch_resources_catalog(peer_id).await
+    }
+
+    /// Fetch a peer's Resource Catalog v0.3 explicitly.
+    ///
+    /// No fallback to v0.2 is attempted.
+    pub async fn fetch_resources_catalog_v3(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponseV3, crate::cluster_manager::FetchResourcesCatalogV3Error> {
+        self.manager.fetch_resources_catalog_v3(peer_id).await
+    }
+
+    /// Fetch a filtered Resource Catalog v0.3 explicitly.
+    ///
+    /// No fallback to v0.2 is attempted.
+    pub async fn fetch_resources_catalog_v3_with(
+        &self,
+        peer_id: PeerId,
+        request: ResourcesRequestV3,
+    ) -> Result<ResourcesResponseV3, crate::cluster_manager::FetchResourcesCatalogV3Error> {
+        self.manager
+            .fetch_resources_catalog_v3_with(peer_id, request)
+            .await
+    }
+
+    /// Open a persistent sender for an exact discovered message-channel row.
+    ///
+    /// `target_peer_id` must equal the row owner. The complete row clock
+    /// reference is bound into the open handshake so a stale discovered row is
+    /// rejected if the receiver re-registers the same resource id with another
+    /// clock.
+    pub async fn open_message_channel(
+        &self,
+        target_peer_id: PeerId,
+        channel: &MessageChannelResource,
+    ) -> Result<MessageChannelSender, DomainOpenMessageChannelError> {
+        channel
+            .validate()
+            .map_err(DomainOpenMessageChannelError::InvalidResource)?;
+        if channel.owner_peer_id != target_peer_id {
+            return Err(DomainOpenMessageChannelError::OwnerMismatch {
+                target: target_peer_id,
+                owner: channel.owner_peer_id,
+            });
+        }
+        Ok(self
+            .manager
+            .open_message_channel(
+                target_peer_id,
+                channel.resource_id.clone(),
+                channel.clock.clone(),
+            )
+            .await?)
+    }
+
+    /// Open, send one opaque live message, and drop the sender.
+    ///
+    /// Success means transport acceptance into the receiver runtime's bounded
+    /// queue only. It does not mean application semantic acceptance. An error
+    /// can be indeterminate if the receiver enqueued the event but its ACK was
+    /// lost; callers must not automatically retry.
+    pub async fn send_message(
+        &self,
+        channel: &MessageChannelResource,
+        r#type: impl Into<String>,
+        timestamp_ns: i64,
+        payload: impl Into<Vec<u8>>,
+    ) -> Result<(), DomainSendMessageError> {
+        self.open_message_channel(channel.owner_peer_id, channel)
+            .await?
+            .send(r#type, timestamp_ns, payload)
+            .await?;
+        Ok(())
     }
 
     /// Shut down the cluster manager and leave the domain.

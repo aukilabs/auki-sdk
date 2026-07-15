@@ -154,10 +154,18 @@ pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));
 }
 
+/// `auki.message` — opaque typed-message envelope for
+/// `/auki/message/0.1.0`. Clock identity is declared out-of-band by the
+/// channel's Resource Catalog row.
+pub mod message {
+    include!(concat!(env!("OUT_DIR"), "/auki.message.rs"));
+}
+
 /// `auki.stream` — `StreamMessage` envelope, `StreamRequest`,
 /// `StreamManifest`, `StreamEntry`, `DeclineReason`, `EndReason`. The
 /// libp2p substream wire shape; mono-`T` per substream, with
 /// `StreamEntry.payload` carrying the prost-encoded `T` bytes.
+#[allow(clippy::large_enum_variant)]
 pub mod stream {
     include!(concat!(env!("OUT_DIR"), "/auki.stream.rs"));
 
@@ -254,10 +262,40 @@ mod tests {
     use super::camera::{CameraFrame, DynamicIntrinsics};
     use super::detection::DetectionFrame;
     use super::joint_encoders;
+    use super::message::Message as TypedMessage;
     use super::point_cloud;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
     use prost::Message;
+
+    #[test]
+    fn typed_message_serializes_to_locked_wire_bytes() {
+        let message = TypedMessage {
+            r#type: "robot.pose".into(),
+            timestamp_ns: 42,
+            payload: vec![0x00, 0xff, 0x7f],
+        };
+
+        assert_eq!(
+            message.encode_to_vec(),
+            vec![
+                0x0a, 0x0a, b'r', b'o', b'b', b'o', b't', b'.', b'p', b'o', b's', b'e', 0x10, 0x2a,
+                0x1a, 0x03, 0x00, 0xff, 0x7f,
+            ]
+        );
+    }
+
+    #[test]
+    fn typed_message_round_trips_opaque_type_and_payload() {
+        let message = TypedMessage {
+            r#type: "vendor.example/arbitrary-v7".into(),
+            timestamp_ns: -123_456_789,
+            payload: vec![0xde, 0xad, 0x00, 0xbe, 0xef],
+        };
+
+        let decoded = TypedMessage::decode(message.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decoded, message);
+    }
 
     // ─── auki.camera locked vectors ──────────────────────────────────────────
 

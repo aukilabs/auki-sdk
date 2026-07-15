@@ -20,6 +20,7 @@ fn main() -> std::io::Result<()> {
                 "proto/info.proto",
                 "proto/join.proto",
                 "proto/joint_encoders.proto",
+                "proto/message.proto",
                 "proto/point_cloud.proto",
                 "proto/pose.proto",
                 "proto/stream.proto",

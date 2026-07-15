@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package auki.message;
+
+// Opaque typed-message envelope. The channel resource declares the clock
+// out-of-band; the SDK does not interpret type or payload.
+message Message {
+  string type = 1;
+  int64 timestamp_ns = 2;
+  bytes payload = 3;
+}

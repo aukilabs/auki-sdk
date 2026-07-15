@@ -32,6 +32,11 @@ pub use auki_network::registries_protocol::RegistryKind;
 #[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 #[cfg(feature = "native_runtime")]
+pub use auki_network::{
+    MessageChannelResource, MessageChannelSender, ResourceEntryV3, ResourceVariantV3,
+    ResourcesRequestV3, ResourcesResponseV3,
+};
+#[cfg(feature = "native_runtime")]
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 #[cfg(feature = "native_runtime")]
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
@@ -40,12 +45,16 @@ pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
     DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
-    FetchResourcesCatalogError, InboundDiagnosticMessage, JoinClusterError,
-    LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
+    FetchResourcesCatalogError, FetchResourcesCatalogV3Error, InboundDiagnosticMessage,
+    JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
     decide_manager_loss_action, elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]
-pub use domain::{Domain, DomainConfig, DomainError, catalog_of};
+pub use domain::{
+    Domain, DomainBuilder, DomainBuilderError, DomainConfig, DomainError,
+    DomainOpenMessageChannelError, DomainSendMessageError, MessageChannelReceiver, MessageEvent,
+    catalog_of,
+};
 #[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

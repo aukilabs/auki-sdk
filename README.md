@@ -2,7 +2,7 @@
 
 On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of Rust crates plus per-language bindings (Python via PyO3, Swift via UniFFI, TypeScript for the browser).
 
-See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [Glossary.md](Glossary.md) defines the domain terms.
+See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms.
 
 ## What this SDK does today
 

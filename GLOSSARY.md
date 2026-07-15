@@ -18,15 +18,15 @@ A unique identifier applied as a tag to data, asserting that the data describes 
 
 A Domain is *not* a scenegraph and *not* a coordinate system. A Domain has zero or more **scenegraphs** tagged with it; the **Domain Owner** designates one as the canonical **Map**.
 
-When devices network on the real world web, they discover each other and form **clusters** around shared Domain IDs (a *domain-as-topic*). On disk, Domain membership rides on a data product as a `domain_membership` [TagClaim](tags.md), not as a path or filename — Domain is one kind of tag among many.
+When devices network on the real world web, they discover each other and form **clusters** around shared Domain IDs (a *domain-as-topic*). On disk, Domain membership rides on a data product as a `domain_membership` [TagClaim](#tagclaim), not as a path or filename — Domain is one kind of tag among many.
 
 ## Domain Owner
 
-The entity that controls a Domain — concretely, the holder of the keypair whose pubkey hashes to the Domain ID (see [`tags.md`](tags.md)). Has authority to designate a scenegraph as the Map and to issue `domain_membership` TagClaims under this Domain.
+The entity that controls a Domain — concretely, the holder of the keypair whose pubkey hashes to the Domain ID. Has authority to designate a scenegraph as the Map and to issue `domain_membership` [TagClaim](#tagclaim)s under this Domain.
 
 ## Domain ID
 
-The identifier for a Domain. Derived as `hash(domain_owner_pubkey)` (see [`tags.md`](tags.md)). Used as the `tag_id` in `domain_membership` TagClaims.
+The identifier for a Domain. Derived as `hash(domain_owner_pubkey)`. Used as the `tag_id` in `domain_membership` [TagClaim](#tagclaim)s.
 
 ## Domain Identity
 
@@ -92,7 +92,7 @@ The libp2p identifier used in [`cluster.json`](#clusterdoc), `/p2p/<peer-id>` mu
 
 The identifier for a recording session — a single span of capture activity by one daemon (BoosterApp, Sentinel, etc.). Minted as a fresh UUIDv4 at daemon startup, used both as the on-disk session directory name and as the `session_id` value carried in every manifest written during the run (see [`auki-layout`](crates/auki-layout)).
 
-Orthogonal to Domain and Scenegraph: a Session ID identifies *when and by whom* data was captured, not *what it's about*. Tying a session's data products to a Domain happens after the fact via [TagClaim](tags.md).
+Orthogonal to Domain and Scenegraph: a Session ID identifies *when and by whom* data was captured, not *what it's about*. Tying a session's data products to a Domain happens after the fact via [TagClaim](#tagclaim).
 
 ## App ID
 
@@ -170,7 +170,7 @@ A coordinate-frame fix — typically a fiducial marker (QR / ArUco) at a known l
 
 ## TagClaim
 
-A signed assertion that some data product has a property — e.g. *"this Pose Log is part of `domain_X`"*, *"this RGB clip cited anchor `Y`"*, *"the prior claim referenced here is hereby revoked"*. Issued by the holder of an issuer wallet; attached to the data via an append-only `tags.jsonl` sidecar next to the log's manifest, separate from the manifest itself (which is treated as immutable). Append-only by design — revocation is a *new* claim of `claim_type: "revoke"` referencing the prior claim's hash. The full v0 schema and claim taxonomy live in [`tags.md`](tags.md).
+A signed assertion that some data product has a property — e.g. *"this Pose Log is part of `domain_X`"*, *"this RGB clip cited anchor `Y`"*, *"the prior claim referenced here is hereby revoked"*. Issued by the holder of an issuer wallet; attached to the data via an append-only `tags.jsonl` sidecar next to the log's manifest, separate from the manifest itself (which is treated as immutable). Append-only by design — revocation is a *new* claim of `claim_type: "revoke"` referencing the prior claim's hash. The full v0 schema and claim taxonomy previously lived in a dedicated `tags.md`, since removed (see `git show 56f8037` for the last version); it has not been re-documented elsewhere yet.
 
 ## Discovery
 

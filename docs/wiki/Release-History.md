@@ -8,6 +8,69 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 
 ---
 
+## v0.0.59 — Manager tiebreak hardening + heartbeat diagnostics
+
+**Released:** 2026-06-25 · [`git show v0.0.59`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.59)
+
+- **[#296](https://github.com/aukilabs/auki-sdk/pull/296) (#295)** Manager tiebreaker: Discovery-arbitrated promotion, step-down, and rejoin — closes races where two peers could each believe they're Manager.
+- **[#294](https://github.com/aukilabs/auki-sdk/pull/294) (#293)** Identity confirmed libp2p-only: the HTTP `/api/info` control-API path for `ParticipantInfo` is removed. `ParticipantInfo` is now gated by cluster membership over `/auki/info/0.0.1` exclusively.
+- **[#305](https://github.com/aukilabs/auki-sdk/pull/305) (#304)** Heartbeat write stalls instrumented for field diagnosis — logging only, no behavior change.
+- **[#300](https://github.com/aukilabs/auki-sdk/pull/300)** `.understand-anything` knowledge-graph + dashboard added for GitHub Pages (repo-internal tooling, not an SDK surface).
+
+**Who's affected:** Anyone polling HTTP `/api/info` for peer identity — that path is gone; use the libp2p `/auki/info/0.0.1` protocol instead. Cluster operators get more reliable Manager failover.
+
+**Migration:** Drop any HTTP-based identity/`is_manager` polling added in v0.0.58 in favor of `/auki/info/0.0.1` over libp2p.
+
+---
+
+## v0.0.58 — Peer/Session/Domain doc sweep + control-api Manager fields
+
+**Released:** 2026-06-10 · [`git show v0.0.58`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.58)
+
+- **[#292](https://github.com/aukilabs/auki-sdk/pull/292) (#288)** Repo-wide doc sweep for the #274/#282 Peer/Session/Domain split — READMEs, the app-builder skill, and `docs/control-api.md` updated to the current shape.
+- **[#284](https://github.com/aukilabs/auki-sdk/pull/284)** Session clock unified: `ClusterManager` reads time through the shared SDK clock primitive; `examples/diagnostic-app` becomes a proper peer instead of hand-rolling its own clock.
+- Control API's `/api/info` gains `is_manager` + `manager_peer_id` fields. (Superseded in v0.0.59, which removes the HTTP `/api/info` identity path entirely — those two fields did not survive.)
+
+**Who's affected:** Contributors reading docs/examples for the current Peer/Session/Domain shape.
+
+**Migration:** None beyond the v0.0.57 Peer/Session/Domain split.
+
+---
+
+## v0.0.57 — Peer / Session / Domain split (#274)
+
+**Released:** 2026-06-09 · [`git show v0.0.57`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.57) · **breaking**
+
+- **[#282](https://github.com/aukilabs/auki-sdk/pull/282) (#274)** `auki-session` + bindings split into a three-layer API:
+  - `Session::new(...)` → `Peer::new(...)` + `peer.start_session()`
+  - Registry registration (sensor/frame/detector) moved from `Session` to `Peer`
+  - `session.join_domain(cfg)` → `Domain::join(&peer, &session, cfg)` (`auki-domain`)
+  - `session.catalog()` → `Domain::catalog()` / `auki_domain::catalog_of(&peer, &session)`
+  - `auki-session` is now network-free; `auki-domain` depends on it, not the other way around.
+  - Python (`auki_session`): new `Peer` class owns registration + `start_session()`; `Session` is thinned to `register_clock` + `register_*_log` + getters.
+- **[#272](https://github.com/aukilabs/auki-sdk/pull/272)** Auki SDK app-builder skill added (after a false start reverted in #271).
+
+**Who's affected:** Everyone on `auki-session` — Rust and Python. The catalog wire shape is unchanged, so this is an API-surface break, not a protocol break.
+
+**Migration:** Replace `Session::new` call sites with `Peer::new(...).start_session()`; move sensor/frame/detector registration onto the `Peer`; replace `session.join_domain(...)` / `session.catalog()` with `Domain::join(...)` / `Domain::catalog()`.
+
+---
+
+## v0.0.56 — /auki/resources is the only peer discovery surface
+
+**Released:** 2026-05-28 · [`git show v0.0.56`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.56) · **breaking**
+
+- **[#253](https://github.com/aukilabs/auki-sdk/pull/253) (#251)** `/auki/sensors` protocol deleted entirely — `/auki/resources/0.2.0` is now the single peer-discovery contract. Removed: `SensorsRequest`/`SensorsResponse`, the protocol-flavored `SensorEntry`, `SENSORS_PROTOCOL`, `SensorCatalogProvider`, `ClusterManager::{set_sensor_catalog_provider, fetch_sensors_catalog, spawn_sensors_handler}`, `FetchSensorsCatalogError`, the matching Python wrappers, and the TS browser handling in `auki-domain-browser`. `proto/sensors.proto` deleted. No backwards-compat shim.
+- **[#250](https://github.com/aukilabs/auki-sdk/pull/250) (#249)** `ResourceEntry.from_dict(d)` / `.from_json(s)` added to `auki_domain.ResourceEntry` — Python producers can now construct catalog rows for `set_resource_catalog_provider` instead of being stuck returning `[]`. All four variants (`sensor_log` / `pose_log` / `time_transform_log` / `detection_log`) supported.
+- **[#248](https://github.com/aukilabs/auki-sdk/pull/248)** Retained-source-tail Tokio runtime bug fixed.
+- Wiki pages drafted: [Concept: Peer-Owned Logs](Concept-Peer-Owned-Logs) (#242), [The Five Questions](The-Five-Questions) (#244, corrected in #247), this [Glossary](Glossary) (#245), [Crate map](Crate-Map) + this Release History page (#246).
+
+**Who's affected:** Anyone still calling `fetch_sensors_catalog` / `set_sensor_catalog_provider` — both gone, no fallback.
+
+**Migration:** Replace `fetch_sensors_catalog` with `fetch_resources_catalog` filtered to `variant == "sensor_log"` (matches the old `/auki/sensors` scope). Replace `set_sensor_catalog_provider` with `set_resource_catalog_provider` returning `ResourceEntry` rows built via `from_dict`/`from_json`. Python wire-shape note: `PoseSource`/`TimeTransformSource` are serde-tagged enums — pass `{"kind": "manual"}`, not a bare string.
+
+---
+
 ## v0.0.55 — type unification + wiki Quickstart
 
 **Released:** 2026-05-28 · [`git show v0.0.55`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.55)

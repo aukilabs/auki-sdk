@@ -20,6 +20,8 @@ subscription types to Python daemons.
 | `ParticipantInfo` | SDK-produced identity wire shape, exchanged over libp2p `/auki/info/0.0.1` (`.to_json()` for local/debug surfaces) |
 | `SensorEntry` | One row in a peer's sensor catalog |
 | `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
+| `MessageEvent` | One live opaque message with `resource_id`, authenticated `sender_peer_id`, `type`, `timestamp_ns`, and byte payload |
+| `MessageChannelReceiver` | Blocking receiver returned by `ClusterManager.register_message_channel` |
 | `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |
 | `StreamRequest` | Consumer → Producer handshake: `resource_id`, `source_peer_id`, `from_` |
 | `ClusterTarget` | Policy enum for `ClusterManager.bootstrap` |
@@ -46,6 +48,16 @@ internal multi-thread tokio runtime).
 **Catalog / registry:**
 - `fetch_resources_catalog(peer_id, variants=None)` → `list[ResourceEntry]`
 - `fetch_sensor_entry / fetch_clock_entry / fetch_frame_entry` → canonical JSON
+
+**Live typed messaging:**
+- `register_message_channel(resource_id, capacity=64)` advertises a Resource
+  Catalog v0.3 message channel owned by this peer, tied to the SDK-declared
+  local session clock, and returns a `MessageChannelReceiver`.
+- `receiver.recv()` blocks until a live `MessageEvent` arrives or returns
+  `None` after the channel closes.
+
+The binding preserves the Rust API's live, ephemeral semantics. It does not
+store, replay, retry, or interpret messages.
 
 ## Constructing `ResourceEntry` from Python
 

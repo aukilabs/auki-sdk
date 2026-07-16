@@ -8,6 +8,7 @@ Run after building the wheel:
 
 from __future__ import annotations
 
+import inspect
 import json
 import pathlib
 
@@ -25,6 +26,10 @@ def test_module_imports_post_216_surface() -> None:
     assert hasattr(auki_domain, "ParticipantInfo")
     # Post-#216 resource catalog type (replaces SensorStreamResource etc.)
     assert hasattr(auki_domain, "ResourceEntry")
+    assert hasattr(auki_domain, "MessageEvent")
+    assert hasattr(auki_domain, "MessageChannelReceiver")
+    for attr in ("resource_id", "sender_peer_id", "type", "timestamp_ns", "payload"):
+        assert hasattr(auki_domain.MessageEvent, attr)
 
     # Post-#216 stream request types
     assert hasattr(auki_domain, "ReadFrom")
@@ -40,6 +45,10 @@ def test_module_imports_post_216_surface() -> None:
     assert hasattr(auki_domain.ClusterManager, "open_pose_stream")
     assert hasattr(auki_domain.ClusterManager, "open_camera_stream")
     assert hasattr(auki_domain.ClusterManager, "open_stream_with_request")
+    assert hasattr(auki_domain.ClusterManager, "register_message_channel")
+    signature = inspect.signature(auki_domain.ClusterManager.register_message_channel)
+    assert list(signature.parameters) == ["self", "resource_id", "capacity"]
+    assert signature.parameters["capacity"].default == 64
 
     # Old deleted types must NOT be present
     assert not hasattr(auki_domain, "SensorEntry")

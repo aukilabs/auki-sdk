@@ -15,6 +15,8 @@
 //!   `time_transform_log` | `detection_log`).
 //! - `ReadFrom` / `StreamRequest` — post-#216 §5 stream subscription
 //!   request types.
+//! - `MessageEvent` / `MessageChannelReceiver` — live, receiver-owned typed
+//!   messaging from Resource Catalog v0.3.
 //! - `StreamManifestBuilder` — producer-side helper.
 //! - `ClusterTarget` / `ClusterManager` — daemon-side cluster handle.
 
@@ -26,10 +28,12 @@ use auki_domain_rs::{
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
     DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
-    JoinClusterError as RustJoinClusterError, ResourceCatalogProvider as RustResourceCatalogProvider,
-    ResourceEntry as RustResourceEntry, StreamManifestBuilder as RustStreamManifestBuilder,
+    JoinClusterError as RustJoinClusterError, MessageChannelResource as RustMessageChannelResource,
+    ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
+    StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
+use auki_network::MessageChannelRegistration as RustMessageChannelRegistration;
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
@@ -47,6 +51,7 @@ use auki_network_py::PyClusterEntry;
 use auki_network_py::stream_types::{
     PyStreamSubscription, STREAM_PROVIDER_CAPSULE_NAME, open_stream_error_to_pyerr,
 };
+use auki_registry::RegistryRef as RustRegistryRef;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyRuntimeError, PyTypeError, PyValueError};
@@ -209,6 +214,77 @@ fn pathlike_to_pathbuf(
 fn shared_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("tokio runtime starts"))
+}
+
+// ─── Live message channel pyclasses ────────────────────────────────────────
+
+/// One live opaque application message delivered by an authenticated peer.
+#[pyclass(name = "MessageEvent")]
+pub struct PyMessageEvent {
+    resource_id: String,
+    sender_peer_id: String,
+    message_type: String,
+    timestamp_ns: i64,
+    payload: Vec<u8>,
+}
+
+#[pymethods]
+impl PyMessageEvent {
+    #[getter]
+    fn resource_id(&self) -> &str {
+        &self.resource_id
+    }
+
+    #[getter]
+    fn sender_peer_id(&self) -> &str {
+        &self.sender_peer_id
+    }
+
+    #[getter(r#type)]
+    fn message_type(&self) -> &str {
+        &self.message_type
+    }
+
+    #[getter]
+    fn timestamp_ns(&self) -> i64 {
+        self.timestamp_ns
+    }
+
+    #[getter]
+    fn payload(&self) -> Vec<u8> {
+        self.payload.clone()
+    }
+}
+
+/// Blocking Python receiver for one bounded, live-only message channel.
+#[pyclass(name = "MessageChannelReceiver")]
+pub struct PyMessageChannelReceiver {
+    inner: Arc<Mutex<Option<RustMessageChannelRegistration>>>,
+}
+
+#[pymethods]
+impl PyMessageChannelReceiver {
+    /// Block until one live message arrives or the channel closes.
+    fn recv(&self, py: Python<'_>) -> PyResult<Option<PyMessageEvent>> {
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let mut guard = inner.lock().expect("MessageChannelReceiver lock");
+                let receiver = guard.as_mut().ok_or_else(|| {
+                    PyRuntimeError::new_err("MessageChannelReceiver has been closed")
+                })?;
+                let resource_id = receiver.resource().resource_id.clone();
+                let event = receiver.recv().await;
+                Ok::<Option<PyMessageEvent>, PyErr>(event.map(|event| PyMessageEvent {
+                    resource_id,
+                    sender_peer_id: event.sender.to_string(),
+                    message_type: event.message.r#type,
+                    timestamp_ns: event.message.timestamp_ns,
+                    payload: event.message.payload,
+                }))
+            })
+        })
+    }
 }
 
 // ─── ClusterMember pyclass ─────────────────────────────────────────
@@ -1681,6 +1757,40 @@ impl PyClusterManager {
         })
     }
 
+    /// Register a bounded, receiver-owned live message channel.
+    ///
+    /// The channel uses this manager's SDK-declared session clock. The returned
+    /// receiver keeps the channel advertised until it is dropped or the
+    /// ClusterManager shuts down.
+    #[pyo3(signature = (resource_id, capacity = 64))]
+    fn register_message_channel(
+        &self,
+        resource_id: String,
+        capacity: usize,
+    ) -> PyResult<PyMessageChannelReceiver> {
+        let registration = self.with_inner(|manager| {
+            let owner_peer_id = manager.local_peer_id();
+            let participant = manager.participant_info();
+            manager
+                .register_message_channel(
+                    RustMessageChannelResource {
+                        owner_peer_id,
+                        resource_id,
+                        clock: RustRegistryRef {
+                            peer_id: participant.peer_id.to_string(),
+                            id: participant.session_clock_id,
+                            hash: participant.session_clock_hash,
+                        },
+                    },
+                    capacity,
+                )
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        })?;
+        Ok(PyMessageChannelReceiver {
+            inner: Arc::new(Mutex::new(Some(registration))),
+        })
+    }
+
     /// Fetch a cluster peer's current resource catalog over `/auki/resources/0.2.0`.
     ///
     /// Returns a `list[ResourceEntry]`. Use `variants` to filter by
@@ -2147,6 +2257,8 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PyResourceEntry>()?;
+    m.add_class::<PyMessageEvent>()?;
+    m.add_class::<PyMessageChannelReceiver>()?;
     m.add_class::<PyReadFrom>()?;
     m.add_class::<PyStreamRequest>()?;
     m.add_class::<PyStreamManifestBuilder>()?;

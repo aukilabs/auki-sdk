@@ -105,6 +105,9 @@ pub mod heartbeat_protocol;
 pub mod membership_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod message_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod diagnostic_protocol;
 
 #[cfg(feature = "swarm")]
@@ -112,6 +115,9 @@ pub mod info_protocol;
 
 #[cfg(feature = "swarm")]
 pub mod resources_protocol;
+
+#[cfg(feature = "swarm")]
+pub mod resources_v3_protocol;
 
 #[cfg(feature = "swarm")]
 pub mod registries_protocol;
@@ -139,8 +145,26 @@ pub use network_runtime::{
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
     InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
     PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError,
-    UpdateReport,
+    RequestResourcesError, RequestResourcesV3Error, ResourcesRequestEvent, SendJoinRequestError,
+    SpawnError, UpdateError, UpdateReport,
+};
+
+#[cfg(feature = "swarm")]
+pub use auki_datatypes::message::Message;
+
+#[cfg(feature = "swarm")]
+pub use message_protocol::{
+    InboundMessage, MAX_MESSAGE_FRAME_BYTES, MESSAGE_PROTOCOL, MessageChannelRegistration,
+    MessageChannelSender, MessageProtocolError, OpenMessageChannelError, RegistrationError,
+    SendMessageError,
+};
+
+#[cfg(feature = "swarm")]
+pub use resources_v3_protocol::{
+    MAX_RESOURCES_FRAME_BYTES as MAX_RESOURCES_V3_FRAME_BYTES, MessageChannelResource,
+    RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL, ResourceEntry as ResourceEntryV3,
+    ResourceVariant as ResourceVariantV3, ResourcesProtocolError as ResourcesProtocolErrorV3,
+    ResourcesRequest as ResourcesRequestV3, ResourcesResponse as ResourcesResponseV3,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]

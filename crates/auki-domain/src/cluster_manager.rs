@@ -1509,6 +1509,58 @@ impl ClusterManager {
         Ok(response)
     }
 
+    /// Fetch a cluster peer's Resource Catalog v0.3 explicitly.
+    ///
+    /// This does not fall back to v0.2, because doing so would make an
+    /// unsupported message-channel catalog indistinguishable from an empty one.
+    pub async fn fetch_resources_catalog_v3(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<auki_network::resources_v3_protocol::ResourcesResponse, FetchResourcesCatalogV3Error>
+    {
+        self.fetch_resources_catalog_v3_with(
+            peer_id,
+            auki_network::resources_v3_protocol::ResourcesRequest::all(),
+        )
+        .await
+    }
+
+    /// Fetch a cluster peer's Resource Catalog v0.3 with an explicit filter.
+    pub async fn fetch_resources_catalog_v3_with(
+        &self,
+        peer_id: PeerId,
+        request: auki_network::resources_v3_protocol::ResourcesRequest,
+    ) -> Result<auki_network::resources_v3_protocol::ResourcesResponse, FetchResourcesCatalogV3Error>
+    {
+        Ok(self
+            .runtime
+            .request_resources_catalog_v3_with(peer_id, request)
+            .await?)
+    }
+
+    /// Atomically bind a receiver-owned message-channel catalog row to the
+    /// runtime and allocate its bounded live receiver.
+    pub fn register_message_channel(
+        &self,
+        resource: auki_network::MessageChannelResource,
+        receiver_capacity: usize,
+    ) -> Result<auki_network::MessageChannelRegistration, auki_network::RegistrationError> {
+        self.runtime
+            .register_message_channel(resource, receiver_capacity)
+    }
+
+    /// Open a persistent live sender for one receiver-owned message channel.
+    pub async fn open_message_channel(
+        &self,
+        owner_peer_id: PeerId,
+        resource_id: impl Into<String>,
+        expected_clock: auki_registry::RegistryRef,
+    ) -> Result<auki_network::MessageChannelSender, auki_network::OpenMessageChannelError> {
+        self.runtime
+            .open_message_channel(owner_peer_id, resource_id, expected_clock)
+            .await
+    }
+
     /// Fetch and verify a peer's `SensorRegistryEntry` by exact
     /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
     ///
@@ -3336,6 +3388,27 @@ pub enum FetchResourcesCatalogError {
     Request(#[from] RequestResourcesError),
 }
 
+/// Errors from [`ClusterManager::fetch_resources_catalog_v3`].
+#[derive(Debug, Error)]
+pub enum FetchResourcesCatalogV3Error {
+    /// The remote peer does not implement Resource Catalog v0.3. No v0.2
+    /// request was attempted.
+    #[error("remote peer does not support Resource Catalog v0.3")]
+    UnsupportedProtocol,
+    /// libp2p / wire / timeout failure during the explicit v0.3 request.
+    #[error("request_resources_catalog_v3: {0}")]
+    Request(auki_network::RequestResourcesV3Error),
+}
+
+impl From<auki_network::RequestResourcesV3Error> for FetchResourcesCatalogV3Error {
+    fn from(error: auki_network::RequestResourcesV3Error) -> Self {
+        match error {
+            auki_network::RequestResourcesV3Error::UnsupportedProtocol => Self::UnsupportedProtocol,
+            error => Self::Request(error),
+        }
+    }
+}
+
 /// Errors from `ClusterManager::fetch_*_entry`.
 #[derive(Debug, Error)]
 pub enum FetchRegistryEntryError {
@@ -4007,6 +4080,17 @@ fn now_unix_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unsupported_resources_v3_is_exposed_without_v2_fallback() {
+        let error = FetchResourcesCatalogV3Error::from(
+            auki_network::RequestResourcesV3Error::UnsupportedProtocol,
+        );
+        assert!(matches!(
+            error,
+            FetchResourcesCatalogV3Error::UnsupportedProtocol
+        ));
+    }
+
     use auki_time::SessionClock;
 
     // ─── #304 heartbeat grace (peers_past_loss_timeout) ──────────────────

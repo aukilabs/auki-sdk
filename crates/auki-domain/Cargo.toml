@@ -56,7 +56,7 @@ getrandom = { version = "0.2", features = ["js"], optional = true }
 [dev-dependencies]
 auki-layout = { path = "../auki-layout" }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 tempfile = "3"
 # Integration tests need to drive a Swarm + listen for events directly
 # (waiting for the OS-chosen TCP port to materialize before calling

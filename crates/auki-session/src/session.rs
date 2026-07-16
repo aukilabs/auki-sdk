@@ -173,6 +173,21 @@ impl Session {
         self.inner.read().utc_clock.clone()
     }
 
+    /// Whether `clock` exactly identifies an entry registered in this Session.
+    ///
+    /// All three `RegistryRef` fields must match: peer identity, clock id, and
+    /// the hash of the stored clock declaration.
+    pub fn contains_clock_ref(&self, clock: &RegistryRef) -> bool {
+        if clock.peer_id != self.peer_id() {
+            return false;
+        }
+        self.inner
+            .read()
+            .clocks
+            .get(&clock.id)
+            .is_some_and(|entry| entry.hash() == clock.hash)
+    }
+
     /// A cheaply-cloneable read handle over this session's live logs, for
     /// `auki-domain` to build the resource catalog without owning the
     /// `Session`. See [`SessionLogs`].
@@ -590,6 +605,25 @@ mod tests {
             tmp.path().join("registries/clocks/galbot").exists(),
             "clock entries not registered on disk"
         );
+    }
+
+    #[test]
+    fn contains_clock_ref_requires_exact_registered_peer_id_and_hash() {
+        let (session, _tmp) = started();
+        let exact = session.monotonic_clock();
+        assert!(session.contains_clock_ref(&exact));
+
+        let mut unknown = exact.clone();
+        unknown.id.push_str("/unknown");
+        assert!(!session.contains_clock_ref(&unknown));
+
+        let mut wrong_peer = exact.clone();
+        wrong_peer.peer_id = "other-peer".into();
+        assert!(!session.contains_clock_ref(&wrong_peer));
+
+        let mut wrong_hash = exact;
+        wrong_hash.hash = "wrong-hash".into();
+        assert!(!session.contains_clock_ref(&wrong_hash));
     }
 }
 

@@ -23,6 +23,14 @@ pub enum GeometryError {
         axes_determinant: i8,
     },
     ZeroQuaternion,
+    MixedHandednessConversion {
+        from_frame_id: String,
+        to_frame_id: String,
+    },
+    MixedUnitConversion {
+        from_frame_id: String,
+        to_frame_id: String,
+    },
 }
 
 impl fmt::Display for GeometryError {
@@ -38,6 +46,20 @@ impl fmt::Display for GeometryError {
                 "frame {frame_id:?} declares {declared:?} handedness but axes have determinant {axes_determinant}"
             ),
             GeometryError::ZeroQuaternion => write!(f, "orientation quaternion has zero length"),
+            GeometryError::MixedHandednessConversion {
+                from_frame_id,
+                to_frame_id,
+            } => write!(
+                f,
+                "cannot convert only one side of a transform between frame {from_frame_id:?} and {to_frame_id:?}: they declare different handedness, so the result would not be a proper rotation"
+            ),
+            GeometryError::MixedUnitConversion {
+                from_frame_id,
+                to_frame_id,
+            } => write!(
+                f,
+                "cannot convert only one side of a transform between frame {from_frame_id:?} and {to_frame_id:?}: they declare different length units, which would require a scale factor that a rotation quaternion cannot represent"
+            ),
         }
     }
 }
@@ -164,6 +186,73 @@ pub fn convert_pose_convention(
         translation,
         orientation,
     })
+}
+
+/// Re-express only the *source* side of a `from -> to` transform in a
+/// new coordinate convention, leaving the target side untouched.
+///
+/// `transform` maps points expressed in `from`'s convention into
+/// whatever convention its target side already uses. This returns the
+/// equivalent transform that instead accepts points expressed in `to`'s
+/// convention. Use this to reinterpret how a transform's input is read
+/// (e.g. a producer switching axis convention) without touching the
+/// convention its output lands in. For re-expressing both ends of a
+/// pose together, use [`convert_pose_convention`] instead.
+///
+/// Returns [`GeometryError::MixedHandednessConversion`] if `from` and
+/// `to` declare different handedness: converting only one side between
+/// differently-handed conventions is not representable as a proper
+/// rotation, and therefore not as a quaternion. Returns
+/// [`GeometryError::MixedUnitConversion`] if `from` and `to` declare
+/// different length units: the resulting map would be a scaled rotation
+/// (a similarity transform), which a rotation quaternion cannot
+/// represent either.
+pub fn convert_transform_source_convention(
+    transform: &SpatialTransform,
+    from: &FrameRegistryEntry,
+    to: &FrameRegistryEntry,
+) -> Result<SpatialTransform> {
+    validate_frame(from)?;
+    validate_frame(to)?;
+    reject_mixed_handedness(from, to)?;
+    reject_mixed_units(from, to)?;
+
+    // Prepending the pure axis conversion `to -> from` is exactly
+    // `T_source_target ∘ T_new_source_old_source`: it leaves the target
+    // side alone and only changes what convention the input is read in.
+    let new_source_to_old_source = axis_only_transform(&to.axes, &from.axes)?;
+    compose_spatial_transforms(&new_source_to_old_source, transform)
+}
+
+/// Re-express only the *target* side of a `from -> to` transform in a
+/// new coordinate convention, leaving the source side untouched.
+///
+/// `transform` maps points into `from`'s convention. This returns the
+/// equivalent transform that instead produces points in `to`'s
+/// convention, without touching the convention its input side already
+/// expects. Use this to retarget where a transform's output lands (e.g.
+/// a consumer switching render convention) without touching how its
+/// input is interpreted. For re-expressing both ends of a pose
+/// together, use [`convert_pose_convention`] instead.
+///
+/// Returns [`GeometryError::MixedHandednessConversion`] or
+/// [`GeometryError::MixedUnitConversion`] for the same reasons as
+/// [`convert_transform_source_convention`].
+pub fn convert_transform_target_convention(
+    transform: &SpatialTransform,
+    from: &FrameRegistryEntry,
+    to: &FrameRegistryEntry,
+) -> Result<SpatialTransform> {
+    validate_frame(from)?;
+    validate_frame(to)?;
+    reject_mixed_handedness(from, to)?;
+    reject_mixed_units(from, to)?;
+
+    // Appending the pure axis conversion `from -> to` is exactly
+    // `T_old_target_new_target ∘ T_source_target`: it leaves the source
+    // side alone and only changes what convention the output lands in.
+    let old_target_to_new_target = axis_only_transform(&from.axes, &to.axes)?;
+    compose_spatial_transforms(transform, &old_target_to_new_target)
 }
 
 /// Invert a transform from `from` into `to`, returning the transform from
@@ -310,6 +399,40 @@ fn validate_frame(entry: &FrameRegistryEntry) -> Result<()> {
             frame_id: entry.frame_id.clone(),
             declared: entry.handedness,
             axes_determinant: det,
+        });
+    }
+    Ok(())
+}
+
+/// A zero-translation transform holding only the signed axis permutation
+/// from `from` to `to`, suitable as an identity-translation leg to plug
+/// into [`compose_spatial_transforms`].
+fn axis_only_transform(from: &AxisConvention, to: &AxisConvention) -> Result<SpatialTransform> {
+    Ok(SpatialTransform {
+        translation: Some(Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }),
+        orientation: Some(matrix_to_quat(axis_convention_matrix(from, to)?)?),
+    })
+}
+
+fn reject_mixed_handedness(from: &FrameRegistryEntry, to: &FrameRegistryEntry) -> Result<()> {
+    if from.handedness != to.handedness {
+        return Err(GeometryError::MixedHandednessConversion {
+            from_frame_id: from.frame_id.clone(),
+            to_frame_id: to.frame_id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn reject_mixed_units(from: &FrameRegistryEntry, to: &FrameRegistryEntry) -> Result<()> {
+    if from.units != to.units {
+        return Err(GeometryError::MixedUnitConversion {
+            from_frame_id: from.frame_id.clone(),
+            to_frame_id: to.frame_id.clone(),
         });
     }
     Ok(())
@@ -811,6 +934,102 @@ mod tests {
         );
 
         assert_vec3_close(actual_target_after, expected_target_after);
+    }
+
+    #[test]
+    fn source_and_target_conversion_compose_to_full_pose_conversion() {
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "world");
+        let t = transform(vec3(1.0, 2.0, 3.0), quat_z_90());
+
+        let source_then_target = convert_transform_target_convention(
+            &convert_transform_source_convention(&t, &from, &to).unwrap(),
+            &from,
+            &to,
+        )
+        .unwrap();
+
+        let full = convert_pose_convention(&t, &from, &to).unwrap();
+
+        assert_transform_close(source_then_target, full);
+    }
+
+    #[test]
+    fn convert_transform_source_convention_leaves_target_side_unchanged() {
+        let from = FrameRegistryEntry::ros_optical("", "camera");
+        let to = FrameRegistryEntry::opengl("", "camera_alt");
+        let a_to_b = transform(vec3(1.0, 2.0, 3.0), quat_z_90());
+
+        let converted = convert_transform_source_convention(&a_to_b, &from, &to).unwrap();
+
+        // Feeding a point already expressed in `to`'s convention through the
+        // converted transform should land on the same target-side point as
+        // feeding the equivalent `from`-convention point through the
+        // original transform.
+        let point_in_to = vec3(4.0, -1.0, 2.0);
+        let point_in_from = convert_point_convention(point_in_to.clone(), &to, &from).unwrap();
+
+        let via_original = apply_transform_to_point(&a_to_b, point_in_from);
+        let via_converted = apply_transform_to_point(&converted, point_in_to);
+
+        assert_vec3_close(via_converted, via_original);
+    }
+
+    #[test]
+    fn convert_transform_target_convention_leaves_source_side_unchanged() {
+        let from = FrameRegistryEntry::ros_optical("", "world_a");
+        let to = FrameRegistryEntry::opengl("", "world_b");
+        let a_to_b = transform(vec3(1.0, 2.0, 3.0), quat_z_90());
+
+        let converted = convert_transform_target_convention(&a_to_b, &from, &to).unwrap();
+
+        // Feeding the same source-side point through both transforms should
+        // produce target-side points that are the same physical point, just
+        // re-expressed in the new target convention.
+        let point_in_from = vec3(4.0, -1.0, 2.0);
+        let via_original = apply_transform_to_point(&a_to_b, point_in_from.clone());
+        let via_converted = apply_transform_to_point(&converted, point_in_from);
+
+        let expected = convert_point_convention(via_original, &from, &to).unwrap();
+        assert_vec3_close(via_converted, expected);
+    }
+
+    #[test]
+    fn one_sided_conversion_rejects_mixed_handedness() {
+        let from = FrameRegistryEntry::opengl("", "world");
+        let to = FrameRegistryEntry::unity("", "unity");
+        let t = identity_transform();
+
+        assert!(matches!(
+            convert_transform_source_convention(&t, &from, &to),
+            Err(GeometryError::MixedHandednessConversion { .. })
+        ));
+        assert!(matches!(
+            convert_transform_target_convention(&t, &from, &to),
+            Err(GeometryError::MixedHandednessConversion { .. })
+        ));
+    }
+
+    #[test]
+    fn one_sided_conversion_rejects_mixed_units() {
+        let from = FrameRegistryEntry::opengl("", "world");
+        let to = FrameRegistryEntry {
+            peer_id: String::new(),
+            frame_id: "world_cm".into(),
+            handedness: Handedness::Right,
+            axes: FrameRegistryEntry::opengl("", "world_cm").axes,
+            units: LengthUnit::Centimeters,
+        };
+        let t = identity_transform();
+
+        assert!(matches!(
+            convert_transform_source_convention(&t, &from, &to),
+            Err(GeometryError::MixedUnitConversion { .. })
+        ));
+        assert!(matches!(
+            convert_transform_target_convention(&t, &from, &to),
+            Err(GeometryError::MixedUnitConversion { .. })
+        ));
     }
 
     #[test]

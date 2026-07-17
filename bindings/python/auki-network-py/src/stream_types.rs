@@ -1665,6 +1665,8 @@ fn decode_retained_audio(bytes: Vec<u8>) -> Result<RustAudioFrame, String> {
 /// `Drop` on [`SourceStreamGuard`] schedules a fire-and-forget `aclose`
 /// task on the wrapper's tokio runtime so the generator's `finally`
 /// block fires promptly rather than waiting for asyncio's gc hooks.
+/// The returned stream is fused so polls after natural termination keep
+/// returning `None` without re-entering the Python bridge.
 fn python_iter_into_source_stream<T>(
     aiter: Py<PyAny>,
     convert: fn(&PyStreamItem) -> Result<RustStreamItem<T>, String>,
@@ -1725,7 +1727,7 @@ where
             }
         }
     });
-    Box::pin(stream)
+    Box::pin(stream.fuse())
 }
 
 /// Drop guard for the producer-side source-Stream. If the SDK drops the
@@ -2222,6 +2224,88 @@ mod tests {
         let mut log = RawLog::<RustRawLogBytes>::open(root, raw_log_manifest()).unwrap();
         log.append(timestamp_ns, &RustRawLogBytes(payload)).unwrap();
         log.flush().unwrap();
+    }
+
+    #[test]
+    fn exhausted_python_source_remains_terminated() {
+        pyo3::prepare_freethreaded_python();
+        let _ = crate::stream_bridge::asyncio_locals();
+        for attempt in 0..3 {
+            let module_name = format!("test_empty_source_{attempt}");
+            let aiter = Python::with_gil(|py| {
+                let module = PyModule::from_code_bound(
+                    py,
+                    "async def _gen():\n    if False:\n        yield None\n",
+                    "test_empty_source.py",
+                    &module_name,
+                )?;
+                Ok::<Py<PyAny>, PyErr>(module.getattr("_gen")?.call0()?.unbind())
+            })
+            .unwrap();
+            let mut source = python_iter_into_source_stream::<RustCameraFrame>(aiter, |_| {
+                unreachable!("empty source must not invoke conversion")
+            });
+
+            crate::cluster_tokio_runtime().block_on(async {
+                assert!(source.next().await.is_none());
+                assert!(source.next().await.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn dropping_python_source_closes_suspended_generator() {
+        pyo3::prepare_freethreaded_python();
+        let _ = crate::stream_bridge::asyncio_locals();
+        let (aiter, module) = Python::with_gil(|py| {
+            let item = PyStreamItem::new(123, camera_frame_as_any(py, b"jpeg"))?;
+            let item = Py::new(py, item)?;
+            let module = PyModule::from_code_bound(
+                py,
+                "closed = False\n\
+                 async def _gen(item):\n\
+                 \x20   global closed\n\
+                 \x20   try:\n\
+                 \x20       yield item\n\
+                 \x20   finally:\n\
+                 \x20       closed = True\n",
+                "test_dropped_source.py",
+                "test_dropped_source",
+            )?;
+            let aiter = module.getattr("_gen")?.call1((item,))?.unbind();
+            Ok::<_, PyErr>((aiter, module.unbind()))
+        })
+        .unwrap();
+        let mut source =
+            python_iter_into_source_stream::<RustCameraFrame>(aiter, PyStreamItem::to_rust_camera);
+
+        crate::cluster_tokio_runtime().block_on(async {
+            let first = source
+                .next()
+                .await
+                .expect("generator should yield one item")
+                .expect("camera item should convert");
+            assert_eq!(first.payload.frame, b"jpeg");
+            drop(source);
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    let closed = Python::with_gil(|py| {
+                        module
+                            .bind(py)
+                            .getattr("closed")
+                            .and_then(|value| value.extract::<bool>())
+                    })
+                    .expect("read generator cleanup flag");
+                    if closed {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("dropping source should aclose its Python generator");
+        });
     }
 
     #[test]

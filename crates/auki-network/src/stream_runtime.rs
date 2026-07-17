@@ -463,6 +463,38 @@ pub(crate) async fn handle_inbound_substream(
     }
 }
 
+/// The next producer-pump event, distinguishing an explicit shutdown request
+/// from loss of the runtime that owned the shutdown sender.
+enum PumpEvent<T> {
+    Source(Option<Result<StreamItem<T>, String>>),
+    ShutdownRequested,
+    ShutdownChannelClosed,
+}
+
+/// Waits for a source item or producer shutdown without hot-looping when the
+/// shutdown watch channel closes. A `false` update is non-terminal.
+async fn next_pump_event<T>(
+    source: &mut SourceStream<T>,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> PumpEvent<T>
+where
+    T: Send + 'static,
+{
+    loop {
+        tokio::select! {
+            biased;
+            result = shutdown_rx.changed() => match result {
+                Ok(()) if *shutdown_rx.borrow() => {
+                    return PumpEvent::ShutdownRequested;
+                }
+                Ok(()) => continue,
+                Err(_) => return PumpEvent::ShutdownChannelClosed,
+            },
+            item = source.next() => return PumpEvent::Source(item),
+        }
+    }
+}
+
 /// Per-`T` source-Stream pump. Writes
 /// [`StreamMessage::Accept(manifest)`]
 /// then drains `source` onto the substream as `StreamMessage::Entry`
@@ -471,6 +503,8 @@ pub(crate) async fn handle_inbound_substream(
 /// D5b — best-effort explicit). Source returns `None` →
 /// `EndOfStream { reason: SourceEnded }`. Source returns
 /// `Some(Err(detail))` → `EndOfStream { reason: ProducerError { detail } }`.
+/// Loss of the shutdown sender is treated as an unclean transport end and
+/// closes the substream without writing `EndOfStream`.
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
 /// (`CameraFrame`, `point_cloud::Data`, `joint_encoders::Data`,
@@ -493,32 +527,23 @@ async fn pump_typed<T>(
     // signal, or send error.
     let mut seq: u64 = 0;
     let end_reason = loop {
-        tokio::select! {
-            biased;
-
-            res = shutdown_rx.changed() => {
-                if res.is_ok() && *shutdown_rx.borrow() {
-                    break EndReason::producer_shutting_down();
+        match next_pump_event(&mut source, &mut shutdown_rx).await {
+            PumpEvent::ShutdownChannelClosed => return,
+            PumpEvent::ShutdownRequested => break EndReason::producer_shutting_down(),
+            PumpEvent::Source(Some(Ok(frame))) => {
+                let payload = frame.payload.encode_to_vec();
+                let msg = StreamMessage::entry(WireStreamEntry {
+                    timestamp_ns: frame.timestamp_ns,
+                    seq,
+                    payload,
+                });
+                if write_message(&mut substream, &msg).await.is_err() {
+                    return;
                 }
-                continue;
+                seq = seq.wrapping_add(1);
             }
-
-            item = source.next() => match item {
-                Some(Ok(frame)) => {
-                    let payload = frame.payload.encode_to_vec();
-                    let msg = StreamMessage::entry(WireStreamEntry {
-                        timestamp_ns: frame.timestamp_ns,
-                        seq,
-                        payload,
-                    });
-                    if write_message(&mut substream, &msg).await.is_err() {
-                        return;
-                    }
-                    seq = seq.wrapping_add(1);
-                }
-                Some(Err(detail)) => break EndReason::producer_error(detail),
-                None => break EndReason::source_ended(),
-            },
+            PumpEvent::Source(Some(Err(detail))) => break EndReason::producer_error(detail),
+            PumpEvent::Source(None) => break EndReason::source_ended(),
         }
     };
     let end_msg = StreamMessage::end_of_stream(end_reason);
@@ -702,6 +727,24 @@ mod tests {
         }
     }
 
+    /// A dropped shutdown watch sender must resolve promptly instead of
+    /// hot-looping on `changed()` returning `Err` with `continue`.
+    #[tokio::test]
+    async fn closed_shutdown_channel_ends_the_pump_wait() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        drop(shutdown_tx);
+        let mut source: SourceStream<CameraFrame> = Box::pin(stream::pending());
+
+        let event = tokio::time::timeout(
+            Duration::from_millis(100),
+            next_pump_event(&mut source, &mut shutdown_rx),
+        )
+        .await
+        .expect("closed shutdown channel must not hot-loop");
+
+        assert!(matches!(event, PumpEvent::ShutdownChannelClosed));
+    }
+
     // ─── Provider fixtures ───────────────────────────────────────────────
 
     fn camera_provider_yielding_three_frames() -> StreamProvider {
@@ -748,7 +791,9 @@ mod tests {
     /// handful that fit in the in-flight window are ever materialized before
     /// the backpressured producer write blocks. Used by the #304
     /// heartbeat-vs-backpressure repro.
-    fn flooding_camera_provider(generated: std::sync::Arc<std::sync::atomic::AtomicU64>) -> StreamProvider {
+    fn flooding_camera_provider(
+        generated: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) -> StreamProvider {
         Arc::new(move |_peer, _req| {
             let generated = generated.clone();
             let frames = (0..1_000_000u64).map(move |i| {

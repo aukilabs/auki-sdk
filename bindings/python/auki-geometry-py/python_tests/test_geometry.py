@@ -160,6 +160,101 @@ def test_convert_pose_convention_rejects_short_array() -> None:
         )
 
 
+def test_convert_transform_source_and_target_convention_compose_to_full_pose() -> None:
+    import math
+
+    import auki_geometry
+    import auki_registry
+
+    half = 1.0 / math.sqrt(2)
+    pose = [1.0, 2.0, 3.0, 0.0, 0.0, half, half]
+    from_entry = auki_registry.frame_ros_optical("test-peer", "camera")
+    to_entry = auki_registry.frame_opengl("test-peer", "world")
+
+    source_then_target = auki_geometry.convert_transform_target_convention(
+        auki_geometry.convert_transform_source_convention(pose, from_entry, to_entry),
+        from_entry,
+        to_entry,
+    )
+    full = auki_geometry.convert_pose_convention(pose, from_entry, to_entry)
+
+    for i in range(3):
+        assert source_then_target[i] == pytest.approx(full[i])
+    # Quaternion can equal ±full (Hamilton sign).
+    same = all(abs(source_then_target[3 + i] - full[3 + i]) < 1e-9 for i in range(4))
+    negated = all(abs(source_then_target[3 + i] + full[3 + i]) < 1e-9 for i in range(4))
+    assert same or negated
+
+
+def test_convert_transform_source_convention_leaves_target_side_unchanged() -> None:
+    import math
+
+    import auki_geometry
+    import auki_registry
+
+    half = 1.0 / math.sqrt(2)
+    a_to_b = [1.0, 2.0, 3.0, 0.0, 0.0, half, half]
+    from_entry = auki_registry.frame_ros_optical("test-peer", "camera")
+    to_entry = auki_registry.frame_opengl("test-peer", "camera_alt")
+
+    converted = auki_geometry.convert_transform_source_convention(a_to_b, from_entry, to_entry)
+
+    # Translation is entirely on the target side, so it must be untouched.
+    assert converted[0] == pytest.approx(a_to_b[0])
+    assert converted[1] == pytest.approx(a_to_b[1])
+    assert converted[2] == pytest.approx(a_to_b[2])
+
+
+def test_convert_transform_target_convention_leaves_source_side_translation_scaled() -> None:
+    import auki_geometry
+    import auki_registry
+
+    identity = [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]
+    from_entry = auki_registry.frame_ros_optical("test-peer", "world_a")
+    to_entry = auki_registry.frame_opengl("test-peer", "world_b")
+
+    converted = auki_geometry.convert_transform_target_convention(identity, from_entry, to_entry)
+
+    # Target-side axis flip: y -> -y, z -> -z (same as convert_point_convention).
+    assert converted[0] == pytest.approx(1.0)
+    assert converted[1] == pytest.approx(-2.0)
+    assert converted[2] == pytest.approx(-3.0)
+
+
+def test_one_sided_conversion_rejects_mixed_handedness() -> None:
+    import auki_geometry
+    import auki_registry
+
+    identity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    from_entry = auki_registry.frame_opengl("test-peer", "world")
+    to_entry = auki_registry.frame_unity("test-peer", "unity")
+
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.convert_transform_source_convention(identity, from_entry, to_entry)
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.convert_transform_target_convention(identity, from_entry, to_entry)
+
+
+def test_one_sided_conversion_rejects_mixed_units() -> None:
+    import auki_geometry
+    import auki_registry
+
+    identity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    from_entry = auki_registry.frame_opengl("test-peer", "world")
+    to_entry = {
+        "peer_id": "test-peer",
+        "frame_id": "world_cm",
+        "handedness": "right",
+        "axes": {"x": "right", "y": "up", "z": "backward"},
+        "units": "centimeters",
+    }
+
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.convert_transform_source_convention(identity, from_entry, to_entry)
+    with pytest.raises(auki_geometry.GeometryError):
+        auki_geometry.convert_transform_target_convention(identity, from_entry, to_entry)
+
+
 def test_inverse_then_compose_yields_identity() -> None:
     import math
 

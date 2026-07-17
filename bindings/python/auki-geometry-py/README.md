@@ -23,6 +23,8 @@ Categorical types (`FrameRegistryEntry`, `AxisConvention`, axis directions, leng
 - `convert_vector_convention(vector, from_entry, to_entry)` → 3-list (axis + unit).
 - `convert_direction_convention(direction, from_entry, to_entry)` → 3-list (axis only, no unit scale).
 - `convert_pose_convention(pose, from_entry, to_entry)` → 7-list.
+- `convert_transform_source_convention(transform, from_entry, to_entry)` → 7-list (re-express only the source side; target side untouched).
+- `convert_transform_target_convention(transform, from_entry, to_entry)` → 7-list (re-express only the target side; source side untouched).
 - `inverse_spatial_transform(transform)` → 7-list.
 - `compose_spatial_transforms(from_to_mid, mid_to_to)` → 7-list (the `from→to` composition).
 - `relative_spatial_transform(common_to_from, common_to_to)` → 7-list (the `from→to` derivation).
@@ -31,7 +33,7 @@ Categorical types (`FrameRegistryEntry`, `AxisConvention`, axis directions, leng
 
 ### Errors
 
-- `GeometryError` (subclass of `ValueError`) — raised for invalid axes, handedness mismatch, or zero-length orientation quaternion.
+- `GeometryError` (subclass of `ValueError`) — raised for invalid axes, handedness mismatch, zero-length orientation quaternion, or (for the one-sided `convert_transform_*_convention` functions) a `from_entry`/`to_entry` pair with mismatched handedness or length units.
 - Plain `ValueError` — raised for array length mismatches, non-numeric elements, or malformed registry dicts.
 
 ## Depends on

@@ -285,6 +285,38 @@ fn convert_pose_convention(
     spatial_transform_to_pylist(py, &converted)
 }
 
+#[pyfunction]
+fn convert_transform_source_convention(
+    py: Python<'_>,
+    transform: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let transform = extract_spatial_transform_array(transform, "transform")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_transform_source_convention(
+        &transform, &from, &to,
+    ))?;
+    spatial_transform_to_pylist(py, &converted)
+}
+
+#[pyfunction]
+fn convert_transform_target_convention(
+    py: Python<'_>,
+    transform: &Bound<'_, PyAny>,
+    from_entry: &Bound<'_, PyAny>,
+    to_entry: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let transform = extract_spatial_transform_array(transform, "transform")?;
+    let from = parse_frame_entry(py, from_entry, "from_entry")?;
+    let to = parse_frame_entry(py, to_entry, "to_entry")?;
+    let converted = map_err(geometry::convert_transform_target_convention(
+        &transform, &from, &to,
+    ))?;
+    spatial_transform_to_pylist(py, &converted)
+}
+
 // ─── Spatial transform composition (PR #193) ────────────────────────
 
 #[pyfunction]
@@ -344,6 +376,8 @@ fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(convert_vector_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_direction_convention, m)?)?;
     m.add_function(wrap_pyfunction!(convert_pose_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_transform_source_convention, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_transform_target_convention, m)?)?;
     m.add_function(wrap_pyfunction!(inverse_spatial_transform, m)?)?;
     m.add_function(wrap_pyfunction!(compose_spatial_transforms, m)?)?;
     m.add_function(wrap_pyfunction!(relative_spatial_transform, m)?)?;

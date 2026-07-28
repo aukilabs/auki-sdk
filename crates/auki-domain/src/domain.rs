@@ -61,6 +61,10 @@ pub struct DomainConfig {
     pub stream_provider: StreamProvider,
     /// Static daemon identity fields (app, name, session_id, etc.).
     pub daemon_info: DaemonInfo,
+    /// Manager-side join gate (`None` = open admit).
+    pub admit_gate: Option<std::sync::Arc<dyn crate::AdmitGate>>,
+    /// Outbound `JoinRequest.authorization` (full HTTP Authorization value).
+    pub join_authorization: Option<String>,
 }
 
 /// A receiver-owned message-channel declaration composed before the Domain
@@ -373,6 +377,10 @@ impl Domain {
             config.swarm,
             config.stream_provider,
             config.daemon_info,
+            crate::JoinAuthConfig {
+                admit_gate: config.admit_gate,
+                join_authorization: config.join_authorization.unwrap_or_default(),
+            },
         )
         .await?;
 

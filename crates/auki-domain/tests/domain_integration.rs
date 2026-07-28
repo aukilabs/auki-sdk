@@ -140,6 +140,8 @@ async fn domain_join_creates_cluster_and_serves_catalog() {
             swarm,
             stream_provider: decline_all_streams(),
             daemon_info,
+            admit_gate: None,
+            join_authorization: None,
         },
     )
     .await
@@ -207,6 +209,8 @@ async fn join_rejects_peer_id_not_matching_local_identity() {
                 session_clock_hash: String::new(),
                 app_instance: "ai".into(),
             },
+            admit_gate: None,
+            join_authorization: None,
         },
     )
     .await;

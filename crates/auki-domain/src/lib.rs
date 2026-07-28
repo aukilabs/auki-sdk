@@ -18,6 +18,8 @@
 #[cfg(feature = "browser_runtime")]
 pub mod browser_session;
 #[cfg(feature = "native_runtime")]
+pub mod admit_gate;
+#[cfg(feature = "native_runtime")]
 pub mod cluster_manager;
 pub mod cluster_membership;
 #[cfg(feature = "native_runtime")]
@@ -40,6 +42,8 @@ pub use auki_network::{
 pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
 #[cfg(feature = "native_runtime")]
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
+#[cfg(feature = "native_runtime")]
+pub use admit_gate::{AdmitGate, JoinAuthConfig};
 #[cfg(feature = "native_runtime")]
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,

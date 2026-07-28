@@ -9,6 +9,9 @@ package auki.join;
 
 message JoinRequest {
   repeated string multiaddrs = 1;
+  // Full HTTP Authorization header value (e.g. "Bearer <token>").
+  // Empty means absent. Additive; protocol id stays /auki/join/0.0.1.
+  string authorization = 2;
 }
 
 message JoinResponse {

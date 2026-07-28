@@ -163,6 +163,7 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         swarm,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster succeeds");
@@ -277,6 +278,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -306,6 +308,7 @@ async fn two_managers_create_then_join_against_live_discovery() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -406,6 +409,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -432,6 +436,7 @@ async fn manager_failover_when_a_dies_b_takes_over() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -534,6 +539,7 @@ async fn domain_clock_metadata_survives_manager_handoff() {
         swarm_a,
         decline_all_streams(),
         daemon_a.clone(),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -568,6 +574,7 @@ async fn domain_clock_metadata_survives_manager_handoff() {
         swarm_b,
         decline_all_streams(),
         daemon_b.clone(),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -670,6 +677,7 @@ async fn three_peer_membership_converges_via_gossip() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -696,6 +704,7 @@ async fn three_peer_membership_converges_via_gossip() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -727,6 +736,7 @@ async fn three_peer_membership_converges_via_gossip() {
         swarm_c,
         decline_all_streams(),
         sample_daemon_info("test"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster C");
@@ -820,6 +830,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
         swarm_a,
         decline_all_streams(),
         daemon_a,
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -853,6 +864,7 @@ async fn cluster_peers_fetch_each_other_participant_info_over_libp2p() {
         swarm_b,
         decline_all_streams(),
         daemon_b,
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -929,6 +941,7 @@ async fn cluster_peers_fetch_frame_registry_entry_over_libp2p() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("park-a"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -954,6 +967,7 @@ async fn cluster_peers_fetch_frame_registry_entry_over_libp2p() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("booster-b"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1038,6 +1052,7 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
         swarm,
         decline_all_streams(),
         sample_daemon_info("arc-shutdown"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster succeeds");
@@ -1154,6 +1169,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1178,6 +1194,7 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1319,6 +1336,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1345,6 +1363,7 @@ async fn manager_failover_over_quic_when_joiner_pid_lower() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1420,6 +1439,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1446,6 +1466,7 @@ async fn manager_failover_over_quic_when_manager_pid_lower() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1513,6 +1534,7 @@ async fn manager_failover_when_manager_dies_before_first_heartbeat() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1539,6 +1561,7 @@ async fn manager_failover_when_manager_dies_before_first_heartbeat() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1619,6 +1642,7 @@ async fn dead_manager_drop_is_replaced_only_after_row_sweep() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1645,6 +1669,7 @@ async fn dead_manager_drop_is_replaced_only_after_row_sweep() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1763,6 +1788,7 @@ async fn foreign_rotation_steps_manager_down() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1789,6 +1815,7 @@ async fn foreign_rotation_steps_manager_down() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");
@@ -1953,6 +1980,7 @@ async fn displaced_manager_keeps_retrying_and_reclaims_when_row_returns() {
         swarm_a,
         decline_all_streams(),
         sample_daemon_info("test-A"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("create_cluster A");
@@ -1979,6 +2007,7 @@ async fn displaced_manager_keeps_retrying_and_reclaims_when_row_returns() {
         swarm_b,
         decline_all_streams(),
         sample_daemon_info("test-B"),
+            auki_domain::JoinAuthConfig::default(),
     )
     .await
     .expect("join_cluster B");

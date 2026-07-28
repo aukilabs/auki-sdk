@@ -1431,6 +1431,7 @@ pub(crate) async fn dial_browser_join_inner(
 
     let request = auki_network::join_protocol::JoinRequest {
         multiaddrs: advertised_multiaddrs,
+        authorization: String::new(),
     };
     {
         let write = write_join_request(&mut substream, &request).fuse();

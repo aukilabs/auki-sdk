@@ -61,6 +61,9 @@ pub struct JoinRequest {
     /// records these in the cluster membership so other peers can
     /// dial back.
     pub multiaddrs: Vec<Multiaddr>,
+    /// Full HTTP `Authorization` header value (e.g. `Bearer <token>`).
+    /// Empty string means absent.
+    pub authorization: String,
 }
 
 /// Body of an outbound or inbound join response. Sent by the Manager
@@ -162,6 +165,7 @@ where
 fn proto_from_join_request(msg: &JoinRequest) -> auki_datatypes::join::JoinRequest {
     auki_datatypes::join::JoinRequest {
         multiaddrs: msg.multiaddrs.iter().map(ToString::to_string).collect(),
+        authorization: msg.authorization.clone(),
     }
 }
 
@@ -191,7 +195,10 @@ fn join_request_from_proto(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(JoinRequest { multiaddrs })
+    Ok(JoinRequest {
+        multiaddrs,
+        authorization: proto.authorization,
+    })
 }
 
 fn join_response_from_proto(
@@ -277,6 +284,7 @@ mod tests {
                 "/ip4/192.168.1.10/tcp/4001".parse().unwrap(),
                 "/ip4/192.168.1.10/udp/4001/quic-v1".parse().unwrap(),
             ],
+            authorization: "Bearer test-token".into(),
         }
     }
 

@@ -47,6 +47,7 @@
 //! so this keeps the directory entry live. The task is cancelled on
 //! [`Self::shutdown`].
 
+use crate::admit_gate::{AdmitGate, JoinAuthConfig};
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
 use auki_network::ParticipantInfo;
 use auki_network::SessionHandle;
@@ -617,6 +618,8 @@ pub struct ClusterManager {
     /// `None` until the daemon calls [`Self::set_registry_app_root`];
     /// inbound registry fetches return `entry: None` while unset.
     registry_app_root: Arc<Mutex<Option<PathBuf>>>,
+    /// Outbound join / rejoin `Authorization` header value.
+    join_authorization: Arc<String>,
     /// Set to `true` by [`Self::shutdown`] before any teardown
     /// begins. Pub I/O methods (`admit_peer`,
     /// `fetch_participant_info`) check this and fast-fail with a
@@ -689,6 +692,7 @@ impl ClusterManager {
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, BootstrapError> {
         let discovery_url = discovery_url.into();
         match target {
@@ -700,6 +704,7 @@ impl ClusterManager {
                 swarm,
                 stream_provider,
                 daemon_info,
+                join_auth,
             )
             .await
             .map_err(BootstrapError::from),
@@ -711,6 +716,7 @@ impl ClusterManager {
                 swarm,
                 stream_provider,
                 daemon_info,
+                join_auth,
             )
             .await
             .map_err(BootstrapError::from),
@@ -725,6 +731,7 @@ impl ClusterManager {
                         swarm,
                         stream_provider,
                         daemon_info,
+                        join_auth,
                     )
                     .await
                     .map_err(BootstrapError::from)
@@ -741,6 +748,7 @@ impl ClusterManager {
                         swarm,
                         stream_provider,
                         daemon_info,
+                        join_auth,
                     )
                     .await
                     {
@@ -771,6 +779,7 @@ impl ClusterManager {
                         swarm,
                         stream_provider,
                         daemon_info,
+                        join_auth,
                     )
                     .await
                     .map_err(BootstrapError::from)
@@ -783,6 +792,7 @@ impl ClusterManager {
                         swarm,
                         stream_provider,
                         daemon_info,
+                        join_auth,
                     )
                     .await
                     .map_err(BootstrapError::from)
@@ -820,6 +830,7 @@ impl ClusterManager {
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, CreateClusterError> {
         Self::create_cluster_with_relay_hints(
             cluster_name,
@@ -830,6 +841,7 @@ impl ClusterManager {
             swarm,
             stream_provider,
             daemon_info,
+            join_auth,
         )
         .await
     }
@@ -846,6 +858,7 @@ impl ClusterManager {
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, CreateClusterError> {
         Self::create_cluster_with_relay_hints(
             cluster_name,
@@ -856,6 +869,7 @@ impl ClusterManager {
             swarm,
             stream_provider,
             daemon_info,
+            join_auth,
         )
         .await
     }
@@ -873,6 +887,7 @@ impl ClusterManager {
         mut swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, CreateClusterError> {
         let mut relay_multiaddrs = Vec::new();
         reserve_manager_relay_multiaddr(
@@ -891,6 +906,7 @@ impl ClusterManager {
             swarm,
             stream_provider,
             daemon_info,
+            join_auth,
         )
         .await
     }
@@ -905,10 +921,13 @@ impl ClusterManager {
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, CreateClusterError> {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
+        let join_authorization = Arc::new(join_auth.join_authorization.clone());
+        let admit_gate = join_auth.admit_gate.clone();
         let session_clock = SessionClock::new(
             local_peer_id.to_string(),
             daemon_info.session_id.clone(),
@@ -1004,6 +1023,7 @@ impl ClusterManager {
                 manager_peer_id.clone(),
                 membership.clone(),
                 runtime.handle(),
+                join_authorization.clone(),
             ))));
 
         // 5. Drain inbound `/auki/join/0.0.1` events.
@@ -1014,6 +1034,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
+            admit_gate.clone(),
         )));
 
         // 6. Drain heartbeat carrier events and run the domain-side
@@ -1036,6 +1057,7 @@ impl ClusterManager {
             domain_clock_sources.clone(),
             advertised_domain_clock_source.clone(),
             session_clock.clone(),
+            join_authorization.clone(),
         )));
 
         // 7. Drain inbound /auki/membership/0.0.1 gossip events. As
@@ -1119,6 +1141,7 @@ impl ClusterManager {
             resource_catalog_provider,
             session_handle,
             registry_app_root,
+            join_authorization,
             stopped: AtomicBool::new(false),
         })
     }
@@ -1126,6 +1149,11 @@ impl ClusterManager {
     /// The cluster's name.
     pub fn cluster_name(&self) -> &str {
         &self.cluster_name
+    }
+
+    /// Outbound join / rejoin `Authorization` value configured at bootstrap.
+    pub fn join_authorization(&self) -> &str {
+        self.join_authorization.as_str()
     }
 
     /// The local peer's libp2p peer-id.
@@ -1713,10 +1741,13 @@ impl ClusterManager {
         swarm: Swarm<Behaviour>,
         stream_provider: StreamProvider,
         daemon_info: DaemonInfo,
+        join_auth: JoinAuthConfig,
     ) -> Result<Self, JoinClusterError> {
         let discovery = DiscoveryClient::new(discovery_url.into());
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
+        let join_authorization = Arc::new(join_auth.join_authorization.clone());
+        let admit_gate = join_auth.admit_gate.clone();
         let session_clock = SessionClock::new(
             local_peer_id.to_string(),
             daemon_info.session_id.clone(),
@@ -1788,6 +1819,7 @@ impl ClusterManager {
                 manager_peer,
                 JoinRequest {
                     multiaddrs: local_multiaddrs.clone(),
+                    authorization: join_auth.join_authorization.clone(),
                 },
             )
             .await?;
@@ -1840,6 +1872,7 @@ impl ClusterManager {
             manager_peer_id.clone(),
             membership.clone(),
             runtime.handle(),
+            admit_gate.clone(),
         )));
 
         // 7. Drain heartbeat carrier events and run the domain-side
@@ -1863,6 +1896,7 @@ impl ClusterManager {
             domain_clock_sources.clone(),
             advertised_domain_clock_source.clone(),
             session_clock.clone(),
+            join_authorization.clone(),
         )));
 
         // 8. Drain inbound /auki/membership/0.0.1 gossip events.
@@ -1944,6 +1978,7 @@ impl ClusterManager {
             resource_catalog_provider,
             session_handle,
             registry_app_root,
+            join_authorization,
             stopped: AtomicBool::new(false),
         })
     }
@@ -2214,6 +2249,7 @@ async fn rejoin_via_manager(
     manager_peer_id_slot: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
     runtime: &auki_network::NetworkRuntimeHandle,
+    authorization: &str,
 ) -> Result<(), RejoinError> {
     // 1. Make the Manager dialable again: current membership ∪ target.
     //    (An evicting Manager dropped us from ITS allow-list; ours may
@@ -2258,6 +2294,7 @@ async fn rejoin_via_manager(
             manager,
             JoinRequest {
                 multiaddrs: local_multiaddrs.to_vec(),
+                authorization: authorization.to_string(),
             },
         )
         .await?;
@@ -2499,6 +2536,7 @@ async fn handle_domain_peer_lost(
     advertised_domain_clock_source: &Arc<Mutex<Option<HeartbeatDomainClock>>>,
     clock_sync: &ClockSyncHandle,
     domain_clock_sources: &DomainClockSources,
+    join_authorization: &str,
     lost_pid: PeerId,
 ) -> LossOutcome {
     let current_manager = *manager_peer_id.lock().expect("manager_peer_id lock");
@@ -2532,6 +2570,7 @@ async fn handle_domain_peer_lost(
                     manager_peer_id,
                     membership,
                     runtime,
+                    join_authorization,
                 )
                 .await
                 {
@@ -2564,6 +2603,7 @@ async fn handle_domain_peer_lost(
                     manager_peer_id,
                     membership,
                     runtime,
+                    join_authorization,
                 )
                 .await
                 {
@@ -2629,6 +2669,7 @@ async fn handle_domain_peer_lost(
                                 manager_peer_id.clone(),
                                 membership.clone(),
                                 runtime.clone(),
+                                Arc::new(join_authorization.to_string()),
                             );
                             let prev = liveness_check_task
                                 .lock()
@@ -2815,6 +2856,7 @@ fn spawn_liveness_handler(
     domain_clock_sources: DomainClockSources,
     advertised_domain_clock_source: Arc<Mutex<Option<HeartbeatDomainClock>>>,
     session_clock: SessionClock,
+    join_authorization: Arc<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_heartbeat_at: HashMap<PeerId, Instant> = HashMap::new();
@@ -2924,6 +2966,7 @@ fn spawn_liveness_handler(
                             &advertised_domain_clock_source,
                             &clock_sync,
                             &domain_clock_sources,
+                            join_authorization.as_str(),
                             peer_id,
                         )
                         .await;
@@ -3793,6 +3836,7 @@ fn spawn_manager_liveness_check(
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
+    join_authorization: Arc<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(LIVENESS_CHECK_INTERVAL);
@@ -3825,6 +3869,7 @@ fn spawn_manager_liveness_check(
                             &manager_peer_id,
                             &membership,
                             &runtime,
+                            join_authorization.as_str(),
                         )
                         .await;
                         // No longer the Manager: stop ticking. The
@@ -3871,6 +3916,7 @@ fn spawn_manager_liveness_check(
                                             &manager_peer_id,
                                             &membership,
                                             &runtime,
+                                            join_authorization.as_str(),
                                         )
                                         .await;
                                         break;
@@ -3913,6 +3959,7 @@ async fn step_down_to(
     manager_peer_id: &Arc<Mutex<PeerId>>,
     membership: &Arc<Mutex<ClusterMembership>>,
     runtime: &auki_network::NetworkRuntimeHandle,
+    join_authorization: &str,
 ) {
     *manager_peer_id.lock().expect("manager_peer_id lock") = winner;
     sync_heartbeat_targets(
@@ -3932,6 +3979,7 @@ async fn step_down_to(
         manager_peer_id,
         membership,
         runtime,
+        join_authorization,
     )
     .await
     {
@@ -3988,6 +4036,7 @@ fn spawn_join_handler(
     manager_peer_id: Arc<Mutex<PeerId>>,
     membership: Arc<Mutex<ClusterMembership>>,
     runtime: auki_network::NetworkRuntimeHandle,
+    admit_gate: Option<Arc<dyn AdmitGate>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -4001,6 +4050,15 @@ fn spawn_join_handler(
                     reason: "not the manager".into(),
                 });
                 continue;
+            }
+
+            // Optional async admit gate (e.g. Bearer token / Zitadel).
+            // No membership locks held across this await.
+            if let Some(gate) = admit_gate.as_ref() {
+                if let Err(reason) = gate.check(peer, &request.authorization).await {
+                    let _ = ack.send(JoinResponse::Reject { reason });
+                    continue;
+                }
             }
 
             // Admit a new peer or refresh the multiaddrs of a peer

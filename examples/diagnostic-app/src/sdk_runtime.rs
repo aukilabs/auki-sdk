@@ -473,6 +473,8 @@ impl RuntimeWorker {
                 swarm,
                 stream_provider: decline_all_streams(),
                 daemon_info,
+                admit_gate: None,
+                join_authorization: None,
             },
         )
         .await

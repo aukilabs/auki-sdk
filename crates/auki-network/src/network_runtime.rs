@@ -46,6 +46,10 @@ use crate::join_protocol::{
     JOIN_PROTOCOL, JoinProtocolError, JoinRequest, JoinResponse, read_join_request,
     read_join_response, write_join_request, write_join_response,
 };
+use crate::leave_protocol::{
+    LEAVE_PROTOCOL, LeaveProtocolError, LeaveRequest, LeaveResponse, read_leave_request,
+    read_leave_response, write_leave_request, write_leave_response,
+};
 use crate::membership_protocol::{
     MEMBERSHIP_PROTOCOL, MembershipUpdate, read_membership_update, write_membership_update,
 };
@@ -231,6 +235,31 @@ const JOIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// error.
 pub const JOIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Inbound `/auki/leave/0.0.1` event surfaced to the owner (Manager).
+///
+/// Owner sends a oneshot on [`LeaveEvent::ack`]; the runtime writes
+/// [`LeaveResponse`] then completes that oneshot. Await the oneshot
+/// before dropping the peer from the allow-list — otherwise the
+/// connection closes and the Ack write races. Drop `ack` without send
+/// for silent close (non-Manager / ignore).
+#[derive(Debug)]
+pub struct LeaveEvent {
+    /// Authenticated peer requesting leave.
+    pub peer: PeerId,
+    /// Empty leave body (peer is the signal).
+    pub request: LeaveRequest,
+    /// Send a oneshot the runtime completes after attempting Ack write.
+    /// Dropping without send = no Ack (silent close).
+    pub ack: oneshot::Sender<oneshot::Sender<()>>,
+}
+
+/// How long the inbound leave task waits for the owner to Ack.
+const LEAVE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long [`NetworkRuntime::send_leave_request`] waits for Ack.
+/// Shorter than join — leaver is shutting down and will continue anyway.
+pub const LEAVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Number of locally sent heartbeat timestamps retained so later peer
 /// echoes can be paired into NTP-style samples.
 const SENT_HEARTBEAT_CACHE_CAPACITY: usize = 64;
@@ -303,6 +332,17 @@ pub enum SendJoinRequestError {
     /// The full request/response round-trip didn't complete within
     /// [`JOIN_REQUEST_TIMEOUT`].
     #[error("join request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+/// Errors from [`NetworkRuntime::send_leave_request`].
+#[derive(Debug, thiserror::Error)]
+pub enum SendLeaveRequestError {
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] LeaveProtocolError),
+    #[error("leave request timed out after {0:?}")]
     Timeout(Duration),
 }
 
@@ -880,6 +920,15 @@ impl NetworkRuntimeHandle {
     ) -> Result<JoinResponse, SendJoinRequestError> {
         send_join_request_impl(self.stream_control.clone(), peer_id, request).await
     }
+
+    /// Open outbound `/auki/leave/0.0.1` to `peer_id`, write request, wait for Ack.
+    pub async fn send_leave_request(
+        &self,
+        peer_id: PeerId,
+        request: LeaveRequest,
+    ) -> Result<(), SendLeaveRequestError> {
+        send_leave_request_impl(self.stream_control.clone(), peer_id, request).await
+    }
 }
 
 impl NetworkRuntime {
@@ -928,6 +977,7 @@ impl NetworkRuntime {
             mpsc::Receiver<ResourcesRequestEvent>,
             mpsc::Receiver<RegistryRequestEvent>,
             mpsc::Receiver<DiagnosticEvent>,
+            mpsc::Receiver<LeaveEvent>,
         ),
         SpawnError,
     > {
@@ -948,6 +998,7 @@ impl NetworkRuntime {
         let (resources_events_tx, resources_events_rx) = mpsc::channel::<ResourcesRequestEvent>(16);
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
+        let (leave_events_tx, leave_events_rx) = mpsc::channel::<LeaveEvent>(16);
         let message_router = MessageChannelRouter::new(local_peer_id);
         let task = handle.spawn(run_task(
             swarm,
@@ -967,6 +1018,7 @@ impl NetworkRuntime {
             resources_events_tx,
             registry_events_tx,
             diagnostic_events_tx,
+            leave_events_tx,
             message_router.clone(),
         ));
         Ok((
@@ -988,6 +1040,7 @@ impl NetworkRuntime {
             resources_events_rx,
             registry_events_rx,
             diagnostic_events_rx,
+            leave_events_rx,
         ))
     }
 
@@ -1006,6 +1059,16 @@ impl NetworkRuntime {
         request: JoinRequest,
     ) -> Result<JoinResponse, SendJoinRequestError> {
         send_join_request_impl(self.stream_control.clone(), peer_id, request).await
+    }
+
+    /// Open outbound `/auki/leave/0.0.1`, write request, wait for Ack
+    /// (up to [`LEAVE_REQUEST_TIMEOUT`]).
+    pub async fn send_leave_request(
+        &self,
+        peer_id: PeerId,
+        request: LeaveRequest,
+    ) -> Result<(), SendLeaveRequestError> {
+        send_leave_request_impl(self.stream_control.clone(), peer_id, request).await
     }
 
     /// Fetch a cluster peer's [`crate::ParticipantInfo`] over the
@@ -1983,6 +2046,7 @@ async fn run_task(
     resources_events_tx: mpsc::Sender<ResourcesRequestEvent>,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
+    leave_events_tx: mpsc::Sender<LeaveEvent>,
     message_router: MessageChannelRouter,
 ) {
     let mut swarm = swarm;
@@ -2041,6 +2105,16 @@ async fn run_task(
     let mut incoming_joins: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(join_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/leave/0.0.1` substream acceptance.
+    let leave_proto = StreamProtocol::try_from_owned(LEAVE_PROTOCOL.to_string())
+        .expect("LEAVE_PROTOCOL is a valid libp2p protocol id");
+    let mut incoming_leaves: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(leave_proto) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2245,6 +2319,12 @@ async fn run_task(
                 // back.
                 let tx = join_events_tx.clone();
                 tokio::spawn(handle_inbound_join_substream(peer, substream, tx));
+            }
+
+            leave = incoming_leaves.next() => {
+                let Some((peer, substream)) = leave else { return; };
+                let tx = leave_events_tx.clone();
+                tokio::spawn(handle_inbound_leave_substream(peer, substream, tx));
             }
 
             heartbeat = incoming_heartbeats.next() => {
@@ -2847,6 +2927,47 @@ async fn handle_inbound_join_substream(
 
     if let Err(e) = write_join_response(&mut substream, &response).await {
         eprintln!("auki-network: join substream to {peer}: write response failed: {e}");
+    }
+}
+
+/// Per-substream task for an inbound `/auki/leave/0.0.1` request.
+async fn handle_inbound_leave_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    leave_events_tx: mpsc::Sender<LeaveEvent>,
+) {
+    let request = match read_leave_request(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: leave substream from {peer}: read request failed: {e}");
+            return;
+        }
+    };
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if leave_events_tx
+        .send(LeaveEvent {
+            peer,
+            request,
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Only write Ack when the owner confirms. Drop / timeout → silent close.
+    // Complete the owner's oneshot after the write attempt so they can
+    // safely drop the peer from the allow-list afterward.
+    match tokio::time::timeout(LEAVE_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(written_tx)) => {
+            if let Err(e) = write_leave_response(&mut substream, &LeaveResponse).await {
+                eprintln!("auki-network: leave substream to {peer}: write Ack failed: {e}");
+            }
+            let _ = written_tx.send(());
+        }
+        Ok(Err(_)) | Err(_) => {}
     }
 }
 
@@ -3480,6 +3601,39 @@ async fn send_join_request_impl(
     Ok(response)
 }
 
+async fn send_leave_request_impl(
+    mut control: Control,
+    peer_id: PeerId,
+    request: LeaveRequest,
+) -> Result<(), SendLeaveRequestError> {
+    let proto = StreamProtocol::try_from_owned(LEAVE_PROTOCOL.to_string())
+        .expect("LEAVE_PROTOCOL is a valid libp2p protocol id");
+
+    let open_fut = control.open_stream(peer_id, proto);
+    let mut substream = match tokio::time::timeout(LEAVE_REQUEST_TIMEOUT, open_fut).await {
+        Err(_) => return Err(SendLeaveRequestError::Timeout(LEAVE_REQUEST_TIMEOUT)),
+        Ok(Err(e)) => return Err(SendLeaveRequestError::OpenStream(e)),
+        Ok(Ok(s)) => s,
+    };
+
+    write_leave_request(&mut substream, &request)
+        .await
+        .map_err(SendLeaveRequestError::Protocol)?;
+
+    match tokio::time::timeout(LEAVE_REQUEST_TIMEOUT, read_leave_response(&mut substream)).await {
+        Err(_) => Err(SendLeaveRequestError::Timeout(LEAVE_REQUEST_TIMEOUT)),
+        // Manager may close the connection right after processing leave;
+        // treat UnexpectedEof after a successful request write as Ack.
+        Ok(Err(LeaveProtocolError::Io(e)))
+            if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+        {
+            Ok(())
+        }
+        Ok(Err(e)) => Err(SendLeaveRequestError::Protocol(e)),
+        Ok(Ok(_)) => Ok(()),
+    }
+}
+
 fn schedule_retry(schedules: &mut HashMap<PeerId, PeerSchedule>, peer_id: PeerId) {
     let sched = schedules.entry(peer_id).or_insert(PeerSchedule {
         next_dial_at: None,
@@ -3580,6 +3734,7 @@ mod tests {
             _resources_events,
             _registry_events,
             _diagnostic_events,
+            _leave_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -3609,6 +3764,7 @@ mod tests {
             _resources_events,
             _registry_events,
             _diagnostic_events,
+            _leave_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -3781,6 +3937,7 @@ mod tests {
             _receiver_resources,
             _receiver_registries,
             _receiver_diagnostics,
+            _receiver_leaves,
         ) = NetworkRuntime::spawn(
             receiver_swarm,
             vec![AllowedPeer {
@@ -3800,6 +3957,7 @@ mod tests {
             _sender_resources,
             _sender_registries,
             _sender_diagnostics,
+            _sender_leaves,
         ) = NetworkRuntime::spawn(
             sender_swarm,
             vec![AllowedPeer {
@@ -3970,6 +4128,7 @@ mod tests {
             _resources_events,
             _registry_events,
             _diagnostic_events,
+            _leave_events,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![
@@ -4054,6 +4213,7 @@ mod tests {
             _resources_events,
             _registry_events,
             _diagnostic_events,
+            _leave_events,
         ) = NetworkRuntime::spawn(
             manager_swarm,
             vec![],
@@ -4202,6 +4362,7 @@ mod tests {
             _receiver_resources,
             _receiver_registries,
             _receiver_diagnostics,
+            _receiver_leaves,
         ) = NetworkRuntime::spawn(
             receiver_swarm,
             vec![AllowedPeer {
@@ -4221,6 +4382,7 @@ mod tests {
             _sender_resources,
             _sender_registries,
             _sender_diagnostics,
+            _sender_leaves,
         ) = NetworkRuntime::spawn(
             sender_swarm,
             vec![AllowedPeer {
@@ -4361,6 +4523,7 @@ mod tests {
             _receiver_resources,
             _receiver_registries,
             _receiver_diagnostics,
+            _receiver_leaves,
         ) = NetworkRuntime::spawn(
             receiver_swarm,
             vec![AllowedPeer {
@@ -4380,6 +4543,7 @@ mod tests {
             _unknown_resources,
             _unknown_registries,
             _unknown_diagnostics,
+            _unknown_leaves,
         ) = NetworkRuntime::spawn(
             unknown_swarm,
             vec![AllowedPeer {
@@ -4491,6 +4655,7 @@ mod tests {
             _receiver_resources,
             _receiver_registries,
             _receiver_diagnostics,
+            _receiver_leaves,
         ) = NetworkRuntime::spawn(
             receiver_swarm,
             vec![AllowedPeer {
@@ -4510,6 +4675,7 @@ mod tests {
             _sender_resources,
             _sender_registries,
             _sender_diagnostics,
+            _sender_leaves,
         ) = NetworkRuntime::spawn(
             sender_swarm,
             vec![AllowedPeer {

@@ -326,6 +326,7 @@ pub async fn spawn_for_swift(
         _resources_rx,
         _registry_rx,
         _diagnostic_rx,
+        _leave_rx,
     ) = auki_network_rs::NetworkRuntime::spawn(
         swarm,
         allowed_peers,

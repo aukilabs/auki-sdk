@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package auki.leave;
+
+// libp2p substream protocol envelope for `/auki/leave/0.0.1`.
+//
+// Framing is owned by `auki-network`: 4-byte big-endian u32 length prefix
+// followed by the protobuf-encoded message body.
+//
+// Peer identity comes from the noise handshake, not the body.
+// LeaveResponse empty body = Ack. No reject variant (best-effort leave).
+
+message LeaveRequest {}
+
+message LeaveResponse {}

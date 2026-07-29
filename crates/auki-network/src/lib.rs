@@ -96,6 +96,9 @@ pub mod stream_runtime;
 pub mod join_protocol;
 
 #[cfg(feature = "join_protocol")]
+pub mod leave_protocol;
+
+#[cfg(feature = "join_protocol")]
 pub mod browser_session_protocol;
 
 #[cfg(feature = "swarm")]
@@ -143,10 +146,10 @@ pub trait SessionHandle: Send + Sync {
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
-    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, RequestResourcesV3Error, ResourcesRequestEvent, SendJoinRequestError,
-    SpawnError, UpdateError, UpdateReport,
+    InfoRequestEvent, JoinEvent, LeaveEvent, MembershipEvent, NetworkRuntime,
+    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
+    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, ResourcesRequestEvent,
+    SendJoinRequestError, SendLeaveRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "swarm")]

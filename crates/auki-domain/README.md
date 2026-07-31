@@ -20,7 +20,7 @@ The SDK's network-presence layer. An app that wants its peer and session visible
 - `Domain::leave()` (async) — clean shutdown of the cluster presence. Non-Managers best-effort notify the Manager over `/auki/leave/0.0.1` (wait ≤2s for Ack) so membership can shrink immediately; then local teardown. Crash/partition still uses heartbeat loss timeout.
 - `catalog_of(&Peer, &Session)` → `Vec<ResourceEntry>` — pure helper, no network; builds exactly the rows `Domain` would serve. Useful for tests and dry runs.
 
-`DomainConfig` fields: `target: ClusterTarget`, `local_identity: PeerIdentity`, `local_multiaddrs: Vec<Multiaddr>`, `discovery_url: String`, `swarm: Swarm<Behaviour>`, `stream_provider: StreamProvider`, `daemon_info: DaemonInfo`.
+`DomainConfig` fields: `target: ClusterTarget`, `local_identity: PeerIdentity`, `local_multiaddrs: Vec<Multiaddr>`, `discovery_url: String`, `swarm: Swarm<Behaviour>`, `stream_provider: StreamProvider`, `daemon_info: DaemonInfo`, `admit_gate`, `join_authorization` (joiner → Manager `/auki/join`), `discovery_authorization` (Manager → Discovery create/liveness/rotate/delete Bearer).
 
 Typed messaging is live and ephemeral. Send success is only a transport ACK
 after the receiver runtime queues the event; it is not application acceptance.

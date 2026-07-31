@@ -74,6 +74,7 @@ fn config(
         daemon_info: daemon_info("typed-messaging-test"),
         admit_gate: None,
         join_authorization: None,
+        discovery_authorization: None,
     }
 }
 
@@ -88,6 +89,7 @@ fn offline_config(identity: PeerIdentity, swarm: Swarm<Behaviour>) -> DomainConf
         daemon_info: daemon_info("preflight-test"),
         admit_gate: None,
         join_authorization: None,
+        discovery_authorization: None,
     }
 }
 

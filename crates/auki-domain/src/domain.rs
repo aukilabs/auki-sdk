@@ -65,6 +65,9 @@ pub struct DomainConfig {
     pub admit_gate: Option<std::sync::Arc<dyn crate::AdmitGate>>,
     /// Outbound `JoinRequest.authorization` (full HTTP Authorization value).
     pub join_authorization: Option<String>,
+    /// Discovery Manager write auth (`Bearer <domain-access-jwt>`).
+    /// Distinct from [`Self::join_authorization`].
+    pub discovery_authorization: Option<String>,
 }
 
 /// A receiver-owned message-channel declaration composed before the Domain
@@ -380,6 +383,7 @@ impl Domain {
             crate::JoinAuthConfig {
                 admit_gate: config.admit_gate,
                 join_authorization: config.join_authorization.unwrap_or_default(),
+                discovery_authorization: config.discovery_authorization.unwrap_or_default(),
             },
         )
         .await?;

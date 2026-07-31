@@ -475,6 +475,7 @@ impl RuntimeWorker {
                 daemon_info,
                 admit_gate: None,
                 join_authorization: None,
+                discovery_authorization: None,
             },
         )
         .await

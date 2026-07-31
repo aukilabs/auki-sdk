@@ -928,7 +928,10 @@ impl ClusterManager {
         daemon_info: DaemonInfo,
         join_auth: JoinAuthConfig,
     ) -> Result<Self, CreateClusterError> {
-        let discovery = DiscoveryClient::new(discovery_url.into());
+        let discovery = DiscoveryClient::new_with_authorization(
+            discovery_url.into(),
+            join_auth.discovery_authorization.clone(),
+        );
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
         let join_authorization = Arc::new(join_auth.join_authorization.clone());
@@ -1760,7 +1763,13 @@ impl ClusterManager {
         daemon_info: DaemonInfo,
         join_auth: JoinAuthConfig,
     ) -> Result<Self, JoinClusterError> {
-        let discovery = DiscoveryClient::new(discovery_url.into());
+        // Joiners typically leave discovery_authorization empty (GET is
+        // open). If present, the same client carries it for later Manager
+        // promotion / re-register writes.
+        let discovery = DiscoveryClient::new_with_authorization(
+            discovery_url.into(),
+            join_auth.discovery_authorization.clone(),
+        );
         let cluster_name = cluster_name.into();
         let local_peer_id = local_identity.peer_id();
         let join_authorization = Arc::new(join_auth.join_authorization.clone());

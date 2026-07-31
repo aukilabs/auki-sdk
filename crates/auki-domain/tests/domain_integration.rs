@@ -142,6 +142,7 @@ async fn domain_join_creates_cluster_and_serves_catalog() {
             daemon_info,
             admit_gate: None,
             join_authorization: None,
+            discovery_authorization: None,
         },
     )
     .await
@@ -211,6 +212,7 @@ async fn join_rejects_peer_id_not_matching_local_identity() {
             },
             admit_gate: None,
             join_authorization: None,
+            discovery_authorization: None,
         },
     )
     .await;

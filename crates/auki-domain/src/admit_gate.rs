@@ -29,6 +29,11 @@ pub struct JoinAuthConfig {
     /// Value placed in outbound `JoinRequest.authorization` when joining
     /// (full header, e.g. `Bearer <token>`). Empty when unused.
     pub join_authorization: String,
+    /// `Authorization` for Discovery Manager writes (create / liveness /
+    /// rotate / delete). Distinct from [`Self::join_authorization`]
+    /// (joiner → Manager `/auki/join`). Empty when Discovery does not
+    /// require write auth (`DDS_URL` unset).
+    pub discovery_authorization: String,
 }
 
 #[cfg(test)]

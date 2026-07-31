@@ -13,18 +13,18 @@
 //!
 //! - `GET    /clusters`                  — directory snapshot, sorted
 //!   by `created_ns` desc (newest-created first).
-//! - `POST   /clusters/{name}`           — create. Trust-on-first-claim;
-//!   409 if the name is taken.
+//! - `POST   /clusters/{name}`           — create. When Discovery has
+//!   `DDS_URL`, requires `Authorization: Bearer <domain-access-jwt>`
+//!   with `domain_id` matching `{name}`; otherwise trust-on-first-claim.
 //! - `POST   /clusters/{name}/liveness`  — Manager liveness check,
-//!   pushed every 1s. Body `{ peer_count }`. Resets Discovery's 3s
-//!   sweep window for the cluster.
-//! - `POST   /clusters/{name}/manager`   — rotate Manager hint (no
-//!   crypto in v1).
+//!   pushed every 1s. Body `{ peer_count }`. Same auth rule as create.
+//! - `POST   /clusters/{name}/manager`   — rotate Manager hint. Same
+//!   auth rule as create.
 //! - `DELETE /clusters/{name}`           — graceful deregistration.
+//!   Same auth rule as create.
 //!
-//! v1 skips all signature verification — endpoints accept claims by
-//! shape. v2 hardening will reintroduce successor-token validation,
-//! Discovery-issued challenge/response, and DELETE auth.
+//! `GET /clusters` stays open. Attach Manager write credentials via
+//! [`DiscoveryClient::with_authorization`].
 //!
 //! ## Wire format
 //!
@@ -144,6 +144,9 @@ pub enum DiscoveryError {
 pub struct DiscoveryClient {
     base_url: String,
     http: reqwest::Client,
+    /// Optional `Authorization` header for Manager write routes
+    /// (`Bearer <jwt>`). `GET /clusters` ignores this.
+    authorization: Option<String>,
 }
 
 // ─── Sync methods (exported as the primary constructor + accessor) ──
@@ -188,8 +191,53 @@ impl DiscoveryClient {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             http,
+            authorization: None,
         }
     }
+
+    /// Attach `Authorization` for create / liveness / manager / delete.
+    /// Accepts `Bearer <token>` or a raw JWT; empty clears the header.
+    pub fn with_authorization(mut self, authorization: impl Into<String>) -> Self {
+        self.authorization = normalize_authorization(authorization.into());
+        self
+    }
+
+    /// Construct with default HTTP client + optional write auth.
+    pub fn new_with_authorization(
+        base_url: String,
+        authorization: impl Into<String>,
+    ) -> Arc<Self> {
+        let http = reqwest::Client::builder()
+            .timeout(DISCOVERY_HTTP_TIMEOUT)
+            .build()
+            .expect("reqwest client with static config");
+        Arc::new(Self::with_http(base_url, http).with_authorization(authorization))
+    }
+
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.authorization {
+            Some(value) => req.header(reqwest::header::AUTHORIZATION, value.as_str()),
+            None => req,
+        }
+    }
+}
+
+fn normalize_authorization(authorization: String) -> Option<String> {
+    let s = authorization.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some((scheme, rest)) = s.split_once(char::is_whitespace) {
+        if scheme.eq_ignore_ascii_case("bearer") {
+            let token = rest.trim();
+            return if token.is_empty() {
+                None
+            } else {
+                Some(format!("Bearer {token}"))
+            };
+        }
+    }
+    Some(format!("Bearer {s}"))
 }
 
 // ─── Async methods (exported with tokio runtime) ────────────────────
@@ -225,7 +273,7 @@ impl DiscoveryClient {
         let url = format!("{}/clusters/{}", self.base_url, name);
         let body =
             WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &manager_multiaddrs);
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.apply_auth(self.http.post(&url).json(&body)).send().await?;
         match resp.status() {
             StatusCode::CREATED => {
                 let wire: WireClusterEntry = resp.json().await?;
@@ -256,7 +304,7 @@ impl DiscoveryClient {
             &manager_multiaddrs,
             &relay_multiaddrs,
         );
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.apply_auth(self.http.post(&url).json(&body)).send().await?;
         match resp.status() {
             StatusCode::CREATED => {
                 let wire: WireClusterEntry = resp.json().await?;
@@ -280,7 +328,10 @@ impl DiscoveryClient {
     ) -> Result<ClusterEntry, DiscoveryError> {
         let url = format!("{}/clusters/{}/liveness", self.base_url, name);
         let body = WireLivenessCheckRequest { peer_count };
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self
+            .apply_auth(self.http.post(&url).json(&body))
+            .send()
+            .await?;
         ok_or_status(resp).await
     }
 
@@ -296,7 +347,7 @@ impl DiscoveryClient {
         let url = format!("{}/clusters/{}/manager", self.base_url, name);
         let body =
             WireManagerRequest::from_manager_multiaddrs(manager_peer_id, &manager_multiaddrs);
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.apply_auth(self.http.post(&url).json(&body)).send().await?;
         ok_or_status(resp).await
     }
 
@@ -316,15 +367,15 @@ impl DiscoveryClient {
             &manager_multiaddrs,
             &relay_multiaddrs,
         );
-        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.apply_auth(self.http.post(&url).json(&body)).send().await?;
         ok_or_status(resp).await
     }
 
     /// Graceful deregistration. Called by the last cluster member on
-    /// clean exit. v1 = trust-the-claim; any HTTP caller succeeds.
+    /// clean exit.
     pub async fn deregister(&self, name: String) -> Result<(), DiscoveryError> {
         let url = format!("{}/clusters/{}", self.base_url, name);
-        let resp = self.http.delete(&url).send().await?;
+        let resp = self.apply_auth(self.http.delete(&url)).send().await?;
         let status = resp.status();
         if status.is_success() {
             Ok(())
@@ -599,6 +650,28 @@ mod tests {
         let b = DiscoveryClient::new("http://example.com:8080/".to_string());
         assert_eq!(a.base_url(), b.base_url());
         assert_eq!(a.base_url(), "http://example.com:8080");
+    }
+
+    #[test]
+    fn with_authorization_normalizes_bearer() {
+        let c = DiscoveryClient::with_http(
+            "http://example.com",
+            reqwest::Client::new(),
+        )
+        .with_authorization("a.b.c");
+        assert_eq!(c.authorization.as_deref(), Some("Bearer a.b.c"));
+        let c2 = DiscoveryClient::with_http(
+            "http://example.com",
+            reqwest::Client::new(),
+        )
+        .with_authorization("Bearer tok");
+        assert_eq!(c2.authorization.as_deref(), Some("Bearer tok"));
+        let c3 = DiscoveryClient::with_http(
+            "http://example.com",
+            reqwest::Client::new(),
+        )
+        .with_authorization("  ");
+        assert!(c3.authorization.is_none());
     }
 
     /// Pins the wire shape Discovery serializes against. A field rename

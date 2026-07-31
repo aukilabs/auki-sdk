@@ -89,6 +89,9 @@ fn map_discovery_error(e: RustDiscoveryError) -> PyErr {
         RustDiscoveryError::InvalidMultiaddr(s) => {
             PyValueError::new_err(format!("invalid multiaddr in Discovery response: {s}"))
         }
+        RustDiscoveryError::InvalidTimestamp(s) => {
+            PyValueError::new_err(format!("invalid timestamp in Discovery response: {s}"))
+        }
     }
 }
 
@@ -231,15 +234,13 @@ impl PyDiscoveryClient {
         self.inner.base_url()
     }
 
-    /// Snapshot of Discovery's directory, sorted by `created_ns` desc.
+    /// **Removed** — Discovery no longer exposes a global directory list.
     fn list_clusters(&self, py: Python<'_>) -> PyResult<Vec<PyClusterEntry>> {
-        let client = self.inner.clone();
-        py.allow_threads(|| {
-            cluster_tokio_runtime()
-                .block_on(client.list_clusters())
-                .map(|entries| entries.into_iter().map(PyClusterEntry::from_rust).collect())
-                .map_err(map_discovery_error)
-        })
+        let _ = py;
+        Err(map_discovery_error(RustDiscoveryError::Status {
+            status: 410,
+            body: "list removed; resolve by domain id".into(),
+        }))
     }
 
     /// Atomically create a cluster. The caller becomes its initial

@@ -23,7 +23,7 @@
 //! 5. The Manager heartbeat tick keeps Discovery's entry alive past
 //!    the 10s sweep window.
 //! 6. `shutdown()` deregisters from Discovery; a follow-up
-//!    `list_clusters` confirms it's gone.
+//!    `get_peer_manager` returns 404.
 
 use auki_domain::ClusterManager;
 use auki_network::PeerIdentity;
@@ -100,12 +100,11 @@ async fn cluster_row(
     discovery: &DiscoveryClient,
     name: &str,
 ) -> Option<auki_network::discovery_client::ClusterEntry> {
-    discovery
-        .list_clusters()
-        .await
-        .expect("list_clusters")
-        .into_iter()
-        .find(|c| c.name == name)
+    match discovery.get_peer_manager(name.to_string()).await {
+        Ok(entry) => Some(entry),
+        Err(auki_network::discovery_client::DiscoveryError::Status { status: 404, .. }) => None,
+        Err(e) => panic!("get_peer_manager: {e}"),
+    }
 }
 
 /// Block until the row's `last_liveness_check_ns` advances past its
@@ -214,10 +213,8 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
     //    Wait 12s, then list and confirm we're still there.
     eprintln!("waiting 12s to verify heartbeat keeps the cluster alive past Discovery's sweep…");
     tokio::time::sleep(Duration::from_secs(12)).await;
-    let snapshot = discovery.list_clusters().await.expect("list_clusters");
-    let entry = snapshot
-        .iter()
-        .find(|c| c.name == cluster_name)
+    let entry = cluster_row(&discovery, &cluster_name)
+        .await
         .expect("cluster still in directory after sweep window");
     assert_eq!(entry.peer_count, 2, "Discovery sees the updated peer_count");
 
@@ -232,12 +229,8 @@ async fn cluster_manager_full_lifecycle_against_live_discovery() {
         .deregister(cluster_name.clone())
         .await
         .expect("explicit cleanup deregister");
-    let after = discovery
-        .list_clusters()
-        .await
-        .expect("list_clusters after");
     assert!(
-        !after.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_none(),
         "cluster {cluster_name} still in directory after explicit deregister"
     );
 
@@ -351,9 +344,8 @@ async fn two_managers_create_then_join_against_live_discovery() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     manager_a.shutdown().await.expect("A shutdown");
 
-    let after = discovery.list_clusters().await.expect("list after");
     assert!(
-        !after.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_none(),
         "cluster {cluster_name} still in directory after both shutdowns"
     );
 
@@ -476,10 +468,8 @@ async fn manager_failover_when_a_dies_b_takes_over() {
 
     // Verify Discovery sees the rotation: the cluster's
     // manager_peer_id should now be B's.
-    let snapshot = discovery.list_clusters().await.expect("list_clusters");
-    let entry = snapshot
-        .iter()
-        .find(|c| c.name == cluster_name)
+    let entry = cluster_row(&discovery, &cluster_name)
+        .await
         .expect("cluster still in directory after failover");
     assert_eq!(
         entry.manager_peer_id, pid_b,
@@ -488,9 +478,8 @@ async fn manager_failover_when_a_dies_b_takes_over() {
 
     // --- Cleanup ---
     manager_b.shutdown().await.expect("B shutdown");
-    let after = discovery.list_clusters().await.expect("list after");
     assert!(
-        !after.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_none(),
         "cluster {cluster_name} still in directory after B shutdown"
     );
 
@@ -628,8 +617,7 @@ async fn domain_clock_metadata_survives_manager_handoff() {
     );
 
     manager_b.shutdown().await.expect("B shutdown");
-    let after = discovery.list_clusters().await.expect("list after");
-    if after.iter().any(|c| c.name == cluster_name) {
+    if cluster_row(&discovery, &cluster_name).await.is_some() {
         discovery
             .deregister(cluster_name.clone())
             .await
@@ -1066,9 +1054,8 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
     drop(manager);
 
     // Sanity: pre-shutdown, Discovery sees the cluster.
-    let pre = discovery.list_clusters().await.expect("list_clusters pre");
     assert!(
-        pre.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_some(),
         "pre-shutdown cluster {cluster_name} should be in Discovery"
     );
 
@@ -1081,9 +1068,8 @@ async fn shutdown_via_arc_clone_deregisters_and_remains_idempotent() {
 
     // Discovery DELETE landed: cluster is gone within the same
     // call (shutdown awaits the DELETE before returning).
-    let post = discovery.list_clusters().await.expect("list_clusters post");
     assert!(
-        !post.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_none(),
         "cluster {cluster_name} still in Discovery after shutdown via Arc clone"
     );
 
@@ -1252,11 +1238,9 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
     // Discovery still has the cluster, now naming B. (The row may
     // have been swept and re-created by B's commit in between —
     // presence + manager==B is the post-handoff invariant.)
-    let snapshot = discovery.list_clusters().await.expect("list_clusters");
-    let entry = snapshot
-        .iter()
-        .find(|c| c.name == cluster_name)
-        .expect("cluster gone from Discovery after B's takeover commit");
+    let entry = cluster_row(&discovery, &cluster_name)
+        .await
+        .expect("cluster present in Discovery after B's takeover commit");
     assert_eq!(
         entry.manager_peer_id, pid_b,
         "Discovery's Manager hint should rotate to B after graceful handoff"
@@ -1264,9 +1248,8 @@ async fn manager_graceful_shutdown_passes_cluster_to_surviving_peer() {
 
     // --- Cleanup ---
     manager_b.shutdown().await.expect("B shutdown");
-    let after = discovery.list_clusters().await.expect("list after");
     assert!(
-        !after.iter().any(|c| c.name == cluster_name),
+        cluster_row(&discovery, &cluster_name).await.is_none(),
         "cluster {cluster_name} still in directory after B (last member) shutdown"
     );
 

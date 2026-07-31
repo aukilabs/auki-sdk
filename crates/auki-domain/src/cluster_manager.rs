@@ -19,7 +19,8 @@
 //!
 //! ## App-facing entry points
 //!
-//! - [`ClusterManager::list_clusters`] — snapshot Discovery's directory.
+//! - [`ClusterManager::list_clusters`] — removed (returns HTTP 410);
+//!   resolve clusters by explicit domain id via join/create instead.
 //! - [`ClusterManager::bootstrap`] — policy-driven: declare intent via
 //!   [`ClusterTarget`] (Create / Join / JoinOrCreate / MostRecentOrCreate)
 //!   and the SDK does list + decide + create-or-join internally.
@@ -41,7 +42,7 @@
 //! ## Discovery liveness check
 //!
 //! While this peer is the Manager, a background task pushes a
-//! `liveness_check` to Discovery every [`LIVENESS_CHECK_INTERVAL`] (1s)
+//! `heartbeat` to Discovery every [`LIVENESS_CHECK_INTERVAL`] (1s)
 //! with the cluster's `peer_count`. Discovery's `liveness requirement`
 //! sweep drops clusters that haven't received a check in 3s (3 missed),
 //! so this keeps the directory entry live. The task is cancelled on
@@ -51,9 +52,7 @@ use crate::admit_gate::{AdmitGate, JoinAuthConfig};
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
 use auki_network::ParticipantInfo;
 use auki_network::SessionHandle;
-use auki_network::discovery_client::{
-    ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
-};
+use auki_network::discovery_client::{ClusterEntry, DiscoveryClient, DiscoveryError};
 use auki_network::heartbeat_protocol::HeartbeatDomainClock;
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
@@ -351,13 +350,12 @@ pub enum ClusterTarget {
         /// Cluster name to join-or-create.
         name: String,
     },
-    /// Join the most-recently-created cluster in Discovery's directory.
-    /// If the directory is empty, create a cluster named
-    /// `fallback_name`. Use this for headless daemons with no operator
-    /// intent (e.g. Boosterapp without `--cluster-name`).
+    /// **Unsupported** — Discovery no longer exposes a global directory
+    /// list. Use [`ClusterTarget::JoinOrCreate`] with an explicit domain
+    /// name instead.
     MostRecentOrCreate {
-        /// Cluster name to fall back to if Discovery's directory is
-        /// empty at bootstrap time.
+        /// Ignored — bootstrap fails closed with
+        /// [`BootstrapError::DirectoryListUnsupported`].
         fallback_name: String,
     },
 }
@@ -381,9 +379,9 @@ impl ClusterTarget {
         Self::JoinOrCreate { name: name.into() }
     }
 
-    /// Join the most-recent cluster; fall back to creating
-    /// `fallback_name` on empty directory. Sugar for
-    /// [`ClusterTarget::MostRecentOrCreate`].
+    /// Legacy sugar for [`ClusterTarget::MostRecentOrCreate`] — fails
+    /// closed at bootstrap time because Discovery no longer lists all
+    /// clusters.
     pub fn most_recent_or_create(fallback_name: impl Into<String>) -> Self {
         Self::MostRecentOrCreate {
             fallback_name: fallback_name.into(),
@@ -428,6 +426,11 @@ pub enum BootstrapError {
     /// publishing Discovery metadata.
     #[error("relay reservation failed: {0}")]
     RelayReservation(#[from] auki_network::swarm::RelayReservationError),
+    /// `ClusterTarget::MostRecentOrCreate` was passed but Discovery no
+    /// longer supports listing all clusters. Use
+    /// `ClusterTarget::JoinOrCreate` with an explicit domain name.
+    #[error("Discovery directory list removed; resolve clusters by explicit domain id")]
+    DirectoryListUnsupported,
 }
 
 impl From<CreateClusterError> for BootstrapError {
@@ -457,15 +460,12 @@ impl From<JoinClusterError> for BootstrapError {
 /// Errors from [`ClusterManager::create_cluster`].
 #[derive(Debug, Error)]
 pub enum CreateClusterError {
-    /// Discovery rejected the create call — typically because the
-    /// cluster name was already taken (in which case the caller
-    /// should `list_clusters` and join the existing cluster instead),
-    /// or because of an HTTP transport / status error.
+    /// Discovery rejected the register call, or HTTP transport failed.
     #[error("Discovery: {0}")]
     Discovery(#[from] DiscoveryError),
-    /// Discovery's atomic create returned 409 — the cluster already
-    /// exists. The caller should list and join instead.
-    #[error("cluster {0:?} already exists; list and join instead")]
+    /// Legacy error retained for API compatibility. The peer-manager
+    /// directory upserts and no longer returns 409 on register.
+    #[error("cluster {0:?} already exists; join instead")]
     AlreadyExists(String),
     /// `NetworkRuntime::spawn` failed — usually because the caller
     /// isn't inside a tokio runtime.
@@ -648,18 +648,16 @@ pub struct InboundDiagnosticMessage {
 }
 
 impl ClusterManager {
-    /// Snapshot Discovery's cluster directory. The SDK-fronted entry
-    /// point for "list clusters" — apps don't construct
-    /// [`DiscoveryClient`] themselves.
-    ///
-    /// Sorted by `created_ns` desc (newest-first) per the Hagall v1
-    /// contract. Returns the typed [`DiscoveryClusterEntry`] values
-    /// re-exported from this module.
+    /// **Removed** — Discovery no longer exposes a global directory
+    /// list. Returns HTTP 410. Resolve clusters by explicit domain id
+    /// via [`Self::join_cluster`] / [`Self::create_cluster`].
     pub async fn list_clusters(
-        discovery_url: impl Into<String>,
+        _discovery_url: impl Into<String>,
     ) -> Result<Vec<ClusterEntry>, DiscoveryError> {
-        let client = DiscoveryClient::new(discovery_url.into());
-        client.list_clusters().await
+        Err(DiscoveryError::Status {
+            status: 410,
+            body: "list removed; resolve by domain id".into(),
+        })
     }
 
     /// Policy-driven cluster bootstrap — **the single entry point**
@@ -677,15 +675,9 @@ impl ClusterManager {
     ///   [`Self::join_cluster`]. Errors with
     ///   [`BootstrapError::NotFound`] if Discovery doesn't have it.
     /// - [`ClusterTarget::JoinOrCreate { name }`][ClusterTarget::JoinOrCreate]
-    ///   → list Discovery; if the name exists, join; else create.
-    ///   Race-tolerant: if a concurrent `create` won the name between
-    ///   our list and our own `create`, the
-    ///   `CreateClusterError::AlreadyExists` is caught and we fall
-    ///   through to `join`.
+    ///   → `get_peer_manager`; on 404 create (PUT), on success join.
     /// - [`ClusterTarget::MostRecentOrCreate { fallback_name }`][ClusterTarget::MostRecentOrCreate]
-    ///   → list Discovery; if non-empty, join the first entry
-    ///   (created_ns desc → newest-first); else create
-    ///   `fallback_name`.
+    ///   → errors with [`BootstrapError::DirectoryListUnsupported`].
     ///
     /// All Discovery talking is internal — apps don't construct
     /// [`DiscoveryClient`].
@@ -726,9 +718,9 @@ impl ClusterManager {
             .await
             .map_err(BootstrapError::from),
             ClusterTarget::JoinOrCreate { name } => {
-                let entries = Self::list_clusters(discovery_url.clone()).await?;
-                if entries.iter().any(|e| e.name == name) {
-                    Self::join_cluster(
+                let client = DiscoveryClient::new(discovery_url.clone());
+                match client.get_peer_manager(name.clone()).await {
+                    Ok(_) => Self::join_cluster(
                         name,
                         local_identity,
                         local_multiaddrs,
@@ -739,77 +731,30 @@ impl ClusterManager {
                         join_auth,
                     )
                     .await
-                    .map_err(BootstrapError::from)
-                } else {
-                    // Race window: someone else may have created
-                    // `name` between our list and our create. If our
-                    // create comes back AlreadyExists, fall through to
-                    // join (the race-winner's cluster).
-                    match Self::create_cluster(
-                        name.clone(),
-                        local_identity.clone(),
-                        local_multiaddrs.clone(),
-                        discovery_url.clone(),
+                    .map_err(BootstrapError::from),
+                    Err(DiscoveryError::Status { status: 404, .. }) => Self::create_cluster(
+                        name,
+                        local_identity,
+                        local_multiaddrs,
+                        discovery_url,
                         swarm,
                         stream_provider,
                         daemon_info,
                         join_auth,
                     )
                     .await
-                    {
-                        Ok(m) => Ok(m),
-                        Err(CreateClusterError::AlreadyExists(_)) => {
-                            // The race-winner's create burned our
-                            // swarm + stream_provider; we can't retry
-                            // join from inside this function (they're
-                            // moved). Surface as AlreadyExists; the
-                            // app re-calls bootstrap if it wants to
-                            // retry. Documented in this method's
-                            // doc-comment.
-                            Err(BootstrapError::AlreadyExists(name))
-                        }
-                        Err(e) => Err(BootstrapError::from(e)),
-                    }
+                    .map_err(BootstrapError::from),
+                    Err(e) => Err(BootstrapError::Discovery(e)),
                 }
             }
-            ClusterTarget::MostRecentOrCreate { fallback_name } => {
-                let entries = Self::list_clusters(discovery_url.clone()).await?;
-                if let Some(first) = entries.first() {
-                    let name = first.name.clone();
-                    Self::join_cluster(
-                        name,
-                        local_identity,
-                        local_multiaddrs,
-                        discovery_url,
-                        swarm,
-                        stream_provider,
-                        daemon_info,
-                        join_auth,
-                    )
-                    .await
-                    .map_err(BootstrapError::from)
-                } else {
-                    Self::create_cluster(
-                        fallback_name,
-                        local_identity,
-                        local_multiaddrs,
-                        discovery_url,
-                        swarm,
-                        stream_provider,
-                        daemon_info,
-                        join_auth,
-                    )
-                    .await
-                    .map_err(BootstrapError::from)
-                }
+            ClusterTarget::MostRecentOrCreate { .. } => {
+                Err(BootstrapError::DirectoryListUnsupported)
             }
         }
     }
 
-    /// Create a new cluster and become its initial Manager. Atomic
-    /// against concurrent `create_cluster` calls — only one peer
-    /// wins; the loser gets [`CreateClusterError::AlreadyExists`]
-    /// and should `list` + `join` instead.
+    /// Create a new cluster and become its initial Manager. Registers
+    /// via Discovery peer-manager PUT (upsert).
     ///
     /// Operator-intent primitive — call this when the operator clicked
     /// "Create" in a UI. For headless daemons, use
@@ -817,7 +762,7 @@ impl ClusterManager {
     ///
     /// Sequence:
     /// 1. Build the [`DiscoveryClient`] from `discovery_url` and call
-    ///    `create_cluster(...)` with the local peer as the initial
+    ///    `put_peer_manager(...)` with the local peer as the initial
     ///    Manager.
     /// 2. Initialize the membership document with the local peer as
     ///    its only entry (`join_ts_ns` = `now_ns()`, opaque empty
@@ -955,30 +900,24 @@ impl ClusterManager {
         );
         let advertised_domain_clock_source = Arc::new(Mutex::new(Some(initial_domain_clock)));
 
-        // 1. Atomic create on Discovery.
-        let create_outcome = if relay_multiaddrs.is_empty() {
+        // 1. Upsert register on Discovery.
+        if relay_multiaddrs.is_empty() {
             discovery
-                .create_cluster(
+                .put_peer_manager(
                     cluster_name.clone(),
                     local_peer_id,
                     local_multiaddrs.clone(),
                 )
-                .await?
+                .await?;
         } else {
             discovery
-                .create_cluster_with_relay_multiaddrs(
+                .put_peer_manager_with_relay_multiaddrs(
                     cluster_name.clone(),
                     local_peer_id,
                     local_multiaddrs.clone(),
                     relay_multiaddrs.clone(),
                 )
-                .await?
-        };
-        match create_outcome {
-            CreateClusterOutcome::Created(_entry) => { /* proceed */ }
-            CreateClusterOutcome::AlreadyExists => {
-                return Err(CreateClusterError::AlreadyExists(cluster_name));
-            }
+                .await?;
         }
 
         // 2. Initialize the membership with the local peer.
@@ -1784,12 +1723,14 @@ impl ClusterManager {
         let advertised_domain_clock_source: Arc<Mutex<Option<HeartbeatDomainClock>>> =
             Arc::new(Mutex::new(None));
 
-        // 1. Look up the cluster in Discovery's directory.
-        let clusters = discovery.list_clusters().await?;
-        let entry = clusters
-            .into_iter()
-            .find(|c| c.name == cluster_name)
-            .ok_or_else(|| JoinClusterError::NotFound(cluster_name.clone()))?;
+        // 1. Look up the cluster in Discovery's peer-manager directory.
+        let entry = match discovery.get_peer_manager(cluster_name.clone()).await {
+            Ok(entry) => entry,
+            Err(DiscoveryError::Status { status: 404, .. }) => {
+                return Err(JoinClusterError::NotFound(cluster_name));
+            }
+            Err(e) => return Err(JoinClusterError::Discovery(e)),
+        };
         let manager_peer = entry.manager_peer_id;
         let manager_multiaddrs = entry.manager_multiaddrs.clone();
         let relay_multiaddrs = entry.relay_multiaddrs.clone();
@@ -2477,17 +2418,13 @@ fn discovery_row_missing(e: &DiscoveryClientError) -> bool {
 /// Why a Manager claim did not commit at Discovery.
 #[derive(Debug)]
 enum RegisterAsManagerError {
-    /// Another peer holds the row (lost the re-create race). The
-    /// caller must NOT promote; it should follow the row instead.
-    Displaced,
     /// Discovery unreachable or errored; retry on a later timeout.
     Discovery(DiscoveryClientError),
 }
 
-/// Commit a Manager claim at Discovery: rotate the existing row, or
-/// re-create it when Discovery already swept it (hardening-plan Task
-/// 6). `Ok(())` is the commit signal — only then may the caller
-/// mutate local Manager state.
+/// Commit a Manager claim at Discovery via peer-manager PUT (upsert).
+/// `Ok(())` is the commit signal — only then may the caller mutate
+/// local Manager state.
 async fn register_as_manager(
     discovery: &DiscoveryClient,
     cluster_name: &str,
@@ -2495,11 +2432,15 @@ async fn register_as_manager(
     local_multiaddrs: &[Multiaddr],
     relay_multiaddrs: &[Multiaddr],
 ) -> Result<(), RegisterAsManagerError> {
-    let rotate_result = match manager_rotation_discovery_request(local_multiaddrs, relay_multiaddrs)
+    let put_result = match manager_rotation_discovery_request(local_multiaddrs, relay_multiaddrs)
     {
         ManagerRotationDiscoveryRequest::DirectOnly { manager_multiaddrs } => {
             discovery
-                .rotate_manager(cluster_name.to_string(), local_peer_id, manager_multiaddrs)
+                .put_peer_manager(
+                    cluster_name.to_string(),
+                    local_peer_id,
+                    manager_multiaddrs,
+                )
                 .await
         }
         ManagerRotationDiscoveryRequest::WithRelays {
@@ -2507,7 +2448,7 @@ async fn register_as_manager(
             relay_multiaddrs,
         } => {
             discovery
-                .rotate_manager_with_relay_multiaddrs(
+                .put_peer_manager_with_relay_multiaddrs(
                     cluster_name.to_string(),
                     local_peer_id,
                     manager_multiaddrs,
@@ -2516,36 +2457,9 @@ async fn register_as_manager(
                 .await
         }
     };
-    let err = match rotate_result {
-        Ok(_) => return Ok(()),
-        Err(e) => e,
-    };
-    if !discovery_row_missing(&err) {
-        return Err(RegisterAsManagerError::Discovery(err));
-    }
-    let create_result = if relay_multiaddrs.is_empty() {
-        discovery
-            .create_cluster(
-                cluster_name.to_string(),
-                local_peer_id,
-                local_multiaddrs.to_vec(),
-            )
-            .await
-    } else {
-        discovery
-            .create_cluster_with_relay_multiaddrs(
-                cluster_name.to_string(),
-                local_peer_id,
-                local_multiaddrs.to_vec(),
-                relay_multiaddrs.to_vec(),
-            )
-            .await
-    };
-    match create_result {
-        Ok(CreateClusterOutcome::Created(_)) => Ok(()),
-        Ok(CreateClusterOutcome::AlreadyExists) => Err(RegisterAsManagerError::Displaced),
-        Err(e) => Err(RegisterAsManagerError::Discovery(e)),
-    }
+    put_result
+        .map(|_| ())
+        .map_err(RegisterAsManagerError::Discovery)
 }
 
 async fn reserve_manager_relay_multiaddr(
@@ -2611,8 +2525,9 @@ async fn handle_domain_peer_lost(
     if !am_manager && lost_pid == current_manager {
         // ── Gate: Discovery is the tiebreak authority (hardening-plan
         // Task 5). Election only runs when Discovery's row is gone.
-        let entry = match discovery.list_clusters().await {
-            Ok(list) => list.into_iter().find(|e| e.name == cluster_name),
+        let entry = match discovery.get_peer_manager(cluster_name.to_string()).await {
+            Ok(entry) => Some(entry),
+            Err(DiscoveryError::Status { status: 404, .. }) => None,
             Err(e) => {
                 eprintln!(
                     "auki-domain: cluster {cluster_name:?}: Manager {lost_pid} timed out but \
@@ -2785,13 +2700,6 @@ async fn handle_domain_peer_lost(
                                 Discovery (detected Lost {lost_pid})"
                             );
                             LossOutcome::Settled
-                        }
-                        Err(RegisterAsManagerError::Displaced) => {
-                            eprintln!(
-                                "auki-domain: cluster {cluster_name:?}: lost the Manager \
-                                re-create race; will follow Discovery's row on the next retry"
-                            );
-                            LossOutcome::RetryLater
                         }
                         Err(RegisterAsManagerError::Discovery(e)) => {
                             eprintln!(
@@ -3916,7 +3824,7 @@ fn spawn_manager_liveness_check(
                 m.peers.len() as u32
             };
             match discovery
-                .liveness_check(cluster_name.clone(), peer_count)
+                .heartbeat(cluster_name.clone(), peer_count)
                 .await
             {
                 Ok(entry) => match liveness_tick_directive(local_peer_id, entry.manager_peer_id) {
@@ -3959,53 +3867,13 @@ fn spawn_manager_liveness_check(
                         Ok(()) => eprintln!(
                             "auki-domain: cluster {cluster_name:?}: Discovery row was swept; re-registered {local_peer_id} as Manager"
                         ),
-                        Err(RegisterAsManagerError::Displaced) => {
-                            let entry = discovery
-                                .list_clusters()
-                                .await
-                                .ok()
-                                .and_then(|l| l.into_iter().find(|e| e.name == cluster_name));
-                            if let Some(entry) = entry {
-                                match liveness_tick_directive(local_peer_id, entry.manager_peer_id)
-                                {
-                                    LivenessTickDirective::StepDown(winner) => {
-                                        eprintln!(
-                                            "auki-domain: cluster {cluster_name:?}: row re-created \
-                                            by {winner}; {local_peer_id} steps down"
-                                        );
-                                        step_down_to(
-                                            &cluster_name,
-                                            local_peer_id,
-                                            &local_multiaddrs,
-                                            winner,
-                                            entry.manager_multiaddrs.clone(),
-                                            &manager_peer_id,
-                                            &membership,
-                                            &runtime,
-                                            join_authorization.as_str(),
-                                        )
-                                        .await;
-                                        break;
-                                    }
-                                    LivenessTickDirective::KeepRole => {
-                                        eprintln!(
-                                            "auki-domain: cluster {cluster_name:?}: row already names {local_peer_id}; keeping role"
-                                        );
-                                    }
-                                }
-                            } else {
-                                eprintln!(
-                                    "auki-domain: cluster {cluster_name:?}: displaced from a swept row but no row visible yet; retrying next tick"
-                                );
-                            }
-                        }
                         Err(RegisterAsManagerError::Discovery(e)) => eprintln!(
                             "auki-domain: cluster {cluster_name:?}: re-register after swept row failed: {e}"
                         ),
                     }
                 }
                 Err(e) => eprintln!(
-                    "auki-domain: Discovery liveness_check for cluster {cluster_name:?} failed: {e}"
+                    "auki-domain: Discovery heartbeat for cluster {cluster_name:?} failed: {e}"
                 ),
             }
         }

@@ -2129,6 +2129,9 @@ fn map_discovery_error(e: RustDiscoveryError) -> PyErr {
         RustDiscoveryError::InvalidMultiaddr(s) => {
             PyValueError::new_err(format!("invalid multiaddr in Discovery response: {s}"))
         }
+        RustDiscoveryError::InvalidTimestamp(s) => {
+            PyValueError::new_err(format!("invalid timestamp in Discovery response: {s}"))
+        }
     }
 }
 
@@ -2154,6 +2157,9 @@ fn map_bootstrap_error(e: RustBootstrapError) -> PyErr {
         RustBootstrapError::RelayReservation(err) => {
             PyOSError::new_err(format!("relay reservation failed: {err}"))
         }
+        RustBootstrapError::DirectoryListUnsupported => PyRuntimeError::new_err(
+            "Discovery directory list removed; resolve clusters by explicit domain id",
+        ),
     }
 }
 

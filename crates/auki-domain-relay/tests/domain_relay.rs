@@ -232,11 +232,10 @@ async fn relay_multiaddr_can_be_published_through_cluster_manager_to_discovery()
         &[relay_advertise_multiaddr.clone()]
     );
 
-    let snapshot = discovery.list_clusters().await.expect("list clusters");
-    let entry = snapshot
-        .iter()
-        .find(|entry| entry.name == cluster_name)
-        .expect("created cluster appears in Discovery");
+    let entry = discovery
+        .get_peer_manager(cluster_name.clone())
+        .await
+        .expect("get peer manager");
 
     assert_eq!(entry.manager_peer_id, manager_identity.peer_id());
     assert_eq!(

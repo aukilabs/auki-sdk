@@ -152,6 +152,39 @@ pub struct DetectionLogManifest {
     pub retention_ns: i64,
 }
 
+/// Manifest for an append-only MapUpdate log. `map` pins the map's immutable
+/// coordinate and merge contract; source input logs are intentionally not
+/// listed here because a Mapper may consume any number of local or remote
+/// inputs over its lifetime. The log manifest and catalog row retain the
+/// identity of the peer serving the update sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MapLogManifest {
+    pub source_peer_id: String,
+    pub writer_peer_id: String,
+    pub app_id: String,
+    pub session_id: String,
+    pub map: RegistryRef,
+    pub clock: RegistryRef,
+    pub segment_duration_ns: i64,
+    pub retention_ns: i64,
+}
+
+impl MapLogManifest {
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_non_empty("source_peer_id", &self.source_peer_id)?;
+        validate_non_empty("writer_peer_id", &self.writer_peer_id)?;
+        validate_non_empty("app_id", &self.app_id)?;
+        validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("map.peer_id", &self.map.peer_id)?;
+        validate_non_empty("map.id", &self.map.id)?;
+        validate_non_empty("map.hash", &self.map.hash)?;
+        validate_non_empty("clock.peer_id", &self.clock.peer_id)?;
+        validate_non_empty("clock.id", &self.clock.id)?;
+        validate_non_empty("clock.hash", &self.clock.hash)?;
+        validate_durations(self.segment_duration_ns, self.retention_ns)
+    }
+}
+
 impl DetectionLogManifest {
     pub fn validate(&self) -> Result<(), ManifestValidationError> {
         validate_non_empty("source_peer_id", &self.source_peer_id)?;

@@ -859,6 +859,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-mappers"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-manifests",
+ "auki-network",
+ "auki-registry",
+ "auki-session",
+ "futures",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "auki-maps"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-registry",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "auki-network"
 version = "0.0.0"
 dependencies = [
@@ -1003,6 +1027,8 @@ dependencies = [
  "auki-jcs",
  "auki-logs",
  "auki-manifests",
+ "auki-mappers",
+ "auki-maps",
  "auki-registry",
  "auki-time",
  "parking_lot",

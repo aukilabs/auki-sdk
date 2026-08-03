@@ -63,6 +63,8 @@ pub enum RegistryKind {
     /// `<app_root>/registries/detectors/<id>/<hash>.json`, same
     /// canonical-bytes + content-addressed-hash model.
     Detector,
+    /// Map Registry (`MapRegistryEntry`).
+    Map,
 }
 
 impl RegistryKind {
@@ -74,6 +76,7 @@ impl RegistryKind {
             RegistryKind::Clock => "clock",
             RegistryKind::Frame => "frame",
             RegistryKind::Detector => "detector",
+            RegistryKind::Map => "map",
         }
     }
 }
@@ -89,7 +92,8 @@ impl std::fmt::Display for RegistryKind {
 pub struct RegistryRequest {
     /// Registry namespace.
     pub kind: RegistryKind,
-    /// Registry id (`sensor_id`, `clock_id`, or `frame_id`).
+    /// Registry id (`sensor_id`, `clock_id`, `frame_id`, `detector_id`, or
+    /// `map_id`).
     pub id: String,
     /// Expected XXH3-128 hash of the canonical JSON entry bytes.
     pub hash: String,

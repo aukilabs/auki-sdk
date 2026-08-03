@@ -11,6 +11,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use futures::{StreamExt, stream};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 
@@ -19,15 +20,17 @@ use auki_network::resources_protocol::{
     SensorBlock, SensorKind, SensorManifestPointer, TimeTransformManifestPointer, VariantContent,
 };
 use auki_network::stream_runtime::StreamProvider;
+use auki_network::stream_runtime::{SourceStream, StreamDispatch, StreamItem, StreamSubscription};
 use auki_network::swarm::Behaviour;
 use auki_network::{
-    MessageChannelRegistration, MessageChannelResource, MessageChannelSender,
-    OpenMessageChannelError, PeerIdentity, RegistrationError, SendMessageError, SessionHandle,
-    Swarm,
+    MapCatalogProvider, MapLogResource, MessageChannelRegistration, MessageChannelResource,
+    MessageChannelSender, OpenMessageChannelError, PeerIdentity, RegistrationError,
+    ResourcesProtocolErrorV4, ResourcesResponseV4, SendMessageError, SessionHandle, Swarm,
     resources_v3_protocol::{
         ResourcesProtocolError as ResourcesProtocolErrorV3, ResourcesRequest as ResourcesRequestV3,
         ResourcesResponse as ResourcesResponseV3,
     },
+    stream_protocol::{ReadFrom, StreamManifest, StreamRequest},
 };
 
 use auki_registry::SensorBody;
@@ -288,6 +291,29 @@ pub enum DomainOpenMessageChannelError {
     Open(#[from] OpenMessageChannelError),
 }
 
+/// Failure to open an exact discovered Map Log stream.
+#[derive(Debug, thiserror::Error)]
+pub enum DomainOpenMapStreamError {
+    /// The catalog row is malformed.
+    #[error("invalid map log resource: {0}")]
+    InvalidResource(#[source] ResourcesProtocolErrorV4),
+    /// The authenticated peer being dialed is not the row's writer.
+    #[error("map log writer {writer_peer_id} does not match target peer {target}")]
+    WriterMismatch {
+        /// Authenticated serving peer being dialed.
+        target: PeerId,
+        /// Writer declared in the discovered row.
+        writer_peer_id: String,
+    },
+    /// The producer accepted but did not bind the stream to the exact map,
+    /// clock, payload, and resource identity from discovery.
+    #[error("accepted map stream manifest does not match the discovered resource")]
+    ManifestMismatch,
+    /// Network open or stream protocol negotiation failed.
+    #[error("open map stream: {0}")]
+    Open(#[from] auki_network::stream_runtime::OpenStreamError),
+}
+
 /// Failure from [`Domain::send_message`].
 #[derive(Debug, thiserror::Error)]
 pub enum DomainSendMessageError {
@@ -365,6 +391,11 @@ impl Domain {
         config.daemon_info.session_clock_id = mono.id;
         config.daemon_info.session_clock_hash = mono.hash;
 
+        // Map Logs are SDK resources, so serving them must not depend on an
+        // application callback. Compose them ahead of the existing provider;
+        // all non-map requests continue to the application unchanged.
+        config.stream_provider = map_stream_provider(config.stream_provider, session.logs());
+
         let manager = ClusterManager::bootstrap(
             config.target,
             config.local_identity,
@@ -382,6 +413,8 @@ impl Domain {
         });
         let handle: Arc<dyn SessionHandle> = catalog.clone();
         manager.set_session_handle(handle);
+        let map_catalog_provider: Arc<dyn MapCatalogProvider> = catalog.clone();
+        manager.set_map_catalog_provider(map_catalog_provider);
 
         let mut registrations = HashMap::new();
         for (resource, capacity) in message_channels {
@@ -455,6 +488,51 @@ impl Domain {
         self.manager
             .fetch_resources_catalog_v3_with(peer_id, request)
             .await
+    }
+
+    /// Fetch a peer's Map Log catalog over Resource Catalog v0.4.
+    pub async fn fetch_map_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponseV4, crate::cluster_manager::FetchMapCatalogError> {
+        self.manager.fetch_map_catalog(peer_id).await
+    }
+
+    /// Open an exact discovered Map Log and receive replay plus live
+    /// [`auki_datatypes::map::MapUpdate`] entries through the SDK stream.
+    pub async fn open_map_stream(
+        &self,
+        peer_id: PeerId,
+        resource: &MapLogResource,
+        from: ReadFrom,
+    ) -> Result<
+        StreamSubscription<auki_network::stream_protocol::map::MapUpdate>,
+        DomainOpenMapStreamError,
+    > {
+        resource
+            .validate()
+            .map_err(DomainOpenMapStreamError::InvalidResource)?;
+        if resource.writer_peer_id != peer_id.to_string() {
+            return Err(DomainOpenMapStreamError::WriterMismatch {
+                target: peer_id,
+                writer_peer_id: resource.writer_peer_id.clone(),
+            });
+        }
+
+        let subscription = self
+            .manager
+            .open_stream::<auki_network::stream_protocol::map::MapUpdate>(
+                peer_id,
+                StreamRequest {
+                    source_peer_id: resource.source_peer_id.clone(),
+                    resource_id: resource.resource_id.clone(),
+                    from,
+                },
+            )
+            .await?;
+
+        validate_map_stream_manifest(&subscription.manifest, resource)?;
+        Ok(subscription)
     }
 
     /// Open a persistent sender for an exact discovered message-channel row.
@@ -532,6 +610,125 @@ pub fn catalog_of(peer: &Peer, session: &Session) -> Vec<ResourceEntry> {
     .catalog()
 }
 
+/// Build the v0.4 Map Log catalog. Kept separate from [`catalog_of`] because
+/// v0.2/v0.3 have closed row variants and must remain wire-compatible.
+pub fn map_catalog_of(session: &Session) -> Vec<MapLogResource> {
+    map_catalog_from_logs(&session.logs())
+}
+
+fn map_catalog_from_logs(logs: &SessionLogs) -> Vec<MapLogResource> {
+    logs.map_logs()
+        .into_iter()
+        .map(|handle| MapLogResource {
+            source_peer_id: handle.manifest.source_peer_id.clone(),
+            writer_peer_id: handle.manifest.writer_peer_id.clone(),
+            resource_id: handle.resource_id.clone(),
+            map: handle.manifest.map.clone(),
+            clock: handle.manifest.clock.clone(),
+        })
+        .collect()
+}
+
+fn map_stream_provider(fallback: StreamProvider, logs: SessionLogs) -> StreamProvider {
+    Arc::new(move |peer, request| {
+        let handle = logs.map_logs().into_iter().find(|handle| {
+            handle.resource_id == request.resource_id
+                && (request.source_peer_id.is_empty()
+                    || handle.manifest.source_peer_id == request.source_peer_id)
+        });
+        let Some(handle) = handle else {
+            return fallback(peer, request);
+        };
+
+        let source = match map_log_source(&handle, request.from) {
+            Ok(source) => source,
+            Err(detail) => {
+                return StreamDispatch::Decline {
+                    reason: auki_network::stream_protocol::DeclineReason::other(detail),
+                };
+            }
+        };
+        StreamDispatch::AcceptMap {
+            manifest: map_stream_manifest(&handle),
+            source,
+        }
+    })
+}
+
+fn map_stream_manifest(handle: &auki_session::MapLogHandle) -> StreamManifest {
+    StreamManifest {
+        resource_id: handle.resource_id.clone(),
+        payload: "map_update".into(),
+        map_peer_id: handle.manifest.map.peer_id.clone(),
+        map_id: handle.manifest.map.id.clone(),
+        map_hash: handle.manifest.map.hash.clone(),
+        clock_peer_id: handle.manifest.clock.peer_id.clone(),
+        clock_id: handle.manifest.clock.id.clone(),
+        clock_hash: handle.manifest.clock.hash.clone(),
+        ..Default::default()
+    }
+}
+
+fn map_log_source(
+    handle: &auki_session::MapLogHandle,
+    from: ReadFrom,
+) -> Result<SourceStream<auki_network::stream_protocol::map::MapUpdate>, String> {
+    let (history, receiver) = match from {
+        ReadFrom::Latest => (Vec::new(), handle.subscribe()),
+        ReadFrom::FromStart | ReadFrom::FromTimestamp(_) => handle
+            .snapshot_and_subscribe()
+            .map_err(|error| error.to_string())?,
+    };
+    let history = history
+        .into_iter()
+        .filter(move |entry| match from {
+            ReadFrom::FromTimestamp(start) => entry.timestamp_ns >= start,
+            _ => true,
+        })
+        .map(|entry| {
+            Ok(StreamItem {
+                timestamp_ns: entry.timestamp_ns,
+                payload: entry.payload,
+            })
+        });
+    let live = stream::unfold(receiver, |mut receiver| async move {
+        match receiver.recv().await {
+            Ok((timestamp_ns, payload)) => Some((
+                Ok(StreamItem {
+                    timestamp_ns,
+                    payload,
+                }),
+                receiver,
+            )),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => Some((
+                Err(format!("map log subscriber lagged by {count} updates")),
+                receiver,
+            )),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+        }
+    });
+    Ok(Box::pin(stream::iter(history).chain(live)))
+}
+
+fn validate_map_stream_manifest(
+    manifest: &StreamManifest,
+    resource: &MapLogResource,
+) -> Result<(), DomainOpenMapStreamError> {
+    let matches = manifest.resource_id == resource.resource_id
+        && manifest.payload == "map_update"
+        && manifest.map_peer_id == resource.map.peer_id
+        && manifest.map_id == resource.map.id
+        && manifest.map_hash == resource.map.hash
+        && manifest.clock_peer_id == resource.clock.peer_id
+        && manifest.clock_id == resource.clock.id
+        && manifest.clock_hash == resource.clock.hash;
+    if matches {
+        Ok(())
+    } else {
+        Err(DomainOpenMapStreamError::ManifestMismatch)
+    }
+}
+
 // ─── Catalog bridge ─────────────────────────────────────────────────────────
 
 /// `SessionHandle` bridge: reads the session's live logs and the peer's
@@ -563,6 +760,14 @@ impl DomainCatalog {
 impl SessionHandle for DomainCatalog {
     fn catalog(&self) -> Vec<ResourceEntry> {
         DomainCatalog::catalog(self)
+    }
+}
+
+impl MapCatalogProvider for DomainCatalog {
+    fn map_catalog(&self) -> ResourcesResponseV4 {
+        ResourcesResponseV4 {
+            resources: map_catalog_from_logs(&self.logs),
+        }
     }
 }
 
@@ -783,6 +988,90 @@ mod tests {
             row.variant_content,
             VariantContent::SensorLog { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn map_catalog_and_stream_provider_follow_registered_map_log_live() {
+        use auki_network::stream_runtime::StreamDispatch;
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        use auki_session::MapLogSpec;
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        let provider = DomainCatalog {
+            logs: session.logs(),
+            registries: peer.registries(),
+        };
+        assert!(
+            MapCatalogProvider::map_catalog(&provider)
+                .resources
+                .is_empty()
+        );
+        let handle = session
+            .register_map_log(MapLogSpec {
+                map,
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            })
+            .unwrap();
+        let rows = map_catalog_of(&session);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].resource_id, "occupancy");
+
+        let served = MapCatalogProvider::map_catalog(&provider);
+        assert_eq!(served.resources, rows);
+
+        let first = auki_network::stream_protocol::map::MapUpdate {
+            voxel_chunks: vec![],
+        };
+        handle.append(100, &first).unwrap();
+        let streams = map_stream_provider(
+            auki_network::stream_runtime::decline_all_streams(),
+            session.logs(),
+        );
+        let dispatch = streams(
+            PeerId::random(),
+            StreamRequest {
+                source_peer_id: peer.peer_id().to_string(),
+                resource_id: "occupancy".into(),
+                from: ReadFrom::FromStart,
+            },
+        );
+        let StreamDispatch::AcceptMap {
+            manifest,
+            mut source,
+        } = dispatch
+        else {
+            panic!("registered Map Log must be served by the SDK provider")
+        };
+        assert_eq!(manifest.map_hash, rows[0].map.hash);
+        validate_map_stream_manifest(&manifest, &rows[0]).unwrap();
+        assert_eq!(source.next().await.unwrap().unwrap().timestamp_ns, 100);
+
+        handle
+            .append(
+                200,
+                &auki_network::stream_protocol::map::MapUpdate {
+                    voxel_chunks: vec![],
+                },
+            )
+            .unwrap();
+        assert_eq!(source.next().await.unwrap().unwrap().timestamp_ns, 200);
     }
 
     #[test]

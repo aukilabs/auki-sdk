@@ -76,6 +76,14 @@ message StreamManifest {
   string to_frame_hash = 12;
   string writer_mode = 13;
   uint32 expected_rate_hz = 14;
+  // Present for map_update streams. Together these pin the immutable Map
+  // Registry contract used to decode and merge every payload.
+  string map_peer_id = 15;
+  string map_id = 16;
+  string map_hash = 17;
+  // Full clock ownership for exact RegistryRef validation. Older stream kinds
+  // historically implied the owner; all new manifests populate this field.
+  string clock_peer_id = 18;
 }
 
 message DeclineReason {

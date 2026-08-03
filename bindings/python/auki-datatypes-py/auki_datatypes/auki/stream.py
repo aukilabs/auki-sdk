@@ -7,8 +7,32 @@ import betterproto
 
 
 @dataclass
+class ReadFromLatest(betterproto.Message):
+    """ReadFrom oneof sub-messages for StreamRequest."""
+
+    pass
+
+
+@dataclass
+class ReadFromStart(betterproto.Message):
+    pass
+
+
+@dataclass
+class ReadFromTimestamp(betterproto.Message):
+    timestamp_ns: int = betterproto.int64_field(1)
+
+
+@dataclass
 class StreamRequest(betterproto.Message):
     sensor_id: str = betterproto.string_field(1)
+    resource_id: str = betterproto.string_field(2)
+    source_peer_id: str = betterproto.string_field(3)
+    latest: "ReadFromLatest" = betterproto.message_field(4, group="read_from")
+    from_start: "ReadFromStart" = betterproto.message_field(5, group="read_from")
+    from_timestamp: "ReadFromTimestamp" = betterproto.message_field(
+        6, group="read_from"
+    )
 
 
 @dataclass
@@ -19,6 +43,22 @@ class StreamManifest(betterproto.Message):
     clock_hash: str = betterproto.string_field(4)
     frame_id: str = betterproto.string_field(5)
     frame_hash: str = betterproto.string_field(6)
+    resource_id: str = betterproto.string_field(7)
+    payload: str = betterproto.string_field(8)
+    from_frame_id: str = betterproto.string_field(9)
+    from_frame_hash: str = betterproto.string_field(10)
+    to_frame_id: str = betterproto.string_field(11)
+    to_frame_hash: str = betterproto.string_field(12)
+    writer_mode: str = betterproto.string_field(13)
+    expected_rate_hz: int = betterproto.uint32_field(14)
+    # Present for map_update streams. Together these pin the immutable Map
+    # Registry contract used to decode and merge every payload.
+    map_peer_id: str = betterproto.string_field(15)
+    map_id: str = betterproto.string_field(16)
+    map_hash: str = betterproto.string_field(17)
+    # Full clock ownership for exact RegistryRef validation. Older stream kinds
+    # historically implied the owner; all new manifests populate this field.
+    clock_peer_id: str = betterproto.string_field(18)
 
 
 @dataclass

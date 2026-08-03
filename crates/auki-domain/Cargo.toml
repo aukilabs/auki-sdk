@@ -19,6 +19,7 @@ native_runtime = [
     "dep:auki-time",
     "dep:prost",
     "dep:tokio",
+    "dep:futures",
 ]
 browser_runtime = ["dep:getrandom"]
 
@@ -46,6 +47,7 @@ thiserror = "2"
 # `tokio::spawn` + `tokio::time::interval` drive the Manager-side
 # Discovery heartbeat tick.
 tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
+futures = { version = "0.3", optional = true }
 # `prost::Message` trait bound on `ClusterManager::open_stream<T>` —
 # the same bound `NetworkRuntime::open_stream` carries on `T`. Pulled
 # directly so the public method signature can name it without

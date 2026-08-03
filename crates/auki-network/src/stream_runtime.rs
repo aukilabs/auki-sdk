@@ -50,6 +50,7 @@ use crate::stream_protocol::{
     stream_request_to_wire, write_message,
 };
 use auki_datatypes::detection::DetectionFrame;
+use auki_datatypes::map::MapUpdate;
 use futures::{Stream, StreamExt, channel::mpsc};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::OpenStreamError as Libp2pOpenStreamError;
@@ -106,7 +107,7 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 ///
 /// SDK-supported `T`s: `CameraFrame`, `point_cloud::Data`,
 /// `joint_encoders::Data`, `audio::Data`, `pose::SpatialTransform`,
-/// and (Cuba T8) `DetectionFrame`.
+/// (Cuba T8) `DetectionFrame`, and `MapUpdate`.
 pub enum StreamDispatch {
     /// Accept the request with a Camera source-Stream — grimsby v1's
     /// original stream path, now carrying the same manifest metadata
@@ -174,6 +175,12 @@ pub enum StreamDispatch {
     AcceptDetection {
         manifest: StreamManifest,
         source: SourceStream<DetectionFrame>,
+    },
+    /// Accept an SDK Map Log stream. Each entry is one sparse, mergeable
+    /// [`MapUpdate`] using the Map Registry reference pinned in the manifest.
+    AcceptMap {
+        manifest: StreamManifest,
+        source: SourceStream<MapUpdate>,
     },
     /// Decline the request with a typed reason. SDK writes
     /// [`StreamMessage::Decline { reason }`] and closes the substream.
@@ -460,6 +467,9 @@ pub(crate) async fn handle_inbound_substream(
         StreamDispatch::AcceptDetection { manifest, source } => {
             pump_typed::<DetectionFrame>(substream, manifest, source, shutdown_rx).await;
         }
+        StreamDispatch::AcceptMap { manifest, source } => {
+            pump_typed::<MapUpdate>(substream, manifest, source, shutdown_rx).await;
+        }
     }
 }
 
@@ -508,7 +518,7 @@ where
 ///
 /// Generic over `T`: the SDK monomorphizes one copy per variant
 /// (`CameraFrame`, `point_cloud::Data`, `joint_encoders::Data`,
-/// `audio::Data`, `pose::SpatialTransform`). Adding a new variant means
+/// `audio::Data`, `pose::SpatialTransform`, `DetectionFrame`, `MapUpdate`). Adding a new variant means
 /// adding a new monomorphization plus extending [`StreamDispatch`].
 async fn pump_typed<T>(
     mut substream: libp2p::Stream,
@@ -640,7 +650,7 @@ mod tests {
     use super::*;
     use crate::PeerIdentity;
     use crate::network_runtime::AllowedPeer;
-    use crate::stream_protocol::{decline_reason, end_reason};
+    use crate::stream_protocol::{ReadFrom, decline_reason, end_reason};
     use crate::swarm::{Behaviour, SwarmConfig, build_swarm};
     use auki_datatypes::pose;
     use futures::stream;
@@ -892,6 +902,46 @@ mod tests {
                     "pc-frame-hash-3",
                 ),
                 source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    fn map_provider_yielding_one_update() -> StreamProvider {
+        Arc::new(|_peer, req| {
+            if req.resource_id != "occupancy" {
+                return StreamDispatch::Decline {
+                    reason: DeclineReason::sensor_not_found(),
+                };
+            }
+            StreamDispatch::AcceptMap {
+                manifest: StreamManifest {
+                    resource_id: "occupancy".into(),
+                    payload: "map_update".into(),
+                    map_peer_id: "galbot".into(),
+                    map_id: "occupancy".into(),
+                    map_hash: "map-hash".into(),
+                    clock_peer_id: "galbot".into(),
+                    clock_id: "session/monotonic".into(),
+                    clock_hash: "clock-hash".into(),
+                    ..Default::default()
+                },
+                source: Box::pin(futures::stream::iter(vec![Ok(StreamItem {
+                    timestamp_ns: 42,
+                    payload: MapUpdate {
+                        voxel_chunks: vec![auki_datatypes::map::VoxelChunkUpdate {
+                            chunk_x: -1,
+                            chunk_y: 0,
+                            chunk_z: 2,
+                            voxels: vec![auki_datatypes::map::VoxelDelta {
+                                x: 63,
+                                y: 1,
+                                z: 2,
+                                occupancy_delta: 0.8,
+                                semantics: vec![],
+                            }],
+                        }],
+                    },
+                })])),
             }
         })
     }
@@ -1898,6 +1948,65 @@ mod tests {
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_map_updates() {
+        let id_p = PeerIdentity::from_seed(&[113u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[114u8; 32]);
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-map-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-map-consumer/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
+            map_provider_yielding_one_update(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("consumer spawn");
+
+        assert!(
+            poll_until(
+                || consumer.connected_peers().contains(&id_p.peer_id()),
+                Duration::from_secs(15),
+            )
+            .await
+        );
+        let sub: StreamSubscription<MapUpdate> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    source_peer_id: "galbot".into(),
+                    resource_id: "occupancy".into(),
+                    from: ReadFrom::FromStart,
+                },
+            )
+            .await
+            .expect("open map stream");
+        assert_eq!(sub.manifest.payload, "map_update");
+        assert_eq!(sub.manifest.map_hash, "map-hash");
+
+        let mut entries = sub.entries;
+        let entry = entries.next().await.unwrap().unwrap();
+        assert_eq!(entry.timestamp_ns, 42);
+        assert_eq!(entry.payload.voxel_chunks[0].chunk_x, -1);
+        assert_eq!(entry.payload.voxel_chunks[0].voxels[0].x, 63);
 
         producer.shutdown();
         consumer.shutdown();

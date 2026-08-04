@@ -279,10 +279,12 @@ fn build_detection_log_manifest(
     writer_peer_id: &str,
     app_id: &str,
     session_id: &str,
+    instance_id: &str,
     detector: &Bound<'_, PyAny>,
     input_log: &Bound<'_, PyAny>,
     input_sensor: &Bound<'_, PyAny>,
     clock: &Bound<'_, PyAny>,
+    cadence: &Bound<'_, PyAny>,
     segment_duration_ns: u64,
     retention_ns: u64,
 ) -> PyResult<PyObject> {
@@ -290,15 +292,20 @@ fn build_detection_log_manifest(
     let log_ref = parse_log_ref(py, input_log, "input_log")?;
     let input_sensor_ref = parse_registry_ref(py, input_sensor, "input_sensor")?;
     let clock_ref = parse_registry_ref(py, clock, "clock")?;
+    let cadence_value = pyany_to_json(py, cadence, "cadence")?;
+    let cadence: manifests::DetectionCadence = serde_json::from_value(cadence_value)
+        .map_err(|e| PyValueError::new_err(format!("cadence: {e}")))?;
     let m = manifests::build_detection_log_manifest(
         source_peer_id,
         writer_peer_id,
         app_id,
         session_id,
+        instance_id,
         detector_ref,
         log_ref,
         input_sensor_ref,
         clock_ref,
+        cadence,
         Duration::from_nanos(segment_duration_ns),
         Duration::from_nanos(retention_ns),
     );

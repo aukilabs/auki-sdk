@@ -51,6 +51,8 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 # RegistryRef / LogRef types used in resource catalog manifest pointers.
 auki-registry = { path = "../../../crates/auki-registry" }
+# Detection cadence exposed by detection-log catalog rows.
+auki-manifests = { path = "../../../crates/auki-manifests" }
 # Process-wide tokio runtime that `block_on`s the async cluster
 # manager calls behind a sync Python surface. Multi-thread because
 # the `NetworkRuntime`'s driver task needs `Handle::try_current()`
@@ -68,6 +70,5 @@ pyo3 = { version = "0.22", features = ["abi3-py38"] }
 
 [dev-dependencies]
 auki-registry = { path = "../../../crates/auki-registry" }
-auki-manifests = { path = "../../../crates/auki-manifests" }
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
 tempfile = "3"

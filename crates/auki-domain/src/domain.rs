@@ -900,10 +900,12 @@ fn detection_log_row(handle: &DetectionLogHandle) -> ResourceEntry {
         pose: None,
         variant_content: VariantContent::DetectionLog {
             manifest: DetectionManifestPointer {
+                instance_id: handle.manifest.instance_id.clone(),
                 detector: handle.manifest.detector.clone(),
                 input_log: handle.manifest.input_log.clone(),
                 input_sensor: handle.manifest.input_sensor.clone(),
                 clock: handle.manifest.clock.clone(),
+                cadence: handle.manifest.cadence.clone(),
             },
         },
     }
@@ -932,7 +934,9 @@ mod tests {
                     width: 1920,
                     height: 1200,
                     frame_rate_hz: 30,
+                    image_encoding: "raw".to_string(),
                     pixel_format: "rgb8".to_string(),
+                    row_stride_bytes: 1920 * 3,
                     color_space: "srgb".to_string(),
                     intrinsics_model: "pinhole".to_string(),
                     distortion_model: "brown_conrady".to_string(),

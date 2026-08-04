@@ -62,7 +62,7 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyCapsule};
+use pyo3::types::{PyAny, PyCapsule, PyDict};
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -729,6 +729,7 @@ impl PyResourceEntry {
     /// - `sensor_log`:        `{"clock": {peer_id,id,hash}, "frame": {peer_id,id,hash} | None}`
     /// - `pose_log`:          `{"from_frame": ..., "to_frame": ..., "clock": ..., "source": ..., "expected_rate_hz": N}`
     /// - `time_transform_log`: `{"from_clock": ..., "to_clock": ..., "source": ...}`
+    /// - `detection_log`:      `{"instance_id": ..., "detector": ..., "input_log": ..., "input_sensor": ..., "clock": ..., "cadence": ...}`
     /// - `detection_log`:     `{"detector": ..., "input_log": {source_peer_id, resource_id}, "input_sensor": ..., "clock": ...}`
     #[getter]
     fn manifest<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
@@ -743,7 +744,10 @@ impl PyResourceEntry {
                 }
             }
             VariantContent::PoseLog { manifest } => {
-                d.set_item("from_frame", registry_ref_to_dict(py, &manifest.from_frame)?)?;
+                d.set_item(
+                    "from_frame",
+                    registry_ref_to_dict(py, &manifest.from_frame)?,
+                )?;
                 d.set_item("to_frame", registry_ref_to_dict(py, &manifest.to_frame)?)?;
                 d.set_item("clock", registry_ref_to_dict(py, &manifest.clock)?)?;
                 let source_str = serde_json::to_value(&manifest.source)
@@ -754,7 +758,10 @@ impl PyResourceEntry {
                 d.set_item("expected_rate_hz", manifest.expected_rate_hz)?;
             }
             VariantContent::TimeTransformLog { manifest } => {
-                d.set_item("from_clock", registry_ref_to_dict(py, &manifest.from_clock)?)?;
+                d.set_item(
+                    "from_clock",
+                    registry_ref_to_dict(py, &manifest.from_clock)?,
+                )?;
                 d.set_item("to_clock", registry_ref_to_dict(py, &manifest.to_clock)?)?;
                 let source_str = serde_json::to_value(&manifest.source)
                     .ok()
@@ -763,6 +770,7 @@ impl PyResourceEntry {
                 d.set_item("source", source_str)?;
             }
             VariantContent::DetectionLog { manifest } => {
+                d.set_item("instance_id", &manifest.instance_id)?;
                 d.set_item("detector", registry_ref_to_dict(py, &manifest.detector)?)?;
                 let log_ref_d = PyDict::new_bound(py);
                 log_ref_d.set_item("source_peer_id", &manifest.input_log.source_peer_id)?;
@@ -773,6 +781,17 @@ impl PyResourceEntry {
                     registry_ref_to_dict(py, &manifest.input_sensor)?,
                 )?;
                 d.set_item("clock", registry_ref_to_dict(py, &manifest.clock)?)?;
+                let cadence = PyDict::new_bound(py);
+                match manifest.cadence {
+                    auki_manifests::DetectionCadence::EveryFrame => {
+                        cadence.set_item("kind", "every_frame")?;
+                    }
+                    auki_manifests::DetectionCadence::Periodic { period_ns } => {
+                        cadence.set_item("kind", "periodic")?;
+                        cadence.set_item("period_ns", period_ns)?;
+                    }
+                }
+                d.set_item("cadence", cadence)?;
             }
         }
         Ok(d)
@@ -835,9 +854,7 @@ impl RustResourceCatalogProvider for PyResourceCatalogProvider {
 
 fn extract_resource_entries(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustResourceEntry>> {
     let iter = obj.iter().map_err(|_| {
-        PyTypeError::new_err(
-            "resource catalog provider must return an iterable of ResourceEntry",
-        )
+        PyTypeError::new_err("resource catalog provider must return an iterable of ResourceEntry")
     })?;
     let mut resources = Vec::new();
     for item in iter {
@@ -966,13 +983,17 @@ impl PyReadFrom {
     /// Tail from the current live end — no historical replay.
     #[staticmethod]
     fn latest() -> Self {
-        Self { inner: RustReadFrom::Latest }
+        Self {
+            inner: RustReadFrom::Latest,
+        }
     }
 
     /// Replay from the very first entry in the log.
     #[staticmethod]
     fn from_start() -> Self {
-        Self { inner: RustReadFrom::FromStart }
+        Self {
+            inner: RustReadFrom::FromStart,
+        }
     }
 
     /// Start at the first entry whose timestamp is ≥ `timestamp_ns`
@@ -1037,9 +1058,7 @@ impl PyStreamRequest {
         source_peer_id: String,
         from_: Option<PyRef<'_, PyReadFrom>>,
     ) -> Self {
-        let from = from_
-            .map(|r| r.inner)
-            .unwrap_or_default();
+        let from = from_.map(|r| r.inner).unwrap_or_default();
         Self {
             inner: RustStreamRequest {
                 source_peer_id,
@@ -1061,7 +1080,9 @@ impl PyStreamRequest {
 
     #[getter]
     fn from_(&self) -> PyReadFrom {
-        PyReadFrom { inner: self.inner.from }
+        PyReadFrom {
+            inner: self.inner.from,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -1069,7 +1090,10 @@ impl PyStreamRequest {
             "StreamRequest(source_peer_id={:?}, resource_id={:?}, from_={:?})",
             self.inner.source_peer_id,
             self.inner.resource_id,
-            PyReadFrom { inner: self.inner.from }.__repr__(),
+            PyReadFrom {
+                inner: self.inner.from
+            }
+            .__repr__(),
         )
     }
 }
@@ -1803,26 +1827,41 @@ impl PyClusterManager {
         let rust_request = request.inner.clone();
 
         match kind {
-            GenericStreamPayloadKind::Camera => self.open_typed_stream_with_request::<RustCameraFrame>(
-                py, peer_id, rust_request,
-                |sub| PyStreamSubscription::from_rust_camera(sub),
-            ),
-            GenericStreamPayloadKind::PointCloud => self.open_typed_stream_with_request::<RustPointCloudFrame>(
-                py, peer_id, rust_request,
-                |sub| PyStreamSubscription::from_rust_pointcloud(sub),
-            ),
-            GenericStreamPayloadKind::JointEncoders => self.open_typed_stream_with_request::<RustJointEncodersFrame>(
-                py, peer_id, rust_request,
-                |sub| PyStreamSubscription::from_rust_joint_encoders(sub),
-            ),
-            GenericStreamPayloadKind::Audio => self.open_typed_stream_with_request::<RustAudioFrame>(
-                py, peer_id, rust_request,
-                |sub| PyStreamSubscription::from_rust_audio(sub),
-            ),
-            GenericStreamPayloadKind::Pose => self.open_typed_stream_with_request::<RustPoseSpatialTransform>(
-                py, peer_id, rust_request,
-                |sub| PyStreamSubscription::from_rust_pose(sub),
-            ),
+            GenericStreamPayloadKind::Camera => self
+                .open_typed_stream_with_request::<RustCameraFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_camera(sub),
+                ),
+            GenericStreamPayloadKind::PointCloud => self
+                .open_typed_stream_with_request::<RustPointCloudFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_pointcloud(sub),
+                ),
+            GenericStreamPayloadKind::JointEncoders => self
+                .open_typed_stream_with_request::<RustJointEncodersFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_joint_encoders(sub),
+                ),
+            GenericStreamPayloadKind::Audio => self
+                .open_typed_stream_with_request::<RustAudioFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_audio(sub),
+                ),
+            GenericStreamPayloadKind::Pose => self
+                .open_typed_stream_with_request::<RustPoseSpatialTransform>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_pose(sub),
+                ),
         }
     }
 
@@ -1841,25 +1880,35 @@ impl PyClusterManager {
         resource_id: &str,
     ) -> PyResult<PyStreamSubscription> {
         match self.resolve_stream_payload_kind(py, peer_id, "", resource_id)? {
-            GenericStreamPayloadKind::Camera => {
-                self.open_typed_stream::<RustCameraFrame>(py, peer_id, resource_id, String::new(), |sub| {
-                    PyStreamSubscription::from_rust_camera(sub)
-                })
-            }
-            GenericStreamPayloadKind::PointCloud => {
-                self.open_typed_stream::<RustPointCloudFrame>(py, peer_id, resource_id, String::new(), |sub| {
-                    PyStreamSubscription::from_rust_pointcloud(sub)
-                })
-            }
+            GenericStreamPayloadKind::Camera => self.open_typed_stream::<RustCameraFrame>(
+                py,
+                peer_id,
+                resource_id,
+                String::new(),
+                |sub| PyStreamSubscription::from_rust_camera(sub),
+            ),
+            GenericStreamPayloadKind::PointCloud => self.open_typed_stream::<RustPointCloudFrame>(
+                py,
+                peer_id,
+                resource_id,
+                String::new(),
+                |sub| PyStreamSubscription::from_rust_pointcloud(sub),
+            ),
             GenericStreamPayloadKind::JointEncoders => self
-                .open_typed_stream::<RustJointEncodersFrame>(py, peer_id, resource_id, String::new(), |sub| {
-                    PyStreamSubscription::from_rust_joint_encoders(sub)
-                }),
-            GenericStreamPayloadKind::Audio => {
-                self.open_typed_stream::<RustAudioFrame>(py, peer_id, resource_id, String::new(), |sub| {
-                    PyStreamSubscription::from_rust_audio(sub)
-                })
-            }
+                .open_typed_stream::<RustJointEncodersFrame>(
+                    py,
+                    peer_id,
+                    resource_id,
+                    String::new(),
+                    |sub| PyStreamSubscription::from_rust_joint_encoders(sub),
+                ),
+            GenericStreamPayloadKind::Audio => self.open_typed_stream::<RustAudioFrame>(
+                py,
+                peer_id,
+                resource_id,
+                String::new(),
+                |sub| PyStreamSubscription::from_rust_audio(sub),
+            ),
             GenericStreamPayloadKind::Pose => self.open_pose_stream(py, peer_id, resource_id),
         }
     }
@@ -2605,9 +2654,7 @@ mod tests {
                     },
                 },
             };
-            let entry = PyResourceEntry {
-                inner: rust_entry,
-            };
+            let entry = PyResourceEntry { inner: rust_entry };
             assert_eq!(entry.source_peer_id(), "galbot");
             assert_eq!(entry.resource_id(), "head_left_rgb");
             assert_eq!(entry.variant(), "sensor_log");
@@ -2615,27 +2662,49 @@ mod tests {
 
             let head = entry.head(py).unwrap().unwrap();
             assert_eq!(
-                head.get_item("kind").unwrap().unwrap().extract::<String>().unwrap(),
+                head.get_item("kind")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "rolling"
             );
 
             let sensor = entry.sensor(py).unwrap().unwrap();
             assert_eq!(
-                sensor.get_item("kind").unwrap().unwrap().extract::<String>().unwrap(),
+                sensor
+                    .get_item("kind")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "camera"
             );
             assert_eq!(
-                sensor.get_item("type").unwrap().unwrap().extract::<String>().unwrap(),
+                sensor
+                    .get_item("type")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "rgb"
             );
 
             let manifest = entry.manifest(py).unwrap();
             let clock = manifest
-                .get_item("clock").unwrap().unwrap()
-                .downcast::<PyDict>().unwrap()
+                .get_item("clock")
+                .unwrap()
+                .unwrap()
+                .downcast::<PyDict>()
+                .unwrap()
                 .clone();
             assert_eq!(
-                clock.get_item("id").unwrap().unwrap().extract::<String>().unwrap(),
+                clock
+                    .get_item("id")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
                 "session/sdk_clock"
             );
         });
@@ -2645,10 +2714,8 @@ mod tests {
     fn resource_entry_to_json_roundtrip() {
         Python::with_gil(|_py| {
             use auki_manifests::PoseSource;
-            use auki_network::resources_protocol::{
-                PoseBlock, PoseManifestPointer,
-            };
             use auki_manifests::PoseWriterMode;
+            use auki_network::resources_protocol::{PoseBlock, PoseManifestPointer};
 
             let rust_entry = ResourceEntry {
                 source_peer_id: "galbot".into(),
@@ -2784,9 +2851,15 @@ mod tests {
                 writer_peer_id: "galbot".into(),
                 resource_id: "head_left_rgb".into(),
                 state: "live".into(),
-                head: Some(Head::Rolling { retention_ns: 5_000_000_000 }),
+                head: Some(Head::Rolling {
+                    retention_ns: 5_000_000_000,
+                }),
                 extent: None,
-                available: Available { bytes: 0, entries: 0, duration_ns: 0 },
+                available: Available {
+                    bytes: 0,
+                    entries: 0,
+                    duration_ns: 0,
+                },
                 sensor: Some(SensorBlock {
                     kind: SensorKind::Camera,
                     r#type: "rgb".into(),
@@ -2796,7 +2869,11 @@ mod tests {
                 pose: None,
                 variant_content: VariantContent::SensorLog {
                     manifest: SensorManifestPointer {
-                        clock: RegistryRef { peer_id: "g".into(), id: "clk".into(), hash: "ch".into() },
+                        clock: RegistryRef {
+                            peer_id: "g".into(),
+                            id: "clk".into(),
+                            hash: "ch".into(),
+                        },
                         frame: None,
                     },
                 },
@@ -2806,9 +2883,15 @@ mod tests {
                 writer_peer_id: "galbot".into(),
                 resource_id: "head_array_4mic".into(),
                 state: "live".into(),
-                head: Some(Head::Rolling { retention_ns: 5_000_000_000 }),
+                head: Some(Head::Rolling {
+                    retention_ns: 5_000_000_000,
+                }),
                 extent: None,
-                available: Available { bytes: 0, entries: 0, duration_ns: 0 },
+                available: Available {
+                    bytes: 0,
+                    entries: 0,
+                    duration_ns: 0,
+                },
                 sensor: Some(SensorBlock {
                     kind: SensorKind::Audio,
                     r#type: "pcm".into(),
@@ -2818,7 +2901,11 @@ mod tests {
                 pose: None,
                 variant_content: VariantContent::SensorLog {
                     manifest: SensorManifestPointer {
-                        clock: RegistryRef { peer_id: "g".into(), id: "clk".into(), hash: "ch".into() },
+                        clock: RegistryRef {
+                            peer_id: "g".into(),
+                            id: "clk".into(),
+                            hash: "ch".into(),
+                        },
                         frame: None,
                     },
                 },
@@ -2931,16 +3018,36 @@ mod tests {
             writer_peer_id: "galbot".into(),
             resource_id: "world->base_link".into(),
             state: "live".into(),
-            head: Some(Head::Rolling { retention_ns: 60_000_000_000 }),
+            head: Some(Head::Rolling {
+                retention_ns: 60_000_000_000,
+            }),
             extent: None,
-            available: Available { bytes: 0, entries: 0, duration_ns: 0 },
+            available: Available {
+                bytes: 0,
+                entries: 0,
+                duration_ns: 0,
+            },
             sensor: None,
-            pose: Some(PoseBlock { writer_mode: PoseWriterMode::Movable }),
+            pose: Some(PoseBlock {
+                writer_mode: PoseWriterMode::Movable,
+            }),
             variant_content: VariantContent::PoseLog {
                 manifest: PoseManifestPointer {
-                    from_frame: RegistryRef { peer_id: "p".into(), id: "world".into(), hash: "fh".into() },
-                    to_frame: RegistryRef { peer_id: "g".into(), id: "base_link".into(), hash: "th".into() },
-                    clock: RegistryRef { peer_id: "g".into(), id: "clk".into(), hash: "ch".into() },
+                    from_frame: RegistryRef {
+                        peer_id: "p".into(),
+                        id: "world".into(),
+                        hash: "fh".into(),
+                    },
+                    to_frame: RegistryRef {
+                        peer_id: "g".into(),
+                        id: "base_link".into(),
+                        hash: "th".into(),
+                    },
+                    clock: RegistryRef {
+                        peer_id: "g".into(),
+                        id: "clk".into(),
+                        hash: "ch".into(),
+                    },
                     source: PoseSource::Manual,
                     expected_rate_hz: 30,
                 },

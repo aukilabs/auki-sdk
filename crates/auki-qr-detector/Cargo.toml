@@ -1,0 +1,25 @@
+[package]
+name = "auki-qr-detector"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "QR Lab-backed Auki SDK Detector producing typed QR Detection Log payloads."
+
+[dependencies]
+auki-datatypes = { path = "../auki-datatypes" }
+auki-registry = { path = "../auki-registry" }
+auki-session = { path = "../auki-session" }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+qr-lab = { git = "https://github.com/aukilabs/qr-lab.git", rev = "d9ee65e0d2f7ea8ecd2b01e1fb6091cfc2a34355" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[dev-dependencies]
+auki-logs = { path = "../auki-logs" }
+qrcode = { version = "0.14.1", default-features = false }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "time"] }

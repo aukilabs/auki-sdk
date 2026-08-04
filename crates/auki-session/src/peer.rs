@@ -174,12 +174,25 @@ impl Peer {
         body: DetectorBody,
         output_types: Vec<String>,
     ) -> Result<RegistryRef> {
+        self.register_detector_with_inputs(detector_id, body, Vec::new(), output_types)
+    }
+
+    /// Register a Detector together with its discoverable sensor input
+    /// compatibility contracts.
+    pub fn register_detector_with_inputs(
+        &self,
+        detector_id: &str,
+        body: DetectorBody,
+        input_types: Vec<auki_registry::DetectorInput>,
+        output_types: Vec<String>,
+    ) -> Result<RegistryRef> {
         DetectorRegistryEntry::validate_id(detector_id)?;
         let mut inner = self.inner.write();
         let entry = DetectorRegistryEntry {
             peer_id: inner.peer_id.clone(),
             detector_id: detector_id.to_string(),
             body,
+            input_types,
             output_types,
         };
         let hash = entry.hash();
@@ -274,7 +287,9 @@ mod tests {
             width: 1920,
             height: 1200,
             frame_rate_hz: 30,
+            image_encoding: "raw".to_string(),
             pixel_format: "rgb8".to_string(),
+            row_stride_bytes: 1920 * 3,
             color_space: "srgb".to_string(),
             intrinsics_model: "pinhole".to_string(),
             distortion_model: "brown_conrady".to_string(),

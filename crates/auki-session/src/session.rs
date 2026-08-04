@@ -168,6 +168,19 @@ impl Session {
         self.peer.read().storage_root.clone()
     }
 
+    /// Resolve an exact local Sensor Registry content address.
+    pub fn sensor_registry_entry(
+        &self,
+        reference: &RegistryRef,
+    ) -> Option<auki_registry::SensorRegistryEntry> {
+        let peer = self.peer.read();
+        if reference.peer_id != peer.peer_id {
+            return None;
+        }
+        let entry = peer.sensors.get(&reference.id)?;
+        (entry.hash() == reference.hash).then(|| entry.clone())
+    }
+
     /// The session's auto-minted monotonic clock (set at start).
     pub fn monotonic_clock(&self) -> RegistryRef {
         self.inner.read().monotonic_clock.clone()
@@ -262,6 +275,7 @@ impl Session {
         }
 
         let head_spec = spec.head.clone();
+        let root = log_root(&storage_root, &inner.session_id, &peer_id, &resource_id);
         let manifest = SensorLogManifest {
             source_peer_id: peer_id.clone(),
             writer_peer_id: peer_id.clone(),
@@ -274,7 +288,7 @@ impl Session {
             retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
         };
 
-        write_manifest(&storage_root, &peer_id, &resource_id, &manifest, "SensorLogManifest")?;
+        write_manifest(&root, &manifest, "SensorLogManifest")?;
 
         let log_ref = LogRef {
             source_peer_id: peer_id,
@@ -285,6 +299,7 @@ impl Session {
             log_ref: log_ref.clone(),
             manifest: manifest.clone(),
             head_spec: head_spec.clone(),
+            root: root.clone(),
         };
         inner.sensor_logs.insert(
             resource_id.clone(),
@@ -293,6 +308,7 @@ impl Session {
                 log_ref,
                 manifest,
                 head_spec,
+                root,
             }),
         );
         Ok(handle)
@@ -316,6 +332,7 @@ impl Session {
 
         let head_spec = spec.head.clone();
         let writer_mode = spec.writer_mode.clone();
+        let root = log_root(&storage_root, &inner.session_id, &peer_id, &resource_id);
         let manifest = PoseLogManifest {
             source_peer_id: peer_id.clone(),
             writer_peer_id: peer_id.clone(),
@@ -331,7 +348,7 @@ impl Session {
             retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
         };
 
-        write_manifest(&storage_root, &peer_id, &resource_id, &manifest, "PoseLogManifest")?;
+        write_manifest(&root, &manifest, "PoseLogManifest")?;
 
         let log_ref = LogRef {
             source_peer_id: peer_id,
@@ -343,6 +360,7 @@ impl Session {
             manifest: manifest.clone(),
             head_spec: head_spec.clone(),
             writer_mode: writer_mode.clone(),
+            root: root.clone(),
         };
         inner.pose_logs.insert(
             resource_id.clone(),
@@ -352,6 +370,7 @@ impl Session {
                 manifest,
                 head_spec,
                 writer_mode,
+                root,
             }),
         );
         Ok(handle)
@@ -377,6 +396,7 @@ impl Session {
         }
 
         let head_spec = spec.head.clone();
+        let root = log_root(&storage_root, &inner.session_id, &peer_id, &resource_id);
         let manifest = TimeTransformLogManifest {
             source_peer_id: peer_id.clone(),
             writer_peer_id: peer_id.clone(),
@@ -389,13 +409,7 @@ impl Session {
             retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
         };
 
-        write_manifest(
-            &storage_root,
-            &peer_id,
-            &resource_id,
-            &manifest,
-            "TimeTransformLogManifest",
-        )?;
+        write_manifest(&root, &manifest, "TimeTransformLogManifest")?;
 
         let log_ref = LogRef {
             source_peer_id: peer_id,
@@ -406,6 +420,7 @@ impl Session {
             log_ref: log_ref.clone(),
             manifest: manifest.clone(),
             head_spec: head_spec.clone(),
+            root: root.clone(),
         };
         inner.time_logs.insert(
             resource_id.clone(),
@@ -414,6 +429,7 @@ impl Session {
                 log_ref,
                 manifest,
                 head_spec,
+                root,
             }),
         );
         Ok(handle)
@@ -422,11 +438,11 @@ impl Session {
     /// Register a detection log, writing the manifest to disk and stashing a handle
     /// in the in-memory log map.
     ///
-    /// `resource_id` is derived as `"<detector.id>@<input_sensor.id>"` (§6).
+    /// `resource_id` is the application-selected Detector `instance_id`.
     /// Rejects duplicate `resource_id` with [`SessionError::DuplicateLog`].
     pub fn register_detection_log(&self, spec: DetectionLogSpec) -> Result<DetectionLogHandle> {
         let (peer_id, app_id, storage_root) = self.peer_fields();
-        let resource_id = format!("{}@{}", spec.detector.id, spec.input_sensor.id);
+        let resource_id = spec.instance_id.clone();
         let mut inner = self.inner.write();
         if inner.detection_logs.contains_key(&resource_id)
             || inner.map_logs.contains_key(&resource_id)
@@ -438,26 +454,24 @@ impl Session {
         }
 
         let head_spec = spec.head.clone();
+        let root = log_root(&storage_root, &inner.session_id, &peer_id, &resource_id);
         let manifest = DetectionLogManifest {
             source_peer_id: peer_id.clone(),
             writer_peer_id: peer_id.clone(),
             app_id,
             session_id: inner.session_id.clone(),
+            instance_id: spec.instance_id,
             detector: spec.detector,
             input_log: spec.input_log,
             input_sensor: spec.input_sensor,
             clock: spec.clock,
+            cadence: spec.cadence,
             segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
             retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
         };
+        manifest.validate()?;
 
-        write_manifest(
-            &storage_root,
-            &peer_id,
-            &resource_id,
-            &manifest,
-            "DetectionLogManifest",
-        )?;
+        write_manifest(&root, &manifest, "DetectionLogManifest")?;
 
         let log_ref = LogRef {
             source_peer_id: peer_id,
@@ -468,6 +482,7 @@ impl Session {
             log_ref: log_ref.clone(),
             manifest: manifest.clone(),
             head_spec: head_spec.clone(),
+            root: root.clone(),
         };
         inner.detection_logs.insert(
             resource_id.clone(),
@@ -476,6 +491,7 @@ impl Session {
                 log_ref,
                 manifest,
                 head_spec,
+                root,
             }),
         );
         Ok(handle)
@@ -638,21 +654,21 @@ impl SessionLogs {
 }
 
 /// Canonicalize `manifest` and write it to
-/// `<storage_root>/logs/<peer_id>/<resource_id>/manifest.json`.
-fn write_manifest<M: serde::Serialize>(
-    storage_root: &Path,
-    peer_id: &str,
-    resource_id: &str,
-    manifest: &M,
-    type_name: &str,
-) -> Result<()> {
-    let manifest_dir = storage_root.join("logs").join(peer_id).join(resource_id);
-    std::fs::create_dir_all(&manifest_dir)?;
-    let value =
-        serde_json::to_value(manifest).unwrap_or_else(|_| panic!("{type_name} serializes"));
+/// `<storage_root>/<session_id>/logs/<peer_id>/<resource_id>/manifest.json`.
+fn write_manifest<M: serde::Serialize>(root: &Path, manifest: &M, type_name: &str) -> Result<()> {
+    std::fs::create_dir_all(root)?;
+    let value = serde_json::to_value(manifest).unwrap_or_else(|_| panic!("{type_name} serializes"));
     let canonical_bytes = auki_jcs::canonicalize(&value);
-    std::fs::write(manifest_dir.join("manifest.json"), &canonical_bytes)?;
+    std::fs::write(root.join("manifest.json"), &canonical_bytes)?;
     Ok(())
+}
+
+fn log_root(storage_root: &Path, session_id: &str, peer_id: &str, resource_id: &str) -> PathBuf {
+    storage_root
+        .join(session_id)
+        .join("logs")
+        .join(peer_id)
+        .join(resource_id)
 }
 
 #[cfg(test)]
@@ -797,7 +813,9 @@ mod register_log_tests {
             width: 1920,
             height: 1200,
             frame_rate_hz: 30,
+            image_encoding: "raw".to_string(),
             pixel_format: "rgb8".to_string(),
+            row_stride_bytes: 1920 * 3,
             color_space: "srgb".to_string(),
             intrinsics_model: "pinhole".to_string(),
             distortion_model: "brown_conrady".to_string(),
@@ -838,7 +856,7 @@ mod register_log_tests {
 
     #[test]
     fn register_sensor_log_resource_id_is_sensor_id() {
-        let (peer, s, tmp) = fixture();
+        let (peer, s, _tmp) = fixture();
         let (sensor, clock, frame) = fixture_registries(&peer, &s);
 
         let handle = s
@@ -858,7 +876,7 @@ mod register_log_tests {
         assert_eq!(handle.log_ref().source_peer_id, "galbot");
         assert_eq!(handle.log_ref().resource_id, "head_left_rgb");
 
-        let manifest_path = tmp.path().join("logs/galbot/head_left_rgb/manifest.json");
+        let manifest_path = handle.root().join("manifest.json");
         assert!(
             manifest_path.exists(),
             "manifest.json missing at {}",
@@ -981,10 +999,12 @@ mod register_log_tests {
         };
         let handle = s
             .register_detection_log(DetectionLogSpec {
+                instance_id: "yolo-head-left".into(),
                 detector,
                 input_log,
                 input_sensor: sensor,
                 clock,
+                cadence: auki_manifests::DetectionCadence::EveryFrame,
                 head: HeadSpec::Rolling {
                     retention_ns: 5_000_000_000,
                 },
@@ -993,7 +1013,7 @@ mod register_log_tests {
             })
             .unwrap();
 
-        assert_eq!(handle.resource_id(), "yolo_v8@head_left_rgb");
+        assert_eq!(handle.resource_id(), "yolo-head-left");
     }
 }
 
@@ -1023,7 +1043,9 @@ mod session_logs_tests {
                     width: 1920,
                     height: 1200,
                     frame_rate_hz: 30,
+                    image_encoding: "raw".to_string(),
                     pixel_format: "rgb8".to_string(),
+                    row_stride_bytes: 1920 * 3,
                     color_space: "srgb".to_string(),
                     intrinsics_model: "pinhole".to_string(),
                     distortion_model: "brown_conrady".to_string(),

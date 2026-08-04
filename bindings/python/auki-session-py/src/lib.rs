@@ -54,11 +54,7 @@ use auki_session_rs as session;
 // ─── JSON helpers ───────────────────────────────────────────────────────────
 
 /// Convert a Python object to `serde_json::Value` via `json.dumps(...)`.
-fn pyobject_to_json(
-    py: Python<'_>,
-    value: &Bound<'_, PyAny>,
-    name: &str,
-) -> PyResult<JsonValue> {
+fn pyobject_to_json(py: Python<'_>, value: &Bound<'_, PyAny>, name: &str) -> PyResult<JsonValue> {
     let json = py.import_bound("json")?;
     let s: String = json.call_method1("dumps", (value,))?.extract()?;
     serde_json::from_str(&s).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
@@ -128,13 +124,12 @@ fn map_session_error(err: session::SessionError) -> PyErr {
         session::SessionError::Io(e) => PyOSError::new_err(e.to_string()),
         session::SessionError::InvalidId(e) => PyValueError::new_err(e.to_string()),
         session::SessionError::Registry(e) => PyValueError::new_err(e.to_string()),
+        session::SessionError::Manifest(e) => PyValueError::new_err(e.to_string()),
         session::SessionError::Log(e) => PyRuntimeError::new_err(format!("log: {e}")),
         session::SessionError::DuplicateLog {
             source_peer_id,
             resource_id,
-        } => PyValueError::new_err(format!(
-            "duplicate log {source_peer_id}/{resource_id}"
-        )),
+        } => PyValueError::new_err(format!("duplicate log {source_peer_id}/{resource_id}")),
         session::SessionError::MapNotRegistered {
             peer_id,
             map_id,
@@ -149,11 +144,11 @@ fn map_session_error(err: session::SessionError) -> PyErr {
         } => PyValueError::new_err(format!(
             "clock is not registered in this Session: {peer_id}/{clock_id}@{clock_hash}"
         )),
-        session::SessionError::Materialization(
-            session::MaterializationError::NotImplemented,
-        ) => PyNotImplementedError::new_err(
-            "not implemented: full materialization deferred to Phase 5",
-        ),
+        session::SessionError::Materialization(session::MaterializationError::NotImplemented) => {
+            PyNotImplementedError::new_err(
+                "not implemented: full materialization deferred to Phase 5",
+            )
+        }
         session::SessionError::Materialization(e) => {
             PyRuntimeError::new_err(format!("materialization: {e}"))
         }
@@ -465,10 +460,12 @@ impl DetectionLogSpec {
     #[new]
     fn new(
         py: Python<'_>,
+        instance_id: String,
         detector: &Bound<'_, PyAny>,
         input_log: &Bound<'_, PyAny>,
         input_sensor: &Bound<'_, PyAny>,
         clock: &Bound<'_, PyAny>,
+        cadence: &Bound<'_, PyAny>,
         head: &HeadSpec,
         segment_duration_ns: u64,
         retention_ns: u64,
@@ -477,12 +474,15 @@ impl DetectionLogSpec {
         let log_ref = parse_log_ref(py, input_log, "input_log")?;
         let input_sensor_ref = parse_registry_ref(py, input_sensor, "input_sensor")?;
         let clock_ref = parse_registry_ref(py, clock, "clock")?;
+        let cadence = parse_py::<session::DetectionCadence>(py, cadence, "cadence")?;
         Ok(Self {
             inner: session::DetectionLogSpec {
+                instance_id,
                 detector: detector_ref,
                 input_log: log_ref,
                 input_sensor: input_sensor_ref,
                 clock: clock_ref,
+                cadence,
                 head: head.inner.clone(),
                 segment_duration: Duration::from_nanos(segment_duration_ns),
                 retention: Duration::from_nanos(retention_ns),
@@ -499,6 +499,8 @@ impl DetectionLogSpec {
 pub struct SensorLogHandle {
     #[pyo3(get)]
     pub resource_id: String,
+    #[pyo3(get)]
+    pub root: String,
     log_ref_inner: registry::LogRef,
 }
 
@@ -520,6 +522,8 @@ impl SensorLogHandle {
 pub struct PoseLogHandle {
     #[pyo3(get)]
     pub resource_id: String,
+    #[pyo3(get)]
+    pub root: String,
     log_ref_inner: registry::LogRef,
 }
 
@@ -541,6 +545,8 @@ impl PoseLogHandle {
 pub struct TimeTransformLogHandle {
     #[pyo3(get)]
     pub resource_id: String,
+    #[pyo3(get)]
+    pub root: String,
     log_ref_inner: registry::LogRef,
 }
 
@@ -562,6 +568,8 @@ impl TimeTransformLogHandle {
 pub struct DetectionLogHandle {
     #[pyo3(get)]
     pub resource_id: String,
+    #[pyo3(get)]
+    pub root: String,
     log_ref_inner: registry::LogRef,
 }
 
@@ -672,7 +680,11 @@ impl Peer {
     /// The storage root path (defaults to `.`).
     #[getter]
     fn storage_root(&self) -> String {
-        self.inner.lock().storage_root().to_string_lossy().into_owned()
+        self.inner
+            .lock()
+            .storage_root()
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Register a sensor, writing the entry to disk.
@@ -698,7 +710,11 @@ impl Peer {
             .lock()
             .register_sensor(sensor_id, sensor_body)
             .map_err(map_session_error)?;
-        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
     }
 
     /// Register a coordinate frame using a preset.
@@ -711,13 +727,21 @@ impl Peer {
     /// Returns
     /// -------
     /// RegistryRef
-    fn register_frame(&self, frame_id: &str, frame_def: &FrameDef) -> PyResult<registry_py::RegistryRef> {
+    fn register_frame(
+        &self,
+        frame_id: &str,
+        frame_def: &FrameDef,
+    ) -> PyResult<registry_py::RegistryRef> {
         let r = self
             .inner
             .lock()
             .register_frame(frame_id, frame_def.clone().into_rust_frame_def())
             .map_err(map_session_error)?;
-        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
     }
 
     /// Register a detector, writing the entry to disk.
@@ -729,24 +753,41 @@ impl Peer {
     ///     Detector body dict.
     /// output_types : list[str]
     ///     Detection type strings this detector emits (e.g. ``["aruco"]``).
+    /// input_types : list[dict], optional
+    ///     Discoverable sensor compatibility contracts accepted by the detector.
     ///
     /// Returns
     /// -------
     /// RegistryRef
+    #[pyo3(signature = (detector_id, body, output_types, input_types=None))]
     fn register_detector(
         &self,
         py: Python<'_>,
         detector_id: &str,
         body: &Bound<'_, PyAny>,
         output_types: Vec<String>,
+        input_types: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<registry_py::RegistryRef> {
         let detector_body: registry::DetectorBody = parse_py(py, body, "body")?;
+        let detector_inputs = match input_types {
+            Some(value) => parse_py::<Vec<registry::DetectorInput>>(py, value, "input_types")?,
+            None => Vec::new(),
+        };
         let r = self
             .inner
             .lock()
-            .register_detector(detector_id, detector_body, output_types)
+            .register_detector_with_inputs(
+                detector_id,
+                detector_body,
+                detector_inputs,
+                output_types,
+            )
             .map_err(map_session_error)?;
-        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
     }
 
     /// Start a fresh session on this peer.
@@ -839,7 +880,11 @@ impl Session {
     /// The storage root path (defaults to `.`), read from the peer.
     #[getter]
     fn storage_root(&self) -> String {
-        self.inner.lock().storage_root().to_string_lossy().into_owned()
+        self.inner
+            .lock()
+            .storage_root()
+            .to_string_lossy()
+            .into_owned()
     }
 
     // ─── Clock registration ───────────────────────────────────────────
@@ -869,7 +914,11 @@ impl Session {
             .lock()
             .register_clock(clock_id, clock_body)
             .map_err(map_session_error)?;
-        Ok(registry_py::RegistryRef { peer_id: r.peer_id, id: r.id, hash: r.hash })
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
     }
 
     // ─── Log registration ─────────────────────────────────────────────
@@ -887,6 +936,7 @@ impl Session {
             .map_err(map_session_error)?;
         Ok(SensorLogHandle {
             resource_id: handle.resource_id().to_string(),
+            root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
     }
@@ -904,6 +954,7 @@ impl Session {
             .map_err(map_session_error)?;
         Ok(PoseLogHandle {
             resource_id: handle.resource_id().to_string(),
+            root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
     }
@@ -924,6 +975,7 @@ impl Session {
             .map_err(map_session_error)?;
         Ok(TimeTransformLogHandle {
             resource_id: handle.resource_id().to_string(),
+            root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
     }
@@ -941,6 +993,7 @@ impl Session {
             .map_err(map_session_error)?;
         Ok(DetectionLogHandle {
             resource_id: handle.resource_id().to_string(),
+            root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
     }
@@ -998,10 +1051,7 @@ impl Session {
     ///
     /// Always raises `NotImplementedError`.
     #[allow(unused_variables)]
-    fn resolve_static_transform(
-        &self,
-        log_ref: &Bound<'_, PyAny>,
-    ) -> PyResult<PyObject> {
+    fn resolve_static_transform(&self, log_ref: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         // The Rust side returns MaterializationError::NotImplemented unconditionally.
         // We short-circuit here rather than driving the async runtime, so that
         // tests don't need a live tokio context and the Python error is raised cleanly.
@@ -1057,14 +1107,19 @@ mod tests {
         d
     }
 
-    fn make_camera_body_dict<'py>(py: Python<'py>, frame_dict: &Bound<'py, PyDict>) -> Bound<'py, PyDict> {
+    fn make_camera_body_dict<'py>(
+        py: Python<'py>,
+        frame_dict: &Bound<'py, PyDict>,
+    ) -> Bound<'py, PyDict> {
         let d = PyDict::new_bound(py);
         d.set_item("kind", "camera").unwrap();
         d.set_item("type", "rgb").unwrap();
         d.set_item("width", 1920u32).unwrap();
         d.set_item("height", 1200u32).unwrap();
         d.set_item("frame_rate_hz", 30u32).unwrap();
+        d.set_item("image_encoding", "raw").unwrap();
         d.set_item("pixel_format", "rgb8").unwrap();
+        d.set_item("row_stride_bytes", 5760u32).unwrap();
         d.set_item("color_space", "srgb").unwrap();
         d.set_item("intrinsics_model", "pinhole").unwrap();
         d.set_item("distortion_model", "brown_conrady").unwrap();
@@ -1135,10 +1190,7 @@ mod tests {
             let p = Py::new(py, Peer::new("p".to_string(), "a".to_string())).unwrap();
             let p2 = Peer::with_storage_root(p, tmp.path().to_str().unwrap(), py);
             let p2_ref = p2.borrow(py);
-            assert_eq!(
-                p2_ref.storage_root(),
-                tmp.path().to_string_lossy().as_ref()
-            );
+            assert_eq!(p2_ref.storage_root(), tmp.path().to_string_lossy().as_ref());
         });
     }
 
@@ -1210,19 +1262,19 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let s = peer_at(tmp.path()).start_session().unwrap();
             let log_ref_dict = PyDict::new_bound(py);
-            log_ref_dict
-                .set_item("source_peer_id", "galbot")
-                .unwrap();
+            log_ref_dict.set_item("source_peer_id", "galbot").unwrap();
             log_ref_dict
                 .set_item("resource_id", "head_left_rgb")
                 .unwrap();
             // materialize_remote_log no longer takes py; just log_ref, retention_ns, segment_duration_ns
-            let result = s.materialize_remote_log(log_ref_dict.as_any(), 300_000_000_000, 10_000_000_000);
+            let result =
+                s.materialize_remote_log(log_ref_dict.as_any(), 300_000_000_000, 10_000_000_000);
             assert!(result.is_err());
             let err = result.unwrap_err();
             assert!(
                 err.is_instance_of::<PyNotImplementedError>(py),
-                "expected NotImplementedError, got: {:?}", err
+                "expected NotImplementedError, got: {:?}",
+                err
             );
         });
     }
@@ -1243,7 +1295,8 @@ mod tests {
             let err = result.unwrap_err();
             assert!(
                 err.is_instance_of::<PyNotImplementedError>(py),
-                "expected NotImplementedError, got: {:?}", err
+                "expected NotImplementedError, got: {:?}",
+                err
             );
         });
     }

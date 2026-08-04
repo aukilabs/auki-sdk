@@ -9,10 +9,11 @@ Single source of truth for the SDK's per-recording log manifest shapes — JCS-c
 - `build_sensor_log_manifest(source_peer_id, writer_peer_id, app_id, session_id, sensor: RegistryRef, clock: RegistryRef, frame: Option<RegistryRef>, ...)`
 - `build_pose_log_manifest(source_peer_id, writer_peer_id, ..., from_frame: RegistryRef, to_frame: RegistryRef, clock: RegistryRef, source, writer_mode, ...)`
 - `build_time_transform_log_manifest(source_peer_id, writer_peer_id, ..., from_clock: RegistryRef, to_clock: RegistryRef, ...)`
-- `build_detection_log_manifest(source_peer_id, writer_peer_id, ..., detector: RegistryRef, input_log: LogRef, input_sensor: RegistryRef, clock: RegistryRef, ...)`
+- `build_detection_log_manifest(source_peer_id, writer_peer_id, ..., instance_id, detector: RegistryRef, input_log: LogRef, input_sensor: RegistryRef, clock: RegistryRef, cadence: DetectionCadence, ...)`
 - `MapLogManifest` pins the exact Map and clock `RegistryRef`s for an append-only `MapUpdate` sequence.
 - Manifest structs: `SensorLogManifest`, `PoseLogManifest`, `TimeTransformLogManifest`, `DetectionLogManifest`, `MapLogManifest` — all have `source_peer_id` and `writer_peer_id` as separate fields. `source_peer_id` is the data origin; `writer_peer_id` is the peer that wrote this manifest file (may differ when a remote peer materializes the log).
 - `PoseSource`, `PoseWriterMode`, `TimeTransformSource` — tagged-enum provenance / writer-mode types stamped into the manifest.
+- `DetectionCadence` — either `EveryFrame` or `Periodic { period_ns }`; it is part of the immutable identity of a running detector instance.
 - Registry references use `RegistryRef { peer_id, id, hash }` (imported from `auki-registry`). `DetectionLogManifest.input_log` uses `LogRef { source_peer_id, resource_id }`.
 
 ## Depends on

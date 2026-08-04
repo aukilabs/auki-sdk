@@ -99,7 +99,7 @@ uniffi::custom_type!(Multiaddr, String, {
 
 // ─── Liveness events ───────────────────────────────────────────────
 //
-// `auki_network::PeerLivenessEvent` has 5 variants; two carry rich
+// `auki_network::PeerLivenessEvent` has 6 variants; three carry rich
 // `Heartbeat*Observation` structs that aren't useful at v0 (iosapp's
 // proof-bar UI only needs connect/disconnect/heartbeat-stream-closed).
 // Translate to a 3-variant Swift-facing enum here and skip the two
@@ -122,8 +122,9 @@ pub enum SwiftPeerLivenessEvent {
 
 impl SwiftPeerLivenessEvent {
     /// Translate an upstream `PeerLivenessEvent` into the Swift-facing
-    /// 3-variant subset. The two heartbeat-detail upstream variants
-    /// (`HeartbeatReceived`, `HeartbeatNtpSampleObserved`) get folded
+    /// 3-variant subset. The three heartbeat-detail upstream variants
+    /// (`HeartbeatReceived`, `HeartbeatNtpSampleObserved`, and
+    /// `HeartbeatWriteStalled`) get folded
     /// into `HeartbeatStreamClosed` as a placeholder; production callers
     /// of this function should pre-filter via `is_v0_forwardable` so
     /// those variants never reach this function.
@@ -140,7 +141,8 @@ impl SwiftPeerLivenessEvent {
                 peer_id: peer_id.to_string(),
             },
             PeerLivenessEvent::HeartbeatReceived { peer_id, .. }
-            | PeerLivenessEvent::HeartbeatNtpSampleObserved { peer_id, .. } => {
+            | PeerLivenessEvent::HeartbeatNtpSampleObserved { peer_id, .. }
+            | PeerLivenessEvent::HeartbeatWriteStalled { peer_id, .. } => {
                 Self::HeartbeatStreamClosed {
                     peer_id: peer_id.to_string(),
                 }
@@ -903,6 +905,19 @@ mod tests {
 
         let heartbeat_closed = PeerLivenessEvent::HeartbeatStreamClosed { peer_id: pid };
         let s = SwiftPeerLivenessEvent::from_upstream(&heartbeat_closed);
+        assert!(matches!(
+            s,
+            SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }
+        ));
+
+        let heartbeat_stalled = PeerLivenessEvent::HeartbeatWriteStalled {
+            peer_id: pid,
+            waited: std::time::Duration::from_secs(1),
+        };
+        assert!(!SwiftPeerLivenessEvent::is_v0_forwardable(
+            &heartbeat_stalled
+        ));
+        let s = SwiftPeerLivenessEvent::from_upstream(&heartbeat_stalled);
         assert!(matches!(
             s,
             SwiftPeerLivenessEvent::HeartbeatStreamClosed { .. }

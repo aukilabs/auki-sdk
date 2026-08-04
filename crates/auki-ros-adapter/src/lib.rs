@@ -123,7 +123,9 @@ pub fn dynamic_intrinsics_from(info: &CameraInfoMsg) -> DynamicIntrinsics {
 /// these come from out-of-band knowledge of the platform.
 #[derive(Debug, Clone)]
 pub struct StaticCameraMetadata {
+    pub image_encoding: String,
     pub pixel_format: String,
+    pub row_stride_bytes: u32,
     pub color_space: String,
     pub frame_rate_hz: u32,
     pub intrinsics_model: String,
@@ -154,7 +156,9 @@ pub fn build_camera_registry_entry(
             width: info.width,
             height: info.height,
             frame_rate_hz: meta.frame_rate_hz,
+            image_encoding: meta.image_encoding.clone(),
             pixel_format: meta.pixel_format.clone(),
+            row_stride_bytes: meta.row_stride_bytes,
             color_space: meta.color_space.clone(),
             intrinsics_model: meta.intrinsics_model.clone(),
             distortion_model: info.distortion_model.clone(),
@@ -908,7 +912,9 @@ mod tests {
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
+                image_encoding: "raw".into(),
                 pixel_format: "YUV_NV12".into(),
+                row_stride_bytes: 544,
                 color_space: "BT.709".into(),
                 frame_rate_hz: 20,
                 intrinsics_model: "pinhole".into(),
@@ -917,7 +923,7 @@ mod tests {
             },
         );
         // Same hash as auki-registry's `sensor_entry_hash_is_locked` (#216 rev 2 shape).
-        assert_eq!(entry.hash(), "bfc5a987e68b274dd5e06c334602f64d");
+        assert_eq!(entry.hash(), "9306d67f99d38ced7c186c0f63734421");
     }
 
     #[test]
@@ -993,7 +999,9 @@ mod tests {
             "K1-AABBCCDDEEFF/head_left_cam",
             &info,
             &StaticCameraMetadata {
+                image_encoding: "raw".into(),
                 pixel_format: "YUV_NV12".into(),
+                row_stride_bytes: 544,
                 color_space: "BT.709".into(),
                 frame_rate_hz: 20,
                 intrinsics_model: "pinhole".into(),
@@ -1002,7 +1010,7 @@ mod tests {
             },
         );
         // Matches auki-registry's locked hash for the M1 camera entry (#216 rev 2 shape).
-        assert_eq!(registry_entry.hash(), "bfc5a987e68b274dd5e06c334602f64d");
+        assert_eq!(registry_entry.hash(), "9306d67f99d38ced7c186c0f63734421");
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {

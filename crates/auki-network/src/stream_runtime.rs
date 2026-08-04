@@ -938,6 +938,7 @@ mod tests {
                                 z: 2,
                                 occupancy_delta: 0.8,
                                 semantics: vec![],
+                                color: None,
                             }],
                         }],
                         checkpoint: None,

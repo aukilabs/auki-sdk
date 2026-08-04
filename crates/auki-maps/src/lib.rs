@@ -8,9 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use auki_datatypes::map::{
-    MapUpdate, SemanticEvidence, VoxelChunkSnapshot, VoxelMapCheckpoint, VoxelSnapshot,
+    ColorEvidence, ColorEvidenceDelta, MapUpdate, SemanticEvidence, VoxelChunkSnapshot,
+    VoxelMapCheckpoint, VoxelSnapshot,
 };
-use auki_registry::{MapBody, MapRegistryEntry, RegistryRef, VoxelMap, VoxelValueModel};
+use auki_registry::{
+    MapBody, MapRegistryEntry, RegistryRef, VoxelColorModel, VoxelMap, VoxelValueModel,
+};
 
 mod viewer;
 
@@ -59,6 +62,9 @@ pub struct ViewerVoxel {
     /// Sum of occupancy evidence deltas. This remains unclamped so the viewer
     /// can choose its own probability/color mapping.
     pub occupancy_evidence: f64,
+    /// Weighted average source color in linear RGB, when color evidence has
+    /// been accumulated for this voxel.
+    pub linear_rgb: Option<[f64; 3]>,
     /// Sparse semantic evidence, sorted by class id.
     pub semantics: Vec<SemanticEvidenceSnapshot>,
 }
@@ -109,6 +115,44 @@ pub struct ApplySummary {
 struct VoxelEvidence {
     occupancy: f64,
     semantics: BTreeMap<u32, f64>,
+    color: Option<AccumulatedColor>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct AccumulatedColor {
+    sums: [f64; 3],
+    weight: f64,
+}
+
+impl AccumulatedColor {
+    fn from_delta(color: &ColorEvidenceDelta) -> Self {
+        Self {
+            sums: [
+                f64::from(color.red_sum_delta),
+                f64::from(color.green_sum_delta),
+                f64::from(color.blue_sum_delta),
+            ],
+            weight: f64::from(color.weight_delta),
+        }
+    }
+
+    fn from_checkpoint(color: &ColorEvidence) -> Self {
+        Self {
+            sums: [color.red_sum, color.green_sum, color.blue_sum],
+            weight: color.weight,
+        }
+    }
+
+    fn add_delta(&mut self, color: &ColorEvidenceDelta) {
+        self.sums[0] += f64::from(color.red_sum_delta);
+        self.sums[1] += f64::from(color.green_sum_delta);
+        self.sums[2] += f64::from(color.blue_sum_delta);
+        self.weight += f64::from(color.weight_delta);
+    }
+
+    fn linear_rgb(&self) -> [f64; 3] {
+        self.sums.map(|sum| (sum / self.weight).clamp(0.0, 1.0))
+    }
 }
 
 impl Default for VoxelEvidence {
@@ -116,6 +160,7 @@ impl Default for VoxelEvidence {
         Self {
             occupancy: 0.0,
             semantics: BTreeMap::new(),
+            color: None,
         }
     }
 }
@@ -202,7 +247,11 @@ impl VoxelMapAccumulator {
                     || delta
                         .semantics
                         .iter()
-                        .any(|semantic| semantic.evidence_delta != 0.0);
+                        .any(|semantic| semantic.evidence_delta != 0.0)
+                    || delta
+                        .color
+                        .as_ref()
+                        .is_some_and(|color| color.weight_delta != 0.0);
                 if !changes_value {
                     continue;
                 }
@@ -230,6 +279,12 @@ impl VoxelMapAccumulator {
                         voxel.semantics.remove(&semantic.class_id);
                     }
                 }
+                if let Some(color) = &delta.color {
+                    match &mut voxel.color {
+                        Some(accumulated) => accumulated.add_delta(color),
+                        None => voxel.color = Some(AccumulatedColor::from_delta(color)),
+                    }
+                }
             }
         }
 
@@ -244,8 +299,10 @@ impl VoxelMapAccumulator {
                             .voxels
                             .iter()
                             .filter_map(|(coord, voxel)| {
-                                (voxel.occupancy == 0.0 && voxel.semantics.is_empty())
-                                    .then_some(*coord)
+                                (voxel.occupancy == 0.0
+                                    && voxel.semantics.is_empty()
+                                    && voxel.color.is_none())
+                                .then_some(*coord)
                             })
                             .collect::<Vec<_>>()
                     })
@@ -303,6 +360,12 @@ impl VoxelMapAccumulator {
                                         evidence: *evidence,
                                     })
                                     .collect(),
+                                color: voxel.color.as_ref().map(|color| ColorEvidence {
+                                    red_sum: color.sums[0],
+                                    green_sum: color.sums[1],
+                                    blue_sum: color.sums[2],
+                                    weight: color.weight,
+                                }),
                             })
                             .collect(),
                     })
@@ -389,6 +452,7 @@ impl VoxelMapAccumulator {
                         return Err(AccumulatorError::NonFiniteEvidence);
                     }
                 }
+                self.validate_color_delta(voxel.color.as_ref())?;
             }
         }
         if let Some(checkpoint) = &update.checkpoint {
@@ -439,6 +503,7 @@ impl VoxelMapAccumulator {
                             return Err(AccumulatorError::NonFiniteEvidence);
                         }
                     }
+                    self.validate_color_checkpoint(voxel.color.as_ref())?;
                 }
             }
         }
@@ -468,7 +533,11 @@ impl VoxelMapAccumulator {
                         (semantic.evidence != 0.0).then_some((semantic.class_id, semantic.evidence))
                     })
                     .collect();
-                if snapshot.occupancy_evidence != 0.0 || !semantics.is_empty() {
+                let color = snapshot
+                    .color
+                    .as_ref()
+                    .map(AccumulatedColor::from_checkpoint);
+                if snapshot.occupancy_evidence != 0.0 || !semantics.is_empty() || color.is_some() {
                     voxels.insert(
                         LocalVoxelCoord {
                             x: snapshot.x,
@@ -478,6 +547,7 @@ impl VoxelMapAccumulator {
                         VoxelEvidence {
                             occupancy: snapshot.occupancy_evidence,
                             semantics,
+                            color,
                         },
                     );
                 }
@@ -533,6 +603,7 @@ impl VoxelMapAccumulator {
                         center(coord.z, local.z),
                     ],
                     occupancy_evidence: evidence.occupancy,
+                    linear_rgb: evidence.color.as_ref().map(AccumulatedColor::linear_rgb),
                     semantics: evidence
                         .semantics
                         .iter()
@@ -550,6 +621,61 @@ impl VoxelMapAccumulator {
             voxels,
         }
     }
+
+    fn validate_color_delta(
+        &self,
+        color: Option<&ColorEvidenceDelta>,
+    ) -> Result<(), AccumulatorError> {
+        let Some(color) = color else {
+            return Ok(());
+        };
+        if self.contract.color_model != Some(VoxelColorModel::AdditiveLinearRgbEvidence) {
+            return Err(AccumulatorError::UnexpectedColorEvidence);
+        }
+        validate_color_components(
+            [
+                f64::from(color.red_sum_delta),
+                f64::from(color.green_sum_delta),
+                f64::from(color.blue_sum_delta),
+            ],
+            f64::from(color.weight_delta),
+            true,
+        )
+    }
+
+    fn validate_color_checkpoint(
+        &self,
+        color: Option<&ColorEvidence>,
+    ) -> Result<(), AccumulatorError> {
+        let Some(color) = color else {
+            return Ok(());
+        };
+        if self.contract.color_model != Some(VoxelColorModel::AdditiveLinearRgbEvidence) {
+            return Err(AccumulatorError::UnexpectedColorEvidence);
+        }
+        validate_color_components(
+            [color.red_sum, color.green_sum, color.blue_sum],
+            color.weight,
+            false,
+        )
+    }
+}
+
+fn validate_color_components(
+    sums: [f64; 3],
+    weight: f64,
+    allow_empty: bool,
+) -> Result<(), AccumulatorError> {
+    if !weight.is_finite() || sums.into_iter().any(|sum| !sum.is_finite()) {
+        return Err(AccumulatorError::NonFiniteColorEvidence);
+    }
+    if weight < 0.0 || (!allow_empty && weight == 0.0) {
+        return Err(AccumulatorError::InvalidColorWeight);
+    }
+    if sums.into_iter().any(|sum| sum < 0.0 || sum > weight) {
+        return Err(AccumulatorError::InvalidColorChannelSum);
+    }
+    Ok(())
 }
 
 /// Invalid contract, update, or viewer query.
@@ -579,6 +705,19 @@ pub enum AccumulatorError {
     /// Occupancy or semantic evidence is NaN or infinite.
     #[error("map evidence must be finite")]
     NonFiniteEvidence,
+    /// A MapUpdate carries color but its Map Registry contract does not.
+    #[error("MapUpdate contains color evidence for an occupancy-only voxel Map")]
+    UnexpectedColorEvidence,
+    /// A color channel sum or weight is NaN or infinite.
+    #[error("voxel color evidence must be finite")]
+    NonFiniteColorEvidence,
+    /// Color weights are additive and cannot be negative; checkpoints require
+    /// a positive weight whenever color is present.
+    #[error("voxel color evidence has an invalid weight")]
+    InvalidColorWeight,
+    /// Weighted channel sums must remain inside `[0, weight]`.
+    #[error("voxel color channel sums must be within [0, weight]")]
+    InvalidColorChannelSum,
     /// A semantic delta refers beyond the registry's label list.
     #[error("semantic class {class_id} is outside class count {class_count}")]
     UnknownSemanticClass {
@@ -624,8 +763,8 @@ pub enum AccumulatorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_datatypes::map::{SemanticDelta, VoxelChunkUpdate, VoxelDelta};
-    use auki_registry::FiniteF64;
+    use auki_datatypes::map::{ColorEvidenceDelta, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
+    use auki_registry::{FiniteF64, VoxelColorModel};
 
     fn contract() -> VoxelMap {
         VoxelMap {
@@ -637,6 +776,7 @@ mod tests {
             voxel_size_m: FiniteF64(0.5),
             chunk_dimension: 64,
             value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+            color_model: None,
             semantic_classes: vec!["wall".into(), "door".into()],
         }
     }
@@ -650,6 +790,42 @@ mod tests {
         }
         .registry_ref();
         VoxelMapAccumulator::new(map, contract).unwrap()
+    }
+
+    fn colored_accumulator() -> VoxelMapAccumulator {
+        let mut contract = contract();
+        contract.color_model = Some(VoxelColorModel::AdditiveLinearRgbEvidence);
+        let map = MapRegistryEntry {
+            peer_id: "galbot".into(),
+            map_id: "colored".into(),
+            body: MapBody::Voxel(contract.clone()),
+        }
+        .registry_ref();
+        VoxelMapAccumulator::new(map, contract).unwrap()
+    }
+
+    fn color_update(color: [f32; 3], weight: f32) -> MapUpdate {
+        MapUpdate {
+            voxel_chunks: vec![VoxelChunkUpdate {
+                chunk_x: 0,
+                chunk_y: 0,
+                chunk_z: 0,
+                voxels: vec![VoxelDelta {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                    occupancy_delta: 1.0,
+                    semantics: vec![],
+                    color: Some(ColorEvidenceDelta {
+                        red_sum_delta: color[0] * weight,
+                        green_sum_delta: color[1] * weight,
+                        blue_sum_delta: color[2] * weight,
+                        weight_delta: weight,
+                    }),
+                }],
+            }],
+            checkpoint: None,
+        }
     }
 
     fn update(chunk_x: i32, occupancy_delta: f32, semantic_delta: f32) -> MapUpdate {
@@ -667,6 +843,7 @@ mod tests {
                         class_id: 1,
                         evidence_delta: semantic_delta,
                     }],
+                    color: None,
                 }],
             }],
             checkpoint: None,
@@ -690,6 +867,61 @@ mod tests {
         assert!((voxel.occupancy_evidence - 0.5).abs() < 1e-6);
         assert_eq!(voxel.center_m, [-0.25, 0.75, 1.25]);
         assert!((voxel.semantics[0].evidence - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn weighted_color_commutes_and_survives_checkpoint_replay() {
+        let red = color_update([1.0, 0.0, 0.0], 1.0);
+        let blue = color_update([0.0, 0.0, 1.0], 3.0);
+
+        let mut red_blue = colored_accumulator();
+        red_blue.apply(&red).unwrap();
+        red_blue.apply(&blue).unwrap();
+        let mut blue_red = colored_accumulator();
+        blue_red.apply(&blue).unwrap();
+        blue_red.apply(&red).unwrap();
+        let expected = [0.25, 0.0, 0.75];
+        assert_eq!(
+            red_blue.viewer_snapshot(0.0).unwrap().chunks[0].voxels[0].linear_rgb,
+            Some(expected)
+        );
+        assert_eq!(
+            red_blue.viewer_snapshot(0.0).unwrap().chunks,
+            blue_red.viewer_snapshot(0.0).unwrap().chunks
+        );
+
+        let checkpoint = red_blue.checkpoint_update();
+        let mut replayed = colored_accumulator();
+        replayed.apply(&checkpoint).unwrap();
+        assert_eq!(
+            replayed.viewer_snapshot(0.0).unwrap().chunks[0].voxels,
+            red_blue.viewer_snapshot(0.0).unwrap().chunks[0].voxels
+        );
+        let stored = checkpoint.checkpoint.unwrap().voxel_chunks[0].voxels[0]
+            .color
+            .unwrap();
+        assert_eq!(stored.weight, 4.0);
+        assert_eq!(
+            [stored.red_sum, stored.green_sum, stored.blue_sum],
+            [1.0, 0.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn color_evidence_requires_a_colored_contract_and_valid_weighted_sums() {
+        let colored = color_update([1.0, 0.0, 0.0], 1.0);
+        assert_eq!(
+            accumulator().apply(&colored).unwrap_err(),
+            AccumulatorError::UnexpectedColorEvidence
+        );
+
+        let mut invalid = colored;
+        let color = invalid.voxel_chunks[0].voxels[0].color.as_mut().unwrap();
+        color.red_sum_delta = 2.0;
+        assert_eq!(
+            colored_accumulator().apply(&invalid).unwrap_err(),
+            AccumulatorError::InvalidColorChannelSum
+        );
     }
 
     #[test]
@@ -742,6 +974,7 @@ mod tests {
                 z: 0,
                 occupancy_delta: 1.0,
                 semantics: vec![],
+                color: None,
             }],
         });
         assert!(matches!(

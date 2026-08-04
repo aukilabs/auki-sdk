@@ -98,8 +98,19 @@ pub struct VoxelMap {
     pub voxel_size_m: FiniteF64,
     pub chunk_dimension: u32,
     pub value_model: VoxelValueModel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_model: Option<VoxelColorModel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub semantic_classes: Vec<String>,
+}
+
+/// Defines how optional per-voxel color observations are combined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoxelColorModel {
+    /// Source sRGB samples are converted to linear light and accumulated as
+    /// weighted channel sums plus an additive weight.
+    AdditiveLinearRgbEvidence,
 }
 
 /// JSON-safe finite floating point value used in content-addressed registries.
@@ -2321,6 +2332,7 @@ mod id_charset_tests {
                 voxel_size_m: FiniteF64(0.05),
                 chunk_dimension: 64,
                 value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                color_model: None,
                 semantic_classes: vec!["floor".into()],
             }),
         };
@@ -2342,6 +2354,7 @@ mod id_charset_tests {
                 voxel_size_m: FiniteF64(0.0),
                 chunk_dimension: 0,
                 value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                color_model: None,
                 semantic_classes: vec![],
             }),
         };

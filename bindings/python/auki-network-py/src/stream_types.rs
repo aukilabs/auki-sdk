@@ -2731,12 +2731,9 @@ mod tests {
         assert_eq!(manifest.resource_id, "voxel/world");
         assert_eq!(manifest.map_hash, "map-hash");
 
-        let mut stream = retained_log_into_source_stream(
-            source,
-            decode_retained_map,
-            &RustReadFrom::FromStart,
-        )
-        .unwrap();
+        let mut stream =
+            retained_log_into_source_stream(source, decode_retained_map, &RustReadFrom::FromStart)
+                .unwrap();
         let got = crate::cluster_tokio_runtime()
             .block_on(async { stream.next().await })
             .unwrap()

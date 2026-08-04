@@ -4,10 +4,10 @@ use auki_domain::DiagnosticMessage;
 use auki_domain::{ClusterManager, ClusterTarget, DaemonInfo, Domain, DomainConfig};
 use auki_identity::{Wallet, load_or_mint_seed};
 use auki_network::PeerIdentity;
-use auki_session::Peer;
 use auki_network::app_instance;
 use auki_network::stream_runtime::decline_all_streams;
 use auki_network::swarm::{SwarmConfig, build_swarm, collect_routable_listen_addrs};
+use auki_session::Peer;
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,

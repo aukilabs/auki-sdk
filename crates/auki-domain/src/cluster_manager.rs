@@ -4897,6 +4897,7 @@ mod tests {
                 voxel_size_m: FiniteF64(0.05),
                 chunk_dimension: 64,
                 value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                color_model: None,
                 semantic_classes: vec![],
             }),
         };

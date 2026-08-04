@@ -1092,6 +1092,7 @@ mod session_logs_tests {
                     voxel_size_m: FiniteF64(0.05),
                     chunk_dimension: 64,
                     value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
                     semantic_classes: vec![],
                 }),
             )
@@ -1119,6 +1120,7 @@ mod session_logs_tests {
                             z: 5,
                             occupancy_delta: 0.8,
                             semantics: vec![],
+                            color: None,
                         }],
                     }],
                     checkpoint: None,
@@ -1147,6 +1149,7 @@ mod session_logs_tests {
                     voxel_size_m: FiniteF64(0.05),
                     chunk_dimension: 64,
                     value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
                     semantic_classes: vec![],
                 }),
             )
@@ -1179,6 +1182,7 @@ mod session_logs_tests {
             voxel_size_m: FiniteF64(1.0),
             chunk_dimension: 64,
             value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+            color_model: None,
             semantic_classes: vec![],
         };
         let map = peer

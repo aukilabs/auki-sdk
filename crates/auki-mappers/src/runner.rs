@@ -365,7 +365,8 @@ impl VoxelMapperRunner {
             });
         }
         Self::new(
-            Voxelizer::new(map.voxel_size_m.0, map.chunk_dimension)?,
+            Voxelizer::new(map.voxel_size_m.0, map.chunk_dimension)?
+                .with_color_model(map.color_model),
             point_layout,
             free_delta,
             occupied_delta,
@@ -1073,6 +1074,7 @@ mod tests {
             voxel_size_m: FiniteF64(0.25),
             chunk_dimension: 32,
             value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+            color_model: None,
             semantic_classes: vec![],
         };
 
@@ -1251,6 +1253,7 @@ mod tests {
                     voxel_size_m: FiniteF64(1.0),
                     chunk_dimension: 64,
                     value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
                     semantic_classes: vec![],
                 }),
             )
@@ -1323,6 +1326,7 @@ mod tests {
                     voxel_size_m: FiniteF64(1.0),
                     chunk_dimension: 64,
                     value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
                     semantic_classes: vec![],
                 }),
             )
@@ -1401,6 +1405,7 @@ mod tests {
                     voxel_size_m: FiniteF64(1.0),
                     chunk_dimension: 64,
                     value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
                     semantic_classes: vec![],
                 }),
             )

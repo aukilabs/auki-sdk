@@ -200,6 +200,31 @@ impl RegisteredCameraDetector {
         input_sensor: RegistryRef,
         clock: RegistryRef,
     ) -> Result<DetectionLogHandle, CameraDetectorPackageError> {
+        if let Some(existing) = session
+            .logs()
+            .detection_logs()
+            .into_iter()
+            .find(|handle| handle.resource_id() == instance.instance_id)
+        {
+            let manifest = &existing.manifest;
+            let segment_duration_ns =
+                instance.segment_duration.as_nanos().min(i64::MAX as u128) as i64;
+            let retention_ns = instance.retention.as_nanos().min(i64::MAX as u128) as i64;
+            if manifest.detector != self.registry_ref
+                || manifest.input_log != input_log
+                || manifest.input_sensor != input_sensor
+                || manifest.clock != clock
+                || manifest.cadence != instance.cadence
+                || existing.head_spec != instance.head
+                || manifest.segment_duration_ns != segment_duration_ns
+                || manifest.retention_ns != retention_ns
+            {
+                return Err(CameraDetectorPackageError::InstanceContractMismatch(
+                    instance.instance_id,
+                ));
+            }
+            return Ok(existing.as_ref().clone());
+        }
         session
             .register_detection_log(DetectionLogSpec {
                 instance_id: instance.instance_id,
@@ -303,6 +328,8 @@ pub enum CameraDetectorPackageError {
     DetectorReferenceMismatch,
     #[error("Detector Registry input contracts reject the selected sensor")]
     DetectorRejectsInput,
+    #[error("detector instance {0:?} is already registered with a different contract")]
+    InstanceContractMismatch(String),
     #[error("detector runner: {0}")]
     Runner(#[from] DetectorRunnerError),
 }
@@ -460,6 +487,39 @@ mod tests {
         assert_eq!(wait_for_entry(second.detection_log()).data, vec![1]);
         first.shutdown().unwrap();
         second.shutdown().unwrap();
+    }
+
+    #[test]
+    fn stopped_instance_reuses_its_registered_detection_log() {
+        let (_tmp, peer, session, input, _writer) = setup_input("restart-peer");
+        let detector = RegisteredCameraDetector::register(
+            &peer,
+            "restartable",
+            DetectorBody::Custom(CustomDetector {
+                kind: "com.example.restartable".into(),
+                configuration: serde_json::Value::Null,
+            }),
+            vec![camera_input()],
+            vec!["example.counter".into()],
+            || CountingDetector {
+                count: 0,
+                output_type: "example.counter",
+            },
+        )
+        .unwrap();
+
+        let first = detector
+            .start(&session, instance("restartable"), &input)
+            .unwrap();
+        let first_root = first.detection_log().root().to_path_buf();
+        first.shutdown().unwrap();
+
+        let restarted = detector
+            .start(&session, instance("restartable"), &input)
+            .unwrap();
+        assert_eq!(restarted.detection_log().root(), first_root);
+        restarted.shutdown().unwrap();
+        assert_eq!(session.logs().detection_logs().len(), 1);
     }
 
     #[test]

@@ -166,6 +166,7 @@ impl TimeTransformLogHandle {
     }
 }
 
+#[derive(Clone)]
 pub struct DetectionLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,

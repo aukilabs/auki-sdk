@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, MapBody, MapRegistryEntry,
-    RegistryRef, SensorBody, SensorRegistryEntry,
+    AxisConvention, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness,
+    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, SensorBody, SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -20,14 +20,20 @@ use crate::session::Session;
 
 // ─── FrameDef ────────────────────────────────────────────────────────────────
 
-/// Builder-style frame preset. Created from one of the four named presets
-/// (`FrameDef::ros_body()` etc.) and consumed by [`Peer::register_frame`].
-/// The peer fills in `peer_id` and `frame_id` at registration time.
+/// Coordinate-frame definition consumed by [`Peer::register_frame`]. Use one
+/// of the four named presets (`FrameDef::ros_body()` etc.), or preserve an
+/// existing registry entry's convention with [`FrameDef::from_entry`]. The
+/// peer fills in `peer_id` and `frame_id` at registration time.
 pub enum FrameDef {
     RosBody,
     RosOptical,
     OpenGl,
     Unity,
+    Custom {
+        handedness: Handedness,
+        axes: AxisConvention,
+        units: LengthUnit,
+    },
 }
 
 impl FrameDef {
@@ -48,6 +54,37 @@ impl FrameDef {
         Self::Unity
     }
 
+    /// Define an explicit coordinate convention.
+    ///
+    /// This validates that the axis directions are orthogonal before the
+    /// definition can be registered. Handedness remains an explicit producer
+    /// declaration, matching [`FrameRegistryEntry::validate`].
+    pub fn custom(handedness: Handedness, axes: AxisConvention, units: LengthUnit) -> Result<Self> {
+        let candidate = FrameRegistryEntry {
+            peer_id: String::new(),
+            frame_id: String::new(),
+            handedness,
+            axes,
+            units,
+        };
+        candidate.validate()?;
+        Ok(Self::Custom {
+            handedness,
+            axes,
+            units,
+        })
+    }
+
+    /// Copy only the coordinate convention from an existing registry entry.
+    ///
+    /// The source entry's owner and frame ID are intentionally discarded;
+    /// [`Peer::register_frame`] supplies the local identity. This is useful
+    /// when a local resource must remain self-contained while retaining the
+    /// exact convention of a remote frame.
+    pub fn from_entry(entry: &FrameRegistryEntry) -> Result<Self> {
+        Self::custom(entry.handedness, entry.axes, entry.units)
+    }
+
     pub(crate) fn into_entry(
         self,
         peer_id: impl Into<String>,
@@ -60,6 +97,17 @@ impl FrameDef {
             Self::RosOptical => FrameRegistryEntry::ros_optical(peer_id, frame_id),
             Self::OpenGl => FrameRegistryEntry::opengl(peer_id, frame_id),
             Self::Unity => FrameRegistryEntry::unity(peer_id, frame_id),
+            Self::Custom {
+                handedness,
+                axes,
+                units,
+            } => FrameRegistryEntry {
+                peer_id,
+                frame_id,
+                handedness,
+                axes,
+                units,
+            },
         }
     }
 }
@@ -278,7 +326,7 @@ impl PeerRegistries {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_registry::{Camera, SensorBody};
+    use auki_registry::{AxisDirection, Camera, SensorBody};
     use tempfile::tempdir;
 
     fn camera_body(frame: RegistryRef) -> SensorBody {
@@ -321,6 +369,48 @@ mod tests {
             .join("registries/frames/galbot/head_left_camera_optical")
             .join(format!("{}.json", r.hash));
         assert!(path.exists(), "frame entry missing at {}", path.display());
+    }
+
+    #[test]
+    fn register_frame_can_preserve_an_arbitrary_valid_convention() {
+        let tmp = tempdir().unwrap();
+        let p = Peer::new("park", "viewer").with_storage_root(tmp.path().to_path_buf());
+        let source = FrameRegistryEntry {
+            peer_id: "bracketbot".to_string(),
+            frame_id: "local_world".to_string(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Forward,
+                z: AxisDirection::Up,
+            },
+            units: LengthUnit::Meters,
+        };
+
+        p.register_frame("voxel/world-frame", FrameDef::from_entry(&source).unwrap())
+            .unwrap();
+
+        let local = p.registries().frame("voxel/world-frame").unwrap();
+        assert_eq!(local.peer_id, "park");
+        assert_eq!(local.frame_id, "voxel/world-frame");
+        assert_eq!(local.handedness, source.handedness);
+        assert_eq!(local.axes, source.axes);
+        assert_eq!(local.units, source.units);
+    }
+
+    #[test]
+    fn custom_frame_definition_rejects_non_orthogonal_axes() {
+        let result = FrameDef::custom(
+            Handedness::Right,
+            AxisConvention {
+                x: AxisDirection::Right,
+                y: AxisDirection::Left,
+                z: AxisDirection::Up,
+            },
+            LengthUnit::Meters,
+        );
+
+        assert!(matches!(result, Err(crate::SessionError::Registry(_))));
     }
 
     #[test]

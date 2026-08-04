@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, RegistryRef, SensorBody,
-    SensorRegistryEntry,
+    DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, MapBody, MapRegistryEntry,
+    RegistryRef, SensorBody, SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -81,6 +81,7 @@ pub(crate) struct PeerInner {
     pub(crate) sensors: RegistryStore<SensorRegistryEntry>,
     pub(crate) frames: RegistryStore<FrameRegistryEntry>,
     pub(crate) detectors: RegistryStore<DetectorRegistryEntry>,
+    pub(crate) maps: RegistryStore<MapRegistryEntry>,
 }
 
 impl Peer {
@@ -93,6 +94,7 @@ impl Peer {
                 sensors: RegistryStore::default(),
                 frames: RegistryStore::default(),
                 detectors: RegistryStore::default(),
+                maps: RegistryStore::default(),
             })),
         }
     }
@@ -204,6 +206,27 @@ impl Peer {
         Ok(registry_ref)
     }
 
+    /// Register a Map resource. The map's registry entry fixes its immutable
+    /// spatial contract; updates are registered separately on a Session.
+    pub fn register_map(&self, map_id: &str, body: MapBody) -> Result<RegistryRef> {
+        MapRegistryEntry::validate_id(map_id)?;
+        let mut inner = self.inner.write();
+        let entry = MapRegistryEntry {
+            peer_id: inner.peer_id.clone(),
+            map_id: map_id.to_string(),
+            body,
+        };
+        let hash = entry.hash();
+        auki_registry::write_map(&inner.storage_root, &entry)?;
+        let registry_ref = RegistryRef {
+            peer_id: inner.peer_id.clone(),
+            id: map_id.to_string(),
+            hash,
+        };
+        inner.maps.insert(map_id, entry);
+        Ok(registry_ref)
+    }
+
     /// Start a new session on this peer: mints a fresh `session_id` and
     /// registers the session's monotonic + UTC clocks in the corrected shape
     /// (`epoch: null` for monotonic, `unit: "ns"`, UTC `device-local`,
@@ -246,6 +269,9 @@ impl PeerRegistries {
     }
     pub fn detector(&self, detector_id: &str) -> Option<DetectorRegistryEntry> {
         self.inner.read().detectors.get(detector_id).cloned()
+    }
+    pub fn map(&self, map_id: &str) -> Option<MapRegistryEntry> {
+        self.inner.read().maps.get(map_id).cloned()
     }
 }
 
@@ -368,5 +394,32 @@ mod tests {
             vec![],
         );
         assert!(matches!(result, Err(crate::SessionError::InvalidId(_))));
+    }
+
+    #[test]
+    fn register_map_returns_ref_and_writes_disk() {
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        let tmp = tempdir().unwrap();
+        let p = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let frame = p.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = p
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        assert_eq!(map.id, "occupancy");
+        assert!(
+            tmp.path()
+                .join("registries/maps/galbot/occupancy")
+                .join(format!("{}.json", map.hash))
+                .exists()
+        );
     }
 }

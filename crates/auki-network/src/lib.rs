@@ -120,6 +120,9 @@ pub mod resources_protocol;
 pub mod resources_v3_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod resources_v4_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod registries_protocol;
 
 // ─── SessionHandle ────────────────────────────────────────────────────────────
@@ -143,10 +146,10 @@ pub trait SessionHandle: Send + Sync {
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
-    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, RequestResourcesV3Error, ResourcesRequestEvent, SendJoinRequestError,
-    SpawnError, UpdateError, UpdateReport,
+    InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
+    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
+    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
+    ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "swarm")]
@@ -165,6 +168,13 @@ pub use resources_v3_protocol::{
     RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL, ResourceEntry as ResourceEntryV3,
     ResourceVariant as ResourceVariantV3, ResourcesProtocolError as ResourcesProtocolErrorV3,
     ResourcesRequest as ResourcesRequestV3, ResourcesResponse as ResourcesResponseV3,
+};
+
+#[cfg(feature = "swarm")]
+pub use resources_v4_protocol::{
+    MapLogResource, RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
+    ResourcesProtocolError as ResourcesProtocolErrorV4, ResourcesRequest as ResourcesRequestV4,
+    ResourcesResponse as ResourcesResponseV4,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]

@@ -18,6 +18,7 @@ The Auki protocol is built around five questions any node should be able to answ
 
 - **Pose Logs** — segmented `from → to` transforms keyed per ordered frame pair. The future `convert_pose` composition along a transform path is pending.
 - **Sensor + Detection Logs** — per-frame sensor payloads (camera, point cloud, joint encoders, audio) and detector outputs.
+- **Maps + Mappers** — content-addressed Map resources, durable Map Logs, and SDK-native producers that transform sensor/pose streams into mergeable Map Updates.
 - **`auki-geometry`** — convention conversion for points, vectors, directions, and `SpatialTransform` poses (the convention-only layer underneath the future full `convert_pose`).
 
 ### Temporal
@@ -51,11 +52,13 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-identity`](crates/auki-identity) | ed25519 wallet + child derivation + signed creation certs | ✓ |
 | [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform` math, NTP-style sampler | ✓ |
 | [`auki-logs`](crates/auki-logs) | Generic segmented append-only log primitive | ✓ |
-| [`auki-registry`](crates/auki-registry) | Sensor / Clock / Frame identity catalogs + IO | ✓ |
+| [`auki-registry`](crates/auki-registry) | Sensor / Clock / Frame / Map identity catalogs + IO | ✓ |
 | [`auki-datatypes`](crates/auki-datatypes) | Shared protobuf segment + wire payload schemas | ✓ |
-| [`auki-manifests`](crates/auki-manifests) | JCS-JSON log-manifest builders (sensor / pose / TT / detection) | ✓ |
+| [`auki-manifests`](crates/auki-manifests) | JCS-JSON log-manifest builders (sensor / pose / TT / detection / map) | ✓ |
 | [`auki-layout`](crates/auki-layout) | On-disk path helpers for session/log layout | ✓ |
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
+| [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
+| [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
 | [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
 | [`auki-domain`](crates/auki-domain) | `Domain::join(&peer, &session, config)` — app-facing network presence; owns `ClusterManager`, the cluster lifecycle engine | ✓ |
@@ -76,6 +79,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
 | [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
 | [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `ResourceEntry`, resource-catalog fetch, and typed stream openers including pose | ✓ |
+| [`auki-mappers-py`](bindings/python/auki-mappers-py) | Python boundary for SDK-native Mappers; normalized point cloud + registry + pose to `MapUpdate` | ✓ |
 | [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
 
 ### `bindings/swift/` — UniFFI

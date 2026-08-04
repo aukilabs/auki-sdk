@@ -32,19 +32,23 @@ pub use auki_network::registries_protocol::RegistryKind;
 #[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 #[cfg(feature = "native_runtime")]
+pub use auki_network::stream_protocol::{ReadFrom, map::MapUpdate};
+#[cfg(feature = "native_runtime")]
 pub use auki_network::{
-    MessageChannelResource, MessageChannelSender, ResourceEntryV3, ResourceVariantV3,
-    ResourcesRequestV3, ResourcesResponseV3,
+    MapLogResource, MessageChannelResource, MessageChannelSender, ResourceEntryV3,
+    ResourceVariantV3, ResourcesRequestV3, ResourcesResponseV3, ResourcesResponseV4,
 };
 #[cfg(feature = "native_runtime")]
-pub use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorRegistryEntry};
+pub use auki_registry::{
+    ClockRegistryEntry, FrameRegistryEntry, MapRegistryEntry, SensorRegistryEntry,
+};
 #[cfg(feature = "native_runtime")]
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
 #[cfg(feature = "native_runtime")]
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
-    DomainTimeNowError, FetchParticipantInfoError, FetchRegistryEntryError,
+    DomainTimeNowError, FetchMapCatalogError, FetchParticipantInfoError, FetchRegistryEntryError,
     FetchResourcesCatalogError, FetchResourcesCatalogV3Error, InboundDiagnosticMessage,
     JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
     decide_manager_loss_action, elect_successor,
@@ -52,9 +56,9 @@ pub use cluster_manager::{
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]
 pub use domain::{
-    Domain, DomainBuilder, DomainBuilderError, DomainConfig, DomainError,
+    Domain, DomainBuilder, DomainBuilderError, DomainConfig, DomainError, DomainOpenMapStreamError,
     DomainOpenMessageChannelError, DomainSendMessageError, MessageChannelReceiver, MessageEvent,
-    catalog_of,
+    catalog_of, map_catalog_of,
 };
 #[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

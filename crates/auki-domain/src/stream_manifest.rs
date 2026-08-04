@@ -81,8 +81,10 @@ impl StreamManifestBuilder {
         }
 
         Ok(StreamManifest {
+            resource_id: sensor_id.clone(),
             sensor_id,
             sensor_hash,
+            clock_peer_id: sensor_peer_id.to_string(),
             clock_id: clock_id.into(),
             clock_hash: clock_hash.into(),
             frame_id,
@@ -213,7 +215,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(manifest.sensor_id, entry.sensor_id);
+        assert_eq!(manifest.resource_id, entry.sensor_id);
         assert_eq!(manifest.sensor_hash, sensor_hash);
+        assert_eq!(manifest.clock_peer_id, PEER_ID);
         assert_eq!(manifest.clock_id, "K1-AABBCCDDEEFF/monotonic");
         assert_eq!(manifest.clock_hash, "clock-hash");
         assert_eq!(manifest.frame_id, FRAME_ID);

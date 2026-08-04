@@ -107,8 +107,13 @@ pub const STREAM_SOURCE_CAPSULE_NAME: &str = "auki_logs_py::stream_source::v1";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetainedStreamSource {
     pub root: PathBuf,
+    pub resource_id: String,
     pub sensor_id: String,
     pub sensor_hash: String,
+    pub map_peer_id: String,
+    pub map_id: String,
+    pub map_hash: String,
+    pub clock_peer_id: String,
     pub clock_id: String,
     pub clock_hash: String,
     pub payload_kind: String,
@@ -118,9 +123,9 @@ pub struct RetainedStreamSource {
 
 fn validate_payload_kind(payload_kind: &str) -> PyResult<()> {
     match payload_kind {
-        "camera" | "pointcloud" | "joint_encoders" | "audio" => Ok(()),
+        "camera" | "pointcloud" | "joint_encoders" | "audio" | "map" => Ok(()),
         other => Err(PyValueError::new_err(format!(
-            "payload_kind must be one of camera, pointcloud, joint_encoders, or audio; got {other:?}"
+            "payload_kind must be one of camera, pointcloud, joint_encoders, audio, or map; got {other:?}"
         ))),
     }
 }
@@ -452,13 +457,66 @@ impl Log {
         Ok(StreamSource {
             inner: RetainedStreamSource {
                 root: self.root.clone(),
+                resource_id: String::new(),
                 sensor_id,
                 sensor_hash,
+                map_peer_id: String::new(),
+                map_id: String::new(),
+                map_hash: String::new(),
+                clock_peer_id: String::new(),
                 clock_id,
                 clock_hash,
                 payload_kind,
                 frame_id: frame_id.unwrap_or_default(),
                 frame_hash: frame_hash.unwrap_or_default(),
+            },
+        })
+    }
+
+    /// Build an SDK-owned retained Map Log source. Map identity and clock
+    /// references are pinned into the stream manifest by `accept_source`.
+    #[pyo3(signature = (*, resource_id, map_peer_id, map_id, map_hash, clock_peer_id, clock_id, clock_hash))]
+    fn map_stream_source(
+        &self,
+        resource_id: String,
+        map_peer_id: String,
+        map_id: String,
+        map_hash: String,
+        clock_peer_id: String,
+        clock_id: String,
+        clock_hash: String,
+    ) -> PyResult<StreamSource> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("log has been closed"))?;
+        for (name, value) in [
+            ("resource_id", &resource_id),
+            ("map_peer_id", &map_peer_id),
+            ("map_id", &map_id),
+            ("map_hash", &map_hash),
+            ("clock_peer_id", &clock_peer_id),
+            ("clock_id", &clock_id),
+            ("clock_hash", &clock_hash),
+        ] {
+            if value.is_empty() {
+                return Err(PyValueError::new_err(format!("{name} must not be empty")));
+            }
+        }
+        Ok(StreamSource {
+            inner: RetainedStreamSource {
+                root: self.root.clone(),
+                resource_id,
+                sensor_id: String::new(),
+                sensor_hash: String::new(),
+                map_peer_id,
+                map_id,
+                map_hash,
+                clock_peer_id,
+                clock_id,
+                clock_hash,
+                payload_kind: "map".into(),
+                frame_id: String::new(),
+                frame_hash: String::new(),
             },
         })
     }
@@ -577,6 +635,32 @@ mod tests {
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].payload.0, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn map_stream_source_pins_resource_map_and_clock_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner = RustLog::<RawBytes>::open(dir.path(), manifest()).unwrap();
+        let log = Log {
+            inner: Some(inner),
+            root: dir.path().to_path_buf(),
+        };
+        let source = log
+            .map_stream_source(
+                "voxel/world".into(),
+                "peer-a".into(),
+                "voxel/world".into(),
+                "map-hash".into(),
+                "peer-a".into(),
+                "clock".into(),
+                "clock-hash".into(),
+            )
+            .unwrap();
+
+        assert_eq!(source.inner.payload_kind, "map");
+        assert_eq!(source.inner.resource_id, "voxel/world");
+        assert_eq!(source.inner.map_hash, "map-hash");
+        assert_eq!(source.inner.clock_peer_id, "peer-a");
     }
 
     /// Cross-encoder parity: `auki_datatypes::detection::DetectionFrame`

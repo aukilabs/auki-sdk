@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package auki.map;
+
+// One append-only, mergeable change to a map. `timestamp_ns` is supplied by
+// the log framing; this payload deliberately contains no peer identity, so it
+// can be materialized and relayed by any peer.
+message MapUpdate {
+  repeated VoxelChunkUpdate voxel_chunks = 1;
+}
+
+// A sparse update to one fixed-size chunk of a voxel map. The chunk coordinate
+// is in map-grid chunk units; `voxels` use zero-based coordinates local to it.
+message VoxelChunkUpdate {
+  sint32 chunk_x = 1;
+  sint32 chunk_y = 2;
+  sint32 chunk_z = 3;
+  repeated VoxelDelta voxels = 4;
+}
+
+// Evidence deltas are summed per voxel. Positive occupancy_delta means an
+// observed surface; negative means traversed free space. Consumers must not
+// clamp stored evidence, preserving deterministic replay and commutative merge.
+message VoxelDelta {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 z = 3;
+  float occupancy_delta = 4;
+  repeated SemanticDelta semantics = 5;
+}
+
+// Optional evidence for an application-defined semantic class. Class labels
+// live in the Map Registry, not in individual updates.
+message SemanticDelta {
+  uint32 class_id = 1;
+  float evidence_delta = 2;
+}

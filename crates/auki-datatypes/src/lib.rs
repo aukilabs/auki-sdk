@@ -71,6 +71,15 @@ pub mod joint_encoders {
 
 impl_log_payload!(joint_encoders::Data);
 
+/// `auki.map` — append-only, peer-agnostic map updates. The concrete update
+/// shape is selected by the Map Registry entry; voxel maps use
+/// [`map::MapUpdate`].
+pub mod map {
+    include!(concat!(env!("OUT_DIR"), "/auki.map.rs"));
+}
+
+impl_log_payload!(map::MapUpdate);
+
 /// `auki.audio` — opaque-bytes audio payload shared by disk (Sensor Log
 /// segment) and wire (`/auki/stream/0.2.0` substream). One `Data` type,
 /// byte-identical encoding on both paths. `sample_format`, `channels`,
@@ -262,11 +271,43 @@ mod tests {
     use super::camera::{CameraFrame, DynamicIntrinsics};
     use super::detection::DetectionFrame;
     use super::joint_encoders;
+    use super::map::{MapUpdate, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
     use super::message::Message as TypedMessage;
     use super::point_cloud;
     use super::pose::{Quat, SpatialTransform, Vec3};
     use super::time_transform::TimeTransformEntry;
     use prost::Message;
+
+    #[test]
+    fn map_update_serializes_to_locked_wire_bytes() {
+        let update = MapUpdate {
+            voxel_chunks: vec![VoxelChunkUpdate {
+                chunk_x: -2,
+                chunk_y: 0,
+                chunk_z: 3,
+                voxels: vec![VoxelDelta {
+                    x: 1,
+                    y: 2,
+                    z: 3,
+                    occupancy_delta: 0.75,
+                    semantics: vec![SemanticDelta {
+                        class_id: 7,
+                        evidence_delta: -0.25,
+                    }],
+                }],
+            }],
+        };
+
+        let hex: String = update
+            .encode_to_vec()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "0a1a080318062214080110021803250000403f2a07080715000080be"
+        );
+    }
 
     #[test]
     fn typed_message_serializes_to_locked_wire_bytes() {

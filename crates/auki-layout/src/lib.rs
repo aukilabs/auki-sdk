@@ -66,6 +66,7 @@ const SENSORS_DIR: &str = "sensors";
 const CLOCKS_DIR: &str = "clocks";
 const FRAMES_DIR: &str = "frames";
 const DETECTORS_DIR: &str = "detectors"; // Cuba T4
+const MAPS_DIR: &str = "maps";
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
 const POSELOGS_DIR: &str = "poselogs";
@@ -128,6 +129,15 @@ pub fn detector_entry_path(
         .join(DETECTORS_DIR)
         .join(id_to_segment(peer_id))
         .join(id_to_segment(detector_id))
+        .join(format!("{hash}.json"))
+}
+
+/// `<app_root>/registries/maps/<peer_id>/<map_id>/<hash>.json`.
+pub fn map_entry_path(app_root: &Path, peer_id: &str, map_id: &str, hash: &str) -> PathBuf {
+    registries_root(app_root)
+        .join(MAPS_DIR)
+        .join(id_to_segment(peer_id))
+        .join(id_to_segment(map_id))
         .join(format!("{hash}.json"))
 }
 

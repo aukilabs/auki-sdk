@@ -27,11 +27,11 @@ pub use detector_runner::{
 };
 pub use error::{Result, SessionError};
 pub use log_handles::{
-    DetectionLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
+    DetectionLogHandle, MapLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
     TimeTransformLogHandle,
 };
 pub use log_specs::{
-    DetectionLogSpec, DetectorInstanceSpec, HeadSpec, PoseLogSpec, SensorLogSpec,
+    DetectionLogSpec, DetectorInstanceSpec, HeadSpec, MapLogSpec, PoseLogSpec, SensorLogSpec,
     TimeTransformLogSpec,
 };
 pub use materialization::MaterializationError;

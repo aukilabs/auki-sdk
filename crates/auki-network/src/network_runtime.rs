@@ -72,6 +72,14 @@ use crate::resources_v3_protocol::{
     write_resources_request as write_resources_request_v3,
     write_resources_response as write_resources_response_v3,
 };
+use crate::resources_v4_protocol::{
+    RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
+    ResourcesProtocolError as ResourcesV4ProtocolError, ResourcesRequest as ResourcesRequestV4,
+    ResourcesResponse as ResourcesResponseV4, read_resources_request as read_resources_request_v4,
+    read_resources_response as read_resources_response_v4,
+    write_resources_request as write_resources_request_v4,
+    write_resources_response as write_resources_response_v4,
+};
 #[cfg(test)]
 use crate::{
     PeerIdentity,
@@ -391,6 +399,13 @@ const RESOURCES_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// error.
 pub const RESOURCES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Live source for `/auki/resources/0.4.0` Map Log rows.
+pub trait MapCatalogProvider: Send + Sync {
+    fn map_catalog(&self) -> ResourcesResponseV4;
+}
+
+type SharedMapCatalogProvider = Arc<Mutex<Option<Arc<dyn MapCatalogProvider>>>>;
+
 /// Errors from [`NetworkRuntime::request_resources_catalog`].
 #[derive(Debug, thiserror::Error)]
 pub enum RequestResourcesError {
@@ -426,6 +441,27 @@ fn map_resources_v3_open_error(error: libp2p_stream::OpenStreamError) -> Request
             RequestResourcesV3Error::UnsupportedProtocol
         }
         error => RequestResourcesV3Error::OpenStream(error),
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RequestResourcesV4Error {
+    #[error("remote peer does not support Resource Catalog v0.4")]
+    UnsupportedProtocol,
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] ResourcesV4ProtocolError),
+    #[error("resources v4 request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV4Error {
+    match error {
+        libp2p_stream::OpenStreamError::UnsupportedProtocol(_) => {
+            RequestResourcesV4Error::UnsupportedProtocol
+        }
+        error => RequestResourcesV4Error::OpenStream(error),
     }
 }
 
@@ -766,6 +802,7 @@ pub struct NetworkRuntime {
     command_tx: mpsc::Sender<RuntimeCmd>,
     /// Receiver-owned live message channels registered on this peer.
     message_router: MessageChannelRouter,
+    map_catalog_provider: SharedMapCatalogProvider,
 }
 
 /// Cloneable handle to a [`NetworkRuntime`] for command-style
@@ -949,6 +986,7 @@ impl NetworkRuntime {
         let (registry_events_tx, registry_events_rx) = mpsc::channel::<RegistryRequestEvent>(16);
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let message_router = MessageChannelRouter::new(local_peer_id);
+        let map_catalog_provider: SharedMapCatalogProvider = Arc::new(Mutex::new(None));
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -968,6 +1006,7 @@ impl NetworkRuntime {
             registry_events_tx,
             diagnostic_events_tx,
             message_router.clone(),
+            map_catalog_provider.clone(),
         ));
         Ok((
             Self {
@@ -980,6 +1019,7 @@ impl NetworkRuntime {
                 _lifeline_tx: lifeline_tx,
                 command_tx,
                 message_router,
+                map_catalog_provider,
             },
             join_events_rx,
             liveness_rx,
@@ -1120,6 +1160,44 @@ impl NetworkRuntime {
         .await
         .map_err(|_| RequestResourcesV3Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
         .map_err(RequestResourcesV3Error::Protocol)
+    }
+
+    /// Install the live source used to answer inbound Resource Catalog v0.4
+    /// requests. Replacing the provider is atomic from a request's point of
+    /// view; requests made before a provider is installed receive an empty
+    /// catalog.
+    pub fn set_map_catalog_provider(&self, provider: Arc<dyn MapCatalogProvider>) {
+        *self
+            .map_catalog_provider
+            .lock()
+            .expect("map_catalog_provider lock") = Some(provider);
+    }
+
+    /// Fetch a cluster peer's current Map Log catalog over
+    /// `/auki/resources/0.4.0`.
+    pub async fn request_map_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponseV4, RequestResourcesV4Error> {
+        let mut control = self.stream_control.clone();
+        let open_fut = control.open_stream(peer_id, RESOURCES_V4_PROTOCOL.clone());
+        let mut substream = match tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, open_fut).await {
+            Err(_) => return Err(RequestResourcesV4Error::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(error)) => return Err(map_resources_v4_open_error(error)),
+            Ok(Ok(substream)) => substream,
+        };
+
+        write_resources_request_v4(&mut substream, &ResourcesRequestV4::all())
+            .await
+            .map_err(RequestResourcesV4Error::Protocol)?;
+
+        tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            read_resources_response_v4(&mut substream),
+        )
+        .await
+        .map_err(|_| RequestResourcesV4Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+        .map_err(RequestResourcesV4Error::Protocol)
     }
 
     /// Atomically register a receiver-owned live message channel and its
@@ -1984,6 +2062,7 @@ async fn run_task(
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
     message_router: MessageChannelRouter,
+    map_catalog_provider: SharedMapCatalogProvider,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -2087,6 +2166,13 @@ async fn run_task(
     let mut incoming_resources_v3: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(RESOURCES_V3_PROTOCOL.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    let mut incoming_resources_v4: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(RESOURCES_V4_PROTOCOL.clone()) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2321,6 +2407,19 @@ async fn run_task(
                     substream,
                     resources_events_tx.clone(),
                     message_router.clone(),
+                ));
+            }
+
+            resources = incoming_resources_v4.next() => {
+                let Some((peer, substream)) = resources else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                tokio::spawn(handle_inbound_resources_v4_substream(
+                    peer,
+                    substream,
+                    map_catalog_provider.clone(),
                 ));
             }
 
@@ -3277,6 +3376,29 @@ async fn handle_inbound_resources_v3_substream(
     let _ = write_resources_response_v3(&mut substream, &response).await;
 }
 
+async fn handle_inbound_resources_v4_substream(
+    _peer: PeerId,
+    mut substream: libp2p::Stream,
+    map_catalog_provider: SharedMapCatalogProvider,
+) {
+    if read_resources_request_v4(&mut substream).await.is_err() {
+        return;
+    }
+
+    // Clone the provider while holding the lock, then release it before
+    // invoking application code or awaiting I/O.
+    let provider = map_catalog_provider
+        .lock()
+        .expect("map_catalog_provider lock")
+        .clone();
+    let response = provider
+        .map(|provider| provider.map_catalog())
+        .unwrap_or_else(|| ResourcesResponseV4 {
+            resources: Vec::new(),
+        });
+    let _ = write_resources_response_v4(&mut substream, &response).await;
+}
+
 /// Per-substream task for an inbound `/auki/registries/0.0.1`
 /// request. Reads the framed [`RegistryRequest`], forwards it to the
 /// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
@@ -4160,6 +4282,119 @@ mod tests {
         assert_eq!(observation.remote_clock_id, heartbeat.clock_id);
         assert_eq!(observation.sample.offset_ns, 1_000_000);
         assert_eq!(observation.sample.uncertainty_ns, 100);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn authenticated_peer_fetches_live_map_catalog_v4() {
+        use crate::resources_v4_protocol::MapLogResource;
+        use auki_registry::RegistryRef;
+
+        #[derive(Clone)]
+        struct TestMapCatalog(ResourcesResponseV4);
+
+        impl MapCatalogProvider for TestMapCatalog {
+            fn map_catalog(&self) -> ResourcesResponseV4 {
+                self.0.clone()
+            }
+        }
+
+        let producer_identity = PeerIdentity::from_seed(&[79; 32]);
+        let consumer_identity = PeerIdentity::from_seed(&[80; 32]);
+        let producer_peer = producer_identity.peer_id();
+        let consumer_peer = consumer_identity.peer_id();
+
+        let mut producer_swarm = build_swarm(
+            &producer_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let producer_addr = wait_for_test_listen_addr(&mut producer_swarm).await;
+        let consumer_swarm = build_swarm(
+            &consumer_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            producer_runtime,
+            _producer_joins,
+            _producer_liveness,
+            _producer_memberships,
+            _producer_info,
+            _producer_resources,
+            _producer_registries,
+            _producer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            producer_swarm,
+            vec![AllowedPeer {
+                peer_id: consumer_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            consumer_runtime,
+            _consumer_joins,
+            _consumer_liveness,
+            _consumer_memberships,
+            _consumer_info,
+            _consumer_resources,
+            _consumer_registries,
+            _consumer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            consumer_swarm,
+            vec![AllowedPeer {
+                peer_id: producer_peer,
+                multiaddrs: vec![producer_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+
+        let expected = ResourcesResponseV4 {
+            resources: vec![MapLogResource {
+                source_peer_id: producer_peer.to_string(),
+                writer_peer_id: producer_peer.to_string(),
+                resource_id: "occupancy".into(),
+                map: RegistryRef {
+                    peer_id: producer_peer.to_string(),
+                    id: "occupancy".into(),
+                    hash: "map-hash".into(),
+                },
+                clock: RegistryRef {
+                    peer_id: producer_peer.to_string(),
+                    id: "session/monotonic".into(),
+                    hash: "clock-hash".into(),
+                },
+            }],
+        };
+        producer_runtime.set_map_catalog_provider(Arc::new(TestMapCatalog(expected.clone())));
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !consumer_runtime.connected_peers().contains(&producer_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("peers connect");
+
+        let received = consumer_runtime
+            .request_map_catalog(producer_peer)
+            .await
+            .unwrap();
+        assert_eq!(received, expected);
+
+        producer_runtime.shutdown();
+        consumer_runtime.shutdown();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

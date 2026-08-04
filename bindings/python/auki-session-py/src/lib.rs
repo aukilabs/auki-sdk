@@ -125,10 +125,25 @@ fn map_session_error(err: session::SessionError) -> PyErr {
         session::SessionError::InvalidId(e) => PyValueError::new_err(e.to_string()),
         session::SessionError::Registry(e) => PyValueError::new_err(e.to_string()),
         session::SessionError::Manifest(e) => PyValueError::new_err(e.to_string()),
+        session::SessionError::Log(e) => PyRuntimeError::new_err(format!("log: {e}")),
         session::SessionError::DuplicateLog {
             source_peer_id,
             resource_id,
         } => PyValueError::new_err(format!("duplicate log {source_peer_id}/{resource_id}")),
+        session::SessionError::MapNotRegistered {
+            peer_id,
+            map_id,
+            map_hash,
+        } => PyValueError::new_err(format!(
+            "Map Registry entry is not registered locally: {peer_id}/{map_id}@{map_hash}"
+        )),
+        session::SessionError::ClockNotRegistered {
+            peer_id,
+            clock_id,
+            clock_hash,
+        } => PyValueError::new_err(format!(
+            "clock is not registered in this Session: {peer_id}/{clock_id}@{clock_hash}"
+        )),
         session::SessionError::Materialization(session::MaterializationError::NotImplemented) => {
             PyNotImplementedError::new_err(
                 "not implemented: full materialization deferred to Phase 5",

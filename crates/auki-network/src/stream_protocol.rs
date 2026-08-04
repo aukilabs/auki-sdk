@@ -96,7 +96,7 @@ pub use auki_datatypes::stream::{
     DeclineReason, EndReason, StreamEntry, StreamManifest, StreamMessage, decline_reason,
     end_reason, stream_message,
 };
-pub use auki_datatypes::{audio, joint_encoders, point_cloud, pose};
+pub use auki_datatypes::{audio, joint_encoders, map, point_cloud, pose};
 
 // ─── StreamRequest + ReadFrom ─────────────────────────────────────────────────
 
@@ -416,6 +416,7 @@ mod tests {
             to_frame_hash: "headhash".into(),
             writer_mode: "movable".into(),
             expected_rate_hz: 30,
+            ..Default::default()
         };
         let msg = StreamMessage::accept(manifest.clone());
         let bytes = msg.encode_to_vec();

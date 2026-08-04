@@ -48,8 +48,6 @@
 //! [`Self::shutdown`].
 
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
-use auki_network::ParticipantInfo;
-use auki_network::SessionHandle;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
@@ -58,8 +56,10 @@ use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
 use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
+use auki_network::{MapCatalogProvider, ParticipantInfo, SessionHandle};
 use auki_registry::{
-    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorRegistryEntry,
+    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, MapRegistryEntry,
+    SensorRegistryEntry,
 };
 use auki_time::SessionClock;
 
@@ -1467,6 +1467,11 @@ impl ClusterManager {
         *self.session_handle.lock().expect("session_handle lock") = Some(handle);
     }
 
+    /// Install the live Map Log catalog served over Resource Catalog v0.4.
+    pub fn set_map_catalog_provider(&self, provider: Arc<dyn MapCatalogProvider>) {
+        self.runtime.set_map_catalog_provider(provider);
+    }
+
     /// Register (or replace) the producer-local app root used to
     /// serve `/auki/registries/0.0.1` requests. The SDK reads existing
     /// registry files from this app root via `auki-registry` and
@@ -1536,6 +1541,14 @@ impl ClusterManager {
             .runtime
             .request_resources_catalog_v3_with(peer_id, request)
             .await?)
+    }
+
+    /// Fetch a cluster peer's Map Log catalog over Resource Catalog v0.4.
+    pub async fn fetch_map_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<auki_network::ResourcesResponseV4, FetchMapCatalogError> {
+        Ok(self.runtime.request_map_catalog(peer_id).await?)
     }
 
     /// Atomically bind a receiver-owned message-channel catalog row to the
@@ -1656,6 +1669,41 @@ impl ClusterManager {
                 id, entry.detector_id
             )));
         }
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's `MapRegistryEntry` by exact
+    /// `(map_id, map_hash)` over `/auki/registries/0.0.1`.
+    pub async fn fetch_map_entry(
+        &self,
+        peer_id: PeerId,
+        map_id: impl Into<String>,
+        map_hash: impl Into<String>,
+    ) -> Result<MapRegistryEntry, FetchRegistryEntryError> {
+        let expected_peer_id = peer_id.to_string();
+        let id = map_id.into();
+        let hash = map_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::Map, id.clone(), hash.clone())
+            .await?;
+        let entry: MapRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.map_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded map_id mismatch: expected {:?}, found {:?}",
+                id, entry.map_id
+            )));
+        }
+        if entry.peer_id != expected_peer_id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(format!(
+                "decoded map peer_id mismatch: expected {:?}, found {:?}",
+                expected_peer_id, entry.peer_id
+            )));
+        }
+        entry.validate().map_err(|error| {
+            FetchRegistryEntryError::InvalidEnvelope(format!(
+                "invalid Map Registry contract: {error}"
+            ))
+        })?;
         Ok(entry)
     }
 
@@ -3400,6 +3448,26 @@ pub enum FetchResourcesCatalogV3Error {
     Request(auki_network::RequestResourcesV3Error),
 }
 
+/// Errors from [`ClusterManager::fetch_map_catalog`].
+#[derive(Debug, Error)]
+pub enum FetchMapCatalogError {
+    /// The remote peer does not implement Resource Catalog v0.4.
+    #[error("remote peer does not support Resource Catalog v0.4")]
+    UnsupportedProtocol,
+    /// libp2p / wire / timeout failure during the v0.4 request.
+    #[error("request_map_catalog: {0}")]
+    Request(auki_network::RequestResourcesV4Error),
+}
+
+impl From<auki_network::RequestResourcesV4Error> for FetchMapCatalogError {
+    fn from(error: auki_network::RequestResourcesV4Error) -> Self {
+        match error {
+            auki_network::RequestResourcesV4Error::UnsupportedProtocol => Self::UnsupportedProtocol,
+            error => Self::Request(error),
+        }
+    }
+}
+
 impl From<auki_network::RequestResourcesV3Error> for FetchResourcesCatalogV3Error {
     fn from(error: auki_network::RequestResourcesV3Error) -> Self {
         match error {
@@ -3627,6 +3695,14 @@ fn read_registry_envelope(
             };
             Ok(Some(envelope_for_detector(entry)))
         }
+        RegistryKind::Map => {
+            let Some(entry) =
+                auki_registry::read_map(app_root, peer_id, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_map(entry)))
+        }
     }
 }
 
@@ -3665,6 +3741,16 @@ fn envelope_for_detector(entry: DetectorRegistryEntry) -> RegistryEntryEnvelope 
     RegistryEntryEnvelope {
         kind: RegistryKind::Detector,
         id: entry.detector_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_map(entry: MapRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::Map,
+        id: entry.map_id,
         hash: auki_hash::hash_jcs_bytes(&bytes),
         canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
     }
@@ -4785,6 +4871,54 @@ mod tests {
         verify_registry_envelope(&envelope, RegistryKind::Detector, &envelope.id, &hash).unwrap();
         let decoded: DetectorRegistryEntry =
             serde_json::from_str(&envelope.canonical_json).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn registry_envelope_reads_canonical_map_from_app_root() {
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+
+        let dir = tempfile::tempdir().unwrap();
+        let peer_id = "K1-FAKE";
+        let frame = FrameRegistryEntry::ros_body(peer_id, "world");
+        let frame_hash = auki_registry::write_frame(dir.path(), &frame)
+            .unwrap()
+            .hash()
+            .to_string();
+        let entry = MapRegistryEntry {
+            peer_id: peer_id.into(),
+            map_id: "occupancy".into(),
+            body: MapBody::Voxel(VoxelMap {
+                frame: auki_registry::RegistryRef {
+                    peer_id: peer_id.into(),
+                    id: "world".into(),
+                    hash: frame_hash,
+                },
+                voxel_size_m: FiniteF64(0.05),
+                chunk_dimension: 64,
+                value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                semantic_classes: vec![],
+            }),
+        };
+        let hash = auki_registry::write_map(dir.path(), &entry)
+            .unwrap()
+            .hash()
+            .to_string();
+
+        let envelope = read_registry_envelope(
+            dir.path(),
+            peer_id,
+            &RegistryRequest {
+                kind: RegistryKind::Map,
+                id: entry.map_id.clone(),
+                hash: hash.clone(),
+            },
+        )
+        .unwrap()
+        .expect("entry exists");
+
+        verify_registry_envelope(&envelope, RegistryKind::Map, &entry.map_id, &hash).unwrap();
+        let decoded: MapRegistryEntry = serde_json::from_str(&envelope.canonical_json).unwrap();
         assert_eq!(decoded, entry);
     }
 

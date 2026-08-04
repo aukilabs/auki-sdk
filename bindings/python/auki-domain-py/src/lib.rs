@@ -26,14 +26,19 @@ use auki_domain_rs::{
     BuildStreamManifestError as RustBuildStreamManifestError, ClusterManager as RustClusterManager,
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
-    DaemonInfo as RustDaemonInfo, FetchRegistryEntryError as RustFetchRegistryEntryError,
+    DaemonInfo as RustDaemonInfo, FetchMapCatalogError as RustFetchMapCatalogError,
+    FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
-    JoinClusterError as RustJoinClusterError, MessageChannelResource as RustMessageChannelResource,
+    JoinClusterError as RustJoinClusterError, MapLogResource as RustMapLogResource,
+    MessageChannelResource as RustMessageChannelResource,
     ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
     StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
-use auki_network::MessageChannelRegistration as RustMessageChannelRegistration;
+use auki_network::{
+    MapCatalogProvider as RustMapCatalogProvider,
+    MessageChannelRegistration as RustMessageChannelRegistration,
+};
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
@@ -43,7 +48,8 @@ use auki_network::resources_protocol::{
 use auki_network::stream_protocol::{
     CameraFrame as RustCameraFrame, ReadFrom as RustReadFrom, StreamRequest as RustStreamRequest,
     audio::Data as RustAudioFrame, joint_encoders::Data as RustJointEncodersFrame,
-    point_cloud::Data as RustPointCloudFrame, pose::SpatialTransform as RustPoseSpatialTransform,
+    map::MapUpdate as RustMapUpdate, point_cloud::Data as RustPointCloudFrame,
+    pose::SpatialTransform as RustPoseSpatialTransform,
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
@@ -847,6 +853,100 @@ fn extract_resource_entries(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustResource
     Ok(resources)
 }
 
+// ─── MapLogResource pyclass (/auki/resources/0.4.0) ────────────────
+
+#[pyclass(name = "MapLogResource")]
+#[derive(Clone)]
+pub struct PyMapLogResource {
+    inner: RustMapLogResource,
+}
+
+#[pymethods]
+impl PyMapLogResource {
+    #[staticmethod]
+    fn from_json(s: &str) -> PyResult<Self> {
+        let inner: RustMapLogResource = serde_json::from_str(s)
+            .map_err(|e| PyValueError::new_err(format!("invalid MapLogResource JSON: {e}")))?;
+        inner
+            .validate()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    fn from_dict(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let json = py.import_bound("json")?;
+        let encoded: String = json.call_method1("dumps", (value,))?.extract()?;
+        Self::from_json(&encoded)
+    }
+
+    #[getter]
+    fn source_peer_id(&self) -> &str {
+        &self.inner.source_peer_id
+    }
+
+    #[getter]
+    fn writer_peer_id(&self) -> &str {
+        &self.inner.writer_peer_id
+    }
+
+    #[getter]
+    fn resource_id(&self) -> &str {
+        &self.inner.resource_id
+    }
+
+    #[getter]
+    fn map<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        registry_ref_to_dict(py, &self.inner.map)
+    }
+
+    #[getter]
+    fn clock<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        registry_ref_to_dict(py, &self.inner.clock)
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner)
+            .map_err(|e| PyTypeError::new_err(format!("serializing MapLogResource: {e}")))
+    }
+}
+
+struct PyMapCatalogProvider {
+    callable: Py<PyAny>,
+}
+
+impl RustMapCatalogProvider for PyMapCatalogProvider {
+    fn map_catalog(&self) -> auki_network::resources_v4_protocol::ResourcesResponse {
+        let resources = Python::with_gil(|py| {
+            self.callable
+                .bind(py)
+                .call0()
+                .and_then(|value| extract_map_log_resources(&value))
+                .unwrap_or_else(|error| {
+                    eprintln!("auki-domain-py: map_catalog_provider callable failed: {error}");
+                    Vec::new()
+                })
+        });
+        auki_network::resources_v4_protocol::ResourcesResponse { resources }
+    }
+}
+
+fn extract_map_log_resources(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustMapLogResource>> {
+    let mut resources = Vec::new();
+    for item in obj.iter().map_err(|_| {
+        PyTypeError::new_err("map catalog provider must return an iterable of MapLogResource")
+    })? {
+        let item = item?;
+        let entry = item.extract::<PyRef<'_, PyMapLogResource>>().map_err(|_| {
+            PyTypeError::new_err(
+                "map catalog provider returned an item that is not a MapLogResource",
+            )
+        })?;
+        resources.push(entry.inner.clone());
+    }
+    Ok(resources)
+}
+
 // ─── ReadFrom pyclass ───────────────────────────────────────────────
 
 /// Tagged enum for stream start position (post-#216 §5).
@@ -1630,6 +1730,61 @@ impl PyClusterManager {
         )
     }
 
+    /// Open an exact discovered Map Log with replay plus live updates.
+    #[pyo3(signature = (peer_id, resource, from_=None))]
+    fn open_map_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        resource: &PyMapLogResource,
+        from_: Option<PyRef<'_, PyReadFrom>>,
+    ) -> PyResult<PyStreamSubscription> {
+        let target = parse_peer_id(peer_id)?;
+        let expected = resource.inner.clone();
+        expected
+            .validate()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        if expected.writer_peer_id != peer_id {
+            return Err(PyValueError::new_err(format!(
+                "map writer mismatch: target={peer_id}, writer_peer_id={}",
+                expected.writer_peer_id
+            )));
+        }
+        let request = RustStreamRequest {
+            source_peer_id: expected.source_peer_id.clone(),
+            resource_id: expected.resource_id.clone(),
+            from: from_.map(|value| value.inner).unwrap_or_default(),
+        };
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let subscription = manager
+                    .open_stream::<RustMapUpdate>(target, request)
+                    .await
+                    .map_err(|error| Python::with_gil(|py| open_stream_error_to_pyerr(py, error)))?;
+                let manifest = &subscription.manifest;
+                let matches = manifest.resource_id == expected.resource_id
+                    && manifest.payload == "map_update"
+                    && manifest.map_peer_id == expected.map.peer_id
+                    && manifest.map_id == expected.map.id
+                    && manifest.map_hash == expected.map.hash
+                    && manifest.clock_peer_id == expected.clock.peer_id
+                    && manifest.clock_id == expected.clock.id
+                    && manifest.clock_hash == expected.clock.hash;
+                if !matches {
+                    return Err(PyValueError::new_err(
+                        "Map stream manifest does not match the discovered MapLogResource",
+                    ));
+                }
+                Ok(PyStreamSubscription::from_rust_map(subscription))
+            })
+        })
+    }
+
     /// Open a stream via a full `StreamRequest` (post-#216 §5).
     ///
     /// Accepts a `StreamRequest` pyclass (use `StreamRequest(resource_id=...,
@@ -1748,6 +1903,15 @@ impl PyClusterManager {
         })
     }
 
+    /// Register the SDK Map Log catalog served over `/auki/resources/0.4.0`.
+    fn set_map_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
+        let provider = Arc::new(PyMapCatalogProvider { callable });
+        self.with_inner(|manager| {
+            manager.set_map_catalog_provider(provider);
+            Ok(())
+        })
+    }
+
     /// Register (or replace) the app root for hash-pinned registry entries.
     fn set_registry_app_root(&self, py: Python<'_>, app_root: &Bound<'_, PyAny>) -> PyResult<()> {
         let path = pathlike_to_pathbuf(py, app_root, "app_root")?;
@@ -1825,6 +1989,33 @@ impl PyClusterManager {
                     .resources
                     .into_iter()
                     .map(|inner| PyResourceEntry { inner })
+                    .collect())
+            })
+        })
+    }
+
+    /// Fetch a peer's Map Log catalog over `/auki/resources/0.4.0`.
+    fn fetch_map_catalog(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+    ) -> PyResult<Vec<PyMapLogResource>> {
+        let peer_id = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let response = manager
+                    .fetch_map_catalog(peer_id)
+                    .await
+                    .map_err(map_fetch_map_catalog_error)?;
+                Ok(response
+                    .resources
+                    .into_iter()
+                    .map(|inner| PyMapLogResource { inner })
                     .collect())
             })
         })
@@ -2207,6 +2398,17 @@ fn map_fetch_resources_catalog_error(e: RustFetchResourcesCatalogError) -> PyErr
     }
 }
 
+fn map_fetch_map_catalog_error(e: RustFetchMapCatalogError) -> PyErr {
+    match e {
+        RustFetchMapCatalogError::UnsupportedProtocol => {
+            PyRuntimeError::new_err("remote peer does not support Map discovery")
+        }
+        RustFetchMapCatalogError::Request(error) => {
+            PyOSError::new_err(format!("fetch_map_catalog: {error}"))
+        }
+    }
+}
+
 fn map_fetch_registry_entry_error(e: RustFetchRegistryEntryError) -> PyErr {
     match e {
         RustFetchRegistryEntryError::Request(err) => {
@@ -2257,6 +2459,7 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDaemonInfo>()?;
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PyResourceEntry>()?;
+    m.add_class::<PyMapLogResource>()?;
     m.add_class::<PyMessageEvent>()?;
     m.add_class::<PyMessageChannelReceiver>()?;
     m.add_class::<PyReadFrom>()?;
@@ -2331,6 +2534,7 @@ mod tests {
             assert!(module.getattr("DaemonInfo").is_ok());
             assert!(module.getattr("ParticipantInfo").is_ok());
             assert!(module.getattr("ResourceEntry").is_ok());
+            assert!(module.getattr("MapLogResource").is_ok());
             assert!(module.getattr("ReadFrom").is_ok());
             assert!(module.getattr("StreamRequest").is_ok());
             assert!(module.getattr("StreamManifestBuilder").is_ok());
@@ -2347,6 +2551,20 @@ mod tests {
                     .getattr("ClusterManager")
                     .unwrap()
                     .getattr("open_stream")
+                    .is_ok()
+            );
+            assert!(
+                module
+                    .getattr("ClusterManager")
+                    .unwrap()
+                    .getattr("fetch_map_catalog")
+                    .is_ok()
+            );
+            assert!(
+                module
+                    .getattr("ClusterManager")
+                    .unwrap()
+                    .getattr("open_map_stream")
                     .is_ok()
             );
         });

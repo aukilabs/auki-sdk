@@ -79,6 +79,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
 | [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
 | [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `ResourceEntry`, resource-catalog fetch, and typed stream openers including pose | ✓ |
+| [`auki-mappers-py`](bindings/python/auki-mappers-py) | Python boundary for SDK-native Mappers; normalized point cloud + registry + pose to `MapUpdate` | ✓ |
 | [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
 
 ### `bindings/swift/` — UniFFI

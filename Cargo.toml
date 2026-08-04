@@ -5,6 +5,7 @@ members = [
     "crates/auki-geometry",
     "crates/auki-maps",
     "crates/auki-mappers",
+    "bindings/python/auki-mappers-py",
     "bindings/python/auki-geometry-py",
     "crates/auki-identity",
     "bindings/python/auki-identity-py",

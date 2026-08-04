@@ -20,6 +20,7 @@ subscription types to Python daemons.
 | `ParticipantInfo` | SDK-produced identity wire shape, exchanged over libp2p `/auki/info/0.0.1` (`.to_json()` for local/debug surfaces) |
 | `SensorEntry` | One row in a peer's sensor catalog |
 | `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
+| `MapLogResource` | Resource Catalog v0.4 Map Log row. Construct via `MapLogResource.from_dict(d)` or `MapLogResource.from_json(s)`. |
 | `MessageEvent` | One live opaque message with `resource_id`, authenticated `sender_peer_id`, `type`, `timestamp_ns`, and byte payload |
 | `MessageChannelReceiver` | Blocking receiver returned by `ClusterManager.register_message_channel` |
 | `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |
@@ -44,9 +45,11 @@ internal multi-thread tokio runtime).
 - `open_stream(peer_id, resource_id)` — auto-dispatches by catalog variant
 - `open_stream_with_request(peer_id, request: StreamRequest)` — full post-#216 control; resolves the payload kind by the request's `source_peer_id` + `resource_id`
 - `open_camera_stream / open_pointcloud_stream / open_joint_encoders_stream / open_audio_stream / open_pose_stream`
+- `open_map_stream(peer_id, resource, from_=ReadFrom.from_start())` — opens an exact discovered `MapLogResource` and validates the producer manifest
 
 **Catalog / registry:**
 - `fetch_resources_catalog(peer_id, variants=None)` → `list[ResourceEntry]`
+- `fetch_map_catalog(peer_id)` → `list[MapLogResource]`
 - `fetch_sensor_entry / fetch_clock_entry / fetch_frame_entry` → canonical JSON
 
 **Live typed messaging:**

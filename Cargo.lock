@@ -874,6 +874,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-mappers-py"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-mappers",
+ "auki-registry",
+ "prost",
+ "pyo3",
+ "serde_json",
+]
+
+[[package]]
 name = "auki-maps"
 version = "0.0.0"
 dependencies = [

@@ -17,6 +17,18 @@ log.flush()
 log.set_retention(retention_ns)
 log.manifest()                       # dict
 
+# Producer sources preserve replay + live log semantics in SDK streams.
+sensor_source = log.stream_source(...)
+map_source = log.map_stream_source(
+    resource_id="voxel/world",
+    map_peer_id=peer_id,
+    map_id="voxel/world",
+    map_hash=map_hash,
+    clock_peer_id=peer_id,
+    clock_id="sdk_clock",
+    clock_hash=clock_hash,
+)
+
 reader = log.read()
 for entry in reader.entries():
     entry.timestamp_ns, entry.payload  # both read-only

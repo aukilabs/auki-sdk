@@ -307,6 +307,7 @@ mod tests {
                     ],
                 }],
             }],
+            checkpoint: None,
         }
     }
 

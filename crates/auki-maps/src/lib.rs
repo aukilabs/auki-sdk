@@ -7,7 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use auki_datatypes::map::MapUpdate;
+use auki_datatypes::map::{
+    MapUpdate, SemanticEvidence, VoxelChunkSnapshot, VoxelMapCheckpoint, VoxelSnapshot,
+};
 use auki_registry::{MapBody, MapRegistryEntry, RegistryRef, VoxelMap, VoxelValueModel};
 
 mod viewer;
@@ -182,6 +184,10 @@ impl VoxelMapAccumulator {
     pub fn apply(&mut self, update: &MapUpdate) -> Result<ApplySummary, AccumulatorError> {
         self.validate_update(update)?;
 
+        if let Some(checkpoint) = &update.checkpoint {
+            return self.apply_checkpoint(checkpoint);
+        }
+
         let mut changed = BTreeSet::new();
         let mut delta_count = 0usize;
         for chunk_update in &update.voxel_chunks {
@@ -267,6 +273,44 @@ impl VoxelMapAccumulator {
         })
     }
 
+    /// Serialize the complete sparse state as an ordered checkpoint barrier.
+    /// The resulting update has no additive chunks, so older protobuf readers
+    /// safely treat it as an empty update rather than adding absolute values.
+    pub fn checkpoint_update(&self) -> MapUpdate {
+        MapUpdate {
+            voxel_chunks: Vec::new(),
+            checkpoint: Some(VoxelMapCheckpoint {
+                voxel_chunks: self
+                    .chunks
+                    .iter()
+                    .map(|(coord, chunk)| VoxelChunkSnapshot {
+                        chunk_x: coord.x,
+                        chunk_y: coord.y,
+                        chunk_z: coord.z,
+                        voxels: chunk
+                            .voxels
+                            .iter()
+                            .map(|(local, voxel)| VoxelSnapshot {
+                                x: local.x,
+                                y: local.y,
+                                z: local.z,
+                                occupancy_evidence: voxel.occupancy,
+                                semantics: voxel
+                                    .semantics
+                                    .iter()
+                                    .map(|(class_id, evidence)| SemanticEvidence {
+                                        class_id: *class_id,
+                                        evidence: *evidence,
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
     /// Snapshot one changed chunk for incremental rendering. `None` means the
     /// chunk is empty and should be removed from the viewer.
     pub fn viewer_chunk(
@@ -316,6 +360,9 @@ impl VoxelMapAccumulator {
     }
 
     fn validate_update(&self, update: &MapUpdate) -> Result<(), AccumulatorError> {
+        if update.checkpoint.is_some() && !update.voxel_chunks.is_empty() {
+            return Err(AccumulatorError::MixedCheckpointAndDeltas);
+        }
         let dimension = self.contract.chunk_dimension;
         let semantic_class_count = self.contract.semantic_classes.len();
         for chunk in &update.voxel_chunks {
@@ -344,7 +391,122 @@ impl VoxelMapAccumulator {
                 }
             }
         }
+        if let Some(checkpoint) = &update.checkpoint {
+            let mut chunks = BTreeSet::new();
+            for chunk in &checkpoint.voxel_chunks {
+                let chunk_coord = (chunk.chunk_x, chunk.chunk_y, chunk.chunk_z);
+                if !chunks.insert(chunk_coord) {
+                    return Err(AccumulatorError::DuplicateCheckpointChunk {
+                        x: chunk.chunk_x,
+                        y: chunk.chunk_y,
+                        z: chunk.chunk_z,
+                    });
+                }
+                let mut voxels = BTreeSet::new();
+                for voxel in &chunk.voxels {
+                    if voxel.x >= dimension || voxel.y >= dimension || voxel.z >= dimension {
+                        return Err(AccumulatorError::VoxelOutsideChunk {
+                            x: voxel.x,
+                            y: voxel.y,
+                            z: voxel.z,
+                            dimension,
+                        });
+                    }
+                    if !voxels.insert((voxel.x, voxel.y, voxel.z)) {
+                        return Err(AccumulatorError::DuplicateCheckpointVoxel {
+                            x: voxel.x,
+                            y: voxel.y,
+                            z: voxel.z,
+                        });
+                    }
+                    if !voxel.occupancy_evidence.is_finite() {
+                        return Err(AccumulatorError::NonFiniteEvidence);
+                    }
+                    let mut semantics = BTreeSet::new();
+                    for semantic in &voxel.semantics {
+                        if semantic.class_id as usize >= semantic_class_count {
+                            return Err(AccumulatorError::UnknownSemanticClass {
+                                class_id: semantic.class_id,
+                                class_count: semantic_class_count,
+                            });
+                        }
+                        if !semantics.insert(semantic.class_id) {
+                            return Err(AccumulatorError::DuplicateCheckpointSemanticClass {
+                                class_id: semantic.class_id,
+                            });
+                        }
+                        if !semantic.evidence.is_finite() {
+                            return Err(AccumulatorError::NonFiniteEvidence);
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
+    }
+
+    fn apply_checkpoint(
+        &mut self,
+        checkpoint: &VoxelMapCheckpoint,
+    ) -> Result<ApplySummary, AccumulatorError> {
+        let next_revision = self.revision.wrapping_add(1);
+        let mut replacement = BTreeMap::new();
+        let mut delta_count = 0usize;
+        for chunk in &checkpoint.voxel_chunks {
+            let coord = ChunkCoord {
+                x: chunk.chunk_x,
+                y: chunk.chunk_y,
+                z: chunk.chunk_z,
+            };
+            let mut voxels = BTreeMap::new();
+            for snapshot in &chunk.voxels {
+                delta_count += 1;
+                let semantics: BTreeMap<u32, f64> = snapshot
+                    .semantics
+                    .iter()
+                    .filter_map(|semantic| {
+                        (semantic.evidence != 0.0).then_some((semantic.class_id, semantic.evidence))
+                    })
+                    .collect();
+                if snapshot.occupancy_evidence != 0.0 || !semantics.is_empty() {
+                    voxels.insert(
+                        LocalVoxelCoord {
+                            x: snapshot.x,
+                            y: snapshot.y,
+                            z: snapshot.z,
+                        },
+                        VoxelEvidence {
+                            occupancy: snapshot.occupancy_evidence,
+                            semantics,
+                        },
+                    );
+                }
+            }
+            if !voxels.is_empty() {
+                replacement.insert(
+                    coord,
+                    ChunkState {
+                        revision: next_revision,
+                        voxels,
+                    },
+                );
+            }
+        }
+        let changed_chunks = self
+            .chunks
+            .keys()
+            .chain(replacement.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.chunks = replacement;
+        self.revision = next_revision;
+        Ok(ApplySummary {
+            revision: self.revision,
+            changed_chunks,
+            voxel_deltas_applied: delta_count,
+        })
     }
 
     fn viewer_chunk_from_state(
@@ -428,6 +590,35 @@ pub enum AccumulatorError {
     /// Viewer filtering threshold is NaN or infinite.
     #[error("viewer occupancy threshold must be finite")]
     InvalidViewerThreshold,
+    /// A checkpoint barrier cannot also carry commutative deltas.
+    #[error("MapUpdate cannot contain both a checkpoint and additive voxel chunks")]
+    MixedCheckpointAndDeltas,
+    /// A full-state checkpoint named one chunk more than once.
+    #[error("checkpoint contains duplicate chunk ({x}, {y}, {z})")]
+    DuplicateCheckpointChunk {
+        /// Duplicate chunk x.
+        x: i32,
+        /// Duplicate chunk y.
+        y: i32,
+        /// Duplicate chunk z.
+        z: i32,
+    },
+    /// A checkpoint named one local voxel more than once in a chunk.
+    #[error("checkpoint contains duplicate voxel ({x}, {y}, {z})")]
+    DuplicateCheckpointVoxel {
+        /// Duplicate local x.
+        x: u32,
+        /// Duplicate local y.
+        y: u32,
+        /// Duplicate local z.
+        z: u32,
+    },
+    /// A checkpoint named one semantic class more than once in a voxel.
+    #[error("checkpoint contains duplicate semantic class {class_id}")]
+    DuplicateCheckpointSemanticClass {
+        /// Duplicate semantic class id.
+        class_id: u32,
+    },
 }
 
 #[cfg(test)]
@@ -478,6 +669,7 @@ mod tests {
                     }],
                 }],
             }],
+            checkpoint: None,
         }
     }
 
@@ -584,5 +776,70 @@ mod tests {
         nan.voxel_chunks[0].voxels[0].occupancy_delta = 0.0;
         nan.voxel_chunks[0].voxels[0].semantics[0].evidence_delta = f32::INFINITY;
         assert_eq!(map.apply(&nan), Err(AccumulatorError::NonFiniteEvidence));
+    }
+
+    #[test]
+    fn checkpoint_atomically_replaces_state_then_accepts_deltas() {
+        let mut source = accumulator();
+        source.apply(&update(4, 2.0, 0.75)).unwrap();
+        let checkpoint = source.checkpoint_update();
+
+        let mut replay = accumulator();
+        replay.apply(&update(-2, 9.0, 1.0)).unwrap();
+        let summary = replay.apply(&checkpoint).unwrap();
+        assert_eq!(
+            summary.changed_chunks,
+            vec![
+                ChunkCoord { x: -2, y: 0, z: 0 },
+                ChunkCoord { x: 4, y: 0, z: 0 },
+            ]
+        );
+        let mut replayed = replay.viewer_snapshot(-1_000.0).unwrap().chunks;
+        let mut expected = source.viewer_snapshot(-1_000.0).unwrap().chunks;
+        replayed.iter_mut().for_each(|chunk| chunk.revision = 0);
+        expected.iter_mut().for_each(|chunk| chunk.revision = 0);
+        assert_eq!(replayed, expected);
+
+        replay.apply(&update(4, -0.5, 0.25)).unwrap();
+        let voxel = &replay.viewer_snapshot(-1_000.0).unwrap().chunks[0].voxels[0];
+        assert!((voxel.occupancy_evidence - 1.5).abs() < 1e-9);
+        assert!((voxel.semantics[0].evidence - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retained_window_from_checkpoint_matches_continuous_replay() {
+        let first = update(0, 0.75, 0.25);
+        let second = update(1, 1.25, 0.5);
+        let tail = update(0, -0.5, 0.25);
+
+        let mut continuous = accumulator();
+        continuous.apply(&first).unwrap();
+        continuous.apply(&second).unwrap();
+        let checkpoint = continuous.checkpoint_update();
+        continuous.apply(&checkpoint).unwrap();
+        continuous.apply(&tail).unwrap();
+
+        let mut retained = accumulator();
+        retained.apply(&checkpoint).unwrap();
+        retained.apply(&tail).unwrap();
+        let mut replayed = retained.viewer_snapshot(-1_000.0).unwrap().chunks;
+        let mut expected = continuous.viewer_snapshot(-1_000.0).unwrap().chunks;
+        replayed.iter_mut().for_each(|chunk| chunk.revision = 0);
+        expected.iter_mut().for_each(|chunk| chunk.revision = 0);
+        assert_eq!(replayed, expected);
+    }
+
+    #[test]
+    fn malformed_checkpoint_does_not_partially_replace_state() {
+        let mut map = accumulator();
+        map.apply(&update(0, 1.0, 0.5)).unwrap();
+        let before = map.viewer_snapshot(-1_000.0).unwrap();
+        let mut checkpoint = map.checkpoint_update();
+        checkpoint.checkpoint.as_mut().unwrap().voxel_chunks[0].voxels[0].x = 64;
+        assert!(matches!(
+            map.apply(&checkpoint),
+            Err(AccumulatorError::VoxelOutsideChunk { .. })
+        ));
+        assert_eq!(map.viewer_snapshot(-1_000.0).unwrap(), before);
     }
 }

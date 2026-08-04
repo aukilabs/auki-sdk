@@ -6,7 +6,42 @@ package auki.map;
 // the log framing; this payload deliberately contains no peer identity, so it
 // can be materialized and relayed by any peer.
 message MapUpdate {
+  // Ordinary commutative evidence deltas. Producers MUST leave this empty
+  // when `checkpoint` is present. Keeping checkpoints in a new field makes
+  // them safe for older consumers: they see an empty additive update instead
+  // of accidentally adding absolute checkpoint evidence.
   repeated VoxelChunkUpdate voxel_chunks = 1;
+
+  // An ordered full-state barrier. Applying it atomically replaces all prior
+  // voxel state before subsequent `voxel_chunks` entries are accumulated.
+  VoxelMapCheckpoint checkpoint = 2;
+}
+
+// Complete sparse materialization of a voxel map at one log position. A
+// retained replay window is self-contained when it begins with a checkpoint
+// and contains every subsequent update through its requested end position.
+message VoxelMapCheckpoint {
+  repeated VoxelChunkSnapshot voxel_chunks = 1;
+}
+
+message VoxelChunkSnapshot {
+  sint32 chunk_x = 1;
+  sint32 chunk_y = 2;
+  sint32 chunk_z = 3;
+  repeated VoxelSnapshot voxels = 4;
+}
+
+message VoxelSnapshot {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 z = 3;
+  double occupancy_evidence = 4;
+  repeated SemanticEvidence semantics = 5;
+}
+
+message SemanticEvidence {
+  uint32 class_id = 1;
+  double evidence = 2;
 }
 
 // A sparse update to one fixed-size chunk of a voxel map. The chunk coordinate

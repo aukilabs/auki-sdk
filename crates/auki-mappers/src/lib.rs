@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 const MAX_RAY_STEPS_PER_POINT: usize = 1_000_000;
 
 mod discovery;
+mod frame_alias;
 mod runner;
 
 pub use discovery::{
@@ -20,6 +21,8 @@ pub use discovery::{
     VoxelMapperSourceQuery, VoxelMapperSourceSelectionError, VoxelMapperSources,
     run_sdk_voxel_mapper,
 };
+
+pub use frame_alias::{FrameAliasError, ValidatedFrameAlias, VoxelMapperMapFrameBinding};
 
 pub use runner::{
     LocalMapLogSink, MapSinkError, MapUpdateSink, MapperInput, MapperInputBindingError,
@@ -177,6 +180,7 @@ impl Voxelizer {
                     voxels,
                 })
                 .collect(),
+            checkpoint: None,
         })
     }
 

@@ -10,7 +10,7 @@ use auki_datatypes::{
 use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture};
 
-use crate::{Voxelizer, VoxelizerError};
+use crate::{VoxelMapperMapFrameBinding, Voxelizer, VoxelizerError};
 
 /// One typed sample received from an SDK log stream.
 #[derive(Debug, Clone, PartialEq)]
@@ -325,6 +325,28 @@ impl VoxelMapperRunner {
         occupied_delta: f32,
         alignment: PoseAlignmentConfig,
     ) -> Result<Self, VoxelMapperRunError> {
+        Self::from_sdk_contract_with_frame_binding(
+            point_layout,
+            pose_from_frame,
+            VoxelMapperMapFrameBinding::Exact(pose_to_frame),
+            map,
+            free_delta,
+            occupied_delta,
+            alignment,
+        )
+    }
+
+    /// Build from SDK contracts while permitting an explicit identity-only
+    /// alias from the pose destination to the Map's independently owned frame.
+    pub fn from_sdk_contract_with_frame_binding(
+        point_layout: Rangefinder,
+        pose_from_frame: RegistryRef,
+        map_frame_binding: VoxelMapperMapFrameBinding,
+        map: &VoxelMap,
+        free_delta: f32,
+        occupied_delta: f32,
+        alignment: PoseAlignmentConfig,
+    ) -> Result<Self, VoxelMapperRunError> {
         if point_layout.r#type != "point_cloud" {
             return Err(VoxelMapperRunError::UnsupportedSensorType(
                 point_layout.r#type.clone(),
@@ -336,9 +358,9 @@ impl VoxelMapperRunner {
                 pose_from_frame: Box::new(pose_from_frame),
             });
         }
-        if map.frame != pose_to_frame {
+        if !map_frame_binding.matches_map(&map.frame) {
             return Err(VoxelMapperRunError::MapFrameMismatch {
-                pose_to_frame: Box::new(pose_to_frame),
+                pose_to_frame: Box::new(map_frame_binding.pose_frame().clone()),
                 map_frame: Box::new(map.frame.clone()),
             });
         }

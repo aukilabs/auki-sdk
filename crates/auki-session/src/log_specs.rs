@@ -4,7 +4,7 @@ use auki_manifests::{DetectionCadence, PoseSource, PoseWriterMode, TimeTransform
 use auki_registry::{LogRef, RegistryRef};
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadSpec {
     Rolling { retention_ns: i64 },
     Fixed,

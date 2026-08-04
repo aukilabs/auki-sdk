@@ -1,10 +1,10 @@
 //! SDK-native map producers. Mappers consume SDK resources and streams and
 //! produce MapUpdates; they deliberately have no robot or ROS dependency.
 
-use auki_datatypes::map::{MapUpdate, VoxelChunkUpdate, VoxelDelta};
+use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
 use auki_datatypes::point_cloud::Data as PointCloudData;
 use auki_datatypes::pose::{SpatialTransform, Vec3};
-use auki_registry::{PointField, PointFieldDataType, Rangefinder};
+use auki_registry::{PointField, PointFieldDataType, Rangefinder, VoxelColorModel};
 use std::collections::BTreeMap;
 
 /// Safety ceiling for one ray from SDK input. It is intentionally far above
@@ -34,6 +34,7 @@ pub use runner::{
 pub struct Voxelizer {
     pub voxel_size_m: f64,
     pub chunk_dimension: u32,
+    pub color_model: Option<VoxelColorModel>,
 }
 
 impl Voxelizer {
@@ -44,7 +45,14 @@ impl Voxelizer {
         Ok(Self {
             voxel_size_m,
             chunk_dimension,
+            color_model: None,
         })
+    }
+
+    /// Select the color evidence model declared by the destination Map.
+    pub fn with_color_model(mut self, color_model: Option<VoxelColorModel>) -> Self {
+        self.color_model = color_model;
+        self
     }
 
     /// Bin points expressed in the map frame into additive occupancy evidence.
@@ -54,7 +62,11 @@ impl Voxelizer {
         points: impl IntoIterator<Item = Vec3>,
         occupancy_delta: f32,
     ) -> Result<MapUpdate, VoxelizerError> {
-        self.map_weighted_points(points.into_iter().map(|point| (point, occupancy_delta)))
+        self.map_weighted_points(
+            points
+                .into_iter()
+                .map(|point| (point, occupancy_delta, None)),
+        )
     }
 
     /// Transform SDK points from a sensor frame into the map frame before binning.
@@ -89,14 +101,45 @@ impl Voxelizer {
         if free_delta >= 0.0 || occupied_delta <= 0.0 {
             return Err(VoxelizerError::InvalidEvidencePolarity);
         }
+        self.map_sensor_samples(
+            points.into_iter().map(|position| DecodedPoint {
+                position,
+                linear_rgb: None,
+            }),
+            sensor_to_map,
+            free_delta,
+            occupied_delta,
+        )
+    }
+
+    fn map_sensor_samples(
+        &self,
+        points: impl IntoIterator<Item = DecodedPoint>,
+        sensor_to_map: &SpatialTransform,
+        free_delta: f32,
+        occupied_delta: f32,
+    ) -> Result<MapUpdate, VoxelizerError> {
+        if !free_delta.is_finite() || !occupied_delta.is_finite() {
+            return Err(VoxelizerError::NonFiniteEvidence);
+        }
+        if free_delta >= 0.0 || occupied_delta <= 0.0 {
+            return Err(VoxelizerError::InvalidEvidencePolarity);
+        }
         let transform = ValidTransform::new(sensor_to_map)?;
         let origin = transform.translation;
         let mut all = Vec::new();
         for point in points {
-            if ![point.x, point.y, point.z].into_iter().all(f64::is_finite) {
+            let DecodedPoint {
+                position,
+                linear_rgb,
+            } = point;
+            if ![position.x, position.y, position.z]
+                .into_iter()
+                .all(f64::is_finite)
+            {
                 return Err(VoxelizerError::NonFinitePoint);
             }
-            let end = transform.transform_point(point);
+            let end = transform.transform_point(position);
             let dx = end.x - origin.x;
             let dy = end.y - origin.y;
             let dz = end.z - origin.z;
@@ -117,9 +160,10 @@ impl Voxelizer {
                         z: origin.z + dz * f,
                     },
                     free_delta,
+                    None,
                 ));
             }
-            all.push((end, occupied_delta));
+            all.push((end, occupied_delta, linear_rgb));
         }
         self.map_weighted_points(all)
     }
@@ -135,26 +179,34 @@ impl Voxelizer {
         free_delta: f32,
         occupied_delta: f32,
     ) -> Result<MapUpdate, VoxelizerError> {
-        self.map_sensor_rays(
-            decode_xyz(&payload.data, layout)?,
-            sensor_to_map,
-            free_delta,
-            occupied_delta,
-        )
+        let mut points = decode_xyz_rgb(&payload.data, layout)?;
+        if self.color_model.is_none() {
+            for point in &mut points {
+                point.linear_rgb = None;
+            }
+        }
+        self.map_sensor_samples(points, sensor_to_map, free_delta, occupied_delta)
     }
 
     fn map_weighted_points(
         &self,
-        points: impl IntoIterator<Item = (Vec3, f32)>,
+        points: impl IntoIterator<Item = (Vec3, f32, Option<[f32; 3]>)>,
     ) -> Result<MapUpdate, VoxelizerError> {
         let d = self.chunk_dimension as i32;
         let mut chunks: BTreeMap<(i32, i32, i32), Vec<VoxelDelta>> = BTreeMap::new();
-        for (point, occupancy_delta) in points {
+        for (point, occupancy_delta, linear_rgb) in points {
             if ![point.x, point.y, point.z].into_iter().all(f64::is_finite) {
                 return Err(VoxelizerError::NonFinitePoint);
             }
             if !occupancy_delta.is_finite() {
                 return Err(VoxelizerError::NonFiniteEvidence);
+            }
+            if linear_rgb.is_some_and(|color| {
+                !color
+                    .into_iter()
+                    .all(|channel| channel.is_finite() && (0.0..=1.0).contains(&channel))
+            }) {
+                return Err(VoxelizerError::InvalidColor);
             }
             let x = self.grid_index(point.x)?;
             let y = self.grid_index(point.y)?;
@@ -168,6 +220,12 @@ impl Voxelizer {
                 z: lz,
                 occupancy_delta,
                 semantics: vec![],
+                color: linear_rgb.map(|[red, green, blue]| ColorEvidenceDelta {
+                    red_sum_delta: red,
+                    green_sum_delta: green,
+                    blue_sum_delta: blue,
+                    weight_delta: 1.0,
+                }),
             });
         }
         Ok(MapUpdate {
@@ -201,12 +259,16 @@ pub enum VoxelizerError {
     MissingCoordinate(&'static str),
     #[error("point-cloud coordinates must be scalar float32 fields")]
     UnsupportedCoordinateLayout,
+    #[error("point-cloud color fields must be uint8 r/g/b or packed float32 rgb")]
+    UnsupportedColorLayout,
     #[error("point-cloud payload is truncated")]
     TruncatedPoint,
     #[error("point-cloud coordinates must be finite")]
     NonFinitePoint,
     #[error("occupancy evidence must be finite")]
     NonFiniteEvidence,
+    #[error("point-cloud color must contain finite linear RGB channels in [0, 1]")]
+    InvalidColor,
     #[error("free-space evidence must be negative and occupied evidence must be positive")]
     InvalidEvidencePolarity,
     #[error("point-cloud coordinate lies outside the supported signed voxel grid")]
@@ -220,6 +282,27 @@ pub enum VoxelizerError {
 /// Decode normalized SDK point-cloud payload bytes using the Rangefinder
 /// registry contract. This is intentionally not a ROS or robot API.
 pub fn decode_xyz(data: &[u8], layout: &Rangefinder) -> Result<Vec<Vec3>, VoxelizerError> {
+    Ok(decode_xyz_rgb(data, layout)?
+        .into_iter()
+        .map(|point| point.position)
+        .collect())
+}
+
+/// One decoded SDK point-cloud sample. Color is linear-light RGB when the
+/// Rangefinder declares a supported source color layout.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DecodedPoint {
+    pub position: Vec3,
+    pub linear_rgb: Option<[f32; 3]>,
+}
+
+/// Decode XYZ and optional source color using only the pinned SDK Rangefinder
+/// contract. Supported color layouts match common PointCloud2 producers:
+/// separate scalar uint8 `r`/`g`/`b`, or packed scalar float32 `rgb`.
+pub fn decode_xyz_rgb(
+    data: &[u8],
+    layout: &Rangefinder,
+) -> Result<Vec<DecodedPoint>, VoxelizerError> {
     let field = |name: &'static str| -> Result<&PointField, VoxelizerError> {
         layout
             .fields
@@ -244,18 +327,77 @@ pub fn decode_xyz(data: &[u8], layout: &Rangefinder) -> Result<Vec<Vec3>, Voxeli
             f32::from_le_bytes(bytes)
         } as f64)
     };
+    let find = |name: &str| layout.fields.iter().find(|field| field.name == name);
+    let separate = match (find("r"), find("g"), find("b")) {
+        (None, None, None) => None,
+        (Some(red), Some(green), Some(blue))
+            if [red, green, blue]
+                .into_iter()
+                .all(|field| field.datatype == PointFieldDataType::Uint8 && field.count == 1) =>
+        {
+            Some((red, green, blue))
+        }
+        _ => return Err(VoxelizerError::UnsupportedColorLayout),
+    };
+    let packed = find("rgb");
+    if packed.is_some_and(|field| field.datatype != PointFieldDataType::Float32 || field.count != 1)
+    {
+        return Err(VoxelizerError::UnsupportedColorLayout);
+    }
     if layout.point_step == 0 || !data.len().is_multiple_of(layout.point_step as usize) {
         return Err(VoxelizerError::TruncatedPoint);
     }
+    let color = |point: &[u8]| -> Result<Option<[f32; 3]>, VoxelizerError> {
+        let srgb = if let Some((red, green, blue)) = separate {
+            let channel = |field: &PointField| {
+                point
+                    .get(field.offset as usize)
+                    .copied()
+                    .ok_or(VoxelizerError::TruncatedPoint)
+            };
+            Some([channel(red)?, channel(green)?, channel(blue)?])
+        } else if let Some(field) = packed {
+            let start = field.offset as usize;
+            let bytes: [u8; 4] = point
+                .get(start..start + 4)
+                .ok_or(VoxelizerError::TruncatedPoint)?
+                .try_into()
+                .unwrap();
+            let bits = if layout.is_bigendian {
+                u32::from_be_bytes(bytes)
+            } else {
+                u32::from_le_bytes(bytes)
+            };
+            Some([
+                ((bits >> 16) & 0xff) as u8,
+                ((bits >> 8) & 0xff) as u8,
+                (bits & 0xff) as u8,
+            ])
+        } else {
+            None
+        };
+        Ok(srgb.map(|channels| channels.map(|channel| srgb_to_linear(channel as f32 / 255.0))))
+    };
     data.chunks_exact(layout.point_step as usize)
         .map(|point| {
-            Ok(Vec3 {
-                x: read(x, point)?,
-                y: read(y, point)?,
-                z: read(z, point)?,
+            Ok(DecodedPoint {
+                position: Vec3 {
+                    x: read(x, point)?,
+                    y: read(y, point)?,
+                    z: read(z, point)?,
+                },
+                linear_rgb: color(point)?,
             })
         })
         .collect()
+}
+
+fn srgb_to_linear(channel: f32) -> f32 {
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 struct ValidTransform {
@@ -375,6 +517,137 @@ mod tests {
         ]
         .concat();
         assert_eq!(decode_xyz(&bytes, &layout).unwrap()[0].y, -2.0);
+    }
+
+    fn identity_pose() -> SpatialTransform {
+        SpatialTransform {
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(auki_datatypes::pose::Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
+        }
+    }
+
+    fn xyz_fields() -> Vec<PointField> {
+        [("x", 0), ("y", 4), ("z", 8)]
+            .into_iter()
+            .map(|(name, offset)| PointField {
+                name: name.into(),
+                offset,
+                datatype: PointFieldDataType::Float32,
+                count: 1,
+            })
+            .collect()
+    }
+
+    fn color_layout(fields: Vec<PointField>, point_step: u32) -> Rangefinder {
+        Rangefinder {
+            r#type: "point_cloud".into(),
+            fields,
+            point_step,
+            is_bigendian: false,
+            frame_rate_hz: 30,
+            frame: RegistryRef {
+                peer_id: "bracketbot".into(),
+                id: "head".into(),
+                hash: "frame-hash".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn decodes_separate_and_packed_rgb_to_linear_light() {
+        let mut separate_fields = xyz_fields();
+        separate_fields.extend([("r", 12), ("g", 13), ("b", 14)].map(|(name, offset)| {
+            PointField {
+                name: name.into(),
+                offset,
+                datatype: PointFieldDataType::Uint8,
+                count: 1,
+            }
+        }));
+        let mut separate_bytes = Vec::new();
+        separate_bytes.extend_from_slice(&1.5_f32.to_le_bytes());
+        separate_bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+        separate_bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+        separate_bytes.extend_from_slice(&[255, 128, 0]);
+        let separate =
+            decode_xyz_rgb(&separate_bytes, &color_layout(separate_fields, 15)).unwrap()[0];
+        assert_eq!(separate.position.x, 1.5);
+        let [red, green, blue] = separate.linear_rgb.unwrap();
+        assert_eq!(red, 1.0);
+        assert!((green - 0.215_860_53).abs() < 1e-6);
+        assert_eq!(blue, 0.0);
+
+        let mut packed_fields = xyz_fields();
+        packed_fields.push(PointField {
+            name: "rgb".into(),
+            offset: 12,
+            datatype: PointFieldDataType::Float32,
+            count: 1,
+        });
+        let mut packed_bytes = separate_bytes[..12].to_vec();
+        packed_bytes.extend_from_slice(&0x00ff_8000_u32.to_le_bytes());
+        let packed = decode_xyz_rgb(&packed_bytes, &color_layout(packed_fields, 16)).unwrap()[0];
+        assert_eq!(packed.linear_rgb, separate.linear_rgb);
+    }
+
+    #[test]
+    fn colored_map_writes_endpoint_color_while_occupancy_only_map_drops_it() {
+        let mut fields = xyz_fields();
+        fields.extend(
+            [("r", 12), ("g", 13), ("b", 14)].map(|(name, offset)| PointField {
+                name: name.into(),
+                offset,
+                datatype: PointFieldDataType::Uint8,
+                count: 1,
+            }),
+        );
+        let layout = color_layout(fields, 15);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1.5_f32.to_le_bytes());
+        bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+        bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+        bytes.extend_from_slice(&[255, 0, 0]);
+        let payload = PointCloudData { data: bytes };
+
+        let colored = Voxelizer::new(1.0, 64)
+            .unwrap()
+            .with_color_model(Some(VoxelColorModel::AdditiveLinearRgbEvidence))
+            .map_point_cloud(&payload, &layout, &identity_pose(), -0.2, 0.8)
+            .unwrap();
+        let voxels = colored
+            .voxel_chunks
+            .iter()
+            .flat_map(|chunk| &chunk.voxels)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            voxels.iter().filter(|voxel| voxel.color.is_some()).count(),
+            1
+        );
+        assert_eq!(
+            voxels.last().unwrap().color.as_ref().unwrap().red_sum_delta,
+            1.0
+        );
+
+        let occupancy_only = Voxelizer::new(1.0, 64)
+            .unwrap()
+            .map_point_cloud(&payload, &layout, &identity_pose(), -0.2, 0.8)
+            .unwrap();
+        assert!(
+            occupancy_only
+                .voxel_chunks
+                .iter()
+                .flat_map(|chunk| &chunk.voxels)
+                .all(|voxel| voxel.color.is_none())
+        );
     }
 
     #[test]

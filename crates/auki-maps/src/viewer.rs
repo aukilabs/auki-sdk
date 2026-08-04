@@ -80,7 +80,8 @@ pub struct VoxelInstance {
     pub center_m: [f32; 3],
     /// Uniform cube edge length in metres.
     pub edge_length_m: f32,
-    /// Final occupancy/semantic color.
+    /// Final source/occupancy/semantic color in linear RGBA. Source color wins
+    /// over the occupancy palette when the voxel has color evidence.
     pub rgba: [f32; 4],
     /// Unclamped occupancy evidence for tooltips and alternate shaders.
     pub occupancy_evidence: f32,
@@ -190,6 +191,9 @@ impl VoxelViewerAdapter {
                     self.style.high_evidence_rgba,
                     t,
                 );
+                if let Some([red, green, blue]) = voxel.linear_rgb {
+                    rgba = [f64_to_f32(red)?, f64_to_f32(green)?, f64_to_f32(blue)?, 1.0];
+                }
                 let dominant_semantic_class = voxel
                     .semantics
                     .iter()
@@ -258,9 +262,12 @@ pub enum ViewerAdapterError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_datatypes::map::{MapUpdate, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
+    use auki_datatypes::map::{
+        ColorEvidenceDelta, MapUpdate, SemanticDelta, VoxelChunkUpdate, VoxelDelta,
+    };
     use auki_registry::{
-        FiniteF64, MapBody, MapRegistryEntry, RegistryRef, VoxelMap, VoxelValueModel,
+        FiniteF64, MapBody, MapRegistryEntry, RegistryRef, VoxelColorModel, VoxelMap,
+        VoxelValueModel,
     };
 
     fn accumulator() -> VoxelMapAccumulator {
@@ -273,6 +280,7 @@ mod tests {
             voxel_size_m: FiniteF64(0.5),
             chunk_dimension: 64,
             value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+            color_model: None,
             semantic_classes: vec!["wall".into(), "door".into()],
         };
         let map = MapRegistryEntry {
@@ -305,6 +313,7 @@ mod tests {
                             evidence_delta: door,
                         },
                     ],
+                    color: None,
                 }],
             }],
             checkpoint: None,
@@ -343,6 +352,43 @@ mod tests {
         assert_eq!(instances[0].edge_length_m, 0.4);
         assert_eq!(instances[0].dominant_semantic_class, Some(1));
         assert_eq!(instances[0].rgba, [1.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn source_color_overrides_visible_occupancy_fallback() {
+        let mut colored_contract = accumulator().contract().clone();
+        colored_contract.color_model = Some(VoxelColorModel::AdditiveLinearRgbEvidence);
+        let map_ref = MapRegistryEntry {
+            peer_id: "galbot".into(),
+            map_id: "colored".into(),
+            body: MapBody::Voxel(colored_contract.clone()),
+        }
+        .registry_ref();
+        let mut colored = VoxelMapAccumulator::new(map_ref, colored_contract).unwrap();
+        let mut colored_update = update(1.0, 0.0, 0.0);
+        colored_update.voxel_chunks[0].voxels[0].color = Some(ColorEvidenceDelta {
+            red_sum_delta: 0.25,
+            green_sum_delta: 0.5,
+            blue_sum_delta: 0.75,
+            weight_delta: 1.0,
+        });
+        let applied = colored.apply(&colored_update).unwrap();
+        let adapter = VoxelViewerAdapter::new(VoxelViewerStyle::default()).unwrap();
+        let ChunkRenderUpdate::Replace { instances, .. } =
+            &adapter.changed_chunks(&colored, &applied).unwrap()[0]
+        else {
+            panic!("expected colored chunk replacement")
+        };
+        assert_eq!(instances[0].rgba, [0.25, 0.5, 0.75, 1.0]);
+
+        let mut uncolored = accumulator();
+        let applied = uncolored.apply(&update(1.0, 0.0, 0.0)).unwrap();
+        let ChunkRenderUpdate::Replace { instances, .. } =
+            &adapter.changed_chunks(&uncolored, &applied).unwrap()[0]
+        else {
+            panic!("expected occupancy chunk replacement")
+        };
+        assert_ne!(instances[0].rgba[..3], [0.0, 0.0, 0.0]);
     }
 
     #[test]

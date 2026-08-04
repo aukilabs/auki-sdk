@@ -483,7 +483,7 @@ fn utc_clock_entry(
 // ─── Map Registry constructors ─────────────────────────────────────
 
 #[pyfunction]
-#[pyo3(signature = (*, peer_id, map_id, frame, voxel_size_m, chunk_dimension, semantic_classes=Vec::new()))]
+#[pyo3(signature = (*, peer_id, map_id, frame, voxel_size_m, chunk_dimension, color_model=None, semantic_classes=Vec::new()))]
 fn voxel_map_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -491,6 +491,7 @@ fn voxel_map_entry(
     frame: &Bound<'_, PyAny>,
     voxel_size_m: f64,
     chunk_dimension: u32,
+    color_model: Option<&str>,
     semantic_classes: Vec<String>,
 ) -> PyResult<PyObject> {
     let entry = registry::MapRegistryEntry {
@@ -501,6 +502,9 @@ fn voxel_map_entry(
             voxel_size_m: registry::FiniteF64(voxel_size_m),
             chunk_dimension,
             value_model: registry::VoxelValueModel::AdditiveOccupancyEvidence,
+            color_model: color_model
+                .map(|value| parse_string_enum("color_model", value))
+                .transpose()?,
             semantic_classes,
         }),
     };
@@ -743,6 +747,7 @@ mod tests {
                 frame_ref.bind(py),
                 0.05,
                 16,
+                None,
                 Vec::new(),
             )
             .unwrap();

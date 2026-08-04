@@ -37,6 +37,7 @@ message VoxelSnapshot {
   uint32 z = 3;
   double occupancy_evidence = 4;
   repeated SemanticEvidence semantics = 5;
+  ColorEvidence color = 6;
 }
 
 message SemanticEvidence {
@@ -62,6 +63,27 @@ message VoxelDelta {
   uint32 z = 3;
   float occupancy_delta = 4;
   repeated SemanticDelta semantics = 5;
+  ColorEvidenceDelta color = 6;
+}
+
+// Additive weighted linear-light RGB evidence. Producers convert source sRGB
+// samples to linear light, multiply each channel by `weight_delta`, and add
+// the four fields independently. This makes color updates replayable and
+// mergeable without last-writer-wins ordering.
+message ColorEvidenceDelta {
+  float red_sum_delta = 1;
+  float green_sum_delta = 2;
+  float blue_sum_delta = 3;
+  float weight_delta = 4;
+}
+
+// Full accumulated color state stored at a checkpoint barrier. A consumer
+// renders `channel_sum / weight` when weight is positive.
+message ColorEvidence {
+  double red_sum = 1;
+  double green_sum = 2;
+  double blue_sum = 3;
+  double weight = 4;
 }
 
 // Optional evidence for an application-defined semantic class. Class labels

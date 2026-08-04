@@ -35,10 +35,6 @@ use auki_domain_rs::{
     StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
-use auki_network::{
-    MapCatalogProvider as RustMapCatalogProvider,
-    MessageChannelRegistration as RustMessageChannelRegistration,
-};
 use auki_network::ParticipantInfo as RustParticipantInfo;
 use auki_network::PeerIdentity;
 use auki_network::discovery_client::DiscoveryError as RustDiscoveryError;
@@ -53,6 +49,10 @@ use auki_network::stream_protocol::{
 };
 use auki_network::stream_runtime::{StreamProvider, decline_all_streams};
 use auki_network::swarm::{SwarmConfig, build_swarm};
+use auki_network::{
+    MapCatalogProvider as RustMapCatalogProvider,
+    MessageChannelRegistration as RustMessageChannelRegistration,
+};
 use auki_network_py::PyClusterEntry;
 use auki_network_py::stream_types::{
     PyStreamSubscription, STREAM_PROVIDER_CAPSULE_NAME, open_stream_error_to_pyerr,
@@ -1789,7 +1789,9 @@ impl PyClusterManager {
                 let subscription = manager
                     .open_stream::<RustMapUpdate>(target, request)
                     .await
-                    .map_err(|error| Python::with_gil(|py| open_stream_error_to_pyerr(py, error)))?;
+                    .map_err(|error| {
+                        Python::with_gil(|py| open_stream_error_to_pyerr(py, error))
+                    })?;
                 let manifest = &subscription.manifest;
                 let matches = manifest.resource_id == expected.resource_id
                     && manifest.payload == "map_update"
@@ -2044,11 +2046,7 @@ impl PyClusterManager {
     }
 
     /// Fetch a peer's Map Log catalog over `/auki/resources/0.4.0`.
-    fn fetch_map_catalog(
-        &self,
-        py: Python<'_>,
-        peer_id: &str,
-    ) -> PyResult<Vec<PyMapLogResource>> {
+    fn fetch_map_catalog(&self, py: Python<'_>, peer_id: &str) -> PyResult<Vec<PyMapLogResource>> {
         let peer_id = parse_peer_id(peer_id)?;
         let inner = self.inner.clone();
         py.allow_threads(|| {
